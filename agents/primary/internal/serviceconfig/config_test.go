@@ -319,6 +319,32 @@ func TestFromEnvRejectsInvalidGuardrail(t *testing.T) {
 	}
 }
 
+// TestTheAnswerGuardIsBothOrNeither: unset, no answer is checked; set, its
+// guardrail and version are read; half set, the service refuses to start,
+// naming both settings.
+func TestTheAnswerGuardIsBothOrNeither(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{}))
+	if err != nil || config.AnswerGuardrailIdentifier != "" || config.AnswerGuardrailVersion != "" {
+		t.Fatalf("unset: config=%+v err=%v, want no answer guard", config, err)
+	}
+	config, err = FromEnv(env(map[string]string{
+		"AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID": " gr-answers ", "AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION": " 2 ",
+	}))
+	if err != nil || config.AnswerGuardrailIdentifier != "gr-answers" || config.AnswerGuardrailVersion != "2" {
+		t.Fatalf("set: config=%+v err=%v, want gr-answers version 2", config, err)
+	}
+	for _, half := range []map[string]string{
+		{"AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID": "gr-answers"},
+		{"AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION": "2"},
+		{"AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID": "gr-answers", "AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION": "  "},
+	} {
+		if _, err := FromEnv(env(half)); err == nil ||
+			!strings.Contains(err.Error(), "AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID") || !strings.Contains(err.Error(), "AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION") {
+			t.Errorf("half set %v: error=%v, want a refusal naming both settings", half, err)
+		}
+	}
+}
+
 func TestFromEnvRejectsInvalidSessionTimeout(t *testing.T) {
 	if _, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS": "30"})); err == nil {
 		t.Fatal("FromEnv() error = nil for a sandbox timeout below one minute")

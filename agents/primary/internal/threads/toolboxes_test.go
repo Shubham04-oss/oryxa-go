@@ -141,3 +141,59 @@ func storedNames(value any) []string {
 	}
 	return nil
 }
+
+// TestARunDeliveringAnInteractionRecordsWhichOne: a run started to deliver
+// one interaction records its request in the thread's state as it starts,
+// which is where its interactions tools read what they may act on; a run
+// that delivers nothing records nothing.
+func TestARunDeliveringAnInteractionRecordsWhichOne(t *testing.T) {
+	ctx := context.Background()
+	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("Done.", genai.RoleModel), nil
+	}}
+	router, err := modelrouter.New(llm, llm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	krude, err := primaryagents.UnattendedRoot(router, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := session.InMemoryService()
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: sessions, Artifacts: artifact.InMemoryService(),
+		Runs: newFakeRuns(), Prices: prices, RunTimeout: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery := primaryagents.Delivery{RequestID: "irq_1", Purpose: primaryagents.DeliveryDecides}
+	for _, delivered := range []primaryagents.Delivery{delivery, {}} {
+		thread, err := service.Create(ctx, asha)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := service.StartRun(ctx, asha, thread.ID, RunInput{Message: "Deliver it.", Delivery: delivered})
+		if err != nil {
+			t.Fatal(err)
+		}
+		run.Execute(ctx, func(Item) error { return nil })
+		after, err := sessions.Get(ctx, &session.GetRequest{AppName: "krude", UserID: asha.UserID, SessionID: thread.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for key, want := range primaryagents.DeliveryState(delivery) {
+			got, err := after.Session.State().Get(key)
+			if delivered.RequestID == "" && err == nil {
+				t.Fatalf("delivering nothing, the thread records %v under %s", got, key)
+			}
+			if delivered.RequestID != "" && got != want {
+				t.Fatalf("delivering %+v, the thread records %v under %s, want %v", delivered, got, key, want)
+			}
+		}
+	}
+}

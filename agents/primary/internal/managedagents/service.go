@@ -57,24 +57,30 @@ const (
 	// interactions toolbox holds only what that request needs, reading,
 	// deciding and answering it, and nothing that lists the member's other
 	// requests. Such a run starts with all it may reach loaded, and has
-	// nothing to list or load.
+	// nothing to list or load. DeliveryReads is approved work allowed both
+	// the member's apps and their knowledge; DeliveryQuiet is approved work
+	// allowed the knowledge alone.
 	DeliveryReads UnattendedProfile = "delivery_reads"
 	DeliveryQuiet UnattendedProfile = "delivery_quiet"
-	// DeliveryReport reaches the one request alone, for telling the member
-	// who asked that it was rejected or answered: neither the member's apps
-	// nor their knowledge.
+	// DeliveryApps is approved work allowed the member's apps, read-only,
+	// and not their knowledge.
+	DeliveryApps UnattendedProfile = "delivery_apps"
+	// DeliveryReport reaches the one request alone: for deciding a new
+	// request, for telling the member who asked that it was rejected or
+	// answered, and for approved work allowed neither the member's apps nor
+	// their knowledge.
 	DeliveryReport UnattendedProfile = "delivery_report"
 )
 
 // ReadsApps is whether a run on this profile may read the member's apps.
 func (profile UnattendedProfile) ReadsApps() bool {
-	return profile == UnattendedReads || profile == DeliveryReads
+	return profile == UnattendedReads || profile == DeliveryReads || profile == DeliveryApps
 }
 
 // Delivers is whether this profile is for a run that delivers one
 // interaction.
 func (profile UnattendedProfile) Delivers() bool {
-	return profile == DeliveryReads || profile == DeliveryQuiet || profile == DeliveryReport
+	return profile == DeliveryReads || profile == DeliveryApps || profile == DeliveryQuiet || profile == DeliveryReport
 }
 
 // UnattendedFactory builds the restricted runtime a profile allows. It must

@@ -70,9 +70,9 @@ func TestStoreLifecycle(t *testing.T) {
 	if err != nil || approved.Status != StatusApproved || approved.Revision != 2 {
 		t.Fatalf("approved=%+v err=%v", approved, err)
 	}
-	completed, err := store.Respond(ctx, request.ID, agents.InteractionResponseInput{
+	completed, err := store.Respond(ctx, request.ID, Unguarded(agents.InteractionResponseInput{
 		Status: StatusCompleted, Summary: "Answered", Content: "The boundary is EventBridge.", ToolsUsed: []string{"knowledge_search"},
-	}, now.Add(2*time.Minute))
+	}), now.Add(2*time.Minute))
 	if err != nil || completed.Status != StatusCompleted || completed.Result == nil || completed.Revision != 3 {
 		t.Fatalf("completed=%+v err=%v", completed, err)
 	}

@@ -344,6 +344,71 @@ queue, which holds each event for 14 days, and the backlog alarm goes with the
 switch. Turned on again within those 14 days, realtime purges everything that
 waited.
 
+### Releasing the answer guard
+
+The release that has Jev choose the tools a teamspace request needs, limits
+approved work to the tools its approval allows, and has Bedrock read every
+answer before the member who asked sees it (`agents/primary/README.md`,
+"Answer guard"). Release the build first, then apply. The build alone
+changes little: with no guardrail named the guard is off, and answers are
+delivered as before. The apply turns the guard on:
+
+```sh
+(cd deploy/production && tofu apply)
+```
+
+It creates the guardrail `oryxa-production-agent-answers`
+(`production/answer_guard.tf`) in us-west-2: sensitive information on the
+output side only, input off, and no cross-region profile, masking secrets and
+card, bank and government numbers, and only detecting email addresses, phone
+numbers and addresses. It also creates its numbered version, lets the task
+role call `bedrock:ApplyGuardrail` on that guardrail alone, and names both to
+the task as `AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID` and
+`AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION`. The task then restarts with the
+guard on, and logs `the answer guard checks every answer another member reads
+before they read it`, naming the guardrail and its version. The service
+refuses to start with one of the two set and not the other; the apply always
+sets both. A later change to the guardrail makes a new version, and the next
+apply names it; the old version is kept.
+
+In that order, no task older than this build ever reads the events the guard
+brings: an answer held for review is the completed event with status
+`review`, and the end of a review one with `completed`, `failed` or
+`withheld`. An older build's consumer refuses those statuses, so an event it
+took during an overlap would go back to the queue, and after five tries to
+`oryxa-production-agents-events-dlq`, from which it can be redriven.
+
+What to expect afterwards:
+
+- Interaction migrations 008 to 012 run in order, each in its own
+  transaction. 008 adds `tools_judged_by` with its check `NOT VALID`, and 009
+  validates it. 010 adds `guard`, `held_result` and `review`, and replaces
+  001's status check with one that also allows `review` and `withheld`, in
+  the same transaction, all its checks `NOT VALID`; 011 validates them. 012
+  builds `agent_interactions_review_expiry_idx`, a small partial index of
+  requests in review. Every row predating them reads as before.
+- Approved work runs with exactly the toolboxes its approval allows. An
+  approval that allowed none, which is every approval the web app has sent so
+  far, now runs with the request alone, where it had the member's read-only
+  apps and knowledge. That includes approved requests in flight at the
+  release.
+- A request made in a teamspace that names no tools has Jev choose them, with
+  `TYPESAFE_API_KEY`, which production has for the knowledge judge. Its owner's
+  approval shows what will be read.
+- An answer holding an email address, phone number or address, or one the
+  guardrail could not check, waits in `review` for the member it asked, and
+  the member who asked sees only that status. The web app shows review and
+  withheld requests, and calls the review route, from its own release on.
+  Until then the member reviews nothing, and the waker withholds each such
+  answer when its request expires, a day after it was made by default.
+- Rolling back to an older build is safe but leaves answers in review where
+  they are: it shows the status and no result to either side, has no review
+  route, and withholds nothing when they expire. This build, back again,
+  withholds those that expired meanwhile on its first poll.
+- Each answer read costs up to three ApplyGuardrail calls (summary, content,
+  artifacts), each billed by Bedrock by the characters it reads, with a
+  minimum per call.
+
 ## Looking at it
 
 - **Dashboard** `oryxa-production` in CloudWatch: the tunnel, API latency by

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
@@ -24,6 +25,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteamrooms"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteams"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentworkflows"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/assembly"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/directoryclient"
@@ -191,6 +193,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	// One agent-token exchange serves Krude's tools and the request ledger,
 	// which reads a request's teamspace again as its addressed member.
 	memberTokens := assembly.MemberTokens(settings, platform.AWS)
+	// Jev answers a room about every message, and judges which of its
+	// target's toolboxes a request made in a teamspace that names none
+	// needs. Without a TypeSafe key there is none.
+	typeSafe := jevClient(settings, logger)
 	var interactionService *agentinteractions.Service
 	var teamspaceService *teamspaces.Service
 	teamspaceStore := teamspaces.NewStore(platform.Database)
@@ -204,9 +210,31 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		}
 		// A request made inside a teamspace is approved as the target's
 		// owner chose there, so the ledger asks the teamspace for its seat.
-		interactionService, err = agentinteractions.New(agentinteractions.Config{
+		interactionConfig := agentinteractions.Config{
 			Repository: interactionStore, Directory: organizationDirectory, Teamspaces: teamspaceService, Tokens: memberTokens,
-		})
+			Logger: logger,
+		}
+		if typeSafe != nil {
+			interactionConfig.Jev = typeSafe.Ask
+		}
+		// Every answer another member reads is checked first when a
+		// guardrail is named. The SDK honours AWS_ENDPOINT_URL_BEDROCK_RUNTIME,
+		// which points development at a stand-in.
+		if settings.AnswerGuardrailIdentifier != "" {
+			guard, err := answerguard.New(bedrockruntime.NewFromConfig(platform.AWS), answerguard.Config{
+				Identifier: settings.AnswerGuardrailIdentifier, Version: settings.AnswerGuardrailVersion, Logger: logger,
+			})
+			if err != nil {
+				sessionStore.Close()
+				return host.Service{}, err
+			}
+			interactionConfig.Guard = guard
+			logger.Info("the answer guard checks every answer another member reads before they read it",
+				"guardrail", settings.AnswerGuardrailIdentifier, "version", settings.AnswerGuardrailVersion)
+		} else {
+			logger.Warn("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID is not set: answers reach the member who asked unchecked")
+		}
+		interactionService, err = agentinteractions.New(interactionConfig)
 		if err != nil {
 			sessionStore.Close()
 			return host.Service{}, err
@@ -400,7 +428,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	// when a key is configured, and rules that answer less when it is not.
 	var roomService *rooms.Service
 	if teamspaceService != nil {
-		decider := roomDecider(settings, logger)
+		decider := roomDecider(typeSafe, logger)
 		speaker, err := rooms.NewAgentSpeaker(agentRegistry, roomStore, settings.RunTimeout)
 		if err != nil {
 			closeAll()
@@ -425,7 +453,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			closeAll()
 			return host.Service{}, err
 		}
-		logger.Info("teamspaces are rooms: people and their agents talk in them", "decider", deciderName(settings))
+		logger.Info("teamspaces are rooms: people and their agents talk in them", "decider", deciderName(typeSafe))
 	}
 	teamRoomService, err := agentteamrooms.New(teamRoomStore, teamService, agentRegistry, logger)
 	if err != nil {
@@ -549,6 +577,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			// The message that wakes an agent names the member who asked, as
 			// auth keeps them, and the teamspace the request was made in.
 			Members: sessionStore, Teamspaces: teamspaceStore,
+			// Each run's start is logged with the toolboxes it was given.
+			Toolboxes: func(profile managedagents.UnattendedProfile) []string {
+				return krude.DeliveryToolboxNames(deliveryReach(profile))
+			},
 		}
 		// The ledger reads a request made in a teamspace again before its
 		// agent is woken; without one, such requests wake nobody.
@@ -569,6 +601,13 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			"organization_synthesis_interval", organizationSynthesisInterval.String())
 	} else {
 		logger.Warn("AGENTS_EVENTS_QUEUE_URL is not set: app events, interaction requests, and shared publications will not wake agents, and a member's threads outlive their place in an organization")
+		// The interaction waker withholds answers left in review past their
+		// request's expiry; without it, this does.
+		if interactionService != nil {
+			workers = append(workers, func(ctx context.Context) {
+				agentinteractions.SweepExpiredReviews(ctx, interactionStore, interactionDeliveryInterval, logger)
+			})
+		}
 	}
 
 	logger.Info("agents mounted", "model", settings.Model, "model_lite", settings.ModelLite, "run_timeout", settings.RunTimeout.String())
@@ -587,6 +626,8 @@ func deliveryReach(profile managedagents.UnattendedProfile) assembly.DeliveryRea
 	switch profile {
 	case managedagents.DeliveryReads:
 		return assembly.DeliveryReads
+	case managedagents.DeliveryApps:
+		return assembly.DeliveryApps
 	case managedagents.DeliveryQuiet:
 		return assembly.DeliveryQuiet
 	default:
@@ -603,23 +644,33 @@ func deliveryReach(profile managedagents.UnattendedProfile) assembly.DeliveryRea
 // many of them.
 const roomCompactEvery = 25
 
-func roomDecider(settings serviceconfig.Config, logger *slog.Logger) rooms.Decider {
+func roomDecider(client *jev.Client, logger *slog.Logger) rooms.Decider {
 	fallback := rooms.Rules{CompactEvery: roomCompactEvery}
-	if settings.TypeSafeAPIKey == "" {
-		return fallback
-	}
-	client, err := jev.New(jev.Config{APIKey: settings.TypeSafeAPIKey, BaseURL: settings.TypeSafeBaseURL})
-	if err != nil {
-		logger.Warn("rooms fall back to rules: Jev could not be reached", "error", err)
+	if client == nil {
 		return fallback
 	}
 	return rooms.Jev{Ask: client.Ask, Fallback: fallback, Logger: logger}
 }
 
 // deciderName is for the one line that says which way a room is running.
-func deciderName(settings serviceconfig.Config) string {
-	if settings.TypeSafeAPIKey == "" {
+func deciderName(client *jev.Client) string {
+	if client == nil {
 		return "rules"
 	}
 	return "jev"
+}
+
+// jevClient is TypeSafe's client for Jev, or nil without a key, or when its
+// settings are refused, which it says: rooms then fall back to rules, and a
+// request made in a teamspace that names no tools asks for none.
+func jevClient(settings serviceconfig.Config, logger *slog.Logger) *jev.Client {
+	if settings.TypeSafeAPIKey == "" {
+		return nil
+	}
+	client, err := jev.New(jev.Config{APIKey: settings.TypeSafeAPIKey, BaseURL: settings.TypeSafeBaseURL})
+	if err != nil {
+		logger.Warn("Jev is not asked: its client could not be built, so rooms fall back to rules and requests ask for no tools", "error", err)
+		return nil
+	}
+	return client
 }

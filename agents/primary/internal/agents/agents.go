@@ -225,8 +225,12 @@ func unattendedRoot(router *modelrouter.Router, toolboxes []Toolbox, delivering 
 	}
 	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool}
 	if delivering != nil {
+		// A delivery works from its request and what its reach loads, and
+		// no more: load_artifacts would list the member's own files, the
+		// user: ones every thread of theirs shares, into a run another
+		// member's words steer.
 		catalog.preloaded = true
-		builders = []func() (tool.Tool, error){loadArtifactsTool}
+		builders = nil
 	}
 	tools, err := buildTools(builders...)
 	if err != nil {

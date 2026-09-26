@@ -75,8 +75,10 @@ func managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, sp
 	}
 	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool, saveArtifactTool}
 	if delivering != nil {
+		// As for Krude (unattendedRoot): no load_artifacts, which would list
+		// the member's own files into a run another member's words steer.
 		catalog.preloaded = true
-		builders = []func() (tool.Tool, error){loadArtifactsTool, saveArtifactTool}
+		builders = []func() (tool.Tool, error){saveArtifactTool}
 	}
 	if remembers {
 		builders = append(builders, loadMemoryTool)

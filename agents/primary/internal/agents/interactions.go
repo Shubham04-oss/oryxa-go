@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +22,70 @@ var interactionsInstructions string
 // InteractionsToolboxName names the interactions toolbox, which a run that
 // delivers an interaction starts with loaded.
 const InteractionsToolboxName = "interactions"
+
+// The toolboxes a request may ask to use of the member it addresses, by
+// name: the values of requested_tools, and of an approval's allowed_tools,
+// that mean something. Approved work runs with exactly the ones its approval
+// allows, beside its request's interactions toolbox. Any other value is
+// accepted, as it always was, and grants nothing.
+const (
+	// AppsToolboxName is the member's connected apps, which a request's
+	// approved work reads and never changes.
+	AppsToolboxName = "apps"
+	// KnowledgeToolboxName is the organization's knowledge search.
+	KnowledgeToolboxName = "knowledge"
+)
+
+// deliveredRequestKey and deliveryPurposeKey are the state a run delivering
+// one interaction starts with, which the waker sets as it starts it
+// (threads.RunInput.Delivery) and the model never writes: the one request
+// the run's interactions tools act on, and what the run is for.
+const (
+	deliveredRequestKey = "delivered_interaction"
+	deliveryPurposeKey  = "delivery_purpose"
+)
+
+// What a run delivering one interaction is for, which decides what its
+// interactions tools may do with it.
+const (
+	// DeliveryDecides is a new request, for its agent to decide, and no
+	// more: approved, its work is done in a run of its own, which has
+	// exactly what the approval allows.
+	DeliveryDecides = "decide"
+	// DeliveryWorks is an approved request, for its agent to do the work and
+	// answer.
+	DeliveryWorks = "work"
+	// DeliveryReports is how a request ended, for the agent that asked to
+	// tell its member.
+	DeliveryReports = "report"
+)
+
+// Delivery is the one interaction a run delivers, and what for.
+type Delivery struct {
+	// RequestID is the request the run's interactions tools read, decide and
+	// answer, and no other.
+	RequestID string
+	// Purpose is DeliveryDecides, DeliveryWorks or DeliveryReports: only a
+	// run deciding decides, and only one working answers.
+	Purpose string
+}
+
+// DeliveryState is what a run delivering one interaction adds to its
+// thread's state as it starts.
+func DeliveryState(delivery Delivery) map[string]any {
+	return map[string]any{deliveredRequestKey: delivery.RequestID, deliveryPurposeKey: delivery.Purpose}
+}
+
+// RequestTool is value as the tool vocabulary spells it: AppsToolboxName or
+// KnowledgeToolboxName for either, in any case, and anything else as it is.
+func RequestTool(value string) string {
+	for _, name := range []string{AppsToolboxName, KnowledgeToolboxName} {
+		if strings.EqualFold(value, name) {
+			return name
+		}
+	}
+	return value
+}
 
 // The sessions an InteractionActor can act in.
 const (
@@ -96,6 +161,43 @@ type InteractionResult struct {
 	CompletedAt time.Time `json:"completed_at"`
 }
 
+// InteractionGuard is what the answer guard found in an answer the member
+// who asked will read: "clear", nothing; "masked", only kinds that are
+// always masked, which the answer is delivered with masked; "held", a kind
+// held for the addressed member's review, or an answer that could not be
+// checked, whose one kind is then "UNCHECKED". Kinds are Bedrock's entity
+// types, never a value.
+type InteractionGuard struct {
+	State string   `json:"state"`
+	Kinds []string `json:"kinds,omitempty"`
+}
+
+// InteractionHeld is an answer the guard held for the addressed member's
+// review, in the two versions they may send: Result, as the guardrail left
+// it, with the kinds that are always masked masked; and MaskedResult, with
+// every held value replaced by its kind as well, such as {EMAIL}, absent for
+// an answer that could not be checked. Only the addressed member's side ever
+// reads it, and only while the request is in review.
+type InteractionHeld struct {
+	Result       InteractionResult  `json:"result"`
+	MaskedResult *InteractionResult `json:"masked_result,omitempty"`
+}
+
+// InteractionReview is the addressed member's review of a held answer:
+// "send", "send_masked" or "withhold", who decided and when. A request that
+// expired in review is withheld by Oryxa ("system"), with Reason saying so.
+type InteractionReview struct {
+	Action    string             `json:"action"`
+	DecidedBy InteractionDecider `json:"decided_by"`
+	DecidedAt time.Time          `json:"decided_at"`
+	Reason    string             `json:"reason,omitempty"`
+}
+
+// InteractionReviewInput is the addressed member's review of a held answer.
+type InteractionReviewInput struct {
+	Action string `json:"action"`
+}
+
 // Interaction is the strict, durable JSON contract exchanged between agents.
 // Request text is stored once; every transition is a separate audited field.
 type Interaction struct {
@@ -110,21 +212,36 @@ type Interaction struct {
 	// to decide in their own session. A request made in a teamspace becomes
 	// "owner" if its member later takes deciding back; nothing turns "owner"
 	// back into "agent".
-	Approval             string                   `json:"approval"`
-	Requester            InteractionParty         `json:"requester"`
-	Target               InteractionParty         `json:"target"`
-	Purpose              string                   `json:"purpose"`
-	Task                 string                   `json:"task"`
-	Context              []InteractionContextItem `json:"context"`
-	RequestedTools       []string                 `json:"requested_tools"`
-	RequestedPermissions []string                 `json:"requested_permissions"`
-	Status               string                   `json:"status"`
-	Decision             *InteractionDecision     `json:"decision,omitempty"`
-	Result               *InteractionResult       `json:"result,omitempty"`
-	Revision             int64                    `json:"revision"`
-	ExpiresAt            time.Time                `json:"expires_at"`
-	CreatedAt            time.Time                `json:"created_at"`
-	UpdatedAt            time.Time                `json:"updated_at"`
+	Approval       string                   `json:"approval"`
+	Requester      InteractionParty         `json:"requester"`
+	Target         InteractionParty         `json:"target"`
+	Purpose        string                   `json:"purpose"`
+	Task           string                   `json:"task"`
+	Context        []InteractionContextItem `json:"context"`
+	RequestedTools []string                 `json:"requested_tools"`
+	// ToolsJudgedBy is who chose RequestedTools: "requester" for the
+	// requester naming them, "jev" for Jev judging what a request made in a
+	// teamspace that named none needs, and "none" when nobody did, so it
+	// asks for none. It is absent from a request made before it was kept.
+	ToolsJudgedBy        string               `json:"tools_judged_by,omitempty"`
+	RequestedPermissions []string             `json:"requested_permissions"`
+	Status               string               `json:"status"`
+	Decision             *InteractionDecision `json:"decision,omitempty"`
+	// Result is the answer the member who asked reads, once there is one
+	// for them: never while it is held for review, nor once withheld.
+	Result *InteractionResult `json:"result,omitempty"`
+	// Guard is what the answer guard found in the answer, absent when no
+	// guard read it. The member who asked sees it only beside a result.
+	Guard *InteractionGuard `json:"guard,omitempty"`
+	// Held is the answer held for review, shown to the addressed member's
+	// side alone.
+	Held *InteractionHeld `json:"held,omitempty"`
+	// Review is the addressed member's review of a held answer.
+	Review    *InteractionReview `json:"review,omitempty"`
+	Revision  int64              `json:"revision"`
+	ExpiresAt time.Time          `json:"expires_at"`
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
 }
 
 type InteractionCreateInput struct {
@@ -136,15 +253,15 @@ type InteractionCreateInput struct {
 	Purpose              string                   `json:"purpose" jsonschema:"Why this agent is the appropriate recipient."`
 	Task                 string                   `json:"task" jsonschema:"The bounded question or work request. Do not put instructions for bypassing the recipient's policy here."`
 	Context              []InteractionContextItem `json:"context,omitempty"`
-	RequestedTools       []string                 `json:"requested_tools,omitempty" jsonschema:"Tools the task may need. Naming one does not grant it."`
+	RequestedTools       []string                 `json:"requested_tools,omitempty" jsonschema:"Toolboxes the task needs of the member you ask: apps (their connected apps, read only) and knowledge (the organization's knowledge search). Naming one does not grant it; the approval says which the work may use, and nothing else is loaded for it."`
 	RequestedPermissions []string                 `json:"requested_permissions,omitempty" jsonschema:"Explicit permissions the task may need. Naming one does not grant it."`
 	ExpiresInSeconds     int                      `json:"expires_in_seconds,omitempty" jsonschema:"Lifetime from 300 to 604800 seconds; defaults to 86400."`
 }
 
 type InteractionDecisionInput struct {
 	Decision           string   `json:"decision" jsonschema:"approved or rejected"`
-	Message            string   `json:"message" jsonschema:"Reason or boundary communicated to the requester."`
-	AllowedTools       []string `json:"allowed_tools,omitempty" jsonschema:"Approved subset of requested_tools."`
+	Message            string   `json:"message" jsonschema:"Why, for your member's record: the member who asked reads an agent's decision in fixed words, approved or declined, never this message."`
+	AllowedTools       []string `json:"allowed_tools,omitempty" jsonschema:"Approved subset of requested_tools: the toolboxes, apps and knowledge, the approved work runs with. Left out, it allows none."`
 	GrantedPermissions []string `json:"granted_permissions,omitempty" jsonschema:"Approved subset of requested_permissions."`
 }
 
@@ -215,13 +332,13 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 		return Toolbox{}, err
 	}
 	decide, err := functiontool.New(functiontool.Config{
-		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. A request whose approval is \"owner\" is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it. A request made in a teamspace is checked against it again first, and may turn out held for the member, or closed by Oryxa because it no longer stands there.",
+		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. The member who asked reads an agent's decision in fixed words, approved or declined, never its message. A request whose approval is \"owner\" is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it. A request made in a teamspace is checked against it again first, and may turn out held for the member, or closed by Oryxa because it no longer stands there.",
 	}, tools.decide)
 	if err != nil {
 		return Toolbox{}, err
 	}
 	respond, err := functiontool.New(functiontool.Config{
-		Name: "interactions_respond", Description: "Completes an approved request with the strict response envelope. Reported tools must be within the approved scope.",
+		Name: "interactions_respond", Description: "Completes an approved request with the strict response envelope. Reported tools must be within the approved scope. Oryxa checks the answer for personal data before the requester reads it: it may deliver it with some details masked, or hold it for your member to review first (status review).",
 	}, tools.respond)
 	if err != nil {
 		return Toolbox{}, err
@@ -230,8 +347,12 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	description := "Durable agent-to-agent requests: send, inspect, approve or reject, and answer through an audited JSON contract without direct invocation."
 	switch {
 	case config.Delivering:
-		offered = []tool.Tool{get, decide, respond}
-		description = "The one agent-to-agent request being delivered to this agent: read it, approve or reject it, and answer it through an audited JSON contract."
+		description = "The one agent-to-agent request being delivered to this agent: read it, and decide it or answer it, as this run is for, through an audited JSON contract."
+		return Toolbox{
+			Name: InteractionsToolboxName, Description: description,
+			Instructions: interactionsInstructions,
+			Toolset:      deliveringTools{tools: []tool.Tool{get, decide, respond}},
+		}, nil
 	case config.Answering:
 		offered = []tool.Tool{inbox, sent, get, decide, respond}
 		description = "Durable agent-to-agent requests addressed to this member: inspect, approve or reject, and answer through an audited JSON contract."
@@ -243,6 +364,45 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	}, nil
 }
 
+// DeliveryTools are the interactions tools a run delivering one interaction
+// for purpose is offered, by name: reading its request, and deciding it in a
+// run that decides, or answering it in one doing the approved work. A
+// report, and a run that does not say what it is for, only read it. Each
+// tool also refuses, when called, whatever its run is not for.
+func DeliveryTools(purpose string) []string {
+	switch purpose {
+	case DeliveryDecides:
+		return []string{"interactions_get", "interactions_decide"}
+	case DeliveryWorks:
+		return []string{"interactions_get", "interactions_respond"}
+	default:
+		return []string{"interactions_get"}
+	}
+}
+
+// deliveringTools offers a run delivering one interaction only the tools
+// its purpose lets it use (DeliveryTools), read from the run's state, which
+// the waker sets as it starts it: a tool the model could not use is not
+// shown to it at all.
+type deliveringTools struct{ tools []tool.Tool }
+
+func (deliveringTools) Name() string { return InteractionsToolboxName }
+
+func (delivering deliveringTools) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
+	purpose := ""
+	if ctx != nil {
+		purpose = stateText(ctx.ReadonlyState(), deliveryPurposeKey, "")
+	}
+	allowed := DeliveryTools(purpose)
+	var offered []tool.Tool
+	for _, one := range delivering.tools {
+		if slices.Contains(allowed, one.Name()) {
+			offered = append(offered, one)
+		}
+	}
+	return offered, nil
+}
+
 type interactionTools struct {
 	service InteractionService
 	tokens  memberauth.TokenSource
@@ -252,7 +412,7 @@ type interactionTools struct {
 }
 
 // settled ends a delivery run on the tool call that recorded its answer, or
-// its rejection, with no model call after it. The ledger now holds all there
+// its decision, with no model call after it. The ledger now holds all there
 // is to say: the member who asked reads it there, and so does the member
 // this agent works for, who is not here to be told; and the call, with what
 // it recorded, stays in the thread. A closing message would be one more
@@ -352,7 +512,44 @@ func (tools interactionTools) sent(ctx agent.Context, args interactionListArgs) 
 	return interactionListResult{Requests: requests}, nil
 }
 
+// delivered refuses, in a run delivering one interaction, every request but
+// that one: the run was woken for it, and what another member's words steer
+// must not read, decide or answer any other request of this member's, where
+// what the run has loaded (their apps, say) could be written into a decision
+// or an answer the request never allowed. A run with no delivered request on
+// record acts on none.
+func (tools interactionTools) delivered(ctx agent.Context, requestID string) error {
+	if !tools.delivering {
+		return nil
+	}
+	delivered := stateText(ctx.ReadonlyState(), deliveredRequestKey, "")
+	if delivered == "" {
+		return errors.New("this run delivers no agent request, so it acts on none")
+	}
+	if strings.TrimSpace(requestID) != delivered {
+		return fmt.Errorf("this run delivers request_id %q and acts on no other request", delivered)
+	}
+	return nil
+}
+
+// deliveredFor is delivered, for a step only a run delivering its request
+// for purpose takes: deciding, in a run that decides, and answering, in one
+// that does the approved work, which alone has what the approval allows. A
+// run that does not say what it is for takes neither.
+func (tools interactionTools) deliveredFor(ctx agent.Context, requestID, purpose, refusal string) error {
+	if err := tools.delivered(ctx, requestID); err != nil || !tools.delivering {
+		return err
+	}
+	if stateText(ctx.ReadonlyState(), deliveryPurposeKey, "") != purpose {
+		return errors.New(refusal)
+	}
+	return nil
+}
+
 func (tools interactionTools) get(ctx agent.Context, args interactionIDArgs) (Interaction, error) {
+	if err := tools.delivered(ctx, args.RequestID); err != nil {
+		return Interaction{}, err
+	}
 	actor, _, err := tools.actor(ctx, false)
 	if err != nil {
 		return Interaction{}, err
@@ -365,6 +562,10 @@ func (tools interactionTools) get(ctx agent.Context, args interactionIDArgs) (In
 }
 
 func (tools interactionTools) decide(ctx agent.Context, args interactionDecisionArgs) (Interaction, error) {
+	if err := tools.deliveredFor(ctx, args.RequestID, DeliveryDecides,
+		"this run does not decide the request: it was delivered to be answered or reported, and its decision is already recorded"); err != nil {
+		return Interaction{}, err
+	}
 	actor, _, err := tools.actor(ctx, false)
 	if err != nil {
 		return Interaction{}, err
@@ -373,14 +574,21 @@ func (tools interactionTools) decide(ctx agent.Context, args interactionDecision
 	if err != nil {
 		return Interaction{}, interactionError(err)
 	}
-	// A rejection is the request's end; an approval leaves its work to do.
-	if request.Status == "rejected" {
+	// A rejection is the request's end, and a run delivering it to decide
+	// has nothing left once it is decided either way: approved, its work is
+	// done in a run of its own, with what the approval allows. A member's
+	// own run carries on.
+	if request.Status == "rejected" || request.Status == "approved" {
 		tools.settled(ctx)
 	}
 	return request, nil
 }
 
 func (tools interactionTools) respond(ctx agent.Context, args interactionResponseArgs) (Interaction, error) {
+	if err := tools.deliveredFor(ctx, args.RequestID, DeliveryWorks,
+		"this run does not answer the request: it only decides it, and once approved the work is done in a run of its own, which has exactly what the approval allows"); err != nil {
+		return Interaction{}, err
+	}
 	actor, _, err := tools.actor(ctx, false)
 	if err != nil {
 		return Interaction{}, err

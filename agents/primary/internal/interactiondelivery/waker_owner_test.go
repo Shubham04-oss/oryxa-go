@@ -44,10 +44,14 @@ func standsStill() Config {
 	return Config{Interval: time.Second, Lease: time.Minute, Standing: &fakeStanding{}}
 }
 
-// decidedBy is the request approved, as decider recorded it.
+// decidedBy is the request approved, as decider recorded it, allowing the
+// member's apps and knowledge.
 func decidedBy(request agents.Interaction, decider *agents.InteractionDecider) agents.Interaction {
 	request.Status = interactions.StatusApproved
-	request.Decision = &agents.InteractionDecision{Decision: interactions.DecisionApproved, Message: "Go ahead.", DecidedAt: time.Now(), DecidedBy: decider}
+	request.Decision = &agents.InteractionDecision{
+		Decision: interactions.DecisionApproved, Message: "Go ahead.", DecidedAt: time.Now(), DecidedBy: decider,
+		AllowedTools: []string{agents.AppsToolboxName, agents.KnowledgeToolboxName},
+	}
 	return request
 }
 
@@ -140,8 +144,8 @@ func TestAHeldRequestTheOwnerRejectsReachesOnlyTheRequester(t *testing.T) {
 }
 
 // TestADelegatedTeamspaceRequestWakesItsAgentAsBefore: a specialist its
-// owner contributed with automatic delegation is woken to decide it, without
-// the member's apps, exactly as a request outside a teamspace is.
+// owner contributed with automatic delegation is woken to decide it, reading
+// the request alone, exactly as a request outside a teamspace is.
 func TestADelegatedTeamspaceRequestWakesItsAgentAsBefore(t *testing.T) {
 	store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_requested", KindTargetRequested, 1)}}
 	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent)}}
@@ -150,8 +154,8 @@ func TestADelegatedTeamspaceRequestWakesItsAgentAsBefore(t *testing.T) {
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(runs.calls) != 1 || runs.calls[0].reach != managedagents.DeliveryQuiet || len(store.done) != 1 {
-		t.Fatalf("calls=%+v done=%v, want one quiet run that decided", runs.calls, store.done)
+	if len(runs.calls) != 1 || runs.calls[0].reach != managedagents.DeliveryReport || len(store.done) != 1 {
+		t.Fatalf("calls=%+v done=%v, want one run reading the request alone that decided", runs.calls, store.done)
 	}
 	if message := runs.calls[0].input.Message; !strings.Contains(message, "interactions_decide") || strings.Contains(message, "themself") {
 		t.Fatalf("a delegated request was not asked to decide: %s", message)

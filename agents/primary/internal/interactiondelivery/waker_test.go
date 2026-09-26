@@ -1,8 +1,11 @@
 package interactiondelivery
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -161,6 +164,28 @@ func (requests *fakeRequests) CloseExpired(ctx context.Context, reason string, s
 		closed = append(closed, failed)
 	}
 	return closed, nil
+}
+
+// WithholdExpired withholds every request in review whose expiry passed by
+// at, the longest expired first, as the ledger does.
+func (requests *fakeRequests) WithholdExpired(_ context.Context, reason string, at time.Time, limit int) ([]agents.Interaction, error) {
+	requests.mu.Lock()
+	defer requests.mu.Unlock()
+	var expired []agents.Interaction
+	for _, request := range requests.requests {
+		if request.Status == interactions.StatusReview && !request.ExpiresAt.After(at) {
+			expired = append(expired, request)
+		}
+	}
+	slices.SortFunc(expired, func(a, b agents.Interaction) int { return a.ExpiresAt.Compare(b.ExpiresAt) })
+	var withheld []agents.Interaction
+	for _, request := range expired[:min(len(expired), limit)] {
+		request.Status, request.Held, request.Revision = interactions.StatusWithheld, nil, request.Revision+1
+		request.Review = &agents.InteractionReview{Action: interactions.ReviewWithhold, DecidedBy: agents.InteractionDecider{Kind: interactions.DecidedBySystem}, DecidedAt: at, Reason: reason}
+		requests.requests[request.ID] = request
+		withheld = append(withheld, request)
+	}
+	return withheld, nil
 }
 
 func (requests *fakeRequests) get(id string) agents.Interaction {
@@ -361,28 +386,189 @@ func TestEveryDeliveryRunStartsWithItsInteractionsToolboxLoaded(t *testing.T) {
 	}
 }
 
+// TestEveryDeliveryRunIsPinnedToItsRequest: whatever the delivery, its run
+// is started naming the one request it delivers, which its interactions
+// tools act on alone.
+func TestEveryDeliveryRunIsPinnedToItsRequest(t *testing.T) {
+	for _, kind := range []string{KindTargetRequested, KindTargetApproved, KindRequesterRejected, KindRequesterCompleted} {
+		status := interactions.StatusPending
+		if kind == KindTargetApproved {
+			status = interactions.StatusApproved
+		}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(status)}}
+		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusCompleted) }}
+		waker := NewWaker(&fakeDeliveries{pending: []Delivery{testDelivery("evt_1", kind, 1)}}, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+		if err := waker.WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(runs.calls) != 1 || runs.calls[0].input.Delivery.RequestID != "irq_1" {
+			t.Fatalf("%s: calls=%+v, want one run pinned to irq_1", kind, runs.calls)
+		}
+		want := map[string]string{
+			KindTargetRequested: agents.DeliveryDecides, KindTargetApproved: agents.DeliveryWorks,
+			KindRequesterRejected: agents.DeliveryReports, KindRequesterCompleted: agents.DeliveryReports,
+		}[kind]
+		if got := runs.calls[0].input.Delivery.Purpose; got != want {
+			t.Fatalf("%s: the run is for %q, want %q", kind, got, want)
+		}
+	}
+}
+
+// TestEveryDeliveryRunStartIsLoggedWithWhatItWasGiven: each run a delivery
+// starts logs one line saying which request, what kind of delivery, and the
+// toolboxes and interactions tools it was given, by name, and nothing the
+// request says.
+func TestEveryDeliveryRunStartIsLoggedWithWhatItWasGiven(t *testing.T) {
+	for kind, want := range map[string]struct {
+		toolboxes, tools []string
+	}{
+		KindTargetRequested:    {[]string{"interactions"}, []string{"interactions_get", "interactions_decide"}},
+		KindTargetApproved:     {[]string{"apps", "interactions"}, []string{"interactions_get", "interactions_respond"}},
+		KindRequesterCompleted: {[]string{"interactions"}, []string{"interactions_get"}},
+	} {
+		status := interactions.StatusPending
+		request := testRequest(status)
+		if kind == KindTargetApproved {
+			request = allowing(request, agents.AppsToolboxName)
+		}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": request}}
+		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusCompleted) }}
+		var logs bytes.Buffer
+		toolboxes := func(profile managedagents.UnattendedProfile) []string {
+			if profile.ReadsApps() {
+				return []string{"apps", "interactions"}
+			}
+			return []string{"interactions"}
+		}
+		waker := NewWaker(&fakeDeliveries{pending: []Delivery{testDelivery("evt_1", kind, 1)}}, runs, requests,
+			Config{Interval: time.Second, Lease: time.Minute, Toolboxes: toolboxes}, slog.New(slog.NewJSONHandler(&logs, nil)))
+		if err := waker.WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		var started []map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var entry map[string]any
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				t.Fatalf("%s: log line %q: %v", kind, line, err)
+			}
+			if entry["msg"] == "interaction delivery run started" {
+				started = append(started, entry)
+			}
+		}
+		if len(started) != 1 {
+			t.Fatalf("%s: %d lines logged a run starting, want one:\n%s", kind, len(started), logs.String())
+		}
+		line := started[0]
+		names := func(key string) []string {
+			var out []string
+			for _, value := range line[key].([]any) {
+				out = append(out, value.(string))
+			}
+			return out
+		}
+		if line["request_id"] != "irq_1" || line["kind"] != kind || line["level"] != "INFO" ||
+			!slices.Equal(names("toolboxes"), want.toolboxes) || !slices.Equal(names("interaction_tools"), want.tools) {
+			t.Fatalf("%s: logged %v, want irq_1, its kind, %v and %v", kind, line, want.toolboxes, want.tools)
+		}
+		if strings.Contains(logs.String(), "TOP SECRET") {
+			t.Fatalf("%s: the log carries the request:\n%s", kind, logs.String())
+		}
+	}
+}
+
+// TestDecidingANewRequestReadsTheRequestAlone: the run deciding a new
+// request has nothing of the member's loaded, and is told it only decides:
+// approved, the work runs on its own, with exactly what was allowed.
+func TestDecidingANewRequestReadsTheRequestAlone(t *testing.T) {
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(interactions.StatusPending)}}
+	runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusApproved) }}
+	waker := NewWaker(&fakeDeliveries{pending: []Delivery{testDelivery("evt_1", KindTargetRequested, 1)}}, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runs.calls) != 1 || runs.calls[0].reach != managedagents.DeliveryReport {
+		t.Fatalf("calls=%+v, want one run reading the request alone", runs.calls)
+	}
+	message := runs.calls[0].input.Message
+	if !strings.Contains(message, "Deciding is all this run does") || strings.Contains(message, "in this run") {
+		t.Fatalf("the deciding run is still told to do the work: %s", message)
+	}
+}
+
 // TestOnlyApprovedWorkReadsTheMembersApps: the member is not here, so what
 // their agent may reach is what it has already approved. Deciding on a new
 // request runs without the apps toolbox at all, and reporting an outcome to
 // one's own member reads the request alone; and every delivery runs as one,
 // offered nothing that lists the member's other requests.
 func TestOnlyApprovedWorkReadsTheMembersApps(t *testing.T) {
+	allowedBoth := allowing(testRequest(interactions.StatusApproved), agents.AppsToolboxName, agents.KnowledgeToolboxName)
 	cases := []struct {
 		kind  string
 		reach managedagents.UnattendedProfile
 	}{
-		{KindTargetRequested, managedagents.DeliveryQuiet},
+		{KindTargetRequested, managedagents.DeliveryReport},
 		{KindTargetApproved, managedagents.DeliveryReads},
 		{KindRequesterRejected, managedagents.DeliveryReport},
 		{KindRequesterCompleted, managedagents.DeliveryReport},
 	}
 	for _, testCase := range cases {
-		got := reach(testCase.kind)
+		got := reach(testCase.kind, allowedBoth)
 		if got != testCase.reach {
 			t.Errorf("reach(%s) = %q, want %q", testCase.kind, got, testCase.reach)
 		}
 		if reads := got.ReadsApps(); reads != (testCase.kind == KindTargetApproved) || !got.Delivers() {
 			t.Errorf("reach(%s) reads apps = %t, delivers = %t; want apps only for approved work, and a delivery always", testCase.kind, reads, got.Delivers())
+		}
+	}
+}
+
+// allowing is request approved with allowed_tools set to tools.
+func allowing(request agents.Interaction, tools ...string) agents.Interaction {
+	request.Status = interactions.StatusApproved
+	request.Decision = &agents.InteractionDecision{Decision: interactions.DecisionApproved, Message: "Go ahead.", AllowedTools: tools, DecidedAt: time.Now()}
+	return request
+}
+
+// TestApprovedWorkReachesOnlyWhatItsApprovalAllows: the run doing approved
+// work is started with exactly the toolboxes its decision's allowed_tools
+// name, beside its request: the member's apps, their knowledge, both or
+// neither. Whatever else the decision names, it grants nothing.
+func TestApprovedWorkReachesOnlyWhatItsApprovalAllows(t *testing.T) {
+	for _, testCase := range []struct {
+		allowed []string
+		reach   managedagents.UnattendedProfile
+	}{
+		{[]string{agents.AppsToolboxName, agents.KnowledgeToolboxName}, managedagents.DeliveryReads},
+		{[]string{agents.AppsToolboxName}, managedagents.DeliveryApps},
+		{[]string{agents.KnowledgeToolboxName}, managedagents.DeliveryQuiet},
+		{[]string{}, managedagents.DeliveryReport},
+		{nil, managedagents.DeliveryReport},
+		{[]string{"apps_write", "knowledge_search", "calendar"}, managedagents.DeliveryReport},
+		{[]string{"Apps", "calendar"}, managedagents.DeliveryApps},
+	} {
+		approved := testDelivery("evt_approved", KindTargetApproved, 2)
+		approved.Status = interactions.StatusApproved
+		store := &fakeDeliveries{pending: []Delivery{approved}}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": allowing(testRequest(interactions.StatusApproved), testCase.allowed...)}}
+		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusCompleted) }}
+		waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+		if err := waker.WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(runs.calls) != 1 || runs.calls[0].reach != testCase.reach {
+			t.Fatalf("approved work allowed %v started %+v, want one run reaching %s", testCase.allowed, runs.calls, testCase.reach)
+		}
+		if !strings.Contains(runs.calls[0].input.Message, "exactly the toolboxes the decision's allowed_tools name") {
+			t.Errorf("approved work allowed %v is not told it has only those: %s", testCase.allowed, runs.calls[0].input.Message)
+		}
+	}
+	// A request whose decision is missing, or is not an approval, reaches
+	// the request alone.
+	for _, decision := range []*agents.InteractionDecision{nil, {Decision: interactions.DecisionRejected, AllowedTools: []string{agents.AppsToolboxName}}} {
+		request := testRequest(interactions.StatusApproved)
+		request.Decision = decision
+		if got := reach(KindTargetApproved, request); got != managedagents.DeliveryReport {
+			t.Errorf("approved work with decision %+v reaches %s, want the request alone", decision, got)
 		}
 	}
 }

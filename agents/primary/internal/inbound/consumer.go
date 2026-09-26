@@ -345,7 +345,18 @@ func (consumer *Consumer) interactionChanged(ctx context.Context, detailType str
 			return fmt.Errorf("event %s: decided interaction has status %q", envelope.EventID, changed.Status)
 		}
 	case agentsv1.InteractionCompletedDetailType:
-		if changed.Status != "completed" && changed.Status != "failed" {
+		switch changed.Status {
+		case "completed", "failed", "withheld":
+			// The member who asked hears how it ended: an answer, a
+			// failure, or an answer its addressed member withheld.
+		case "review":
+			// An answer held for its addressed member's review wakes
+			// nobody: the member reviews it in person, and their review,
+			// or its expiry, is the event that tells the member who asked.
+			consumer.logger.InfoContext(ctx, "interaction answer held for review; nobody is woken",
+				"event_id", envelope.EventID, "request_id", changed.RequestID)
+			return nil
+		default:
 			return fmt.Errorf("event %s: completed interaction has status %q", envelope.EventID, changed.Status)
 		}
 		delivery.RecipientUserID = changed.RequesterUserID

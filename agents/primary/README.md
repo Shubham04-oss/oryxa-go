@@ -311,10 +311,38 @@ The toolbox exposes `interactions_create`, `interactions_inbox`,
 `interactions_respond`. A specialist sees only requests it sent or received;
 the member's primary agent may mediate every request belonging to that member.
 Approval can only narrow the requested tools and permissions, and a response
-cannot report using a tool outside the approved set. These grants describe the
-interaction envelope; they never bypass a tool's existing authorization or
-human-confirmation requirements, and they are not enforced on the run that
-does the approved work either (see below).
+cannot report using a tool outside the approved set. These grants never
+bypass a tool's existing authorization or human-confirmation requirements,
+and the run that does the approved work has exactly the toolboxes they allow
+(see below).
+
+**What a request may ask to use.** `requested_tools` and `allowed_tools` name
+toolboxes of the member asked: `apps`, their connected apps, which approved
+work only reads, and `knowledge`, the organization's knowledge search. They
+are read in any case and kept spelled as here (`agents.RequestTool`). Any
+other value is accepted, as it always was, and grants nothing.
+`allowed_tools` must be a subset of `requested_tools`, or the decision is
+`400 invalid_request`, and an approval that leaves it out allows none:
+nothing grants a tool implicitly.
+
+**Jev chooses what a request made in a teamspace needs.** A request made in
+a teamspace that names no `requested_tools` gets them from Jev as it is
+created (`interactions.Service.requestedTools`): one Choice over the
+requester's own words, the task and its context, and never anything of the
+member asked, between `none`, `knowledge`, `apps` and `apps_and_knowledge`.
+Its owner's approval then shows what would be read, and allows it or not.
+A choice with a confidence below 0.5 (`interactions.ToolsConfidence`) asks
+for none. Over four options that is a choice holding at least 62.5% of the
+probability: the least TypeSafe's guidance acts on at all, and acting on it
+is safe here because it only proposes what the owner approves in person.
+No Jev (`TYPESAFE_API_KEY` unset), one that does not answer within 3 seconds,
+and one that fails ask for none as well, and the request is made all the
+same. A requester who names tools keeps them as given. `tools_judged_by`
+says who chose: `requester`, `jev` (which may have chosen none), or `none`,
+nobody (a request made outside a teamspace that names none, or Jev unsure,
+unset, silent or failing). A request made before this has nobody on record,
+and the field is absent. Sent again under its `Idempotency-Key`, a request
+whose tools Jev chose is compared as it was sent, naming none.
 
 **Requests inside a teamspace, and who approves them.** A request may name the
 teamspace it belongs to (`teamspace_id`), which is how a teamspace side
@@ -372,7 +400,16 @@ Every decision records who made it, as `decision.decided_by`:
 `{"kind": "member", "user_id": ...}` for the member in their own session,
 `{"kind": "agent", "user_id": ..., "agent_id": ...}` for an agent in a run,
 and `{"kind": "system"}` when Oryxa closes a request (below). A decision an
-older build recorded has no `decided_by`. The waker tells an agent its owner
+older build recorded has no `decided_by`.
+
+An agent's decision reaches the member who asked in fixed words,
+`Approved by their agent.` or `Declined by their agent.`, never the message
+the agent wrote (`interactions.AgentApproved`, `AgentDeclined`). A run
+deciding holds whatever it may reach, and no guard reads a decision (only an
+answer is held for review), so what an agent writes there could otherwise
+carry what it read of its member's. Its message stays in its own thread,
+with the call that carried it. A member deciding in their own session writes
+to the member who asked in their own words. The waker tells an agent its owner
 approved in person only when `decided_by` names that member, never inferred
 from `approval`.
 
@@ -424,30 +461,59 @@ is told (see [Wake-ups](#wake-ups)).
 there, so the run answers on the reduced agent (see [Wake-ups](#wake-ups)) and
 what it may reach follows what their own agent has already allowed:
 
-- **Deciding** on a new request runs without the apps toolbox at all, with
-  the organization's knowledge, read-only, beside the request, so an approval
-  whose work needs no more can be finished in the same run. Nothing another
-  member wrote can read this member's connected apps before their agent has
-  approved it. A request held for its owner is never delivered for deciding
-  at all.
+- **Deciding** on a new request reads the request alone, neither the
+  member's apps nor their knowledge, and only decides: its
+  `interactions_respond` refuses to answer (`agents.DeliveryDecides`), and
+  the run ends on its decision, approval or rejection. Nothing another member
+  wrote reaches anything of this member's before their agent has approved
+  it, and approved work always runs on its own, with exactly what the
+  approval allows. A request held for its owner is never delivered for
+  deciding at all.
 - **Reporting** a rejection or a result back to the member who asked reads
   the request alone: neither their apps nor their knowledge.
-- **Doing approved work** runs with the read-only apps toolbox (the same one
-  a wake-up gets) and never the writing one, beside the read-only knowledge.
-  The run is not narrowed to the decision's `allowed_tools`: it has the whole
-  read-only toolbox and is only told to keep to what was allowed. The ledger
-  checks only the response's own account of it, that `tools_used` is within
-  `allowed_tools`.
+- **Doing approved work** runs with exactly the toolboxes its decision's
+  `allowed_tools` name, beside the request (`interactiondelivery.approvedReach`):
+  `apps`, the read-only apps toolbox (the same one a wake-up gets, never the
+  writing one), and `knowledge`, the read-only knowledge, both, or neither
+  (`managedagents.DeliveryReads`, `DeliveryApps`, `DeliveryQuiet` or
+  `DeliveryReport`). An approval that allows none, or names only tools the
+  vocabulary does not know, reaches the request alone. The limit is the run's
+  own, not an instruction: what was not allowed is not loaded, and the prompt
+  says so. The ledger still checks the response's own account of it, that
+  `tools_used` is within `allowed_tools`. Only this run answers
+  (`agents.DeliveryWorks`), and it does not decide.
+
+  An approval an agent makes itself therefore costs one more run than it did
+  when the deciding run could go on to answer: the approval's event through
+  the bus and the agents queue, which wakes the waker as it is recorded
+  (well under a second, #97), and that run's own model calls, the first of
+  them reading the request again (2 to 37 seconds each, as measured below).
+  An approval its member makes in person always took a run of its own.
 - No unwatched run may start an interaction of its own: `interactions_create`
   is left out, so a request cannot fan out into requests on other members.
 - A delivery is about its one request. Its run gets an interactions toolbox
-  of its own (`managedagents.DeliveryReads`, `DeliveryQuiet` and
-  `DeliveryReport`, the reach above) with `interactions_get`,
+  of its own (`managedagents.DeliveryReads`, `DeliveryApps`, `DeliveryQuiet`
+  and `DeliveryReport`, the reach above) with `interactions_get`,
   `interactions_decide` and `interactions_respond` only: `interactions_inbox`
   and `interactions_sent` are not there, so the model cannot browse the
-  member's other requests whatever it makes of the request. Nothing a
+  member's other requests whatever it makes of the request. Of the three it
+  is offered only those its purpose uses, from its first model call
+  (`agents.DeliveryTools`): reading and deciding its request in a run
+  deciding it, reading and answering it in one doing the approved work, and
+  reading it alone in a report. Each tool still refuses, when called, what
+  its run is not for. They act on the delivered request alone: the waker starts the run naming it
+  (`threads.RunInput.Delivery`, kept in the thread's state, which the model
+  never writes), and any other `request_id` is refused, so a run holding the
+  member's apps cannot read, decide or answer another of their requests. Nothing a
   delivery does needs them, since its message names the request. App
   wake-ups and a room's stand-in keep the toolbox they had.
+- Every delivery run's start is logged at INFO, `interaction delivery run
+  started`, with its request, the delivery's kind and purpose, its profile,
+  and the toolboxes and interactions tools it was given, by name
+  (`interactiondelivery.Config.Toolboxes`); never what any of them holds.
+- A delivery run has no `load_artifacts`, which would list the member's own
+  files, the `user:` ones every thread of theirs shares, into a run another
+  member's words steer.
 
 Each create, decision, and response is committed with an EventBridge outbox
 event. The event contains routing identities and lifecycle state, not the task,
@@ -474,10 +540,10 @@ A delivery run starts with all it may reach already loaded: every toolbox of
 its reach has its tools declared, and its skill in the instruction, from the
 first model call, and the run has no `list_tools` or `load_tools`, so no
 model call goes to finding what it could use (`assembly.Krude.Delivering` for
-Krude, `ManagedDelivering` for a specialist). Approved work starts with the
-read-only apps, the read-only knowledge and the request's interactions
-toolbox; deciding a new request with the knowledge and the interactions
-toolbox; a report with the interactions toolbox alone.
+Krude, `ManagedDelivering` for a specialist). Approved work starts with
+what its approval allows of the read-only apps and the read-only knowledge,
+and the request's interactions toolbox; deciding a new request, and a
+report, with the interactions toolbox alone.
 
 That puts the whole reach on every call. For approved work it is 4.7 KB of
 tool declarations and 4.8 KB of skills that the interactions toolbox alone
@@ -515,7 +581,7 @@ described the member who asked. Two of three measured runs called it, at 7 to
 16 seconds each, and learned nothing their instruction did not say.
 
 The addressed agent's delivery run ends on the call that settles it:
-`interactions_respond`, or `interactions_decide` rejecting. That call sets
+`interactions_respond`, or `interactions_decide` either way. That call sets
 ADK's `SkipSummarization`, so no model call follows it. The member it works
 for is not there to be told, and nothing is lost: the request holds its
 decision, who made it and its result, which both members read (in a
@@ -523,8 +589,8 @@ teamspace's side conversation the answer shows as the agent's message, "on
 behalf of … approved by …", and a failure as a line), and the call, with
 what it recorded, stays in the delivery thread. A closing message was one
 more model call, 3 to 37 seconds, restating another member's request to
-nobody while the run held its thread and a delivery slot. An approval carries
-on to do the work, and a member's own run is unchanged.
+nobody while the run held its thread and a delivery slot. An approval's work
+runs on its own, and a member's own run is unchanged.
 
 ## Run API
 
@@ -711,6 +777,7 @@ and a decision made here is the member's own:
 | `GET /v1/organizations/{org}/agent-requests/{request}` | Reads one request visible to the member |
 | `POST /v1/organizations/{org}/agent-requests/{request}/decision` | The member approves or rejects, in their own session, with narrowed tools and permissions; the only way a request held for its owner is decided. Approving one made in a teamspace reads it again first, with the member's own token |
 | `POST /v1/organizations/{org}/agent-requests/{request}/response` | Completes an approved request with the strict result envelope |
+| `POST /v1/organizations/{org}/agent-requests/{request}/review` | The member sends, sends masked, or withholds an answer the answer guard held for them, in their own session (see [Answer guard](#answer-guard)) |
 
 A request's JSON carries `teamspace_id` (absent outside a teamspace) and
 `approval` (`agent` or `owner`, see
@@ -748,6 +815,114 @@ caller is not a party to is `404 not_found`), one past its expiry
 `409 request_expired`, one already decided `409 invalid_state`, and one that
 no longer stands in its teamspace `409 request_closed`, with the reason:
 Oryxa has closed it.
+
+### Answer guard
+
+Every answer one member's agent gives another member is read, before that
+member reads it, by the answer guard (`internal/answerguard`): Amazon Bedrock
+Guardrails' standalone `ApplyGuardrail`, on the output side, with the
+guardrail `AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID` and
+`AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION` name (`deploy/production/answer_guard.tf`).
+Unset, no answer is checked, as before; one set without the other refuses to
+start. `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`, which the SDK honours, points
+development at a stand-in.
+
+It reads every text of the result the member who asked would read, each in a
+call of its own and all within 5 seconds: `summary`, `content`, and the
+`artifacts` references. `tools_used` is not read: it can only name what the
+approval allowed, the requester's own vocabulary. Nor is the decision's
+`message`, which is written when a request is decided, not answered.
+
+What it found is read from each finding in the assessments, never from the
+response's top-level action: the held kinds are detect-only, so an answer
+with nothing else in it comes back with action `NONE` and no outputs, its
+findings listed all the same.
+
+| Found | What happens | `guard` |
+| --- | --- | --- |
+| Nothing | Delivered as given | `{"state":"clear"}` |
+| Only kinds that are always masked | Delivered as the guardrail masked it, each value as `{TYPE}` | `{"state":"masked","kinds":[...]}` |
+| An email address, phone number or address (`EMAIL`, `PHONE`, `ADDRESS`) | Held in `review` for the addressed member, not delivered | `{"state":"held","kinds":[...]}`, the held kinds |
+| A failure, a timeout, anything blocked, or a response that does not add up | Held the same way: it fails closed | `{"state":"held","kinds":["UNCHECKED"]}` |
+
+Always masked: `PASSWORD`, `AWS_ACCESS_KEY`, `AWS_SECRET_KEY`,
+`CREDIT_DEBIT_CARD_NUMBER`, `_CVV` and `_EXPIRY`, `PIN`,
+`INTERNATIONAL_BANK_ACCOUNT_NUMBER`, `SWIFT_CODE`, `US_BANK_ACCOUNT_NUMBER`,
+`US_BANK_ROUTING_NUMBER`, `US_SOCIAL_SECURITY_NUMBER`,
+`US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER`, `US_PASSPORT_NUMBER`, `DRIVER_ID`,
+`CA_HEALTH_NUMBER`, `CA_SOCIAL_INSURANCE_NUMBER`,
+`UK_NATIONAL_HEALTH_SERVICE_NUMBER`, `UK_NATIONAL_INSURANCE_NUMBER` and
+`UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER`. A kind that is always masked but came
+back found and not masked is held, since its value is still there. `NAME`,
+`AGE`, `USERNAME`, `URL`, `IP_ADDRESS`, `MAC_ADDRESS`, `LICENSE_PLATE` and
+`VEHICLE_IDENTIFICATION_NUMBER` are not set up at all: they are too common in
+work answers. A failed answer is read like a completed one: its summary is
+read by the member who asked too.
+
+A held answer is kept in two versions, as `held`: `held.result`, as the
+guardrail left it, with the kinds that are always masked masked; and
+`held.masked_result`, with every held value replaced by its kind as well,
+such as `{EMAIL}`. A held value is found whatever its case and however its
+spaces run; one that cannot be found makes that text its kinds alone, so no
+held value survives in the masked version. An answer that could not be
+checked has no `masked_result`.
+
+The addressed member reviews it with `POST .../agent-requests/{request}/review`
+and `{"action":"send"}`, `"send_masked"` or `"withhold"`
+(`interactions.Service.ReviewAsOwner`). Exactly as for a decision, only their
+own signed-in session may: the actor must be marked `"member"`, agent tokens
+are `403 forbidden`, the member who asked is `403 forbidden`, and anyone else
+`404 not_found`. Only a request in `review` is reviewed (`409 invalid_state`
+otherwise, and `409 request_expired` past its expiry). `send` delivers
+`held.result` and `send_masked` `held.masked_result` (`409 invalid_state` for
+an answer that could not be checked); either completes the request, or fails
+it for a held failure. Sending the answer to a request made in a teamspace
+reads the teamspace again first, with the member's own token, as approving it
+did: one that no longer stands there (the member who asked left its team,
+say) has its answer withheld by Oryxa,
+`{"action":"withhold","decided_by":{"kind":"system"},"reason":"Oryxa withheld this answer because ..."}`,
+and the route answers `409 request_closed` saying why. `withhold` ends it
+`withheld`, needing nothing to remain, and the member who asked reads no
+result. Either way the held versions are dropped, and the review is
+kept as `review`:
+`{"action":"send","decided_by":{"kind":"member","user_id":"..."},"decided_at":"..."}`.
+A request that expires in review is withheld by the waker's poll
+(`Store.WithholdExpired`), or, where no events queue runs the waker, by a
+sweep of its own every five seconds (`interactions.SweepExpiredReviews`),
+with
+`{"action":"withhold","decided_by":{"kind":"system"},"decided_at":"...","reason":"expired before review"}`.
+Until a sweep records it, a request in review past its expiry already reads
+that way to both members, with its expiry as `decided_at`, and cannot be
+reviewed (`409 request_expired`).
+
+The addressed member reads all of it in their own signed-in session. Their
+agents read that an answer is held, and what for (`guard`), but never `held`:
+no run carries the held texts into a model call, its thread or a trace. The
+member who asked, and their agents, read a request in `review` as its status
+alone (no `result`, `guard` or `held`), a `withheld` one as its status and
+`review`, and a delivered one with its `result`, `guard` and `review`; never
+`held`.
+
+Each step is the ordinary `agents.interaction.completed.v1` event, carrying
+`review`, `withheld`, or `completed` or `failed` as its status, and nothing of
+the guard or of any text. `review` wakes nobody: the member reviews in
+person. `withheld` wakes the requester's agent, told the answer was withheld
+and that there is nothing to read. Nothing else touches a request in review:
+the approval's delivery is settled without a run, since the ledger left
+`approved`; giving up on approved work, and closing approvals that expired,
+touch only `approved` requests.
+
+Nothing the guard found is logged or traced as a value: Bedrock's `match`
+holds the raw value by design, and neither it nor any text is ever logged,
+published or traced. ADK traces every tool call's arguments and response on
+its `execute_tool` span, whatever `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`
+says, which would put an answer the guard has yet to read, from
+`interactions_respond`'s arguments, into X-Ray. So the process's trace
+exporter redacts both attributes on every `interactions_` tool's span, and on
+a span of merged calls one of them is among
+(`observability.RedactToolCalls`). The guard logs reasons and kinds, and a failed call by
+its error code alone, since the error's message could quote what it was
+sent.
 
 ### A teamspace is a room
 
@@ -1020,7 +1195,7 @@ fills it (`internal/inbound`):
 | `batching.trigger-batch.ready.v1` | Keeps the batch's triggers, all at once, to wake Krude for its member (see [Wake-ups](#wake-ups)) |
 | `agents.interaction.requested.v1` | Persists a delivery job for the addressed target agent; one held for its owner completes without waking it |
 | `agents.interaction.decided.v1` | Wakes the target to finish approved work, or the requester to observe a rejection |
-| `agents.interaction.completed.v1` | Wakes the requester to observe a completed or failed result |
+| `agents.interaction.completed.v1` | Wakes the requester to observe a completed, failed or withheld result; an answer held for review (`review`) wakes nobody |
 | `auth.member.removed.v1` | Removes the member's threads, waiting wake-ups, agent definitions, and cross-user request content in that organization |
 | `auth.organization.deleted.v1` | The same for everyone in the organization |
 | `teams.member.removed.v1` | Withdraws the person's contributions to the team's teamspace, and records `agents.teamspace.member.removed.v1` when the team has one |
@@ -1473,7 +1648,7 @@ Contracts live in `/contracts/events/agents/v1`:
 | `agents.workflow.execution.failed.v1` | Execution ends without a result |
 | `agents.interaction.requested.v1` | A durable request is ready to route to its target agent |
 | `agents.interaction.decided.v1` | The target approved or rejected a request |
-| `agents.interaction.completed.v1` | The target completed or failed an approved request |
+| `agents.interaction.completed.v1` | The target completed or failed an approved request; its answer was held for review (`review`); or that review ended it: `completed` or `failed` once sent, `withheld` when withheld |
 | `agents.teamspace.room.message.posted.v1` | A teamspace's room stored a message, a person's or an agent's answer, without its body ([A teamspace is a room](#a-teamspace-is-a-room)) |
 | `agents.teamspace.member.removed.v1` | A person left a teamspace: Teams removed them from the team it is bound to, whether or not they had contributed agents to it |
 
@@ -1682,9 +1857,14 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf |
 | `AGENTS_ALLOWED_ORIGINS` | unset | Origins, comma-separated, whose cookie-authenticated requests may start runs and change threads; the web app's |
 | `AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS` | `600` | Longest one run may take; 60–3600 seconds |
+| `TYPESAFE_API_KEY` | unset | TypeSafe's key, for Jev: a room's judgment of every message, and what a request made in a teamspace that names no tools needs (see [Agent interactions toolbox](#agent-interactions-toolbox)). Unset, rooms fall back to rules and such a request asks for none |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | TypeSafe's API: HTTPS, or plain HTTP to this machine |
 | `AGENTS_PRIMARY_GUARDRAIL_ID` | unset | Bedrock guardrail that screens the member's conversation; unset turns screening off |
 | `AGENTS_PRIMARY_GUARDRAIL_VERSION` | unset | The guardrail's numbered version, required with its ID; never `DRAFT` |
 | `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` | `false` | Block, rather than pass, what a failed screen could not check |
+| `AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID` | unset | Bedrock guardrail the answer guard reads every answer another member will read with (see [Answer guard](#answer-guard)); unset, no answer is checked. Set with its version or not at all |
+| `AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION` | unset | That guardrail's version, set with its ID |
+| `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` | unset | Bedrock runtime endpoint override, for a development stand-in of the answer guard's guardrail |
 | `AGENTS_PRIMARY_DATABASE_MAX_CONNS` | `8` | Size of the pool the service keeps for ADK's tables, apart from the shared one |
 | `AGENTS_EVENTS_QUEUE_URL` | unset | Queue carrying batching's app batches and interaction lifecycle events; without it neither app nor cross-agent events wake persistent agents (see [Wake-ups](#wake-ups)) |
 | `AWS_ENDPOINT_URL_SQS` | unset | SQS endpoint override for the LocalStack emulator |

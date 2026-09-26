@@ -61,6 +61,9 @@ type RunInput struct {
 	// whose work is known before it starts, such as delivering an
 	// interaction, spends no model calls finding and loading what it needs.
 	Toolboxes []string
+	// Delivery names the one interaction a run delivering one is about: its
+	// interactions tools act on that request alone.
+	Delivery agents.Delivery
 }
 
 // Answer is the member's decision on one confirmation.
@@ -168,6 +171,12 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 			run.stateDelta = map[string]any{}
 		}
 		maps.Copy(run.stateDelta, agents.LoadToolboxes(stored.State(), input.Toolboxes...))
+	}
+	if input.Delivery.RequestID != "" {
+		if run.stateDelta == nil {
+			run.stateDelta = map[string]any{}
+		}
+		maps.Copy(run.stateDelta, agents.DeliveryState(input.Delivery))
 	}
 	pending := pendingConfirmations(sessionEvents(stored), service.agent.Name())
 	if message != "" {
