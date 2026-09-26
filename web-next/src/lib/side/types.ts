@@ -5,14 +5,28 @@ import type {
   SideAgentMessageStatus,
   SideApproval,
   SideConfirmation,
+  SideDecision,
+  SideGuard,
+  SideHeldAnswer,
+  SideOutcome,
   SideRequestStatus,
+  SideReview,
+  SideReviewAction,
+  SideVia,
 } from "./protocol"
 
 export type {
   SideAgentMessageStatus,
   SideApproval,
   SideConfirmation,
+  SideDecision,
+  SideGuard,
+  SideHeldAnswer,
+  SideOutcome,
   SideRequestStatus,
+  SideReview,
+  SideReviewAction,
+  SideVia,
 }
 
 /**
@@ -60,8 +74,9 @@ export type SideMessage = {
  *   only that it waits.
  * - `via` is a request's result: `onBehalfOf` the agent's owner, approved by
  *   `approvedBy` (the owner), or by nobody when the agent decided itself
- *   (automatic delegation). A view says so in a quiet line: "on behalf of
- *   Priya · approved by Priya".
+ *   (automatic delegation), and `reviewedBy` the owner when the answer
+ *   guard held the answer for them first. A view says so in a quiet line:
+ *   "on behalf of Priya · approved by Priya · reviewed by Priya".
  */
 export type SideAgentMessage = {
   kind: "agent-message"
@@ -77,7 +92,7 @@ export type SideAgentMessage = {
   error?: string
   code?: string
   replyTo?: number
-  via?: { requestId: string; onBehalfOf: string; approvedBy?: string }
+  via?: SideVia
   confirmations?: SideConfirmation[]
 }
 
@@ -91,11 +106,20 @@ export type SideAgentMessage = {
  *   decide (a specialist contributed with automatic delegation).
  * - `status` is Go's: `pending`, `approved`, then `completed` (the result
  *   follows as an agent message) or `failed`, or `rejected`, or `expired`.
- *   Before Go has it, the viewer's own request is `sending`, or
- *   `not_filed` with `error` (retry(clientId) asks again); its
- *   `requestId` is "" until then.
- * - `deciding` is set on the target owner's view while their decision is on
- *   its way; `decisionError` says why the last one was refused.
+ *   An answer the answer guard holds is `review` until `targetId` reviews
+ *   it (`review`): then `completed`, or `withheld` when they chose not to
+ *   share it or it expired first. Before Go has it, the viewer's own
+ *   request is `sending`, or `not_filed` with `error` (retry(clientId) asks
+ *   again); its `requestId` is "" until then.
+ * - `requestedTools` is what it asks to use: toolbox names (`apps`, the
+ *   owner's connected apps; `knowledge`, the team's knowledge). Approving
+ *   it allows them, or none (`decide`'s `allowedTools`).
+ * - `guard` and `heldAnswer` are on the target owner's view only: what the
+ *   answer guard found, and, while `review`, the answer held for them as it
+ *   would be shared and fully masked (`review(requestId, action)`).
+ * - `deciding` is set on the target owner's view while their decision or
+ *   review is on its way; `decisionError` says why the last one was
+ *   refused.
  */
 export type SideRequestCard = {
   kind: "request-card"
@@ -114,12 +138,12 @@ export type SideRequestCard = {
   createdAt: string
   updatedAt: string
   expiresAt: string
-  decision?: {
-    decision: "approved" | "rejected"
-    message: string
-    decidedAt: string
-  }
+  decision?: SideDecision
   clientId?: string
+  requestedTools?: string[]
+  guard?: SideGuard
+  heldAnswer?: SideHeldAnswer
+  review?: SideReview
   error?: string
   deciding?: boolean
   decisionError?: string
@@ -127,15 +151,15 @@ export type SideRequestCard = {
 
 /**
  * A quiet line in the transcript: a request declined (`rejected`), failed
- * or expired. `text` says it in the object's words; `authorId` is the
- * target agent's owner.
+ * or expired, or an answer its owner did not share (`withheld`). `text`
+ * says it in the object's words; `authorId` is the target agent's owner.
  */
 export type SideStatusLine = {
   kind: "status"
   id: string
   seq: number
   requestId: string
-  outcome: "rejected" | "failed" | "expired"
+  outcome: SideOutcome
   authorId: string
   text: string
   createdAt: string

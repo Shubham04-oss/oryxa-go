@@ -530,6 +530,118 @@ describe("useSideConversation: asking agents", () => {
     expect(socket.said("side-decide")).toHaveLength(2)
   })
 
+  it("approves with the tools the viewer names, and declines with none", () => {
+    const { result } = setup()
+    const tools = ["apps", "knowledge"]
+    const socket = open([
+      card(1, { requestedTools: tools }),
+      card(2, { requestedTools: tools }),
+      card(3, { requestedTools: tools }),
+    ])
+    // Nothing answers them here: they close with the view.
+    const ignore = () => undefined
+    act(() => {
+      result.current.decide("irq_1", "approved", undefined, tools).catch(ignore)
+      result.current.decide("irq_2", "approved", "Only this", []).catch(ignore)
+      result.current.decide("irq_3", "rejected", "Not now", tools).catch(ignore)
+    })
+    expect(socket.said("side-decide")).toEqual([
+      {
+        type: "side-decide",
+        requestId: "irq_1",
+        decision: "approved",
+        allowedTools: ["apps", "knowledge"],
+      },
+      {
+        type: "side-decide",
+        requestId: "irq_2",
+        decision: "approved",
+        message: "Only this",
+        allowedTools: [],
+      },
+      {
+        type: "side-decide",
+        requestId: "irq_3",
+        decision: "rejected",
+        message: "Not now",
+      },
+    ])
+  })
+
+  it("reviews an answer held for the viewer, resolving once the card is past review, and says why one was refused", async () => {
+    const { result } = setup()
+    const held = {
+      status: "review" as const,
+      guard: { state: "held" as const, kinds: ["EMAIL"] },
+      heldAnswer: {
+        stored: "Mail Ada at ada@sim.oryxa.",
+        masked: "Mail Ada at {EMAIL}.",
+      },
+    }
+    const socket = open([
+      card(1, held),
+      card(2, held),
+      // Asked by the viewer: its owner reviews it, not them.
+      card(3, { status: "review", requesterId: viewer, targetId: peer }),
+      card(4),
+      // Not checked, so it has no masked version.
+      card(5, {
+        status: "review",
+        guard: { state: "held", kinds: ["UNCHECKED"] },
+        heldAnswer: { stored: "Mail Ada at ada@sim.oryxa." },
+      }),
+    ])
+    let reviewed = false
+    act(() => {
+      void result.current.review("irq_1", "send_masked").then(() => {
+        reviewed = true
+      })
+    })
+    expect(socket.said("side-review")).toEqual([
+      { type: "side-review", requestId: "irq_1", action: "send_masked" },
+    ])
+    expect(result.current.items[0]).toMatchObject({ deciding: true })
+    socket.says({
+      type: "side-item",
+      item: card(1, {
+        status: "completed",
+        review: { action: "send_masked", decidedAt: at(5), by: "owner" },
+      }),
+    })
+    await waitFor(() => expect(reviewed).toBe(true))
+    expect(result.current.items[0]).not.toHaveProperty("deciding")
+
+    let refusal: unknown
+    act(() => {
+      result.current.review("irq_2", "withhold").catch((error: unknown) => {
+        refusal = error
+      })
+    })
+    socket.says({
+      type: "side-refused",
+      target: "irq_2",
+      code: "already_decided",
+      message: "This answer was reviewed already, or expired.",
+    })
+    await waitFor(() => expect(refusal).toBeInstanceOf(SideActionError))
+    expect(refusal).toMatchObject({ code: "already_decided" })
+    expect(result.current.items[1]).toMatchObject({
+      decisionError: "This answer was reviewed already, or expired.",
+    })
+
+    // Not the viewer's to review, or not waiting for a review: refused
+    // here, and nothing is sent.
+    for (const requestId of ["irq_3", "irq_4", "irq_9"]) {
+      await expect(result.current.review(requestId, "send")).rejects.toThrow(
+        SideActionError
+      )
+    }
+    await expect(result.current.review("irq_5", "send_masked")).rejects.toThrow(
+      "This answer has no masked version to send."
+    )
+    expect(socket.said("side-review")).toHaveLength(2)
+  })
+
   it("answers a confirmation the viewer's own agent waits on", async () => {
     const { result } = setup()
     const waiting = agentMessage(2, {

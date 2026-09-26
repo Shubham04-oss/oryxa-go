@@ -22,13 +22,14 @@ import {
   agentRequestBody,
   cardFields,
   clip,
+  heldAnswerOf,
   isOpen,
   ownAgentPrompt,
   personName,
   resultText,
   statusLineText,
 } from "./lib/side/asking"
-import type { TranscriptLine } from "./lib/side/asking"
+import type { CardFields, TranscriptLine } from "./lib/side/asking"
 import { parseSideConversationName, peerIn } from "./lib/side/names"
 import type { SideConversationIds } from "./lib/side/names"
 import {
@@ -50,10 +51,14 @@ import type {
   SideAgentMessageStatus,
   SideConfirmation,
   SideFailure,
+  SideHeldAnswer,
+  SideOutcome,
   SideRead,
   SideRequestStatus,
+  SideReviewAction,
   SideRoster,
   SideServerMessage,
+  SideVia,
   SideWireItem,
   SideWireRequestCard,
 } from "./lib/side/protocol"
@@ -172,10 +177,14 @@ type AgentData = {
   error?: string
   code?: string
   replyTo?: number
-  via?: { requestId: string; onBehalfOf: string; approvedBy?: string }
+  via?: SideVia
   confirmations?: SideConfirmation[]
 }
 
+/**
+ * What a card keeps of Go's request beside its columns. A held answer is
+ * never among it: it stays in memory (`heldAnswers`).
+ */
 type CardData = Omit<
   SideWireRequestCard,
   | "kind"
@@ -188,6 +197,7 @@ type CardData = Omit<
   | "createdAt"
   | "updatedAt"
   | "clientId"
+  | "heldAnswer"
 > & {
   /** Go's revision, to tell a change. */
   revision?: number
@@ -198,7 +208,7 @@ type CardData = Omit<
 }
 
 type StatusData = {
-  outcome: "rejected" | "failed" | "expired"
+  outcome: SideOutcome
   /** The agent the request asked: an inbox counts the line as its. */
   agentId: string
 }
@@ -246,6 +256,104 @@ const runWords: RelayWords = {
 }
 
 const sessionEndedWords = "The session had ended before the agent could answer."
+
+/** Why Send masked is refused for an answer the guard could not check. */
+const noMaskedWords =
+  "This answer couldn't be checked, so it has no masked version. Send it as it is, or don't send it."
+
+type Refusal = { code: SideFailure; message: string }
+
+/** Go's refusal of an owner's decision, in words. */
+function decisionRefusal(error: ApiError): Refusal {
+  if (error.status === 409 && error.code === "request_closed") {
+    return {
+      code: "already_decided",
+      message:
+        "Oryxa closed this request, as it no longer stands in this teamspace.",
+    }
+  }
+  return error.status === 409
+    ? {
+        code: "already_decided",
+        message: "This request was decided already, or expired.",
+      }
+    : {
+        code: "not_allowed",
+        message: error.message || "The decision was refused.",
+      }
+}
+
+/**
+ * Go's refusal of an owner's review, in words: an answer reviewed already
+ * (or one without the masked version asked for, while still in review), a
+ * request past its time, a choice Go does not take, and a request that is
+ * not theirs to review or not there.
+ */
+function reviewRefusal(
+  error: ApiError,
+  action: unknown,
+  stillInReview: boolean
+): Refusal {
+  if (error.status === 409 && error.code === "request_expired") {
+    return {
+      code: "already_decided",
+      message: "This request expired before its answer was reviewed.",
+    }
+  }
+  if (error.status === 409 && error.code === "request_closed") {
+    // Go withheld it meanwhile, saying why: the card's quiet line has it.
+    return {
+      code: "already_decided",
+      message:
+        "Oryxa withheld this answer, as its request no longer stands in this teamspace.",
+    }
+  }
+  if (error.status === 409) {
+    return action === "send_masked" && stillInReview
+      ? { code: "not_allowed", message: noMaskedWords }
+      : {
+          code: "already_decided",
+          message: "This answer was reviewed already, or expired.",
+        }
+  }
+  switch (error.status) {
+    case 400:
+      return {
+        code: "not_allowed",
+        message: "That review wasn't understood. Try again.",
+      }
+    case 403:
+      return {
+        code: "not_allowed",
+        message: "Only the person whose agent answered can review its answer.",
+      }
+    case 404:
+      return {
+        code: "not_allowed",
+        message: "This request can't be found any more.",
+      }
+    default:
+      return {
+        code: "not_allowed",
+        message: error.message || "The review was refused.",
+      }
+  }
+}
+
+/** A request's state as an agent reads it in the transcript, where Go's word would not say it. */
+const requestStateWords: Partial<Record<string, string>> = {
+  review: "waiting for its owner to review the answer",
+}
+
+/** Whether two lists hold the same names in the same order; none is an empty list. */
+function sameList(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined
+): boolean {
+  const a = left ?? []
+  const b = right ?? []
+  return a.length === b.length && a.every((item, index) => item === b[index])
+}
 
 function stateOf(connection: Connection): SideConnectionState | undefined {
   const state = connection.state as SideConnectionState | null
@@ -356,8 +464,17 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
   >()
   /** The answers being streamed, by seq. */
   private readonly drafts = new Map<number, Draft>()
-  /** Requests being filed and decisions being sent, so neither goes twice at once. */
+  /** Requests being filed, and decisions and reviews being sent, so none goes twice at once. */
   private readonly inFlight = new Set<string>()
+  /**
+   * The answers the answer guard holds for their owner's review, by
+   * request, as Go showed them to that owner: in memory only, never stored,
+   * and sent to the owner's sockets alone. An instance without one reads it
+   * again as its owner while they are here (`readHeldAnswers`).
+   */
+  private readonly heldAnswers = new Map<string, SideHeldAnswer>()
+  /** When each held answer was last read as its owner, so a Go that shows none is not asked on every poll. */
+  private readonly heldReads = new Map<string, number>()
   /** Counts purges in this instance: work that began before one stops. */
   private epoch = 0
   private schemaReady = false
@@ -481,6 +598,12 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     if (Date.now() - this.lastRead >= sideTiming.catchUpMs) {
       await this.readRequests()
     }
+    // An owner who opens it is shown the answers held for them; a read of
+    // one may find it reviewed or withheld meanwhile, and leave its end.
+    if (await this.readHeldAnswers()) {
+      await this.events.plan()
+      await this.syncInboxes()
+    }
     await this.planPoll()
   }
 
@@ -515,8 +638,12 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
           { connection, state },
           said.requestId,
           said.decision,
-          said.message
+          said.message,
+          said.allowedTools
         )
+        return
+      case "side-review":
+        await this.review({ connection, state }, said.requestId, said.action)
         return
       case "side-history": {
         const page = this.page(said.beforeSeq, said.limit)
@@ -593,6 +720,8 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     this.typing.clear()
     this.sendBuckets.clear()
     this.inFlight.clear()
+    this.heldAnswers.clear()
+    this.heldReads.clear()
     if (!leaving) {
       await this.reset()
       this.endSockets(() => true)
@@ -825,6 +954,13 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       }
       case "request-card": {
         const data = parseData<CardData>(row)
+        // What the answer guard found, and an answer it holds, are its
+        // target's owner's alone to see.
+        const owner = viewer === data.targetId
+        const held =
+          owner && row.state === "review" && row.request_id
+            ? this.heldAnswers.get(row.request_id)
+            : undefined
         return {
           kind: "request-card",
           ...base,
@@ -842,6 +978,12 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
           expiresAt: data.expiresAt,
           ...(data.decision ? { decision: data.decision } : {}),
           ...(own ? { clientId: row.client_id ?? undefined } : {}),
+          ...(data.requestedTools?.length
+            ? { requestedTools: data.requestedTools }
+            : {}),
+          ...(owner && data.guard ? { guard: data.guard } : {}),
+          ...(held ? { heldAnswer: held } : {}),
+          ...(data.review ? { review: data.review } : {}),
         }
       }
       case "status": {
@@ -858,11 +1000,14 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     }
   }
 
-  /** Sends every socket an item as it now stands, each as its person sees it. */
-  private announce(row: ItemRow): void {
+  /** Sends every socket an item as it now stands, each as its person sees it, or those `to` picks. */
+  private announce(
+    row: ItemRow,
+    to?: (state: SideConnectionState) => boolean
+  ): void {
     for (const connection of this.getConnections()) {
       const state = stateOf(connection)
-      if (!state) continue
+      if (!state || (to && !to(state))) continue
       send(connection, {
         type: "side-item",
         item: this.wire(row, state.userId),
@@ -1554,13 +1699,16 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
   /**
    * The target's owner decides a request held for them, from their own
    * socket, as themself (`POST …/agent-requests/{id}/decision`, the only
-   * way Go takes an owner's decision).
+   * way Go takes an owner's decision). An approval allows `allowedTools`,
+   * which must be among what the request asked for, or none: nothing
+   * grants a tool unless the owner's page named it.
    */
   private async decide(
     actor: Actor,
     requestId: string,
     decision: "approved" | "rejected",
-    message: string | undefined
+    message: string | undefined,
+    allowedTools: readonly string[] | undefined
   ): Promise<void> {
     const { connection, state } = actor
     const card = this.cardRow(requestId)
@@ -1602,30 +1750,102 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       )
       return
     }
-    const key = `decide:${requestId}`
+    // A decline allows nothing; an approval only what was asked for.
+    const tools = decision === "approved" ? [...new Set(allowedTools)] : []
+    const requested = data.requestedTools ?? []
+    if (tools.some((tool) => !requested.includes(tool))) {
+      this.refuseTarget(
+        connection,
+        requestId,
+        "not_allowed",
+        "Only the tools the request asked for can be allowed."
+      )
+      return
+    }
+    await this.asOwner(actor, requestId, "decision", {
+      decision,
+      // Go requires a note: without one, the decision says where it was made.
+      message:
+        note ||
+        (decision === "approved"
+          ? "Approved in the side conversation."
+          : "Declined in the side conversation."),
+      ...(decision === "approved" ? { allowed_tools: tools } : {}),
+    })
+  }
+
+  /**
+   * The target's owner reviews an answer the answer guard held for them,
+   * from their own socket, as themself (`POST …/agent-requests/{id}/review`,
+   * which Go takes from the owner's own session alone, as a decision): it
+   * shares the answer as it stands (`send`), fully masked (`send_masked`),
+   * or not at all (`withhold`).
+   */
+  private async review(
+    actor: Actor,
+    requestId: string,
+    action: SideReviewAction
+  ): Promise<void> {
+    const { connection, state } = actor
+    const card = this.cardRow(requestId)
+    const data = card ? parseData<CardData>(card) : undefined
+    if (!card || !data || data.targetId !== state.userId) {
+      this.refuseTarget(
+        connection,
+        requestId,
+        "not_allowed",
+        "Only the person whose agent answered can review its answer."
+      )
+      return
+    }
+    if (card.state !== "review") {
+      send(connection, {
+        type: "side-item",
+        item: this.wire(card, state.userId),
+      })
+      this.refuseTarget(
+        connection,
+        requestId,
+        "already_decided",
+        "This answer was reviewed already, or expired."
+      )
+      return
+    }
+    // An answer the guard could not check has no masked version to send.
+    const held = this.heldAnswers.get(requestId)
+    if (action === "send_masked" && held && held.masked === undefined) {
+      this.refuseTarget(connection, requestId, "not_allowed", noMaskedWords)
+      return
+    }
+    await this.asOwner(actor, requestId, "review", { action })
+  }
+
+  /**
+   * Sends the owner's decision or review of a request to Go as them, one at
+   * a time, and brings its card up to date with Go's answer; a refusal is
+   * told to their socket in words. A request decided or reviewed meanwhile
+   * is read again, so the card shows how it stands.
+   */
+  private async asOwner(
+    actor: Actor,
+    requestId: string,
+    what: "decision" | "review",
+    body: Record<string, unknown>
+  ): Promise<void> {
+    const { connection, state } = actor
+    const key = `${what}:${requestId}`
     if (this.inFlight.has(key)) return
     this.inFlight.add(key)
     const epoch = this.epoch
-    const ids = this.ids
     const path = organizationPath(
-      ids.organizationId,
+      this.ids.organizationId,
       "agent-requests",
-      requestId
+      requestId,
+      what
     )
     let answer: unknown
     try {
-      answer = await this.goAs<unknown>(state, `${path}/decision`, {
-        method: "POST",
-        body: {
-          decision,
-          // Go requires a note: without one, the decision says where it was made.
-          message:
-            note ||
-            (decision === "approved"
-              ? "Approved in the side conversation."
-              : "Declined in the side conversation."),
-        },
-      })
+      answer = await this.goAs<unknown>(state, path, { method: "POST", body })
     } catch (error) {
       this.inFlight.delete(key)
       if (this.epoch !== epoch) return
@@ -1640,36 +1860,33 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         return
       }
       if (error instanceof ApiError && error.status === 409) {
-        // Decided meanwhile, or past its time: the card shows how it stands.
+        // Decided or reviewed meanwhile, or past its time: the card shows
+        // how it stands.
         await this.readRequest(state, requestId)
         await this.events.plan()
-        this.refuseTarget(
-          connection,
-          requestId,
-          "already_decided",
-          "This request was decided already, or expired."
-        )
-        return
       }
       if (
         error instanceof ApiError &&
         error.status >= 400 &&
         error.status < 500
       ) {
-        this.refuseTarget(
-          connection,
-          requestId,
-          "not_allowed",
-          error.message || "The decision was refused."
-        )
+        const refusal =
+          what === "decision"
+            ? decisionRefusal(error)
+            : reviewRefusal(
+                error,
+                body.action,
+                this.cardRow(requestId)?.state === "review"
+              )
+        this.refuseTarget(connection, requestId, refusal.code, refusal.message)
         return
       }
-      console.error("side conversation: could not send a decision", error)
+      console.error(`side conversation: could not send a ${what}`, error)
       this.refuseTarget(
         connection,
         requestId,
         "unavailable",
-        "The decision couldn't be sent. Try again."
+        `The ${what} couldn't be sent. Try again.`
       )
       return
     }
@@ -1734,8 +1951,39 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         if (this.epoch !== epoch) return
       }
     }
+    await this.readHeldAnswers()
+    if (this.epoch !== epoch) return
     await this.events.plan()
     await this.syncInboxes()
+  }
+
+  /**
+   * Reads, as its owner, each answer held for review that this instance
+   * does not hold, while that owner is here: Go shows a held answer to its
+   * owner alone, and the object keeps it in memory only. A Go that shows
+   * none is asked again once a socket's catch-up has passed, not on every
+   * poll. Resolves whether it read any.
+   */
+  private async readHeldAnswers(): Promise<boolean> {
+    const epoch = this.epoch
+    let read = false
+    const held = this.sql<ItemRow>`SELECT * FROM side_items
+      WHERE kind = 'request-card' AND state = 'review'`
+    for (const card of held) {
+      const requestId = card.request_id
+      if (!requestId || this.heldAnswers.has(requestId)) continue
+      const readAt = this.heldReads.get(requestId)
+      if (readAt !== undefined && Date.now() - readAt < sideTiming.catchUpMs) {
+        continue
+      }
+      const owner = this.actorOf(parseData<CardData>(card).targetId)
+      if (!owner) continue
+      this.heldReads.set(requestId, Date.now())
+      await this.readRequest(owner.state, requestId)
+      if (this.epoch !== epoch) return false
+      read = true
+    }
+    return read
   }
 
   /** Reads one request as `state`'s person and brings its card up to date. */
@@ -1786,34 +2034,69 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         data: this.cardData(fields, request),
         settled: true,
       })
+      this.holdAnswer(fields, request)
       this.announce(row)
     } else {
       const data = parseData<CardData>(row)
       const revision = (request as { revision?: unknown }).revision
+      // What the guard found stays as its owner's read brought it: the
+      // requester's read may not carry it.
+      const guard = fields.guard ?? data.guard
+      const heldChanged = this.holdAnswer(fields, request)
       if (
         row.state !== fields.status ||
         (typeof revision === "number" && revision !== data.revision) ||
-        Boolean(fields.decision) !== Boolean(data.decision)
+        Boolean(fields.decision) !== Boolean(data.decision) ||
+        Boolean(fields.review) !== Boolean(data.review) ||
+        !sameList(fields.requestedTools, data.requestedTools) ||
+        !sameList(guard?.kinds, data.guard?.kinds) ||
+        guard?.state !== data.guard?.state
       ) {
         row = this.rewrite(row, {
           state: fields.status,
           data: {
             ...this.cardData(fields, request),
+            ...(guard ? { guard } : {}),
             outcomeSeq: data.outcomeSeq,
           },
         })
         this.announce(row)
+      } else if (heldChanged) {
+        // Only its owner is sent what arrived.
+        this.announce(row, (state) => state.userId === data.targetId)
       }
     }
     this.leaveOutcome(row, request)
     return fields.requestId
   }
 
+  /**
+   * Keeps the answer Go holds for review, as it showed it to its owner, or
+   * lets it go once the request is past review. Resolves whether what the
+   * owner is shown changed.
+   */
+  private holdAnswer(fields: CardFields, request: unknown): boolean {
+    if (fields.status !== "review") {
+      this.heldReads.delete(fields.requestId)
+      return this.heldAnswers.delete(fields.requestId)
+    }
+    // A read as the requester, or a Go that shows none, holds nothing new.
+    const held = heldAnswerOf(request)
+    if (!held) return false
+    const before = this.heldAnswers.get(fields.requestId)
+    if (
+      before?.stored === held.stored &&
+      before.masked === held.masked &&
+      before.failed === held.failed
+    ) {
+      return false
+    }
+    this.heldAnswers.set(fields.requestId, held)
+    return true
+  }
+
   /** What a card keeps of Go's request beside its columns. */
-  private cardData(
-    fields: NonNullable<ReturnType<typeof cardFields>>,
-    request: unknown
-  ): CardData {
+  private cardData(fields: CardFields, request: unknown): CardData {
     const revision = (request as { revision?: unknown }).revision
     return {
       requesterAgentId: fields.requesterAgentId,
@@ -1826,6 +2109,11 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       goCreatedAt: fields.createdAt,
       ...(fields.decision ? { decision: fields.decision } : {}),
       ...(typeof revision === "number" ? { revision } : {}),
+      ...(fields.requestedTools
+        ? { requestedTools: fields.requestedTools }
+        : {}),
+      ...(fields.guard ? { guard: fields.guard } : {}),
+      ...(fields.review ? { review: fields.review } : {}),
     }
   }
 
@@ -1856,6 +2144,11 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
               ...(data.approval === "owner"
                 ? { approvedBy: data.targetId }
                 : {}),
+              // Held by the answer guard, it was shared once its owner
+              // reviewed it.
+              ...(data.review?.by === "owner"
+                ? { reviewedBy: data.targetId }
+                : {}),
             },
           } satisfies AgentData,
           settled: true,
@@ -1871,7 +2164,8 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       if (
         status === "rejected" ||
         status === "failed" ||
-        status === "expired"
+        status === "expired" ||
+        status === "withheld"
       ) {
         const failure =
           status === "failed"
@@ -1887,6 +2181,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
               approval: data.approval,
               targetAgentName: data.targetAgentName,
               decision: data.decision,
+              review: data.review,
             },
             ownerName,
             typeof failure === "string" ? failure : undefined
@@ -1918,9 +2213,10 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     )
   }
 
+  /** The cards whose request can still change: waiting for a decision, for a result, or for its owner's review. */
   private openCards(): ItemRow[] {
     return this.sql<ItemRow>`SELECT * FROM side_items
-      WHERE kind = 'request-card' AND state IN ('pending', 'approved')`
+      WHERE kind = 'request-card' AND state IN ('pending', 'approved', 'review')`
   }
 
   /**
@@ -1941,6 +2237,17 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     for (const connection of this.getConnections()) {
       const state = stateOf(connection)
       if (state && !state.expired) return { connection, state }
+    }
+    return undefined
+  }
+
+  /** A socket of `userId` whose cookie Go still takes. */
+  private actorOf(userId: string): Actor | undefined {
+    for (const connection of this.getConnections()) {
+      const state = stateOf(connection)
+      if (state?.userId === userId && !state.expired) {
+        return { connection, state }
+      }
     }
     return undefined
   }
@@ -2071,9 +2378,10 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       }
       case "request-card": {
         const data = parseData<CardData>(row)
+        const state = row.state ?? "pending"
         return {
           speaker: personName(roster, row.author_id),
-          text: `asked ${data.targetAgentName} (${personName(roster, data.targetId)}'s agent), which is ${row.state ?? "pending"}: ${row.body}`,
+          text: `asked ${data.targetAgentName} (${personName(roster, data.targetId)}'s agent), which is ${requestStateWords[state] ?? state}: ${row.body}`,
         }
       }
       case "status":

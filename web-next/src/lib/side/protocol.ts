@@ -11,6 +11,7 @@ import {
   DM_PAGE_SIZE,
   DM_TYPING_REFRESH_MS,
   DM_TYPING_TTL_MS,
+  codePoints,
   conversationGoneCloseCode,
   isClientId,
 } from "@/lib/dms/protocol"
@@ -45,6 +46,10 @@ export const SIDE_MAX_AGENT_TEXT = 4_000 + 2 + 20_000
 /** The longest note a decision carries (Go's `maxMessageRunes`). */
 export const SIDE_MAX_DECISION_MESSAGE = 4_000
 
+/** The most tools a decision allows, and the longest name of one, in code points (Go's `maxListItems` and `validateList`). */
+export const SIDE_MAX_TOOLS = 32
+export const SIDE_MAX_TOOL_NAME = 120
+
 /**
  * The close code of a socket whose conversation was purged (a member left,
  * or the organization was deleted). The SDK does not reopen a socket closed
@@ -62,9 +67,48 @@ const goIdPattern = /^[\w-]{1,128}$/
 // points are at most 16,000 UTF-16 units escaped, with room to spare.
 const maxClientFrame = 64 * 1024
 
-/** A request's state, as Go has it: `expired` is a pending or approved one past its time. */
+/**
+ * A request's state, as Go has it: `expired` is a pending or approved one
+ * past its time; `review` holds its finished answer for its target's owner
+ * to review (the answer guard found personal data in it), and `withheld` is
+ * one they did not share, or that expired before they reviewed it.
+ */
 export type SideRequestStatus =
-  "pending" | "approved" | "rejected" | "completed" | "failed" | "expired"
+  | "pending"
+  | "approved"
+  | "review"
+  | "rejected"
+  | "completed"
+  | "failed"
+  | "expired"
+  | "withheld"
+
+/** How a request that ended without a result ended, as its quiet line says. */
+export type SideOutcome = "rejected" | "failed" | "expired" | "withheld"
+
+/** The owner's choice for an answer held for review: share it, share it fully masked, or not at all. */
+export type SideReviewAction = "send" | "send_masked" | "withhold"
+
+/**
+ * What the answer guard found in a request's answer (Go's `guard`): only
+ * kinds it always masks (`masked`), a kind it held for review (`held`), or
+ * nothing (`clear`). `kinds` are entity type names, never what matched;
+ * `UNCHECKED` when the check could not run.
+ */
+export type SideGuard = {
+  state: "clear" | "masked" | "held"
+  kinds: string[]
+}
+
+/**
+ * An answer held for review, as its owner alone is shown it: the answer as
+ * it would be shared (`stored`: the kinds the guard always masks already
+ * masked), and with every kind it found masked too (`masked`, absent for an
+ * answer the guard could not check, which has no masked version). `failed`
+ * marks an answer that was its agent's failure: shared, it fails the
+ * request with it.
+ */
+export type SideHeldAnswer = { stored: string; masked?: string; failed?: true }
 
 /**
  * Who decides a request: its target's owner themself (`owner`: a teammate's
@@ -131,12 +175,21 @@ export type SideWireAgentMessage = {
   replyTo?: number
   /**
    * A request's result: the request, the member the agent worked for (its
-   * owner), and who approved it: the owner, or nobody when the agent
-   * decided itself (`automatic` delegation).
+   * owner), who approved it (the owner, or nobody when the agent decided
+   * itself: `automatic` delegation), and who reviewed it before it was
+   * shared, when the answer guard held it for them.
    */
-  via?: { requestId: string; onBehalfOf: string; approvedBy?: string }
+  via?: SideVia
   /** While `waiting`, what the run waits on. Sent to its owner's sockets only. */
   confirmations?: SideConfirmation[]
+}
+
+/** Whom a request's result was for, and who approved and reviewed it. */
+export type SideVia = {
+  requestId: string
+  onBehalfOf: string
+  approvedBy?: string
+  reviewedBy?: string
 }
 
 /** A request to a teammate's agent, mirroring Go's (`agents.Interaction`) as the object last read it. */
@@ -160,22 +213,51 @@ export type SideWireRequestCard = {
   /** When its status last changed here. */
   updatedAt: string
   expiresAt: string
-  decision?: {
-    decision: "approved" | "rejected"
-    message: string
-    decidedAt: string
-  }
+  decision?: SideDecision
   /** The requester's page id, on their own card, when it was asked for here. */
   clientId?: string
+  /** What the request asks to use (Go's `requested_tools`): toolbox names, `apps` and `knowledge`. Absent when none. */
+  requestedTools?: string[]
+  /** What the answer guard found in its answer. On its target's owner's copy only. */
+  guard?: SideGuard
+  /** While `review`, the answer held for its target's owner, on their copy only, once the object has read it as them. */
+  heldAnswer?: SideHeldAnswer
+  /** How a held answer was reviewed: by its target's owner, or withheld by Oryxa (`system`), saying why. */
+  review?: SideReview
 }
 
-/** A quiet line: a request declined, failed or expired. */
+/**
+ * A request's decision: `by` its target's owner, their agent (whose
+ * message is fixed words, never its own), or Oryxa (`system`, closing a
+ * request that no longer stands, its message saying why); absent from a
+ * decision Go recorded no decider for.
+ */
+export type SideDecision = {
+  decision: "approved" | "rejected"
+  message: string
+  decidedAt: string
+  by?: "owner" | "agent" | "system"
+}
+
+/**
+ * A held answer's review: its target's owner's (`owner`), or Oryxa's
+ * withholding (`system`, `withhold`), with Go's `reason`: "expired before
+ * review", or why the request no longer stood in its teamspace.
+ */
+export type SideReview = {
+  action: SideReviewAction
+  decidedAt: string
+  by: "owner" | "system"
+  reason?: string
+}
+
+/** A quiet line: a request declined, failed or expired, or an answer not shared. */
 export type SideWireStatusLine = {
   kind: "status"
   id: string
   seq: number
   requestId: string
-  outcome: "rejected" | "failed" | "expired"
+  outcome: SideOutcome
   /** Whose side it is: the target agent's owner. */
   authorId: string
   /** The object's words, which name who did what. */
@@ -262,13 +344,20 @@ export type SideClientMessage =
       seq: number
       answers: Array<{ id: string; confirmed: boolean }>
     }
-  /** The target's owner decides a request held for them, from their own socket. */
+  /**
+   * The target's owner decides a request held for them, from their own
+   * socket. An approval allows `allowedTools`, a subset of the request's
+   * `requestedTools`; without them it allows none.
+   */
   | {
       type: "side-decide"
       requestId: string
       decision: "approved" | "rejected"
       message?: string
+      allowedTools?: string[]
     }
+  /** The target's owner reviews an answer held for them, from their own socket. */
+  | { type: "side-review"; requestId: string; action: SideReviewAction }
   /** Up to `limit` items before `beforeSeq` (0: the latest). */
   | {
       type: "side-history"
@@ -309,10 +398,10 @@ export type SideServerMessage =
       code: SideFailure
       message: string
     }
-  /** The object refused a decision or a confirmation; only that socket hears. */
+  /** The object refused a decision, a review or a confirmation; only that socket hears. */
   | {
       type: "side-refused"
-      /** The request decided, or the agent message confirmed (its seq, as a string). */
+      /** The request decided or reviewed, or the agent message confirmed (its seq, as a string). */
       target: string
       code: SideFailure
       message: string
@@ -349,11 +438,19 @@ const failures = new Set<string>([
 const requestStatuses = new Set<string>([
   "pending",
   "approved",
+  "review",
   "rejected",
   "completed",
   "failed",
   "expired",
+  "withheld",
 ])
+
+const outcomes = new Set<string>(["rejected", "failed", "expired", "withheld"])
+
+const reviewActions = new Set<string>(["send", "send_masked", "withhold"])
+
+const guardStates = new Set<string>(["clear", "masked", "held"])
 
 const agentStatuses = new Set<string>([
   "streaming",
@@ -399,11 +496,16 @@ export function parseSideClientMessage(
         ? { type: "side-confirm", seq: value.seq, answers }
         : undefined
     }
-    case "side-decide":
+    case "side-decide": {
+      const allowedTools =
+        value.allowedTools === undefined
+          ? undefined
+          : toolNames(value.allowedTools)
       if (
         !isGoId(value.requestId) ||
         (value.decision !== "approved" && value.decision !== "rejected") ||
-        (value.message !== undefined && typeof value.message !== "string")
+        (value.message !== undefined && typeof value.message !== "string") ||
+        (value.allowedTools !== undefined && !allowedTools)
       ) {
         return undefined
       }
@@ -414,7 +516,19 @@ export function parseSideClientMessage(
         ...(typeof value.message === "string"
           ? { message: value.message }
           : {}),
+        ...(allowedTools ? { allowedTools } : {}),
       }
+    }
+    case "side-review":
+      return isGoId(value.requestId) &&
+        typeof value.action === "string" &&
+        reviewActions.has(value.action)
+        ? {
+            type: "side-review",
+            requestId: value.requestId,
+            action: value.action as SideReviewAction,
+          }
+        : undefined
     case "side-history":
       if (
         typeof value.requestId !== "string" ||
@@ -780,6 +894,10 @@ function wireItem(value: unknown): SideWireItem | undefined {
         expiresAt,
         decision,
         clientId,
+        requestedTools,
+        guard,
+        heldAnswer,
+        review,
       } = value
       if (
         typeof requestId !== "string" ||
@@ -795,13 +913,21 @@ function wireItem(value: unknown): SideWireItem | undefined {
         typeof task !== "string" ||
         typeof updatedAt !== "string" ||
         typeof expiresAt !== "string" ||
-        !optionalString(clientId)
+        !optionalString(clientId) ||
+        (requestedTools !== undefined && !isStrings(requestedTools))
       ) {
         return undefined
       }
       const parsedDecision =
         decision === undefined ? undefined : decisionOf(decision)
       if (decision !== undefined && !parsedDecision) return undefined
+      const parsedGuard = guard === undefined ? undefined : guardOf(guard)
+      if (guard !== undefined && !parsedGuard) return undefined
+      const parsedHeld =
+        heldAnswer === undefined ? undefined : heldAnswerOf(heldAnswer)
+      if (heldAnswer !== undefined && !parsedHeld) return undefined
+      const parsedReview = review === undefined ? undefined : reviewOf(review)
+      if (review !== undefined && !parsedReview) return undefined
       return {
         kind,
         id,
@@ -821,15 +947,20 @@ function wireItem(value: unknown): SideWireItem | undefined {
         expiresAt,
         ...(parsedDecision ? { decision: parsedDecision } : {}),
         ...(typeof clientId === "string" ? { clientId } : {}),
+        ...(requestedTools !== undefined && requestedTools.length > 0
+          ? { requestedTools }
+          : {}),
+        ...(parsedGuard ? { guard: parsedGuard } : {}),
+        ...(parsedHeld ? { heldAnswer: parsedHeld } : {}),
+        ...(parsedReview ? { review: parsedReview } : {}),
       }
     }
     case "status": {
       const { requestId, outcome, authorId, text } = value
       if (
         typeof requestId !== "string" ||
-        (outcome !== "rejected" &&
-          outcome !== "failed" &&
-          outcome !== "expired") ||
+        typeof outcome !== "string" ||
+        !outcomes.has(outcome) ||
         typeof authorId !== "string" ||
         typeof text !== "string"
       ) {
@@ -840,7 +971,7 @@ function wireItem(value: unknown): SideWireItem | undefined {
         id,
         seq,
         requestId,
-        outcome,
+        outcome: outcome as SideOutcome,
         authorId,
         text,
         createdAt,
@@ -851,13 +982,14 @@ function wireItem(value: unknown): SideWireItem | undefined {
   }
 }
 
-function viaOf(value: unknown): SideWireAgentMessage["via"] | undefined {
+function viaOf(value: unknown): SideVia | undefined {
   if (!isObject(value)) return undefined
-  const { requestId, onBehalfOf, approvedBy } = value
+  const { requestId, onBehalfOf, approvedBy, reviewedBy } = value
   if (
     typeof requestId !== "string" ||
     typeof onBehalfOf !== "string" ||
-    !optionalString(approvedBy)
+    !optionalString(approvedBy) ||
+    !optionalString(reviewedBy)
   ) {
     return undefined
   }
@@ -865,7 +997,66 @@ function viaOf(value: unknown): SideWireAgentMessage["via"] | undefined {
     requestId,
     onBehalfOf,
     ...(typeof approvedBy === "string" ? { approvedBy } : {}),
+    ...(typeof reviewedBy === "string" ? { reviewedBy } : {}),
   }
+}
+
+/** Tool names as a decision allows them: at most `SIDE_MAX_TOOLS`, each 1 to `SIDE_MAX_TOOL_NAME` code points, each once. */
+function toolNames(value: unknown): string[] | undefined {
+  if (!isStrings(value) || value.length > SIDE_MAX_TOOLS) return undefined
+  if (
+    value.some((tool) => tool === "" || codePoints(tool) > SIDE_MAX_TOOL_NAME)
+  ) {
+    return undefined
+  }
+  return [...new Set(value)]
+}
+
+function guardOf(value: unknown): SideGuard | undefined {
+  if (!isObject(value)) return undefined
+  const { state, kinds } = value
+  if (
+    typeof state !== "string" ||
+    !guardStates.has(state) ||
+    !isStrings(kinds)
+  ) {
+    return undefined
+  }
+  return { state: state as SideGuard["state"], kinds }
+}
+
+function heldAnswerOf(value: unknown): SideHeldAnswer | undefined {
+  if (!isObject(value)) return undefined
+  const { stored, masked, failed } = value
+  if (
+    typeof stored !== "string" ||
+    !optionalString(masked) ||
+    (failed !== undefined && failed !== true)
+  ) {
+    return undefined
+  }
+  return {
+    stored,
+    ...(typeof masked === "string" ? { masked } : {}),
+    ...(failed === true ? { failed } : {}),
+  }
+}
+
+function reviewOf(value: unknown): SideReview | undefined {
+  if (!isObject(value)) return undefined
+  const { action, decidedAt, by, reason } = value
+  return typeof action === "string" &&
+    reviewActions.has(action) &&
+    typeof decidedAt === "string" &&
+    (by === "owner" || by === "system") &&
+    optionalString(reason)
+    ? {
+        action: action as SideReviewAction,
+        decidedAt,
+        by,
+        ...(typeof reason === "string" ? { reason } : {}),
+      }
+    : undefined
 }
 
 function confirmationsOf(value: unknown): SideConfirmation[] | undefined {
@@ -892,17 +1083,18 @@ function confirmationsOf(value: unknown): SideConfirmation[] | undefined {
   return confirmations
 }
 
-function decisionOf(value: unknown): SideWireRequestCard["decision"] {
+function decisionOf(value: unknown): SideDecision | undefined {
   if (!isObject(value)) return undefined
-  const { decision, message, decidedAt } = value
+  const { decision, message, decidedAt, by } = value
   if (
     (decision !== "approved" && decision !== "rejected") ||
     typeof message !== "string" ||
-    typeof decidedAt !== "string"
+    typeof decidedAt !== "string" ||
+    (by !== undefined && by !== "owner" && by !== "agent" && by !== "system")
   ) {
     return undefined
   }
-  return { decision, message, decidedAt }
+  return { decision, message, decidedAt, ...(by ? { by } : {}) }
 }
 
 function isGoId(value: unknown): value is string {

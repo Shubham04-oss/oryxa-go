@@ -230,17 +230,20 @@
   -webkit-line-clamp: 4;
 }
 .workspace-side-card > .workspace-agent-text-button { align-self: flex-start; margin-top: -4px; }
+/* The icon stays beside the words, which wrap beside it (an owner's
+   review says two sentences). */
 .workspace-side-card-status {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 6px;
   margin: 0;
   color: #a9a9a9;
   font-size: 11.5px;
   line-height: 1.45;
 }
-.workspace-side-card-status svg { flex: none; }
+.workspace-side-card-status svg { flex: none; margin-top: 2px; }
+.workspace-side-card-status > span { min-width: 0; overflow-wrap: anywhere; }
+.workspace-side-card-status .workspace-dm-retry { flex: none; }
 .workspace-side-card[data-tone="done"] .workspace-side-card-status svg { color: #7fcf98; }
 .workspace-side-card[data-tone="ended"] .workspace-side-card-status { color: #8d8d8d; }
 .workspace-side-card[data-tone="failed"] .workspace-side-card-status { color: #e4aaa6; }
@@ -267,6 +270,37 @@
 .workspace-side-card-note input::placeholder { color: #8a8a8a; }
 .workspace-side-card-note input:focus-visible { border-color: #777; outline: none; }
 .workspace-side-card-note input:disabled { opacity: .6; }
+
+/* What approving a request lets its agent read, for its owner. */
+.workspace-side-card-tools {
+  margin: -2px 0 0;
+  color: #bdbdbd;
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+/* Three choices may not fit one row of a narrow panel. */
+.workspace-side-card .workspace-agent-confirmation-actions { flex-wrap: wrap; }
+
+/* An answer held for its owner's review: the answer as Send shares it, and
+   what Send masked shares. */
+.workspace-side-card-held { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.workspace-side-card-held > .workspace-agent-text-button { align-self: flex-start; }
+.workspace-side-card-held .workspace-agent-note { margin: 0; }
+.workspace-side-card-answer {
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid #2e2e2e;
+  border-radius: 10px;
+  background: #161616;
+  color: #dedede;
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.workspace-side-card-answer[data-masked="true"] { color: #a9a9a9; }
+.workspace-side-card-answer[data-folded="true"] { max-height: 7.5em; overflow: hidden; }
+.workspace-side-card-masked-label { margin: 2px 0 -2px; color: #8d8d8d; font-size: 11px; line-height: 1.4; }
 
 /* A request that ended without a result: one quiet line. */
 .workspace-side-status {

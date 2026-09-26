@@ -289,8 +289,8 @@ used twice, as a DM's) over all of them:
 |---|---|---|
 | `message` | a person's message; `asksAgentId` when it asked their own agent | its author |
 | `agent-message` | an agent's message: an answer to its owner (`replyTo` the question), or a request's result (`via`: the request, `onBehalfOf` its owner, `approvedBy` its owner or none when the agent decided itself). `status`: `streaming`, `waiting` (on its owner's confirmation), `done`, `failed` (`error`, `code`) | the agent's owner |
-| `request-card` | a request to a teammate's agent, mirroring Go's (`approval`, `status`, `decision`) | the member who asked |
-| `status` | a quiet line: a request declined, failed or expired, in words that say who did what | the asked agent's owner |
+| `request-card` | a request to a teammate's agent, mirroring Go's (`approval`, `status`, `decision`, `requestedTools`, `review`; `guard` to the asked agent's owner alone) | the member who asked |
+| `status` | a quiet line: a request declined, failed or expired, or an answer not shared, in words that say who did what | the asked agent's owner |
 
 **People's messages** keep a DM's semantics (`side-send`): the author is
 the socket's person, the body is trimmed and holds 1 to 4,000 code points,
@@ -362,10 +362,46 @@ agent is involved.
   socket (`side-decide`, the hook's `decide`): the object calls `POST
   …/agent-requests/{id}/decision` as them, with their cookie, and nobody
   else's socket may. Without a note it says where it was decided ("Approved
-  in the side conversation."). A request decided already, or expired, is
-  refused (`already_decided`) and its card shows how it stands.
-- **Reading Go.** While any card is open (`pending` or `approved`) and a
-  socket with a cookie Go takes is here, the object reads
+  in the side conversation."). An approval allows exactly the tools the
+  page names (`allowedTools`, sent as `allowed_tools`), which must be among
+  the request's `requested_tools` (toolbox names: `apps`, the owner's
+  connected apps, read-only; `knowledge`, the team's knowledge, which Go's
+  Jev picks when the requester names none): the card's Approve names them
+  all, Approve without tools none, and a page that names nothing allows
+  nothing. A decline sends no tools. A request decided already, or expired,
+  is refused (`already_decided`) and its card shows how it stands.
+- **The owner reviews** an answer the answer guard held for them (status
+  `review`: Bedrock found an email address, a phone number or a street
+  address in it, the kinds `guard.kinds` lists, or could not check it,
+  `UNCHECKED`). Go shows the held answer to its owner's reads alone, and
+  only while it is in review: `held.result`, the answer as it would be
+  shared, and `held.masked_result`, fully masked, each a whole result
+  (`HELD_ANSWER_FIELDS` in `src/lib/side/asking.ts` is the one place that
+  names them). An answer Go could not check has no masked version, so its
+  owner has no Send masked (the page, the object and Go each refuse it). The
+  object reads the request as the owner while they are here, keeps both
+  versions (each its summary, then its content) in memory only, never in
+  its storage, an inbox, an event or an agent's transcript, and sends them,
+  with what the guard found (`guard`), to the owner's sockets alone. An
+  instance that lost them (a restart) reads them again as the owner, and a
+  Go that shows none is asked again at most every 15 s. The owner's
+  `side-review` (the hook's `review`) calls `POST
+  …/agent-requests/{id}/review` with `{"action": "send" | "send_masked" |
+  "withhold"}` as them, from their own socket, as a decision is; Go records
+  `review: {action, decided_by: {kind: "member", user_id}, decided_at}`. A
+  held answer may be its agent's failure: shared, it fails the request, and
+  the one who asked reads its summary in the failure's quiet line. Go's
+  refusals are said on the card: 400 `invalid_request` ("That review wasn't
+  understood"), 403 (not the owner's, or an agent's), 404 (not there), 409
+  `invalid_state` (reviewed already, or no masked version), 409
+  `request_expired`, and 409 `request_closed`: sent, the request no longer
+  stood in its teamspace, so Oryxa withheld it, saying why (`review.by`
+  `system`, Go's `reason`); a 409 reads the request again, so the card shows
+  how it stands. The one who asked is sent only that it waits: Go shows them the
+  status alone in review, the status and `review` once withheld, and the
+  result, `guard` and `review` once it was sent, never `held`.
+- **Reading Go.** While any card is open (`pending`, `approved` or
+  `review`) and a socket with a cookie Go takes is here, the object reads
   `GET …/agent-requests?teamspace_id=&with_user=` as that person (both
   directions, newest first; an open card the listing did not reach is read
   on its own) every 3 seconds, on the SDK's schedule (an alarm, one at a
@@ -374,9 +410,19 @@ agent is involved.
   of an own-agent run. Cards change live.
 - **Ends.** A completed request's result (its summary, then its content)
   lands as the asked agent's message, attributed to the agent and its owner,
-  with `via` for the quiet "on behalf of Priya · approved by Priya" line. A
-  decline ("Priya declined the request to Nia: …"), a failure and an expiry
-  leave a quiet `status` line. Each once.
+  with `via` for the quiet "on behalf of Priya · approved by Priya" line,
+  and "· reviewed by Priya" when it was shared after the owner's review
+  (`reviewedBy`; masked, it is the masked answer Go delivers). A decline
+  ("Priya declined the request to Nia: …"), a failure, an expiry and an
+  answer not shared ("Priya chose not to share Nia's answer."; "Nia's answer
+  expired before Priya reviewed it." once Oryxa withheld it for time, its
+  `reason` "expired before review" and `decided_at` the expiry; or Oryxa's
+  own reason, "Oryxa withheld Nia's answer because …", when the request no
+  longer stood in its teamspace) leave a quiet `status` line. An agent's
+  decision is fixed words ("Declined by their agent."), which the line
+  leaves out ("Pricing declined the request."); one Oryxa made closing a
+  request says why ("Oryxa closed the request to Nia because …"). Who
+  decided comes from Go's `decided_by`. Each once.
 - **Requests from elsewhere.** A request between the two in this teamspace
   that either's agent filed since the conversation first opened (less a
   minute, for the two clocks) shows as a card too; older ones and other
@@ -407,7 +453,8 @@ teamspaceId?, peerId?)`:
   hasOlder; loadOlder(); send(body); retry(clientId); markRead(); setTyping(on)
   askMyAgent(body)           // a message asking the viewer's own agent, answered for both
   askTeammateAgent(agentId, body)  // a card: "sending", then Go's; "not_filed" with `error` when refused
-  decide(requestId, "approved" | "rejected", message?): Promise<void>  // the owner's own; rejects with SideActionError
+  decide(requestId, "approved" | "rejected", message?, allowedTools?): Promise<void>  // the owner's own; allowedTools among the card's requestedTools, none without; rejects with SideActionError
+  review(requestId, "send" | "send_masked" | "withhold"): Promise<void>  // the owner's own, while `review`; rejects with SideActionError
   confirm(seq, answers): Promise<void>  // the viewer's own agent's waiting confirmations
   peer: { online; typing; lastReadSeq }
   agents: { mine: AgentRef | undefined; theirs: AgentRef[] }  // theirs: primary first, then contributions

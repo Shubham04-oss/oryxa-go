@@ -10,6 +10,7 @@ export type {
   SideItem,
   SideMessage,
   SideRequestCard,
+  SideReviewAction,
   SideStatusLine,
 } from "./types"
 export { SideActionError, useSideConversation } from "./use-side-conversation"
