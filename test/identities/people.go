@@ -30,6 +30,19 @@ func OrgMembers() []Person {
 	return []Person{People["owner"], People["admin"], People["member"], People["outsider"]}
 }
 
+// PersonByUserID returns the stand-in person whose UserID is userID, and
+// whether one was found. Minting an agent token is asked for a user_id —
+// the field a Cognito-backed store would use — not the bearer-token role
+// key People is keyed by, so this resolves it the other way around.
+func PersonByUserID(userID string) (Person, bool) {
+	for _, person := range People {
+		if person.UserID == userID {
+			return person, true
+		}
+	}
+	return Person{}, false
+}
+
 func TokenFrom(request *http.Request) (string, bool) {
 	parts := strings.Fields(request.Header.Get("Authorization"))
 	if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") && parts[1] != "" {
