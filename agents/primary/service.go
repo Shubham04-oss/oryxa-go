@@ -462,7 +462,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}
 
 	httpConfig := httpserver.Config{
-		AllowedOrigins:      settings.AllowedOrigins,
+		AllowedOrigins: settings.AllowedOrigins,
+		Documents: httpserver.DocumentsConfig{
+			PublicURL: settings.DocumentServerURL, InternalURL: settings.DocumentServerInternalURL,
+			APIURL: settings.DocumentAPIURL, JWTSecret: settings.DocumentJWTSecret,
+		},
 		RunTimeout:          settings.RunTimeout,
 		Agents:              agentRegistry,
 		Teams:               teamService,

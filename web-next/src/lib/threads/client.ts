@@ -11,6 +11,7 @@ import { threadAgentName } from "./chat-messages"
 import type { ThreadChatMessage } from "./chat-messages"
 import { readItemStream } from "./event-stream"
 import type { RunResult } from "./event-stream"
+import type { ScreenContext } from "@/lib/agents/screen-context"
 
 // Everything here mirrors agents/primary/internal/threads (items.go,
 // threads.go, run.go) and the routes in agents/primary/internal/httpserver.
@@ -147,8 +148,9 @@ export type ConfirmationAnswer = {
 }
 
 /** What a run is sent: a message, or answers to every waiting confirmation. Never both. */
-export type RunInput =
+export type RunInput = (
   { message: string } | { confirmations: ConfirmationAnswer[] }
+) & { screen_context?: ScreenContext }
 
 /** The error codes the thread and run routes answer with (httpserver `ErrorCode`), as `ApiError.code`. */
 export type ThreadErrorCode =
@@ -276,9 +278,10 @@ function invalidRun(message: string): ApiError {
  */
 export function runRequestBody(input: RunInput): RunInput {
   // Read as data rather than trusted as typed: pages build it from state.
-  const { message, confirmations } = input as {
+  const { message, confirmations, screen_context } = input as {
     message?: unknown
     confirmations?: unknown
+    screen_context?: ScreenContext
   }
   const text = typeof message === "string" ? message : ""
   const answers: unknown[] = Array.isArray(confirmations) ? confirmations : []
@@ -293,6 +296,7 @@ export function runRequestBody(input: RunInput): RunInput {
     }
     return {
       confirmations: answers.map(({ id, confirmed }) => ({ id, confirmed })),
+      ...(screen_context ? { screen_context } : {}),
     }
   }
   if (text.trim() === "") {
@@ -301,7 +305,7 @@ export function runRequestBody(input: RunInput): RunInput {
   if (Array.from(text.trim()).length > MAX_MESSAGE_LENGTH) {
     throw invalidRun(`a message holds at most ${MAX_MESSAGE_LENGTH} characters`)
   }
-  return { message: text }
+  return { message: text, ...(screen_context ? { screen_context } : {}) }
 }
 
 function isConfirmationAnswer(value: unknown): value is ConfirmationAnswer {
@@ -428,6 +432,26 @@ export type ArtifactLink = {
   contentType: string
   /** Whether Go lets the browser show it in place (images, PDF, plain text); anything else downloads. */
   inline: boolean
+}
+
+export type ArtifactEditorSession = {
+  server_url: string
+  version: number
+  config: Record<string, unknown>
+}
+
+/** A signed ONLYOFFICE session for the latest version of a private artifact. */
+export function fetchArtifactEditorSession(
+  organizationId: string,
+  threadId: string,
+  name: string,
+  mode: "view" | "edit",
+  signal?: AbortSignal
+): Promise<ArtifactEditorSession> {
+  return apiRequest<ArtifactEditorSession>(
+    `${artifactPath(organizationId, threadId, name)}/editor?mode=${mode}`,
+    { signal }
+  )
 }
 
 /**

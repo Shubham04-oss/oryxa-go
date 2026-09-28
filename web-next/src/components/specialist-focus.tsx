@@ -31,6 +31,7 @@ import {
 } from "@/lib/agents/queries"
 import { clearSpecialistChat, specialistKeys } from "@/lib/specialists/client"
 import { teamspacesQueryOptions } from "@/lib/teamspaces/queries"
+import type { ScreenContext } from "@/lib/agents/screen-context"
 
 const tabs = ["Overview", "Instructions", "Teams"] as const
 type Tab = (typeof tabs)[number]
@@ -40,11 +41,13 @@ export function SpecialistFocus({
   agentId,
   onBack,
   onOpen,
+  getScreenContext,
 }: {
   organizationId: string
   agentId: string
   onBack: () => void
   onOpen: (target: AgentsFocusTarget) => void
+  getScreenContext?: () => ScreenContext
 }) {
   const queryClient = useQueryClient()
   const agents = useQuery(agentsQueryOptions(organizationId))
@@ -176,6 +179,7 @@ export function SpecialistFocus({
             organizationId={organizationId}
             specialist={agent}
             onComposingChange={setComposing}
+            getScreenContext={getScreenContext}
           />
         </section>
 

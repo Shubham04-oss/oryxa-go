@@ -2,6 +2,7 @@ import type { UIMessage } from "ai"
 import { sessionExpiredCode } from "./lib/threads/chat-messages"
 import type { ConfirmationAnswer, Item, RunInput } from "./lib/threads/client"
 import { readItemStream } from "./lib/threads/event-stream"
+import { screenContextInput } from "./lib/agents/screen-context"
 
 // What a chat Durable Object does with one of Go's runs, whichever runs route
 // it calls: read the member's input from the chat turn, POST it as the
@@ -59,7 +60,8 @@ export function inputFromMessages(
   if (body?.confirmations !== undefined) {
     const confirmations = confirmationInput(body.confirmations)
     if (!confirmations) throw new RunStartError("Invalid confirmation answers.")
-    return { confirmations }
+    const screen_context = screenContextInput(body.screen_context)
+    return { confirmations, ...(screen_context ? { screen_context } : {}) }
   }
   let lastUser: UIMessage | undefined
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -73,7 +75,8 @@ export function inputFromMessages(
     .join("")
     .trim()
   if (!text) throw new RunStartError("Send a message to start a run.")
-  return { message: text }
+  const screen_context = screenContextInput(body?.screen_context)
+  return { message: text, ...(screen_context ? { screen_context } : {}) }
 }
 
 /** Go's words for a refused run, as a sentence: they start lower case and end bare. */

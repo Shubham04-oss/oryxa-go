@@ -110,6 +110,11 @@ type Config struct {
 	ArtifactBucket string
 	// S3Endpoint overrides AWS for artifacts, for the LocalStack emulator.
 	S3Endpoint string
+	// Document editor endpoints and shared JWT secret for ONLYOFFICE Docs.
+	DocumentServerURL         string
+	DocumentServerInternalURL string
+	DocumentAPIURL            string
+	DocumentJWTSecret         string
 	// AuthURL is auth's own URL: agent tokens for a member-absent run are
 	// requested at {AuthURL}/v1/internal/agent-tokens.
 	AuthURL string
@@ -298,6 +303,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		MemoryLocation:            valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_LOCATION", googleCloudLocation),
 		ArtifactBucket:            strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
 		S3Endpoint:                artifactEndpoint(getenv),
+		DocumentServerURL:         strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_SERVER_URL")),
+		DocumentServerInternalURL: strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_SERVER_INTERNAL_URL")),
+		DocumentAPIURL:            strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_API_URL")),
+		DocumentJWTSecret:         strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_JWT_SECRET")),
 		TypeSafeAPIKey:            strings.TrimSpace(getenv("TYPESAFE_API_KEY")),
 		TypeSafeBaseURL:           strings.TrimSpace(getenv("TYPESAFE_BASE_URL")),
 		AuthURL:                   strings.TrimSpace(getenv("AUTH_URL")),

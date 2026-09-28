@@ -70,7 +70,7 @@ func TestAFileARunKeepsShowsInTheThreadAndCanBeRead(t *testing.T) {
 	}
 
 	file, err := service.Artifact(context.Background(), asha, created.ID, "shot.png", 0)
-	if err != nil || file.MIMEType != "image/png" || string(file.Data) != "png-bytes" {
+	if err != nil || file.MIMEType != "image/png" || string(file.Data) != "png-bytes" || file.Version != 1 {
 		t.Fatalf("Artifact() = %+v, %v", file, err)
 	}
 	if _, err := service.Artifact(context.Background(), asha, created.ID, "missing.png", 0); !errors.Is(err, ErrNotFound) {
@@ -82,5 +82,26 @@ func TestAFileARunKeepsShowsInTheThreadAndCanBeRead(t *testing.T) {
 	someoneElse := Member{UserID: "user_ravi", OrganizationID: asha.OrganizationID}
 	if _, err := service.Artifact(context.Background(), someoneElse, created.ID, "shot.png", 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another member reading it = %v, want ErrNotFound", err)
+	}
+	version, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("edited-png"), "image/png")
+	if err != nil || version != 2 {
+		t.Fatalf("edited artifact version = %d, %v", version, err)
+	}
+	latest, err := service.Artifact(context.Background(), asha, created.ID, "shot.png", 0)
+	if err != nil || latest.Version != 2 || string(latest.Data) != "edited-png" {
+		t.Fatalf("latest edited artifact = %+v, %v", latest, err)
+	}
+	old, err := service.Artifact(context.Background(), asha, created.ID, "shot.png", 1)
+	if err != nil || string(old.Data) != "png-bytes" {
+		t.Fatalf("previous version = %+v, %v", old, err)
+	}
+	if _, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("different"), "image/png"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale edit = %v, want conflict", err)
+	}
+	if version, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("edited-png"), "image/png"); err != nil || version != 2 {
+		t.Fatalf("retry of saved edit = %d, %v", version, err)
+	}
+	if _, err := service.SaveArtifact(context.Background(), someoneElse, created.ID, "shot.png", 2, []byte("stolen"), "image/png"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another member editing it = %v, want not found", err)
 	}
 }

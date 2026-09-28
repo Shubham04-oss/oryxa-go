@@ -12,7 +12,7 @@ import { SquarePen } from "lucide-react"
 import { failureText, lastUserMessageId } from "./agent-chat"
 import { AgentComposer } from "./agent-composer"
 import { AgentConversation } from "./agent-conversation"
-import { AgentTimeline } from "./agent-timeline"
+import { AgentActivity, AgentTimeline } from "./agent-timeline"
 import { ApiError } from "@/lib/api/client"
 import { getSession } from "@/lib/auth/client"
 import { getAgent } from "@/lib/agents/managed-agents"
@@ -39,6 +39,7 @@ import type { ThreadChatMessage } from "@/lib/threads/chat-messages"
 import type { ConfirmationAnswer } from "@/lib/threads/client"
 import { socketProtocol } from "@/lib/socket-protocol"
 import { buildTimeline, pendingConfirmationIds } from "@/lib/threads/timeline"
+import type { ScreenContext } from "@/lib/agents/screen-context"
 
 /** What the chat needs of a specialist, as the member's agents list has it. */
 export type ChatSpecialist = Pick<ManagedAgent, "id" | "name" | "status">
@@ -237,6 +238,7 @@ export function SpecialistChat({
   missing = false,
   layout,
   onComposingChange,
+  getScreenContext,
 }: {
   organizationId: string
   specialist: ChatSpecialist
@@ -244,6 +246,7 @@ export function SpecialistChat({
   missing?: boolean
   layout: SpecialistChatLayout
   onComposingChange?: (composing: boolean) => void
+  getScreenContext?: () => ScreenContext
 }) {
   const [attempt, setAttempt] = useState(0)
   const [draft, setDraft] = useState("")
@@ -267,6 +270,7 @@ export function SpecialistChat({
         specialist={specialist}
         initialMessages={transcript.messages}
         layout={layout}
+        getScreenContext={getScreenContext}
         {...composer}
       />
     )
@@ -360,11 +364,13 @@ function SpecialistChatSession({
   draft,
   onDraftChange,
   onComposingChange,
+  getScreenContext,
 }: ComposerHandlers & {
   organizationId: string
   specialist: ChatSpecialist
   initialMessages: ThreadChatMessage[]
   layout: SpecialistChatLayout
+  getScreenContext?: () => ScreenContext
 }) {
   const queryClient = useQueryClient()
   const [connection, setConnection] = useState<Connection>("connecting")
@@ -501,11 +507,16 @@ function SpecialistChatSession({
 
   function send(text: string) {
     setRunError("")
-    lastSend.current = { own: true, expired: false, retried: false }
-    void chat.sendMessage({ text }).catch((error: unknown) => {
-      lastSend.current.own = false
-      setRunError(failureText(error, `${name} couldn't answer. Try again.`))
-    })
+    const body = getScreenContext
+      ? { screen_context: getScreenContext() }
+      : undefined
+    lastSend.current = { body, own: true, expired: false, retried: false }
+    void chat
+      .sendMessage({ text }, ...(body ? [{ body }] : []))
+      .catch((error: unknown) => {
+        lastSend.current.own = false
+        setRunError(failureText(error, `${name} couldn't answer. Try again.`))
+      })
   }
 
   function answer(answers: ConfirmationAnswer[]) {
@@ -515,7 +526,10 @@ function SpecialistChatSession({
       for (const item of answers) next[item.id] = item.confirmed
       return next
     })
-    const body = { confirmations: answers }
+    const body = {
+      confirmations: answers,
+      screen_context: getScreenContext?.(),
+    }
     lastSend.current = { body, own: true, expired: false, retried: false }
     void chat
       .sendMessage(
@@ -670,11 +684,7 @@ function SpecialistChatSession({
           onAnswer={answer}
           organizationId={organizationId}
         />
-        {running && !writing && (
-          <p className="workspace-agent-working" role="status">
-            {name} is working…
-          </p>
-        )}
+        {running && !writing && <AgentActivity name={name} />}
       </AgentConversation>
       <AgentComposer
         label={`Message ${name}`}

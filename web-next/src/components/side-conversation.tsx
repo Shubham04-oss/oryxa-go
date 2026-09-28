@@ -18,7 +18,11 @@ import {
   LoaderCircle,
 } from "lucide-react"
 import { AgentComposer } from "./agent-composer"
-import { AgentMarkdown, ConfirmationCard } from "./agent-timeline"
+import {
+  AgentActivity,
+  AgentMarkdown,
+  ConfirmationCard,
+} from "./agent-timeline"
 import {
   ConversationNotice,
   LogAnnouncer,
@@ -579,9 +583,7 @@ function AgentMessage({
         {item.body ? (
           <AgentMarkdown text={item.body} />
         ) : item.status === "streaming" ? (
-          <p className="workspace-agent-working">
-            {item.agentName} is working…
-          </p>
+          <AgentActivity name={item.agentName} />
         ) : item.status === "done" ? (
           <p className="workspace-agent-note">It finished without an answer.</p>
         ) : null}

@@ -316,6 +316,9 @@ function KnowledgeBaseList({
                     className="workspace-knowledge-card"
                     type="button"
                     key={base.id}
+                    data-screen-context-kind="knowledge_base"
+                    data-screen-context-id={base.id}
+                    data-screen-context-name={base.name}
                     aria-label={`Open ${base.name}`}
                     onClick={() => onSelect({ id: base.id, name: base.name })}
                   >

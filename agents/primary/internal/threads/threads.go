@@ -9,6 +9,7 @@
 package threads
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -17,11 +18,13 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
@@ -29,6 +32,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
 )
 
 // The ways a request can fail that the member can act on.
@@ -38,6 +42,8 @@ var (
 	ErrNotFound = errors.New("thread not found")
 	// ErrInvalid reports a request that cannot be run as sent.
 	ErrInvalid = errors.New("invalid request")
+	// ErrConflict reports a file changed after an editor opened it.
+	ErrConflict = errors.New("artifact version conflict")
 	// ErrConfirmationPending reports a message sent while a tool waits for
 	// the member to approve or decline it: the answer has to come first.
 	ErrConfirmationPending = errors.New("a tool is waiting for you to approve or decline it")
@@ -162,18 +168,19 @@ type Config struct {
 
 // Service is the run API.
 type Service struct {
-	appName      string
-	agent        agent.Agent
-	unattended   agent.Agent
-	sessions     session.Service
-	artifacts    artifact.Service
-	memory       *adkmemory.Service
-	runs         RunStore
-	prices       *pricing.Table
-	logger       *slog.Logger
-	runTimeout   time.Duration
-	lease        time.Duration
-	initialState map[string]any
+	artifactSaveMu sync.Mutex
+	appName        string
+	agent          agent.Agent
+	unattended     agent.Agent
+	sessions       session.Service
+	artifacts      artifact.Service
+	memory         *adkmemory.Service
+	runs           RunStore
+	prices         *pricing.Table
+	logger         *slog.Logger
+	runTimeout     time.Duration
+	lease          time.Duration
+	initialState   map[string]any
 }
 
 // New returns the service.
@@ -407,6 +414,7 @@ type File struct {
 	Name     string
 	MIMEType string
 	Data     []byte
+	Version  int64
 }
 
 // Artifact reads a file one of the member's threads kept: the latest
@@ -427,6 +435,20 @@ func (service *Service) Artifact(ctx context.Context, member Member, threadID, n
 	if request.Validate() != nil {
 		return File{}, ErrNotFound
 	}
+	metadata, err := service.artifacts.GetArtifactVersion(ctx, &artifact.GetArtifactVersionRequest{
+		AppName: service.appName, UserID: member.UserID, SessionID: threadID, FileName: name, Version: version,
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return File{}, ErrNotFound
+	}
+	if err != nil {
+		return File{}, fmt.Errorf("read artifact version: %w", err)
+	}
+	if metadata == nil || metadata.ArtifactVersion == nil {
+		return File{}, ErrNotFound
+	}
+	version = metadata.ArtifactVersion.Version
+	request.Version = version // keep bytes and version from the same revision
 	loaded, err := service.artifacts.Load(ctx, request)
 	if errors.Is(err, fs.ErrNotExist) {
 		return File{}, ErrNotFound
@@ -439,12 +461,44 @@ func (service *Service) Artifact(ctx context.Context, member Member, threadID, n
 	case part == nil:
 		return File{}, ErrNotFound
 	case part.InlineData != nil:
-		return File{Name: name, MIMEType: part.InlineData.MIMEType, Data: part.InlineData.Data}, nil
+		return File{Name: name, MIMEType: part.InlineData.MIMEType, Data: part.InlineData.Data, Version: version}, nil
 	case part.Text != "":
-		return File{Name: name, MIMEType: "text/plain; charset=utf-8", Data: []byte(part.Text)}, nil
+		return File{Name: name, MIMEType: "text/plain; charset=utf-8", Data: []byte(part.Text), Version: version}, nil
 	default:
 		return File{}, ErrNotFound
 	}
+}
+
+// SaveArtifact stores an edited version only if the version the editor opened
+// is still current. Explicit version allocation also prevents lost updates in
+// the S3 artifact store when two saves race.
+func (service *Service) SaveArtifact(ctx context.Context, member Member, threadID, name string, expectedVersion int64, data []byte, mimeType string) (int64, error) {
+	if expectedVersion < 1 || len(data) == 0 || strings.TrimSpace(mimeType) == "" {
+		return 0, ErrInvalid
+	}
+	service.artifactSaveMu.Lock()
+	defer service.artifactSaveMu.Unlock()
+	current, err := service.Artifact(ctx, member, threadID, name, 0)
+	if err != nil {
+		return 0, err
+	}
+	if current.Version == expectedVersion+1 && bytes.Equal(current.Data, data) {
+		return current.Version, nil // a document server retry of a completed save
+	}
+	if current.Version != expectedVersion {
+		return 0, ErrConflict
+	}
+	saved, err := service.artifacts.Save(ctx, &artifact.SaveRequest{
+		AppName: service.appName, UserID: member.UserID, SessionID: threadID, FileName: name,
+		Version: expectedVersion + 1, Part: genai.NewPartFromBytes(data, mimeType),
+	})
+	if err != nil {
+		if errors.Is(err, s3artifact.ErrVersionConflict) {
+			return 0, ErrConflict
+		}
+		return 0, fmt.Errorf("save edited artifact: %w", err)
+	}
+	return saved.Version, nil
 }
 
 // deleteArtifacts removes the files a thread's runs kept. The thread is

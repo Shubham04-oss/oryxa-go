@@ -58,6 +58,7 @@ type Threads interface {
 	Delete(ctx context.Context, member threads.Member, threadID string) error
 	StartRun(ctx context.Context, member threads.Member, threadID string, input threads.RunInput) (Run, error)
 	Artifact(ctx context.Context, member threads.Member, threadID, name string, version int64) (threads.File, error)
+	SaveArtifact(ctx context.Context, member threads.Member, threadID, name string, expectedVersion int64, data []byte, mimeType string) (int64, error)
 }
 
 // Run is a started run. *threads.Run implements it.
@@ -168,6 +169,8 @@ type Rooms interface {
 
 // Config is how the server runs.
 type Config struct {
+	// Documents configures the external ONLYOFFICE Docs editing service.
+	Documents DocumentsConfig
 	// AllowedOrigins may send cookie-authenticated requests that change
 	// something, such as starting a run.
 	AllowedOrigins []string
@@ -204,6 +207,7 @@ type Config struct {
 
 // Server serves the API.
 type Server struct {
+	documents           DocumentsConfig
 	directory           Directory
 	threads             Threads
 	agents              ManagedAgents
@@ -230,6 +234,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		logger = slog.New(slog.DiscardHandler)
 	}
 	server := &Server{
+		documents:           config.Documents,
 		directory:           directory,
 		threads:             service,
 		agents:              config.Agents,
@@ -262,6 +267,9 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("DELETE /v1/organizations/{organizationID}/threads/{threadID}", server.deleteThread)
 	server.handle("POST /v1/organizations/{organizationID}/threads/{threadID}/runs", server.run)
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}", server.artifact)
+	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor", server.documentEditor)
+	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor-source", server.documentSource)
+	server.handle("POST /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor-callback", server.documentCallback)
 	server.handle("GET /v1/organizations/{organizationID}/agents", server.listAgents)
 	server.handle("POST /v1/organizations/{organizationID}/agents", server.createAgent)
 	server.handle("GET /v1/organizations/{organizationID}/agents/{agentID}", server.getAgent)
@@ -646,8 +654,9 @@ func (server *Server) runAgent(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	var body struct {
-		ThreadID      string `json:"thread_id"`
-		Message       string `json:"message"`
+		ThreadID      string                       `json:"thread_id"`
+		Message       string                       `json:"message"`
+		ScreenContext *primaryagents.ScreenContext `json:"screen_context"`
 		Confirmations []struct {
 			ID        string `json:"id"`
 			Confirmed *bool  `json:"confirmed"`
@@ -656,7 +665,11 @@ func (server *Server) runAgent(writer http.ResponseWriter, request *http.Request
 	if !server.decode(writer, request, &body) {
 		return
 	}
-	input := threads.RunInput{Message: body.Message}
+	if body.ScreenContext != nil && !body.ScreenContext.Valid() {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "screen context is invalid")
+		return
+	}
+	input := threads.RunInput{Message: body.Message, ScreenContext: body.ScreenContext}
 	for _, answer := range body.Confirmations {
 		if answer.ID == "" || answer.Confirmed == nil {
 			writeError(writer, http.StatusBadRequest, "invalid_request", "every confirmation needs an id and whether it is confirmed")
@@ -1414,6 +1427,7 @@ func (server *Server) artifact(writer http.ResponseWriter, request *http.Request
 		mediaType = "application/octet-stream"
 	}
 	header := writer.Header()
+	header.Set("Cache-Control", "no-store")
 	header.Set("Content-Type", mediaType)
 	if mediaType == "text/plain" {
 		header.Set("Content-Type", "text/plain; charset=utf-8")
@@ -1444,7 +1458,8 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var body struct {
-		Message       string `json:"message"`
+		Message       string                       `json:"message"`
+		ScreenContext *primaryagents.ScreenContext `json:"screen_context"`
 		Confirmations []struct {
 			ID        string `json:"id"`
 			Confirmed *bool  `json:"confirmed"`
@@ -1453,7 +1468,11 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 	if !server.decode(writer, request, &body) {
 		return
 	}
-	input := threads.RunInput{Message: body.Message}
+	if body.ScreenContext != nil && !body.ScreenContext.Valid() {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "screen context is invalid")
+		return
+	}
+	input := threads.RunInput{Message: body.Message, ScreenContext: body.ScreenContext}
 	for _, answer := range body.Confirmations {
 		if answer.ID == "" || answer.Confirmed == nil {
 			writeError(writer, http.StatusBadRequest, "invalid_request", "every confirmation needs an id and whether it is confirmed")
@@ -1784,6 +1803,8 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusConflict, "agent_disabled"
 	case errors.Is(err, threads.ErrInvalid):
 		return http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, threads.ErrConflict):
+		return http.StatusConflict, "artifact_conflict"
 	case errors.Is(err, authclient.ErrUnauthorized):
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, authclient.ErrForbidden):

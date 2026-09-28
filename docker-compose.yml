@@ -123,5 +123,26 @@ services:
       timeout: 5s
       retries: 10
 
+  # Optional local Office editor. Oryxa's Go API supplies its files and save
+  # callback; Docs only sees short-lived signed URLs, never member cookies.
+  documents:
+    profiles: ["documents"]
+    image: onlyoffice/documentserver:9.4.0.1
+    restart: unless-stopped
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${ORYXA_DOCUMENT_JWT_SECRET:-oryxa-local-documents-secret-change-before-sharing}
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+    ports:
+      - "${ORYXA_DOCUMENT_PORT:-8082}:80"
+    volumes:
+      - documents-data:/var/www/onlyoffice/Data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/healthcheck >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
 volumes:
   postgres-data:
+  documents-data:

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -50,6 +51,7 @@ type fakeThreads struct {
 	run           *fakeRun
 	createOrigins []string
 	listOrigins   []string
+	edited        []byte
 }
 
 // resolvedFakeOrigin trims origin and defaults blank to chat, the way
@@ -130,13 +132,30 @@ func (service *fakeThreads) Artifact(_ context.Context, member threads.Member, t
 	case threadID != "thread_1":
 		return threads.File{}, threads.ErrNotFound
 	case name == "screenshot.png":
-		return threads.File{Name: name, MIMEType: "image/png", Data: []byte("png-bytes")}, nil
+		return threads.File{Name: name, MIMEType: "image/png", Data: []byte("png-bytes"), Version: 1}, nil
 	case name == "report.html" && version == 2:
-		return threads.File{Name: name, MIMEType: "text/html", Data: []byte("<script>alert(1)</script>")}, nil
+		return threads.File{Name: name, MIMEType: "text/html", Data: []byte("<script>alert(1)</script>"), Version: 2}, nil
 	case name == "user:plan.txt":
-		return threads.File{Name: name, MIMEType: "text/plain; charset=utf-8", Data: []byte("plan")}, nil
+		return threads.File{Name: name, MIMEType: "text/plain; charset=utf-8", Data: []byte("plan"), Version: 1}, nil
+	case name == "draft.docx":
+		if len(service.edited) > 0 {
+			return threads.File{Name: name, MIMEType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Data: service.edited, Version: 2}, nil
+		}
+		return threads.File{Name: name, MIMEType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Data: []byte("docx-original"), Version: 1}, nil
 	}
 	return threads.File{}, threads.ErrNotFound
+}
+
+func (service *fakeThreads) SaveArtifact(_ context.Context, member threads.Member, threadID, name string, expectedVersion int64, data []byte, _ string) (int64, error) {
+	service.members = append(service.members, member)
+	if threadID != "thread_1" || name != "draft.docx" {
+		return 0, threads.ErrNotFound
+	}
+	if expectedVersion != 1 {
+		return 0, threads.ErrConflict
+	}
+	service.edited = append([]byte(nil), data...)
+	return 2, nil
 }
 
 type fakeRun struct {
@@ -634,7 +653,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 58 {
+	if len(patterns) != 61 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -1087,6 +1106,7 @@ func TestARunIsRefusedBeforeItsStreamOpens(t *testing.T) {
 		code   string
 	}{
 		{`{"message":"hi","extra":1}`, nil, http.StatusBadRequest, "invalid_request"},
+		{`{"message":"hi","screen_context":{"view":"other/window","visible_items":[]}}`, nil, http.StatusBadRequest, "invalid_request"},
 		{`{"confirmations":[{"id":"c1"}]}`, nil, http.StatusBadRequest, "invalid_request"},
 		{`{"message":"hi"}`, threads.ErrRunInProgress, http.StatusConflict, "run_in_progress"},
 		{`{"message":"hi"}`, threads.ErrConfirmationPending, http.StatusConflict, "confirmation_pending"},
@@ -1121,15 +1141,15 @@ func TestARunStreamsItsItemsAsServerSentEvents(t *testing.T) {
 	}}
 	service := &fakeThreads{run: run}
 	response := serve(newTestServer(member(), service), http.MethodPost, "/v1/organizations/org_1/threads/thread_1/runs",
-		`{"confirmations":[{"id":"c1","confirmed":true},{"id":"c2","confirmed":false}]}`, bearer)
+		`{"confirmations":[{"id":"c1","confirmed":true},{"id":"c2","confirmed":false}],"screen_context":{"view":"team/teamspace","selection":{"kind":"teamspace","id":"space_1","name":"Launch"},"visible_items":[]}}`, bearer)
 	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/event-stream" || response.Header().Get("X-Oryxa-Run") != "run_1" {
 		t.Fatalf("stream = %d %v", response.Code, response.Header())
 	}
 	if !run.executed || run.discarded != "" {
 		t.Fatalf("run executed %t, discarded %q", run.executed, run.discarded)
 	}
-	want := []threads.RunInput{{Confirmations: []threads.Answer{{ID: "c1", Confirmed: true}, {ID: "c2", Confirmed: false}}}}
-	if fmt.Sprint(service.inputs) != fmt.Sprint(want) {
+	want := []threads.RunInput{{Confirmations: []threads.Answer{{ID: "c1", Confirmed: true}, {ID: "c2", Confirmed: false}}, ScreenContext: &primaryagents.ScreenContext{View: "team/teamspace", Selection: &primaryagents.ScreenItem{Kind: "teamspace", ID: "space_1", Name: "Launch"}, VisibleItems: []primaryagents.ScreenItem{}}}}
+	if !reflect.DeepEqual(service.inputs, want) {
 		t.Fatalf("inputs = %+v, want %+v", service.inputs, want)
 	}
 

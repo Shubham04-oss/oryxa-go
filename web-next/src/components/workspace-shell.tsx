@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react"
-import type { ComponentType } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import type { ComponentType, CSSProperties } from "react"
 import {
   ArrowLeft,
   ArrowRight,
@@ -20,6 +20,9 @@ import {
   Workflow,
 } from "lucide-react"
 import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
+import { FocusHeader } from "./agents-parts"
+import { PrimaryAgentFileViewer } from "./primary-agent-files"
+import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import { KnowledgeBases } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
 import { TeamspacesManagement } from "./teamspaces-management"
@@ -44,6 +47,8 @@ import { PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
 import type { SettingsPage } from "./workspace-settings"
 import { useTeamspaces } from "@/hooks/use-teamspaces"
+import { useQuery } from "@tanstack/react-query"
+import { agentsQueryOptions } from "@/lib/agents/queries"
 import { useAgentsMode } from "@/hooks/use-agents-mode"
 import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
@@ -53,6 +58,8 @@ import { useInbox } from "@/lib/dms"
 import { isNameId } from "@/lib/dms/names"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { cn } from "@/lib/utils"
+import { captureScreenContext } from "@/lib/agents/screen-context"
+import type { ScreenContext, ScreenItem } from "@/lib/agents/screen-context"
 
 type Section =
   | "overview"
@@ -162,6 +169,10 @@ export function WorkspaceShell({
     ...(firstDm ? { team: "people" as const } : {}),
   })
   const teamspaces = useTeamspaces(selectedOrganization?.id)
+  const ownAgents = useQuery({
+    ...agentsQueryOptions(selectedOrganization?.id ?? ""),
+    enabled: Boolean(selectedOrganization),
+  })
   const [knowledgeBaseSelection, setKnowledgeBaseSelection] =
     useState<SelectedKnowledgeBase | null>(null)
   const [signingOut, setSigningOut] = useState(false)
@@ -171,6 +182,17 @@ export function WorkspaceShell({
   // The page Settings opens on, when a link asked for one.
   const [settingsPage, setSettingsPage] = useState<SettingsPage>()
   const agentsMode = useAgentsMode()
+  const [primaryWork, setPrimaryWork] = useState(false)
+  const [primaryComposing, setPrimaryComposing] = useState(false)
+  const [primaryViewer, setPrimaryViewer] = useState<"overview" | "file">(
+    "overview"
+  )
+  const [primaryFile, setPrimaryFile] = useState<PrimaryAgentFileTarget | null>(
+    null
+  )
+  const [primaryThreadId, setPrimaryThreadId] = useState<
+    string | null | undefined
+  >()
   const [chatRequest, setChatRequest] = useState<AgentPanelChatRequest | null>(
     null
   )
@@ -261,11 +283,11 @@ export function WorkspaceShell({
   const agentWork =
     activeMode === "agents" && selectedOrganization ? agentsMode.focus : null
   const isFocused = Boolean(
-    agentWork || (teamspaces.openId && selectedOrganization)
+    primaryWork || agentWork || (teamspaces.openId && selectedOrganization)
   )
   // The teamspace on the page: the agent panel offers its teammates.
   const pageTeamspaceId =
-    !agentWork && selectedOrganization && teamspaces.openId
+    !primaryWork && !agentWork && selectedOrganization && teamspaces.openId
       ? teamspaces.openId
       : undefined
   // The DM in the main canvas, while People is on screen.
@@ -278,6 +300,7 @@ export function WorkspaceShell({
   const canvasPeerOnline = usePeerOnline(canvasPeerId ?? undefined)
   // On a small screen with the keyboard up, the DM gets the height it leaves.
   const middleHeight = useVisibleHeight(Boolean(canvasPeerId) && dmComposing)
+  const primaryVisibleHeight = useVisibleHeight(primaryWork && primaryComposing)
   const recentPeerIds = recentDirectMessages(inbox.conversations).map(
     (conversation) => conversation.peerId
   )
@@ -299,6 +322,58 @@ export function WorkspaceShell({
       : selectedTeamspace
         ? `Teamspace · ${statusLabel(selectedTeamspace)}`
         : undefined
+
+  const screenView =
+    primaryWork && primaryViewer === "file"
+      ? "agents/file"
+      : agentWork
+        ? `agents/${agentWork.kind}`
+        : teamspaces.openId
+          ? "team/teamspace"
+          : activeMode === "agents" && section === "agents"
+            ? "agents/overview"
+            : `${activeMode}/${section}`
+  const screenSelection: ScreenItem | undefined = primaryWork
+    ? undefined
+    : agentWork
+      ? {
+          kind: agentWork.kind,
+          id: agentWork.kind === "team" ? agentWork.teamId : agentWork.agentId,
+          name:
+            agentWork.kind === "specialist"
+              ? (ownAgents.data?.find((agent) => agent.id === agentWork.agentId)
+                  ?.name ?? "")
+              : "",
+        }
+      : teamspaces.openId
+        ? {
+            kind: "teamspace",
+            id: teamspaces.openId,
+            name:
+              teamspaces.spaces.find((space) => space.id === teamspaces.openId)
+                ?.name ?? "",
+          }
+        : canvasPeerId && canvasPeerName
+          ? { kind: "person", id: canvasPeerId, name: canvasPeerName }
+          : selectedKnowledgeBase
+            ? {
+                kind: "knowledge_base",
+                id: selectedKnowledgeBase.id,
+                name: selectedKnowledgeBase.name,
+              }
+            : selectedTeamspace
+              ? {
+                  kind: "teamspace",
+                  id: selectedTeamspace.id,
+                  name: selectedTeamspace.name,
+                }
+              : undefined
+  const screenContextRef = useRef<() => ScreenContext>(() =>
+    captureScreenContext("home/overview")
+  )
+  screenContextRef.current = () =>
+    captureScreenContext(screenView, screenSelection)
+  const getScreenContext = useCallback(() => screenContextRef.current(), [])
 
   // The page's address follows the DM in the main canvas, so a refresh
   // returns to it.
@@ -364,9 +439,45 @@ export function WorkspaceShell({
 
   function openWork(target: AgentsFocusTarget) {
     teamspaces.close()
+    setPrimaryWork(false)
+    setPrimaryComposing(false)
     agentsMode.open(target)
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
+  }
+
+  function openPrimaryWork() {
+    teamspaces.close()
+    agentsMode.close()
+    setPrimaryWork(true)
+    setActiveMode("agents")
+    setSectionsByMode((current) => ({ ...current, agents: "agents" }))
+    setLeftExpanded(false)
+    setRightExpanded(false)
+  }
+
+  function openAgentOverview() {
+    setPrimaryViewer("overview")
+    setPrimaryFile(null)
+    openPrimaryWork()
+  }
+
+  function openPrimaryFile(file?: PrimaryAgentFileTarget) {
+    setPrimaryViewer("file")
+    setPrimaryFile(file ?? null)
+    openPrimaryWork()
+  }
+
+  function closePrimaryWork() {
+    setPrimaryWork(false)
+    setPrimaryComposing(false)
+  }
+
+  function navigatePrimarySection(
+    next: "agents" | "multi-agents" | "specialists"
+  ) {
+    closePrimaryWork()
+    selectSection(next)
   }
 
   /** Opens the agent panel on the Agents tab, talking to this specialist. */
@@ -399,6 +510,17 @@ export function WorkspaceShell({
       data-left={leftExpanded ? "expanded" : "collapsed"}
       data-right={rightExpanded ? "expanded" : "collapsed"}
       data-view={isFocused ? "focused" : "browse"}
+      data-primary-work={primaryWork ? "true" : undefined}
+      data-primary-composing={
+        primaryWork && primaryComposing ? "true" : undefined
+      }
+      style={
+        primaryVisibleHeight
+          ? ({
+              "--primary-visible-height": `${primaryVisibleHeight}px`,
+            } as CSSProperties)
+          : undefined
+      }
     >
       {!isFocused && (
         <aside
@@ -613,13 +735,53 @@ export function WorkspaceShell({
         data-composing={middleHeight ? "true" : undefined}
         style={middleHeight ? { height: middleHeight } : undefined}
       >
-        {agentWork && selectedOrganization ? (
+        {primaryWork && selectedOrganization ? (
+          <div className="workspace-focus workspace-primary-focus">
+            <FocusHeader
+              title="Agent overview"
+              kind="Primary agent"
+              onBack={closePrimaryWork}
+            />
+            <main className="workspace-focus-layout workspace-primary-focus-layout">
+              <div
+                className="workspace-conversation workspace-primary-conversation-slot"
+                aria-hidden="true"
+              />
+              <div className="workspace-work-column">
+                <section
+                  className="workspace-work-panel"
+                  aria-label="Agent overview work panel"
+                >
+                  {primaryViewer === "file" ? (
+                    <PrimaryAgentFileViewer
+                      organizationId={selectedOrganization.id}
+                      threadId={primaryFile?.threadId ?? primaryThreadId}
+                      file={primaryFile ?? undefined}
+                      onBack={() => setPrimaryViewer("overview")}
+                    />
+                  ) : (
+                    <AgentsCanvas
+                      section="agents"
+                      primaryThreadId={primaryThreadId}
+                      organizationId={selectedOrganization.id}
+                      viewerId={session?.user.id}
+                      onOpen={openWork}
+                      onNavigate={navigatePrimarySection}
+                      onOpenFile={openPrimaryFile}
+                    />
+                  )}
+                </section>
+              </div>
+            </main>
+          </div>
+        ) : agentWork && selectedOrganization ? (
           <AgentsFocus
             target={agentWork}
             organizationId={selectedOrganization.id}
             onBack={agentsMode.close}
             onOpen={openWork}
             onChat={chatWith}
+            getScreenContext={getScreenContext}
           />
         ) : teamspaces.openId && selectedOrganization ? (
           <TeamspaceFocus
@@ -755,12 +917,14 @@ export function WorkspaceShell({
               {isAgentsSection(section) && (
                 <AgentsCanvas
                   section={section}
+                  primaryThreadId={primaryThreadId}
                   organizationId={
                     session ? selectedOrganization?.id : undefined
                   }
                   viewerId={session?.user.id}
                   onOpen={openWork}
                   onNavigate={selectSection}
+                  onOpenFile={openPrimaryFile}
                 />
               )}
             </main>
@@ -773,6 +937,12 @@ export function WorkspaceShell({
         expanded={rightExpanded}
         onExpand={expandAgentPanel}
         onCollapse={() => setRightExpanded(false)}
+        primaryWork={primaryWork}
+        onOpenAgentOverview={openAgentOverview}
+        onPrimaryThreadChange={setPrimaryThreadId}
+        onPrimaryFileCreated={openPrimaryFile}
+        onPrimaryComposingChange={setPrimaryComposing}
+        getScreenContext={getScreenContext}
         chatRequest={chatRequest}
         tabRequest={tabRequest}
         directMessages={

@@ -179,7 +179,13 @@ function DocumentRow({
   const retrying = document.status === "pending" && document.attempts > 0
 
   return (
-    <li className="workspace-knowledge-document" data-status={document.status}>
+    <li
+      className="workspace-knowledge-document"
+      data-status={document.status}
+      data-screen-context-kind="document"
+      data-screen-context-id={document.id}
+      data-screen-context-name={title}
+    >
       <OriginIcon origin={origin} />
       <span className="workspace-knowledge-source-name">
         {href ? (
