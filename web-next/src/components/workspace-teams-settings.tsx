@@ -1,7 +1,14 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Plus, UsersRound } from "lucide-react"
+import { ArrowLeft, ChevronDown, Plus, UsersRound } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { ApiError } from "@/lib/api/client"
 import type { Organization, Role } from "@/lib/auth/client"
 import { authErrorMessage } from "@/lib/auth/client"
@@ -67,10 +74,25 @@ export function WorkspaceTeamsSettings({
   })
   const refreshTeams = () =>
     queryClient.invalidateQueries({ queryKey: ["settings", "teams", orgId] })
+  const refreshDetail = () =>
+    queryClient.invalidateQueries({
+      queryKey: ["settings", "teams", orgId, selectedId, "detail"],
+    })
   const refreshMembers = () =>
     queryClient.invalidateQueries({
       queryKey: ["settings", "teams", orgId, selectedId, "members"],
     })
+  // A role change or removal that Go refuses with 403/404/409 usually means
+  // this member's own place in the team just changed underneath them, so
+  // re-read the detail (it holds `can_manage`, which gates every admin
+  // control here) and the member list the same way a success would, instead
+  // of leaving the page's stale view in charge.
+  const refreshAfterRefusal = (error: unknown) => {
+    if (error instanceof ApiError && [403, 404, 409].includes(error.status)) {
+      void refreshDetail()
+      void refreshMembers()
+    }
+  }
   const create = useMutation({
     mutationFn: (name: string) =>
       createTeam(orgId!, name, parentId || undefined),
@@ -107,14 +129,20 @@ export function WorkspaceTeamsSettings({
       id: string
       nextRole: "admin" | "member"
     }) => changeTeamMemberRole(orgId!, selectedId!, id, nextRole),
-    onSuccess: refreshMembers,
+    onSuccess: async () => {
+      await refreshMembers()
+      await refreshDetail()
+    },
+    onError: refreshAfterRefusal,
   })
   const removeMember = useMutation({
     mutationFn: (id: string) => removeTeamMember(orgId!, selectedId!, id),
     onSuccess: async () => {
       setConfirmRemoveMemberId(null)
       await refreshMembers()
+      await refreshDetail()
     },
+    onError: refreshAfterRefusal,
   })
 
   // What is open below the list belongs to one team: a removal waiting to be
@@ -251,20 +279,40 @@ export function WorkspaceTeamsSettings({
                   </div>
                   {detail.data?.can_manage ? (
                     <div className="workspace-settings-member-actions">
-                      <select
-                        aria-label={`Role for ${member.display_name || member.email}`}
-                        value={member.role}
-                        disabled={changeRole.isPending}
-                        onChange={(event) =>
-                          changeRole.mutate({
-                            id: member.user_id,
-                            nextRole: event.target.value as "admin" | "member",
-                          })
-                        }
-                      >
-                        <option value="member">Member</option>
-                        <option value="admin">Admin</option>
-                      </select>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          className="workspace-settings-tag workspace-settings-role-trigger"
+                          aria-label={`Role for ${member.display_name || member.email}`}
+                          disabled={changeRole.isPending}
+                        >
+                          {member.role}
+                          <ChevronDown size={11} aria-hidden="true" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent>
+                          {/* A native select fires `change` on every
+                              arrow-key press while closed on some platforms,
+                              which used to send a role change per keypress.
+                              A menu only commits on an explicit choice. */}
+                          <DropdownMenuRadioGroup
+                            value={member.role}
+                            onValueChange={(value) => {
+                              if (value !== member.role) {
+                                changeRole.mutate({
+                                  id: member.user_id,
+                                  nextRole: value as "admin" | "member",
+                                })
+                              }
+                            }}
+                          >
+                            <DropdownMenuRadioItem value="member" closeOnClick>
+                              Member
+                            </DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="admin" closeOnClick>
+                              Admin
+                            </DropdownMenuRadioItem>
+                          </DropdownMenuRadioGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       <button
                         type="button"
                         disabled={removeMember.isPending}

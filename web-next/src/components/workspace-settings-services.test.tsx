@@ -111,6 +111,121 @@ describe("connected settings sections", () => {
     )
   })
 
+  it("commits a team member's role only on an explicit choice, and re-syncs the team detail so a self-demotion drops the admin controls", async () => {
+    // "me" starts as the team's admin, so `can_manage` is true and the
+    // detail query gates rename/add-member/delete-team on it. Demoting
+    // "me" to member must make Go's next `can_manage` false, and the page
+    // must go re-read it instead of trusting the value it already has.
+    let detailRequests = 0
+    let role: "admin" | "member" = "admin"
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/v1/organizations/org-1/teams" && init?.method === "GET") {
+        return json({
+          teams: [
+            {
+              id: "team-1",
+              name: "Design",
+              organization_id: "org-1",
+              role: "admin",
+              can_manage: true,
+            },
+          ],
+        })
+      }
+      if (
+        url === "/v1/organizations/org-1/teams/team-1" &&
+        init?.method === "GET"
+      ) {
+        detailRequests += 1
+        const canManage = detailRequests === 1
+        return json({
+          team: {
+            id: "team-1",
+            name: "Design",
+            organization_id: "org-1",
+            can_manage: canManage,
+          },
+          membership: { user_id: "me", email: "me@example.com", role },
+          can_manage: canManage,
+        })
+      }
+      if (
+        url === "/v1/organizations/org-1/teams/team-1/members" &&
+        init?.method === "GET"
+      ) {
+        return json({
+          members: [
+            {
+              user_id: "me",
+              email: "me@example.com",
+              display_name: "Me",
+              role,
+              notify_email: false,
+            },
+          ],
+        })
+      }
+      if (
+        url === "/v1/organizations/org-1/teams/team-1/members/me" &&
+        init?.method === "PATCH"
+      ) {
+        role = "member"
+        return json({ user_id: "me", email: "me@example.com", role })
+      }
+      if (url === "/v1/organizations/org-1/members" && init?.method === "GET") {
+        return json({ members: [] })
+      }
+      throw new Error(`unexpected fetch: ${init?.method} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    show(
+      <WorkspaceTeamsSettings
+        organization={organization}
+        role="admin"
+        preview={false}
+      />
+    )
+
+    fireEvent.click(await screen.findByRole("button", { name: /Design/ }))
+    await screen.findByText("Manage this team and its members.")
+
+    fireEvent.click(await screen.findByRole("button", { name: "Role for Me" }))
+    // Browsing the open menu with the keyboard must not commit anything.
+    fireEvent.keyDown(screen.getByRole("menuitemradio", { name: "Admin" }), {
+      key: "ArrowDown",
+    })
+    fireEvent.keyDown(screen.getByRole("menuitemradio", { name: "Member" }), {
+      key: "ArrowDown",
+    })
+    expect(fetchMock.mock.calls.some(([, i]) => i?.method === "PATCH")).toBe(
+      false
+    )
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Member" }))
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/v1/organizations/org-1/teams/team-1/members/me",
+        expect.objectContaining({
+          method: "PATCH",
+          body: '{"role":"member"}',
+        })
+      )
+    )
+    expect(
+      fetchMock.mock.calls.filter(([, i]) => i?.method === "PATCH")
+    ).toHaveLength(1)
+
+    // The stale `can_manage: true` must not survive the demotion: the
+    // detail query is re-read, and every admin-only control it gates
+    // disappears without a reload.
+    await waitFor(() =>
+      expect(screen.getByText("Your place in this team.")).toBeTruthy()
+    )
+    expect(screen.queryByRole("button", { name: "Delete team" })).toBeNull()
+    expect(screen.queryByLabelText("Add a member")).toBeNull()
+    expect(detailRequests).toBeGreaterThan(1)
+  })
+
   it("groups organisation connections without exposing admin data to members", async () => {
     const fetchMock = vi.fn(async () =>
       json({

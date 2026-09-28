@@ -3,7 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowRight } from "lucide-react"
 import { ApiError } from "@/lib/api/client"
-import { getSession } from "@/lib/auth/client"
+import { getSession, signOut } from "@/lib/auth/client"
 import { acceptInvitationToken } from "@/lib/auth/invitations"
 import { AuthNotice, AuthShell } from "./auth-shell"
 
@@ -11,6 +11,9 @@ export function InvitationAcceptPage({ token }: { token?: string }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [errorMessage, setErrorMessage] = useState("")
+  const [wrongAccount, setWrongAccount] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
+  const [signOutError, setSignOutError] = useState("")
   const session = useQuery({
     queryKey: ["auth", "session"],
     queryFn: getSession,
@@ -26,8 +29,10 @@ export function InvitationAcceptPage({ token }: { token?: string }) {
       })
     },
     onError: (error) => {
+      setWrongAccount(false)
       if (error instanceof ApiError) {
         if (error.status === 403) {
+          setWrongAccount(true)
           setErrorMessage(
             "Sign in with the email address this invitation was sent to."
           )
@@ -59,6 +64,24 @@ export function InvitationAcceptPage({ token }: { token?: string }) {
     )
   }, [session.error])
 
+  // The invitation was sent to a different address than whoever is signed
+  // in right now. Signing out and sending them to sign-in with this page as
+  // the redirect brings them straight back here once they are that person.
+  async function signOutAndSwitch() {
+    setSigningOut(true)
+    setSignOutError("")
+    try {
+      await signOut()
+      const destination = `${window.location.pathname}${window.location.search}`
+      window.location.replace(
+        `/auth/sign-in?redirect=${encodeURIComponent(destination)}`
+      )
+    } catch {
+      setSignOutError("Could not sign out. Try again.")
+      setSigningOut(false)
+    }
+  }
+
   return (
     <AuthShell>
       <h1>Join your team.</h1>
@@ -68,6 +91,20 @@ export function InvitationAcceptPage({ token }: { token?: string }) {
           : "This invitation link is incomplete."}
       </p>
       {errorMessage && <AuthNotice>{errorMessage}</AuthNotice>}
+      {wrongAccount && (
+        <>
+          <button
+            className="auth-submit"
+            type="button"
+            disabled={signingOut}
+            onClick={() => void signOutAndSwitch()}
+          >
+            {signingOut ? "Signing out…" : "Sign out and use another account"}
+            <ArrowRight size={17} aria-hidden="true" />
+          </button>
+          {signOutError && <AuthNotice>{signOutError}</AuthNotice>}
+        </>
+      )}
       {token && !session.error && session.data && (
         <button
           className="auth-submit"
@@ -75,6 +112,7 @@ export function InvitationAcceptPage({ token }: { token?: string }) {
           disabled={accept.isPending}
           onClick={() => {
             setErrorMessage("")
+            setWrongAccount(false)
             accept.mutate()
           }}
         >

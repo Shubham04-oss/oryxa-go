@@ -1,7 +1,14 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Mail, UserRoundPlus, UsersRound, X } from "lucide-react"
+import { ChevronDown, Mail, UserRoundPlus, UsersRound, X } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { ApiError } from "@/lib/api/client"
 import type { Role } from "@/lib/auth/client"
 import {
@@ -81,17 +88,42 @@ function MemberRow({
         <strong>{name}</strong>
         {member.display_name && <small>{member.email}</small>}
       </span>
+      {/* Unlike Remove (below), the old app lets an owner change their own
+          role from this same picker, so this stays open on the viewer's
+          own row too. */}
       {viewerRole === "owner" && !preview ? (
-        <select
-          aria-label={`Role for ${name}`}
-          value={member.role}
-          disabled={changeRole.isPending}
-          onChange={(event) => changeRole.mutate(event.target.value as Role)}
-        >
-          <option value="owner">Owner</option>
-          <option value="admin">Admin</option>
-          <option value="member">Member</option>
-        </select>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            className="workspace-person-role workspace-person-role-trigger"
+            aria-label={`Role for ${name}`}
+            disabled={changeRole.isPending}
+          >
+            {member.role}
+            <ChevronDown size={11} aria-hidden="true" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent>
+            {/* A native select fires `change` on every arrow-key press while
+                closed on some platforms, which used to send a request per
+                key. A menu only commits on an explicit click or activation,
+                so browsing the roles with the keyboard is free. */}
+            <DropdownMenuRadioGroup
+              value={member.role}
+              onValueChange={(value) => {
+                if (value !== member.role) changeRole.mutate(value as Role)
+              }}
+            >
+              <DropdownMenuRadioItem value="owner" closeOnClick>
+                Owner
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="admin" closeOnClick>
+                Admin
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="member" closeOnClick>
+                Member
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
       ) : (
         <span className="workspace-person-role">{member.role}</span>
       )}
