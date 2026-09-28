@@ -28,6 +28,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { ApiError } from "@/lib/api/client"
 import { formatBytes, uploadProblem } from "@/lib/files/client"
 import {
+  createCorpusPolicy,
+  deleteCorpusPolicy,
+  listCorpusPolicies,
+} from "@/lib/policies/client"
+import {
   addDocument,
   addFileDocument,
   afterDeleteCorpus,
@@ -76,6 +81,7 @@ import {
   originLabel,
   relativeTime,
 } from "./knowledge-format"
+import { PolicyEditor } from "./policy-editor"
 
 // simple-icons carries no Slack mark (removed for its trademark policy); a
 // Slack chip falls back to its initial, same as any other unmapped app.
@@ -920,6 +926,10 @@ export function KnowledgeBaseDetail({
   const fromApps = isFromConnectedApps(corpus)
   const canWrite = !fromApps && canWriteCorpus(corpus, viewer)
   const canDelete = !fromApps && canDeleteCorpus(corpus, viewer)
+  // Policies narrow who may read or search this knowledge base — a separate
+  // axis from `canWrite`/`canDelete` above, and always an organization-admin
+  // action regardless of the corpus's own scope or where its content is from.
+  const isOrgAdmin = viewer.role === "owner" || viewer.role === "admin"
   const description = corpusDescription(corpus)
   const documentCount = Math.max(corpus.document_count, documents.length)
   const indexingCount = documents.filter(isIndexing).length
@@ -1170,6 +1180,26 @@ export function KnowledgeBaseDetail({
             </button>
           )}
         </div>
+      )}
+
+      {isOrgAdmin && (
+        <>
+          <div className="workspace-knowledge-section-heading">
+            <h3>Policies</h3>
+          </div>
+          <PolicyEditor
+            resource={{ kind: "corpus", id: corpus.id }}
+            client={{
+              list: (options) =>
+                listCorpusPolicies(organizationId, corpus.id, options),
+              create: (input) =>
+                createCorpusPolicy(organizationId, corpus.id, input),
+              remove: (policyId) =>
+                deleteCorpusPolicy(organizationId, corpus.id, policyId),
+            }}
+            canManage={isOrgAdmin}
+          />
+        </>
       )}
     </div>
   )

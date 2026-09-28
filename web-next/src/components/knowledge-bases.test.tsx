@@ -138,6 +138,9 @@ function detailRoutes(
     [`GET ${corpusPath}`]: () =>
       json({ ...base, document_count: documents().length }),
     [`GET ${corpusPath}/documents`]: () => json({ documents: documents() }),
+    // An org admin's detail view also mounts the Policies section; keep it
+    // quiet here since these tests are about documents, not policies.
+    [`GET ${corpusPath}/policies`]: { policies: [] },
   }
 }
 

@@ -11,6 +11,7 @@
 @import "./components/teamspaces.css";
 @import "./components/workspace-settings.css";
 @import "./components/knowledge-bases.css";
+@import "./components/policy-editor.css";
 @import "./components/auth/auth.css";
 @import "./components/agents-mode.css";
 

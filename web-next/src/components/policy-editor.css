@@ -1,0 +1,273 @@
+/* Policy editor: a reusable list/add/remove editor for the Cedar policies
+   that narrow who may read or search a resource (a knowledge base today,
+   other resource types later). It carries its own spacing so it can be
+   dropped into any surface's detail view without that page styling it. */
+
+.policy-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 26px;
+}
+
+.policy-editor-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.policy-editor-intro {
+  max-width: 560px;
+  margin: 0;
+  color: #999;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.policy-editor-hint {
+  margin: 0;
+  color: #999;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.policy-editor-create-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 13px;
+  border: 1px solid #444;
+  border-radius: 10px;
+  background: #292929;
+  color: #e4e4e4;
+  font-size: 12px;
+  font-weight: 500;
+}
+.policy-editor-create-button:hover {
+  border-color: #555;
+  background: #303030;
+}
+
+.policy-editor-loading {
+  margin: 0;
+  color: #999;
+  font-size: 12px;
+}
+
+.policy-editor-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  max-width: 700px;
+  margin: 0;
+  padding: 10px 13px;
+  border: 1px solid #8c4949;
+  border-radius: 11px;
+  background: #292929;
+  color: #f3b7b7;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.policy-editor-alert button {
+  flex: none;
+  color: #f1f1f1;
+  font-weight: 600;
+}
+
+.policy-editor-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: 700px;
+  min-height: 140px;
+  padding: 22px;
+  border: 1px dashed #454545;
+  border-radius: 15px;
+  color: #aaa;
+  text-align: center;
+}
+.policy-editor-empty strong {
+  color: #eee;
+  font-size: 13px;
+}
+.policy-editor-empty p {
+  margin: 0;
+  color: #999;
+  font-size: 12px;
+}
+
+.policy-editor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 700px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.policy-editor-item {
+  padding: 14px 16px;
+  border: 1px solid #383838;
+  border-radius: 13px;
+  background: #242424;
+}
+.policy-editor-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.policy-editor-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.policy-editor-item-head strong {
+  color: #eee;
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.policy-editor-text {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #353535;
+  border-radius: 10px;
+  background: #1b1b1b;
+  color: #cfcfcf;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.policy-editor-text:not([data-expanded="true"]) {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+}
+.policy-editor-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #bdbdbd;
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.policy-editor-meta {
+  color: #929292;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.policy-editor-remove {
+  flex: none;
+  padding: 5px 10px;
+  border: 1px solid #444;
+  border-radius: 8px;
+  background: transparent;
+  color: #999;
+  font-size: 11px;
+}
+.policy-editor-remove:hover {
+  border-color: #8c4949;
+  color: #f3b7b7;
+}
+
+.policy-editor-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid #353535;
+  color: #d6d6d6;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.policy-editor-confirm p {
+  margin: 0;
+}
+
+.policy-editor-error {
+  margin: 0;
+  color: #ff9d9d;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.policy-editor-form {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-width: 560px;
+  padding: 18px;
+  border: 1px solid #444;
+  border-radius: 16px;
+  background: #252525;
+}
+.policy-editor-form label {
+  color: #d6d6d6;
+  font-size: 11px;
+  font-weight: 500;
+}
+.policy-editor-form [data-slot="input"],
+.policy-editor-form [data-slot="textarea"] {
+  border-color: #454545;
+  background: #1e1e1e;
+  color: #f2f2f2;
+  font-size: 12px;
+}
+.policy-editor-form [data-slot="input"] {
+  height: 36px;
+}
+.policy-editor-textarea[data-slot="textarea"] {
+  min-height: 140px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.policy-editor-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.policy-editor-form-actions button {
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid #444;
+  border-radius: 8px;
+  background: #303030;
+  color: #ddd;
+  font-size: 11px;
+}
+.policy-editor-form-actions button[type="submit"] {
+  border-color: #ddd;
+  background: #e9e9e9;
+  color: #202020;
+  font-weight: 600;
+}
+.policy-editor-form-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.policy-editor-confirm .policy-editor-form-actions button.is-danger {
+  border-color: #8c4949;
+  background: #3a2323;
+  color: #f3b7b7;
+}
