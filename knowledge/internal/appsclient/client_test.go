@@ -45,9 +45,36 @@ func TestConnectionCarriesABearerToken(t *testing.T) {
 	}
 	if connection != (domain.AppConnection{
 		ID: "apc_1", Toolkit: "github", Status: "active", MemberID: "user-1",
-		ComposioAccountID: "ca_1", Label: "github_red-castle",
+		ComposioAccountID: "ca_1", Label: "github_red-castle", Broker: "composio",
 	}) {
 		t.Fatalf("Connection() = %+v", connection)
+	}
+}
+
+func TestConnectionReadsTheBrokerFromTheConnectionView(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "composio, explicit", body: `{"id": "apc_1", "toolkit": "github", "status": "active", "member_id": "user-1", "broker": "composio"}`, want: "composio"},
+		{name: "oryxa", body: `{"id": "apc_1", "toolkit": "github", "status": "active", "member_id": "user-1", "broker": "oryxa"}`, want: "oryxa"},
+		{name: "missing reads as composio", body: `{"id": "apc_1", "toolkit": "github", "status": "active", "member_id": "user-1"}`, want: "composio"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				_, _ = writer.Write([]byte(test.body))
+			}))
+			defer server.Close()
+
+			connection, err := New(server.URL).Connection(context.Background(), "org_1", "apc_1", authclient.Credentials{Authorization: "Bearer t"})
+			if err != nil {
+				t.Fatalf("Connection() error = %v", err)
+			}
+			if connection.Broker != test.want {
+				t.Fatalf("Broker = %q, want %q", connection.Broker, test.want)
+			}
+		})
 	}
 }
 

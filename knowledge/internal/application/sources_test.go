@@ -212,6 +212,63 @@ func TestRegisterSourceRefusesAConnectionThatIsNotTheCallers(t *testing.T) {
 	}
 }
 
+// TestRegisterSourceOnAnOryxaConnectionNeedsAReaderThatUsesApps is 1G's
+// guard: Composio-backed extractors read through Composio's own proxy, which
+// cannot see a connection Oryxa's own sign-in holds instead. Until an
+// extractor is registered as one that reads through apps (2B, per toolkit),
+// every oryxa connection is refused; a composio connection, or one with no
+// broker at all, registers exactly as before.
+func TestRegisterSourceOnAnOryxaConnectionNeedsAReaderThatUsesApps(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		broker  string
+		wantErr error
+	}{
+		{name: "composio registers as before", broker: "composio", wantErr: nil},
+		{name: "no broker at all reads as composio", broker: "", wantErr: nil},
+		{name: "oryxa is refused until an extractor reads through apps", broker: "oryxa", wantErr: domain.ErrConflict},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newFakeStore()
+			connection := usableConnection()
+			connection.Broker = test.broker
+			service := githubRegistrar(t, store, member(), &fakeApps{connection: connection})
+
+			source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration())
+			if test.wantErr == nil {
+				if err != nil {
+					t.Fatalf("RegisterSource() error = %v, want nil", err)
+				}
+				if source.ConnectionID != "apc_1" {
+					t.Fatalf("source = %+v, want it registered on apc_1", source)
+				}
+				return
+			}
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("RegisterSource() error = %v, want %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
+// TestRegisterSourceAcceptsAnOryxaConnectionOnceItsExtractorReadsThroughApps
+// proves appsReaders is what 2B flips per toolkit: nothing else about
+// registration needs to change for a toolkit whose reader moves off
+// Composio.
+func TestRegisterSourceAcceptsAnOryxaConnectionOnceItsExtractorReadsThroughApps(t *testing.T) {
+	appsReaders["github"] = true
+	defer delete(appsReaders, "github")
+
+	store := newFakeStore()
+	connection := usableConnection()
+	connection.Broker = "oryxa"
+	service := githubRegistrar(t, store, member(), &fakeApps{connection: connection})
+
+	if _, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration()); err != nil {
+		t.Fatalf("RegisterSource() error = %v, want nil once github reads through apps", err)
+	}
+}
+
 func TestRegisterSourceRefusesAProviderSourceWhenAppsIsNotConfigured(t *testing.T) {
 	// Without COMPOSIO_API_KEY, mount builds no extractor for github, notion
 	// or slack, so this path is defensive: it must still refuse cleanly
