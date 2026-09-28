@@ -135,22 +135,25 @@ func TestAReportNamesOnlyWhereTheRequestWasMade(t *testing.T) {
 // any teamspace names no teamspace, and a waker told of neither members nor
 // teamspaces names the asking agent alone.
 func TestADeliveryLeavesOutWhatItCannotRead(t *testing.T) {
-	outside := requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent)
+	// Only its member approves a request made outside any teamspace, so the
+	// agent is woken for its approved work.
+	outside := decidedBy(requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner), byTheMember)
 	outside.TeamspaceID = ""
-	requested := testDelivery("evt_1", KindTargetRequested, 1)
+	requested, approved := testDelivery("evt_1", KindTargetRequested, 1), testDelivery("evt_2", KindTargetApproved, 2)
 	for name, testCase := range map[string]struct {
-		request agents.Interaction
-		config  Config
-		want    string
+		delivery Delivery
+		request  agents.Interaction
+		config   Config
+		want     string
 	}{
-		"a member who left":        {requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), named(&fakeMembers{}, launch), `It comes from "Crew", in the teamspace "Launch".`},
-		"auth not answering":       {requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), named(&fakeMembers{err: errors.New("database down")}, launch), `It comes from "Crew", in the teamspace "Launch".`},
-		"a teamspace that is gone": {requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), named(orgMember(), fakeSpaces{}), `It comes from "Crew", the agent of "Org Member" (member@sim.oryxa).`},
-		"teamspaces not answering": {requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), named(orgMember(), fakeSpaces{err: errors.New("database down")}), `It comes from "Crew", the agent of "Org Member" (member@sim.oryxa).`},
-		"outside any teamspace":    {outside, named(orgMember(), launch), `It comes from "Crew", the agent of "Org Member" (member@sim.oryxa).`},
-		"nothing to read them in":  {requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), named(nil, nil), `It comes from "Crew".`},
+		"a member who left":        {requested, requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), named(&fakeMembers{}, launch), `It comes from "Crew", in the teamspace "Launch".`},
+		"auth not answering":       {requested, requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), named(&fakeMembers{err: errors.New("database down")}, launch), `It comes from "Crew", in the teamspace "Launch".`},
+		"a teamspace that is gone": {requested, requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), named(orgMember(), fakeSpaces{}), `It comes from "Crew", the agent of "Org Member" (member@sim.oryxa).`},
+		"teamspaces not answering": {requested, requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), named(orgMember(), fakeSpaces{err: errors.New("database down")}), `It comes from "Crew", the agent of "Org Member" (member@sim.oryxa).`},
+		"outside any teamspace":    {approved, outside, named(orgMember(), launch), `It comes from "Crew", the agent of "Org Member" (member@sim.oryxa).`},
+		"nothing to read them in":  {requested, requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), named(nil, nil), `It comes from "Crew".`},
 	} {
-		if message := deliverOnce(t, requested, testCase.request, testCase.config); !strings.Contains(message, testCase.want) || strings.Contains(message, "teamspace \"Launch\"") != strings.Contains(testCase.want, "Launch") {
+		if message := deliverOnce(t, testCase.delivery, testCase.request, testCase.config); !strings.Contains(message, testCase.want) || strings.Contains(message, "teamspace \"Launch\"") != strings.Contains(testCase.want, "Launch") {
 			t.Errorf("%s: message = %s, want %s", name, message, testCase.want)
 		}
 	}

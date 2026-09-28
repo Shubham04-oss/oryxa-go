@@ -136,8 +136,8 @@ func (noInteractions) Respond(context.Context, agents.InteractionActor, string, 
 }
 
 // assembledKrude is Krude built on llm the way Build builds it, with the
-// member's apps and knowledge and the interactions toolboxes, and runs
-// delivering a request thinking at thinking.
+// member's apps and knowledge, the interactions toolboxes and the room's,
+// and runs delivering a request thinking at thinking.
 func assembledKrude(t *testing.T, llm model.LLM, thinking genai.ThinkingLevel) *Krude {
 	t.Helper()
 	router, err := modelrouter.New(llm, llm)
@@ -152,15 +152,20 @@ func assembledKrude(t *testing.T, llm model.LLM, thinking genai.ThinkingLevel) *
 		}
 		return box
 	}
+	room, err := agents.RoomToolbox(agents.RoomConfig{Service: noInteractions{}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	apps, knowledge := fakeToolbox(t, "apps", "apps_run_read_tool"), fakeToolbox(t, "knowledge", "knowledge_search")
-	answering, delivering := interactions(agents.InteractionConfig{Answering: true}), interactions(agents.InteractionConfig{Delivering: true})
-	unattended := []agents.Toolbox{apps, knowledge, answering}
-	unattendedQuiet := []agents.Toolbox{knowledge, answering}
+	delivering := interactions(agents.InteractionConfig{Delivering: true})
+	unattended := []agents.Toolbox{apps, knowledge}
+	unattendedQuiet := []agents.Toolbox{knowledge}
 	krude := &Krude{
 		router:            router,
 		toolboxes:         []agents.Toolbox{apps, knowledge, interactions(agents.InteractionConfig{})},
 		unattended:        unattended,
 		unattendedQuiet:   unattendedQuiet,
+		room:              []agents.Toolbox{room},
 		deliveryToolboxes: deliveryToolboxes(unattended, unattendedQuiet, &delivering),
 		deliveryThinking:  thinking,
 	}
@@ -215,9 +220,9 @@ func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 	}
 }
 
-// TestOnlyDeliveriesStartLoaded: the member's own chat, an app wake-up and a
-// room's stand-in still find and load their toolboxes, and look up their
-// member, as they did.
+// TestOnlyDeliveriesStartLoaded: the member's own chat, an app wake-up and
+// an unwatched run kept from the apps still find and load their toolboxes,
+// and look up their member, as they did.
 func TestOnlyDeliveriesStartLoaded(t *testing.T) {
 	llm := &recordingModel{}
 	krude := assembledKrude(t, llm, "")
@@ -226,7 +231,7 @@ func TestOnlyDeliveriesStartLoaded(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, built := range map[string]agent.Agent{
-		"a member's chat": krude.Root, "a wake-up": krude.Unattended, "a room's stand-in": krude.UnattendedQuiet, "a specialist standing in": stood,
+		"a member's chat": krude.Root, "a wake-up": krude.Unattended, "a run kept from the apps": krude.UnattendedQuiet, "a specialist's unwatched run": stood,
 	} {
 		offered := declared(llm.firstCall(t, built))
 		if !slices.Contains(offered, "list_tools") || !slices.Contains(offered, "load_tools") || !slices.Contains(offered, "get_user_details") {
@@ -239,12 +244,12 @@ func TestOnlyDeliveriesStartLoaded(t *testing.T) {
 }
 
 // TestDeliveryToolboxesGiveEachReachItsOwn: a delivery's toolboxes are the
-// unattended run's, or those without the apps, with the interactions toolbox
-// swapped for the delivering one, and a report's are the delivering one
+// unattended run's, or those without the apps, with the delivering
+// interactions toolbox after them, and a report's are the delivering one
 // alone; with no interactions configured, a report has none.
 func TestDeliveryToolboxesGiveEachReachItsOwn(t *testing.T) {
-	unattended := []agents.Toolbox{{Name: "apps", Description: "reads"}, {Name: "knowledge", Description: "reads"}, {Name: "interactions", Description: "answering"}}
-	quiet := []agents.Toolbox{{Name: "knowledge", Description: "reads"}, {Name: "interactions", Description: "answering"}}
+	unattended := []agents.Toolbox{{Name: "apps", Description: "reads"}, {Name: "knowledge", Description: "reads"}}
+	quiet := []agents.Toolbox{{Name: "knowledge", Description: "reads"}}
 	delivering := agents.Toolbox{Name: "interactions", Description: "delivering"}
 	described := func(toolboxes []agents.Toolbox) []string {
 		descriptions := []string{}
@@ -267,7 +272,7 @@ func TestDeliveryToolboxesGiveEachReachItsOwn(t *testing.T) {
 	if got := described(deliveryToolboxes(unattended, quiet, nil)[DeliveryReport]); len(got) != 0 {
 		t.Errorf("a report with no interactions configured has %v", got)
 	}
-	if got := described(unattended); !slices.Equal(got, []string{"apps:reads", "knowledge:reads", "interactions:answering"}) {
+	if got := described(unattended); !slices.Equal(got, []string{"apps:reads", "knowledge:reads"}) {
 		t.Errorf("the unattended list changed: %v", got)
 	}
 }
@@ -289,7 +294,7 @@ func TestAReachNobodyKnowsGetsTheLeast(t *testing.T) {
 // TestOnlyDeliveriesThinkAtTheLevelSet: the thinking level set for
 // deliveries reaches the model on every run delivering a request, Krude's
 // and a specialist's, whatever its reach, and never a member's own chat, an
-// app wake-up, a room's stand-in, a workflow or the organization agent,
+// app wake-up, a turn in a room, a workflow or the organization agent,
 // which send no thinking config at all. Set to nothing, no run sends one.
 func TestOnlyDeliveriesThinkAtTheLevelSet(t *testing.T) {
 	spec := agents.ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}
@@ -326,14 +331,19 @@ func TestOnlyDeliveriesThinkAtTheLevelSet(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		seated, err := krude.ManagedRoom(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
 		organization, err := krude.OrganizationAgent(agents.OrganizationSpec{ID: "oag_1", Name: "Org", Instructions: "Keep the organization's context."})
 		if err != nil {
 			t.Fatal(err)
 		}
 		for name, built := range map[string]agent.Agent{
 			"a member's chat with Krude": krude.Root, "a member's chat with a specialist": member,
-			"an app wake-up": krude.Unattended, "a room's stand-in": krude.UnattendedQuiet,
-			"a specialist's workflow": reading, "a specialist standing in": standing,
+			"an app wake-up": krude.Unattended, "an unwatched run kept from the apps": krude.UnattendedQuiet,
+			"a specialist's workflow": reading, "a specialist's unwatched run": standing,
+			"Krude in a room": krude.Room, "a specialist in a room": seated,
 			"the organization agent": organization,
 		} {
 			thinks(name, built, "")

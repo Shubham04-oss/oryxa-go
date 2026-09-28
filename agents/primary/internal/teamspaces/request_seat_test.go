@@ -159,8 +159,9 @@ func (organizationDirectory) FindAgents(context.Context, string, string, string,
 
 // TestATeamspaceRequestIsApprovedAsTheTargetsOwnerChose runs the request
 // ledger over this package's seat lookup, as the service wires them: who
-// approves follows what the target's owner chose in the teamspace, and a
-// requester off the team or a target without a seat is refused.
+// approves follows what the target's owner chose in the teamspace, outside
+// one the owner always does, and a requester off the team or a target
+// without a seat is refused.
 func TestATeamspaceRequestIsApprovedAsTheTargetsOwnerChose(t *testing.T) {
 	requestsFor := func(t *testing.T, directory primaryagents.OrganizationDirectory) (*interactions.Service, *requestLedger) {
 		t.Helper()
@@ -187,7 +188,7 @@ func TestATeamspaceRequestIsApprovedAsTheTargetsOwnerChose(t *testing.T) {
 		{"agt_grace", "tsp_1", interactions.ApprovalOwner},
 		{"agt_auto", "tsp_1", interactions.ApprovalAgent},
 		{"agt_ask", "tsp_1", interactions.ApprovalOwner},
-		{"agt_grace", "", interactions.ApprovalAgent},
+		{"agt_grace", "", interactions.ApprovalOwner},
 	} {
 		created, err := requests.Create(context.Background(), requester, "token", testCase.target+testCase.teamspaceID, ask(testCase.target, testCase.teamspaceID))
 		if err != nil || created.Approval != testCase.approval || created.TeamspaceID != testCase.teamspaceID {

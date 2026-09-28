@@ -70,6 +70,13 @@ const (
 	// answered, and for approved work allowed neither the member's apps nor
 	// their knowledge.
 	DeliveryReport UnattendedProfile = "delivery_report"
+	// RoomSeat is a seat's turn in a room, its owner reading the room or
+	// away alike: what steers it is what everyone in the room wrote, and
+	// everyone in the room reads what it says. It answers from the room
+	// alone, reaching none of the member's apps, knowledge, memory or
+	// requests, and files what it cannot answer with its member. It is
+	// Confined.
+	RoomSeat UnattendedProfile = "room"
 )
 
 // ReadsApps is whether a run on this profile may read the member's apps.
@@ -83,11 +90,19 @@ func (profile UnattendedProfile) Delivers() bool {
 	return profile == DeliveryReads || profile == DeliveryApps || profile == DeliveryQuiet || profile == DeliveryReport
 }
 
+// Confined is whether a run on this profile answers on the reduced agent,
+// with no memory, whoever started it: a seat's turn in a room, which its
+// owner reading the room does not make a conversation of their own.
+func (profile UnattendedProfile) Confined() bool {
+	return profile == RoomSeat
+}
+
 // UnattendedFactory builds the restricted runtime a profile allows. It must
 // answer to the same name as [Factory] for the same definition: a run picks
 // between the two, and ADK addresses the agent by name. When a service has
 // no unattended factory, an unwatched run falls back to the full agent, so
-// wiring one is what makes the restriction real.
+// wiring one is what makes the restriction real; a run on a Confined profile
+// does not run at all without one.
 type UnattendedFactory func(Definition, UnattendedProfile) (agent.Agent, error)
 
 type Config struct {
@@ -364,9 +379,19 @@ func (service *Service) engine(definition Definition, profile UnattendedProfile)
 			return nil, fmt.Errorf("build the agent for an unwatched run: %w", err)
 		}
 	}
+	memory := service.memory
+	if profile.Confined() {
+		// A run on a confined profile answers on the reduced agent even with
+		// somebody watching, and remembers nothing: without that agent it
+		// does not run at all, rather than on the full one.
+		if unattended == nil {
+			return nil, errors.New("managed agents: a turn in a room needs the reduced agent built for it, and none is wired")
+		}
+		built, memory = unattended, nil
+	}
 	engine, err := threads.New(threads.Config{
 		AppName: appName(definition.ID), Agent: built, Unattended: unattended, Sessions: service.sessions,
-		Artifacts: service.artifacts, Memory: service.memory, Runs: service.runs,
+		Artifacts: service.artifacts, Memory: memory, Runs: service.runs,
 		Prices: service.prices, Logger: service.logger,
 		InitialState: map[string]any{
 			primaryagents.AgentIDKey:   definition.ID,

@@ -91,9 +91,9 @@ func TestADeliveryWaitsForItsDisabledAgent(t *testing.T) {
 		"an outcome's report": {report, interactions.StatusCompleted, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(testCase.status)}}
+			requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable(testCase.status)}}
 			store := &fakeDeliveries{pending: []Delivery{testCase.delivery}}
-			waker := NewWaker(store, &fakeAgentRuns{err: managedagents.ErrDisabled}, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+			waker := NewWaker(store, &fakeAgentRuns{err: managedagents.ErrDisabled}, requests, standsStill(), nil)
 			if err := waker.WakeDue(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -143,13 +143,13 @@ func TestOnlyApprovedWorkIsClosedWhenDropped(t *testing.T) {
 		"approved work answered too":     {approvedDelivery(0), interactions.StatusApproved, interactions.StatusCompleted, interactions.StatusCompleted},
 	} {
 		t.Run(name, func(t *testing.T) {
-			requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(testCase.status)}}
+			requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable(testCase.status)}}
 			runs := &fakeAgentRuns{fail: true}
 			if testCase.answered != "" {
 				runs.onExecute = func() { requests.setStatus("irq_1", testCase.answered) }
 			}
 			store := &fakeDeliveries{}
-			waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+			waker := NewWaker(store, runs, requests, standsStill(), nil)
 			if testCase.answered != "" {
 				// The run answers, and fails after, on its last attempt.
 				store.failures = map[string]int{testCase.delivery.EventID: maxAttempts - 1}

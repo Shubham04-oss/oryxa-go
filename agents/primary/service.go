@@ -199,6 +199,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	typeSafe := jevClient(settings, logger)
 	var interactionService *agentinteractions.Service
 	var teamspaceService *teamspaces.Service
+	// answerGuard reads what one member's agent tells another before they
+	// read it: answers to requests, and what agents say in rooms.
+	var answerGuard *answerguard.Guard
 	teamspaceStore := teamspaces.NewStore(platform.Database)
 	roomStore := rooms.NewStore(platform.Database)
 	teamRoomStore := agentteamrooms.NewStore(platform.Database)
@@ -228,6 +231,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 				sessionStore.Close()
 				return host.Service{}, err
 			}
+			answerGuard = guard
 			interactionConfig.Guard = guard
 			logger.Info("the answer guard checks every answer another member reads before they read it",
 				"guardrail", settings.AnswerGuardrailIdentifier, "version", settings.AnswerGuardrailVersion)
@@ -304,9 +308,17 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		// at all until their agent has approved the request that woke it. A
 		// run delivering one interaction is offered nothing that lists the
 		// member's other requests, and starts with all it may reach loaded.
+		// A seat's turn in a room answers from the room alone, whether or
+		// not its member is reading the room.
 		Unattended: func(definition managedagents.Definition, profile managedagents.UnattendedProfile) (agent.Agent, error) {
 			spec := agents.ManagedSpec{
 				ID: definition.ID, Name: definition.Name, Description: definition.Description, Instructions: definition.Instructions,
+			}
+			if profile == managedagents.RoomSeat {
+				if definition.Kind == managedagents.KindPrimary {
+					return krude.Room, nil
+				}
+				return krude.ManagedRoom(spec)
 			}
 			if profile.Delivers() {
 				if definition.Kind == managedagents.KindPrimary {
@@ -440,6 +452,12 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			return host.Service{}, err
 		}
 		relay.Logger = logger
+		// The team reads what an agent says in a room, so the answer guard
+		// reads it first. Set only when there is one: a nil *Guard in the
+		// interface would not read as none.
+		if answerGuard != nil {
+			relay.Guard = answerGuard
+		}
 		compactor, err := rooms.NewModelCompactor(krude.Compact)
 		if err != nil {
 			closeAll()

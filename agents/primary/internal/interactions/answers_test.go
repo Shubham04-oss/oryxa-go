@@ -78,7 +78,8 @@ func guardedService(t *testing.T, guard Guard, logs io.Writer) (*Service, *fakeR
 	if err != nil {
 		t.Fatal(err)
 	}
-	approved, err := service.Decide(context.Background(), target, created.ID, agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "Approved"})
+	// Made outside a teamspace, it is B's own to approve, in their session.
+	approved, err := service.DecideAsOwner(context.Background(), inOwnSession(target), "member-token", created.ID, agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "Approved"})
 	if err != nil {
 		t.Fatal(err)
 	}

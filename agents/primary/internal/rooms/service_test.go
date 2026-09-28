@@ -136,11 +136,13 @@ func (compactor *serviceFakeCompactor) Compact(context.Context, Situation, []Mes
 	return compactor.brief, nil
 }
 
-// aRoom is a teamspace with two people, each with their own agent.
+// aRoom is a teamspace with two people, each with their own agent, as
+// teamspaces.Service shows it to a member of its team, which is who these
+// tests act as.
 func aRoom() teamspaces.Space {
 	return teamspaces.Space{
 		ID: "tsp_room", OrganizationID: "org_1", Name: "Launch Council",
-		Status: teamspaces.StatusActive,
+		Status: teamspaces.StatusActive, IsMember: true,
 		Whisperers: []teamspaces.Whisperer{
 			{UserID: "user-ada", UserDisplayName: "Ada", AgentID: "agt_ada", AgentName: "Mira"},
 			{UserID: "user-bo", UserDisplayName: "Bo", AgentID: "agt_bo", AgentName: "Cass"},

@@ -29,12 +29,14 @@ type Threads interface {
 
 // AgentSpeaker takes a seat's turn by running the member's own agent.
 //
-// Whether the run is watched is not a detail: it decides which agent answers
-// and whether the turn may touch memory. A seat whose owner is reading the
-// room is that person's agent speaking beside them, and runs as a team turn.
-// A seat whose owner is away is standing in for them, steered by what other
-// people wrote — so it runs as an unwatched turn, which is answered by the
-// reduced agent with no memory at all.
+// Every turn answers from the room alone, on the reduced room agent with no
+// memory (managedagents.RoomSeat): what steers it is what other people wrote,
+// and the whole team reads what it says, so it reaches none of the member's
+// apps, knowledge, memory or requests, and files what it cannot answer with
+// the member instead. Whether the owner is reading the room only says who the
+// turn was for: a seat whose owner is here is their agent speaking beside
+// them, and runs as a team turn; a seat whose owner is away is standing in
+// for them, and runs as an unwatched one.
 type AgentSpeaker struct {
 	agents  AgentRuns
 	threads Threads
@@ -66,11 +68,11 @@ func (speaker *AgentSpeaker) Speak(ctx context.Context, seat Seat, room Situatio
 	if err != nil {
 		return "", err
 	}
-	origin, profile := agentsv1.StartedByTrigger, managedagents.UnattendedQuiet
+	origin, profile := agentsv1.StartedByTrigger, managedagents.RoomSeat
 	if presentOwner(room.Seats, seat.UserID) {
 		// Their person is here, reading. The agent is speaking beside them
-		// rather than instead of them.
-		origin, profile = agentsv1.StartedByTeam, managedagents.UnattendedReads
+		// rather than instead of them, from the room all the same.
+		origin = agentsv1.StartedByTeam
 	}
 	started, err := speaker.agents.StartUnattendedRun(ctx,
 		threads.Member{UserID: seat.UserID, OrganizationID: room.OrganizationID},

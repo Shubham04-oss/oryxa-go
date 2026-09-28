@@ -93,13 +93,14 @@ func TestKrudeCloseRunsAllAndJoinsErrors(t *testing.T) {
 	}
 }
 
-// TestReplaceToolboxSwapsOnlyTheOneNamed: a delivery's toolboxes are the
-// unattended run's, with the interactions toolbox swapped for the delivering
-// one and nothing else changed; without a replacement they are as they were,
-// and the unattended list itself never changes.
-func TestReplaceToolboxSwapsOnlyTheOneNamed(t *testing.T) {
+// TestWithToolboxAddsOnlyTheOneGiven: a delivery's toolboxes are the
+// unattended run's, which hold none of the member's requests, with the
+// delivering interactions toolbox after them and nothing else changed;
+// without one they are as they were, and the unattended list itself never
+// changes.
+func TestWithToolboxAddsOnlyTheOneGiven(t *testing.T) {
 	t.Parallel()
-	unattended := []agents.Toolbox{{Name: "apps", Description: "reads"}, {Name: "interactions", Description: "answering"}}
+	unattended := []agents.Toolbox{{Name: "apps", Description: "reads"}}
 	delivering := agents.Toolbox{Name: "interactions", Description: "delivering"}
 	described := func(toolboxes []agents.Toolbox) []string {
 		var descriptions []string
@@ -108,13 +109,13 @@ func TestReplaceToolboxSwapsOnlyTheOneNamed(t *testing.T) {
 		}
 		return descriptions
 	}
-	if got := described(replaceToolbox(unattended, &delivering)); !slices.Equal(got, []string{"apps:reads", "interactions:delivering"}) {
-		t.Fatalf("replaced = %v", got)
+	if got := described(withToolbox(unattended, &delivering)); !slices.Equal(got, []string{"apps:reads", "interactions:delivering"}) {
+		t.Fatalf("with the delivering toolbox = %v", got)
 	}
-	if got := described(replaceToolbox(unattended, nil)); !slices.Equal(got, []string{"apps:reads", "interactions:answering"}) {
-		t.Fatalf("with no replacement = %v", got)
+	if got := described(withToolbox(unattended, nil)); !slices.Equal(got, []string{"apps:reads"}) {
+		t.Fatalf("with none = %v", got)
 	}
-	if got := described(unattended); !slices.Equal(got, []string{"apps:reads", "interactions:answering"}) {
+	if got := described(unattended); !slices.Equal(got, []string{"apps:reads"}) {
 		t.Fatalf("the unattended list changed: %v", got)
 	}
 }

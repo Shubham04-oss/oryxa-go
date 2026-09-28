@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 )
 
@@ -160,7 +162,9 @@ func (service *Service) Post(ctx context.Context, actor Actor, roomID, body stri
 		"compact", verdict.Compact, "certainty", verdict.Certainty, "why", verdict.Why, "model", verdict.Model,
 		"seats", handles(seats))
 
-	said, err := service.relay.Post(ctx, situation, message, verdict)
+	// What a seat's turn cannot answer from the room it files with its own
+	// member, for the member who posted this.
+	said, err := service.relay.Post(askingFor(ctx, actor, space), situation, message, verdict)
 	if err != nil {
 		return nil, err
 	}
@@ -220,6 +224,9 @@ func (service *Service) Catchup(ctx context.Context, actor Actor, roomID string,
 }
 
 // space resolves the teamspace and refuses anybody the team does not include.
+// An organization admin who is not on the team may manage its teamspace, and
+// teamspaces.Service lets them read it to do so, but what the team says in
+// its room is the team's: they read none of it and say nothing there.
 func (service *Service) space(ctx context.Context, actor Actor, roomID string) (teamspaces.Space, error) {
 	space, err := service.spaces.Get(ctx, teamspaces.Actor{
 		OrganizationID: actor.OrganizationID, UserID: actor.UserID, AccessToken: actor.AccessToken,
@@ -231,6 +238,8 @@ func (service *Service) space(ctx context.Context, actor Actor, roomID string) (
 		return teamspaces.Space{}, ErrForbidden
 	case err != nil:
 		return teamspaces.Space{}, err
+	case !space.IsMember:
+		return teamspaces.Space{}, fmt.Errorf("%w: only a member of its team is in a room", ErrForbidden)
 	case space.Status != teamspaces.StatusActive:
 		return teamspaces.Space{}, fmt.Errorf("%w: this room is paused", ErrInvalid)
 	}
@@ -379,6 +388,24 @@ func personSeat(seats []Seat, userID string) (Seat, bool) {
 		}
 	}
 	return Seat{}, false
+}
+
+// askingFor is ctx saying who asks, for a seat's turn that files what it
+// cannot answer from the room with its own member (agents.WithRoomAsker):
+// the member who posted, through their own agent in the room, with the token
+// of the session they posted in, as a request they made there themself
+// would be.
+func askingFor(ctx context.Context, actor Actor, space teamspaces.Space) context.Context {
+	for _, whisperer := range space.Whisperers {
+		if whisperer.UserID == actor.UserID {
+			return agents.WithRoomAsker(ctx, agents.RoomAsker{
+				RoomID: space.ID, OrganizationID: actor.OrganizationID, UserID: actor.UserID,
+				// A whisperer is always its member's primary agent.
+				AgentID: whisperer.AgentID, AgentName: whisperer.AgentName, AgentKind: string(managedagents.KindPrimary),
+			}, actor.AccessToken)
+		}
+	}
+	return ctx
 }
 
 // whispererAgent is the agent that speaks for a member in this space.
