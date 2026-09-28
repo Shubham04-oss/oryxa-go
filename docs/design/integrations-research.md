@@ -1,6 +1,13 @@
 # Integrations and ingestion: research, 2026-09-28
 
-Under discussion. Nothing here is decided or built. It records what was
+**Decided later on 2026-09-28:**
+
+- Nango, decoupled Activepieces pieces and AgentCore Identity are ruled out.
+- Composio stays the tool provider.
+- Oryxa builds its own sign-ins and integrations on official SDKs; see
+  [integrations-plan.md](integrations-plan.md).
+
+What follows is the research as it stood before that decision. It records what was
 learned on 2026-09-28 about getting members' app data (Gmail, Google Drive,
 Slack, Notion, GitHub) into Oryxa's knowledge bases, and about who should
 provide agents' tools, so the discussion can continue on any machine.
