@@ -116,7 +116,27 @@ raw data; how that becomes the org chart is the organization's to define.
 - **Personal accounts:** whether employees may connect their personal Jira and
   GitHub in chat.
 
-**4. Slack.** The CLI creates the organization's own internal Slack app from
+**4. Slack.**
+
+> **Blocked on a decision: Slack's terms.** Since May 2025, Slack's API terms
+> make its Marketplace "the only appropriate channel for commercially
+> distributing apps built with Slack APIs", and that explicitly includes
+> giving customers "instructions for a templated custom app that connects to
+> your product" (Slack changelog, 2025-05-29, checked 2026-09-28). A
+> per-organization app created from Oryxa's template is exactly that.
+>
+> The compliant route is one Oryxa Slack app, listed in the Marketplace:
+> - Each workspace installs it with "Add to Slack".
+> - The bot token goes to the vault.
+> - Events and clicks arrive at Oryxa's deployment-scope webhook endpoint.
+> - There is no configuration token and no per-organization app, so this step
+>   gets simpler.
+>
+> Until the app is approved, it is installed only in design partners'
+> workspaces. The per-organization route below stays only as a fallback, if
+> Slack confirms it counts as internal.
+
+The fallback: the CLI creates the organization's own internal Slack app from
 Oryxa's app template, installs it, and wires it to Oryxa:
 
 - It creates the app from the template through Slack's App Manifest API,
@@ -332,6 +352,7 @@ and a loopback redirect.
 
 | Decision | Recommended default |
 | --- | --- |
+| Slack app model (Slack's terms) | One Oryxa app, submitted to the Marketplace now; design partners only until it is approved |
 | Download domain and signing | `get.oryxa.in`, with signed releases and checksums |
 | Google directory route | A guided client step for v1.1, keeping the customer in control, over domain-wide delegation |
 | Where the workspace service lives | A new `setup` package in the one binary, which calls auth, teams and apps rather than duplicating them |
