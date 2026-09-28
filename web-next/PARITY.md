@@ -475,8 +475,8 @@ One row per member capability. "Build" names the DESIGN.md location, the client 
 A few items above are marked **unclear** rather than guessed: single-item GET endpoints across `agents/primary` (agent/team/workflow/interaction) and `rag` (corpus/document), and `knowledge`'s single-source GET — no caller was found in either app's client code, but a caller could exist in a code path neither research pass traversed (e.g. inside a dialog not opened during review). Confirm with a repo-wide grep for the specific function name before deleting or assuming any of these are truly dead.
 
 ### Known gaps from the #83 review, still open
-- Role and workspace `<select>`s commit in `onChange`; arrow keys on a closed select change a member's role at once on Windows (`people-management.tsx`, the header switcher, team roles). Commit on an explicit choice instead.
-- The invitation page has no "use another account" for someone signed in with the wrong email (`web/`'s had one).
-- Teams settings keeps a team's `can_manage` after its admin demotes or removes themselves; refresh the team detail and list too.
-- `BILLING_URL` still sends Dodo's return to `web/`'s `/settings/billing`; web-next has no such route.
+- Role and workspace `<select>`s commit in `onChange`; arrow keys on a closed select change a member's role at once on Windows (`people-management.tsx`, the header switcher, team roles). Commit on an explicit choice instead. Fixed in #104: these are now `DropdownMenu` radio menus that commit only on an explicit choice.
+- The invitation page has no "use another account" for someone signed in with the wrong email (`web/`'s had one). Fixed in #104: it now offers "Sign out and use another account".
+- Teams settings keeps a team's `can_manage` after its admin demotes or removes themselves; refresh the team detail and list too. Fixed in #104: a role change or removal now refreshes the team detail too, and re-syncs both queries on a 403/404/409.
+- `BILLING_URL` still sends Dodo's return to `web/`'s `/settings/billing`; web-next has no such route. Fixed in #103: `BILLING_URL` now points at web-next's own `/settings/billing`, which opens Settings on Billing.
 - The example create flows use `crypto.randomUUID()`, which is missing over plain http on a LAN address; use `crypto.getRandomValues` (as `createOrganization` does) when these become real.

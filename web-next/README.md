@@ -1,7 +1,8 @@
 # Oryxa next frontend
 
-This is the clean TanStack Start app for the new Oryxa interface. The current
-`../web` app remains available while the new design and workflows are built.
+This is the TanStack Start app that serves Oryxa's frontend at
+`app.oryxa.in`. The old `../web` app stays deployed only for rollback; see
+"Releasing" in `deploy/README.md`.
 
 UI changes must follow [DESIGN.md](DESIGN.md). [AGENTS.md](AGENTS.md) makes
 that contract part of the working instructions for this frontend.
@@ -27,8 +28,9 @@ state cookie there. Restart the backend after changing these variables. The auth
 in; it currently proxies through port 8080.
 
 Only in development, an unavailable auth service leaves the existing workspace
-prototype accessible with a Preview badge. A signed-out response still sends
-you to sign-in, and production never falls back to the prototype.
+prototype accessible, with inline "Layout preview · ..." notices per section
+rather than a header badge, which DESIGN.md forbids. A signed-out response
+still sends you to sign-in, and production never falls back to the prototype.
 
 ## Chats: the Worker and its Durable Objects
 
@@ -133,5 +135,5 @@ pnpm build
 Vitest runs in Node without the Cloudflare plugins (`vite.config.ts` leaves
 them out under Vitest); the Worker's tests stand in for the Agents SDK.
 
-Deployment configuration and final brand assets will be set when the new app is
-ready to replace the current frontend.
+Deployment configuration exists; see "Chats: the Worker and its Durable
+Objects" above and `deploy/README.md`. Final brand assets are still open.

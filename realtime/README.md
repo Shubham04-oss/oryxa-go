@@ -247,7 +247,7 @@ Realtime deploys in the single `oryxa` image, off. Its identity needs `sqs:Recei
 
 For the Worker's events to arrive, web-next's Worker needs `ORYXA_API_ORIGIN`, the API's public origin, and the same `REALTIME_PURGE_SECRET`, and realtime must be on. Until it is, the route answers `404`, and the Worker keeps each event, retrying, for seven days, then drops it.
 
-In production it stays off until web-next serves `app.oryxa.in`. The Worker's endpoint must be live, holding the same secret, before realtime is on, and today `app.oryxa.in` is served by the old `web/` Worker, which has no purge route and answers `404`, so every purge would end in the dead-letter queue. web-next has the route but no production environment yet, so there is no production Worker to give the secret to (`wrangler secret put REALTIME_PURGE_SECRET --env production` waits for one). `realtime_purge` in `deploy/production/realtime.auto.tfvars.json` is the switch, committed off, and `deploy/README.md` gives the order to turn it on.
+In production it was turned on 2026-09-28, once web-next was serving `app.oryxa.in` with the purge route: the Worker's endpoint had to be live, holding the same secret, before realtime went on. Before that, `app.oryxa.in` was served by the old `web/` Worker, which has no purge route and answers `404`, so every purge would have ended in the dead-letter queue. web-next now has both the route and a production environment, `oryxa-production-web-next`, holding the secret (`wrangler secret put REALTIME_PURGE_SECRET --env production`). `realtime_purge` in `deploy/production/realtime.auto.tfvars.json` is the switch, now `true`, and `deploy/README.md` gives the order to turn it on again, or off.
 
 ## Limits
 
