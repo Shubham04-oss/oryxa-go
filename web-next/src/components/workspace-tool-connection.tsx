@@ -6,15 +6,23 @@ import {
   Check,
   CircleAlert,
   Clock3,
+  KeyRound,
   Plus,
   RotateCw,
 } from "lucide-react"
 import {
   appsErrorMessage,
+  appsQueryKey,
+  canReplaceCredential,
   catalogTriggerTypesQueryOptions,
   connectionTargetsQueryOptions,
+  connectionsQueryOptions,
   createTrigger,
+  isOryxaConnection,
   removeTrigger,
+  replaceCredentials,
+  signinDescription,
+  signinManifestQueryOptions,
   triggersQueryOptions,
 } from "@/lib/apps/client"
 import type { Connection, Toolkit, TriggerType } from "@/lib/apps/client"
@@ -47,6 +55,7 @@ import {
   triggerCapability,
 } from "./workspace-tool-helpers"
 import type { SourceProvider, TriggerField } from "./workspace-tool-helpers"
+import { CredentialDialog } from "./workspace-tool-credential-dialog"
 
 type Pane = "events" | "indexing" | "runs"
 
@@ -88,8 +97,133 @@ function sourcesKey(organizationId: string) {
  * wakes them for, what it indexes, and how those runs went. Only an active
  * connection has these (apps and knowledge answer 409 otherwise), so the page
  * mounts this for nothing else.
+ *
+ * A connection made through Oryxa's own sign-in shows how it signs in
+ * instead, and replaces its key. Its app's events, indexing and tools arrive
+ * with that app's integration; until then apps refuses them for it
+ * (`not_connectable`, "not available yet"), so none is offered.
  */
-export function ConnectionWorkspace({
+export function ConnectionWorkspace(props: {
+  connection: Connection
+  toolkit: Toolkit
+  organizationId: string
+  preview: boolean
+}) {
+  if (!props.preview && isOryxaConnection(props.connection)) {
+    return (
+      <OryxaSignin
+        connection={props.connection}
+        toolkit={props.toolkit}
+        organizationId={props.organizationId}
+      />
+    )
+  }
+  return <ComposioWorkspace {...props} />
+}
+
+/**
+ * How an Oryxa connection signs in, and "Replace key" for one that holds a
+ * key, a password or client credentials. An OAuth connection has nothing to
+ * replace: it is connected again instead.
+ */
+function OryxaSignin({
+  connection,
+  toolkit,
+  organizationId,
+}: {
+  connection: Connection
+  toolkit: Toolkit
+  organizationId: string
+}) {
+  const queryClient = useQueryClient()
+  const [replacing, setReplacing] = useState(false)
+  const [replaced, setReplaced] = useState(false)
+  const kind = connection.credential_kind ?? ""
+  const manifest = useQuery({
+    ...signinManifestQueryOptions(connection.toolkit),
+    enabled: replacing,
+  })
+  const methods = (manifest.data?.methods ?? []).filter(
+    (method) => method.kind === kind
+  )
+  const loadError = manifest.isError
+    ? appsErrorMessage(
+        manifest.error,
+        `${toolkit.name}'s sign-in could not be loaded.`
+      )
+    : manifest.isSuccess && !methods.length
+      ? `${toolkit.name} no longer signs in this way. Disconnect it and connect it again.`
+      : undefined
+
+  // The values go from the dialog straight into the request, never into a
+  // mutation's variables, which TanStack Query keeps after it settles.
+  async function replace(_kind: string, values: Record<string, string>) {
+    const updated = await replaceCredentials(organizationId, connection.id, {
+      fields: values,
+      kind,
+    })
+    queryClient.setQueryData<Connection[]>(
+      connectionsQueryOptions(organizationId).queryKey,
+      (current) =>
+        current?.map((item) =>
+          item.id === updated.id ? { ...item, ...updated } : item
+        )
+    )
+    setReplacing(false)
+    setReplaced(true)
+    void queryClient.invalidateQueries({
+      queryKey: [...appsQueryKey(organizationId), "connections"],
+    })
+  }
+
+  return (
+    <div className="workspace-tool-workspace">
+      <div className="workspace-tool-pane">
+        <div className="workspace-tool-pane-head">
+          <div>
+            <h4>Sign-in</h4>
+            <p>{signinDescription(connection, toolkit.name)}</p>
+          </div>
+          {canReplaceCredential(connection) && (
+            <button
+              type="button"
+              className="workspace-tool-action"
+              onClick={() => {
+                setReplaced(false)
+                setReplacing(true)
+              }}
+            >
+              <KeyRound size={14} /> Replace key
+            </button>
+          )}
+        </div>
+        {replaced && (
+          <p className="workspace-tool-muted" role="status">
+            Key replaced. {toolkit.name} accepted the new one.
+          </p>
+        )}
+        <p className="workspace-tool-muted">
+          Events, indexing and runs aren't available yet for apps connected
+          through Oryxa's own sign-in.
+        </p>
+      </div>
+      {replacing && (
+        <CredentialDialog
+          mode="replace"
+          appName={toolkit.name}
+          methods={methods}
+          loading={manifest.isPending}
+          loadError={loadError}
+          onRetry={() => void manifest.refetch()}
+          onSubmit={replace}
+          onClose={() => setReplacing(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+function ComposioWorkspace({
   connection,
   toolkit,
   organizationId,

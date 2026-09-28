@@ -1,8 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ApiError } from "@/lib/api/client"
 import {
+  AppsFieldError,
+  ConnectCancelledError,
   appsErrorMessage,
   canReconnect,
+  canReplaceCredential,
+  clientIdProblem,
+  connectOryxa,
+  connectReturnUrl,
+  directSignin,
+  fieldProblem,
+  getOAuthClient,
+  isOryxaConnection,
+  listOryxaIntegrations,
+  nextStep,
+  oauthClientQueryOptions,
+  oryxaIntegrationsQueryOptions,
+  refusedFieldText,
+  removeOAuthClient,
+  replaceCredentials,
+  revealVerificationToken,
+  saveOAuthClient,
+  signinDescription,
+  signinManifestQueryOptions,
+  signinMethodLabel,
+  webhookSecretProblem,
   catalogSearchQueryOptions,
   catalogTriggerTypesQueryOptions,
   connect,
@@ -843,5 +866,484 @@ describe("query options", () => {
   it("keys triggers under the connection", () => {
     const options = triggersQueryOptions("org_1", "apc_1")
     expect(options.queryKey).toEqual(["apps", "org_1", "triggers", "apc_1"])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Oryxa's own sign-in
+// ---------------------------------------------------------------------------
+
+describe("connect: Oryxa's own sign-in or Composio", () => {
+  const githubManifest = {
+    toolkit: "github",
+    name: "GitHub",
+    version: 1,
+    methods: [
+      { kind: "oauth2_code", client: "github", scopes: ["repo"], fields: [] },
+    ],
+    redirect_uri: "https://app.example.test/v1/apps/oauth/callback",
+  }
+
+  function routes(
+    answers: Record<string, () => Response>
+  ): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+      const route = `${init?.method ?? "GET"} ${input}`
+      return route in answers
+        ? answers[route]()
+        : errorResponse("not_found", "resource not found", 404)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    return fetchMock
+  }
+
+  function postBody(fetchMock: ReturnType<typeof vi.fn>) {
+    const call = fetchMock.mock.calls.find(
+      ([, init]) => (init as RequestInit | undefined)?.method === "POST"
+    )
+    return JSON.parse(String((call?.[1] as RequestInit).body)) as unknown
+  }
+
+  it("sends a toolkit Oryxa's sign-in doesn't list through Composio, exactly as before", async () => {
+    const fetchMock = routes({
+      "GET /v1/apps/integrations": () =>
+        jsonResponse({
+          integrations: [
+            { toolkit: "github", name: "GitHub", kinds: ["oauth2_code"] },
+          ],
+        }),
+      "POST /v1/organizations/org_1/apps/connections": () =>
+        jsonResponse(
+          {
+            connection: connection({ toolkit: "gmail", status: "pending" }),
+            redirect_url: "https://connect.composio.dev/link/lk_1",
+          },
+          201
+        ),
+    })
+
+    const result = await connect("org_1", {
+      returnTo: "https://app.example.test/?view=tools",
+      toolkit: "gmail",
+    })
+
+    expect(result.redirect_url).toBe("https://connect.composio.dev/link/lk_1")
+    expect(postBody(fetchMock)).toEqual({
+      return_to: "https://app.example.test/?view=tools",
+      toolkit: "gmail",
+    })
+  })
+
+  it("keeps Composio for an apps that predates Oryxa's sign-in (404)", async () => {
+    const fetchMock = routes({
+      "POST /v1/organizations/org_1/apps/connections": () =>
+        jsonResponse(
+          {
+            connection: connection({ status: "pending" }),
+            redirect_url: "https://connect.composio.dev/link/lk_2",
+          },
+          201
+        ),
+    })
+    await connect("org_1", {
+      returnTo: "https://app.example.test/",
+      toolkit: "github",
+    })
+    expect(postBody(fetchMock)).toEqual({
+      return_to: "https://app.example.test/",
+      toolkit: "github",
+    })
+  })
+
+  it("refuses to guess the broker when the list of Oryxa's apps fails", async () => {
+    const fetchMock = routes({
+      "GET /v1/apps/integrations": () =>
+        errorResponse("unavailable", "did not answer", 503),
+    })
+    await expect(
+      connect("org_1", {
+        returnTo: "https://app.example.test/",
+        toolkit: "github",
+      })
+    ).rejects.toMatchObject({ status: 503 })
+    expect(
+      fetchMock.mock.calls.some(
+        ([, init]) => (init as RequestInit | undefined)?.method === "POST"
+      )
+    ).toBe(false)
+  })
+
+  it("starts an OAuth sign-in through Oryxa with a same-origin, credentialed POST and answers the app's page", async () => {
+    const fetchMock = routes({
+      "GET /v1/apps/integrations": () =>
+        jsonResponse({
+          integrations: [
+            { toolkit: "github", name: "GitHub", kinds: ["oauth2_code"] },
+          ],
+        }),
+      "GET /v1/apps/integrations/github/manifest": () =>
+        jsonResponse(githubManifest),
+      "POST /v1/organizations/org_1/apps/connections": () =>
+        jsonResponse(
+          {
+            connection: connection({
+              broker: "oryxa",
+              status: "pending",
+            }),
+            redirect_url: "https://github.com/login/oauth/authorize?state=s",
+          },
+          201
+        ),
+    })
+
+    const result = await connect("org_1", {
+      returnTo: "https://app.example.test/?view=tools",
+      toolkit: "github",
+    })
+
+    expect(result.redirect_url).toBe(
+      "https://github.com/login/oauth/authorize?state=s"
+    )
+    expect(postBody(fetchMock)).toEqual({
+      broker: "oryxa",
+      kind: "oauth2_code",
+      return_to: "https://app.example.test/?view=tools",
+      toolkit: "github",
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/organizations/org_1/apps/connections",
+      expect.objectContaining({ credentials: "include", method: "POST" })
+    )
+  })
+
+  it("connects with a key and replaces it, keeping the field an invalid_credentials answer blames", async () => {
+    const fetchMock = routes({
+      "POST /v1/organizations/org_1/apps/connections": () =>
+        jsonResponse(
+          {
+            connection: connection({
+              broker: "oryxa",
+              credential_kind: "api_token",
+            }),
+          },
+          201
+        ),
+      "PUT /v1/organizations/org_1/apps/connections/apc_1/credentials": () =>
+        jsonResponse(
+          {
+            error: {
+              code: "invalid_credentials",
+              message: "token was refused",
+              field: "token",
+            },
+          },
+          400
+        ),
+    })
+
+    const started = await connectOryxa("org_1", {
+      fields: { token: "ghp_example" },
+      kind: "api_token",
+      returnTo: "https://app.example.test/?view=tools",
+      toolkit: "github",
+    })
+    expect(started.redirect_url).toBeUndefined()
+    expect(nextStep(started, "https://app.example.test/?view=tools")).toEqual({
+      connection: started.connection,
+      redirect_url:
+        "https://app.example.test/?view=tools&app_connection=apc_1&status=active",
+    })
+
+    const failure = await replaceCredentials("org_1", "apc_1", {
+      fields: { token: "ghp_other" },
+      kind: "api_token",
+    }).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(AppsFieldError)
+    expect(failure).toMatchObject({
+      code: "invalid_credentials",
+      field: "token",
+      status: 400,
+    })
+    const put = fetchMock.mock.calls.find(
+      ([, init]) => (init as RequestInit | undefined)?.method === "PUT"
+    )
+    expect(JSON.parse(String((put?.[1] as RequestInit).body))).toEqual({
+      fields: { token: "ghp_other" },
+      kind: "api_token",
+    })
+  })
+})
+
+describe("organizations' own OAuth apps", () => {
+  it("saves only what was typed: no empty secret, fields or webhook secrets", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ client: "github", saved: true })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await saveOAuthClient("org_1", "github", {
+      clientId: "Iv1.abc",
+      fields: {},
+      refuseDefault: false,
+      webhookSecrets: {},
+    })
+    await saveOAuthClient("org_1", "slack", {
+      clientId: "123.456",
+      clientSecret: "s3cret-value-0000",
+      refuseDefault: true,
+      webhookSecrets: { slack: "signing-secret-0000" },
+    })
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/v1/organizations/org_1/apps/oauth-clients/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ client_id: "Iv1.abc", refuse_default: false }),
+      })
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/v1/organizations/org_1/apps/oauth-clients/slack",
+      expect.objectContaining({
+        body: JSON.stringify({
+          client_id: "123.456",
+          client_secret: "s3cret-value-0000",
+          refuse_default: true,
+          webhook_secrets: { slack: "signing-secret-0000" },
+        }),
+      })
+    )
+  })
+
+  it("reads, removes, and reveals a verification token once (409 after)", async () => {
+    let revealed = false
+    const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") return new Response(null, { status: 204 })
+      if (input.endsWith("/verification-token")) {
+        if (revealed) return errorResponse("conflict", "already revealed", 409)
+        revealed = true
+        return jsonResponse({ toolkit: "notion", verification_token: "tok_1" })
+      }
+      return jsonResponse({ client: "notion", saved: false })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(getOAuthClient("org_1", "notion")).resolves.toMatchObject({
+      client: "notion",
+    })
+    await removeOAuthClient("org_1", "notion")
+    await expect(revealVerificationToken("org_1", "notion")).resolves.toBe(
+      "tok_1"
+    )
+    await expect(
+      revealVerificationToken("org_1", "notion")
+    ).rejects.toMatchObject({ status: 409 })
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/organizations/org_1/apps/webhooks/notion/verification-token",
+      expect.objectContaining({ method: "POST" })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/organizations/org_1/apps/oauth-clients/notion",
+      expect.objectContaining({ method: "DELETE" })
+    )
+  })
+})
+
+describe("what can be connected and replaced", () => {
+  it("connects straight away only through one OAuth way in with nothing to type", () => {
+    const oauth = { kind: "oauth2_code", fields: [] }
+    const token = {
+      kind: "api_token",
+      fields: [
+        {
+          name: "token",
+          label: "Token",
+          secret: true,
+          level: "connection",
+          standard: true,
+          validation: { required: true, max_length: 4096 },
+        },
+      ],
+    }
+    const manifest = { toolkit: "github", name: "GitHub", version: 1 }
+    expect(directSignin({ ...manifest, methods: [oauth] })).toBe(oauth)
+    expect(
+      directSignin({ ...manifest, methods: [oauth, token] })
+    ).toBeUndefined()
+    expect(directSignin({ ...manifest, methods: [token] })).toBeUndefined()
+    expect(
+      directSignin({
+        ...manifest,
+        methods: [
+          {
+            kind: "oauth2_code",
+            fields: [
+              {
+                name: "subdomain",
+                label: "Subdomain",
+                secret: false,
+                level: "connection",
+                validation: { required: true, pattern: "[a-z]+" },
+              },
+            ],
+          },
+        ],
+      })
+    ).toBeUndefined()
+  })
+
+  it("replaces a key, a password or client credentials of an active Oryxa connection, never OAuth or Composio's", () => {
+    const oryxa = connection({ broker: "oryxa", credential_kind: "api_token" })
+    expect(canReplaceCredential(oryxa)).toBe(true)
+    expect(canReplaceCredential({ ...oryxa, credential_kind: "basic" })).toBe(
+      true
+    )
+    expect(
+      canReplaceCredential({ ...oryxa, credential_kind: "oauth2_code" })
+    ).toBe(false)
+    expect(canReplaceCredential({ ...oryxa, status: "expired" })).toBe(false)
+    expect(canReplaceCredential(connection())).toBe(false)
+    expect(isOryxaConnection(connection())).toBe(false)
+  })
+
+  it("names how an Oryxa connection signs in", () => {
+    expect(
+      signinDescription({ credential_kind: "oauth2_code" }, "GitHub")
+    ).toBe("Signed in with GitHub through Oryxa's own sign-in.")
+    expect(signinDescription({ credential_kind: "api_token" }, "GitHub")).toBe(
+      "Connected with an API token through Oryxa's own sign-in."
+    )
+    expect(signinMethodLabel("oauth2_code", "GitHub")).toBe(
+      "Sign in with GitHub"
+    )
+    expect(signinMethodLabel("basic", "Jira")).toBe("Username and password")
+  })
+
+  it("tells a member they closed the sign-in, in words", () => {
+    expect(
+      appsErrorMessage(new ConnectCancelledError("GitHub"), "fallback")
+    ).toBe("You closed GitHub's sign-in, so it isn't connected.")
+  })
+})
+
+describe("checking what was typed", () => {
+  const field = (validation: Record<string, unknown>) => ({
+    label: "Subdomain",
+    validation: { required: false, ...validation },
+  })
+  const secret = "ghp_s3cretValue"
+
+  it("applies the manifest's rules as apps does, never quoting the value", () => {
+    expect(fieldProblem(field({ required: true }), "  ")).toBe(
+      "Subdomain is required."
+    )
+    expect(fieldProblem(field({}), "")).toBeUndefined()
+    expect(fieldProblem(field({ max_length: 4 }), "abcde")).toBe(
+      "Subdomain must be at most 4 characters."
+    )
+    expect(fieldProblem(field({ enum: ["us", "eu"] }), "ap")).toBe(
+      "Subdomain must be one of us, eu."
+    )
+    // The pattern is anchored at both ends, as apps anchors RE2.
+    expect(
+      fieldProblem(field({ pattern: "[a-z0-9][a-z0-9-]{0,62}" }), "acme")
+    ).toBeUndefined()
+    expect(
+      fieldProblem(field({ pattern: "[a-z0-9][a-z0-9-]{0,62}" }), "acme.test")
+    ).toBe("Subdomain isn't in the form this app expects.")
+    expect(fieldProblem(field({}), "two\nlines")).toBe(
+      "Subdomain must be one line of text."
+    )
+    for (const [format, bad, good] of [
+      ["hostname", "localhost", "acme.zendesk.com"],
+      ["https_url", "https://acme.test/?q=1", "https://acme.test/api"],
+      ["uuid", "not-a-uuid", "123e4567-e89b-12d3-a456-426614174000"],
+      ["email", "@acme.test", "ops@acme.test"],
+    ]) {
+      expect(fieldProblem(field({ format }), bad)).toMatch(
+        /^Subdomain must be /
+      )
+      expect(fieldProblem(field({ format }), good)).toBeUndefined()
+    }
+    expect(fieldProblem(field({ max_length: 3 }), secret)).not.toContain(secret)
+  })
+
+  it("checks an OAuth client ID and a webhook signing secret as apps does", () => {
+    expect(clientIdProblem("Iv1.abc")).toBeUndefined()
+    expect(clientIdProblem("two words")).toBe(
+      "Client ID must be one word of at most 512 characters."
+    )
+    expect(webhookSecretProblem("Slack signing secret", "short")).toBe(
+      "Slack signing secret must be 16 to 1024 characters."
+    )
+    expect(
+      webhookSecretProblem("Slack signing secret", "sixteen chars ok")
+    ).toBe("Slack signing secret must be printable characters without spaces.")
+    expect(
+      webhookSecretProblem("Slack signing secret", "0123456789abcdef")
+    ).toBeUndefined()
+  })
+
+  it("leads apps' refusal with the field's label", () => {
+    expect(
+      refusedFieldText("token was refused by the app", "token", "Token")
+    ).toBe("Token was refused by the app.")
+    expect(
+      refusedFieldText(
+        "webhook_secrets.slack must be 16 to 1024 characters",
+        "webhook_secrets.slack",
+        "Slack signing secret"
+      )
+    ).toBe("Slack signing secret must be 16 to 1024 characters.")
+    expect(refusedFieldText("something else", "token", "Token")).toBe(
+      "Token wasn't accepted."
+    )
+  })
+
+  it("builds the return trip a key's connect sends the browser on", () => {
+    expect(
+      connectReturnUrl("https://app.example.test/?org=o&view=tools", {
+        id: "apc_9",
+        status: "active",
+      })
+    ).toBe(
+      "https://app.example.test/?org=o&view=tools&app_connection=apc_9&status=active"
+    )
+  })
+})
+
+describe("Oryxa query options", () => {
+  it("keys integrations and manifests apart from any organization, and OAuth clients under one", () => {
+    expect(oryxaIntegrationsQueryOptions().queryKey).toEqual([
+      "apps",
+      "oryxa",
+      "integrations",
+    ])
+    expect(signinManifestQueryOptions("github").queryKey).toEqual([
+      "apps",
+      "oryxa",
+      "manifest",
+      "github",
+    ])
+    expect(oauthClientQueryOptions("org_1", "google").queryKey).toEqual([
+      "apps",
+      "org_1",
+      "oauth-clients",
+      "google",
+    ])
+  })
+
+  it("reads an empty list while Oryxa's sign-in is off", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ integrations: [] }))
+    )
+    await expect(listOryxaIntegrations()).resolves.toEqual([])
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({}))
+    )
+    await expect(listOryxaIntegrations()).resolves.toEqual([])
   })
 })

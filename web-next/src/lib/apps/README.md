@@ -188,3 +188,59 @@ touched, but the duplication is worth resolving when Tools/Apps migrates
 onto this package: either have that settings page switch to
 `listConnections(id, { scope: "organization" })` from here, or accept the
 two independent, overlapping clients.
+
+## Oryxa's own sign-in
+
+The second broker (`apps/README.md`, "Oryxa's own sign-in"). It ships
+switched off: `GET /v1/apps/integrations` answers an empty list until
+`APPS_ORYXA_TOOLKITS` names a toolkit.
+
+**Which broker `connect()` uses.** It reads the list first. A toolkit on it
+connects with `broker: "oryxa"`; every other one gets the Composio request it
+always did, byte for byte. A 404 for the list means an apps from before this
+broker, so Composio; any other failure is thrown rather than guessed, since a
+guess could connect an app through the wrong broker. The one-current-connection
+rule (409 `conflict`) holds across brokers.
+
+**What a connect answers.** One OAuth way in with nothing to type answers the
+app's own page as `redirect_url`, like Composio's link. The POST sets the
+sign-in's state cookie, so it must go to the web app's own origin
+(`apiFetch` with `VITE_API_URL` unset, as in production); apps refuses an OAuth
+connect sent to another host than its redirect URI's. Anything else (a key, or
+a choice of ways in, such as GitHub's token beside its OAuth) is asked in the
+credential dialog, which `connect()` mounts itself (`connect-prompt.tsx`)
+because Tools renders none. A key connects at once, so `connect()` answers the
+return trip itself (`return_to` with `app_connection` and `status`), and the
+page reads it with `parseConnectReturn` exactly as it reads a callback's.
+Closing the dialog rejects with `ConnectCancelledError`, which
+`appsErrorMessage` puts in words.
+
+**Secrets are write-only.** A member's key and an admin's client secret,
+secret client fields and webhook signing secrets go from the form straight
+into the request: never into React state, a query cache, or a TanStack
+mutation's `variables` (which outlive the request). Forms read them from
+uncontrolled inputs when sending and empty those inputs once the request
+settles. apps never answers one back: an OAuth client shows `secret_hint`
+(its last four characters, for one of 16 or more) and `secret_set`.
+
+**Errors.** `invalid_credentials` (400) carries `field`, the field's name and
+never its value; `appsRequest` keeps it on `AppsFieldError.field`, and
+`refusedFieldText` leads apps' wording with the field's label. When the app
+itself refuses a key in its test call, apps names **no** field
+(`signin.testFailure` sets only a rule), so the dialog says the app didn't
+accept it instead. `fieldProblem`, `clientIdProblem` and
+`webhookSecretProblem` check what apps' signin checks before anything is sent.
+
+**Replacing a key** is `PUT …/connections/{id}/credentials`, for an active
+Oryxa connection whose `credential_kind` is not `oauth2_code`
+(`canReplaceCredential`); apps keeps the old key until the app accepts the
+new one. An Oryxa connection has no triggers, targets or tools until its
+integration ships, and apps refuses them (`not_connectable`), so Tools shows
+how it signs in instead of Events, Indexing and Runs.
+
+**Organizations' own OAuth apps** (`…/oauth-clients/{client}`, admins only).
+A PUT keeps what it leaves out: no `client_secret` keeps the saved one, a
+field left out keeps its value and an empty one clears it. A new client ID
+needs its secret and every required field again. A webhook signing secret
+needs a client ID. Notion's verification token is revealed once (`POST
+…/webhooks/notion/verification-token`); every later call is 409.
