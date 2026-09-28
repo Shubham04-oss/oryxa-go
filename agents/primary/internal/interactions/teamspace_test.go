@@ -227,27 +227,58 @@ func TestATargetWithoutASeatIsRefused(t *testing.T) {
 	}
 }
 
-// TestARequestOutsideATeamspaceIsDecidedByItsAgentAsBefore: without a
-// teamspace nothing changes — the target's agent decides, and no teamspace is
-// consulted, whether or not the service can reach one.
-func TestARequestOutsideATeamspaceIsDecidedByItsAgentAsBefore(t *testing.T) {
+// TestARequestOutsideATeamspaceIsHeldForItsOwner: no standing rule of its
+// member's covers a request made outside any teamspace, so the requester
+// cannot spare it their approval by leaving teamspace_id out. It is held for
+// them whether or not the service can reach teamspaces, and no teamspace is
+// consulted: no agent decides it, the one it asks, a specialist its member
+// let decide in a teamspace included, nor their primary agent mediating;
+// the member decides it in person. One an older build stored as its agent's
+// is held all the same, and reads as held.
+func TestARequestOutsideATeamspaceIsHeldForItsOwner(t *testing.T) {
 	spaces := teamspaceSeats()
 	withSpaces, _ := teamspaceService(t, spaces)
-	withoutSpaces, _ := teamspaceService(t, nil)
+	withoutSpaces, repo := teamspaceService(t, nil)
 	for name, service := range map[string]*Service{"with teamspaces": withSpaces, "without teamspaces": withoutSpaces} {
-		created, err := service.Create(context.Background(), requester, "member-token", "key", agents.InteractionCreateInput{
-			TargetAgentID: "agt_b", Purpose: "Question", Task: "Answer.",
-		})
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if created.Approval != ApprovalAgent || created.TeamspaceID != "" {
-			t.Fatalf("%s: created=%+v, want an agent-approved request outside any teamspace", name, created)
+		for asked, deciders := range map[string][]agents.InteractionActor{
+			"agt_b": {targetPrimary}, "agt_auto": {autoSpecialist, targetPrimary},
+		} {
+			created, err := service.Create(context.Background(), requester, "member-token", "key-"+asked, outsideAnyTeamspace(asked))
+			if err != nil {
+				t.Fatalf("%s, asking %s: %v", name, asked, err)
+			}
+			if created.Approval != ApprovalOwner || created.TeamspaceID != "" || !HeldForOwner(created) {
+				t.Fatalf("%s, asking %s: created=%+v, want it held for its owner", name, asked, created)
+			}
+			for _, agent := range deciders {
+				if _, err := service.Decide(context.Background(), agent, created.ID, approve); !errors.Is(err, ErrForbidden) || !strings.Contains(err.Error(), "your member's own decision") {
+					t.Fatalf("%s: %s deciding a request to %s: error=%v, want ErrForbidden saying the member decides", name, agent.AgentID, asked, err)
+				}
+			}
+			if decided, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", created.ID, approve); err != nil || decided.Status != StatusApproved {
+				t.Fatalf("%s, asking %s: the member's own decision = %+v, %v", name, asked, decided, err)
+			}
 		}
 	}
-	if len(spaces.calls) != 0 {
-		t.Fatalf("a request outside a teamspace looked up a seat: %+v", spaces.calls)
+	if len(spaces.calls) != 0 || len(spaces.standings) != 0 {
+		t.Fatalf("a request outside a teamspace consulted one: seats %+v, standings %+v", spaces.calls, spaces.standings)
 	}
+
+	older := between("irq_older", "user_a", "agt_a", "user_b", "agt_b", "")
+	older.Approval = ApprovalAgent
+	repo.requests[older.ID] = older
+	if _, err := withoutSpaces.Decide(context.Background(), targetPrimary, older.ID, approve); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("an agent deciding what an older build stored as its own: error=%v, want ErrForbidden", err)
+	}
+	if read, err := withoutSpaces.Get(context.Background(), inOwnSession(targetPrimary), older.ID); err != nil || read.Approval != ApprovalOwner || read.Status != StatusPending {
+		t.Fatalf("its member reads %+v, %v; want it pending, held for them", read, err)
+	}
+}
+
+// outsideAnyTeamspace is a request made outside any teamspace to the agent
+// asked.
+func outsideAnyTeamspace(asked string) agents.InteractionCreateInput {
+	return agents.InteractionCreateInput{TargetAgentID: asked, Purpose: "Question", Task: "Answer."}
 }
 
 func TestATeamspaceRequestNeedsTeamspacesAndABoundedID(t *testing.T) {

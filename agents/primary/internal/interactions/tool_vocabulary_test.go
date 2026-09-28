@@ -28,7 +28,7 @@ func TestAnApprovalAllowsOnlyRequestedTools(t *testing.T) {
 		t.Fatalf("requested_tools = %v, want knowledge spelled as the vocabulary does and the other kept as sent", created.RequestedTools)
 	}
 	for _, allowed := range [][]string{{"apps"}, {"knowledge", "apps"}, {"knowledge_search"}} {
-		_, err := service.Decide(context.Background(), target, created.ID, agents.InteractionDecisionInput{
+		_, err := service.DecideAsOwner(context.Background(), inOwnSession(target), "member-token", created.ID, agents.InteractionDecisionInput{
 			Decision: DecisionApproved, Message: "Approved", AllowedTools: allowed,
 		})
 		if !errors.Is(err, ErrInvalid) {
@@ -38,7 +38,7 @@ func TestAnApprovalAllowsOnlyRequestedTools(t *testing.T) {
 			t.Fatalf("allowing %v left the request %s", allowed, status)
 		}
 	}
-	approved, err := service.Decide(context.Background(), target, created.ID, agents.InteractionDecisionInput{
+	approved, err := service.DecideAsOwner(context.Background(), inOwnSession(target), "member-token", created.ID, agents.InteractionDecisionInput{
 		Decision: DecisionApproved, Message: "Approved", AllowedTools: []string{"KNOWLEDGE"},
 	})
 	if err != nil || !slices.Equal(approved.Decision.AllowedTools, []string{agents.KnowledgeToolboxName}) {
@@ -58,7 +58,7 @@ func TestAnApprovalThatLeavesOutAllowedToolsAllowsNone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	approved, err := service.Decide(context.Background(), target, created.ID, agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "Approved"})
+	approved, err := service.DecideAsOwner(context.Background(), inOwnSession(target), "member-token", created.ID, agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "Approved"})
 	if err != nil || approved.Decision == nil || approved.Decision.AllowedTools == nil || len(approved.Decision.AllowedTools) != 0 {
 		t.Fatalf("approved=%+v err=%v, want an empty allowed_tools", approved.Decision, err)
 	}

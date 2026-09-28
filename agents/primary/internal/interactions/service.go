@@ -60,15 +60,17 @@ const (
 	DecidedBySystem = "system"
 
 	// ApprovalAgent lets the addressed agent, or its member's primary agent,
-	// decide: every request made outside a teamspace, and one made in a
-	// teamspace to a specialist its owner contributed there with automatic
-	// delegation, for as long as they keep it so.
+	// decide: a request made in a teamspace to a specialist its owner
+	// contributed there with automatic delegation, for as long as they keep
+	// it so. An older build stored it for every request made outside a
+	// teamspace as well; those are held all the same (HeldForOwner).
 	ApprovalAgent = "agent"
 	// ApprovalOwner holds the request for the addressed agent's member, who
-	// decides it in their own session and never through an agent: one made in
-	// a teamspace to a teammate's primary agent, or to a specialist
-	// contributed there with request delegation, and one its owner has since
-	// taken deciding back for, or that could not be read again.
+	// decides it in their own session and never through an agent: every
+	// request made outside a teamspace, one made in a teamspace to a
+	// teammate's primary agent, or to a specialist contributed there with
+	// request delegation, and one its owner has since taken deciding back
+	// for, or that could not be read again.
 	ApprovalOwner = "owner"
 
 	defaultExpiry   = 24 * time.Hour
@@ -345,25 +347,23 @@ func namedByRequester(stored agents.Interaction) []string {
 // HeldForOwner is whether only the addressed agent's member may decide a
 // request, in their own session. It fails closed: any approval but the
 // agent's own holds the request, one this code does not know included, and
-// so does a request made in a teamspace that names none. Only a request made
-// outside any teamspace may name none: it predates teamspaces and is its
-// agent's to decide, as it always was.
+// so does one naming none. A request made outside any teamspace is held
+// whatever it names: no standing rule of its member's lets an agent decide
+// what is asked of it there, so the "agent" an older build stored for every
+// such request decides nothing.
 func HeldForOwner(request agents.Interaction) bool {
-	if request.Approval == "" {
-		return request.TeamspaceID != ""
-	}
-	return request.Approval != ApprovalAgent
+	return request.TeamspaceID == "" || request.Approval != ApprovalAgent
 }
 
-// approval is who decides a new request. Outside a teamspace the addressed
-// agent does, as it always has. Inside one it follows the target's standing
-// there and nothing the requester sends: a specialist its owner contributed
-// with automatic delegation decides for itself, while a teammate's primary
-// agent, or a specialist contributed with request delegation, waits for its
-// owner.
+// approval is who decides a new request, which follows the target's standing
+// and nothing the requester sends. Outside a teamspace its owner does: whether
+// to send one there is the requester's choice, and no standing rule of the
+// owner's covers it. Inside one, a specialist its owner contributed with
+// automatic delegation decides for itself, while a teammate's primary agent,
+// or a specialist contributed with request delegation, waits for its owner.
 func (service *Service) approval(ctx context.Context, actor agents.InteractionActor, directory agents.OrganizationDirectory, teamspaceID string, target agents.DirectoryAgent) (string, error) {
 	if teamspaceID == "" {
-		return ApprovalAgent, nil
+		return ApprovalOwner, nil
 	}
 	if service.teamspaces == nil {
 		return "", fmt.Errorf("%w: requests inside a teamspace are not available on this server", ErrInvalid)
@@ -431,10 +431,11 @@ func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, 
 
 // Decide records a decision an agent makes, through its interactions tool:
 // the addressed agent's own, or its member's primary agent mediating. A
-// request held for its owner (HeldForOwner) is never an agent's to decide,
-// whichever agent asks, and one made in a teamspace is read again first
-// (agentMayDecide): held for its owner if they have since taken deciding
-// back, closed if it no longer stands.
+// request held for its owner (HeldForOwner), every one made outside a
+// teamspace among them, is never an agent's to decide, whichever agent asks,
+// and one made in a teamspace is read again first (agentMayDecide): held for
+// its owner if they have since taken deciding back, closed if it no longer
+// stands.
 func (service *Service) Decide(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput) (agents.Interaction, error) {
 	return service.decide(ctx, actor, "", id, input, false)
 }
@@ -539,6 +540,12 @@ func (service *Service) Respond(ctx context.Context, actor agents.InteractionAct
 }
 
 func (service *Service) view(request agents.Interaction) agents.Interaction {
+	if request.TeamspaceID == "" {
+		// Its member decides a request made outside a teamspace, whatever an
+		// older build stored for it (HeldForOwner), so it reads as held for
+		// them, and their own session offers them the decision.
+		request.Approval = ApprovalOwner
+	}
 	expired := !request.ExpiresAt.After(service.now())
 	switch {
 	case (request.Status == StatusPending || request.Status == StatusApproved) && expired:

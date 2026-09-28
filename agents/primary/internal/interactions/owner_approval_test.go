@@ -103,11 +103,10 @@ func TestOnlyTheAddressedMemberDecidesAsOwner(t *testing.T) {
 	}
 }
 
-// TestAnAgentStillDecidesWhatItsOwnerDelegatedOrNeverHeld: a specialist
-// contributed with automatic delegation decides for itself, and a request
-// made outside any teamspace is decided by its agent as before — which its
-// member may also do in person.
-func TestAnAgentStillDecidesWhatItsOwnerDelegatedOrNeverHeld(t *testing.T) {
+// TestAnAgentStillDecidesWhatItsOwnerDelegated: a specialist contributed
+// with automatic delegation decides for itself, and a request made outside
+// any teamspace, which no agent decides, its member decides in person.
+func TestAnAgentStillDecidesWhatItsOwnerDelegated(t *testing.T) {
 	service, _ := teamspaceService(t, teamspaceSeats())
 	delegated := createInTeamspace(t, service, "agt_auto")
 	if decided, err := service.Decide(context.Background(), autoSpecialist, delegated.ID, approve); err != nil || decided.Status != StatusApproved {
@@ -121,7 +120,7 @@ func TestAnAgentStillDecidesWhatItsOwnerDelegatedOrNeverHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 	if decided, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", outside.ID, approve); err != nil || decided.Status != StatusApproved {
-		t.Fatalf("the member deciding a request their agent could = %+v, %v", decided, err)
+		t.Fatalf("the member deciding a request made outside any teamspace = %+v, %v", decided, err)
 	}
 }
 
@@ -142,11 +141,11 @@ func TestARequestHeldForItsOwnerStillExpires(t *testing.T) {
 }
 
 // TestAnApprovalNobodyKnowsIsHeldForTheOwner: only an explicit agent
-// approval, or none at all from before teamspaces, lets an agent decide;
-// anything else fails closed to the member.
+// approval of a request made in a teamspace lets an agent decide; anything
+// else fails closed to the member.
 func TestAnApprovalNobodyKnowsIsHeldForTheOwner(t *testing.T) {
-	for approval, held := range map[string]bool{ApprovalAgent: false, "": false, ApprovalOwner: true, "team": true} {
-		if got := HeldForOwner(agents.Interaction{Approval: approval}); got != held {
+	for approval, held := range map[string]bool{ApprovalAgent: false, "": true, ApprovalOwner: true, "team": true} {
+		if got := HeldForOwner(agents.Interaction{TeamspaceID: "tsp_1", Approval: approval}); got != held {
 			t.Errorf("HeldForOwner(%q) = %t, want %t", approval, got, held)
 		}
 	}
@@ -164,11 +163,10 @@ func TestAnApprovalNobodyKnowsIsHeldForTheOwner(t *testing.T) {
 
 // TestATeamspaceRequestNamingNoApprovalIsHeld: a request made in a teamspace
 // that reaches the ledger naming no approval fails closed to its owner — no
-// agent may decide it — while one outside any teamspace naming none is still
-// its agent's, as every request before teamspaces was.
+// agent may decide it — as one made outside any teamspace always is.
 func TestATeamspaceRequestNamingNoApprovalIsHeld(t *testing.T) {
-	if !HeldForOwner(agents.Interaction{TeamspaceID: "tsp_1"}) || HeldForOwner(agents.Interaction{}) {
-		t.Fatal("HeldForOwner: want a teamspace request naming no approval held, and one outside any teamspace not")
+	if !HeldForOwner(agents.Interaction{TeamspaceID: "tsp_1"}) || !HeldForOwner(agents.Interaction{}) {
+		t.Fatal("HeldForOwner: want a teamspace request naming no approval held, and one outside any teamspace too")
 	}
 	service, repo := teamspaceService(t, teamspaceSeats())
 	unnamed := between("irq_unnamed", "user_a", "agt_a", "user_b", "agt_b", "tsp_1")

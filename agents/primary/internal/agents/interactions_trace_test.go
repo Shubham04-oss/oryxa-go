@@ -36,7 +36,7 @@ func TestAnAgentRequestsContentNeverReachesATrace(t *testing.T) {
 	otel.SetTracerProvider(provider)
 	t.Cleanup(func() { otel.SetTracerProvider(previous) })
 
-	toolbox, err := InteractionToolbox(InteractionConfig{Service: &heldInteractions{}, Answering: true, Delivering: true})
+	toolbox, err := InteractionToolbox(InteractionConfig{Service: &heldInteractions{}, Delivering: true})
 	if err != nil {
 		t.Fatal(err)
 	}

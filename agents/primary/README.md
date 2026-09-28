@@ -362,21 +362,20 @@ sets it:
 
 | The target | `approval` | Who decides |
 | --- | --- | --- |
-| Any agent, in a request made outside a teamspace | `agent` | The addressed agent, or its member's primary agent mediating, as before teamspaces |
+| Any agent, in a request made outside a teamspace | `owner` | Only that member, in their own session |
 | A specialist contributed to the teamspace with `automatic` delegation | `agent` | The same |
 | A teammate's primary agent | `owner` | Only that member, in their own session |
 | A specialist contributed with `request` delegation | `owner` | Only that member, in their own session |
 
-The owner's approval therefore guards the requests made in a teamspace, and
-only those. A request made outside any teamspace follows the protocol from
-before teamspaces, so the addressed agent decides it even when its owner
-holds that agent's requests in a teamspace: a requester who leaves
-`teamspace_id` out, or asks in a teamspace where that specialist has
-`automatic` delegation, reaches the agent's own decision. Whether requests
-made outside a teamspace should be held for their owner too is a policy
-decision that is still open. A specialist contributed to two teamspaces with
-different modes is approved as the teamspace the request names has it, for a
-requester on that teamspace's team.
+The owner's approval therefore guards every request but one made in a
+teamspace to a specialist its owner gave `automatic` delegation there, the
+one standing rule that lets an agent decide. A requester who leaves
+`teamspace_id` out reaches the member, never their agent's own decision. An
+older build stored `agent` for every request made outside a teamspace; those
+are held all the same (`interactions.HeldForOwner`), and read as `owner`. A
+specialist contributed to two teamspaces with different modes is approved as
+the teamspace the request names has it, for a requester on that teamspace's
+team.
 
 A request held for its owner is decided only through
 `POST .../agent-requests/{request}/decision`, the member's own signed-in call
@@ -506,8 +505,10 @@ what it may reach follows what their own agent has already allowed:
   (`threads.RunInput.Delivery`, kept in the thread's state, which the model
   never writes), and any other `request_id` is refused, so a run holding the
   member's apps cannot read, decide or answer another of their requests. Nothing a
-  delivery does needs them, since its message names the request. App
-  wake-ups and a room's stand-in keep the toolbox they had.
+  delivery does needs them, since its message names the request. No other
+  unwatched run has an interactions toolbox at all: an app wake-up, a
+  schedule or workflow, and a turn in a room can neither list the member's
+  requests nor read, decide or answer any.
 - Every delivery run's start is logged at INFO, `interaction delivery run
   started`, with its request, the delivery's kind and purpose, its profile,
   and the toolboxes and interactions tools it was given, by name
@@ -558,8 +559,8 @@ when it is large enough for an explicit prompt cache, one cache serves every
 call rather than a second after a toolbox loaded. The waker still marks the
 interactions toolbox loaded in the delivery's thread
 (`threads.RunInput.Toolboxes`), so a member who carries that thread on in
-their own chat has it there. App wake-ups, a room's stand-in and a member's
-own runs find and load toolboxes as before.
+their own chat has it there. App wake-ups and a member's own runs find and
+load toolboxes as before; a turn in a room starts with its one toolbox loaded.
 
 The message that wakes the agent says where the request comes from, so the
 agent need not look it up. The agent asked to decide it, or to do its work,
@@ -925,6 +926,13 @@ a span of merged calls one of them is among
 its error code alone, since the error's message could quote what it was
 sent.
 
+What an agent says in a room is read the same way before the room stores it
+(`rooms.Relay.Guard`), since the whole team reads it; what people say there is
+their own and is not read. A room has nobody to review an answer before the
+team reads it, so nothing there is held: an answer with a held kind is said
+with every such value replaced by its kind, as `{EMAIL}`, and one that could
+not be checked is not said at all, a fixed line saying so in its place.
+
 ### A teamspace is a room
 
 A teamspace is read and written as a conversation: the people on the team and
@@ -952,9 +960,17 @@ been away is handed.
 
 Presence is reading: a member who fetches messages is here for a minute and a
 half, which is how the room knows whether an agent is speaking beside its
-person or standing in for them. That distinction also decides what the turn
-may reach — a stand-in runs unwatched, on the reduced agent, with no memory
-(see [Wake-ups](#wake-ups)).
+person or standing in for them. That distinction does not change what the
+turn may reach. Every turn in a room answers from the room alone, on the
+room's own agent with no memory (`managedagents.RoomSeat`,
+`assembly.Krude.Room`): none of the member's apps, knowledge or requests, no
+web research, helpers or delegation, whether its person is here or away. What
+it cannot answer from the room it files with its member, `room_ask_owner`, as
+a request from the member whose message started the exchange, made in the
+room, so it is held for the member unless they let that agent decide there.
+Everything an agent says in a room passes the answer guard before it is
+stored (see [Answer guard](#answer-guard)), and only the team's members read
+or write in a room: an organization admin who is not on the team is refused.
 
 **The brief is how a room stays affordable.** Nobody re-reads a whole room:
 an agent taking a turn is given the brief plus the last dozen messages, and
@@ -1031,12 +1047,11 @@ it for work here without them, and the request ledger enforces it for every
 cross-user request made in the teamspace (`teamspace_id`): a `request`
 specialist's requests are held for its owner, who approves or rejects each in
 their own session before the specialist is woken, while an `automatic`
-specialist decides them itself, as any agent does outside a teamspace. A
-request made in the teamspace to a teammate's primary agent is always held for
-its owner. The mode is read again whenever a request is decided or its agent
+specialist decides them itself. A request made in the teamspace to a
+teammate's primary agent is always held for its owner. The mode is read again whenever a request is decided or its agent
 woken, so switching to `request` holds requests the specialist has not
 decided, or has approved but not started. A request made outside any
-teamspace is not governed by it at all (see
+teamspace is held for its owner whatever the mode (see
 [Agent interactions toolbox](#agent-interactions-toolbox)). Existing per-tool
 authorization and human-confirmation requirements remain in force in both
 modes. Another member, including a team admin, cannot increase that standing
@@ -1244,7 +1259,9 @@ wakes Krude for each batch it hands over, as `batching.trigger-batch.ready.v1`
   by the reduced agent rather than the one the member talks to, and neither
   reads nor writes memory. Every persistent agent has such a variant, not only
   Krude itself. A team delegation is not unwatched: the member asked for it in
-  their own thread.
+  their own thread. A turn in a room is answered by the room's own agent even
+  when its member is reading the room (see
+  [A teamspace is a room](#a-teamspace-is-a-room)).
 - **Told, not acted on.** The message hands Krude the events as data, never
   instructions — nothing in them changes what it may do — and asks it to say
   what happened and what needs the member's attention, reading more from
@@ -1362,7 +1379,7 @@ requests. A token budget (`ThinkingBudget`) is not offered: it is Gemini
 Unset, no request carries a thinking config and each model thinks as it does
 by default, as before the setting existed: `gemini-3.8-flash` at medium,
 `gemini-3.5-flash-lite` at minimal. A member's own chat, an app wake-up, a
-room's stand-in, a team room, a workflow and the organization agent never
+turn in a room, a team room, a workflow and the organization agent never
 carry it. Krude answers a request on the main model and a specialist on the
 lite one, and Vertex refuses a level a model does not take with `400
 INVALID_ARGUMENT`, so the service refuses to start on anything but a level,

@@ -234,18 +234,19 @@ func TestCreateResolvesTheTargetAndRecordsStrictScope(t *testing.T) {
 }
 
 func TestTargetOrPrimaryCanDecideWithinRequestedScope(t *testing.T) {
-	service, _ := testService(t)
-	created, err := service.Create(context.Background(), requester, "token", "key", agents.InteractionCreateInput{
-		TargetAgentID: "agt_engineering", Purpose: "Question", Task: "Answer.",
-		RequestedTools: []string{"knowledge_search"}, RequestedPermissions: []string{"read:architecture"},
-	})
+	// An agent decides only what its member let it: a request made in a
+	// teamspace to a specialist contributed there with automatic delegation.
+	service, _ := teamspaceService(t, teamspaceSeats())
+	input := askInTeamspace("agt_auto")
+	input.RequestedTools, input.RequestedPermissions = []string{"knowledge_search"}, []string{"read:architecture"}
+	created, err := service.Create(context.Background(), requester, "token", "key", input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.Decide(context.Background(), requester, created.ID, agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "No"}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("requester decision error=%v", err)
 	}
-	if _, err := service.Decide(context.Background(), target, created.ID, agents.InteractionDecisionInput{
+	if _, err := service.Decide(context.Background(), autoSpecialist, created.ID, agents.InteractionDecisionInput{
 		Decision: DecisionApproved, Message: "Approved", AllowedTools: []string{"apps_write"},
 	}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("broadened decision error=%v", err)
@@ -263,7 +264,7 @@ func TestResponseCannotClaimAnUnapprovedTool(t *testing.T) {
 	created, _ := service.Create(context.Background(), requester, "token", "key", agents.InteractionCreateInput{
 		TargetAgentID: "agt_engineering", Purpose: "Question", Task: "Answer.", RequestedTools: []string{"knowledge_search"},
 	})
-	_, _ = service.Decide(context.Background(), target, created.ID, agents.InteractionDecisionInput{
+	_, _ = service.DecideAsOwner(context.Background(), inOwnSession(target), "member-token", created.ID, agents.InteractionDecisionInput{
 		Decision: DecisionApproved, Message: "Approved", AllowedTools: []string{"knowledge_search"},
 	})
 	if _, err := service.Respond(context.Background(), target, created.ID, agents.InteractionResponseInput{
@@ -291,7 +292,7 @@ func TestExpiredRequestCannotBeDecided(t *testing.T) {
 	if err != nil || read.Status != StatusExpired {
 		t.Fatalf("read=%+v err=%v", read, err)
 	}
-	if _, err := service.Decide(context.Background(), target, created.ID, agents.InteractionDecisionInput{Decision: DecisionRejected, Message: "Too late"}); !errors.Is(err, ErrExpired) {
+	if _, err := service.DecideAsOwner(context.Background(), inOwnSession(target), "member-token", created.ID, agents.InteractionDecisionInput{Decision: DecisionRejected, Message: "Too late"}); !errors.Is(err, ErrExpired) {
 		t.Fatalf("expired decision error=%v", err)
 	}
 }

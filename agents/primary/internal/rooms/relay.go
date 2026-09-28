@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"regexp"
 	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
 )
 
 // A relay is bounded three ways, each guarding against a different way a
@@ -68,7 +70,23 @@ type Relay struct {
 	// Logger records an agent turn that failed so the room can keep moving
 	// without losing why. Nil discards it.
 	Logger *slog.Logger
+	// Guard reads every agent's answer before it is stored: the whole team
+	// reads a room, so what one member's agent says there it tells the
+	// others. Nil stores answers as they were said.
+	Guard Guard
 }
+
+// Guard checks what an agent says in a room before anybody reads it.
+// *answerguard.Guard implements it; it never fails, holding what it cannot
+// check.
+type Guard interface {
+	Check(ctx context.Context, texts []string) answerguard.Verdict
+}
+
+// unchecked is what a room hears in place of an agent's answer the guard
+// could not check: a room has nobody to review an answer before the team
+// reads it, so it is not said at all.
+const unchecked = "I have an answer, but it could not be checked for personal data, so I have not posted it."
 
 // NewRelay returns the relay a room service runs every posted message
 // through.
@@ -94,7 +112,8 @@ type relayItem struct {
 }
 
 // Post appends message, works out which agent seats should answer it, runs
-// them in order, and appends what they say. It returns everything it added:
+// them in order, and appends what they say, as the answer guard leaves it
+// (guarded). It returns everything it added:
 // the posted message first, then each reply in the order the relay produced
 // it.
 //
@@ -171,6 +190,7 @@ func (relay *Relay) Post(ctx context.Context, room Situation, message Message, v
 				continue
 			}
 			consecutivePasses = 0
+			reply = relay.guarded(ctx, trigger.RoomID, seat, reply)
 
 			said, err := relay.Store.Append(ctx, Message{
 				RoomID:        trigger.RoomID,
@@ -195,6 +215,34 @@ func (relay *Relay) Post(ctx context.Context, room Situation, message Message, v
 	}
 
 	return results, nil
+}
+
+// guarded is what the room hears of an agent's answer, as the guard found
+// it: nothing found, the answer as said; only kinds that are always masked,
+// the answer with them masked; a kind held for review (an email address, a
+// phone number, an address), the answer with every such value replaced by
+// its kind, as {EMAIL}, since a room has nobody to review it before the team
+// reads it; and an answer that could not be checked, or a verdict that does
+// not add up, unchecked in its place. What was found is logged by kind,
+// never by value.
+func (relay *Relay) guarded(ctx context.Context, roomID string, seat Seat, reply string) string {
+	if relay.Guard == nil {
+		return reply
+	}
+	verdict := relay.Guard.Check(ctx, []string{reply})
+	said := unchecked
+	switch {
+	case len(verdict.Texts) != 1:
+	case verdict.State == answerguard.StateClear, verdict.State == answerguard.StateMasked:
+		said = verdict.Texts[0]
+	case verdict.State == answerguard.StateHeld && len(verdict.Masked) == 1:
+		said = verdict.Masked[0]
+	}
+	if verdict.State != answerguard.StateClear || said == unchecked {
+		relay.logger().InfoContext(ctx, "rooms: relay: the answer guard found something in a seat's answer",
+			"room_id", roomID, "seat", seat.Handle, "state", verdict.State, "kinds", verdict.Kinds)
+	}
+	return said
 }
 
 // resolveResponders is rules 1 and 2: addressing decides first, and only

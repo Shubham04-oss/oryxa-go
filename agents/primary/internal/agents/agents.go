@@ -63,6 +63,9 @@ var krudeInstructionText string
 //go:embed instructions/krude_unattended.md
 var unattendedInstructionText string
 
+//go:embed instructions/krude_room.md
+var roomInstructionText string
+
 // krudeInstruction is a Go text/template rendered on every turn by instruction.
 // The sub-agents' instructions are ADK templates instead: {key} is replaced
 // with that session state value, and a turn fails when the key is missing
@@ -72,6 +75,10 @@ var krudeInstruction = template.Must(template.New("krude").Parse(krudeInstructio
 // unattendedInstruction is Krude's instruction for a run the member is not
 // there for, rendered the same way.
 var unattendedInstruction = template.Must(template.New("krude-unattended").Parse(unattendedInstructionText))
+
+// roomInstruction is Krude's instruction for its turn in a room, rendered
+// the same way.
+var roomInstruction = template.Must(template.New("krude-room").Parse(roomInstructionText))
 
 // Gemini returns the named Gemini model on Vertex AI in the given Google Cloud
 // project and location. It authenticates with credentials when there are any,
@@ -184,6 +191,36 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agen
 // same thread.
 func UnattendedRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
 	return unattendedRoot(router, toolboxes, nil)
+}
+
+// RoomRoot returns Krude for its turn in a room its member's team shares,
+// whether its member is reading the room or away: what steers it is what
+// everyone in the room wrote, and everyone in the room reads what it says.
+// So it answers from the room alone. It reaches none of the member's apps,
+// knowledge, memory, files or requests; it has no web research, sub-agents
+// or helpers; and it has only the toolboxes given, each loaded, with its
+// skill, from its first model call, with nothing to list, load or look up.
+// The caller gives it the room toolbox, which files what it cannot answer
+// with its member.
+//
+// It answers to the same name as Root, since it takes turns in a thread of
+// its member's.
+func RoomRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
+	if router == nil {
+		return nil, errors.New("a model router is required")
+	}
+	catalog, err := newToolCatalog(toolboxes)
+	if err != nil {
+		return nil, err
+	}
+	catalog.preloaded = true
+	return llmagent.New(llmagent.Config{
+		Name:                RootName,
+		Description:         "Krude, speaking for a member in a room their team shares.",
+		Model:               router.For(modelrouter.RoleChat),
+		InstructionProvider: instructionFrom(roomInstruction, catalog, false),
+		Toolsets:            []tool.Toolset{catalog.loaded()},
+	})
 }
 
 // delivery is how a run that delivers one interaction runs.
