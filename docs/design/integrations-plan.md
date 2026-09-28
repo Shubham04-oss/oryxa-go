@@ -618,6 +618,38 @@ A one-week spike. It uses a dev gateway in us-west-2 with the MCP endpoint as it
 
 ---
 
+## Amendments from building 1A and 1B (2026-09-28)
+
+What the code now says, where it differs from the contracts above. The code wins.
+
+**1A**
+- A credential transport sees every redirect hop. It must add a credential only for that credential's own host, or the client must use `MaxRedirects(0)`.
+- `internal/secrets.Secret` also redacts in `Format` and `MarshalText`.
+
+**1B, credential flows and tokens**
+- `Test.Headers` is new, for apps whose test call needs a fixed header (Notion's `Notion-Version`).
+- **GitHub revokes one token (`github_token`), not the grant.** Deleting the grant would kill every token the app holds for that GitHub user, across organizations.
+- **Two more revoke styles:** `rfc7009_json` (Notion) and `slack_auth_revoke` (Slack answers 200 when it refuses).
+- **Slack signs members in with their own user token,** through `oauth/v2_user/authorize` and `oauth.v2.user.access`, not the bot token.
+- **PKCE is off for Slack and Notion.** Slack allows it only for public clients, and Notion doesn't document it. G2 re-checks both.
+- **Revoking one Google token revokes the whole grant for that account.** So 1C skips revocation while the member has another live Google connection (Gmail, Drive or Calendar) on the same account. All three use the email address as the label, so compare that.
+- **The test call passes only if its label pointer resolves,** because Slack answers 200 with `ok: false`.
+- **Settings keys `account.label` and `account.ref`.** A dot can't clash with a field name.
+- **Google scopes, frozen from phase 2:** `gmail.modify`, `drive`, `calendar.readonly` and `calendar.events`. These are restricted scopes: Oryxa's own Google app needs verification and a yearly assessment before offering them, so until then Google goes through an organization's own client.
+
+**1B, webhooks**
+- **A new handshake, `notion_verification`.** Notion sends its signing secret once, unsigned. 1D seals it, and shows it once to an admin, who pastes it back into Notion.
+- **Pushed events route by the member's own id,** never the workspace, because routing by workspace would leak private channels and pages. Slack routes by `user_id`, Notion by the bot's id.
+- **A renewed Google channel restarts its message numbers.** So a renewal needs a fresh endpoint, or 7-day dedupe drops its messages.
+
+**1B, validation, stricter than above**
+- **Fields:** a field placed in a URL needs a format, pattern or enum, and can't be secret.
+- **Protected parameters:** `auth_params` and token-request fields can't override state, `redirect_uri` or PKCE.
+- **Webhook signatures:** a header timestamp must be signed.
+- **Paths:** they can't climb out of `api_base`.
+- **Schemas and slugs:** schemas must be JSON objects, and trigger slugs carry the toolkit prefix.
+- **Push triggers:** they need a webhook.
+
 ## Files to read first
 - `apps/internal/application/connections.go`
 - `apps/internal/application/tools.go`
