@@ -102,8 +102,14 @@ jobs:
           aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
           # The circuit breaker rolls a release that never turns healthy back,
           # and a service rolled back is stable too: check what it settled on.
-          read -r running rollout < <(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
-            --query 'services[0].deployments[?status==`PRIMARY`] | [0].[taskDefinition, rolloutState]' --output text)
+          # ECS can call the service stable before it gives the rollout its
+          # verdict, so wait up to ten minutes for one.
+          for _ in $(seq 60); do
+            read -r running rollout < <(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+              --query 'services[0].deployments[?status==`PRIMARY`] | [0].[taskDefinition, rolloutState]' --output text)
+            [ "$rollout" != "IN_PROGRESS" ] && break
+            sleep 10
+          done
           if [ "$running" != "$next" ] || [ "$rollout" != "COMPLETED" ]; then
             echo "::error::the service settled on $running ($rollout), not $next"
             exit 1
