@@ -1,8 +1,8 @@
-# Releases main to production once CI has passed on it, after an approval: the
-# job waits on the repository's production environment until its reviewer
-# approves. It builds the image for Fargate, rolls ECS onto it, records the
-# release on main and deploys the web Worker. Infrastructure changes stay a
-# manual `tofu apply`; see deploy/README.md for this workflow's one-time setup.
+# Releases main to production once CI has passed on it, in the repository's
+# production environment, which only main may deploy to. It builds the image
+# for Fargate, rolls ECS onto it, records the release on main and deploys
+# web-next's Worker. Infrastructure changes stay a manual `tofu apply`; see
+# deploy/README.md for this workflow's one-time setup.
 
 name: Deploy
 
@@ -48,11 +48,10 @@ jobs:
       - name: Setup
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          HYPERDRIVE_ID: ${{ vars.HYPERDRIVE_ID }}
         run: |
-          # Nothing ships half-configured: the Worker needs both.
-          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$HYPERDRIVE_ID" ]; then
-            echo "::error::the production environment needs the CLOUDFLARE_API_TOKEN secret and the HYPERDRIVE_ID variable; see deploy/README.md"
+          # Nothing ships half-configured: the Worker needs it.
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::the production environment needs the CLOUDFLARE_API_TOKEN secret; see deploy/README.md"
             exit 1
           fi
 
@@ -136,19 +135,14 @@ jobs:
           node-version: 26
 
       - name: Deploy the web Worker
-        working-directory: web
+        # web-next's env.production, the Worker app.oryxa.in routes to. The
+        # build writes the configuration wrangler deploys, as web.sh relies on.
+        working-directory: web-next
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          HYPERDRIVE_ID: ${{ vars.HYPERDRIVE_ID }}
           WRANGLER_SEND_METRICS: "false"
         run: |
           npm install --global pnpm@12.4.2
           pnpm install --frozen-lockfile
           CLOUDFLARE_ENV=production pnpm build
-          # As deploy/scripts/web.sh does: the Hyperdrive binding's id is the
-          # deployment's, so it joins the configuration the build wrote.
-          config=$(jq -r .configPath .wrangler/deploy/config.json)
-          config=$(cd .wrangler/deploy && cd "$(dirname "$config")" && pwd)/$(basename "$config")
-          jq --arg id "$HYPERDRIVE_ID" '.hyperdrive = [{binding: "HYPERDRIVE", id: $id}]' "$config" > "$config.new"
-          mv "$config.new" "$config"
           pnpm exec wrangler deploy
