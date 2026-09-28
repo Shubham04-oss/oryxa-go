@@ -1,0 +1,87 @@
+// The Oryxa authorization model, in Cedar's schema language.
+//
+// This file is documentation for whoever writes an organization's stored
+// policies (see ValidatePolicy and Store): it names every entity type,
+// attribute and action a policy may reference, and ValidatePolicy refuses a
+// policy that names anything else. It is not fed to Cedar's validator —
+// cedar-go's is experimental, and this package does not depend on it — so it
+// is parsed only to keep it honest as documentation (see schema_test.go);
+// nothing at request time checks a Request or a stored Policy against it.
+//
+// Knowledge bases and their documents are the first resources modeled here.
+// Files, teams, agents and apps will add their own entity types later.
+namespace Oryxa {
+    // Organization is the root everything else is parented to, directly or
+    // through a Member. It carries no attributes: a request already names
+    // its organization (see Request.OrganizationID), so nothing here needs
+    // to read one back off the entity.
+    entity Organization;
+
+    // Member is a person in an Organization. The id is that person's user
+    // id, the same one Request.Principal.UserID carries.
+    entity Member in [Organization];
+
+    // Agent is an agent acting for the Member that is its parent, never a
+    // caller in its own right. It carries the same id as that Member: an
+    // Oryxa::Agent and an Oryxa::Member with the same id are the same
+    // person, one acting through automation. Parenting the agent to the
+    // member is what lets a policy write `principal in resource.member_id`
+    // once and have it mean "this member, or an agent acting for them".
+    entity Agent in [Member];
+
+    // KnowledgeBase is a rag corpus. scope is "member", "team" or
+    // "organization"; member_id and team_id are set only for the matching
+    // scope, so a policy guards them with `has` rather than comparing
+    // against "". member_id is a reference to the owning Member, not a
+    // string, so ownership can be tested with `in` instead of an equality
+    // Cedar has no operator for; team_id stays a string because teams are
+    // not their own entity type yet, and team membership instead reaches
+    // policies as the acts_as_admin/team_member context (see below).
+    entity KnowledgeBase in [Organization] = {
+        organization_id: String,
+        scope: String,
+        team_id?: String,
+        member_id?: Member,
+        created_by: String,
+    };
+
+    // Document is one document in a KnowledgeBase. access is "", "members"
+    // or "admins" ("" means the same as "members"); metadata is whatever
+    // string keys and values the document was tagged with. Cedar's schema
+    // language has no type for a record with caller-defined keys, so
+    // metadata is written here as the empty shape — accurate as far as it
+    // goes, but not a real constraint, which is one more reason this schema
+    // is parsed for syntax and not fed to a validator. knowledge_base_id is
+    // a reference to the owning KnowledgeBase, not its id as a string, so a
+    // policy can read the knowledge base's own scope, member_id and team_id
+    // through it — see policies/knowledge_bases.cedar's baseline/documents/read,
+    // which is the only reason this attribute exists in this shape.
+    entity Document in [KnowledgeBase] = {
+        organization_id: String,
+        knowledge_base_id: KnowledgeBase,
+        access: String,
+        metadata: {},
+    };
+
+    // read and search share one rule set for knowledge bases (see
+    // policies/knowledge_bases.cedar) and read is the only one defined for
+    // documents; administer is seeing and changing a resource's own stored
+    // policies, and today only a KnowledgeBase has any.
+    action "read", "search" appliesTo {
+        principal: [Member, Agent],
+        resource: [KnowledgeBase, Document],
+        context: {
+            acts_as_admin: Bool,
+            team_member: Bool,
+        },
+    };
+
+    action "administer" appliesTo {
+        principal: [Member, Agent],
+        resource: [KnowledgeBase],
+        context: {
+            acts_as_admin: Bool,
+            team_member: Bool,
+        },
+    };
+}
