@@ -8,11 +8,13 @@ single `oryxa` binary like every other service — see
 [Mounting it](#mounting-it) and [Run locally](#run-locally).
 
 Apps replaces the connections service, which was archived on 2026-09-17 at tag
-`archive/connections-and-integrations-2026-09-17`. Oryxa no longer holds a
-single OAuth credential: [Composio](https://composio.dev) holds them, refreshes
-them, and runs the calls. What Oryxa keeps is the part no vendor can decide —
-who may use which connection, which tools may run unconfirmed, and what is
-announced when something happens.
+`archive/connections-and-integrations-2026-09-17`. A connection is made through
+one of two **brokers**. [Composio](https://composio.dev), the default, holds
+its credentials, refreshes them, and runs the calls. **Oryxa's own sign-in**,
+switched on per toolkit and off everywhere today, keeps them here, sealed — see
+[Oryxa's own sign-in](#oryxas-own-sign-in). Either way, what Oryxa keeps is the
+part no vendor can decide — who may use which connection, which tools may run
+unconfirmed, and what is announced when something happens.
 
 ```text
 member ── connect an app ──▶ apps ── hosted link ──▶ Composio ──▶ the app
@@ -23,6 +25,10 @@ agent ── MCP ─────────────────┤
 
 the app ── event ──▶ Composio ── signed webhook ──▶ apps
 auth ── organization deleted, member removed ──▶ apps-events queue
+
+member ── connect with Oryxa ──▶ apps ── authorization URL ──▶ the app
+the app ── code ──▶ browser ──▶ app.oryxa.in/v1/apps/oauth/callback ──▶ apps
+the app ── webhook ──▶ api.oryxa.in/v1/apps/hooks/{endpoint} ──▶ apps
 ```
 
 ## Composio holds the credentials, apps holds the rules
@@ -55,7 +61,9 @@ are deliberately deferred.
 | A write through `apps_run_read_tool` | Composio's own read-only mark decides, and the server enforces it |
 | A write without an idempotency key | A retry must not become a second change |
 | A webhook whose signature does not verify | Nothing in the body is read at all |
-| An app needing an OAuth app of Oryxa's own | There is none yet, so the member would reach a broken page |
+| An app needing an OAuth app of Oryxa's own, through Composio | Composio has none for it, so the member would reach a broken page; Oryxa's own sign-in is the route for it once switched on |
+| An agent replacing a key or changing an organization's OAuth app | The same: those are a member's and an admin's decisions |
+| Anything through an Oryxa connection on a Composio path | Composio holds no account of it; its tools arrive with phase 2 |
 
 ## Connecting an app
 
@@ -82,6 +90,205 @@ connects it: Composio's own app where Composio has one, otherwise a scheme
 whose credential the member types into Composio's page (`API_KEY`,
 `BEARER_TOKEN`, `BASIC`). An app that would need an OAuth app of Oryxa's own is
 refused as not connectable rather than half-connected.
+
+## Oryxa's own sign-in
+
+The second broker. It is `docs/design/integrations-plan.md`'s phase 1: one
+sign-in and token system for every credential kind (`apps/internal/signin`)
+and one webhook ingress (`apps/internal/hooks`), wired in here. A connection
+made through it has `broker: "oryxa"`; its credential lives in
+`apps_credentials`, each secret value sealed on its own with the KMS key in
+`APPS_SIGNIN_KMS_KEY_ID`, bound to `service=oryxa-apps`, the resource type and
+the resource id. Composio's connections, routes and events are untouched.
+
+**It ships switched off.** A toolkit takes this route only once
+`APPS_ORYXA_TOOLKITS` names it, which happens at the plan's gate G4. With the
+list empty every Oryxa request is refused as `not_connectable`, and the web
+app keeps connecting everything through Composio. A connection already made
+through Oryxa can still be removed, checked and revoked for as long as
+`APPS_SIGNIN_KMS_KEY_ID` is set.
+
+### Connecting
+
+`POST …/apps/connections` with `"broker": "oryxa"`. The toolkit must be
+switched on and registered, and `kind` picks the manifest's way in
+(`oauth2_code`, `api_token`, `basic`, `oauth2_client_credentials`; empty is
+the manifest's first). The one-current-connection rule holds across brokers:
+a member with a pending or active Composio connection to an app cannot start
+an Oryxa one to it, and the other way round.
+
+- **OAuth.** The pending connection is recorded, `signin.StartOAuth` makes
+  the flow (32 random bytes of state, only its SHA-256 kept, PKCE S256, ten
+  minutes, single use), and the answer is
+  `{"connection": …, "redirect_url": "<the app's authorization URL>"}`, exactly
+  as a Composio connect answers its link. The same answer sets the **state
+  cookie**: `oryxa_apps_signin_<hash>` = the state, `HttpOnly; Secure;
+  SameSite=Lax; Path=/v1/apps/oauth/callback; Max-Age=600`. Its name carries
+  a hash of the state, so two sign-ins started in one browser each keep
+  their own.
+- **A key, a password or client credentials.** `fields` carries the kind's
+  standard fields (`token`; `username` and `password`; `client_id` and
+  `client_secret`) and the manifest's connection-level ones. They are proved
+  with the manifest's test call and kept sealed at once, so the answer is
+  `{"connection": …}` already `active`. A key the app refuses fails the
+  connection and answers `invalid_credentials`, naming the field, never its
+  value.
+
+The member comes back to `GET /v1/apps/oauth/callback`. The callback reads
+the state cookie, clears it, and has signin check it against the state,
+spend the flow, exchange the code and run the test call. If the browser
+carries an access cookie, it must belong to the member and organization that
+began the sign-in, or the sign-in fails as `wrong_account`. The connection
+becomes active (labelled with the account the test call named) or failed, and
+the browser is sent to `return_to` with **exactly** `app_connection` and
+`status`, as the Composio callback does, so the web app's
+`parseConnectReturn` reads either. Without a return page it answers the
+connection as JSON. A state that is missing, not the cookie's, spent or
+expired is an error: `forbidden` or `not_found`.
+
+**The cookie comes back only to the host that set it.** The state cookie is
+set on the connect answer, so `APPS_SIGNIN_REDIRECT_URI` must be on the host
+the browser sends the connect request to. web-next calls apps on its own
+origin — `app.oryxa.in/v1/…` goes through the Cloudflare tunnel to the tasks —
+so production's callback is `https://app.oryxa.in/v1/apps/oauth/callback`,
+not the API host Composio's callback uses. Apps refuses to start with a
+redirect URI whose path is not `/v1/apps/oauth/callback` or whose host is
+neither an `APPS_ALLOWED_ORIGINS` host nor `APPS_PUBLIC_BASE_URL`'s, and
+refuses an OAuth connect sent to any other host than the redirect URI's
+(ports aside: a cookie is a host's), since that sign-in could never finish.
+That check reads the request's `Host`, which cloudflared forwards unchanged:
+the tunnel's ingress sets no `httpHostHeader`.
+
+Every connection's view carries `broker` (`composio` or `oryxa`) and, for an
+Oryxa connection holding a credential, `credential_kind`, which says whether
+it has a key to replace.
+
+A key is replaced with `PUT …/apps/connections/{id}/credentials`
+(`{"kind"?, "fields"}`), by the connection's own member only: the new one is
+kept only once the app accepts it in the test call, the connection's label
+follows the account it names, and `apps.credential.replaced.v1` says so. An
+OAuth connection, or an expired one, is connected again instead.
+
+Pending sign-ins that never come back are failed as `abandoned` fifteen
+minutes after they began (the flow lasts ten), which frees the member's slot.
+
+A failed or expired Oryxa connection's `status_reason` is in a member's words,
+never an app's: `the app did not grant access`, `the sign-in came back to
+another member`, `the app did not answer`, `there is no OAuth app to sign in
+through`, `link expired`, a field's own rule such as `token was refused by
+the app`, and for an expired one `the app no longer accepts the sign-in` or
+`the app no longer accepts the credential`.
+
+### What an Oryxa connection can do today
+
+Only exist, be listed, be removed. Its integration's tools, readers and
+triggers are phase 2, and every Composio path refuses it rather than calling
+Composio with an account Composio never had: running or searching tools, the
+read proxy, targets and triggers answer `not_connectable` ("… not available
+yet"), and auto-subscribe never claims it.
+
+### Disconnecting
+
+Removing an Oryxa connection — by the member, an admin, or with the member
+(`auth.member.removed`) or the organization (`auth.organization.deleted`) —
+has signin revoke the credential at the app in the manifest's revoke style,
+deletes the connection's webhook endpoints, and records it removed.
+`apps.connection.removed.v1` carries `provider_revoked`: `true` when the app
+confirmed it, `false` for a key or a password (only its owner can revoke
+those), a grant another connection still shares, or an app that did not
+answer. That last kind never blocks the removal: signin keeps the sealed
+credential and tries again, backing off, until the app answers or eight
+attempts have passed. A deleted organization's own OAuth clients are retired
+and its own webhook endpoints deleted with it.
+
+### Organizations' own OAuth apps
+
+`GET|PUT|DELETE /v1/organizations/{org}/apps/oauth-clients/{client}` is the
+organization's own OAuth app for a registration (`github`, `slack`,
+`notion`, `google` — shared across toolkits), for its admins only, never an
+agent. The secret is write-only: what comes back is `secret_set` and, for a
+secret of 16 characters or more, its last four characters. `refuse_default`
+is the "don't use Oryxa's app" switch. The view also carries what an admin
+copies into their app: `redirect_uri`, and for apps whose deliveries are the
+whole app's (Slack, Notion) the URL of an endpoint of the organization's own.
+Slack's signing secret is entered as `webhook_secrets: {"slack": "…"}`, which
+makes that endpoint or rotates its secret (the old one verifies for a further
+24 hours); Notion sends its own verification token to the endpoint once, and
+an admin reveals it once, with `POST …/apps/webhooks/notion/verification-token`,
+to paste back into Notion. Saving and removing are announced as
+`apps.oauth_client.saved.v1` and `apps.oauth_client.removed.v1`, never with a
+secret. Removing a client retires it; connections made through it go on
+refreshing and revoking through it.
+
+Oryxa's own OAuth apps — what a member signs in through unless their
+organization brings its own or refuses it — come from
+`APPS_DEFAULT_OAUTH_CLIENTS`, which the upkeep saves, sealed, when apps
+starts. Changing a secret there saves it over the old one; changing a client
+id makes a new live client, and connections made through the old one keep
+refreshing and revoking through it.
+
+### The form the web app renders
+
+`GET /v1/apps/integrations` lists the toolkits switched on, with the kinds each
+signs in with; `GET /v1/apps/integrations/{toolkit}/manifest` is one toolkit's
+sign-in as a form: each method's kind, the OAuth client registration and
+scopes, and every field with its label, help, `secret`, `level`
+(`connection` for the member, `client` for an admin, `discovered` from the
+app) and validation, the standard ones marked `standard`; the `redirect_uri`;
+and whether its webhook needs an organization's endpoint, secret or
+verification token. Neither needs a caller, and neither carries a secret, an
+app's URLs, or where a value goes on a request.
+
+### The webhook ingress
+
+`POST /v1/apps/hooks/{endpointID}` takes every delivery Oryxa's own
+integrations' apps push. The id is 120 random bits and the only thing in the
+URL; an unknown one is 404 before the body is read; each endpoint takes 50
+deliveries a second per replica; bodies stop at 1 MiB; the manifest's scheme
+verifies each one in constant time before anything in it is used (401
+otherwise); handshakes (Slack's `url_verification`, GitHub's ping, Graph's
+validation, Google's sync, Notion's token) are answered by the core; and
+deliveries are deduplicated for 7 days in `apps_handled_events`. Until
+Oryxa's integrations have triggers (phase 2), no subscription is found for a
+verified delivery, so it is acknowledged, recorded and publishes nothing.
+
+An endpoint is a connection's (made for one subscription, secret generated),
+an organization's (its own app; secret entered by its admin) or the
+deployment's (Oryxa's own app for everyone; secret in `APPS_HOOK_SECRETS`,
+current and previous during a rotation). The deployment's endpoint for a
+toolkit, and a token its app sent it, are an operator's, served on apps'
+internal routes to a service token alone, never to a member:
+
+```text
+GET  /v1/internal/apps/hooks/{toolkit}                     the URL to put in Oryxa's own app, made the first time
+POST /v1/internal/apps/hooks/{toolkit}/verification-token  Notion's token, once
+```
+
+They exist only where `APPS_SERVICE_CALLERS` names the services allowed to
+call them, each signing an `X-Oryxa-Service-Token` for audience `apps` with
+purpose `hooks` (`internal/serviceauth`).
+
+### Limits
+
+Per replica, with teams' token bucket: **10 a minute per member** for
+connecting (either broker) and replacing a key, and **30 a minute per
+address** for the OAuth callback, the address being Cloudflare's
+`CF-Connecting-IP`. Over either, `429 rate_limited`. A Cloudflare rule on
+the callback and hook paths belongs in front of both.
+
+### What runs in the background
+
+`RunOryxa`, a worker of its own wherever `APPS_SIGNIN_KMS_KEY_ID` is set,
+every minute on every replica (signin claims each check and revocation
+first):
+
+| Does | So that |
+| --- | --- |
+| Saves `APPS_DEFAULT_OAUTH_CLIENTS` until each has been saved once | Oryxa's own apps are there to sign in through |
+| Fails pending Oryxa sign-ins older than fifteen minutes, as `abandoned` | A member who never came back can connect again |
+| Runs the daily health checks that are due (`signin.CheckDue`) | A connection the app refuses expires, announced with `refresh_rejected` or `credential_rejected` |
+| Tries again the revocations an app did not answer (`signin.RetryRevocations`) | A removed connection's credential is revoked, or forgotten after eight attempts |
+| Deletes webhook endpoints whose subscriptions lapsed (`hooks.SweepExpired`) | A lapsed endpoint answers as an unknown one |
 
 ## Running tools
 
@@ -330,8 +537,9 @@ acknowledged and dropped, because Composio would otherwise retry it forever.
 ## API
 
 Every route needs a member's access token, as a bearer token or the access
-cookie, except the catalog and the two Composio calls. A cookie-authenticated
-mutation also needs an `Origin` in `APPS_ALLOWED_ORIGINS`.
+cookie, except the catalog, Oryxa's integrations and manifests, the two
+callbacks and the two webhook routes. A cookie-authenticated mutation also
+needs an `Origin` in `APPS_ALLOWED_ORIGINS`.
 
 | Route | Does |
 | --- | --- |
@@ -341,7 +549,7 @@ mutation also needs an `Origin` in `APPS_ALLOWED_ORIGINS`.
 | `GET /v1/apps/catalog/{toolkit}/triggers` | The events an app can deliver |
 | `GET /v1/apps/connect/callback` | Where Composio returns a member's browser |
 | `POST /v1/apps/webhooks/composio` | Where Composio delivers events |
-| `POST /v1/organizations/{org}/apps/connections` | Start connecting an app; answers the link to send the member to. `auto_subscribe: false` connects without subscribing to its events |
+| `POST /v1/organizations/{org}/apps/connections` | Start connecting an app; answers the link to send the member to. `auto_subscribe: false` connects without subscribing to its events. `broker: "oryxa"` with `kind` and `fields` connects through Oryxa's own sign-in |
 | `GET /v1/organizations/{org}/apps/connections` | The caller's connections, or with `?scope=organization` an admin's view of everyone's |
 | `GET /v1/organizations/{org}/apps/connections/{id}` | One connection |
 | `GET /v1/organizations/{org}/apps/connections/{id}/targets` | What the connection holds that can be indexed, read from the app itself |
@@ -351,11 +559,21 @@ mutation also needs an `Origin` in `APPS_ALLOWED_ORIGINS`.
 | `POST /v1/organizations/{org}/apps/triggers` | Subscribe a connection to an app's event, checked against the trigger's own definition |
 | `GET /v1/organizations/{org}/apps/triggers` | The caller's triggers, with how each delivers and whether it ever has |
 | `DELETE /v1/organizations/{org}/apps/triggers/{id}` | Unsubscribe |
+| `GET /v1/apps/oauth/callback` | Where an app returns a member's browser from Oryxa's own sign-in |
+| `GET /v1/apps/integrations` | The toolkits Oryxa's own sign-in is switched on for |
+| `GET /v1/apps/integrations/{toolkit}/manifest` | One toolkit's sign-in, as a form |
+| `PUT /v1/organizations/{org}/apps/connections/{id}/credentials` | Replace an Oryxa connection's key, password or client credentials |
+| `GET/PUT/DELETE /v1/organizations/{org}/apps/oauth-clients/{client}` | An organization's own OAuth app, for its admins |
+| `POST /v1/organizations/{org}/apps/webhooks/{toolkit}/verification-token` | Reveal, once, the token an organization's own app sent its endpoint |
+| `POST /v1/apps/hooks/{endpointID}` | Where Oryxa's own integrations' apps deliver |
 
 Errors are `{"error":{"code","message"}}` with the codes
-`invalid_request`, `unauthorized`, `forbidden`, `not_read_only`, `not_found`,
-`not_connected`, `needs_reconnect`, `not_connectable`,
-`conflict`, `rate_limited`, `unavailable`, `internal`.
+`invalid_request`, `invalid_credentials`, `unauthorized`, `forbidden`,
+`not_read_only`, `not_found`, `not_connected`, `needs_reconnect`,
+`not_connectable`, `conflict`, `rate_limited`, `unavailable`, `internal`.
+`invalid_credentials` (400) is a key, a password or a field that broke its
+rule or that the app refused; it also carries `"field"`, the field's name,
+and never quotes the value.
 
 ## Events
 
@@ -378,6 +596,17 @@ happened is visible only in a log line.
 | `apps.trigger.disabled.v1` | Composio stopped a trigger, and why |
 | `apps.action.completed.v1` | A write ran |
 | `apps.action.failed.v1` | A write did not, in one word — never the app's own |
+| `apps.credential.replaced.v1` | A member replaced an Oryxa connection's key, with its kind — never the key |
+| `apps.oauth_client.saved.v1` | An admin saved their organization's own OAuth app, or the deployment saved one of Oryxa's (`organization_id` empty, `actor_id` `deployment`) — never its secret |
+| `apps.oauth_client.removed.v1` | An admin removed their organization's own OAuth app |
+
+The connection events of an Oryxa connection carry `"broker": "oryxa"`, and
+its `removed` carries `provider_revoked`. Both are left out for Composio's,
+whose events are byte for byte what they were
+(`contracts/events/apps/v1/testdata/composio.golden`). An Oryxa connection's
+`failed` reasons add `invalid_credentials`, `unavailable` and
+`not_connectable`, and its `expired` reasons are `refresh_rejected` and
+`credential_rejected`.
 
 A connection's life is a closed story on the bus: every `initiated` ends as
 `connected`, `failed`, or `removed` when it is removed while still pending,
@@ -421,10 +650,16 @@ Apps uses `/internal/postgreskit`. Other services never read these tables.
 | `apps_actions` | Tool runs, with the idempotency key a write can be replayed under |
 | `apps_handled_events` | Webhook and bus deliveries already acted on, since both deliver at least once |
 | `apps_outbox` | Events written in the same transaction as the change they describe |
+| `apps_credentials` | An Oryxa connection's credential: each secret value sealed on its own, its kind, scopes, expiry, the refresh lease and the health-check schedule |
+| `apps_oauth_clients` | OAuth clients: organizations' own and Oryxa's (organization `''`), the secret sealed; a replaced one stays for its connections |
+| `apps_signin_flows` | OAuth sign-ins in flight, by the state's SHA-256: ten minutes, spent once |
+| `apps_hook_endpoints` | Webhook endpoints, each with its scheme frozen at creation and its secret sealed |
 
-No credential is anywhere in there. Composio's answer for a connected account
-carries the connection's state, and the client leaves it undecoded, so no
-token Composio might include ever reaches a struct, a log or a row.
+No Composio credential is anywhere in there. Composio's answer for a
+connected account carries the connection's state, and the client leaves it
+undecoded, so no token Composio might include ever reaches a struct, a log or
+a row. An Oryxa connection's credential is there, sealed: nothing opens it but
+signin, with the KMS key, and no answer or event ever carries it.
 
 ## Security
 
@@ -438,6 +673,13 @@ token Composio might include ever reaches a struct, a log or a row.
 - Composio's own wording reaches a caller only for a request it refused,
   truncated, because that is usually about the caller's own input. Everything
   else keeps only its kind.
+- Oryxa's own sign-in seals every secret with `APPS_SIGNIN_KMS_KEY_ID`,
+  bound to `service=oryxa-apps` and the row it belongs to, so a sealed value
+  cannot be moved to another row; the key's policy grants apps only that
+  encryption context. The state cookie is HttpOnly, Secure, Lax and scoped to
+  the callback; a callback whose browser is signed in as someone else fails;
+  an agent may not connect, replace a key or change an OAuth app; and no
+  answer, error, event or log line quotes a secret a member or admin typed.
 - Composio was breached in May 2026, taking roughly 5,000 GitHub tokens and
   5,241 API keys with it, including custom-auth credentials. That is the risk
   this design accepts, and why apps holds the rules that outlive any single
@@ -519,6 +761,22 @@ alone; it refuses to take over one pointing at another deployment unless
 `APPS_REPLACE_WEBHOOK=true`, because replacing it mints a new secret and breaks
 whatever was using the old one.
 
+Oryxa's own sign-in needs nothing until a toolkit is switched on. Then:
+
+| Variable | Is |
+| --- | --- |
+| `APPS_ORYXA_TOOLKITS` | The toolkits it is switched on for, a comma list. Empty means off |
+| `APPS_SIGNIN_KMS_KEY_ID` | The KMS key every secret is sealed with. Required once a toolkit is on |
+| `APPS_SIGNIN_REDIRECT_URI` | The one OAuth callback: `{the web app's origin}/v1/apps/oauth/callback`, `https://app.oryxa.in/v1/apps/oauth/callback` in production. Required with the key |
+| `APPS_DEFAULT_OAUTH_CLIENTS` | Oryxa's own OAuth apps, `{"github": {"client_id": "…", "client_secret": "…"}}` |
+| `APPS_HOOK_SECRETS` | The deployment's webhook secrets, `{"slack": ["current", "previous"]}` |
+| `APPS_HOOK_VALUES` | What a manifest names as `{config:name}`, `{"pubsub_push_account": "…"}` |
+| `APPS_SERVICE_CALLERS` | The services that may call apps' internal routes, as `internal/serviceauth` reads them |
+
+Webhook URLs are built on `APPS_PUBLIC_BASE_URL`. The task role needs
+`kms:GenerateDataKey` and `kms:Decrypt` on the key, conditioned on
+`kms:EncryptionContext:service = oryxa-apps`.
+
 The embedded migrations are in `internal/postgres/migrations/` and are applied
 in name order when `oryxa` starts, unless `ORYXA_AUTO_MIGRATE=false`, or ahead
 of time with `go run ./cmd/oryxa migrate`.
@@ -548,6 +806,12 @@ Connecting an app end to end: sign in, `POST` a connection, open the
 `redirect_url` it answers, finish Composio's page, and the callback brings the
 browser back to `APPS_ALLOWED_ORIGINS` with `app_connection` and `status`.
 
+Through Oryxa's own sign-in, the redirect URI has to be on the host the web
+app is served from, since its dev server proxies `/v1` to apps: with web-next
+on `localhost:3000`, `APPS_SIGNIN_REDIRECT_URI=http://localhost:3000/v1/apps/oauth/callback`
+(http is accepted on a loopback host), registered with the app's OAuth
+client. The KMS key can be a local emulator's.
+
 ## Tests
 
 ```sh
@@ -563,7 +827,12 @@ APPS_TEST_DATABASE_URL=postgres://... go test ./apps/internal/postgres/
 ```
 
 They create a schema of their own and drop it afterwards, so they never touch
-anything else in that database.
+anything else in that database. The same variable runs
+`apps/internal/httpserver/oryxa_e2e_test.go`, which drives Oryxa's own sign-in
+through the real API, application, signin, hooks and store against a
+stand-in OAuth app: connect, callback with the state cookie, a key and its
+replacement, disconnect with revocation, a signed Slack `url_verification`,
+the upkeep expiring a refused key, and a member leaving.
 
 **The trigger pipeline is tested by shape, not by app.** Composio has
 thousands of triggers and no test can name them, but each is some combination
@@ -640,8 +909,9 @@ Not yet run, and not to be described as working:
 
 ## Later
 
-- **An OAuth app of Oryxa's own**, so apps that Composio holds no app for can
-  be connected. Today they are refused as not connectable.
+- **Oryxa's own integrations' tools, readers and triggers** (phase 2), so an
+  Oryxa connection can do more than exist. Until then every Composio path
+  refuses one.
 - **Knowledge behind the read route**, so the project API key is in one
   service rather than two. It waits on a member-acting token for a scheduled
   pass.

@@ -1,0 +1,11 @@
+apps.action.completed.v1 {"action_id":"apa_1","connection_id":"apc_1","organization_id":"org_1","member_id":"user-1","toolkit":"github","tool":"GITHUB_CREATE_AN_ISSUE","read_only":false,"agent":true,"finished_at":"2026-09-28T12:30:00.123Z"}
+apps.action.failed.v1 {"action_id":"apa_1","connection_id":"apc_1","organization_id":"org_1","member_id":"user-1","toolkit":"github","tool":"GITHUB_CREATE_AN_ISSUE","read_only":false,"agent":false,"error":"app_error","finished_at":"2026-09-28T12:30:00.123Z"}
+apps.connection.connected.v1 {"connection_id":"apc_1","organization_id":"org_1","member_id":"user-1","toolkit":"github","connected_at":"2026-09-28T12:30:00.123Z"}
+apps.connection.expired.v1 {"connection_id":"apc_1","organization_id":"org_1","member_id":"user-1","toolkit":"github","reason":"the refresh token was revoked","expired_at":"2026-09-28T12:30:00.123Z"}
+apps.connection.failed.v1 {"connection_id":"apc_1","organization_id":"org_1","member_id":"user-1","toolkit":"github","reason":"denied_at_provider","failed_at":"2026-09-28T12:30:00.123Z"}
+apps.connection.initiated.v1 {"connection_id":"apc_1","organization_id":"org_1","member_id":"user-1","toolkit":"github","initiated_at":"2026-09-28T12:30:00.123Z"}
+apps.connection.removed.v1 {"connection_id":"apc_1","organization_id":"org_1","member_id":"user-1","toolkit":"github","reason":"removed_by_member","removed_at":"2026-09-28T12:30:00.123Z"}
+apps.trigger.disabled.v1 {"trigger_id":"apt_1","connection_id":"apc_1","organization_id":"org_1","member_id":"user-1","toolkit":"github","trigger":"GITHUB_COMMIT_EVENT","reason":"the connection expired","disabled_at":"2026-09-28T12:30:00.123Z"}
+apps.trigger.received.v1 {"trigger_id":"apt_1","connection_id":"apc_1","organization_id":"org_1","member_id":"user-1","toolkit":"github","trigger":"GITHUB_COMMIT_EVENT","data":{"sha":"abc"},"received_at":"2026-09-28T12:30:00.123Z"}
+apps.trigger.subscribed.v1 {"trigger_id":"apt_1","connection_id":"apc_1","organization_id":"org_1","member_id":"user-1","toolkit":"github","trigger":"GITHUB_COMMIT_EVENT","kind":"webhook","manual_setup":true,"subscribed_at":"2026-09-28T12:30:00.123Z"}
+apps.trigger.unsubscribed.v1 {"trigger_id":"apt_1","connection_id":"apc_1","organization_id":"org_1","member_id":"user-1","toolkit":"github","trigger":"GITHUB_COMMIT_EVENT","by_admin":true,"unsubscribed_at":"2026-09-28T12:30:00.123Z"}

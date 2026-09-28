@@ -25,6 +25,10 @@ const requestTimeout = 15 * time.Second
 // listing.
 const maxResponseBytes = 1 << 20
 
+// composioBroker is Composio's own broker, and what a connection view's
+// missing broker is read as: apps defaults an empty column the same way.
+const composioBroker = "composio"
+
 type Client struct {
 	baseURL string
 	http    *http.Client
@@ -41,6 +45,9 @@ type connectionResponse struct {
 	Label             string `json:"label"`
 	MemberID          string `json:"member_id"`
 	ComposioAccountID string `json:"composio_account_id"`
+	// Broker is composio or oryxa. apps' connection view always carries it;
+	// a missing value is only ever an older or partial answer.
+	Broker string `json:"broker"`
 }
 
 // Connection reads one of a member's connections to a third-party app,
@@ -81,9 +88,14 @@ func (client *Client) Connection(ctx context.Context, organizationID, connection
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		return domain.AppConnection{}, fmt.Errorf("decode apps response")
 	}
+	broker := decoded.Broker
+	if broker == "" {
+		broker = composioBroker
+	}
 	return domain.AppConnection{
 		ID: decoded.ID, Toolkit: decoded.Toolkit, Status: decoded.Status,
 		MemberID: decoded.MemberID, ComposioAccountID: decoded.ComposioAccountID, Label: decoded.Label,
+		Broker: broker,
 	}, nil
 }
 

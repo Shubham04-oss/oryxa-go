@@ -48,7 +48,7 @@ func (s *Service) ReceiveWebhook(ctx context.Context, header http.Header, body [
 			return s.drop(ctx, delivery, "trigger not active")
 		}
 		connection, err := s.store.ConnectionByAccount(ctx, message.ConnectedAccountID)
-		if err != nil || connection.ID != trigger.ConnectionID {
+		if err != nil || connection.ID != trigger.ConnectionID || connection.Oryxa() {
 			return s.drop(ctx, delivery, "account does not match the trigger")
 		}
 		received := appsv1.TriggerReceived{
@@ -90,6 +90,11 @@ func (s *Service) ReceiveWebhook(ctx context.Context, header http.Header, body [
 		}
 		if err != nil {
 			return err
+		}
+		if connection.Oryxa() {
+			// Composio holds no account of an Oryxa connection's, so it
+			// cannot say one expired.
+			return s.drop(ctx, delivery, "not a Composio connection")
 		}
 		event, err := s.event(appsv1.ConnectionExpiredDetailType, appsv1.ConnectionExpired{
 			ConnectionID: connection.ID, OrganizationID: connection.OrganizationID, MemberID: connection.MemberID,

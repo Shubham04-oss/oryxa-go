@@ -43,3 +43,27 @@ locals {
     { service = "rag", key_id = aws_kms_alias.service["rag"].name, purposes = ["documents"] },
   ])
 }
+
+# Oryxa's own sign-in (docs/design/integrations-plan.md, work package 1F):
+# apps/internal/signin seals every OAuth credential, key, password and
+# webhook secret it holds under this key, each bound to its own encryption
+# context (internal/secrets.Envelope), service "oryxa-apps". It ships
+# switched off (APPS_ORYXA_TOOLKITS empty in compute.tf) until a toolkit is
+# added at the plan's gate G4, but once real members' credentials are sealed
+# under it, losing the key loses them beyond recovery — unlike the keys
+# above, its deletion window is 30 days, the longest AWS allows, and an
+# ordinary apply cannot destroy it.
+resource "aws_kms_key" "apps_signin" {
+  description             = "${local.name} apps: Oryxa's own sign-in, envelope encryption of credentials and webhook secrets"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_kms_alias" "apps_signin" {
+  name          = "alias/${local.name}-apps-signin"
+  target_key_id = aws_kms_key.apps_signin.key_id
+}

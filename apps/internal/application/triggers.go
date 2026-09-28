@@ -80,6 +80,11 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 	default:
 		return domain.Trigger{}, fmt.Errorf("the connection is %s: %w", connection.Status, domain.ErrNotConnected)
 	}
+	if connection.Oryxa() {
+		// A Composio trigger watches a Composio account; an Oryxa
+		// connection's triggers come from its own integration.
+		return domain.Trigger{}, errOryxaNotYet(connection.Toolkit)
+	}
 
 	// The connection's own app decides which events it can deliver, so a
 	// trigger belonging to another app is not found rather than refused:

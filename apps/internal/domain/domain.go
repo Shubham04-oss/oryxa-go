@@ -34,9 +34,41 @@ var (
 	// does not mark as read-only.
 	ErrNotReadOnly = errors.New("the tool is not read-only")
 	// ErrNotConnectable means the app cannot be connected with what this
-	// project holds, such as an OAuth app Composio has no app of its own for.
+	// project holds, such as an OAuth app Composio has no app of its own for,
+	// or a toolkit Oryxa's own sign-in is not switched on for.
 	ErrNotConnectable = errors.New("the app cannot be connected here")
+	// ErrInvalidCredentials means a key, a password or a field a member or an
+	// admin typed broke its rule, or the app refused it when it was tried.
+	// InvalidCredentials names the field; nothing ever quotes its value.
+	ErrInvalidCredentials = errors.New("invalid credentials")
 )
+
+// InvalidCredentials is ErrInvalidCredentials about what a member or an admin
+// typed. Field names the field to blame, when one is, and Rule says what it
+// must be. Neither ever quotes a value, so it is safe to log and to answer.
+type InvalidCredentials struct {
+	Field string
+	Rule  string
+}
+
+func (e *InvalidCredentials) Error() string {
+	switch {
+	case e.Field != "" && e.Rule != "":
+		return e.Field + " " + e.Rule
+	case e.Field != "":
+		return e.Field + " was refused"
+	case e.Rule == "":
+		return "the app refused the credential"
+	case strings.HasPrefix(e.Rule, "the "):
+		return e.Rule
+	default:
+		return "the credential " + e.Rule
+	}
+}
+
+// Unwrap answers both kinds it is: ErrInvalidCredentials, and ErrInvalid for
+// a caller that only knows that one.
+func (e *InvalidCredentials) Unwrap() []error { return []error{ErrInvalidCredentials, ErrInvalid} }
 
 // OrgRole is the caller's role in an organization, as auth answers it.
 type OrgRole string
@@ -59,6 +91,28 @@ type OrgMembership struct {
 	Agent bool
 }
 
+// Brokers: who holds a connection's credential.
+const (
+	// BrokerComposio is Composio's hosted flow: Composio holds the credential
+	// and runs the calls. It is every connection made before Oryxa's own
+	// sign-in, and the default.
+	BrokerComposio = "composio"
+	// BrokerOryxa is Oryxa's own sign-in: apps keeps the credential, sealed,
+	// and a toolkit takes this route only once APPS_ORYXA_TOOLKITS names it.
+	BrokerOryxa = "oryxa"
+)
+
+// CheckBroker normalizes and checks a broker; empty is Composio.
+func CheckBroker(broker string) (string, error) {
+	switch broker = strings.ToLower(strings.TrimSpace(broker)); broker {
+	case "", BrokerComposio:
+		return BrokerComposio, nil
+	case BrokerOryxa:
+		return BrokerOryxa, nil
+	}
+	return "", errors.Join(ErrInvalid, errors.New("a broker is composio or oryxa"))
+}
+
 // ConnectionStatus is where a connection is in its life.
 type ConnectionStatus string
 
@@ -74,12 +128,20 @@ const (
 )
 
 // Connection is one member's connection to one app in one organization.
-// Composio holds the credential; this holds whose it is.
+// Composio holds the credential, or for an Oryxa connection apps keeps it
+// sealed beside this; this holds whose it is.
 type Connection struct {
 	ID             string
 	OrganizationID string
 	MemberID       string
 	Toolkit        string
+	// Broker is who holds the credential: BrokerComposio or BrokerOryxa. An
+	// empty Broker is Composio's.
+	Broker string
+	// CredentialKind is the kind of credential an Oryxa connection holds
+	// (oauth2_code, api_token, basic, oauth2_client_credentials), once it
+	// holds one; empty otherwise.
+	CredentialKind string
 	AuthConfigID   string
 	// ComposioUserID is the user Composio files the account under, one per
 	// member per organization, so a member's connections in one organization
@@ -110,6 +172,10 @@ type Connection struct {
 	ConnectedAt           *time.Time
 	RemovedAt             *time.Time
 }
+
+// Oryxa says the connection was made through Oryxa's own sign-in, so none of
+// Composio's paths may act through it.
+func (connection Connection) Oryxa() bool { return connection.Broker == BrokerOryxa }
 
 // ConnectionQuery narrows a listing. An org admin may list the organization's
 // connections; anyone else lists their own.
