@@ -45,6 +45,10 @@ type Engine struct {
 
 	mu    sync.Mutex
 	cache map[string]cacheEntry
+	// generations counts each organization's invalidations. A load that ran
+	// while one happened must not cache what it read, since that may predate
+	// the change the invalidation announced.
+	generations map[string]uint64
 }
 
 // cacheEntry is one organization's compiled stored policies, as of loadedAt.
@@ -99,6 +103,7 @@ func New(store PolicyStore, options ...Option) (*Engine, error) {
 		cacheTTL:    defaultCacheTTL,
 		now:         time.Now,
 		cache:       map[string]cacheEntry{},
+		generations: map[string]uint64{},
 	}
 	for _, option := range options {
 		option(engine)
@@ -173,6 +178,7 @@ func (engine *Engine) Invalidate(organizationID string) {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
 	delete(engine.cache, organizationID)
+	engine.generations[organizationID]++
 }
 
 // statementsFor is an organization's compiled stored policies, from cache
@@ -184,10 +190,14 @@ func (engine *Engine) statementsFor(ctx context.Context, organizationID string) 
 		return nil, nil
 	}
 	engine.mu.Lock()
-	defer engine.mu.Unlock()
-	if entry, ok := engine.cache[organizationID]; ok && engine.now().Sub(entry.loadedAt) < engine.cacheTTL {
+	entry, cached := engine.cache[organizationID]
+	generation := engine.generations[organizationID]
+	engine.mu.Unlock()
+	if cached && engine.now().Sub(entry.loadedAt) < engine.cacheTTL {
 		return entry.statements, nil
 	}
+	// Read outside the lock, so one organization's slow read never holds up
+	// another's decisions. Two misses at once may both read, harmlessly.
 	policies, err := engine.store.OrganizationPolicies(ctx, organizationID)
 	if err != nil {
 		return nil, fmt.Errorf("authz: load organization policies: %w", err)
@@ -196,7 +206,11 @@ func (engine *Engine) statementsFor(ctx context.Context, organizationID string) 
 	if err != nil {
 		return nil, err
 	}
-	engine.cache[organizationID] = cacheEntry{loadedAt: engine.now(), statements: statements}
+	engine.mu.Lock()
+	if engine.generations[organizationID] == generation {
+		engine.cache[organizationID] = cacheEntry{loadedAt: engine.now(), statements: statements}
+	}
+	engine.mu.Unlock()
 	return statements, nil
 }
 

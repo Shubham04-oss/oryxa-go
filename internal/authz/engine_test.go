@@ -626,3 +626,69 @@ func TestParseBaselineRejectsADuplicateID(t *testing.T) {
 		t.Fatal("parseBaselineFromText() error = nil, want a duplicate @id to be refused")
 	}
 }
+
+// blockingStore holds its first read until released, so a test can
+// invalidate while a load is in flight.
+type blockingStore struct {
+	mu       sync.Mutex
+	policies []Policy
+	started  chan struct{}
+	release  chan struct{}
+	blocked  bool
+}
+
+func (store *blockingStore) OrganizationPolicies(_ context.Context, _ string) ([]Policy, error) {
+	store.mu.Lock()
+	policies := append([]Policy(nil), store.policies...)
+	block := !store.blocked
+	store.blocked = true
+	store.mu.Unlock()
+	if block {
+		close(store.started)
+		<-store.release
+	}
+	return policies, nil
+}
+
+func TestEngineDoesNotCacheALoadThatAnInvalidationOvertook(t *testing.T) {
+	store := &blockingStore{started: make(chan struct{}), release: make(chan struct{})}
+	engine, err := New(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb := KnowledgeBase{ID: "kb-1", OrganizationID: "org-1", Scope: "organization"}
+	request := Request{OrganizationID: "org-1", Principal: Principal{UserID: "u-1"}, Action: Read, Resource: kb}
+
+	done := make(chan Decision)
+	go func() {
+		decision, err := engine.Authorize(context.Background(), request)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- decision
+	}()
+	<-store.started
+	// An admin adds a policy while the first load is still reading the
+	// store's old contents, and the engine is told.
+	store.mu.Lock()
+	store.policies = []Policy{{
+		ID: "pol-1", OrganizationID: "org-1", Scope: Scope{Type: "knowledge_base", ID: "kb-1"},
+		Text: `forbid (principal, action, resource is Oryxa::KnowledgeBase);`,
+	}}
+	store.mu.Unlock()
+	engine.Invalidate("org-1")
+	close(store.release)
+	if first := <-done; !first.Allowed {
+		t.Fatal("the load that began before the policy existed should still allow")
+	}
+
+	// The overtaken load must not have been cached: the next decision reads
+	// the store again and sees the new forbid.
+	second, err := engine.Authorize(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Allowed {
+		t.Fatal("a stale load was cached over the invalidation; the new forbid was missed")
+	}
+}
