@@ -259,6 +259,40 @@ describe("WorkspaceTools", () => {
     expect(screen.queryByRole("heading", { name: "Gmail" })).toBeNull()
   })
 
+  it("filters the apps on screen for a query too short for Composio's search, and searches the catalog from three characters", async () => {
+    const state = { connections: [connection()] }
+    const { requests } = fakeFetch(
+      catalog(),
+      connections(state),
+      quietDetails()
+    )
+    render(<WorkspaceTools organizationId="org-1" />)
+    expect(await screen.findByRole("heading", { name: "Zoom" })).toBeTruthy()
+    const searchbox = screen.getByRole("searchbox", { name: "Search tools" })
+    const searched = (term: string) =>
+      requests.some(
+        (request) =>
+          request.path === "/v1/apps/catalog" &&
+          request.params.get("search") === term
+      )
+
+    fireEvent.change(searchbox, { target: { value: "zo" } })
+    expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy()
+    expect(screen.queryByRole("heading", { name: "Gmail" })).toBeNull()
+    fireEvent.change(searchbox, { target: { value: "qx" } })
+    expect(screen.getByText("Keep typing to search every app.")).toBeTruthy()
+    // Past the debounce, a short query has still asked Composio nothing.
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(searched("zo") || searched("qx")).toBe(false)
+    expect(screen.queryByText(/Search could not be loaded/)).toBeNull()
+
+    fireEvent.change(searchbox, { target: { value: "slack" } })
+    expect(
+      await screen.findByRole("heading", { name: "Messaging" })
+    ).toBeTruthy()
+    expect(searched("slack")).toBe(true)
+  })
+
   it("stays live and says so when apps answers but the catalog is down", async () => {
     const state = { connections: [connection()] }
     fakeFetch(
