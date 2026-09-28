@@ -72,6 +72,11 @@ func (s *Service) ConnectionTargets(ctx context.Context, credentials authclient.
 	default:
 		return nil, fmt.Errorf("the connection is %s: %w", connection.Status, domain.ErrNotConnected)
 	}
+	if connection.Oryxa() {
+		// Read through Composio's proxy, which holds no Oryxa credential;
+		// an Oryxa connection's targets come from its integration's reader.
+		return nil, errOryxaNotYet(connection.Toolkit)
+	}
 	return s.targetsOf(ctx, connection)
 }
 
