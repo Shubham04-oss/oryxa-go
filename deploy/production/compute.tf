@@ -97,6 +97,19 @@ locals {
       APPS_PUBLIC_BASE_URL = local.api_url
       BILLING_URL          = "${local.app_url}/settings/billing"
 
+      # Oryxa's own sign-in (docs/design/integrations-plan.md, phase 1):
+      # apps' vault key, and the one OAuth callback registered with every
+      # app. The callback has to be on the host a member's browser sends the
+      # connect request to, because that is where the state cookie is set
+      # (apps/README.md, "Oryxa's own sign-in") — the web app's own origin,
+      # not the API host Composio's callback uses. APPS_ORYXA_TOOLKITS is
+      # named explicitly, empty, rather than left out: ECS's own filter below
+      # drops a blank value the same as leaving it unset, but switching a
+      # toolkit on later (gate G4) is then a one-line change here.
+      APPS_SIGNIN_KMS_KEY_ID   = aws_kms_alias.apps_signin.name
+      APPS_SIGNIN_REDIRECT_URI = "${local.app_url}/v1/apps/oauth/callback"
+      APPS_ORYXA_TOOLKITS      = ""
+
       FILES_BUCKET_NAME = local.files_bucket
 
       KNOWLEDGE_SERVICE_KEY_ID  = aws_kms_alias.service["knowledge"].name
@@ -327,6 +340,21 @@ resource "aws_iam_role_policy" "task" {
         Effect   = "Allow"
         Action   = ["kms:GenerateDataKey", "kms:Decrypt", "kms:DescribeKey"]
         Resource = aws_kms_key.auth.arn
+      },
+      {
+        # Oryxa's own sign-in. One task role can use this key for every
+        # service in the binary (deploy/README.md's "one task role" risk),
+        # but the encryption context confines what it seals to apps' own
+        # rows: a ciphertext bound to another service, resource type or id
+        # fails to open even under this same grant (internal/secrets.Envelope,
+        # apps/internal/signin.SealService).
+        Sid      = "SealAppsSignin"
+        Effect   = "Allow"
+        Action   = ["kms:GenerateDataKey", "kms:Decrypt"]
+        Resource = aws_kms_key.apps_signin.arn
+        Condition = {
+          StringEquals = { "kms:EncryptionContext:service" = "oryxa-apps" }
+        }
       },
       {
         Sid      = "Cognito"

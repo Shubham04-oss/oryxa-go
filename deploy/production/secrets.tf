@@ -15,15 +15,43 @@ locals {
       # can be filled before realtime is on, and an apply with the switch off
       # never deletes what was stored.
       REALTIME_PURGE_SECRET = "realtime-purge-secret"
+      # Oryxa's own sign-in (docs/design/integrations-plan.md, work package
+      # 1F): Oryxa's own OAuth apps (github, slack, notion, ...) and the
+      # deployment's webhook secrets, by toolkit. Both containers exist
+      # whatever apps_signin_secrets_ready says, so put-secrets.sh can fill
+      # them in before the task ever names them; see task_secrets below and
+      # deploy/README.md, "Oryxa's own sign-in".
+      APPS_DEFAULT_OAUTH_CLIENTS = "apps-default-oauth-clients"
+      APPS_HOOK_SECRETS          = "apps-hook-secrets"
     },
     # Only when Jev judges: the tasks cannot start while a secret they name
     # holds no value, so it exists only once there is one to put in it.
     var.knowledge_judge == "jev" ? { TYPESAFE_API_KEY = "typesafe-api-key" } : {},
   )
 
-  # The secrets the task names. Realtime's only once realtime_purge is on, for
-  # the same reason: the container is there sooner, and may still be empty.
-  task_secrets = { for variable, slug in local.external_secrets : variable => slug if variable != "REALTIME_PURGE_SECRET" || var.realtime_purge }
+  # Variables the task definition references only once their gate is true.
+  # An ECS task whose definition names a secret with no value fails to
+  # start, so each container above exists as soon as external_secrets does,
+  # but the task itself waits for an operator to say the value is there.
+  # Anything left out of this map is ungated: named as soon as its container
+  # exists.
+  secret_gates = {
+    REALTIME_PURGE_SECRET      = var.realtime_purge
+    APPS_DEFAULT_OAUTH_CLIENTS = var.apps_signin_secrets_ready
+    APPS_HOOK_SECRETS          = var.apps_signin_secrets_ready
+  }
+
+  task_secrets = { for variable, slug in local.external_secrets : variable => slug if lookup(local.secret_gates, variable, true) }
+}
+
+# Declared here, beside the secrets it gates, rather than in variables.tf.
+# Put APPS_DEFAULT_OAUTH_CLIENTS and APPS_HOOK_SECRETS in Secrets Manager
+# first (deploy/scripts/put-secrets.sh), then turn this on and apply; see
+# deploy/README.md, "Oryxa's own sign-in".
+variable "apps_signin_secrets_ready" {
+  description = "Whether APPS_DEFAULT_OAUTH_CLIENTS and APPS_HOOK_SECRETS hold real values yet. False keeps them out of the task definition, since ECS refuses to start a task whose definition names a secret with no value."
+  type        = bool
+  default     = false
 }
 
 resource "aws_secretsmanager_secret" "external" {

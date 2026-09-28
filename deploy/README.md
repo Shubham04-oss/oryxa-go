@@ -440,6 +440,47 @@ What to expect afterwards:
   artifacts), each billed by Bedrock by the characters it reads, with a
   minimum per call.
 
+### Oryxa's own sign-in
+
+Work package 1F (`docs/design/integrations-plan.md`) gives `apps` a KMS vault
+and the settings its own sign-in needs (`apps/README.md`, "Oryxa's own
+sign-in"), which still ships switched off. Apply it targeted, so it picks up
+nothing else pending in this configuration, in this order:
+
+```sh
+(cd deploy/production && tofu apply \
+  -target=aws_kms_key.apps_signin -target=aws_kms_alias.apps_signin \
+  -target=aws_iam_role_policy.task -target=aws_secretsmanager_secret.external \
+  -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
+deploy/scripts/put-secrets.sh   # APPS_DEFAULT_OAUTH_CLIENTS, APPS_HOOK_SECRETS
+echo '{"apps_signin_secrets_ready": true}' | jq . > deploy/production/apps_signin.auto.tfvars.json
+(cd deploy/production && tofu apply \
+  -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
+```
+
+The first apply creates `alias/oryxa-production-apps-signin` (a 30-day
+deletion window and `prevent_destroy`, since losing it loses every sealed
+credential for good), lets the task role `kms:GenerateDataKey` and
+`kms:Decrypt` on that key alone, conditioned on
+`kms:EncryptionContext:service = oryxa-apps`, gives the task
+`APPS_SIGNIN_KMS_KEY_ID` and `APPS_SIGNIN_REDIRECT_URI`
+(`https://app.oryxa.in/v1/apps/oauth/callback`), and makes empty containers
+for the two secrets below — but `APPS_ORYXA_TOOLKITS` stays `""`, so `apps`
+still refuses every Oryxa connection and Composio keeps serving everything.
+An ECS task whose definition names a secret with no value fails to start, so
+the task definition does not reference `APPS_DEFAULT_OAUTH_CLIENTS` or
+`APPS_HOOK_SECRETS` until `apps_signin_secrets_ready` says `put-secrets.sh`
+has filled them in; commit `apps_signin.auto.tfvars.json` once it is `true`,
+so every other checkout's apply keeps naming them.
+
+**Switching a toolkit on** is the plan's gate G4: change
+`APPS_ORYXA_TOOLKITS = ""` in `compute.tf` to a comma list naming it
+(`"github"`, `"github,slack"`, ...) and apply. First, register
+`https://app.oryxa.in/v1/apps/oauth/callback` — exactly, including scheme and
+path — as the redirect URI on that toolkit's own OAuth app at GitHub, Slack
+or Notion; a mismatched URI sends the member's browser somewhere the
+provider refuses or apps does not recognize.
+
 ## Looking at it
 
 - **Dashboard** `oryxa-production` in CloudWatch: the tunnel, API latency by
