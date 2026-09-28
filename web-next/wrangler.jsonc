@@ -8,11 +8,11 @@
   // purge with and the conversations sign their events for Go with (a
   // Worker secret once deployed: `wrangler secret put`).
   //
-  // There is deliberately no production environment yet: deploying web-next
-  // is deferred until it replaces ../web. When it does, add an `env.production`
-  // block as ../web/wrangler.jsonc has one (its own name, `workers_dev` and
-  // `preview_urls` off, ORYXA_API_ORIGIN, and the Durable Object bindings and
-  // migrations repeated, since wrangler does not inherit them into an env).
+  // `env.production` is the Worker app.oryxa.in routes to, which
+  // .github/workflows/deploy.yml builds with CLOUDFLARE_ENV=production and
+  // deploys. wrangler does not inherit Durable Object bindings or migrations
+  // into an env, so it repeats them; src/wrangler-config.test.ts keeps the
+  // two the same.
   "name": "oryxa-web-next",
   "compatibility_date": "2026-09-15",
   "compatibility_flags": ["nodejs_compat"],
@@ -68,5 +68,71 @@
   "observability": {
     "enabled": true
   },
-  "upload_source_maps": true
+  "upload_source_maps": true,
+  "env": {
+    "production": {
+      // deploy/production/web.auto.tfvars.json routes app.oryxa.in/* here.
+      "name": "oryxa-production-web-next",
+      "workers_dev": false,
+      "preview_urls": false,
+      "vars": {
+        // app.oryxa.in/v1/* goes through the API tunnel to the tasks, as
+        // the browser's calls do. REALTIME_PURGE_SECRET is a Worker secret.
+        "ORYXA_API_ORIGIN": "https://app.oryxa.in"
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "ThreadChatAgent", "class_name": "ThreadChatAgent" },
+          {
+            "name": "SpecialistChatAgent",
+            "class_name": "SpecialistChatAgent"
+          },
+          {
+            "name": "TeamspaceRoomAgent",
+            "class_name": "TeamspaceRoomAgent"
+          },
+          {
+            "name": "DirectMessageAgent",
+            "class_name": "DirectMessageAgent"
+          },
+          {
+            "name": "SideConversationAgent",
+            "class_name": "SideConversationAgent"
+          },
+          { "name": "InboxAgent", "class_name": "InboxAgent" },
+          {
+            "name": "RealtimeRegistryAgent",
+            "class_name": "RealtimeRegistryAgent"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "thread-chat-v1",
+          "new_sqlite_classes": ["ThreadChatAgent"]
+        },
+        {
+          "tag": "specialist-chat-v1",
+          "new_sqlite_classes": ["SpecialistChatAgent"]
+        },
+        {
+          "tag": "teamspace-room-v1",
+          "new_sqlite_classes": ["TeamspaceRoomAgent"]
+        },
+        {
+          "tag": "direct-message-v1",
+          "new_sqlite_classes": ["DirectMessageAgent"]
+        },
+        { "tag": "inbox-v1", "new_sqlite_classes": ["InboxAgent"] },
+        {
+          "tag": "realtime-registry-v1",
+          "new_sqlite_classes": ["RealtimeRegistryAgent"]
+        },
+        {
+          "tag": "side-conversation-v1",
+          "new_sqlite_classes": ["SideConversationAgent"]
+        }
+      ]
+    }
+  }
 }

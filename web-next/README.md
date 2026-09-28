@@ -92,10 +92,12 @@ without which the Worker refuses every purge; deployed, it is a Worker
 secret (`wrangler secret put REALTIME_PURGE_SECRET`) holding the value Go
 signs with.
 
-Deploying web-next is deferred: `wrangler.jsonc` holds only the development
-Worker, `oryxa-web-next`, with no production environment. `pnpm build`
-followed by `pnpm exec wrangler deploy --dry-run` checks the bundle without
-deploying it.
+web-next serves `app.oryxa.in` as the Worker `oryxa-production-web-next`,
+`env.production` in `wrangler.jsonc`; `oryxa-web-next` is the development
+Worker. Every release from main deploys it (`.github/workflows/deploy.yml`,
+see `deploy/README.md`), built with `CLOUDFLARE_ENV=production pnpm build`.
+`pnpm build` followed by `pnpm exec wrangler deploy --dry-run` checks the
+bundle without deploying it.
 
 ## Included
 
