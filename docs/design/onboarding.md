@@ -11,9 +11,10 @@ it is**: tools and app connections keep going through the apps service and
 Composio as today, and Oryxa's own sign-in (integrations phase 1) stays
 switched off. The org chart exists, in a shape the owner defines.*
 
-*Anything marked **(verify)** is believed but not yet checked against the
-provider's current documentation. Every setting's status is marked **Today**
-(exists), **New** (to build) or **Later** (planned, not in v1).*
+*Provider facts were checked against the providers' documentation on
+2026-09-28, with sources at the end ([S1] and so on). Anything still marked
+**(verify)** must be settled by a live run. Every setting's status is marked
+**Today** (exists), **New** (to build) or **Later** (planned, not in v1).*
 
 ---
 
@@ -56,6 +57,17 @@ later change, from renaming an agent to restructuring teams.
 7. **People only where providers insist.** Approving the Slack install and
    granting directory consent need an admin's click. The CLI opens the exact
    page, waits, and verifies the result.
+8. **Sensitive changes are approved by a person in the browser.** An agent
+   can plan anything and apply ordinary changes, but it can't approve its own
+   sensitive plan. A person approves that exact plan in the browser. Sensitive
+   means:
+   - new admins;
+   - removals;
+   - more than 25 invitations;
+   - loosening consent or safety rules;
+   - search running as a service rather than as each member.
+
+   A misled agent can't weaken the workspace on its own.
 
 ## 3. Who runs it
 
@@ -103,9 +115,21 @@ Two clicks and one question for the admin.
 curl -fsSL https://get.oryxa.in/setup.sh | sh
 ```
 
-The script detects the OS and architecture, downloads the static binary for a
-pinned version, verifies its SHA-256 checksum and signature, and runs it from
-a temporary directory, with no `sudo`. Alternatives: `brew install
+What the script does:
+- **It detects the OS and architecture,** downloads the static binary for a
+  pinned version, and verifies its SHA-256 checksum.
+- **It runs from a temporary directory** (`mktemp -d`, removed on exit), with
+  no `sudo`.
+- **A cut-off download runs nothing.** The script's whole body is one function
+  called on its last line.
+
+Releases:
+- CI builds them reproducibly.
+- `SHA256SUMS` is signed with Sigstore keyless signing, with GitHub artifact
+  attestations [A1]. The script checks the signature when `cosign` is present,
+  or when `ORYXA_VERIFY=strict` is set.
+- The API refuses CLI versions below a minimum, so a fix can be forced.
+- Agents are told to download, read and verify the script before running it. Alternatives: `brew install
 oryxa/tap/oryxa`, or a direct download with its published checksum and
 signature. `ORYXA_VERSION=v1.4.2` pins a version with any of them.
 
@@ -160,6 +184,35 @@ is invalid, or input is missing under `--no-input` · `4` a provider refused ·
   `--yes`, and `--no-input` refuses it.
 - The CLI never deletes members' conversations, agent memories, knowledge
   content or audit history; those have their own controls in the web app.
+
+### Signing in and the setup session
+
+- **The loopback only carries Oryxa's pairing code.**
+  - The CLI listens on `127.0.0.1`, on a random port, for one request, and
+    opens `app.oryxa.in/setup/authorize` with PKCE (RFC 8252 [R1]).
+  - The admin signs in (or signs up and creates the organization) and
+    approves.
+  - Every provider consent (Slack, Google, Microsoft, Glean) returns to
+    `app.oryxa.in` over HTTPS. Slack refuses non-HTTPS redirects [S4]. So no
+    provider token ever reaches the laptop.
+- **`--device` shows a code instead,** for SSH and sandboxes (RFC 8628 [R2]).
+  Device flows can be phished, so a device session can plan but applies only
+  after a browser approval.
+- **The CLI holds one setup session, and nothing else:**
+  - opaque, and stored by Oryxa only as a hash;
+  - 60 minutes long, one organization, setup routes only;
+  - dead the moment the admin loses the role;
+  - never accepted as an agent.
+  - The CLI never holds a provider token, a client secret or an ordinary
+    Oryxa session. The session lives in memory, or the OS keychain with
+    `--keep`, and `logout` or the purge deletes it.
+- **Secrets are typed in the browser.** `oryxa secret set <name>` opens a
+  write-only page in the admin's browser. Only at a real terminal may
+  `--prompt` read the value, hidden, from `/dev/tty`. Under a coding agent
+  there is no terminal, so it is always the browser.
+- **Credential-shaped text is refused.** The file's validation refuses
+  anything that looks like a credential (`xox…-`, `ghp_`, JWTs, long random
+  strings) as `secret_in_manifest`.
 
 ## 6. The workspace file
 
@@ -488,34 +541,59 @@ Never:
 
 ## 9. Provider steps
 
-**Slack (v1).** One Oryxa app, distributed through the Slack Marketplace.
-`oryxa connect slack` opens "Add to Slack"; a workspace admin approves; the
-bot token goes to the vault, linked to the organization through the
-workspace's `team_id`. Scopes: `app_mentions:read`, `chat:write`,
-`im:write`, `users:read`, `users:read.email`, `channels:read`, `groups:read`;
-events: `app_mention`, `app_uninstalled`, `tokens_revoked`. Every workspace
-sends its events and clicks to one Oryxa endpoint. Until the Marketplace
-listing is live, installs go through Oryxa's install link as a labelled beta;
-the listing needs 10 active workspaces and a review of up to about 12 weeks.
+| Provider | What Oryxa's backend does | What a person still does |
+| --- | --- | --- |
+| **Slack** (v1; one Oryxa app, through the Marketplace) | Serves the "Add to Slack" link. Takes the OAuth v2 install on `app.oryxa.in`, stores the bot token in the vault, links the workspace (`team_id`) to the organization, and checks it with `auth.test`. With token rotation on, bot tokens last 12 hours [S5], and the vault's refresh lease handles them. Reads `users.list` to link identities by email, and resolves the high-priority channels | A workspace admin clicks Allow. If the workspace requires app approval, an admin approves the request first [S6] |
+| **Google Workspace** (v1.1) | Creates a service account per organization in Oryxa's GCP project. It has no key: it signs through `signJwt` and the task's existing Google federation (`deploy/production/gcp.tf`) [G5]. Imports users, org units, `relations` (manager) and `organizations` (department, title) [G6] | A super admin authorizes that service account's client ID and read-only directory scopes for domain-wide delegation. That is a console-only step [G3], and may need multi-party approval. The CLI opens a prefilled deep link. Google's own sample uses one, but Google's help pages don't document it [G4] |
+| **Microsoft 365** (v1.1) | Reads `/users/delta` with `User.Read.All`, through Oryxa's multi-tenant app [M3] | One admin-consent click by a Privileged Role Administrator, since `User.Read.All` is a Graph app role [M2] |
+| **Glean, or any MCP search** (v1.1) | Discovers the MCP server's authorization server (RFC 9728), registers through a Client ID Metadata Document or else dynamic registration, sends `resource` (RFC 8707) [MCP], and checks `tools/list` | Each member authorizes once. If the tenant restricts dynamic registration, a Glean admin allows Oryxa's client [GL1] |
+| **Composio** (as today) | Nothing per organization. Onboarding records which apps are offered, and nudges members | Members connect their apps in Tools, as now |
 
-**Google Workspace (v1.1).** The admin consents in the browser to read-only
-access to the directory (users, groups, and their departments and managers).
-Creating an OAuth client through an API is not generally available (verify),
-so v1.1 uses a guided step: the CLI opens the exact console page and the admin
-pastes the client ID and secret with `oryxa secret set`.
+**Slack, verified:**
+- One Oryxa app goes through the Marketplace, because Slack's terms treat a
+  templated per-customer app as commercial distribution [S7].
+  - Listing needs 10 active workspaces first, and review takes up to 10
+    business days for the first check, then up to 10 weeks.
+  - Until then, installs go through Oryxa's install link, as a labelled beta.
+- **Scopes:** `app_mentions:read`, `chat:write`, `im:write`, `users:read`,
+  `users:read.email`, `channels:read` and `groups:read`. No channel history.
+  New scopes mean a reinstall, which a plan lists as a person's step.
+- **Events:** `app_mention`, `app_uninstalled` and `tokens_revoked`. All
+  arrive at one Oryxa endpoint.
+- **Interactivity payloads (button clicks)** arrive form-encoded, not as JSON
+  (verify). apps' webhook ingress currently expects JSON with an `event_id`,
+  so it needs a small change before the consent buttons work.
 
-**Microsoft 365 (v1.1).** Registering the app and granting admin consent for
-reading the directory can be scripted with the admin's own `az` login.
-(verify)
+**Google, verified:**
+- **No API creates OAuth clients or consent screens today.** The IAP OAuth
+  Admin API shut down on 2026-03-19 [G1], and IAM's `oauthClients` serve only
+  Workforce Identity Federation [G2].
+- **So the directory is read through domain-wide delegation,** as above.
+- **The fallback, for security teams that refuse delegation,** is the
+  organization's own Internal OAuth client, which needs no Google verification
+  [G7].
+  - Its project and APIs can be scripted with the engineer's `gcloud`.
+  - The consent screen and client are made by hand in the console, with the
+    CLI's deep links. The admin enters the client ID and secret with
+    `oryxa secret set`.
 
-**Glean, or any MCP search (v1.1).** `oryxa connect glean` registers the MCP
-address; the admin signs in with OAuth in the browser or gives a token with
-`oryxa secret set`; the CLI runs one test search as the admin. Searches then
-run as the asking member where the search supports it.
+**Microsoft:**
+- An own-tenant app registration and its grants are fully scriptable through
+  Graph or `az` [M1], but v1 doesn't need one.
+- **Microsoft Teams (Later) has a constraint.** New multi-tenant bots can't be
+  created after 2025-07-31 [M4], and the single-tenant replacement is
+  supported only by the C#, JavaScript and Python SDKs, not Go.
 
-**Composio (as today).** Nothing to install per organization. Members connect
-their apps in Tools, as now; onboarding only sends the nudge and records which
-apps are offered.
+**Glean:**
+- Each member's own OAuth is the default, so searches run as the member.
+- A global token with `X-Glean-ActAs` [GL2] is possible only if chosen
+  explicitly. It needs a person's browser approval, and whether it works
+  through the MCP server is unverified. Its header carries the email Oryxa
+  verified for the asker, never one taken from a request.
+
+**Linking a directory is safe:** it's linked only if the directory's
+verified domains include the file's `domains`. Nobody can attach another
+company's tenant.
 
 ## 10. The API
 
@@ -536,8 +614,23 @@ admin's session; every change is audited and published as an event.
 | `POST …/providers/{google\|microsoft}/link` | Link the directory |
 | `POST …/search/verify` | Test the external search |
 
-The CLI signs in through a public OAuth client for native apps: PKCE with a
-loopback redirect on `127.0.0.1`.
+Pairing and plan approval:
+
+| Call | Purpose |
+| --- | --- |
+| `POST /v1/setup/flows`, `…/flows/{id}/approve` (browser), `POST /v1/setup/token`, `DELETE /v1/setup/session` | Pairing through the loopback with PKCE, or a device code; the token exchange; revocation |
+| `POST …/workspace/plans/{id}/approve` (browser) | A person approves a sensitive plan, by its exact hash |
+| `POST …/workspace/plans/{id}/apply` | Applies exactly that plan (`If-Match: <hash>`). Answers `409 stale_plan` if anything changed since it was planned |
+
+New internal routes let the workspace service apply changes through the
+services that own them:
+- auth: bulk invitations, idempotent by email;
+- teams: upserts of teams and members, and the org model;
+- apps: installations, the MCP search registration, the personal-connection
+  policy, and secrets.
+
+They are signed with `internal/serviceauth`. Before applying, the service
+asks auth whether the approving admin is still an admin.
 
 ## 11. Security
 
@@ -613,7 +706,29 @@ hints, rules, notifications, data retention).
 - **Later:** CI mode, Microsoft Teams, SSO, takeover and sign-off by N of M,
   data export.
 
-## 15. Decisions
+## 15. Risks
+
+- **Onboarding alone doesn't make approvals work.** It leaves the Slack app
+  installed and its deliveries verified. The consent loop that acts on them
+  is built separately: [slack-consent-loop.md](slack-consent-loop.md), slice 1.
+- **Security teams may refuse Google's domain-wide delegation.** The fallback
+  is the organization's own Internal client. Also, a sync stops if the admin it
+  reads the directory as leaves.
+- **A misled agent** could propose weakening rules. Sensitive plans need a
+  person in the browser.
+- **Names in git.** A file can list people. Prefer directory selectors to
+  lists of names in files that get committed.
+- **Member limits** can stop invitations part way. The apply reports it and
+  resumes later.
+- **Two writers.** The web app and the file both change settings. `plan` shows
+  the drift, and `pull` always reflects the live state.
+- **Unverified:**
+  - Slack's form-encoded interactivity, and how Slack verifies request URLs set
+    through the API.
+  - Glean's `ActAs` through MCP.
+  - The service-account quota per GCP project.
+
+## 16. Decisions
 
 | Decision | Recommended default |
 | --- | --- |
@@ -621,6 +736,38 @@ hints, rules, notifications, data retention).
 | The default preset | `team` |
 | How members are added from lists | Quiet, with a welcome in Slack from the organization agent; email only for directory imports that aren't in Slack |
 | Where the workspace service lives | `internal/workspace`, in the one binary |
-| Google directory route (v1.1) | The guided client step, keeping the customer in control, over domain-wide delegation |
+| Google directory route (v1.1) | Domain-wide delegation to a keyless, per-organization service account (one console step), with the organization's own Internal client as the fallback |
+| May the CLI apply without a browser click? | Yes for ordinary changes, within its 60-minute session; sensitive plans are approved in the browser |
+| The CLI's source | Public, so admins and their agents can read what runs |
+| An onboarding MCP server | No. A CLI with JSON output works in every coding agent, and is one surface to secure |
 | The org chart | Yours to define: the API carries relationships and one question |
 | Agent naming at onboarding | Members choose, with a generated suggestion ready |
+
+## Sources
+
+- **Slack:**
+  - [S1] https://docs.slack.dev/reference/methods/apps.manifest.create
+  - [S4] https://docs.slack.dev/authentication/installing-with-oauth
+  - [S5] https://docs.slack.dev/authentication/using-token-rotation
+  - [S6] https://slack.com/help/articles/222386767-Manage-app-approval-for-your-workspace
+  - [S7] https://docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps
+- **Google:**
+  - [G1] https://docs.cloud.google.com/iap/docs/deprecations
+  - [G2] https://docs.cloud.google.com/iam/docs/workforce-manage-oauth-app
+  - [G3] https://knowledge.workspace.google.com/admin/apps/control-api-access-with-domain-wide-delegation
+  - [G4] https://github.com/google/drive-file-search-fix
+  - [G5] https://docs.cloud.google.com/iam/docs/best-practices-for-managing-service-account-keys
+  - [G6] https://developers.google.com/workspace/admin/directory/reference/rest/v1/users
+  - [G7] https://support.google.com/cloud/answer/13464323
+- **Microsoft:**
+  - [M1] https://learn.microsoft.com/en-us/graph/permissions-grant-via-msgraph
+  - [M2] https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent
+  - [M3] https://learn.microsoft.com/en-us/graph/api/user-delta
+  - [M4] https://learn.microsoft.com/en-us/azure/bot-service/bot-service-quickstart-registration
+- **Standards and others:**
+  - [R1] https://www.rfc-editor.org/rfc/rfc8252
+  - [R2] https://www.rfc-editor.org/rfc/rfc8628
+  - [MCP] https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization
+  - [GL1] https://docs.glean.com/administration/platform/mcp/about
+  - [GL2] https://developers.glean.com/api-info/client/authentication/overview
+  - [A1] https://docs.github.com/en/actions/concepts/security/artifact-attestations
