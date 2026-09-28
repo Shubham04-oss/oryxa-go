@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -20,9 +22,9 @@ func (store *Store) CreateOrganization(ctx context.Context, organization domain.
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO auth_organizations (id, name, slug, created_by, created_at, updated_at)
-		VALUES ($1, $2, lower($3), $4, $5, $5)`,
-		organization.ID, organization.Name, organization.Slug, organization.CreatedBy, organization.CreatedAt)
+		INSERT INTO auth_organizations (id, name, slug, domains, timezone, guests_allowed, created_by, created_at, updated_at)
+		VALUES ($1, $2, lower($3), $4, $5, $6, $7, $8, $8)`,
+		organization.ID, organization.Name, organization.Slug, organization.Domains, organization.Timezone, organization.GuestsAllowed, organization.CreatedBy, organization.CreatedAt)
 	if err != nil {
 		return mapWriteError("insert organization", err)
 	}
@@ -43,7 +45,7 @@ func (store *Store) CreateOrganization(ctx context.Context, organization domain.
 
 func (store *Store) OrganizationsForUser(ctx context.Context, userID string) ([]domain.Organization, error) {
 	rows, err := store.pool.Query(ctx, `
-		SELECT o.id, o.name, o.slug, o.created_by, o.created_at, o.updated_at
+		SELECT o.id, o.name, o.slug, o.domains, o.timezone, o.guests_allowed, o.created_by, o.created_at, o.updated_at
 		FROM auth_organizations o
 		JOIN auth_memberships m ON m.organization_id = o.id
 		WHERE m.user_id = $1
@@ -60,6 +62,9 @@ func (store *Store) OrganizationsForUser(ctx context.Context, userID string) ([]
 			&organization.ID,
 			&organization.Name,
 			&organization.Slug,
+			&organization.Domains,
+			&organization.Timezone,
+			&organization.GuestsAllowed,
 			&organization.CreatedBy,
 			&organization.CreatedAt,
 			&organization.UpdatedAt,
@@ -77,12 +82,15 @@ func (store *Store) OrganizationsForUser(ctx context.Context, userID string) ([]
 func (store *Store) OrganizationByID(ctx context.Context, organizationID string) (domain.Organization, error) {
 	var organization domain.Organization
 	err := store.pool.QueryRow(ctx, `
-		SELECT id, name, slug, created_by, created_at, updated_at
+		SELECT id, name, slug, domains, timezone, guests_allowed, created_by, created_at, updated_at
 		FROM auth_organizations WHERE id = $1`, organizationID).
 		Scan(
 			&organization.ID,
 			&organization.Name,
 			&organization.Slug,
+			&organization.Domains,
+			&organization.Timezone,
+			&organization.GuestsAllowed,
 			&organization.CreatedBy,
 			&organization.CreatedAt,
 			&organization.UpdatedAt,
@@ -105,8 +113,10 @@ func (store *Store) UpdateOrganization(ctx context.Context, organization domain.
 
 	result, err := tx.Exec(ctx, `
 		UPDATE auth_organizations
-		SET name = $2, slug = lower($3), updated_at = $4
-		WHERE id = $1`, organization.ID, organization.Name, organization.Slug, organization.UpdatedAt)
+		SET name = $2, slug = lower($3), domains = $4, timezone = $5,
+		    guests_allowed = $6, updated_at = $7
+		WHERE id = $1`, organization.ID, organization.Name, organization.Slug,
+		organization.Domains, organization.Timezone, organization.GuestsAllowed, organization.UpdatedAt)
 	if err != nil {
 		return mapWriteError("update organization", err)
 	}
@@ -255,12 +265,13 @@ func (store *Store) CreateInvitation(ctx context.Context, invitation domain.Invi
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO auth_invitations
-		    (id, organization_id, email, role, token_hash, invited_by, status, expires_at, created_at)
-		VALUES ($1, $2, lower($3), $4, $5, $6, $7, $8, $9)`,
+		    (id, organization_id, email, role, guest, token_hash, invited_by, status, expires_at, created_at)
+		VALUES ($1, $2, lower($3), $4, $5, $6, $7, $8, $9, $10)`,
 		invitation.ID,
 		invitation.OrganizationID,
 		invitation.Email,
 		invitation.Role,
+		invitation.Guest,
 		invitation.TokenHash,
 		invitation.InvitedBy,
 		invitation.Status,
@@ -287,7 +298,7 @@ func (store *Store) Invitations(ctx context.Context, organizationID string) ([]d
 		return nil, fmt.Errorf("expire invitations: %w", err)
 	}
 	rows, err := store.pool.Query(ctx, `
-		SELECT id, organization_id, email, role, invited_by, status, expires_at, created_at, accepted_at
+		SELECT id, organization_id, email, role, guest, invited_by, status, expires_at, created_at, accepted_at
 		FROM auth_invitations
 		WHERE organization_id = $1
 		ORDER BY created_at DESC, id`, organizationID)
@@ -312,7 +323,7 @@ func (store *Store) Invitations(ctx context.Context, organizationID string) ([]d
 
 func (store *Store) InvitationByTokenHash(ctx context.Context, tokenHash string) (domain.Invitation, error) {
 	invitation, err := scanInvitation(store.pool.QueryRow(ctx, `
-		SELECT id, organization_id, email, role, invited_by, status, expires_at, created_at, accepted_at
+		SELECT id, organization_id, email, role, guest, invited_by, status, expires_at, created_at, accepted_at
 		FROM auth_invitations WHERE token_hash = $1`, tokenHash))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Invitation{}, domain.ErrNotFound
@@ -325,7 +336,7 @@ func (store *Store) InvitationByTokenHash(ctx context.Context, tokenHash string)
 
 func (store *Store) InvitationByID(ctx context.Context, organizationID, invitationID string) (domain.Invitation, error) {
 	invitation, err := scanInvitation(store.pool.QueryRow(ctx, `
-		SELECT id, organization_id, email, role, invited_by, status, expires_at, created_at, accepted_at
+		SELECT id, organization_id, email, role, guest, invited_by, status, expires_at, created_at, accepted_at
 		FROM auth_invitations WHERE organization_id = $1 AND id = $2`, organizationID, invitationID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Invitation{}, domain.ErrNotFound
@@ -423,13 +434,14 @@ func (store *Store) AcceptInvitation(ctx context.Context, invitationID string, u
 
 	var email string
 	var role domain.Role
+	var guest bool
 	var status domain.InvitationStatus
 	var expiresAt time.Time
 	err = tx.QueryRow(ctx, `
-		SELECT email, role, status, expires_at
+		SELECT email, role, guest, status, expires_at
 		FROM auth_invitations
 		WHERE id = $1
-		FOR UPDATE`, invitationID).Scan(&email, &role, &status, &expiresAt)
+		FOR UPDATE`, invitationID).Scan(&email, &role, &guest, &status, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrNotFound
 	}
@@ -438,6 +450,15 @@ func (store *Store) AcceptInvitation(ctx context.Context, invitationID string, u
 	}
 	if status != domain.InvitationPending {
 		return domain.ErrConflict
+	}
+	var domains []string
+	var guestsAllowed bool
+	if err := tx.QueryRow(ctx, `SELECT domains, guests_allowed FROM auth_organizations WHERE id = $1`, organizationID).Scan(&domains, &guestsAllowed); err != nil {
+		return fmt.Errorf("check organization domains: %w", err)
+	}
+	_, emailDomain, hasDomain := strings.Cut(strings.ToLower(email), "@")
+	if len(domains) > 0 && (!hasDomain || (!slices.Contains(domains, emailDomain) && !(guest && guestsAllowed))) {
+		return domain.ErrForbidden
 	}
 	if !expiresAt.After(membership.JoinedAt) {
 		if _, err := tx.Exec(ctx, `UPDATE auth_invitations SET status = 'expired' WHERE id = $1`, invitationID); err != nil {
@@ -572,6 +593,7 @@ func scanInvitation(row rowScanner) (domain.Invitation, error) {
 		&invitation.OrganizationID,
 		&invitation.Email,
 		&invitation.Role,
+		&invitation.Guest,
 		&invitation.InvitedBy,
 		&invitation.Status,
 		&invitation.ExpiresAt,

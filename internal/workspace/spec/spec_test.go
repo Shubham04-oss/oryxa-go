@@ -100,3 +100,15 @@ func TestParseOrganizationAgentSettings(t *testing.T) {
 		t.Fatalf("agent settings did not round trip: %v", err)
 	}
 }
+
+func TestGuestOutsideDomainRequiresExplicitMemberMarker(t *testing.T) {
+	base := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme, domains: [acme.com]}\n"
+	member := "people:\n  members: [{email: guest@example.com}]\n"
+	if _, err := Parse([]byte(base + member)); err == nil || !strings.Contains(err.Error(), "guest: true") {
+		t.Fatalf("guest without marker = %v", err)
+	}
+	valid := base + "people:\n  guests: true\n  members: [{email: guest@example.com, guest: true}]\nteams:\n  - {name: Partners, members: [guest@example.com]}\n"
+	if _, err := Parse([]byte(valid)); err != nil {
+		t.Fatalf("guest with policy = %v", err)
+	}
+}

@@ -603,6 +603,7 @@ func (server *Server) inviteMember(writer http.ResponseWriter, request *http.Req
 		Email string      `json:"email"`
 		Role  domain.Role `json:"role"`
 		Quiet bool        `json:"quiet"`
+		Guest bool        `json:"guest"`
 	}
 	if err := readJSON(request, &input); err != nil {
 		writeError(writer, http.StatusBadRequest, "invalid request body")
@@ -613,7 +614,7 @@ func (server *Server) inviteMember(writer http.ResponseWriter, request *http.Req
 		request.Context(),
 		authenticated.Claims.Subject,
 		request.PathValue("organizationID"),
-		application.InviteMemberInput{Email: input.Email, Role: input.Role, Quiet: input.Quiet},
+		application.InviteMemberInput{Email: input.Email, Role: input.Role, Quiet: input.Quiet, Guest: input.Guest},
 	)
 	if err != nil {
 		server.handleError(writer, err)

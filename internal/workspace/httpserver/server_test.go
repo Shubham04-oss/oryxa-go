@@ -65,9 +65,9 @@ func fakeOrganizationAPI(extraMember bool) *httptest.Server {
 		case "/v1/auth/me":
 			_, _ = io.WriteString(writer, `{"user":{"id":"u1","email":"owner@acme.com"}}`)
 		case "/v1/organizations":
-			_, _ = io.WriteString(writer, `{"organizations":[{"id":"org1","name":"Acme","slug":"acme"}]}`)
+			_, _ = io.WriteString(writer, `{"organizations":[{"id":"org1","name":"Acme","slug":"acme","domains":["acme.com"],"timezone":"UTC"}]}`)
 		case "/v1/organizations/org1":
-			_, _ = io.WriteString(writer, `{"organization":{"id":"org1","name":"Acme","slug":"acme"},"membership":{"organization_id":"org1","user_id":"u1","role":"owner"}}`)
+			_, _ = io.WriteString(writer, `{"organization":{"id":"org1","name":"Acme","slug":"acme","domains":["acme.com"],"timezone":"UTC"},"membership":{"organization_id":"org1","user_id":"u1","role":"owner"}}`)
 		case "/v1/organizations/org1/members":
 			if extraMember {
 				_, _ = io.WriteString(writer, `{"members":[{"user_id":"u1","email":"owner@acme.com","role":"owner"},{"user_id":"u2","email":"other@acme.com","role":"member"}]}`)
@@ -210,8 +210,8 @@ func TestWorkspaceRollbackRestoresEarlierFileAsNewVersion(t *testing.T) {
 	defer workspace.Close()
 	path := "/v1/organizations/org1/workspace"
 	files := []string{
-		"apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme, domains: [acme.com]}\n",
-		"apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme, domains: [acme.com, example.com]}\n",
+		"apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme, domains: [acme.com]}\npreset: team\n",
+		"apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme, domains: [acme.com]}\npreset: startup\n",
 	}
 	for _, document := range files {
 		response := workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": document, "approved_plan": runtime.Plan{}})

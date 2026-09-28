@@ -37,7 +37,7 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 	plan := Plan{Changes: []Change{}, NeedsHuman: []HumanStep{}}
 	if state.Organization == nil {
 		plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "organization", Name: document.Metadata.Organization})
-	} else if document.Organization != nil && document.Organization.Name != "" && state.Organization.Name != document.Organization.Name {
+	} else if organizationChanged(document, *state.Organization) {
 		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "organization", Name: document.Metadata.Organization})
 	}
 	wantedMembers := map[string]bool{}
@@ -56,13 +56,16 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 					plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "member_role", Name: member.Email, Role: role})
 				}
 			} else if invitation, ok := state.Invitations[member.Email]; ok {
-				if invitation.Role != role {
-					return Plan{}, fmt.Errorf("people.members has a pending invitation with another role")
+				if invitation.Role != role || invitation.Guest != member.Guest {
+					return Plan{}, fmt.Errorf("people.members has a pending invitation with another role or guest setting")
 				}
 				plan.NeedsHuman = append(plan.NeedsHuman, HumanStep{Step: "people.join", Why: member.Email + " must accept the invitation"})
 			} else {
 				if role == "owner" {
 					return Plan{}, fmt.Errorf("people.members cannot invite an owner")
+				}
+				if member.Guest && !guestsEnabled(document, state) {
+					return Plan{}, fmt.Errorf("people.members guest invitations require people.guests: true")
 				}
 				plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "invitation", Name: member.Email, Role: role})
 				plan.NeedsHuman = append(plan.NeedsHuman, HumanStep{Step: "people.join", Why: member.Email + " must accept the invitation"})
@@ -183,6 +186,43 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 	return plan, nil
 }
 
+func guestsEnabled(document spec.Document, state Snapshot) bool {
+	if document.People != nil && document.People.Guests != nil {
+		return *document.People.Guests
+	}
+	return state.Organization != nil && state.Organization.GuestsAllowed
+}
+
+func organizationChanged(document spec.Document, current Organization) bool {
+	if document.Organization != nil {
+		if document.Organization.Name != "" && document.Organization.Name != current.Name {
+			return true
+		}
+		if document.Organization.Timezone != nil && *document.Organization.Timezone != current.Timezone {
+			return true
+		}
+	}
+	if document.People != nil && document.People.Guests != nil && *document.People.Guests != current.GuestsAllowed {
+		return true
+	}
+	if document.Metadata.Domains != nil {
+		wanted := slices.Clone(document.Metadata.Domains)
+		actual := slices.Clone(current.Domains)
+		slices.Sort(wanted)
+		slices.Sort(actual)
+		return !slices.Equal(wanted, actual)
+	}
+	return false
+}
+
+func memberIsGuest(email string, domains []string) bool {
+	if len(domains) == 0 {
+		return false
+	}
+	_, emailDomain, _ := strings.Cut(email, "@")
+	return !slices.Contains(domains, emailDomain)
+}
+
 func organizationAgentInput(document spec.Document, state Snapshot) (map[string]any, error) {
 	input := map[string]any{}
 	if document.Agents == nil || document.Agents.Organization == nil {
@@ -246,7 +286,7 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 		if document.Organization != nil && document.Organization.Name != "" {
 			name = document.Organization.Name
 		}
-		if err := client.CreateOrganization(ctx, name, document.Metadata.Organization); err != nil {
+		if err := client.CreateOrganization(ctx, name, document.Metadata.Organization, document); err != nil {
 			return Plan{}, err
 		}
 		state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
@@ -257,8 +297,8 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 			return Plan{}, fmt.Errorf("organization creation has not appeared in the API yet; retry apply")
 		}
 	}
-	if document.Organization != nil && document.Organization.Name != "" && state.Organization.Name != document.Organization.Name {
-		if err := client.UpdateOrganization(ctx, state.Organization.ID, document.Organization.Name, state.Organization.Slug); err != nil {
+	if organizationChanged(document, *state.Organization) {
+		if err := client.UpdateOrganization(ctx, state.Organization.ID, *state.Organization, document); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -275,7 +315,7 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 					}
 				}
 			} else if _, invited := state.Invitations[member.Email]; !invited {
-				if err := client.Invite(ctx, state.Organization.ID, member.Email, role, document.People.Invite == "quiet"); err != nil {
+				if err := client.Invite(ctx, state.Organization.ID, member.Email, role, document.People.Invite == "quiet", member.Guest); err != nil {
 					return Plan{}, err
 				}
 			}
@@ -458,16 +498,19 @@ func Pull(state Snapshot) (spec.Document, error) {
 	}
 	document := spec.Document{
 		APIVersion: spec.APIVersion, Kind: "Workspace",
-		Metadata: spec.Metadata{Organization: state.Organization.Slug},
+		Metadata: spec.Metadata{Organization: state.Organization.Slug, Domains: state.Organization.Domains},
 		Preset:   "team", Organization: &spec.Organization{Name: state.Organization.Name},
-		People: &spec.People{Invite: "email"},
+		People: &spec.People{Invite: "email", Guests: &state.Organization.GuestsAllowed},
+	}
+	if state.Organization.Timezone != "" {
+		document.Organization.Timezone = &state.Organization.Timezone
 	}
 	for _, member := range state.Members {
-		document.People.Members = append(document.People.Members, spec.Member{Email: member.Email, Role: member.Role})
+		document.People.Members = append(document.People.Members, spec.Member{Email: member.Email, Role: member.Role, Guest: memberIsGuest(member.Email, state.Organization.Domains)})
 	}
 	for email, invitation := range state.Invitations {
 		if _, joined := state.Members[email]; !joined {
-			document.People.Members = append(document.People.Members, spec.Member{Email: email, Role: invitation.Role})
+			document.People.Members = append(document.People.Members, spec.Member{Email: email, Role: invitation.Role, Guest: invitation.Guest})
 		}
 	}
 	slices.SortFunc(document.People.Members, func(a, b spec.Member) int { return strings.Compare(a.Email, b.Email) })

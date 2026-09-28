@@ -261,6 +261,46 @@ func TestQuietInvitationKeepsInvitationButSuppressesEmail(t *testing.T) {
 	}
 }
 
+func TestOrganizationDomainsAndGuestInvitations(t *testing.T) {
+	store := &fakeStore{user: domain.User{ID: "owner-1", Email: "owner@acme.com"}}
+	service := New(store, "https://app.example.com/invitations/accept")
+	organization, err := service.CreateOrganization(context.Background(), "owner-1", CreateOrganizationInput{
+		Name: "Acme", Domains: []string{"ACME.COM"}, Timezone: "Asia/Kolkata", GuestsAllowed: true,
+	})
+	if err != nil || len(organization.Domains) != 1 || organization.Domains[0] != "acme.com" || organization.Timezone != "Asia/Kolkata" || !organization.GuestsAllowed {
+		t.Fatalf("create organization = %+v, %v", organization, err)
+	}
+	store.actorMembership = domain.Membership{OrganizationID: organization.ID, UserID: "owner-1", Role: domain.RoleOwner}
+	if _, _, err := service.InviteMember(context.Background(), "owner-1", organization.ID, InviteMemberInput{
+		Email: "outside@example.com", Role: domain.RoleMember,
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("outside-domain invitation without guest = %v", err)
+	}
+	invitation, _, err := service.InviteMember(context.Background(), "owner-1", organization.ID, InviteMemberInput{
+		Email: "outside@example.com", Role: domain.RoleMember, Guest: true,
+	})
+	if err != nil || !invitation.Guest {
+		t.Fatalf("guest invitation = %+v, %v", invitation, err)
+	}
+	if _, _, err := service.InviteMember(context.Background(), "owner-1", organization.ID, InviteMemberInput{
+		Email: "member@acme.com", Role: domain.RoleMember,
+	}); err != nil {
+		t.Fatalf("member invitation = %v", err)
+	}
+	falseValue := false
+	updated, err := service.UpdateOrganization(context.Background(), "owner-1", organization.ID, UpdateOrganizationInput{
+		Name: organization.Name, Slug: organization.Slug, GuestsAllowed: &falseValue,
+	})
+	if err != nil || updated.GuestsAllowed || updated.Timezone != "Asia/Kolkata" || len(updated.Domains) != 1 {
+		t.Fatalf("update organization = %+v, %v", updated, err)
+	}
+	if _, _, err := service.InviteMember(context.Background(), "owner-1", organization.ID, InviteMemberInput{
+		Email: "another@example.com", Role: domain.RoleMember, Guest: true,
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("guest invitation after disabling guests = %v", err)
+	}
+}
+
 // TestInviteMemberAcceptURLPreservesExistingQueryAndFragment guards against
 // the accept URL going back to plain concatenation: INVITATION_ACCEPT_URL
 // can itself carry a query (say, an analytics tag) or a fragment, and the

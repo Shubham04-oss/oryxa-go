@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 )
 
 // Client talks to the existing organization and team APIs with a person's
@@ -86,9 +88,12 @@ func (client *Client) request(ctx context.Context, method, path string, input, o
 }
 
 type Organization struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Slug string `json:"slug"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Slug          string   `json:"slug"`
+	Domains       []string `json:"domains"`
+	Timezone      string   `json:"timezone"`
+	GuestsAllowed bool     `json:"guests_allowed"`
 }
 
 type Member struct {
@@ -102,6 +107,7 @@ type Invitation struct {
 	Email  string `json:"email"`
 	Role   string `json:"role"`
 	Status string `json:"status"`
+	Guest  bool   `json:"guest"`
 }
 
 type Team struct {
@@ -243,16 +249,40 @@ func (client *Client) Whoami(ctx context.Context, output *json.RawMessage) error
 	return client.request(ctx, http.MethodGet, "/v1/auth/me", nil, output)
 }
 
-func (client *Client) CreateOrganization(ctx context.Context, name, slug string) error {
-	return client.request(ctx, http.MethodPost, "/v1/organizations", map[string]string{"name": name, "slug": slug}, nil)
+func (client *Client) CreateOrganization(ctx context.Context, name, slug string, document spec.Document) error {
+	input := map[string]any{"name": name, "slug": slug}
+	if document.Metadata.Domains != nil {
+		input["domains"] = document.Metadata.Domains
+	}
+	if document.Organization != nil && document.Organization.Timezone != nil {
+		input["timezone"] = *document.Organization.Timezone
+	}
+	if document.People != nil && document.People.Guests != nil {
+		input["guests_allowed"] = *document.People.Guests
+	}
+	return client.request(ctx, http.MethodPost, "/v1/organizations", input, nil)
 }
 
-func (client *Client) UpdateOrganization(ctx context.Context, id, name, slug string) error {
-	return client.request(ctx, http.MethodPatch, "/v1/organizations/"+url.PathEscape(id), map[string]string{"name": name, "slug": slug}, nil)
+func (client *Client) UpdateOrganization(ctx context.Context, id string, organization Organization, document spec.Document) error {
+	name := organization.Name
+	if document.Organization != nil && document.Organization.Name != "" {
+		name = document.Organization.Name
+	}
+	input := map[string]any{"name": name, "slug": organization.Slug}
+	if document.Metadata.Domains != nil {
+		input["domains"] = document.Metadata.Domains
+	}
+	if document.Organization != nil && document.Organization.Timezone != nil {
+		input["timezone"] = *document.Organization.Timezone
+	}
+	if document.People != nil && document.People.Guests != nil {
+		input["guests_allowed"] = *document.People.Guests
+	}
+	return client.request(ctx, http.MethodPatch, "/v1/organizations/"+url.PathEscape(id), input, nil)
 }
 
-func (client *Client) Invite(ctx context.Context, orgID, email, role string, quiet bool) error {
-	return client.request(ctx, http.MethodPost, "/v1/organizations/"+url.PathEscape(orgID)+"/invitations", map[string]any{"email": email, "role": role, "quiet": quiet}, nil)
+func (client *Client) Invite(ctx context.Context, orgID, email, role string, quiet, guest bool) error {
+	return client.request(ctx, http.MethodPost, "/v1/organizations/"+url.PathEscape(orgID)+"/invitations", map[string]any{"email": email, "role": role, "quiet": quiet, "guest": guest}, nil)
 }
 
 func (client *Client) ChangeMemberRole(ctx context.Context, orgID, memberID, role string) error {

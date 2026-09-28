@@ -292,7 +292,6 @@ func (server *Server) pull(writer http.ResponseWriter, request *http.Request) {
 			writeError(writer, http.StatusInternalServerError, "saved workspace file is invalid")
 			return
 		}
-		document.Metadata.Domains = previous.Metadata.Domains
 		document.Preset = previous.Preset
 		if previous.People != nil {
 			document.People.Invite = previous.People.Invite

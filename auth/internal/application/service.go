@@ -12,6 +12,7 @@ import (
 	"net/mail"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 )
 
 var nonSlugCharacters = regexp.MustCompile(`[^a-z0-9]+`)
+var organizationDomainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$`)
 
 type Service struct {
 	store                 Store
@@ -45,19 +47,26 @@ type FederatedIdentity struct {
 }
 
 type CreateOrganizationInput struct {
-	Name string
-	Slug string
+	Name          string
+	Slug          string
+	Domains       []string
+	Timezone      string
+	GuestsAllowed bool `json:"guests_allowed"`
 }
 
 type UpdateOrganizationInput struct {
-	Name string
-	Slug string
+	Name          string
+	Slug          string
+	Domains       *[]string
+	Timezone      *string
+	GuestsAllowed *bool `json:"guests_allowed"`
 }
 
 type InviteMemberInput struct {
 	Email string
 	Role  domain.Role
 	Quiet bool
+	Guest bool
 }
 
 func New(store Store, invitationAcceptBase string) *Service {
@@ -288,6 +297,14 @@ func (service *Service) CreateOrganization(ctx context.Context, actorID string, 
 	if err != nil {
 		return domain.Organization{}, err
 	}
+	domains, err := organizationDomains(input.Domains)
+	if err != nil {
+		return domain.Organization{}, err
+	}
+	timezone, err := organizationTimezone(input.Timezone)
+	if err != nil {
+		return domain.Organization{}, err
+	}
 	user, err := service.store.UserByID(ctx, actorID)
 	if err != nil {
 		return domain.Organization{}, err
@@ -299,12 +316,15 @@ func (service *Service) CreateOrganization(ctx context.Context, actorID string, 
 	}
 	now := service.now().UTC()
 	organization := domain.Organization{
-		ID:        organizationID,
-		Name:      name,
-		Slug:      slug,
-		CreatedBy: actorID,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:            organizationID,
+		Name:          name,
+		Slug:          slug,
+		Domains:       domains,
+		Timezone:      timezone,
+		GuestsAllowed: input.GuestsAllowed,
+		CreatedBy:     actorID,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 	owner := domain.Membership{
 		OrganizationID: organization.ID,
@@ -356,12 +376,33 @@ func (service *Service) UpdateOrganization(ctx context.Context, actorID, organiz
 	if err != nil {
 		return domain.Organization{}, err
 	}
-	if organization.Name == name && organization.Slug == slug {
+	domains := organization.Domains
+	if input.Domains != nil {
+		domains, err = organizationDomains(*input.Domains)
+		if err != nil {
+			return domain.Organization{}, err
+		}
+	}
+	timezone := organization.Timezone
+	if input.Timezone != nil {
+		timezone, err = organizationTimezone(*input.Timezone)
+		if err != nil {
+			return domain.Organization{}, err
+		}
+	}
+	guestsAllowed := organization.GuestsAllowed
+	if input.GuestsAllowed != nil {
+		guestsAllowed = *input.GuestsAllowed
+	}
+	if organization.Name == name && organization.Slug == slug && slices.Equal(organization.Domains, domains) && organization.Timezone == timezone && organization.GuestsAllowed == guestsAllowed {
 		return organization, nil
 	}
 	now := service.now().UTC()
 	organization.Name = name
 	organization.Slug = slug
+	organization.Domains = domains
+	organization.Timezone = timezone
+	organization.GuestsAllowed = guestsAllowed
 	organization.UpdatedAt = now
 	event, err := newEvent(autheventsv1.OrganizationUpdatedDetailType, autheventsv1.OrganizationUpdated{
 		OrganizationID: organization.ID,
@@ -464,6 +505,9 @@ func (service *Service) InviteMember(ctx context.Context, actorID, organizationI
 	if err != nil {
 		return domain.Invitation{}, "", err
 	}
+	if !organizationAllowsEmail(organization, email, input.Guest) {
+		return domain.Invitation{}, "", fmt.Errorf("invitation email is outside the allowed domains: %w", domain.ErrInvalid)
+	}
 
 	invitationID, err := randomID("inv_", 12)
 	if err != nil {
@@ -479,6 +523,7 @@ func (service *Service) InviteMember(ctx context.Context, actorID, organizationI
 		OrganizationID: organizationID,
 		Email:          email,
 		Role:           input.Role,
+		Guest:          input.Guest,
 		TokenHash:      hashToken(token),
 		InvitedBy:      actorID,
 		Status:         domain.InvitationPending,
@@ -780,6 +825,47 @@ func organizationFields(rawName, rawSlug string) (string, string, error) {
 		return "", "", fmt.Errorf("organization slug must contain 2-63 characters: %w", domain.ErrInvalid)
 	}
 	return name, slug, nil
+}
+
+func organizationDomains(raw []string) ([]string, error) {
+	domains := make([]string, 0, len(raw))
+	seen := map[string]bool{}
+	for _, item := range raw {
+		domainName := strings.ToLower(strings.TrimSpace(item))
+		if len(domainName) > 253 || !organizationDomainPattern.MatchString(domainName) || seen[domainName] {
+			return nil, fmt.Errorf("organization domains must be unique valid DNS names: %w", domain.ErrInvalid)
+		}
+		seen[domainName] = true
+		domains = append(domains, domainName)
+	}
+	slices.Sort(domains)
+	return domains, nil
+}
+
+func organizationTimezone(value string) (string, error) {
+	if value == "" {
+		return "UTC", nil
+	}
+	if _, err := time.LoadLocation(value); err != nil {
+		return "", fmt.Errorf("organization timezone must be an IANA location: %w", domain.ErrInvalid)
+	}
+	return value, nil
+}
+
+func organizationAllowsEmail(organization domain.Organization, email string, guest bool) bool {
+	if len(organization.Domains) == 0 {
+		return true
+	}
+	_, emailDomain, found := strings.Cut(email, "@")
+	if !found {
+		return false
+	}
+	for _, allowed := range organization.Domains {
+		if strings.EqualFold(emailDomain, allowed) {
+			return true
+		}
+	}
+	return guest && organization.GuestsAllowed
 }
 
 func tokenURL(base, token string) string {

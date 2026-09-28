@@ -14,6 +14,7 @@ import (
 func TestApplyResumesAfterInvitationAcceptance(t *testing.T) {
 	state := &fakeState{
 		orgExists: true,
+		domains:   []string{"acme.com"},
 		members:   []Member{{UserID: "u1", Email: "owner@acme.com", Role: "owner"}},
 	}
 	server := httptest.NewServer(http.HandlerFunc(state.serve))
@@ -75,6 +76,45 @@ func TestApplyRequestsQuietInvitations(t *testing.T) {
 	}
 	if state.invites != 1 || !state.lastInviteQuiet {
 		t.Fatalf("invitations = %d, quiet = %v", state.invites, state.lastInviteQuiet)
+	}
+}
+
+func TestApplyOrganizationDomainTimezoneAndGuestPolicy(t *testing.T) {
+	state := &fakeState{orgExists: true, domains: []string{"acme.com"}, timezone: "UTC", members: []Member{{UserID: "u1", Email: "owner@acme.com", Role: "owner"}}}
+	server := httptest.NewServer(http.HandlerFunc(state.serve))
+	defer server.Close()
+	client, err := NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	timezone, guests := "Asia/Kolkata", true
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace",
+		Metadata:     spec.Metadata{Organization: "acme", Domains: []string{"acme.com", "example.com"}},
+		Organization: &spec.Organization{Timezone: &timezone}, People: &spec.People{Guests: &guests},
+	}
+	remaining, err := Apply(context.Background(), client, document)
+	if err != nil || len(remaining.Changes) != 0 || state.timezone != timezone || !state.guestsAllowed || len(state.domains) != 2 {
+		t.Fatalf("apply = %+v, %v; state = %+v", remaining, err, state)
+	}
+	if _, err := Apply(context.Background(), client, document); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGuestInvitationNeedsOrganizationGuestPolicy(t *testing.T) {
+	state := Snapshot{Organization: &Organization{ID: "org_1", Slug: "acme", Domains: []string{"acme.com"}},
+		Members: map[string]Member{}, Invitations: map[string]Invitation{}, Teams: map[string]Team{}, TeamMembers: map[string]map[string]TeamMember{}}
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace",
+		Metadata: spec.Metadata{Organization: "acme", Domains: []string{"acme.com"}},
+		People:   &spec.People{Members: []spec.Member{{Email: "guest@example.com", Guest: true}}},
+	}
+	if _, err := BuildPlan(document, state); err == nil || !strings.Contains(err.Error(), "people.guests") {
+		t.Fatalf("guest invitation without policy = %v", err)
+	}
+	allow := true
+	document.People.Guests = &allow
+	if _, err := BuildPlan(document, state); err != nil {
+		t.Fatalf("guest invitation with policy = %v", err)
 	}
 }
 
@@ -268,6 +308,9 @@ func TestOrganizationAgentPlanRejectsMemberUpdates(t *testing.T) {
 
 type fakeState struct {
 	orgExists          bool
+	domains            []string
+	timezone           string
+	guestsAllowed      bool
 	orgCreates         int
 	members            []Member
 	teamMembers        []TeamMember
@@ -300,7 +343,7 @@ func (state *fakeState) serve(writer http.ResponseWriter, request *http.Request)
 	case "GET /v1/organizations":
 		organizations := []Organization{}
 		if state.orgExists {
-			organizations = append(organizations, Organization{ID: "org_1", Name: "Acme", Slug: "acme"})
+			organizations = append(organizations, Organization{ID: "org_1", Name: "Acme", Slug: "acme", Domains: state.domains, Timezone: state.timezone, GuestsAllowed: state.guestsAllowed})
 		}
 		write(map[string]any{"organizations": organizations})
 	case "GET /v1/auth/me":
@@ -308,6 +351,23 @@ func (state *fakeState) serve(writer http.ResponseWriter, request *http.Request)
 	case "POST /v1/organizations":
 		state.orgExists = true
 		state.orgCreates++
+		write(map[string]string{"id": "org_1"})
+	case "PATCH /v1/organizations/org_1":
+		var input struct {
+			Domains       []string `json:"domains"`
+			Timezone      *string  `json:"timezone"`
+			GuestsAllowed *bool    `json:"guests_allowed"`
+		}
+		_ = json.NewDecoder(request.Body).Decode(&input)
+		if input.Domains != nil {
+			state.domains = input.Domains
+		}
+		if input.Timezone != nil {
+			state.timezone = *input.Timezone
+		}
+		if input.GuestsAllowed != nil {
+			state.guestsAllowed = *input.GuestsAllowed
+		}
 		write(map[string]string{"id": "org_1"})
 	case "GET /v1/organizations/org_1/members":
 		write(map[string]any{"members": state.members})

@@ -10,6 +10,7 @@ import (
 	"net/mail"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
@@ -46,11 +47,13 @@ type Metadata struct {
 }
 
 type Organization struct {
-	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+	Name     string  `yaml:"name,omitempty" json:"name,omitempty"`
+	Timezone *string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 }
 
 type People struct {
 	Invite  string   `yaml:"invite,omitempty" json:"invite,omitempty"`
+	Guests  *bool    `yaml:"guests,omitempty" json:"guests,omitempty"`
 	Members []Member `yaml:"members,omitempty" json:"members,omitempty"`
 	Prune   bool     `yaml:"prune,omitempty" json:"prune,omitempty"`
 }
@@ -58,6 +61,7 @@ type People struct {
 type Member struct {
 	Email string `yaml:"email" json:"email"`
 	Role  string `yaml:"role,omitempty" json:"role,omitempty"`
+	Guest bool   `yaml:"guest,omitempty" json:"guest,omitempty"`
 }
 
 type Team struct {
@@ -127,6 +131,7 @@ type OrganizationAgent struct {
 }
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var domainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$`)
 
 // Parse refuses unknown keys, aliases that hide settings, and multiple YAML
 // documents. Error messages name paths, never submitted values.
@@ -222,6 +227,14 @@ func (document Document) Validate() error {
 			return fmt.Errorf("people.invite must be email or quiet")
 		}
 	}
+	if document.Organization != nil && document.Organization.Timezone != nil {
+		if *document.Organization.Timezone == "" {
+			return fmt.Errorf("organization.timezone must be an IANA time zone")
+		}
+		if _, err := time.LoadLocation(*document.Organization.Timezone); err != nil {
+			return fmt.Errorf("organization.timezone must be an IANA time zone")
+		}
+	}
 	if document.Agents != nil && document.Agents.Organization != nil {
 		agent := document.Agents.Organization
 		if agent.DisplayName != nil && (strings.TrimSpace(*agent.DisplayName) == "" || utf8.RuneCountInString(*agent.DisplayName) > 100) {
@@ -236,21 +249,29 @@ func (document Document) Validate() error {
 	}
 	seenDomains := map[string]bool{}
 	for _, domain := range document.Metadata.Domains {
-		if domain == "" || strings.ToLower(domain) != domain || strings.ContainsAny(domain, " @/:\n\r\t") || seenDomains[domain] {
+		if len(domain) > 253 || !domainPattern.MatchString(domain) || seenDomains[domain] {
 			return fmt.Errorf("metadata.domains must contain unique lowercase domains")
 		}
 		seenDomains[domain] = true
 	}
 	seenMembers := map[string]bool{}
+	guestMembers := map[string]bool{}
 	if document.People != nil {
 		for _, member := range document.People.Members {
-			if err := validateEmail(member.Email, seenDomains); err != nil {
+			if err := validateEmail(member.Email, nil); err != nil {
 				return fmt.Errorf("people.members: %w", err)
+			}
+			_, emailDomain, _ := strings.Cut(member.Email, "@")
+			if len(seenDomains) > 0 && !seenDomains[emailDomain] {
+				if !member.Guest {
+					return fmt.Errorf("people.members outside metadata.domains require guest: true")
+				}
 			}
 			if seenMembers[member.Email] {
 				return fmt.Errorf("people.members has a duplicate email")
 			}
 			seenMembers[member.Email] = true
+			guestMembers[member.Email] = member.Guest
 			switch member.Role {
 			case "", "member", "admin", "owner":
 			default:
@@ -266,8 +287,12 @@ func (document Document) Validate() error {
 		seenTeams[team.Name] = true
 		teamMembers := map[string]bool{}
 		for _, email := range team.Members {
-			if err := validateEmail(email, seenDomains); err != nil {
+			if err := validateEmail(email, nil); err != nil {
 				return fmt.Errorf("teams[].members: %w", err)
+			}
+			_, emailDomain, _ := strings.Cut(email, "@")
+			if len(seenDomains) > 0 && !seenDomains[emailDomain] && !guestMembers[email] {
+				return fmt.Errorf("teams[].members outside metadata.domains must be declared as guest members")
 			}
 			if teamMembers[email] {
 				return fmt.Errorf("teams[].members has a duplicate email")
