@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/authz"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
@@ -40,6 +41,10 @@ type fakeService struct {
 		cursor string
 		limit  int
 	}
+	policies      []authz.Policy
+	policy        authz.Policy
+	addPolicyArgs application.AddPolicyInput
+	removedPolicy string
 }
 
 func (fake *fakeService) CreateCorpus(_ context.Context, credentials authclient.Credentials, _ string, input application.CreateCorpusInput) (domain.Corpus, error) {
@@ -97,6 +102,20 @@ func (fake *fakeService) Search(_ context.Context, _ authclient.Credentials, _, 
 func (fake *fakeService) Answer(_ context.Context, _ authclient.Credentials, _, _ string, query domain.Query) (application.Answered, error) {
 	fake.query = query
 	return fake.answered, fake.err
+}
+
+func (fake *fakeService) ListPolicies(context.Context, authclient.Credentials, string, string) ([]authz.Policy, error) {
+	return fake.policies, fake.err
+}
+
+func (fake *fakeService) AddPolicy(_ context.Context, _ authclient.Credentials, _, _ string, input application.AddPolicyInput) (authz.Policy, error) {
+	fake.addPolicyArgs = input
+	return fake.policy, fake.err
+}
+
+func (fake *fakeService) RemovePolicy(_ context.Context, _ authclient.Credentials, _, _, policyID string) error {
+	fake.removedPolicy = policyID
+	return fake.err
 }
 
 func newServer(fake *fakeService) *Server {

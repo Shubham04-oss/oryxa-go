@@ -89,7 +89,9 @@ func TestTeamForbiddenFromTeamsIsConcealedAsNotFound(t *testing.T) {
 
 func TestTeamScopeIsUnavailableWithoutATeamsService(t *testing.T) {
 	store := newFakeStore()
-	service := New(store, fakeDirectory{}, nil, &fakeFiles{}, nil, newFakeVectors(), &fakeRetriever{}, &fakeGenerator{}, nil, Defaults{}, nil)
+	authzEngine, authzStore := newTestAuthz()
+	service := New(store, fakeDirectory{}, nil, &fakeFiles{}, nil, newFakeVectors(), &fakeRetriever{}, &fakeGenerator{}, nil,
+		authzEngine, authzStore, Defaults{}, nil)
 	if _, err := service.CreateCorpus(context.Background(), creds("user-creator"), testOrganization, CreateCorpusInput{
 		Name: "Handbook", Scope: domain.ScopeTeam, TeamID: "team_eng",
 	}); !errors.Is(err, domain.ErrInvalid) {
@@ -436,7 +438,8 @@ func TestSearchAndAnswerHonorTheReadGate(t *testing.T) {
 
 func TestAnswerWithoutAGeneratorConfigured(t *testing.T) {
 	h := newHarness()
-	h.service = New(h.store, fakeDirectory{}, h.teams, h.files, h.documents, h.vectors, h.retriever, nil, h.knowledgeBase, Defaults{}, nil)
+	h.service = New(h.store, fakeDirectory{}, h.teams, h.files, h.documents, h.vectors, h.retriever, nil, h.knowledgeBase,
+		h.authzEngine, h.authzStore, Defaults{}, nil)
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "m1", Scope: domain.ScopeMember, MemberID: "user-creator"})
 
 	// This check runs before the corpus is even looked up: a deployment with
@@ -1055,7 +1058,8 @@ func TestAFileGoesOnlyWhereEveryReaderCanAlreadyReadIt(t *testing.T) {
 
 func TestAddDocumentFromAFileNeedsFilesConfigured(t *testing.T) {
 	h := newHarness()
-	h.service = New(h.store, fakeDirectory{}, h.teams, nil, nil, h.vectors, h.retriever, h.generator, h.knowledgeBase, Defaults{}, nil)
+	h.service = New(h.store, fakeDirectory{}, h.teams, nil, nil, h.vectors, h.retriever, h.generator, h.knowledgeBase,
+		h.authzEngine, h.authzStore, Defaults{}, nil)
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "m1", Scope: domain.ScopeMember, MemberID: "user-creator"})
 	if _, err := h.service.AddDocument(context.Background(), creds("user-creator"), testOrganization, corpus.ID, given(AddDocumentInput{
 		Source: domain.Source{Kind: domain.SourceFile, Ref: "file_1"},

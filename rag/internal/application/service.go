@@ -19,6 +19,8 @@ import (
 
 	rageventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/rag/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/authz"
+
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/chunking"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
@@ -103,6 +105,30 @@ type Retriever interface {
 	Search(ctx context.Context, corpus domain.Corpus, query domain.Query) (retrieval.Results, error)
 }
 
+// AuthzEngine is Oryxa's system-wide Cedar-based permission layer (see
+// internal/authz), asked on top of every check above rather than instead of
+// it: mayRead, mayWrite and the rest still run first, and this can only
+// narrow what they already allowed, never widen it. It also backs a
+// knowledge base's own administer check, for the policy routes in
+// policies.go.
+type AuthzEngine interface {
+	Authorize(ctx context.Context, request authz.Request) (authz.Decision, error)
+	AuthorizeEach(ctx context.Context, organizationID string, principal authz.Principal, action authz.Action, resources []authz.Resource, requestContext authz.Context) ([]bool, error)
+	Invalidate(organizationID string)
+}
+
+// AuthzStore is where an organization's own stored Cedar policies are read,
+// written and cleaned up — the admin-facing half of internal/authz that
+// AuthzEngine itself never needs, since it only ever reads policies through
+// the narrower authz.PolicyStore internal/authz.Store also satisfies.
+type AuthzStore interface {
+	Policies(ctx context.Context, organizationID string, scope authz.Scope) ([]authz.Policy, error)
+	CreatePolicy(ctx context.Context, policy authz.Policy) (authz.Policy, error)
+	DeletePolicy(ctx context.Context, organizationID string, scope authz.Scope, id string) error
+	DeleteScope(ctx context.Context, organizationID string, scope authz.Scope) error
+	DeleteOrganization(ctx context.Context, organizationID string) error
+}
+
 // MaxDocumentsPerPage bounds a listing.
 const MaxDocumentsPerPage = 200
 
@@ -123,6 +149,8 @@ type Service struct {
 	retriever     Retriever
 	generator     generation.Generator
 	knowledgeBase KnowledgeBase
+	authzEngine   AuthzEngine
+	authzStore    AuthzStore
 	defaults      Defaults
 	logger        *slog.Logger
 	now           func() time.Time
@@ -145,8 +173,14 @@ type Defaults struct {
 // of failure Vectors.For already gives a corpus on a backend this deployment
 // cannot serve. Corpus creation is what actually keeps such a corpus from
 // existing in the first place; see requireBackendSpec.
+//
+// authzEngine and authzStore are never nil in a running deployment — Mount
+// fails rather than start without them — so unlike teams, files, documents
+// and knowledgeBase above, nothing here guards a nil authzEngine or
+// authzStore before using it.
 func New(store Store, directory Directory, teams Teams, files Files, documents Documents, vectors Vectors,
-	retriever Retriever, generator generation.Generator, knowledgeBase KnowledgeBase, defaults Defaults, logger *slog.Logger) *Service {
+	retriever Retriever, generator generation.Generator, knowledgeBase KnowledgeBase,
+	authzEngine AuthzEngine, authzStore AuthzStore, defaults Defaults, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
@@ -164,7 +198,9 @@ func New(store Store, directory Directory, teams Teams, files Files, documents D
 	}
 	return &Service{
 		store: store, directory: directory, teams: teams, files: files, documents: documents, vectors: vectors,
-		retriever: retriever, generator: generator, knowledgeBase: knowledgeBase, defaults: defaults, logger: logger, now: time.Now,
+		retriever: retriever, generator: generator, knowledgeBase: knowledgeBase,
+		authzEngine: authzEngine, authzStore: authzStore,
+		defaults: defaults, logger: logger, now: time.Now,
 	}
 }
 
@@ -318,8 +354,11 @@ func (service *Service) Corpora(ctx context.Context, credentials authclient.Cred
 
 // Corpus reads one corpus, with its counts, if the caller may see it.
 func (service *Service) Corpus(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string) (domain.Corpus, error) {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, teamMember, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
+		return domain.Corpus{}, err
+	}
+	if err := service.authorizeKnowledgeBase(ctx, organizationID, member, corpus, teamMember, authz.Read); err != nil {
 		return domain.Corpus{}, err
 	}
 	documents, chunks, err := service.store.CorpusCounts(ctx, corpus.ID, member.ActsAsAdmin())
@@ -331,7 +370,7 @@ func (service *Service) Corpus(ctx context.Context, credentials authclient.Crede
 }
 
 func (service *Service) DeleteCorpus(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string) error {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, _, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return err
 	}
@@ -352,7 +391,19 @@ func (service *Service) DeleteCorpus(ctx context.Context, credentials authclient
 	if err := service.dropVectors(ctx, corpus); err != nil {
 		return err
 	}
-	return service.store.DeleteCorpus(ctx, organizationID, corpusID, event)
+	if err := service.store.DeleteCorpus(ctx, organizationID, corpusID, event); err != nil {
+		return err
+	}
+	// The knowledge base's own stored policies outlive it otherwise: a new
+	// corpus could never reuse the id, but Engine's cache would still be
+	// wasting space on rules for a knowledge_base scope nothing can reach any
+	// more. Best-effort, because the corpus is already gone either way and an
+	// orphaned policy row costs storage, not correctness.
+	if err := service.authzStore.DeleteScope(ctx, organizationID, authz.Scope{Type: knowledgeBaseScopeType, ID: corpus.ID}); err != nil {
+		service.logger.ErrorContext(ctx, "authz: failed to delete a deleted knowledge base's stored policies",
+			"organization_id", organizationID, "corpus_id", corpus.ID, "error", err)
+	}
+	return nil
 }
 
 // AddDocumentInput is one document offered for indexing.
@@ -378,7 +429,7 @@ type DocumentReader func() (AddDocumentInput, error)
 // embedding provider. The same bytes offered again are recognised and cost
 // nothing, which is what lets an upstream pipeline re-deliver freely.
 func (service *Service) AddDocument(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, read DocumentReader) (domain.Document, error) {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, _, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return domain.Document{}, err
 	}
@@ -556,8 +607,11 @@ type DocumentPage struct {
 // first page, exactly as it does today; passing back the cursor a page
 // returned continues from where that page left off.
 func (service *Service) Documents(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) (DocumentPage, error) {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, teamMember, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
+		return DocumentPage{}, err
+	}
+	if err := service.authorizeKnowledgeBase(ctx, organizationID, member, corpus, teamMember, authz.Read); err != nil {
 		return DocumentPage{}, err
 	}
 	if status != "" && !status.Valid() {
@@ -574,8 +628,11 @@ func (service *Service) Documents(ctx context.Context, credentials authclient.Cr
 }
 
 func (service *Service) Document(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID, documentID string) (domain.Document, error) {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, teamMember, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
+		return domain.Document{}, err
+	}
+	if err := service.authorizeKnowledgeBase(ctx, organizationID, member, corpus, teamMember, authz.Read); err != nil {
 		return domain.Document{}, err
 	}
 	document, err := service.store.Document(ctx, organizationID, documentID)
@@ -588,11 +645,14 @@ func (service *Service) Document(ctx context.Context, credentials authclient.Cre
 	if !document.VisibleTo(member) {
 		return domain.Document{}, domain.ErrNotFound
 	}
+	if err := service.authorizeDocument(ctx, organizationID, member, corpus, teamMember, document); err != nil {
+		return domain.Document{}, err
+	}
 	return document, nil
 }
 
 func (service *Service) DeleteDocument(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID, documentID string) error {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, _, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return err
 	}
@@ -627,12 +687,22 @@ func (service *Service) DeleteDocument(ctx context.Context, credentials authclie
 
 // Search returns the passages a question matches, without writing an answer.
 func (service *Service) Search(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, query domain.Query) (retrieval.Results, error) {
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, teamMember, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return retrieval.Results{}, err
 	}
+	if err := service.authorizeKnowledgeBase(ctx, organizationID, member, corpus, teamMember, authz.Search); err != nil {
+		return retrieval.Results{}, err
+	}
 	query.IncludeAdminOnly = member.ActsAsAdmin()
-	return service.retriever.Search(ctx, corpus, query)
+	results, err := service.retriever.Search(ctx, corpus, query)
+	if err != nil {
+		return retrieval.Results{}, err
+	}
+	if results.Matches, err = service.authorizeMatches(ctx, organizationID, member, corpus, teamMember, results.Matches); err != nil {
+		return retrieval.Results{}, err
+	}
+	return results, nil
 }
 
 // Answered is a grounded answer together with what it was built from, so a
@@ -647,13 +717,19 @@ func (service *Service) Answer(ctx context.Context, credentials authclient.Crede
 	if service.generator == nil {
 		return Answered{}, fmt.Errorf("this deployment has no answering model configured: %w", domain.ErrInvalid)
 	}
-	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, teamMember, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
+		return Answered{}, err
+	}
+	if err := service.authorizeKnowledgeBase(ctx, organizationID, member, corpus, teamMember, authz.Search); err != nil {
 		return Answered{}, err
 	}
 	query.IncludeAdminOnly = member.ActsAsAdmin()
 	results, err := service.retriever.Search(ctx, corpus, query)
 	if err != nil {
+		return Answered{}, err
+	}
+	if results.Matches, err = service.authorizeMatches(ctx, organizationID, member, corpus, teamMember, results.Matches); err != nil {
 		return Answered{}, err
 	}
 	answer, err := generation.Answer(ctx, service.generator, query.Text, results.Matches, service.defaults.AnswerInstructions)
@@ -686,19 +762,24 @@ func (service *Service) caller(ctx context.Context, credentials authclient.Crede
 }
 
 // readable loads a corpus the caller may see, or reports it as missing.
-func (service *Service) readable(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string) (domain.Corpus, domain.OrgMembership, error) {
-	member, err := service.caller(ctx, credentials, organizationID)
+// teamMember is mayRead's own team_member fact (see Context.TeamMember):
+// true only when corpus is team-scoped and the caller reached it by being on
+// that team, exactly what a Cedar check on this same corpus needs and never
+// meaningful otherwise.
+func (service *Service) readable(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string) (corpus domain.Corpus, member domain.OrgMembership, teamMember bool, err error) {
+	member, err = service.caller(ctx, credentials, organizationID)
 	if err != nil {
-		return domain.Corpus{}, domain.OrgMembership{}, err
+		return domain.Corpus{}, domain.OrgMembership{}, false, err
 	}
-	corpus, err := service.lookup(ctx, organizationID, corpusID)
+	corpus, err = service.lookup(ctx, organizationID, corpusID)
 	if err != nil {
-		return domain.Corpus{}, domain.OrgMembership{}, err
+		return domain.Corpus{}, domain.OrgMembership{}, false, err
 	}
-	if err := service.mayRead(ctx, credentials, member, corpus); err != nil {
-		return domain.Corpus{}, domain.OrgMembership{}, err
+	teamMember, err = service.mayRead(ctx, credentials, member, corpus)
+	if err != nil {
+		return domain.Corpus{}, domain.OrgMembership{}, false, err
 	}
-	return corpus, member, nil
+	return corpus, member, teamMember, nil
 }
 
 // lookup resolves a corpus by id or by the slug its creator chose.
@@ -709,28 +790,32 @@ func (service *Service) lookup(ctx context.Context, organizationID, reference st
 	return service.store.CorpusBySlug(ctx, organizationID, reference)
 }
 
-// mayRead decides who can search a corpus. Placement mirrors files exactly.
-// An org admin's reach is a person's own: an agent acting for one reaches
-// what a plain member would (see domain.OrgMembership.ActsAsAdmin).
-func (service *Service) mayRead(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) error {
+// mayRead decides who can search a corpus, and reports whether that was
+// because the caller is on the team a team-scoped corpus is placed on — the
+// only shape of "may read" here that Cedar cannot re-derive on its own, since
+// team membership comes from the teams service rather than anything in
+// authz.KnowledgeBase (see authz.Context.TeamMember). Placement mirrors files
+// exactly. An org admin's reach is a person's own: an agent acting for one
+// reaches what a plain member would (see domain.OrgMembership.ActsAsAdmin).
+func (service *Service) mayRead(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) (teamMember bool, err error) {
 	switch corpus.Scope {
 	case domain.ScopeOrganization:
-		return nil
+		return false, nil
 	case domain.ScopeMember:
 		if corpus.MemberID == member.UserID || member.ActsAsAdmin() {
-			return nil
+			return false, nil
 		}
-		return domain.ErrNotFound
+		return false, domain.ErrNotFound
 	case domain.ScopeTeam:
 		if member.ActsAsAdmin() {
-			return nil
+			return false, nil
 		}
 		if _, err := service.teamAccess(ctx, credentials, member, corpus.OrganizationID, corpus.TeamID); err != nil {
-			return err
+			return false, err
 		}
-		return nil
+		return true, nil
 	default:
-		return domain.ErrNotFound
+		return false, domain.ErrNotFound
 	}
 }
 
@@ -830,6 +915,184 @@ func (service *Service) teamAccess(ctx context.Context, credentials authclient.C
 		access.CanManage = access.TeamAdmin
 	}
 	return access, nil
+}
+
+// knowledgeBaseScopeType is the Scope.Type a knowledge base's own stored
+// policies are filed under (see internal/authz's Scope and Store).
+const knowledgeBaseScopeType = "knowledge_base"
+
+// knowledgeBaseResource is corpus as internal/authz sees it: enough to place
+// it and attribute it. Every Cedar check against a corpus, or against one of
+// its documents, builds one of these, so the mapping from domain.Corpus lives
+// in this one place.
+func knowledgeBaseResource(corpus domain.Corpus) authz.KnowledgeBase {
+	return authz.KnowledgeBase{
+		ID:             corpus.ID,
+		OrganizationID: corpus.OrganizationID,
+		Scope:          string(corpus.Scope),
+		TeamID:         corpus.TeamID,
+		MemberID:       corpus.MemberID,
+		CreatedBy:      corpus.CreatedBy,
+	}
+}
+
+// documentResource is document as internal/authz sees it, placed inside its
+// own knowledge base exactly as knowledgeBaseResource builds it — a Document
+// resource is only ever evaluated together with the KnowledgeBase it embeds
+// (see policies/knowledge_bases.cedar's baseline/documents/read).
+func documentResource(corpus domain.Corpus, document domain.Document) authz.Document {
+	return authz.Document{
+		KnowledgeBase: knowledgeBaseResource(corpus),
+		ID:            document.ID,
+		Access:        string(document.Access),
+		Metadata:      document.Metadata,
+	}
+}
+
+// authorizeKnowledgeBase asks internal/authz's Cedar engine whether member
+// may take action on corpus, once mayRead (or, for a search or answer,
+// mayRead plus the search-specific call above it) has already allowed it.
+// With no stored policies the baseline reproduces mayRead's own rules exactly
+// (see policies/knowledge_bases.cedar), so this can only ever remove access
+// mayRead already granted, never add any.
+//
+// A denial reads back exactly like mayRead's own denial — domain.ErrNotFound
+// — so a caller a stored policy turned away learns nothing beyond "not
+// found," same as a corpus they could never see at all. An engine error
+// fails closed: internal/authz's whole design rests on a check it cannot
+// complete never silently passing (see internal/authz's doc.go), so this is
+// reported as an internal error instead of falling back to mayRead alone.
+func (service *Service) authorizeKnowledgeBase(ctx context.Context, organizationID string, member domain.OrgMembership, corpus domain.Corpus, teamMember bool, action authz.Action) error {
+	decision, err := service.authzEngine.Authorize(ctx, authz.Request{
+		OrganizationID: organizationID,
+		Principal:      authz.Principal{UserID: member.UserID, Agent: member.Agent},
+		Action:         action,
+		Resource:       knowledgeBaseResource(corpus),
+		Context:        authz.Context{ActsAsAdmin: member.ActsAsAdmin(), TeamMember: teamMember},
+	})
+	if err != nil {
+		service.logger.ErrorContext(ctx, "authz: failed to evaluate a knowledge base policy",
+			"organization_id", organizationID, "corpus_id", corpus.ID, "action", action, "error", err)
+		return fmt.Errorf("evaluate knowledge base policy: %w", err)
+	}
+	if !decision.Allowed {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// authorizeDocument is authorizeKnowledgeBase for one document, asked once
+// document.VisibleTo has already allowed it (see the VisibleTo call site in
+// Document above). The same denial and error handling applies: not found on
+// a stored forbid, an internal error, fail closed, if the engine could not
+// answer at all.
+func (service *Service) authorizeDocument(ctx context.Context, organizationID string, member domain.OrgMembership, corpus domain.Corpus, teamMember bool, document domain.Document) error {
+	decision, err := service.authzEngine.Authorize(ctx, authz.Request{
+		OrganizationID: organizationID,
+		Principal:      authz.Principal{UserID: member.UserID, Agent: member.Agent},
+		Action:         authz.Read,
+		Resource:       documentResource(corpus, document),
+		Context:        authz.Context{ActsAsAdmin: member.ActsAsAdmin(), TeamMember: teamMember},
+	})
+	if err != nil {
+		service.logger.ErrorContext(ctx, "authz: failed to evaluate a document policy",
+			"organization_id", organizationID, "corpus_id", corpus.ID, "document_id", document.ID, "error", err)
+		return fmt.Errorf("evaluate document policy: %w", err)
+	}
+	if !decision.Allowed {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// authorizeMatches drops every match whose document the principal may not
+// read under internal/authz, on top of the corpus-level check Search and
+// Answer already ran and the access rule retriever.Search's own SQL already
+// applied. With no stored policies this removes nothing: the baseline's
+// per-document rule (see policies/knowledge_bases.cedar) allows exactly what
+// that SQL already limited results to, so a search behaves exactly as it did
+// before this package existed.
+//
+// It asks with the one engine.AuthorizeEach call the interface is built for:
+// an organization's stored policies are loaded once for the whole result
+// list rather than once per hit. What that call needs but a domain.Match does
+// not carry is its document's access label (see domain.Ref, which hydrate
+// builds Match.Document from) — so documentsForMatches reads it first, once
+// per distinct document behind matches rather than once per hit, since a
+// search commonly returns several passages from the same document.
+//
+// Finalizing (top_k, min_score, diversity) has already run inside
+// retriever.Search by the time matches gets here, so a document a stored
+// policy forbids can leave fewer than top_k results even when the corpus held
+// other candidates that would have filled it. retriever.Search's own SQL
+// makes the identical trade today for its admin-only filter, for the same
+// reason: moving either gate earlier, inside retrieval, would mean threading
+// principal and context through a package that today only ever sees a query.
+// The simpler, more legible split is a top_k that undershoots on the rare
+// search an admin has actually narrowed with a stored policy.
+func (service *Service) authorizeMatches(ctx context.Context, organizationID string, member domain.OrgMembership, corpus domain.Corpus, teamMember bool, matches []domain.Match) ([]domain.Match, error) {
+	if len(matches) == 0 {
+		return matches, nil
+	}
+	documents, err := service.documentsForMatches(ctx, organizationID, matches)
+	if err != nil {
+		return nil, err
+	}
+	resources := make([]authz.Resource, len(matches))
+	for i, match := range matches {
+		resources[i] = documentResource(corpus, documents[match.Chunk.DocumentID])
+	}
+	allowed, err := service.authzEngine.AuthorizeEach(ctx, organizationID,
+		authz.Principal{UserID: member.UserID, Agent: member.Agent}, authz.Read, resources,
+		authz.Context{ActsAsAdmin: member.ActsAsAdmin(), TeamMember: teamMember})
+	if err != nil {
+		service.logger.ErrorContext(ctx, "authz: failed to evaluate document policies for search results",
+			"organization_id", organizationID, "corpus_id", corpus.ID, "error", err)
+		return nil, fmt.Errorf("evaluate document policies: %w", err)
+	}
+	kept := make([]domain.Match, 0, len(matches))
+	for i, match := range matches {
+		if allowed[i] {
+			kept = append(kept, match)
+		}
+	}
+	return kept, nil
+}
+
+// documentsForMatches is the Access and Metadata of every document behind
+// matches, keyed by document id. domain.Ref — what hydrate already attaches
+// to a Match as Match.Document — carries a document's title and metadata for
+// a citation, but not its access label, so this reads the rest from the one
+// store method the application layer already has for it: Store.Document,
+// called once per distinct document id rather than once per hit, since a
+// search commonly returns several passages from the same document.
+//
+// A document id Store.Document no longer recognises — vanished in the brief
+// window since retriever.Search read it, the same staleness hydrate's own
+// lookups already tolerate (see retrieval.go) — comes back as that id's zero
+// domain.Document rather than being left out. Its access label is then "",
+// which the baseline treats as an ordinary readable document (see
+// policies/knowledge_bases.cedar); with no stored policy narrowing it, this
+// authorizes exactly as if the check had never run, rather than turning a
+// benign race into a dropped result.
+func (service *Service) documentsForMatches(ctx context.Context, organizationID string, matches []domain.Match) (map[string]domain.Document, error) {
+	documents := make(map[string]domain.Document, len(matches))
+	for _, match := range matches {
+		id := match.Chunk.DocumentID
+		if _, seen := documents[id]; seen {
+			continue
+		}
+		document, err := service.store.Document(ctx, organizationID, id)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				documents[id] = domain.Document{}
+				continue
+			}
+			return nil, err
+		}
+		documents[id] = document
+	}
+	return documents, nil
 }
 
 // requireBackendSpec refuses a corpus whose spec does not match what its

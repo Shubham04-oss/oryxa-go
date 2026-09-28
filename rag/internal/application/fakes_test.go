@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/authz"
+
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/generation"
@@ -660,6 +662,125 @@ func (documents *fakeDocuments) Body(_ context.Context, organizationID, document
 	return knowledgeclient.Document{ID: documentID, Body: documents.body, ContentHash: documents.hash}, nil
 }
 
+// fakeAuthzStore is authz.PolicyStore and application.AuthzStore together, an
+// in-memory stand-in for authz.Store (which needs a real PostgreSQL pool) so
+// these tests can build a real authz.Engine instead of a hand-rolled one: a
+// real engine exercises the actual baseline and Cedar parsing, which is
+// exactly what a task built on top of internal/authz should never have to
+// reimplement, or risk getting subtly wrong, in a test double.
+type fakeAuthzStore struct {
+	mu       sync.Mutex
+	policies map[string]authz.Policy // by id
+}
+
+func newFakeAuthzStore() *fakeAuthzStore {
+	return &fakeAuthzStore{policies: map[string]authz.Policy{}}
+}
+
+// seed stores policy directly, bypassing CreatePolicy's own validation and id
+// assignment, the way seedCorpus bypasses CreateCorpus: a test that wants an
+// already-invalid or specifically-shaped policy in place can do that here.
+func (store *fakeAuthzStore) seed(policy authz.Policy) authz.Policy {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if policy.ID == "" {
+		policy.ID = "pol_" + policy.Name
+	}
+	store.policies[policy.ID] = policy
+	return policy
+}
+
+func (store *fakeAuthzStore) OrganizationPolicies(_ context.Context, organizationID string) ([]authz.Policy, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var result []authz.Policy
+	for _, policy := range store.policies {
+		if policy.OrganizationID == organizationID {
+			result = append(result, policy)
+		}
+	}
+	return result, nil
+}
+
+func (store *fakeAuthzStore) Policies(_ context.Context, organizationID string, scope authz.Scope) ([]authz.Policy, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var result []authz.Policy
+	for _, policy := range store.policies {
+		if policy.OrganizationID == organizationID && policy.Scope == scope {
+			result = append(result, policy)
+		}
+	}
+	return result, nil
+}
+
+func (store *fakeAuthzStore) CreatePolicy(_ context.Context, policy authz.Policy) (authz.Policy, error) {
+	if err := authz.ValidatePolicy(policy.Text); err != nil {
+		return authz.Policy{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, existing := range store.policies {
+		if existing.OrganizationID == policy.OrganizationID && existing.Scope == policy.Scope && existing.Name == policy.Name {
+			return authz.Policy{}, authz.ErrConflict
+		}
+	}
+	id, err := domain.NewID("pol_")
+	if err != nil {
+		return authz.Policy{}, err
+	}
+	now := testClock
+	policy.ID, policy.CreatedAt, policy.UpdatedAt = id, now, now
+	store.policies[id] = policy
+	return policy, nil
+}
+
+func (store *fakeAuthzStore) DeletePolicy(_ context.Context, organizationID string, scope authz.Scope, id string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	existing, ok := store.policies[id]
+	if !ok || existing.OrganizationID != organizationID || existing.Scope != scope {
+		return authz.ErrNotFound
+	}
+	delete(store.policies, id)
+	return nil
+}
+
+func (store *fakeAuthzStore) DeleteScope(_ context.Context, organizationID string, scope authz.Scope) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for id, policy := range store.policies {
+		if policy.OrganizationID == organizationID && policy.Scope == scope {
+			delete(store.policies, id)
+		}
+	}
+	return nil
+}
+
+func (store *fakeAuthzStore) DeleteOrganization(_ context.Context, organizationID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for id, policy := range store.policies {
+		if policy.OrganizationID == organizationID {
+			delete(store.policies, id)
+		}
+	}
+	return nil
+}
+
+// newTestAuthz is a real authz.Engine over a fresh fakeAuthzStore: with
+// nothing seeded or stored through it yet, every check rests on the baseline
+// alone, exactly as production starts for an organization with no policies
+// of its own.
+func newTestAuthz() (*authz.Engine, *fakeAuthzStore) {
+	store := newFakeAuthzStore()
+	engine, err := authz.New(store)
+	if err != nil {
+		panic(err)
+	}
+	return engine, store
+}
+
 type harness struct {
 	service       *Service
 	store         *fakeStore
@@ -670,6 +791,8 @@ type harness struct {
 	retriever     *fakeRetriever
 	generator     *fakeGenerator
 	knowledgeBase *fakeKnowledgeBase
+	authzEngine   *authz.Engine
+	authzStore    *fakeAuthzStore
 }
 
 var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
@@ -683,8 +806,11 @@ func newHarness() *harness {
 	retriever := &fakeRetriever{}
 	generator := &fakeGenerator{model: "test-model"}
 	knowledgeBase := &fakeKnowledgeBase{}
-	service := New(store, fakeDirectory{}, teams, files, documents, vectors, retriever, generator, knowledgeBase, Defaults{}, nil)
+	authzEngine, authzStore := newTestAuthz()
+	service := New(store, fakeDirectory{}, teams, files, documents, vectors, retriever, generator, knowledgeBase,
+		authzEngine, authzStore, Defaults{}, nil)
 	service.now = func() time.Time { return testClock }
 	return &harness{service: service, store: store, teams: teams, files: files, documents: documents,
-		vectors: vectors, retriever: retriever, generator: generator, knowledgeBase: knowledgeBase}
+		vectors: vectors, retriever: retriever, generator: generator, knowledgeBase: knowledgeBase,
+		authzEngine: authzEngine, authzStore: authzStore}
 }

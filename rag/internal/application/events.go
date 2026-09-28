@@ -30,11 +30,15 @@ func (service *Service) OrganizationUpdated(ctx context.Context, event authevent
 	return service.store.UpsertOrganization(ctx, event.OrganizationID, event.Name, event.UpdatedAt)
 }
 
-// OrganizationDeleted removes every corpus the organization had, and the
-// vectors behind them.
+// OrganizationDeleted removes every corpus the organization had, the vectors
+// behind them, and whatever Cedar policies it had stored on any of its
+// knowledge bases or on the organization itself.
 func (service *Service) OrganizationDeleted(ctx context.Context, event autheventsv1.OrganizationDeleted) error {
-	return service.wipe(ctx, event.OrganizationID, "", "",
-		rageventsv1.ReasonOrganizationDeleted, event.DeletedAt)
+	if err := service.wipe(ctx, event.OrganizationID, "", "",
+		rageventsv1.ReasonOrganizationDeleted, event.DeletedAt); err != nil {
+		return err
+	}
+	return service.authzStore.DeleteOrganization(ctx, event.OrganizationID)
 }
 
 // MemberRemoved removes the corpora that hung under that member.

@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3vectors"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/authz"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
@@ -57,7 +58,9 @@ const URLVariable = "RAG_URL"
 // Definition is how a host builds rag.
 var Definition = host.Definition{Name: Name, URLVariable: URLVariable, EventsQueueVariable: "RAG_EVENTS_QUEUE_URL", Migrate: Migrate, Mount: Mount}
 
-// Migrate installs the rag schema.
+// Migrate installs the rag schema, then internal/authz's: rag is the first
+// thing an organization's Cedar policies are stored against, but the table
+// they live in is authz's own to own and migrate, not rag's.
 //
 // It must not check that pgvector is installed: on a fresh database the pool
 // it is handed can predate the migration that installs the extension, and
@@ -66,7 +69,10 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	if platform.Database == nil {
 		return host.ErrDatabaseRequired
 	}
-	return postgres.New(platform.Database).Migrate(ctx)
+	if err := postgres.New(platform.Database).Migrate(ctx); err != nil {
+		return err
+	}
+	return authz.Migrate(ctx, platform.Database)
 }
 
 // Mount assembles rag on what the host shares.
@@ -93,6 +99,17 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}
 	logger := platform.Logger
 	store := postgres.New(platform.Database)
+
+	// The Cedar engine that narrows what mayRead and the rest of application
+	// already decide (see internal/authz). Its baseline alone reproduces
+	// today's rules exactly, so a deployment with nothing stored behaves
+	// exactly as it did before this existed; building it is not optional,
+	// because every read, search and document check now asks it.
+	authzStore := authz.NewStore(platform.Database)
+	authzEngine, err := authz.New(authzStore, authz.WithLogger(logger))
+	if err != nil {
+		return host.Service{}, err
+	}
 
 	bedrockClient := bedrockruntime.NewFromConfig(platform.AWS)
 	bedrockAgentRuntimeClient := bedrockagentruntime.NewFromConfig(platform.AWS)
@@ -252,7 +269,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}
 
 	service := application.New(store, authclient.New(config.AuthURL), teams, files, documents, vectors,
-		retriever, generator, appKnowledgeBase, application.Defaults{
+		retriever, generator, appKnowledgeBase, authzEngine, authzStore, application.Defaults{
 			Provider:           config.DefaultProvider,
 			Model:              config.DefaultModel,
 			Metric:             config.DefaultMetric,

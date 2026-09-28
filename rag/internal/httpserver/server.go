@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/authz"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
@@ -46,6 +47,10 @@ type ragService interface {
 
 	Search(context.Context, authclient.Credentials, string, string, domain.Query) (retrieval.Results, error)
 	Answer(context.Context, authclient.Credentials, string, string, domain.Query) (application.Answered, error)
+
+	ListPolicies(context.Context, authclient.Credentials, string, string) ([]authz.Policy, error)
+	AddPolicy(context.Context, authclient.Credentials, string, string, application.AddPolicyInput) (authz.Policy, error)
+	RemovePolicy(context.Context, authclient.Credentials, string, string, string) error
 }
 
 type Config struct {
@@ -108,6 +113,10 @@ func New(service ragService, config Config, logger *slog.Logger) *Server {
 
 	server.handle("POST /v1/organizations/{organizationID}/corpora/{corpusID}/search", server.search)
 	server.handle("POST /v1/organizations/{organizationID}/corpora/{corpusID}/answer", server.answer)
+
+	server.handle("GET /v1/organizations/{organizationID}/corpora/{corpusID}/policies", server.listPolicies)
+	server.handle("POST /v1/organizations/{organizationID}/corpora/{corpusID}/policies", server.addPolicy)
+	server.handle("DELETE /v1/organizations/{organizationID}/corpora/{corpusID}/policies/{policyID}", server.deletePolicy)
 	return server
 }
 

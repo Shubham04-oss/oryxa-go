@@ -45,7 +45,7 @@ func newHarnessWithBedrockKBDefault(t *testing.T) *harness {
 	t.Helper()
 	h := newHarness()
 	h.service = New(h.store, fakeDirectory{}, h.teams, h.files, h.documents, h.vectors, h.retriever, h.generator,
-		h.knowledgeBase, Defaults{Backend: domain.BackendBedrockKB}, nil)
+		h.knowledgeBase, h.authzEngine, h.authzStore, Defaults{Backend: domain.BackendBedrockKB}, nil)
 	h.service.now = func() time.Time { return testClock }
 	return h
 }
