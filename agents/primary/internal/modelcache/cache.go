@@ -16,6 +16,7 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -201,18 +202,31 @@ func (s *GenaiStore) Ensure(ctx context.Context, modelName string, prefix Prefix
 	return cached.Name, nil
 }
 
-// Close deletes every cache this store created.
+// Close deletes every cache this store created that has not expired yet.
+// Vertex deletes an expired cache itself and answers 404 for it, which is
+// taken as deleted too.
 func (s *GenaiStore) Close(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
 	var failures []error
 	for key, entry := range s.entries {
-		if _, err := s.caches.Delete(ctx, entry.name, nil); err != nil {
+		delete(s.entries, key)
+		if !now.Before(entry.expiresAt) {
+			continue
+		}
+		if _, err := s.caches.Delete(ctx, entry.name, nil); err != nil && !gone(err) {
 			failures = append(failures, fmt.Errorf("delete cached content %q: %w", entry.name, err))
 		}
-		delete(s.entries, key)
 	}
 	return errors.Join(failures...)
+}
+
+// gone reports whether err is Vertex saying the cached content no longer
+// exists, as it does once a cache has expired or been deleted elsewhere.
+func gone(err error) bool {
+	var apiErr genai.APIError
+	return errors.As(err, &apiErr) && apiErr.Code == http.StatusNotFound
 }
 
 // pruneExpired best-effort deletes entries that are already gone server-side.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -124,10 +125,11 @@ func TestEstimateTokens(t *testing.T) {
 }
 
 type fakeCaches struct {
-	created  int
-	deleted  []string
-	configs  []*genai.CreateCachedContentConfig
-	failWith error
+	created    int
+	deleted    []string
+	configs    []*genai.CreateCachedContentConfig
+	failWith   error
+	deleteWith error
 }
 
 func (f *fakeCaches) Create(_ context.Context, _ string, config *genai.CreateCachedContentConfig) (*genai.CachedContent, error) {
@@ -141,6 +143,9 @@ func (f *fakeCaches) Create(_ context.Context, _ string, config *genai.CreateCac
 
 func (f *fakeCaches) Delete(_ context.Context, name string, _ *genai.DeleteCachedContentConfig) (*genai.DeleteCachedContentResponse, error) {
 	f.deleted = append(f.deleted, name)
+	if f.deleteWith != nil {
+		return nil, f.deleteWith
+	}
 	return &genai.DeleteCachedContentResponse{}, nil
 }
 
@@ -224,5 +229,43 @@ func TestGenaiStoreCloseDeletesItsCaches(t *testing.T) {
 	}
 	if len(caches.deleted) != 2 {
 		t.Fatalf("deleted %v, want both caches", caches.deleted)
+	}
+}
+
+func TestGenaiStoreCloseLeavesExpiredCachesToVertex(t *testing.T) {
+	caches := &fakeCaches{}
+	now := time.Now()
+	store := newStore(caches, time.Hour, func() time.Time { return now })
+	if _, err := store.Ensure(context.Background(), "gemini-test", Prefix{Instruction: largeInstruction()}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	if err := store.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(caches.deleted) != 0 {
+		t.Fatalf("deleted %v, want none: Vertex deleted the expired cache itself", caches.deleted)
+	}
+}
+
+func TestGenaiStoreCloseTakesAGoneCacheAsDeleted(t *testing.T) {
+	caches := &fakeCaches{deleteWith: genai.APIError{Code: http.StatusNotFound, Status: "404 Not Found"}}
+	store := newStore(caches, time.Hour, time.Now)
+	if _, err := store.Ensure(context.Background(), "gemini-test", Prefix{Instruction: largeInstruction()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v, want a cache Vertex no longer has taken as deleted", err)
+	}
+}
+
+func TestGenaiStoreCloseReportsAFailedDelete(t *testing.T) {
+	caches := &fakeCaches{deleteWith: genai.APIError{Code: http.StatusForbidden, Status: "403 Forbidden"}}
+	store := newStore(caches, time.Hour, time.Now)
+	if _, err := store.Ensure(context.Background(), "gemini-test", Prefix{Instruction: largeInstruction()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(context.Background()); err == nil {
+		t.Fatal("Close succeeded, want the refused delete reported")
 	}
 }

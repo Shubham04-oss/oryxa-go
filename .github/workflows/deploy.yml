@@ -77,7 +77,7 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           aws ecr get-login-password | docker login --username AWS --password-stdin "${REPOSITORY%%/*}"
-          docker buildx build --platform linux/arm64 --tag "$REPOSITORY:$TAG" --push .
+          docker buildx build --platform linux/arm64 --build-arg VERSION="$TAG" --tag "$REPOSITORY:$TAG" --push .
 
       - name: Roll the service onto it
         env:

@@ -22,7 +22,7 @@ repository=$(tf_output ecr_repository)
 
 step "building $repository:$tag"
 aws ecr get-login-password | docker login --username AWS --password-stdin "${repository%%/*}"
-docker build --platform linux/arm64 --tag "$repository:$tag" .
+docker build --platform linux/arm64 --build-arg VERSION="$tag" --tag "$repository:$tag" .
 docker push "$repository:$tag"
 
 jq -n --arg tag "$tag" --argjson count "$count" '{image_tag: $tag, desired_count: $count}' >"$release"

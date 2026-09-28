@@ -193,7 +193,15 @@ func metricExportConfigured() bool {
 		strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")) != ""
 }
 
+// version is the release the binary was built as, set at link time by the
+// image build (Dockerfile's VERSION, the image's tag). Unset, the version is
+// the module's, or "development".
+var version string
+
 func buildVersion() string {
+	if version != "" {
+		return version
+	}
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
 		return info.Main.Version
 	}
