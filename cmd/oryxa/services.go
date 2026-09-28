@@ -9,6 +9,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/email"
 	"github.com/Shubham04-oss/oryxa-go/files"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace"
 	"github.com/Shubham04-oss/oryxa-go/knowledge"
 	"github.com/Shubham04-oss/oryxa-go/rag"
 	"github.com/Shubham04-oss/oryxa-go/realtime"
@@ -29,5 +30,6 @@ var definitions = []host.Definition{
 	batching.Definition,
 	email.Definition,
 	primary.Definition,
+	workspace.Definition,
 	realtime.Definition,
 }

@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"slices"
 	"strings"
@@ -25,6 +26,7 @@ type options struct {
 	api, org, file, output, preset, domains string
 	json, dryRun, noInput, yes              bool
 	noBrowser                               bool
+	to                                      int64
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
@@ -49,6 +51,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	flags.BoolVar(&opts.noInput, "no-input", false, "never prompt for confirmation")
 	flags.BoolVar(&opts.noBrowser, "no-browser", false, "print sign-in URL without opening a browser")
 	flags.BoolVar(&opts.yes, "yes", false, "confirm setup plan or overwrite an output file")
+	flags.Int64Var(&opts.to, "to", 0, "workspace version to restore (rollback)")
 	if err := flags.Parse(args[1:]); err != nil {
 		return 3
 	}
@@ -74,7 +77,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return 0
 	}
 	if command == "setup" {
-		document, err := readDocument(opts.file)
+		document, err := setupDocument(opts, stderr)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -89,23 +92,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if err != nil {
 			return reportError(err, stderr)
 		}
-		plan, err := runtime.BuildPlan(document, state)
+		plan, err := workspacePlan(ctx, client, document, state)
 		if err != nil {
 			return reportError(err, stderr)
 		}
 		if code := report(stdout, opts.json, plan); code != 0 || opts.dryRun {
 			return code
 		}
-		if len(plan.Changes) == 0 {
-			if len(plan.NeedsHuman) > 0 {
-				return 2
-			}
-			return 0
-		}
 		if hasRemoval(plan) && opts.noInput {
 			return reportError(fmt.Errorf("prune requires an interactive confirmation"), stderr)
 		}
-		if !opts.yes {
+		if !opts.yes && len(plan.Changes) > 0 {
 			if opts.noInput {
 				return reportError(fmt.Errorf("apply requires --yes under --no-input"), stderr)
 			}
@@ -115,21 +112,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 				return reportError(fmt.Errorf("apply was cancelled"), stderr)
 			}
 		}
-		remaining, err := runtime.ApplyApproved(ctx, client, document, plan)
+		result, err := workspaceApply(ctx, client, document, state, plan)
 		if err != nil {
 			return reportError(err, stderr)
 		}
-		status := "done"
-		code := 0
-		if len(remaining.NeedsHuman) > 0 {
-			status, code = "needs_human", 2
-		} else if len(remaining.Changes) > 0 {
-			status, code = "failed", 1
-		}
-		if report(stdout, opts.json, map[string]any{"step": "apply", "status": status, "remaining": remaining}) != 0 {
+		if report(stdout, opts.json, result) != 0 {
 			return 1
 		}
-		return code
+		return applyExitCode(result.Status)
 	}
 	if command == "validate" {
 		document, err := readDocument(opts.file)
@@ -137,6 +127,53 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return reportError(err, stderr)
 		}
 		return report(stdout, opts.json, map[string]any{"step": "validate", "status": "done", "organization": document.Metadata.Organization})
+	}
+	if command == "rollback" {
+		if opts.org == "" || opts.to <= 0 {
+			return reportError(fmt.Errorf("rollback requires --org and a positive --to version"), stderr)
+		}
+		client, err := signedInClient(ctx, opts, stdout, getenv)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		state, err := client.Snapshot(ctx, opts.org)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		if state.Organization == nil {
+			return reportError(fmt.Errorf("organization was not found"), stderr)
+		}
+		document, err := client.WorkspaceVersion(ctx, state.Organization.ID, opts.to)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		plan, err := client.WorkspacePlan(ctx, state.Organization.ID, document)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		if code := report(stdout, opts.json, plan); code != 0 || opts.dryRun {
+			return code
+		}
+		if hasRemoval(plan) {
+			if opts.noInput {
+				return reportError(fmt.Errorf("prune requires an interactive confirmation"), stderr)
+			}
+			if !opts.yes {
+				fmt.Fprint(stderr, "Confirm these removals? [y/N] ")
+				answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+					return reportError(fmt.Errorf("rollback was cancelled"), stderr)
+				}
+			}
+		}
+		result, err := client.WorkspaceRollback(ctx, state.Organization.ID, opts.to, plan)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		if code := report(stdout, opts.json, result); code != 0 {
+			return code
+		}
+		return applyExitCode(result.Status)
 	}
 	if command == "plan" || command == "apply" || command == "diff" {
 		document, err := readDocument(opts.file)
@@ -155,7 +192,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			if err != nil {
 				return reportError(err, stderr)
 			}
-			approved, err := runtime.BuildPlan(document, state)
+			approved, err := workspacePlan(ctx, client, document, state)
 			if err != nil {
 				return reportError(err, stderr)
 			}
@@ -174,32 +211,20 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 					}
 				}
 			}
-			plan, err := runtime.ApplyApproved(ctx, client, document, approved)
+			result, err := workspaceApply(ctx, client, document, state, approved)
 			if err != nil {
 				return reportError(err, stderr)
 			}
-			status := "done"
-			if len(plan.NeedsHuman) > 0 {
-				status = "needs_human"
-			} else if len(plan.Changes) > 0 {
-				status = "failed"
-			}
-			if code := report(stdout, opts.json, map[string]any{"step": "apply", "status": status, "remaining": plan}); code != 0 {
+			if code := report(stdout, opts.json, result); code != 0 {
 				return code
 			}
-			if status != "done" {
-				if status == "needs_human" {
-					return 2
-				}
-				return 1
-			}
-			return 0
+			return applyExitCode(result.Status)
 		}
 		state, err := client.Snapshot(ctx, document.Metadata.Organization)
 		if err != nil {
 			return reportError(err, stderr)
 		}
-		plan, err := runtime.BuildPlan(document, state)
+		plan, err := workspacePlan(ctx, client, document, state)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -232,9 +257,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return reportError(fmt.Errorf("organization was not found"), stderr)
 		}
 		if command == "status" {
-			return report(stdout, opts.json, map[string]any{"step": "status", "status": "done", "organization": opts.org, "members": len(state.Members), "teams": len(state.Teams), "pending_invitations": len(state.Invitations)})
+			status, err := client.WorkspaceStatus(ctx, state.Organization.ID)
+			if err != nil {
+				return reportError(err, stderr)
+			}
+			return report(stdout, opts.json, status)
 		}
-		document, err := runtime.Pull(state)
+		document, err := client.WorkspacePull(ctx, state.Organization.ID)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -243,6 +272,73 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	fmt.Fprintln(stderr, "unknown command:", command)
 	usage(stderr)
 	return 3
+}
+
+func workspacePlan(ctx context.Context, client *runtime.Client, document spec.Document, state runtime.Snapshot) (runtime.Plan, error) {
+	if state.Organization == nil {
+		return runtime.BuildPlan(document, state)
+	}
+	return client.WorkspacePlan(ctx, state.Organization.ID, document)
+}
+
+func workspaceApply(ctx context.Context, client *runtime.Client, document spec.Document, state runtime.Snapshot, approved runtime.Plan) (runtime.WorkspaceApplyResult, error) {
+	if state.Organization == nil {
+		if _, err := runtime.ApplyApproved(ctx, client, document, approved); err != nil {
+			return runtime.WorkspaceApplyResult{}, err
+		}
+		var err error
+		state, err = client.Snapshot(ctx, document.Metadata.Organization)
+		if err != nil {
+			return runtime.WorkspaceApplyResult{}, err
+		}
+		if state.Organization == nil {
+			return runtime.WorkspaceApplyResult{}, fmt.Errorf("created organization has not appeared in the API; retry apply")
+		}
+	}
+	return client.WorkspaceApply(ctx, state.Organization.ID, document, approved)
+}
+
+func applyExitCode(status string) int {
+	switch status {
+	case "done":
+		return 0
+	case "needs_human":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func setupDocument(opts options, stderr io.Writer) (spec.Document, error) {
+	document, err := readDocument(opts.file)
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return document, err
+	}
+	if opts.org == "" {
+		if opts.noInput {
+			return spec.Document{}, fmt.Errorf("--org is required to create a starter workspace under --no-input")
+		}
+		fmt.Fprint(stderr, "Organization slug: ")
+		answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		opts.org = strings.TrimSpace(answer)
+	}
+	document = spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: opts.org}, Preset: opts.preset}
+	if opts.domains != "" {
+		for _, domain := range strings.Split(opts.domains, ",") {
+			document.Metadata.Domains = append(document.Metadata.Domains, strings.TrimSpace(domain))
+		}
+	}
+	if err := document.Validate(); err != nil {
+		return spec.Document{}, err
+	}
+	data, err := document.YAML()
+	if err != nil {
+		return spec.Document{}, err
+	}
+	if err := os.WriteFile(opts.file, data, 0600); err != nil {
+		return spec.Document{}, err
+	}
+	return document, nil
 }
 
 func hasRemoval(plan runtime.Plan) bool {
@@ -291,7 +387,7 @@ func initCommand(ctx context.Context, opts options, stdout, stderr io.Writer, ge
 			return reportError(err, stderr)
 		}
 		if state.Organization != nil {
-			document, err = runtime.Pull(state)
+			document, err = client.WorkspacePull(ctx, state.Organization.ID)
 			if err != nil {
 				return reportError(err, stderr)
 			}
@@ -359,6 +455,9 @@ func report(writer io.Writer, asJSON bool, value any) int {
 
 func reportError(err error, stderr io.Writer) int {
 	fmt.Fprintln(stderr, err)
+	if runtime.IsStatus(err, http.StatusConflict) {
+		return 5
+	}
 	return 3
 }
 
@@ -380,8 +479,9 @@ Commands:
   plan       show changes against the current organization
   apply      make the planned changes, then report any pending joins
   diff       alias of plan
-  pull       write the current organization and team settings as YAML
-  status     show organization, member, team and invitation counts
+  pull       write live organization settings as YAML
+  status     check the applied workspace for drift and pending steps
+  rollback  restore a saved workspace version with --to VERSION
   whoami     show the authenticated user and organizations
 
 Remote commands sign in through the browser when ORYXA_ACCESS_TOKEN is absent.

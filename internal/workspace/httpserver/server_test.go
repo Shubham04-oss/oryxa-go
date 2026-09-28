@@ -1,0 +1,243 @@
+package httpserver
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/runtime"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
+)
+
+type memoryRepository struct {
+	mu       sync.Mutex
+	versions []store.Version
+}
+
+func (repo *memoryRepository) WithApplyLock(_ context.Context, _ string, operation func() error) error {
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	return operation()
+}
+
+func (repo *memoryRepository) Latest(context.Context, string) (store.Version, error) {
+	if len(repo.versions) == 0 {
+		return store.Version{}, store.ErrVersionNotFound
+	}
+	return repo.versions[len(repo.versions)-1], nil
+}
+
+func (repo *memoryRepository) Versions(context.Context, string) ([]store.Version, error) {
+	return append([]store.Version(nil), repo.versions...), nil
+}
+
+func (repo *memoryRepository) AtVersion(_ context.Context, _ string, number int64) (store.Version, error) {
+	if number <= 0 || number > int64(len(repo.versions)) {
+		return store.Version{}, store.ErrVersionNotFound
+	}
+	return repo.versions[number-1], nil
+}
+
+func (repo *memoryRepository) Save(_ context.Context, _, actor string, document []byte) (store.Version, error) {
+	if len(repo.versions) > 0 && bytes.Equal(repo.versions[len(repo.versions)-1].Document, document) {
+		return repo.versions[len(repo.versions)-1], nil
+	}
+	version := store.Version{Number: int64(len(repo.versions) + 1), AppliedBy: actor, AppliedAt: time.Now(), Document: document}
+	repo.versions = append(repo.versions, version)
+	return version, nil
+}
+
+func fakeOrganizationAPI(extraMember bool) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Header.Get("Authorization") != "Bearer owner-token" {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch request.URL.Path {
+		case "/v1/auth/me":
+			_, _ = io.WriteString(writer, `{"user":{"id":"u1","email":"owner@acme.com"}}`)
+		case "/v1/organizations":
+			_, _ = io.WriteString(writer, `{"organizations":[{"id":"org1","name":"Acme","slug":"acme"}]}`)
+		case "/v1/organizations/org1":
+			_, _ = io.WriteString(writer, `{"organization":{"id":"org1","name":"Acme","slug":"acme"},"membership":{"organization_id":"org1","user_id":"u1","role":"owner"}}`)
+		case "/v1/organizations/org1/members":
+			if extraMember {
+				_, _ = io.WriteString(writer, `{"members":[{"user_id":"u1","email":"owner@acme.com","role":"owner"},{"user_id":"u2","email":"other@acme.com","role":"member"}]}`)
+			} else {
+				_, _ = io.WriteString(writer, `{"members":[{"user_id":"u1","email":"owner@acme.com","role":"owner"}]}`)
+			}
+		case "/v1/organizations/org1/invitations":
+			_, _ = io.WriteString(writer, `{"invitations":[]}`)
+		case "/v1/organizations/org1/teams":
+			_, _ = io.WriteString(writer, `{"teams":[]}`)
+		case "/v1/organizations/org1/organization-agent":
+			writer.WriteHeader(http.StatusNotFound)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func workspaceRequest(t *testing.T, server *httptest.Server, method, path, token string, body any) *http.Response {
+	t.Helper()
+	var input io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input = bytes.NewReader(data)
+	}
+	request, err := http.NewRequest(method, server.URL+path, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func TestWorkspaceApplyIsVersionedAndIdempotent(t *testing.T) {
+	api := fakeOrganizationAPI(false)
+	defer api.Close()
+	repo := &memoryRepository{}
+	server, err := New(repo, api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := httptest.NewServer(server)
+	defer workspace.Close()
+	document := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme, domains: [acme.com]}\npreset: team\npeople:\n  invite: quiet\n  members: [{email: owner@acme.com, role: owner}]\n"
+	path := "/v1/organizations/org1/workspace"
+	for _, token := range []string{"", "invalid"} {
+		response := workspaceRequest(t, workspace, http.MethodPost, path+":plan", token, map[string]string{"document": document})
+		if response.StatusCode != http.StatusUnauthorized {
+			t.Errorf("token %q: got %d", token, response.StatusCode)
+		}
+		response.Body.Close()
+	}
+	response := workspaceRequest(t, workspace, http.MethodPost, path+":plan", "owner-token", map[string]string{"document": document})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("plan status %d", response.StatusCode)
+	}
+	var plan runtime.Plan
+	if err := json.NewDecoder(response.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if len(plan.Changes) != 0 {
+		t.Fatalf("plan had changes: %+v", plan)
+	}
+	for i := 0; i < 2; i++ {
+		response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": document, "approved_plan": plan})
+		if response.StatusCode != http.StatusOK {
+			data, _ := io.ReadAll(response.Body)
+			t.Fatalf("apply %d status %d: %s", i, response.StatusCode, data)
+		}
+		var result runtime.WorkspaceApplyResult
+		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if result.Version != 1 || result.Status != "done" {
+			t.Fatalf("apply %d result %+v", i, result)
+		}
+	}
+	if len(repo.versions) != 1 {
+		t.Fatalf("saved %d versions", len(repo.versions))
+	}
+	response = workspaceRequest(t, workspace, http.MethodGet, path, "owner-token", nil)
+	data, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	pulled, err := spec.Parse(data)
+	if err != nil || len(pulled.Metadata.Domains) != 1 || pulled.People.Invite != "quiet" {
+		t.Fatalf("pull: %+v, %v", pulled, err)
+	}
+	response = workspaceRequest(t, workspace, http.MethodGet, path+"/status", "owner-token", nil)
+	var status struct {
+		Status  string `json:"status"`
+		Version int64  `json:"version"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if status.Status != "done" || status.Version != 1 {
+		t.Fatalf("status %+v", status)
+	}
+}
+
+func TestWorkspaceApplyRejectsUnapprovedRemoval(t *testing.T) {
+	api := fakeOrganizationAPI(true)
+	defer api.Close()
+	repo := &memoryRepository{}
+	server, err := New(repo, api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := httptest.NewServer(server)
+	defer workspace.Close()
+	document := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\npeople:\n  prune: true\n  members: [{email: owner@acme.com, role: owner}]\n"
+	response := workspaceRequest(t, workspace, http.MethodPut, "/v1/organizations/org1/workspace", "owner-token", map[string]any{"document": document, "approved_plan": runtime.Plan{}})
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusConflict || len(repo.versions) != 0 {
+		t.Fatalf("unapproved removal returned %d and saved %d versions", response.StatusCode, len(repo.versions))
+	}
+}
+
+func TestWorkspaceRollbackRestoresEarlierFileAsNewVersion(t *testing.T) {
+	api := fakeOrganizationAPI(false)
+	defer api.Close()
+	repo := &memoryRepository{}
+	server, err := New(repo, api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := httptest.NewServer(server)
+	defer workspace.Close()
+	path := "/v1/organizations/org1/workspace"
+	files := []string{
+		"apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme, domains: [acme.com]}\n",
+		"apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme, domains: [acme.com, example.com]}\n",
+	}
+	for _, document := range files {
+		response := workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": document, "approved_plan": runtime.Plan{}})
+		if response.StatusCode != http.StatusOK {
+			data, _ := io.ReadAll(response.Body)
+			t.Fatalf("apply status %d: %s", response.StatusCode, data)
+		}
+		response.Body.Close()
+	}
+	response := workspaceRequest(t, workspace, http.MethodGet, path+"/versions/1", "owner-token", nil)
+	data, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte("acme.com")) {
+		t.Fatalf("read version 1 status %d: %s", response.StatusCode, data)
+	}
+	response = workspaceRequest(t, workspace, http.MethodPost, path+":rollback", "owner-token", map[string]any{"to": 1, "approved_plan": runtime.Plan{}})
+	if response.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(response.Body)
+		t.Fatalf("rollback status %d: %s", response.StatusCode, data)
+	}
+	var result runtime.WorkspaceApplyResult
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if result.Version != 3 || len(repo.versions) != 3 || !bytes.Equal(repo.versions[0].Document, repo.versions[2].Document) {
+		t.Fatalf("rollback result %+v, versions %d", result, len(repo.versions))
+	}
+}

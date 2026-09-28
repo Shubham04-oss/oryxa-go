@@ -128,7 +128,7 @@ func TestEveryEventConsumerDeclaresItsQueue(t *testing.T) {
 	// service is in neither list until someone decides which it is: a
 	// consumer that forgot to declare its queue would otherwise pass here
 	// and start in production without it, never hearing what others deleted.
-	consumesNothing := map[string]bool{}
+	consumesNothing := map[string]bool{"workspace": true}
 	got := map[string]string{}
 	for _, definition := range definitions {
 		switch {

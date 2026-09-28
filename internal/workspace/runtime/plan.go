@@ -402,6 +402,12 @@ func verifyApprovedRemovals(plan Plan, approved *Plan) error {
 	return nil
 }
 
+// RemovalsDiffer reports whether an approved plan still matches the current
+// deletion set, including when a previously planned deletion disappeared.
+func RemovalsDiffer(current, approved Plan) bool {
+	return !slices.Equal(deletions(current), deletions(approved))
+}
+
 func deletions(plan Plan) []Change {
 	var result []Change
 	for _, change := range plan.Changes {
