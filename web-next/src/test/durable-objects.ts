@@ -1,12 +1,13 @@
 // A stand-in for the Agents SDK, for the tests of the direct messages'
 // objects (src/direct-message-agent.ts, src/inbox-agent.ts,
-// src/realtime-registry-agent.ts), which only run in workerd. Each object
+// src/realtime-registry-agent.ts) and of the purges that reach a teamspace's
+// room (src/teamspace-room-agent.ts), which only run in workerd. Each object
 // gets a real SQLite database (Node's built-in, as Durable Object SQLite is
-// SQLite) with workerd's `ctx.storage.transactionSync`, sockets the test
-// opens, speaks through and reads, and schedules the test runs;
-// `getAgentByName` reaches the other objects over a stand-in RPC that
-// copies what crosses it, as Durable Object RPC does, and fails for an
-// object the test says was reset. Use it with
+// SQLite) with workerd's `ctx.storage.transactionSync` and `ctx.storage.kv`
+// on it, the SDK's synced state, sockets the test opens, speaks through and
+// reads, and schedules the test runs; `getAgentByName` reaches the other
+// objects over a stand-in RPC that copies what crosses it, as Durable Object
+// RPC does, and fails for an object the test says was reset. Use it with
 // `vi.mock("agents", async () => (await import("@/test/durable-objects")).agentsModule)`.
 
 type Row = Record<string, unknown>
@@ -74,10 +75,64 @@ export class FakeSocket {
 
 let scheduleIds = 0
 
+/**
+ * workerd's synchronous key-value storage (`ctx.storage.kv`), as far as the
+ * objects use it, kept in the object's own database, so that a restart keeps
+ * it: values as JSON, listed in key order.
+ */
+class FakeKv {
+  constructor(private readonly db: () => Database) {}
+
+  private table(): Database {
+    const db = this.db()
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS _fake_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    ).all()
+    return db
+  }
+
+  get<T>(key: string): T | undefined {
+    const row = this.table()
+      .prepare("SELECT value FROM _fake_kv WHERE key = ?")
+      .all(key)
+      .at(0)
+    return row === undefined ? undefined : (JSON.parse(String(row.value)) as T)
+  }
+
+  put(key: string, value: unknown): void {
+    this.table()
+      .prepare(
+        "INSERT INTO _fake_kv (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"
+      )
+      .all(key, JSON.stringify(value))
+  }
+
+  delete(key: string): boolean {
+    const had = this.get(key) !== undefined
+    this.table().prepare("DELETE FROM _fake_kv WHERE key = ?").all(key)
+    return had
+  }
+
+  list<T>({
+    prefix = "",
+    reverse = false,
+    limit = -1,
+  }: { prefix?: string; reverse?: boolean; limit?: number } = {}): Array<
+    [string, T]
+  > {
+    return this.table()
+      .prepare(
+        `SELECT key, value FROM _fake_kv WHERE substr(key, 1, ?) = ? ORDER BY key ${reverse ? "DESC" : "ASC"} LIMIT ?`
+      )
+      .all(prefix.length, prefix, limit)
+      .map((row) => [String(row.key), JSON.parse(String(row.value)) as T])
+  }
+}
+
 /** The Durable Object's state, as far as the objects use it. */
 type FakeState = {
   id: { name: string }
-  storage: { transactionSync: <T>(work: () => T) => T }
+  storage: { transactionSync: <T>(work: () => T) => T; kv: FakeKv }
 }
 
 /** The SDK's `Agent`, as far as the objects use it. */
@@ -88,12 +143,17 @@ class Agent {
   db: Database
   sockets: Array<FakeSocket> = []
   jobs: Array<Job> = []
+  /** The synced state before the object first sets one: an object's own, if it has one. */
+  initialState: unknown = undefined
   private savepoints = 0
 
   constructor(ctx: { id: { name: string } }, env: unknown) {
     this.ctx = {
       ...ctx,
-      storage: { transactionSync: (work) => this.transactionSync(work) },
+      storage: {
+        transactionSync: (work) => this.transactionSync(work),
+        kv: new FakeKv(() => this.db),
+      },
     }
     this.env = env
     this.db = new DatabaseSync(":memory:")
@@ -122,8 +182,27 @@ class Agent {
     return this.ctx.id.name
   }
 
+  /** The synced state: the last one set, kept in its database as the SDK keeps it, or the initial one. */
   get state(): unknown {
-    return undefined
+    const kept = this.ctx.storage.kv.get<{ state: unknown }>("_fake_state")
+    return kept === undefined ? this.initialState : kept.state
+  }
+
+  // As the SDK's: checked, kept, and sent to every socket open whose
+  // protocol is on.
+  setState(state: unknown): void {
+    const validate = (this as { validateStateChange?: unknown })
+      .validateStateChange
+    if (typeof validate === "function") validate.call(this, state, "server")
+    this.ctx.storage.kv.put("_fake_state", { state })
+    for (const socket of this.getConnections()) {
+      if (!this.isConnectionProtocolEnabled(socket)) continue
+      socket.send(JSON.stringify({ type: "cf_agent_state", state }))
+    }
+  }
+
+  isConnectionProtocolEnabled(_connection: FakeSocket): boolean {
+    return true
   }
 
   // As the SDK: `?` for each value, run on the object's own database.
@@ -333,7 +412,11 @@ async function getAgentByName(namespace: FakeNamespace, name: string) {
   return namespace.stub(name)
 }
 
-export const agentsModule = { Agent, getAgentByName }
+export const agentsModule = {
+  Agent,
+  getAgentByName,
+  MessageType: { CF_AGENT_STATE: "cf_agent_state" },
+}
 
 /** An object as the tests reach into it: its sockets, schedules and database. */
 export type Harness = {

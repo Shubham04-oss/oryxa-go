@@ -1,8 +1,10 @@
-import { Agent } from "agents"
+import { Agent, MessageType, getAgentByName } from "agents"
 import type { Connection, ConnectionContext, Schedule, WSMessage } from "agents"
+import type { ConversationEnv } from "./conversation-env"
 import { ApiError, requestError } from "./lib/api/client"
 import { organizationPath } from "./lib/agents/http"
 import { isUnavailableHere } from "./lib/agents/policy"
+import { isNameId, registryName } from "./lib/dms/names"
 import { roomApi } from "./lib/rooms/client"
 import type { RoomMessage, RoomRequest, RoomSeat } from "./lib/rooms/client"
 import {
@@ -10,6 +12,7 @@ import {
   emptyRoomState,
   hasLanded,
   parseRoomClientMessage,
+  parseTeamspaceRoomAgentName,
   roomGoneCloseCode,
   teamspaceRoomAgentName,
 } from "./lib/rooms/room-agent"
@@ -19,7 +22,17 @@ import type {
   TeamspaceRoomState,
 } from "./lib/rooms/room-agent"
 import { sessionExpiredCode } from "./lib/threads/chat-messages"
+import { isPurgeInstant, purgeMemoryMs } from "./realtime-registry-agent"
 import type { ThreadChatEnv } from "./thread-chat-agent"
+
+/**
+ * What the room reads from the Worker's environment: Go's origin, and its
+ * organization's registry, which it registers with so that a purge of the
+ * organization, or of a member who left it, finds it (src/realtime-purge.ts).
+ */
+export interface RoomEnv extends ThreadChatEnv {
+  RealtimeRegistryAgent: ConversationEnv["RealtimeRegistryAgent"]
+}
 
 /**
  * The headers the Worker sets on every request it routes to the room,
@@ -44,14 +57,31 @@ export type RoomConnectionState = {
   teamspaceId: string
   /** The page's origin: Go takes a cookie-authenticated post only from an allowed one. */
   origin: string
+  /**
+   * When the socket opened, as ISO 8601 in UTC to the millisecond: a purge
+   * closes a member's sockets opened at or before they left. Sockets from
+   * before it was kept have none, and count as older than any removal.
+   */
+  connectedAt?: string
   /** Who the cookie is, once `GET /v1/auth/me` has said. */
   userId?: string
   /** The page says its tab is visible. False until the page says anything. */
   visible: boolean
   /** Go answered 401 for this cookie, so it is never used again. */
   expired?: boolean
+  /**
+   * Its member may no longer open the room: Go said so, or a purge did. The
+   * socket is told `gone` and closed, and its cookie is never used again.
+   */
+  removed?: boolean
   /** The socket has been sent the room; until then it is sent nothing else of it. */
   ready?: boolean
+  /**
+   * It was sent the room, then held back while Go had not lately said its
+   * member is on the team. Once Go has, it is sent the room afresh, and its
+   * member's posts' results with it.
+   */
+  held?: boolean
 }
 
 /**
@@ -69,6 +99,19 @@ export const roomTiming = {
   slowMs: 12_000,
   /** Every visible member is read at least this often: Go counts a reader present for 90 s. */
   heartbeatMs: 30_000,
+  /**
+   * How long Go's word that a member is on the team counts, from when it was
+   * asked: once it is older, nothing of the room reaches their sockets until
+   * Go says it again. A member removed without a purge stops hearing the
+   * room within this.
+   */
+  memberLeaseMs: 20_000,
+  /**
+   * While anybody has the room open in a visible tab, every member with a
+   * socket here, looking or not, is asked again once Go's word on them is
+   * this old, unless a read's seats have said it again meanwhile.
+   */
+  memberCheckMs: 15_000,
   /** A member whose read failed is tried again after this. */
   retryMs: 5_000,
   /** A member coming back to the room is read at once, unless read this recently. */
@@ -96,6 +139,12 @@ const maxPostsPerMember = 5
 // The largest frame the object sends: a long room's messages go in several.
 const maxFrameLength = 256 * 1024
 
+/** How long the room waits before registering with its organization again after it failed to. */
+const registrationRetrySeconds = 30
+
+/** What a member Go no longer has on the team is told as their sockets close. */
+const notOnTheTeam = "Only the teamspace's team can open its room."
+
 // Keys in the object's storage (SQLite-backed KV). Each message has its own
 // key, by seq, so the room lists in order.
 const keys = {
@@ -104,18 +153,40 @@ const keys = {
   readThrough: "room:read-through",
   lastRead: "room:last-read",
   readers: "room:readers",
+  removals: "room:removals",
   fastUntil: "room:fast-until",
   condition: "room:condition",
   trouble: "room:trouble",
   tick: "room:tick",
   forget: "room:forget",
+  registered: "room:registered",
+  registrationRetry: "room:registration-retry",
 } as const
 
-/** When a member was last read: `tried` when a read went out, `read` when Go answered one. */
-type Reader = { read?: number; tried?: number }
+/**
+ * What the room knows of a member from Go: when a read as them went out
+ * (`tried`) and when Go answered one (`read`); when Go was last asked
+ * whether they are on the team (`asked`), and as of when it last said they
+ * are (`confirmed`: when that asking, or that read, went out).
+ */
+type Reader = {
+  read?: number
+  tried?: number
+  asked?: number
+  confirmed?: number
+}
 
 /** Every member's reads, by member. */
 type Readers = Partial<Record<string, Reader>>
+
+/**
+ * A member's removal the room carried out (`purgeMember`): when they left
+ * (`removedAt`, a `PurgeInstant`), and when the purge reached the room.
+ */
+type Removal = { removedAt: string; at: number }
+
+/** The removals carried out lately, by member. */
+type Removals = Partial<Record<string, Removal>>
 
 /** Why nothing is read: Go refuses everyone until the teamspace changes. */
 type Condition = "paused" | "unavailable"
@@ -133,12 +204,19 @@ type OutgoingPost = {
   /** Whose it is: the user id, or the socket until Go says who that is. */
   member: string
   connectionId: string
+  /** When its socket opened (`RoomConnectionState.connectedAt`). */
+  openedAt?: string
   userId?: string
   body: string
   /** The last seq the room held when it went out. */
   after: number
   /** A read has shown the room recorded it. */
   landed: boolean
+  /**
+   * A purge reached the room while it was out: its member left, or the room
+   * let go of everything. Nothing of it is kept or sent.
+   */
+  dropped?: boolean
 }
 
 /** The room's durable part: its copy of the messages, and how it reads. */
@@ -224,6 +302,68 @@ class RoomStore {
     this.kv.put(keys.readers, readers)
   }
 
+  /** Go is asked, as `member`, whether they are on the team. */
+  asked(member: string, at: number): void {
+    const readers = this.readers
+    readers[member] = { ...readers[member], asked: at }
+    this.kv.put(keys.readers, readers)
+  }
+
+  /** Go said, as of `at`, that each of `members` is on the team. */
+  confirmed(members: readonly string[], at: number): void {
+    if (members.length === 0) return
+    const readers = this.readers
+    for (const member of members) {
+      const confirmed = Math.max(readers[member]?.confirmed ?? 0, at)
+      readers[member] = { ...readers[member], confirmed }
+    }
+    this.kv.put(keys.readers, readers)
+  }
+
+  /** The removals carried out in the last `purgeMemoryMs`, by member. */
+  get removals(): Removals {
+    const since = Date.now() - purgeMemoryMs
+    return Object.fromEntries(
+      Object.entries(this.kv.get<Removals>(keys.removals) ?? {}).filter(
+        ([, removal]) => removal !== undefined && removal.at >= since
+      )
+    )
+  }
+
+  /**
+   * Remembers that `member` left at `removedAt`, as a purge reached the room
+   * at `at`: the later of that and a removal remembered already. Those older
+   * than `purgeMemoryMs` are let go.
+   */
+  removed(member: string, removedAt: string, at: number): void {
+    const removals = this.removals
+    const known = removals[member]?.removedAt
+    removals[member] = {
+      removedAt: known !== undefined && known > removedAt ? known : removedAt,
+      at,
+    }
+    this.kv.put(keys.removals, removals)
+  }
+
+  /**
+   * Lets go of what the room keeps of `member`: their reads and Go's word on
+   * them, and the results kept for their posts or for those of `sockets`.
+   */
+  forgetMember(member: string, sockets: ReadonlySet<string>): void {
+    const readers = this.readers
+    if (member in readers) {
+      delete readers[member]
+      this.kv.put(keys.readers, readers)
+    }
+    for (const [key, kept] of this.kv.list<KeptResult>({
+      prefix: keys.result,
+    })) {
+      if (kept.member === member || sockets.has(kept.connectionId)) {
+        this.kv.delete(key)
+      }
+    }
+  }
+
   /** Forgets the members no socket is for any more. */
   keepReaders(members: ReadonlySet<string>): void {
     const readers = this.readers
@@ -277,6 +417,24 @@ class RoomStore {
 
   set forget(id: string | undefined) {
     this.put(keys.forget, id)
+  }
+
+  /** The room is in its organization's registry. */
+  get registered(): boolean {
+    return this.kv.get<boolean>(keys.registered) ?? false
+  }
+
+  set registered(registered: boolean) {
+    this.put(keys.registered, registered || undefined)
+  }
+
+  /** The schedule that tries the registration again. */
+  get registrationRetry(): string | undefined {
+    return this.kv.get<string>(keys.registrationRetry)
+  }
+
+  set registrationRetry(id: string | undefined) {
+    this.put(keys.registrationRetry, id)
   }
 
   result(id: string): KeptResult | undefined {
@@ -346,6 +504,62 @@ function update(
 /** Whom a socket reads and posts as: its user id, or itself until Go says who that is. */
 function memberOf(state: RoomConnectionState, connectionId: string): string {
   return state.userId ?? `socket:${connectionId}`
+}
+
+/** Whether the room may still use a socket's cookie: Go took it, and its member was not turned away. */
+function usable(state: RoomConnectionState): boolean {
+  return !state.expired && !state.removed
+}
+
+/** Whether Go said, within `memberLeaseMs` of `now`, that `reader`'s member is on the team. */
+function vouchedFor(reader: Reader | undefined, now: number): boolean {
+  return (
+    reader?.confirmed !== undefined &&
+    reader.confirmed + roomTiming.memberLeaseMs > now
+  )
+}
+
+/**
+ * Whether a socket may be sent the room now: its member is known, the room
+ * still uses its cookie, and Go lately said they are on the team.
+ */
+function mayHear(
+  state: RoomConnectionState,
+  readers: Readers,
+  now: number
+): boolean {
+  return (
+    usable(state) &&
+    state.userId !== undefined &&
+    vouchedFor(readers[state.userId], now)
+  )
+}
+
+/**
+ * When `reader`'s member is next asked whether they are on the team:
+ * `memberCheckMs` after Go last said so (at once, if it never has), and
+ * never sooner than `retryMs` after the last asking went out.
+ */
+function confirmationAt(reader: Reader | undefined): number {
+  return Math.max(
+    reader?.confirmed === undefined
+      ? 0
+      : reader.confirmed + roomTiming.memberCheckMs,
+    (reader?.asked ?? 0) + roomTiming.retryMs
+  )
+}
+
+/** Go's seats without those of `members`: their own, and their agent's. */
+function withoutSeatsOf(
+  seats: readonly RoomSeat[],
+  members: ReadonlySet<string>
+): RoomSeat[] {
+  return seats.filter(
+    (seat) =>
+      !members.has(
+        seat.kind === "person" ? seat.user_id : (seat.speaks_for ?? "")
+      )
+  )
 }
 
 function send(connection: Connection, message: RoomServerMessage): void {
@@ -438,19 +652,38 @@ function failedPost(id: string, error: unknown): RoomPostResult {
  *   a timer, so the object hibernates between them: fast during and for
  *   `afterPostMs` after a post, `slowMs` otherwise, and not at all once no
  *   tab is visible.
+ * - **Membership.** Only the teamspace's team hears the room. A socket is
+ *   let in once Go, asked with its own cookie, says who it is and that they
+ *   are on the team (`GET …/teamspaces/{id}` with `is_member`, which marks
+ *   nobody present), and it is sent nothing of the room before. Go's word on
+ *   a member counts for `memberLeaseMs`: every message, snapshot and post's
+ *   answer goes only to sockets whose member Go vouched for within it, and a
+ *   socket whose member it lapsed for is held back and sent the room afresh
+ *   once Go says it again. While anybody is looking, every member with a
+ *   socket here, hidden tabs too, is asked again every `memberCheckMs`,
+ *   unless a read's seats said it meanwhile (Go seats a person only while
+ *   they are on the team). So a member removed without a purge stops hearing
+ *   the room within `memberLeaseMs`, and their sockets close once Go is
+ *   asked; the room never reads as anybody Go has not vouched for.
+ * - **Purges.** Go's purge (src/realtime-purge.ts) reaches the room when a
+ *   member leaves the team or the organization (`purgeMember`: their sockets
+ *   close at once, and the room lets go of what it keeps of them), and when
+ *   the organization or the teamspace is deleted (`purgeRoom`: every socket
+ *   closes, and the room lets go of everything). It registers with its
+ *   organization's registry as its first socket is let in, so that the
+ *   organization's purges find it.
  * - **Refusals**, per member: a 401 tells that cookie's sockets
- *   `session_expired` and the cookie is not used again; a 403 or 404 closes
- *   the member's sockets as gone, and once nobody here may open the room its
- *   copy goes; a paused room (400) or a server without rooms (503) tells
- *   every socket and stops reading until a member's read succeeds again.
+ *   `session_expired` and the cookie is not used again; a 403 or 404, or Go
+ *   saying they are not on the team, closes the member's sockets as gone,
+ *   and once nobody here may open the room its copy goes; a paused room
+ *   (400) or a server without rooms (503) tells every socket and stops
+ *   reading until a member's read succeeds again.
  *
- * Only the teamspace's team reaches it: the Worker routes a socket only once
- * Go answers `GET …/teamspaces/{id}` with `is_member` for the member's cookie.
+ * The Worker routes a socket here only once Go answers `GET
+ * …/teamspaces/{id}` with `is_member` for the member's cookie, and the room
+ * asks again itself.
  */
-export class TeamspaceRoomAgent extends Agent<
-  ThreadChatEnv,
-  TeamspaceRoomState
-> {
+export class TeamspaceRoomAgent extends Agent<RoomEnv, TeamspaceRoomState> {
   override initialState: TeamspaceRoomState = emptyRoomState
 
   /** Posts on their way to Go, by the page's id. In memory: a restart loses the POST with them. */
@@ -459,6 +692,13 @@ export class TeamspaceRoomAgent extends Agent<
   private readonly reading = new Set<string>()
   /** `GET /v1/auth/me` for a socket, while it is out. */
   private readonly identifying = new Map<string, Promise<string | undefined>>()
+  /** Go asked whether a member is on the team, while it is out: one asking per member at once. */
+  private readonly confirming = new Map<string, Promise<boolean>>()
+  /**
+   * Counts the times this instance let go of everything (`forget`): a read
+   * or a post under way as it did keeps nothing of what Go answers.
+   */
+  private epoch = 0
   /** When the last tick ran, in this instance. */
   private lastTick = 0
 
@@ -466,8 +706,10 @@ export class TeamspaceRoomAgent extends Agent<
     return new RoomStore(this.ctx.storage.kv)
   }
 
-  // After hibernation or a restart: carry on reading for whoever is here.
+  // After hibernation or a restart: carry on reading for whoever is here,
+  // and register sockets let in before the room registered itself.
   override async onStart(): Promise<void> {
+    if (this.connections().length > 0) await this.register()
     await this.planTick()
   }
 
@@ -490,6 +732,19 @@ export class TeamspaceRoomAgent extends Agent<
     }
   }
 
+  // The SDK's broadcasts, the synced state among them (Go's seats and who is
+  // here), go only to the sockets the room may send the room to, as
+  // everything else it sends does; one let in again is sent the state with
+  // the room (`sendSnapshot`).
+  override isConnectionProtocolEnabled(connection: Connection): boolean {
+    const state = stateOf(connection)
+    return (
+      super.isConnectionProtocolEnabled(connection) &&
+      state !== undefined &&
+      mayHear(state, this.store.readers, Date.now())
+    )
+  }
+
   override async onConnect(connection: Connection, context: ConnectionContext) {
     const { request } = context
     const cookie = request.headers.get(roomRequestHeaders.cookie)
@@ -509,18 +764,21 @@ export class TeamspaceRoomAgent extends Agent<
       organizationId,
       teamspaceId,
       origin: request.headers.get("Origin") ?? "",
+      connectedAt: new Date().toISOString(),
       visible: false,
     } satisfies RoomConnectionState)
     await this.cancelForget()
-    // Who the cookie is, for presence and a post's answer. The room is not
-    // read yet: reading marks the member present, so the page says first
-    // whether anybody is looking.
-    await this.identify(connection)
+    // Who the cookie is, and whether Go has them on the team: until both are
+    // known the socket is sent nothing of the room. The room is not read
+    // yet: reading marks the member present, so the page says first whether
+    // anybody is looking.
+    if (await this.admit(connection)) await this.register()
   }
 
   override async onMessage(connection: Connection, message: WSMessage) {
     const said = parseRoomClientMessage(message)
-    if (!said || !stateOf(connection)) return
+    const state = stateOf(connection)
+    if (!said || !state || state.removed) return
     if (said.type === "room-visibility") {
       await this.see(connection, said.visible)
     } else {
@@ -537,15 +795,19 @@ export class TeamspaceRoomAgent extends Agent<
   }
 
   /**
-   * One round of reads, woken by its schedule: as each visible member whose
-   * presence is due, else, when the room is due a read, as the one read
-   * longest ago. Then the next round is set.
+   * One round, woken by its schedule: first Go is asked again about each
+   * member here whose turn it is (`confirmDue`), then the room is read as
+   * each visible member whose presence is due, else, when the room is due a
+   * read, as the one read longest ago. Then the next round is set.
    */
   async tick(_payload?: unknown, schedule?: Schedule<unknown>): Promise<void> {
     const store = this.store
     // The SDK drops a tick once it has run; any other set stands.
     if (schedule && store.tick?.id === schedule.id) store.tick = undefined
     this.lastTick = Date.now()
+    if (!store.condition && this.visibleMembers().size > 0) {
+      await this.confirmDue(Date.now() + roomTiming.toleranceMs)
+    }
     if (!store.condition) {
       const members = this.visibleMembers()
       // A tick may run a little early: whatever is due by then is read.
@@ -575,6 +837,85 @@ export class TeamspaceRoomAgent extends Agent<
     await this.forget()
   }
 
+  /**
+   * `userId` left the teamspace's team, or the organization, at `removedAt`
+   * (a `PurgeInstant`): Go's purge (src/realtime-purge.ts), straight from
+   * the Worker for the team, through the organization's registry for the
+   * organization.
+   *
+   * Their sockets opened at or before then are told `gone` and closed, and
+   * the room lets go of what it keeps of them: their reads and Go's word on
+   * them, their posts' results, and their seat and their agent's in the
+   * synced state (a later read brings back whatever Go still seats). A post
+   * of theirs still out is neither answered nor kept. Sockets of theirs
+   * opened since (a member let back in) stay, and are sent nothing more
+   * until Go says again that they are on the team.
+   *
+   * While sockets are open or Go is being asked anything, the removal is
+   * remembered for `purgeMemoryMs` (and until the room lets go of
+   * everything): a socket from before it that is still learning who it is
+   * closes once it does, what Go answered about them as of before the purge
+   * counts for nothing, and the same removal again, or an earlier one, does
+   * nothing. A room with nothing under way remembers nothing of them. Safe
+   * to call again.
+   */
+  async purgeMember(userId: string, removedAt: string): Promise<void> {
+    if (!isNameId(userId) || !isPurgeInstant(removedAt)) {
+      throw new TypeError("not a purge of this room")
+    }
+    const store = this.store
+    const known = store.removals[userId]
+    if (known && known.removedAt >= removedAt) return
+    if (
+      this.connections().length > 0 ||
+      this.reading.size > 0 ||
+      this.posts.size > 0
+    ) {
+      store.removed(userId, removedAt, Date.now())
+    }
+    const openedBefore = (openedAt: string | undefined) =>
+      (openedAt ?? "") <= removedAt
+    const leaving = this.connections().filter((connection) => {
+      const state = stateOf(connection)
+      return state?.userId === userId && openedBefore(state.connectedAt)
+    })
+    const closed = new Set(leaving.map((connection) => connection.id))
+    for (const post of this.posts.values()) {
+      if (
+        closed.has(post.connectionId) ||
+        (post.member === userId && openedBefore(post.openedAt))
+      ) {
+        post.dropped = true
+      }
+    }
+    this.remove(leaving)
+    store.forgetMember(userId, closed)
+    this.setSeats(withoutSeatsOf(this.state.seats, new Set([userId])))
+    if (leaving.length > 0 && this.connections().length === 0) {
+      await this.scheduleForget()
+    }
+  }
+
+  /**
+   * The organization or the teamspace is gone: Go's purge
+   * (src/realtime-purge.ts), through the organization's registry. Every
+   * socket is told `gone` and closed, no post still out is answered or
+   * kept, and the room lets go of everything it holds (`forget`). Safe to
+   * call again.
+   */
+  async purgeRoom(): Promise<void> {
+    for (const post of this.posts.values()) post.dropped = true
+    this.remove(this.connections())
+    await this.cancelForget()
+    await this.forget()
+  }
+
+  /** The registration's retry schedule: for a room somebody still has open. */
+  async retryRegistration(): Promise<void> {
+    this.store.registrationRetry = undefined
+    if (this.connections().length > 0) await this.register()
+  }
+
   /** A page's tab became visible or hidden (and, first, which it is). */
   private async see(connection: Connection, visible: boolean): Promise<void> {
     const state = update(connection, { visible })
@@ -600,39 +941,54 @@ export class TeamspaceRoomAgent extends Agent<
 
   /**
    * Reads what the room added as the socket's member, which also marks them
-   * present, and sends it on: new messages to every socket, the seats in the
-   * synced state, and the room to any socket still waiting for it.
+   * present, and sends it on: new messages to every socket whose member Go
+   * vouched for, the seats in the synced state, and the room to any socket
+   * still waiting for it. Never as somebody Go has not lately said is on the
+   * team (`vouch`).
    */
   private async readAs(connection: Connection): Promise<void> {
-    await this.identify(connection)
+    const member = await this.vouch(connection)
     const state = stateOf(connection)
-    if (!state || state.expired) return
-    const member = memberOf(state, connection.id)
+    if (!member || !state || !usable(state)) return
     if (this.reading.has(member)) return
     this.reading.add(member)
     const store = this.store
-    store.tried(member, Date.now())
+    const epoch = this.epoch
+    const asked = Date.now()
+    store.tried(member, asked)
     try {
       const read = await this.api(state).readAfter(
         state.organizationId,
         state.teamspaceId,
         store.readThrough
       )
+      // The room let go of everything while Go answered: nothing of it stays.
+      if (this.epoch !== epoch) return
       store.readThrough = Math.max(read.readThrough, store.readThrough ?? 0)
-      store.read(member, Date.now())
+      // What Go answered was as of when the read went out: of a member a
+      // purge reached since, it keeps nothing.
+      const left = this.removedSince(asked)
+      if (!left.has(member)) store.read(member, Date.now())
+      const seats = withoutSeatsOf(read.seats, left)
+      this.confirmSeated(seats, asked)
       this.arrived(read.messages)
-      this.setSeats(read.seats)
+      this.setSeats(seats)
       this.recovered()
       this.noteLanded()
       await this.sendSnapshots()
     } catch (error) {
-      await this.refused(connection, state, error)
+      if (this.epoch === epoch) await this.refused(connection, state, error)
     } finally {
       this.reading.delete(member)
     }
   }
 
-  /** Stores what it did not hold and sends it, once, to every socket that has the room. */
+  /**
+   * Stores what it did not hold and sends it, once, to every socket that has
+   * the room and whose member Go vouched for within `memberLeaseMs`. Any
+   * other socket that has the room is held back: sent nothing more until Go
+   * vouches for its member again, and then the room afresh (`sendSnapshots`).
+   */
   private arrived(messages: readonly RoomMessage[]): void {
     const store = this.store
     // Until the room has been read it holds nothing: the first read brings
@@ -640,8 +996,15 @@ export class TeamspaceRoomAgent extends Agent<
     if (store.readThrough === undefined) return
     const fresh = store.add(messages)
     if (fresh.length === 0) return
+    const now = Date.now()
+    const readers = store.readers
     for (const connection of this.connections()) {
-      if (!stateOf(connection)?.ready) continue
+      const state = stateOf(connection)
+      if (!state?.ready) continue
+      if (!mayHear(state, readers, now)) {
+        update(connection, { ready: false, held: true })
+        continue
+      }
       for (const frame of framed(fresh)) {
         send(connection, { type: "room-messages", messages: frame })
       }
@@ -649,47 +1012,74 @@ export class TeamspaceRoomAgent extends Agent<
   }
 
   private async sendSnapshots(): Promise<void> {
-    for (const connection of this.connections()) {
-      if (!stateOf(connection)?.ready) await this.sendSnapshot(connection)
-    }
+    await Promise.all(
+      this.connections()
+        .filter((connection) => !stateOf(connection)?.ready)
+        .map((connection) => this.sendSnapshot(connection))
+    )
   }
 
   /**
-   * Sends a socket the room, once there is one to send: after a read, and
-   * never while Go refuses the room. With it go this member's posts still
-   * out and those finished lately, so a page that reopened its socket learns
-   * what became of what it said.
+   * Sends a socket the room, once there is one to send and Go has vouched
+   * for its member (`vouch`): after a read, and never while Go refuses the
+   * room. With it go this member's posts still out and those finished
+   * lately, so a page that reopened its socket learns what became of what
+   * it said; a socket that was held back is sent those results again as
+   * answers, since its page takes an answer to a post it sent on this socket
+   * only as it comes.
    */
   private async sendSnapshot(connection: Connection): Promise<void> {
-    const store = this.store
-    if (store.condition) {
-      send(connection, { type: "room-status", status: store.condition })
+    if (this.store.condition) {
+      send(connection, { type: "room-status", status: this.store.condition })
       return
     }
-    if (store.readThrough === undefined) return
-    await this.identify(connection)
+    if (this.store.readThrough === undefined) return
+    const member = await this.vouch(connection)
     const state = stateOf(connection)
-    if (!state || state.ready) return
-    const member = memberOf(state, connection.id)
+    const store = this.store
+    if (
+      !member ||
+      !state ||
+      state.ready ||
+      !usable(state) ||
+      store.readThrough === undefined
+    ) {
+      return
+    }
     const pending = [...this.posts]
       .filter(
         ([, post]) =>
           post.member === member || post.connectionId === connection.id
       )
       .map(([id]) => id)
+    const results = store.resultsFor(member, connection.id)
     const [first = [], ...rest] = framed(store.messages())
+    // The synced state as it stands: the socket missed any change while it
+    // was not let in.
+    try {
+      connection.send(
+        JSON.stringify({ type: MessageType.CF_AGENT_STATE, state: this.state })
+      )
+    } catch {
+      // It closed meanwhile.
+    }
     send(connection, {
       type: "room-snapshot",
       messages: first,
       pending,
-      results: store.resultsFor(member, connection.id),
+      results,
     })
     for (const frame of rest) {
       send(connection, { type: "room-messages", messages: frame })
     }
+    if (state.held) {
+      for (const result of results) {
+        send(connection, { type: "room-posted", result })
+      }
+    }
     if (store.trouble)
       send(connection, { type: "room-status", status: "error" })
-    update(connection, { ready: true })
+    update(connection, { ready: true, held: undefined })
   }
 
   /** Says `body` in the room as the socket's member, and tells their sockets what became of it. */
@@ -708,7 +1098,7 @@ export class TeamspaceRoomAgent extends Agent<
     const kept = this.store.result(id)
     if (kept) {
       if (kept.member === member || kept.connectionId === connection.id) {
-        send(connection, { type: "room-posted", result: kept.result })
+        this.tell(connection, kept.result, this.store.readers, Date.now())
       }
       return
     }
@@ -717,6 +1107,7 @@ export class TeamspaceRoomAgent extends Agent<
     const outgoing: OutgoingPost = {
       member,
       connectionId: connection.id,
+      openedAt: state.connectedAt,
       userId: state.userId,
       body: body.trim(),
       after: this.store.lastSeq(),
@@ -726,6 +1117,7 @@ export class TeamspaceRoomAgent extends Agent<
       (post) => post.member === outgoing.member
     ).length
     this.posts.set(id, outgoing)
+    const epoch = this.epoch
 
     let result: RoomPostResult
     try {
@@ -740,6 +1132,9 @@ export class TeamspaceRoomAgent extends Agent<
       if (stateOf(connection)?.expired) {
         throw new ApiError("Your session has ended.", 401)
       }
+      // Its member was turned away while it waited: nothing is said.
+      if (stateOf(connection)?.removed) outgoing.dropped = true
+      if (outgoing.dropped) throw new ApiError(notOnTheTeam, 404)
       // Reads at the landing pace start now.
       await this.planTick()
       const said = await this.keepAliveWhile(() =>
@@ -747,7 +1142,7 @@ export class TeamspaceRoomAgent extends Agent<
           signal: AbortSignal.timeout(roomTiming.postTimeoutMs),
         })
       )
-      this.arrived(said)
+      if (this.epoch === epoch) this.arrived(said)
       result = { id, ok: true, messages: said }
     } catch (error) {
       result = failedPost(id, error)
@@ -756,7 +1151,15 @@ export class TeamspaceRoomAgent extends Agent<
       }
     } finally {
       this.posts.delete(id)
-      this.store.fastUntil = Date.now() + roomTiming.afterPostMs
+      if (this.epoch === epoch) {
+        this.store.fastUntil = Date.now() + roomTiming.afterPostMs
+      }
+    }
+    // A purge reached the room while it was out: nothing of it is kept, and
+    // nobody it would be told to is left.
+    if (outgoing.dropped || this.epoch !== epoch) {
+      await this.planTick()
+      return
     }
     if (!result.ok && result.status !== 401 && result.status !== 429) {
       // What the room recorded reaches every page before the author hears
@@ -777,8 +1180,10 @@ export class TeamspaceRoomAgent extends Agent<
     await this.planTick()
   }
 
-  /** Sends a post's result to every socket of its author. */
+  /** Sends a post's result to every socket of its author (`tell`). */
   private answer(post: OutgoingPost, result: RoomPostResult): void {
+    const now = Date.now()
+    const readers = this.store.readers
     for (const connection of this.connections()) {
       const state = stateOf(connection)
       if (!state) continue
@@ -786,16 +1191,37 @@ export class TeamspaceRoomAgent extends Agent<
         connection.id === post.connectionId ||
         (post.userId !== undefined && state.userId === post.userId)
       ) {
-        send(connection, { type: "room-posted", result })
+        this.tell(connection, result, readers, now)
       }
     }
+  }
+
+  /**
+   * Sends a socket a post's result. An answer carries what the room said,
+   * so it goes only while Go vouches for the socket's member (`mayHear`);
+   * otherwise the socket is held back, and sent it with the room once Go
+   * does. A refusal carries nothing of the room, and always goes.
+   */
+  private tell(
+    connection: Connection,
+    result: RoomPostResult,
+    readers: Readers,
+    now: number
+  ): void {
+    const state = stateOf(connection)
+    if (!state) return
+    if (result.ok && !mayHear(state, readers, now)) {
+      update(connection, { ready: false, held: true })
+      return
+    }
+    send(connection, { type: "room-posted", result })
   }
 
   /** Reads as a visible member, the author first, so what a failed post left in the room is seen. */
   private async readForLanding(author: Connection): Promise<void> {
     const state = stateOf(author)
     const reader =
-      state?.visible && !state.expired
+      state?.visible && usable(state)
         ? author
         : this.visibleMembers().values().next().value
     if (reader) await this.readAs(reader)
@@ -848,17 +1274,18 @@ export class TeamspaceRoomAgent extends Agent<
   }
 
   /**
-   * Go no longer lets `member` in (403 or 404): their sockets are told and
-   * closed. Go answers 404 to everyone once the teamspace is deleted, so the
-   * other members here are asked too, for the teamspace itself (which marks
-   * nobody present); once none of them may open it, the room's copy goes.
+   * Go no longer lets `member` in (403 or 404, or it says they are not on
+   * the team): their sockets are told and closed. Go answers 404 to everyone
+   * once the teamspace is deleted, so the other members here are asked too,
+   * for the teamspace itself (which marks nobody present); once none of them
+   * may open it, the room's copy goes.
    */
   private async turnAway(member: string, message?: string): Promise<void> {
     this.close(member, message)
     const asked = new Set<string>()
     for (const connection of this.connections()) {
       const state = stateOf(connection)
-      if (!state || state.expired) continue
+      if (!state || !usable(state)) continue
       const other = memberOf(state, connection.id)
       if (asked.has(other)) continue
       asked.add(other)
@@ -886,11 +1313,26 @@ export class TeamspaceRoomAgent extends Agent<
     await this.forget()
   }
 
-  /** Tells a member's sockets they may no longer open the room, and closes them. */
+  /** Tells a member's sockets they may no longer open the room, and closes them (`remove`). */
   private close(member: string, message?: string): void {
-    for (const connection of this.connections()) {
-      const state = stateOf(connection)
-      if (!state || memberOf(state, connection.id) !== member) continue
+    this.remove(
+      this.connections().filter((connection) => {
+        const state = stateOf(connection)
+        return state !== undefined && memberOf(state, connection.id) === member
+      }),
+      message
+    )
+  }
+
+  /**
+   * Tells sockets their member may no longer open the room (`gone`) and
+   * closes them with `roomGoneCloseCode`, which the page does not reopen.
+   * Their cookies are never used again, even by work already under way.
+   */
+  private remove(connections: readonly Connection[], message?: string): void {
+    for (const connection of connections) {
+      update(connection, { removed: true })
+      this.identifying.delete(connection.id)
       send(connection, {
         type: "room-status",
         status: "gone",
@@ -950,7 +1392,7 @@ export class TeamspaceRoomAgent extends Agent<
     const here = new Set<string>()
     for (const connection of this.connections(without)) {
       const state = stateOf(connection)
-      if (state?.visible && !state.expired && state.userId) {
+      if (state?.visible && usable(state) && state.userId) {
         here.add(state.userId)
       }
     }
@@ -967,11 +1409,201 @@ export class TeamspaceRoomAgent extends Agent<
     const members = new Map<string, Connection>()
     for (const connection of this.connections()) {
       const state = stateOf(connection)
-      if (!state?.visible || state.expired) continue
+      if (!state?.visible || !usable(state)) continue
       const member = memberOf(state, connection.id)
       if (!members.has(member)) members.set(member, connection)
     }
     return members
+  }
+
+  /**
+   * One socket per member here whom Go has said who they are, looking or
+   * not, with a cookie Go still takes: whom the room asks Go about.
+   */
+  private identifiedMembers(): Map<string, Connection> {
+    const members = new Map<string, Connection>()
+    for (const connection of this.connections()) {
+      const state = stateOf(connection)
+      if (!state?.userId || !usable(state)) continue
+      if (!members.has(state.userId)) members.set(state.userId, connection)
+    }
+    return members
+  }
+
+  /**
+   * Lets a socket in: who its cookie is (`GET /v1/auth/me`), then whether
+   * Go has them on the team, asked with its own cookie (`confirm`). Until
+   * both are known it is sent nothing of the room, and a socket Go refuses
+   * is told `gone` and closed. Resolves whether it was let in.
+   */
+  private async admit(connection: Connection): Promise<boolean> {
+    const member = await this.identify(connection)
+    if (!member) return false
+    return this.confirm(member, connection)
+  }
+
+  /**
+   * The socket's member, when the room may send them the room now: Go said
+   * within `memberLeaseMs` that they are on the team, or says so now that it
+   * is asked (`confirm`). Nothing otherwise, and nothing without asking when
+   * Go was asked in the last `retryMs` and did not say yes: the schedule
+   * asks again.
+   */
+  private async vouch(connection: Connection): Promise<string | undefined> {
+    const member = await this.identify(connection)
+    const state = stateOf(connection)
+    if (!member || !state || !usable(state)) return undefined
+    const reader = this.store.readers[member]
+    const now = Date.now()
+    if (vouchedFor(reader, now)) return member
+    if (!this.confirming.has(member) && confirmationAt(reader) > now) {
+      return undefined
+    }
+    if (!(await this.confirm(member, connection))) return undefined
+    const after = stateOf(connection)
+    return after && usable(after) ? member : undefined
+  }
+
+  /**
+   * Asks Go, with the socket's cookie, whether `member` is on the teamspace's
+   * team (`GET …/teamspaces/{id}` and its `is_member`, which marks nobody
+   * present), unless that is being asked already. Yes is kept as of when it
+   * was asked, unless a purge of theirs reached the room meanwhile. No, or
+   * 403 or 404, closes their sockets as gone (`turnAway`); 401 ends that
+   * cookie (`expire`). Anything else leaves them as they were, and asked
+   * again `retryMs` later. Resolves whether Go said yes.
+   */
+  private confirm(member: string, connection: Connection): Promise<boolean> {
+    let asking = this.confirming.get(member)
+    if (!asking) {
+      asking = this.askAboutTeam(member, connection).finally(() => {
+        this.confirming.delete(member)
+      })
+      this.confirming.set(member, asking)
+    }
+    return asking
+  }
+
+  private async askAboutTeam(
+    member: string,
+    connection: Connection
+  ): Promise<boolean> {
+    const state = stateOf(connection)
+    if (!state || !usable(state)) return false
+    const epoch = this.epoch
+    const asked = Date.now()
+    this.store.asked(member, asked)
+    let space: { is_member?: unknown }
+    try {
+      space = await this.requestAs(state)<{ is_member?: unknown }>(
+        organizationPath(state.organizationId, "teamspaces", state.teamspaceId)
+      )
+    } catch (error) {
+      if (this.epoch !== epoch) return false
+      if (error instanceof ApiError) {
+        if (error.status === 401) this.expire(state.cookie)
+        if (error.status === 403 || error.status === 404) {
+          await this.turnAway(member, error.message)
+        }
+      } else {
+        console.error(
+          "teamspace room: Go could not say who is on the team",
+          error
+        )
+      }
+      return false
+    }
+    if (this.epoch !== epoch || this.removedSince(asked).has(member)) {
+      return false
+    }
+    if (space.is_member !== true) {
+      // A manager of the team who is not on it, or somebody who left it.
+      await this.turnAway(member, notOnTheTeam)
+      return false
+    }
+    this.store.confirmed([member], asked)
+    return true
+  }
+
+  /**
+   * Asks Go again, as each member here whose turn has come, whether they are
+   * still on the team (`confirm`); a socket held back whose member Go now
+   * vouches for is sent the room afresh at once.
+   */
+  private async confirmDue(by: number): Promise<void> {
+    const readers = this.store.readers
+    const due = [...this.identifiedMembers()].filter(
+      ([member]) => confirmationAt(readers[member]) <= by
+    )
+    if (due.length === 0) return
+    await Promise.all(
+      due.map(([member, connection]) => this.confirm(member, connection))
+    )
+    await this.sendSnapshots()
+  }
+
+  /**
+   * A read's seats as Go's word on who is on the team: Go seats a person
+   * only while they are on it (the teamspace's whisperers, from the live
+   * team directory). The members here with a seat are vouched for as of
+   * when the read went out; the others are asked on their own
+   * (`confirmDue`).
+   */
+  private confirmSeated(seats: readonly RoomSeat[], asked: number): void {
+    const seated = new Set(
+      seats.filter((seat) => seat.kind === "person").map((seat) => seat.user_id)
+    )
+    this.store.confirmed(
+      [...this.identifiedMembers().keys()].filter((member) =>
+        seated.has(member)
+      ),
+      asked
+    )
+  }
+
+  /** The members whose removal a purge carried out here at or after `at`. */
+  private removedSince(at: number): Set<string> {
+    return new Set(
+      Object.entries(this.store.removals)
+        .filter(([, removal]) => removal !== undefined && removal.at >= at)
+        .map(([member]) => member)
+    )
+  }
+
+  /**
+   * Registers the room with its organization's registry, once, so that the
+   * organization's purges, and those of a member who left it, find it; a
+   * registration that failed is tried again on a schedule.
+   */
+  private async register(): Promise<void> {
+    const store = this.store
+    const ids = parseTeamspaceRoomAgentName(this.name)
+    if (store.registered || !ids) return
+    const epoch = this.epoch
+    try {
+      const registry = await getAgentByName(
+        this.env.RealtimeRegistryAgent,
+        registryName(ids.organizationId)
+      )
+      await registry.registerRoom(ids.teamspaceId)
+      if (this.epoch === epoch) this.store.registered = true
+    } catch (error) {
+      console.error(
+        "teamspace room: could not register with its organization",
+        error
+      )
+      await this.scheduleRegistration()
+    }
+  }
+
+  /** Schedules the registration's retry, unless it is scheduled already. */
+  private async scheduleRegistration(): Promise<void> {
+    if (this.store.registrationRetry) return
+    const schedule = await this.schedule(
+      registrationRetrySeconds,
+      "retryRegistration"
+    )
+    this.store.registrationRetry = schedule.id
   }
 
   /** How soon the room is due its next read, besides each member's presence. */
@@ -985,9 +1617,10 @@ export class TeamspaceRoomAgent extends Agent<
   }
 
   /**
-   * Sets the next round of reads for whoever is looking. Nothing is set
-   * once no tab is visible, or while Go refuses the room: a tick already set
-   * fires once, finds nobody to read as, and stops.
+   * Sets the next round of reads for whoever is looking, and of asking Go
+   * about everybody here. Nothing is set once no tab is visible, or while Go
+   * refuses the room: a tick already set fires once, finds nobody to read
+   * as, and stops.
    */
   private async planTick(): Promise<void> {
     const store = this.store
@@ -1006,6 +1639,9 @@ export class TeamspaceRoomAgent extends Agent<
     let next = store.lastRead + this.cadence(now)
     for (const member of members.keys()) {
       next = Math.min(next, heartbeatAt(readers[member]))
+    }
+    for (const member of this.identifiedMembers().keys()) {
+      next = Math.min(next, confirmationAt(readers[member]))
     }
     // Never sooner than a moment after the last tick: a room can be busy,
     // but its alarm never spins.
@@ -1047,19 +1683,31 @@ export class TeamspaceRoomAgent extends Agent<
     await this.cancelSchedule(id)
   }
 
-  /** Lets go of everything the room holds: its messages, how it reads, its seats and presence. Go keeps the room. */
+  /**
+   * Lets go of everything the room holds: its messages, how it reads, what
+   * it knows of each member, its registration, its seats and presence, and
+   * its schedules but the one that forgets. Go keeps the room. Work under
+   * way keeps nothing of what Go answers it (`epoch`).
+   */
   private async forget(): Promise<void> {
+    this.epoch += 1
     const store = this.store
     const tick = store.tick
+    const retry = store.registrationRetry
     store.clear()
     if (tick) await this.cancelSchedule(tick.id)
+    if (retry) await this.cancelSchedule(retry)
     this.setState(emptyRoomState)
   }
 
-  /** Who a socket's cookie is (`GET /v1/auth/me`), asked once per socket. */
+  /**
+   * Who a socket's cookie is (`GET /v1/auth/me`), asked once per socket. A
+   * socket opened at or before its member's removal, which the purge could
+   * not yet tell was theirs, is closed now that it can.
+   */
   private identify(connection: Connection): Promise<string | undefined> {
     const state = stateOf(connection)
-    if (!state || state.expired) return Promise.resolve(undefined)
+    if (!state || !usable(state)) return Promise.resolve(undefined)
     if (state.userId) return Promise.resolve(state.userId)
     let asking = this.identifying.get(connection.id)
     if (!asking) {
@@ -1070,6 +1718,11 @@ export class TeamspaceRoomAgent extends Agent<
           this.identifying.delete(connection.id)
           const userId = session.user?.id
           if (typeof userId !== "string" || !userId) return undefined
+          const removal = this.store.removals[userId]
+          if (removal && (state.connectedAt ?? "") <= removal.removedAt) {
+            this.remove([connection])
+            return undefined
+          }
           update(connection, { userId })
           this.publishPresence()
           return userId
