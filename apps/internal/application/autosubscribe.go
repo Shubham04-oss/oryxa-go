@@ -92,6 +92,11 @@ func (s *Service) subscribeConnections(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		if connection.Oryxa() {
+			// The store claims only Composio's; subscribing is a Composio
+			// call, which an Oryxa connection has no account for.
+			continue
+		}
 		s.subscribeEverything(ctx, connection)
 	}
 }

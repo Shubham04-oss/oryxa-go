@@ -16,9 +16,14 @@ import (
 // organization goes, every connection they made there is deleted at Composio
 // and its credential revoked.
 
-// OrganizationDeleted removes every connection an organization had.
+// OrganizationDeleted removes every connection an organization had, and
+// retires what it kept for Oryxa's own sign-in.
 func (s *Service) OrganizationDeleted(ctx context.Context, event authv1.OrganizationDeleted) error {
-	return s.removeAll(ctx, event.OrganizationID, "", appsv1.RemovedOrganizationDeleted)
+	if err := s.removeAll(ctx, event.OrganizationID, "", appsv1.RemovedOrganizationDeleted); err != nil {
+		return err
+	}
+	s.forgetOrganization(ctx, event.OrganizationID)
+	return nil
 }
 
 // MemberRemoved removes the connections a departing member made.
@@ -84,7 +89,7 @@ func (s *Service) maintain(ctx context.Context) {
 		for _, connection := range connections {
 			event, err := s.event(appsv1.ConnectionFailedDetailType, appsv1.ConnectionFailed{
 				ConnectionID: connection.ID, OrganizationID: connection.OrganizationID,
-				MemberID: connection.MemberID, Toolkit: connection.Toolkit,
+				MemberID: connection.MemberID, Toolkit: connection.Toolkit, Broker: eventBroker(connection),
 				Reason: appsv1.FailedAbandoned, FailedAt: now,
 			})
 			if err != nil {
