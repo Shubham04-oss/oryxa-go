@@ -308,9 +308,7 @@
 .workspace-settings-confirm input,
 .workspace-settings-inline-form input,
 .workspace-settings-inline-form select,
-.workspace-settings-member-actions select,
-.workspace-settings-plan-actions input,
-.workspace-person-row select {
+.workspace-settings-plan-actions input {
   min-height: 32px;
   padding: 0 9px;
   border: 1px solid #454545;
@@ -438,6 +436,28 @@
   font-size: 10px;
   font-weight: 500;
   text-transform: capitalize;
+}
+.workspace-settings-role-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.workspace-settings-role-trigger:hover {
+  border-color: #6a6a6a;
+  color: #eee;
+}
+.workspace-settings-role-trigger:focus-visible {
+  outline: 2px solid #8a8a8a;
+  outline-offset: 2px;
+}
+.workspace-settings-role-trigger[data-popup-open] {
+  border-color: #8a8a8a;
+  color: #fff;
+}
+.workspace-settings-role-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 .workspace-settings-plan-row {
   border-top: 1px solid #383838;
