@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Building2,
   CreditCard,
+  KeyRound,
   Mail,
   Network,
   Puzzle,
@@ -18,6 +19,10 @@ import { WorkspaceAccountSettings } from "./workspace-account-settings"
 import { WorkspaceOrganizationSettings } from "./workspace-organization-settings"
 import { WorkspaceTeamsSettings } from "./workspace-teams-settings"
 import { WorkspaceToolAccessSettings } from "./workspace-tool-access-settings"
+import {
+  WorkspaceSigninAppsSettings,
+  useSigninAppsAvailable,
+} from "./workspace-signin-apps-settings"
 import { WorkspaceEmailSettings } from "./workspace-email-settings"
 import { WorkspaceBillingSettings } from "./workspace-billing-settings"
 import { cn } from "@/lib/utils"
@@ -28,6 +33,7 @@ export type SettingsPage =
   | "people"
   | "teams"
   | "tools"
+  | "signin"
   | "email"
   | "billing"
 
@@ -37,6 +43,7 @@ const pageTitles: Record<SettingsPage, string> = {
   people: "People & invitations",
   teams: "Teams",
   tools: "Tool access",
+  signin: "Sign-in apps",
   email: "Email",
   billing: "Billing",
 }
@@ -68,6 +75,12 @@ export function WorkspaceSettings({
 }) {
   const [page, setPage] = useState<SettingsPage>(initialPage)
   const organization = selectedOrganization || session?.organizations[0]
+  // Organization admins only, and only once Oryxa's own sign-in is on.
+  const signinApps = useSigninAppsAvailable({
+    organizationId: organization?.id,
+    role: organizationRole,
+    preview,
+  })
 
   return (
     <div
@@ -128,6 +141,15 @@ export function WorkspaceSettings({
             >
               <Puzzle size={18} strokeWidth={1.7} /> Tool access
             </button>
+            {signinApps && (
+              <button
+                type="button"
+                className={cn(page === "signin" && "is-active")}
+                onClick={() => setPage("signin")}
+              >
+                <KeyRound size={18} strokeWidth={1.7} /> Sign-in apps
+              </button>
+            )}
             <button
               type="button"
               className={cn(page === "email" && "is-active")}
@@ -206,6 +228,12 @@ export function WorkspaceSettings({
                 role={organizationRole}
                 preview={preview}
                 onOpenTools={onOpenTools}
+              />
+            ) : page === "signin" ? (
+              <WorkspaceSigninAppsSettings
+                organization={organization}
+                role={organizationRole}
+                preview={preview}
               />
             ) : page === "email" ? (
               <WorkspaceEmailSettings
