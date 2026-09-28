@@ -118,6 +118,30 @@ func TestGuestInvitationNeedsOrganizationGuestPolicy(t *testing.T) {
 	}
 }
 
+func TestApplyTeamLeadPromotesExistingMember(t *testing.T) {
+	state := &fakeState{orgExists: true,
+		members:       []Member{{UserID: "u1", Email: "owner@acme.com", Role: "owner"}, {UserID: "u2", Email: "lead@acme.com", Role: "member"}},
+		existingTeams: []Team{{ID: "team_1", Name: "Engineering", Path: "engineering"}},
+		teamMembers:   []TeamMember{{UserID: "u1", Email: "owner@acme.com", Role: "admin"}, {UserID: "u2", Email: "lead@acme.com", Role: "member"}},
+	}
+	server := httptest.NewServer(http.HandlerFunc(state.serve))
+	defer server.Close()
+	client, err := NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"},
+		Teams: spec.Teams{Items: []spec.Team{{Name: "Engineering", Leads: []string{"lead@acme.com"}}}},
+	}
+	remaining, err := Apply(context.Background(), client, document)
+	if err != nil || len(remaining.Changes) != 0 || state.roleChanges != 1 || state.teamMembers[1].Role != "admin" {
+		t.Fatalf("lead apply = %+v, %v, role changes %d", remaining, err, state.roleChanges)
+	}
+	if _, err := Apply(context.Background(), client, document); err != nil || state.roleChanges != 1 {
+		t.Fatalf("repeated lead apply = %v, changes %d", err, state.roleChanges)
+	}
+}
+
 func TestPeoplePruneNeedsExactApprovedRemovalPlan(t *testing.T) {
 	state := &fakeState{
 		orgExists: true,
@@ -325,6 +349,7 @@ type fakeState struct {
 	revokedInvitations int
 	teamCreates        int
 	adds               int
+	roleChanges        int
 	agent              *OrganizationAgent
 	agentReads         int
 	agentUpdates       int
@@ -418,9 +443,24 @@ func (state *fakeState) serve(writer http.ResponseWriter, request *http.Request)
 		state.existingTeams = nil
 		writer.WriteHeader(http.StatusNoContent)
 	case "POST /v1/organizations/org_1/teams/team_1/members":
+		var input struct {
+			Role string `json:"role"`
+		}
+		_ = json.NewDecoder(request.Body).Decode(&input)
+		if input.Role == "" {
+			input.Role = "member"
+		}
 		state.adds++
-		state.teamMembers = append(state.teamMembers, TeamMember{UserID: "u2", Email: "new@acme.com", Role: "member"})
+		state.teamMembers = append(state.teamMembers, TeamMember{UserID: "u2", Email: "new@acme.com", Role: input.Role})
 		write(map[string]string{"status": "created"})
+	case "PATCH /v1/organizations/org_1/teams/team_1/members/u2":
+		state.roleChanges++
+		for i := range state.teamMembers {
+			if state.teamMembers[i].UserID == "u2" {
+				state.teamMembers[i].Role = "admin"
+			}
+		}
+		write(map[string]string{"status": "updated"})
 	case "GET /v1/organizations/org_1/organization-agent":
 		if request.URL.RawQuery != "preview=1" {
 			writer.WriteHeader(http.StatusBadRequest)

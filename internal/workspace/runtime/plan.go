@@ -111,7 +111,8 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 		if !exists {
 			plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "team", Name: team.Name})
 		}
-		for _, email := range team.Members {
+		emails, roles := teamMemberRoles(team)
+		for _, email := range emails {
 			if _, joined := state.Members[email]; !joined {
 				if !wantedMembers[email] && state.Invitations[email].Email == "" {
 					return Plan{}, fmt.Errorf("teams[].members references a person absent from the organization and people.members")
@@ -119,13 +120,15 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 				plan.NeedsHuman = append(plan.NeedsHuman, HumanStep{Step: "teams.members", Why: email + " must join before being added to " + team.Name})
 				continue
 			}
-			if _, already := state.TeamMembers[team.Name][email]; !already {
-				plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "team_member", Name: team.Name + "/" + email})
+			if existing, already := state.TeamMembers[team.Name][email]; !already {
+				plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "team_member", Name: team.Name + "/" + email, Role: roles[email]})
+			} else if roles[email] == "admin" && existing.Role != "admin" {
+				plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "team_member_role", Name: team.Name + "/" + email, Role: "admin"})
 			}
 		}
 		if document.Teams.Prune && exists {
 			wantedTeamMembers := map[string]bool{}
-			for _, email := range team.Members {
+			for _, email := range emails {
 				wantedTeamMembers[email] = true
 			}
 			for email := range state.TeamMembers[team.Name] {
@@ -184,6 +187,22 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 		return strings.Compare(a.Name, b.Name)
 	})
 	return plan, nil
+}
+
+func teamMemberRoles(team spec.Team) ([]string, map[string]string) {
+	roles := make(map[string]string, len(team.Members)+len(team.Leads))
+	for _, email := range team.Members {
+		roles[email] = "member"
+	}
+	for _, email := range team.Leads {
+		roles[email] = "admin"
+	}
+	emails := make([]string, 0, len(roles))
+	for email := range roles {
+		emails = append(emails, email)
+	}
+	slices.Sort(emails)
+	return emails, roles
 }
 
 func guestsEnabled(document spec.Document, state Snapshot) bool {
@@ -339,15 +358,23 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 		if !exists {
 			return Plan{}, fmt.Errorf("team creation has not appeared in the API yet; retry apply")
 		}
-		for _, email := range team.Members {
+		emails, roles := teamMemberRoles(team)
+		for _, email := range emails {
 			member, joined := state.Members[email]
 			if !joined {
 				continue
 			}
-			if _, already := state.TeamMembers[team.Name][email]; already {
+			if existing, already := state.TeamMembers[team.Name][email]; already {
+				if roles[email] == "admin" && existing.Role != "admin" {
+					if err := client.ChangeTeamMemberRole(ctx, state.Organization.ID, current.ID, member.UserID, "admin"); err != nil {
+						return Plan{}, err
+					}
+				}
 				continue
 			}
-			if err := retryNotFound(ctx, func() error { return client.AddTeamMember(ctx, state.Organization.ID, current.ID, member.UserID) }); err != nil {
+			if err := retryNotFound(ctx, func() error {
+				return client.AddTeamMember(ctx, state.Organization.ID, current.ID, member.UserID, roles[email])
+			}); err != nil {
 				return Plan{}, err
 			}
 		}
@@ -518,8 +545,12 @@ func Pull(state Snapshot) (spec.Document, error) {
 		entry := spec.Team{Name: team.Name}
 		for email := range state.TeamMembers[team.Name] {
 			entry.Members = append(entry.Members, email)
+			if state.TeamMembers[team.Name][email].Role == "admin" {
+				entry.Leads = append(entry.Leads, email)
+			}
 		}
 		slices.Sort(entry.Members)
+		slices.Sort(entry.Leads)
 		document.Teams.Items = append(document.Teams.Items, entry)
 	}
 	slices.SortFunc(document.Teams.Items, func(a, b spec.Team) int { return strings.Compare(a.Name, b.Name) })

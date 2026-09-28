@@ -67,6 +67,7 @@ type Member struct {
 type Team struct {
 	Name    string   `yaml:"name" json:"name"`
 	Members []string `yaml:"members,omitempty" json:"members,omitempty"`
+	Leads   []string `yaml:"leads,omitempty" json:"leads,omitempty"`
 }
 
 // Teams accepts the compact list form or {items, prune}. The latter is
@@ -298,6 +299,20 @@ func (document Document) Validate() error {
 				return fmt.Errorf("teams[].members has a duplicate email")
 			}
 			teamMembers[email] = true
+		}
+		seenLeads := map[string]bool{}
+		for _, email := range team.Leads {
+			if err := validateEmail(email, nil); err != nil {
+				return fmt.Errorf("teams[].leads: %w", err)
+			}
+			_, emailDomain, _ := strings.Cut(email, "@")
+			if len(seenDomains) > 0 && !seenDomains[emailDomain] && !guestMembers[email] {
+				return fmt.Errorf("teams[].leads outside metadata.domains must be declared as guest members")
+			}
+			if seenLeads[email] {
+				return fmt.Errorf("teams[].leads has a duplicate email")
+			}
+			seenLeads[email] = true
 		}
 	}
 	return nil

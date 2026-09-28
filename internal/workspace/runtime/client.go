@@ -301,8 +301,12 @@ func (client *Client) CreateTeam(ctx context.Context, orgID, name string) error 
 	return client.request(ctx, http.MethodPost, "/v1/organizations/"+url.PathEscape(orgID)+"/teams", map[string]string{"name": name}, nil)
 }
 
-func (client *Client) AddTeamMember(ctx context.Context, orgID, teamID, memberID string) error {
-	return client.request(ctx, http.MethodPost, "/v1/organizations/"+url.PathEscape(orgID)+"/teams/"+url.PathEscape(teamID)+"/members", map[string]string{"user_id": memberID, "role": "member"}, nil)
+func (client *Client) AddTeamMember(ctx context.Context, orgID, teamID, memberID, role string) error {
+	return client.request(ctx, http.MethodPost, "/v1/organizations/"+url.PathEscape(orgID)+"/teams/"+url.PathEscape(teamID)+"/members", map[string]string{"user_id": memberID, "role": role}, nil)
+}
+
+func (client *Client) ChangeTeamMemberRole(ctx context.Context, orgID, teamID, memberID, role string) error {
+	return client.request(ctx, http.MethodPatch, "/v1/organizations/"+url.PathEscape(orgID)+"/teams/"+url.PathEscape(teamID)+"/members/"+url.PathEscape(memberID), map[string]string{"role": role}, nil)
 }
 
 func (client *Client) RemoveTeamMember(ctx context.Context, orgID, teamID, memberID string) error {
