@@ -4,12 +4,16 @@
 FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
+# The release, the image's tag, that logs and traces carry as service_version.
+ARG VERSION=
 
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/oryxa ./cmd/oryxa
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+    -ldflags="-s -w -X github.com/Shubham04-oss/oryxa-go/internal/observability.version=${VERSION}" \
+    -o /out/oryxa ./cmd/oryxa
 
 # Every service in one static executable. ORYXA_SERVICES picks which of them
 # a container runs; all of them by default.

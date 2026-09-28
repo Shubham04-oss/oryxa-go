@@ -224,3 +224,17 @@ func TestHTTPHandlerAddsRouteToServerMetrics(t *testing.T) {
 		t.Fatalf("http.route attribute = %q, %v, want \"/v1/items/{id}\", true", route.Emit(), ok)
 	}
 }
+
+func TestBuildVersionIsTheReleaseTheImageLinkedIn(t *testing.T) {
+	previous := version
+	t.Cleanup(func() { version = previous })
+
+	version = "982215135c9b"
+	if got := buildVersion(); got != "982215135c9b" {
+		t.Fatalf("buildVersion() = %q, want the linked release", got)
+	}
+	version = ""
+	if got := buildVersion(); got == "" {
+		t.Fatal("buildVersion() is empty without a linked release")
+	}
+}

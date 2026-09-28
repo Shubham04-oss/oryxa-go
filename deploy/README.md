@@ -130,16 +130,25 @@ and passages to members. Its RAG inserts also fail, because the access column
 no longer has a default. So, for this release only:
 
 1. Stop the old task before the new one starts. That means one or two minutes
-   of downtime instead of an overlap:
+   of downtime instead of an overlap. ECS refuses `maximumPercent=100` while
+   the service rebalances across Availability Zones, which it does by default,
+   so that goes off for the release too:
 
    ```sh
    aws ecs update-service --region us-west-2 --cluster oryxa-production --service oryxa \
+     --availability-zone-rebalancing DISABLED \
      --deployment-configuration minimumHealthyPercent=0,maximumPercent=100
    ```
 
    Then release as usual. Afterwards, put the overlap back, either with
    `minimumHealthyPercent=100,maximumPercent=200` or with a `tofu apply`, which
-   restores `compute.tf`'s values.
+   restores `compute.tf`'s values, and then the rebalancing, which OpenTofu
+   leaves alone:
+
+   ```sh
+   aws ecs update-service --region us-west-2 --cluster oryxa-production --service oryxa \
+     --availability-zone-rebalancing ENABLED
+   ```
 2. Once members or admins have created admin-only content, do not roll back to
    a build older than this one, because it would serve that content to
    members. If a later release has to be rolled back, roll back to a build
@@ -168,15 +177,18 @@ addressed agent for a held request with the prompt to decide it, and its Decide
 lets that agent approve it, so while an old task runs, or after a rollback, an
 agent can approve what only its owner may. So, for this release only:
 
-1. Stop the old task before the new one starts, exactly as for #85 above:
+1. Stop the old task before the new one starts, exactly as for #85 above,
+   rebalancing off with it:
 
    ```sh
    aws ecs update-service --region us-west-2 --cluster oryxa-production --service oryxa \
+     --availability-zone-rebalancing DISABLED \
      --deployment-configuration minimumHealthyPercent=0,maximumPercent=100
    ```
 
    Then release as usual, and put the overlap back afterwards
-   (`minimumHealthyPercent=100,maximumPercent=200`, or a `tofu apply`).
+   (`minimumHealthyPercent=100,maximumPercent=200`, or a `tofu apply`), and the
+   rebalancing (`--availability-zone-rebalancing ENABLED`).
 2. Once a request is held for its owner (one made in a teamspace to a
    teammate's primary agent, or to a specialist contributed with `request`
    delegation), do not roll back to a build older than this one: its waker

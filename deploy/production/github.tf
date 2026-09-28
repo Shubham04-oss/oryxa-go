@@ -4,10 +4,10 @@
 # the image and roll the service onto a task definition carrying it;
 # everything else stays with `tofu apply`.
 
-variable "github_repository" {
-  description = "The repository whose production environment releases, as owner/name."
+variable "github_oidc_subject_prefix" {
+  description = "How GitHub's OIDC tokens for the releasing repository begin their sub claim. The repository uses immutable subjects, which name its owner and itself with their ids, so a renamed or recreated repository of the same name cannot take its place; `gh api repos/OWNER/REPO/actions/oidc/customization/sub` reports the prefix."
   type        = string
-  default     = "Shubham04-oss/oryxa-go"
+  default     = "repo:Shubham04-oss@218535561/oryxa-go@1368173110"
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -26,7 +26,7 @@ resource "aws_iam_role" "github_deploy" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:production"
+          "token.actions.githubusercontent.com:sub" = "${var.github_oidc_subject_prefix}:environment:production"
         }
       }
     }]
