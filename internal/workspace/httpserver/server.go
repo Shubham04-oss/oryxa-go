@@ -429,7 +429,11 @@ func (server *Server) status(writer http.ResponseWriter, request *http.Request) 
 	if len(plan.Changes) > 0 {
 		status = "drift"
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"status": status, "version": latest.Number, "plan": plan})
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"status": status, "version": latest.Number, "plan": plan,
+		"members": len(state.Members), "teams": len(state.Teams),
+		"pending_invitations": len(state.Invitations),
+	})
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {

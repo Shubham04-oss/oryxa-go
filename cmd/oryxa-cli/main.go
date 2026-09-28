@@ -230,7 +230,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		}
 		return report(stdout, opts.json, plan)
 	}
-	if command == "pull" || command == "status" || command == "whoami" {
+	if command == "pull" || command == "status" || command == "doctor" || command == "whoami" {
 		client, err := signedInClient(ctx, opts, stdout, getenv)
 		if err != nil {
 			return reportError(err, stderr)
@@ -256,10 +256,26 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if state.Organization == nil {
 			return reportError(fmt.Errorf("organization was not found"), stderr)
 		}
-		if command == "status" {
+		if command == "status" || command == "doctor" {
 			status, err := client.WorkspaceStatus(ctx, state.Organization.ID)
 			if err != nil {
 				return reportError(err, stderr)
+			}
+			if command == "doctor" {
+				var detail map[string]any
+				if err := json.Unmarshal(status, &detail); err != nil {
+					return reportError(err, stderr)
+				}
+				detail["step"] = "doctor"
+				switch detail["status"] {
+				case "not_configured":
+					detail["fix"] = "run oryxa-cli setup with the workspace file"
+				case "drift":
+					detail["fix"] = "review the plan and rerun apply with the workspace file"
+				case "needs_human":
+					detail["fix"] = "complete the listed human steps, then rerun apply with the workspace file"
+				}
+				return report(stdout, opts.json, detail)
 			}
 			return report(stdout, opts.json, status)
 		}
@@ -481,6 +497,7 @@ Commands:
   diff       alias of plan
   pull       write live organization settings as YAML
   status     check the applied workspace for drift and pending steps
+  doctor     show status and the next corrective command
   rollback  restore a saved workspace version with --to VERSION
   whoami     show the authenticated user and organizations
 
