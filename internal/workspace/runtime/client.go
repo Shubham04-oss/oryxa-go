@@ -114,12 +114,21 @@ type TeamMember struct {
 	Role   string `json:"role"`
 }
 
+type OrganizationAgent struct {
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	Instructions string `json:"instructions"`
+	Status       string `json:"status"`
+	CanManage    bool   `json:"can_manage"`
+}
+
 type Snapshot struct {
 	Organization *Organization
 	Members      map[string]Member
 	Invitations  map[string]Invitation
 	Teams        map[string]Team
 	TeamMembers  map[string]map[string]TeamMember
+	Agent        *OrganizationAgent
 }
 
 func (client *Client) Snapshot(ctx context.Context, slug string) (Snapshot, error) {
@@ -196,7 +205,18 @@ func (client *Client) Snapshot(ctx context.Context, slug string) (Snapshot, erro
 			state.TeamMembers[team.Name][strings.ToLower(member.Email)] = member
 		}
 	}
+	var agent OrganizationAgent
+	err := client.request(ctx, http.MethodGet, base+"/organization-agent?preview=1", nil, &agent)
+	if err == nil {
+		state.Agent = &agent
+	} else if !IsStatus(err, http.StatusNotFound) && !IsStatus(err, http.StatusServiceUnavailable) {
+		return Snapshot{}, err
+	}
 	return state, nil
+}
+
+func (client *Client) UpdateOrganizationAgent(ctx context.Context, orgID string, input map[string]any) error {
+	return client.request(ctx, http.MethodPatch, "/v1/organizations/"+url.PathEscape(orgID)+"/organization-agent", input, nil)
 }
 
 func (client *Client) Whoami(ctx context.Context, output *json.RawMessage) error {

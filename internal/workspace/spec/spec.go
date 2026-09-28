@@ -10,6 +10,7 @@ import (
 	"net/mail"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -27,7 +28,7 @@ type Document struct {
 	Directory     *yaml.Node    `yaml:"directory,omitempty" json:"-"`
 	OrgChart      *yaml.Node    `yaml:"orgChart,omitempty" json:"-"`
 	Chat          *yaml.Node    `yaml:"chat,omitempty" json:"-"`
-	Agents        *yaml.Node    `yaml:"agents,omitempty" json:"-"`
+	Agents        *Agents       `yaml:"agents,omitempty" json:"agents,omitempty"`
 	Rules         *yaml.Node    `yaml:"rules,omitempty" json:"-"`
 	Safety        *yaml.Node    `yaml:"safety,omitempty" json:"-"`
 	Tools         *yaml.Node    `yaml:"tools,omitempty" json:"-"`
@@ -62,6 +63,19 @@ type Member struct {
 type Team struct {
 	Name    string   `yaml:"name" json:"name"`
 	Members []string `yaml:"members,omitempty" json:"members,omitempty"`
+}
+
+// Agents exposes the organization agent settings backed by the agents API.
+// Other agent policy fields remain unsupported until they affect the runtime.
+type Agents struct {
+	Organization *OrganizationAgent `yaml:"organization,omitempty" json:"organization,omitempty"`
+}
+
+type OrganizationAgent struct {
+	Enabled      *bool   `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	DisplayName  *string `yaml:"displayName,omitempty" json:"displayName,omitempty"`
+	Description  *string `yaml:"description,omitempty" json:"description,omitempty"`
+	Instructions *string `yaml:"instructions,omitempty" json:"instructions,omitempty"`
 }
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -106,7 +120,7 @@ func rejectUnsupportedSections(root *yaml.Node) error {
 	for i := 0; i < len(root.Content[0].Content); i += 2 {
 		name := root.Content[0].Content[i].Value
 		switch name {
-		case "directory", "orgChart", "chat", "agents", "rules", "safety", "tools", "search", "notifications", "data", "security", "ownership", "secrets":
+		case "directory", "orgChart", "chat", "rules", "safety", "tools", "search", "notifications", "data", "security", "ownership", "secrets":
 			return fmt.Errorf("%s is not yet supported by the workspace applier", name)
 		}
 	}
@@ -145,7 +159,7 @@ func (document Document) Validate() error {
 		node *yaml.Node
 	}{
 		{"directory", document.Directory}, {"orgChart", document.OrgChart},
-		{"chat", document.Chat}, {"agents", document.Agents}, {"rules", document.Rules},
+		{"chat", document.Chat}, {"rules", document.Rules},
 		{"safety", document.Safety}, {"tools", document.Tools}, {"search", document.Search},
 		{"notifications", document.Notifications}, {"data", document.Data},
 		{"security", document.Security}, {"ownership", document.Ownership},
@@ -161,6 +175,18 @@ func (document Document) Validate() error {
 		}
 		if document.People.Invite != "" && document.People.Invite != "email" {
 			return fmt.Errorf("people.invite currently supports email only")
+		}
+	}
+	if document.Agents != nil && document.Agents.Organization != nil {
+		agent := document.Agents.Organization
+		if agent.DisplayName != nil && (strings.TrimSpace(*agent.DisplayName) == "" || utf8.RuneCountInString(*agent.DisplayName) > 100) {
+			return fmt.Errorf("agents.organization.displayName must be between 1 and 100 characters")
+		}
+		if agent.Description != nil && utf8.RuneCountInString(*agent.Description) > 2000 {
+			return fmt.Errorf("agents.organization.description holds at most 2000 characters")
+		}
+		if agent.Instructions != nil && (strings.TrimSpace(*agent.Instructions) == "" || utf8.RuneCountInString(*agent.Instructions) > 20000) {
+			return fmt.Errorf("agents.organization.instructions must be between 1 and 20000 characters")
 		}
 	}
 	seenDomains := map[string]bool{}

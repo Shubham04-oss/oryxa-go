@@ -59,6 +59,20 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	if command == "init" {
 		return initCommand(ctx, opts, stdout, stderr, getenv)
 	}
+	if command == "login" {
+		client, err := signedInClient(ctx, opts, stdout, getenv)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		var me json.RawMessage
+		if err := client.Whoami(ctx, &me); err != nil {
+			return reportError(err, stderr)
+		}
+		if _, err := stdout.Write(append(me, '\n')); err != nil {
+			return reportError(err, stderr)
+		}
+		return 0
+	}
 	if command == "setup" {
 		document, err := readDocument(opts.file)
 		if err != nil {
@@ -67,11 +81,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if opts.org != "" && opts.org != document.Metadata.Organization {
 			return reportError(fmt.Errorf("--org does not match metadata.organization"), stderr)
 		}
-		token, err := nativeLogin(ctx, opts.api, opts.noBrowser, opts.json, stdout)
-		if err != nil {
-			return reportError(err, stderr)
-		}
-		client, err := runtime.NewClient(opts.api, token)
+		client, err := signedInClient(ctx, opts, stdout, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -133,7 +143,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if opts.org != "" && opts.org != document.Metadata.Organization {
 			return reportError(fmt.Errorf("--org does not match metadata.organization"), stderr)
 		}
-		client, err := runtime.NewClient(opts.api, getenv("ORYXA_ACCESS_TOKEN"))
+		client, err := signedInClient(ctx, opts, stdout, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -170,7 +180,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return report(stdout, opts.json, plan)
 	}
 	if command == "pull" || command == "status" || command == "whoami" {
-		client, err := runtime.NewClient(opts.api, getenv("ORYXA_ACCESS_TOKEN"))
+		client, err := signedInClient(ctx, opts, stdout, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -207,6 +217,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	fmt.Fprintln(stderr, "unknown command:", command)
 	usage(stderr)
 	return 3
+}
+
+func signedInClient(ctx context.Context, opts options, stdout io.Writer, getenv func(string) string) (*runtime.Client, error) {
+	token := getenv("ORYXA_ACCESS_TOKEN")
+	if token == "" {
+		if opts.noInput {
+			return nil, fmt.Errorf("browser sign-in is required under --no-input; run without --no-input or provide a short-lived ORYXA_ACCESS_TOKEN")
+		}
+		var err error
+		token, err = nativeLogin(ctx, opts.api, opts.noBrowser, opts.json, stdout)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return runtime.NewClient(opts.api, token)
 }
 
 func initCommand(ctx context.Context, opts options, stdout, stderr io.Writer, getenv func(string) string) int {
@@ -314,6 +339,7 @@ func usage(writer io.Writer) {
 
 Commands:
   setup      browser sign-in, plan and apply in one process
+  login      browser sign-in and show the current account (no saved session)
   init       write a starting oryxa.yaml to stdout or -o
   validate   validate a workspace file without contacting Oryxa
   plan       show changes against the current organization
@@ -323,9 +349,9 @@ Commands:
   status     show organization, member, team and invitation counts
   whoami     show the authenticated user and organizations
 
-Setup keeps its browser session in memory. Other remote commands currently
-require ORYXA_ACCESS_TOKEN in the environment. The token is never written by
-this CLI. Use -f for the input file, --org for an organization
+Remote commands sign in through the browser when ORYXA_ACCESS_TOKEN is absent.
+Each command keeps its session in memory and never saves the token. Use -f for
+the input file, --org for an organization
 slug, --api for the API URL, --json for machine-readable output, and --dry-run
 to plan an apply. Unsupported sections are rejected before any write.
 `)

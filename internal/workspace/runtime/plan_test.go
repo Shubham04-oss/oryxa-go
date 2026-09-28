@@ -88,14 +88,80 @@ func TestPlanRejectsUnresolvedTeamMember(t *testing.T) {
 	}
 }
 
+func TestOrganizationAgentPlanApplyAndPull(t *testing.T) {
+	state := &fakeState{
+		orgExists: true,
+		members:   []Member{{UserID: "u1", Email: "owner@acme.com", Role: "owner"}},
+		agent:     &OrganizationAgent{Name: "Acme Agent", Description: "Old", Instructions: "Coordinate.", Status: "active", CanManage: true},
+	}
+	server := httptest.NewServer(http.HandlerFunc(state.serve))
+	defer server.Close()
+	client, err := NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled, name, instructions := false, "Atlas", "Coordinate team work."
+	document := spec.Document{
+		APIVersion: spec.APIVersion, Kind: "Workspace",
+		Metadata: spec.Metadata{Organization: "acme"},
+		Agents: &spec.Agents{Organization: &spec.OrganizationAgent{
+			Enabled: &enabled, DisplayName: &name, Instructions: &instructions,
+		}},
+	}
+	snapshot, err := client.Snapshot(context.Background(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := BuildPlan(document, snapshot)
+	if err != nil || len(plan.Changes) != 3 || state.agentUpdates != 0 || state.agentReads != 1 {
+		t.Fatalf("plan = %+v, %v; reads/updates = %d/%d", plan, err, state.agentReads, state.agentUpdates)
+	}
+	if _, err := Apply(context.Background(), client, document); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(context.Background(), client, document); err != nil {
+		t.Fatal(err)
+	}
+	if state.agentUpdates != 1 || state.agent.Name != name || state.agent.Instructions != instructions || state.agent.Status != "disabled" || state.agent.Description != "Old" {
+		t.Fatalf("agent = %+v, updates = %d", state.agent, state.agentUpdates)
+	}
+	snapshot, err = client.Snapshot(context.Background(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulled, err := Pull(snapshot)
+	if err != nil || pulled.Agents == nil || pulled.Agents.Organization == nil || *pulled.Agents.Organization.Enabled || *pulled.Agents.Organization.DisplayName != name {
+		t.Fatalf("pulled agent = %+v, %v", pulled.Agents, err)
+	}
+}
+
+func TestOrganizationAgentPlanRejectsMemberUpdates(t *testing.T) {
+	name := "Atlas"
+	document := spec.Document{
+		APIVersion: spec.APIVersion, Kind: "Workspace",
+		Metadata: spec.Metadata{Organization: "acme"},
+		Agents:   &spec.Agents{Organization: &spec.OrganizationAgent{DisplayName: &name}},
+	}
+	state := Snapshot{
+		Organization: &Organization{ID: "org_1", Slug: "acme"},
+		Agent:        &OrganizationAgent{Name: "Acme Agent", Status: "active"},
+	}
+	if _, err := BuildPlan(document, state); err == nil || !strings.Contains(err.Error(), "owner or admin") {
+		t.Fatalf("plan error = %v", err)
+	}
+}
+
 type fakeState struct {
-	orgExists   bool
-	orgCreates  int
-	members     []Member
-	teamMembers []TeamMember
-	invites     int
-	teamCreates int
-	adds        int
+	orgExists    bool
+	orgCreates   int
+	members      []Member
+	teamMembers  []TeamMember
+	invites      int
+	teamCreates  int
+	adds         int
+	agent        *OrganizationAgent
+	agentReads   int
+	agentUpdates int
 }
 
 func (state *fakeState) serve(writer http.ResponseWriter, request *http.Request) {
@@ -147,6 +213,37 @@ func (state *fakeState) serve(writer http.ResponseWriter, request *http.Request)
 		state.adds++
 		state.teamMembers = append(state.teamMembers, TeamMember{UserID: "u2", Email: "new@acme.com", Role: "member"})
 		write(map[string]string{"status": "created"})
+	case "GET /v1/organizations/org_1/organization-agent":
+		if request.URL.RawQuery != "preview=1" {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		state.agentReads++
+		if state.agent == nil {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		write(state.agent)
+	case "PATCH /v1/organizations/org_1/organization-agent":
+		state.agentUpdates++
+		var fields map[string]string
+		if err := json.NewDecoder(request.Body).Decode(&fields); err != nil {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for key, value := range fields {
+			switch key {
+			case "name":
+				state.agent.Name = value
+			case "description":
+				state.agent.Description = value
+			case "instructions":
+				state.agent.Instructions = value
+			case "status":
+				state.agent.Status = value
+			}
+		}
+		write(state.agent)
 	default:
 		writer.WriteHeader(http.StatusNotFound)
 	}

@@ -29,6 +29,9 @@ type Plan struct {
 }
 
 func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
+	if err := document.Validate(); err != nil {
+		return Plan{}, err
+	}
 	plan := Plan{Changes: []Change{}, NeedsHuman: []HumanStep{}}
 	if state.Organization == nil {
 		plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "organization", Name: document.Metadata.Organization})
@@ -82,7 +85,49 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 			}
 		}
 	}
+	input, err := organizationAgentInput(document, state)
+	if err != nil {
+		return Plan{}, err
+	}
+	for _, field := range []string{"name", "description", "instructions", "status"} {
+		if _, changed := input[field]; changed {
+			plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "organization_agent", Name: field})
+		}
+	}
 	return plan, nil
+}
+
+func organizationAgentInput(document spec.Document, state Snapshot) (map[string]any, error) {
+	input := map[string]any{}
+	if document.Agents == nil || document.Agents.Organization == nil {
+		return input, nil
+	}
+	wanted := document.Agents.Organization
+	if state.Organization != nil && state.Agent == nil {
+		return nil, fmt.Errorf("agents.organization requires the agents service to be available")
+	}
+	if wanted.DisplayName != nil && (state.Agent == nil || state.Agent.Name != *wanted.DisplayName) {
+		input["name"] = *wanted.DisplayName
+	}
+	if wanted.Description != nil && (state.Agent == nil || state.Agent.Description != *wanted.Description) {
+		input["description"] = *wanted.Description
+	}
+	if wanted.Instructions != nil && (state.Agent == nil || state.Agent.Instructions != *wanted.Instructions) {
+		input["instructions"] = *wanted.Instructions
+	}
+	if wanted.Enabled != nil {
+		status := "disabled"
+		if *wanted.Enabled {
+			status = "active"
+		}
+		if state.Agent == nil || state.Agent.Status != status {
+			input["status"] = status
+		}
+	}
+	if len(input) > 0 && state.Agent != nil && !state.Agent.CanManage {
+		return nil, fmt.Errorf("agents.organization requires an organization owner or admin")
+	}
+	return input, nil
 }
 
 // Apply reconciles only settings backed by the existing services. Repeated
@@ -167,6 +212,15 @@ func Apply(ctx context.Context, client *Client, document spec.Document) (Plan, e
 			}
 		}
 	}
+	input, err := organizationAgentInput(document, state)
+	if err != nil {
+		return Plan{}, err
+	}
+	if len(input) > 0 {
+		if err := client.UpdateOrganizationAgent(ctx, state.Organization.ID, input); err != nil {
+			return Plan{}, err
+		}
+	}
 	state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
 	if err != nil {
 		return Plan{}, err
@@ -230,5 +284,12 @@ func Pull(state Snapshot) (spec.Document, error) {
 		document.Teams = append(document.Teams, entry)
 	}
 	slices.SortFunc(document.Teams, func(a, b spec.Team) int { return strings.Compare(a.Name, b.Name) })
+	if state.Agent != nil {
+		enabled := state.Agent.Status == "active"
+		document.Agents = &spec.Agents{Organization: &spec.OrganizationAgent{
+			Enabled: &enabled, DisplayName: &state.Agent.Name,
+			Description: &state.Agent.Description, Instructions: &state.Agent.Instructions,
+		}}
+	}
 	return document, document.Validate()
 }

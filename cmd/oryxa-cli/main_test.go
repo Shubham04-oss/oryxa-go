@@ -37,3 +37,11 @@ func TestValidateRefusesUnknownSetting(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 }
+
+func TestRemoteCommandNeedsSignInWithoutInput(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"status", "--org", "acme", "--no-input"}, &stdout, &stderr, func(string) string { return "" })
+	if code != 3 || !strings.Contains(stderr.String(), "browser sign-in is required") {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+}

@@ -73,6 +73,23 @@ func (service *Service) OrganizationAgent(ctx context.Context, actor Actor) (Org
 	return agent, nil
 }
 
+// PreviewOrganizationAgent returns effective settings without creating the
+// organization agent. Workspace plans use this read-only projection.
+func (service *Service) PreviewOrganizationAgent(ctx context.Context, actor Actor) (OrganizationAgent, error) {
+	access, err := service.organizationAccess(ctx, actor)
+	if err != nil {
+		return OrganizationAgent{}, err
+	}
+	agent, err := service.repository.GetOrganizationAgent(ctx, actor.OrganizationID)
+	if errors.Is(err, ErrNotFound) {
+		agent = defaultOrganizationAgent(actor.OrganizationID, access.organizationName)
+	} else if err != nil {
+		return OrganizationAgent{}, err
+	}
+	agent.CanManage = access.canManageOrganization
+	return agent, nil
+}
+
 func (service *Service) UpdateOrganizationAgent(ctx context.Context, actor Actor, input OrganizationAgentUpdate) (OrganizationAgent, error) {
 	if input.Name == nil && input.Description == nil && input.Instructions == nil && input.Status == nil {
 		return OrganizationAgent{}, fmt.Errorf("%w: send at least one organization-agent field to change", ErrInvalid)

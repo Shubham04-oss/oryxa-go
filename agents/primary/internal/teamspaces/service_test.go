@@ -22,16 +22,32 @@ type fakeRepository struct {
 	spaces            []Space
 	organizationAgent OrganizationAgent
 	entries           []Entry
+	ensureCount       int
 }
 
 func (repo *fakeRepository) EnsureOrganizationAgent(_ context.Context, organizationID, organizationName, _ string) (OrganizationAgent, error) {
+	repo.ensureCount++
 	if repo.organizationAgent.ID == "" {
-		repo.organizationAgent = OrganizationAgent{
-			ID: "oag_1", OrganizationID: organizationID, Name: organizationName + " Agent",
-			Instructions: "Coordinate shared organizational context.", Status: StatusActive, Revision: 1,
-		}
+		repo.organizationAgent = defaultOrganizationAgent(organizationID, organizationName)
+		repo.organizationAgent.ID, repo.organizationAgent.Revision = "oag_1", 1
 	}
 	return repo.organizationAgent, nil
+}
+
+func TestPreviewOrganizationAgentDoesNotCreateIt(t *testing.T) {
+	repo := &fakeRepository{}
+	service, _ := New(repo, fakeDirectory{directory: teamDirectory(true, true)})
+	preview, err := service.PreviewOrganizationAgent(context.Background(), actor())
+	if err != nil || preview.ID != "" || preview.Revision != 0 || preview.Status != StatusActive || !preview.CanManage {
+		t.Fatalf("preview = %+v, %v", preview, err)
+	}
+	if repo.ensureCount != 0 || repo.organizationAgent.ID != "" {
+		t.Fatal("preview created the organization agent")
+	}
+	created, err := service.OrganizationAgent(context.Background(), actor())
+	if err != nil || created.Name != preview.Name || created.Instructions != preview.Instructions {
+		t.Fatalf("created = %+v, %v; preview = %+v", created, err, preview)
+	}
 }
 
 func (repo *fakeRepository) GetOrganizationAgent(_ context.Context, organizationID string) (OrganizationAgent, error) {

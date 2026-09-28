@@ -1,9 +1,10 @@
 # Workspace CLI: first implementation
 
 This is the first executable slice of [the onboarding design](design/onboarding.md).
-It reconciles organizations, invitations, member roles, teams, and team
-membership through the existing auth and teams APIs. It does not yet install
-Slack, configure agents or search, or store the other settings in the design.
+It reconciles organizations, invitations, member roles, teams, team
+membership, and the organization agent's name, description, instructions and
+enabled state through the existing APIs. It does not yet install Slack,
+configure personal agents or search, or store the other settings in the design.
 Those sections are rejected before an apply makes any change.
 
 Build the standalone command from the repository root:
@@ -31,10 +32,13 @@ open; `--json` prints machine-readable progress.
 ./bin/oryxa setup -f oryxa.yaml
 ```
 
-Separate remote commands read a short-lived member access token from
-`ORYXA_ACCESS_TOKEN` in their environment. No token is accepted in the file
-or as a flag, and the CLI does not save it. The standalone `login` and
-cross-command in-memory session from the design are still to build.
+Separate remote commands open browser sign-in when they need a session. They
+can also read a short-lived member access token from `ORYXA_ACCESS_TOKEN`.
+No token is accepted in the file or as a flag, and the CLI does not save it.
+`oryxa login` checks sign-in and shows the current account; its in-memory
+session ends with that command. For one sign-in and several setup steps, use
+`oryxa setup`. A reusable cross-command session needs a future in-memory
+daemon or a different security design.
 
 ```sh
 ./bin/oryxa plan -f oryxa.yaml --json
@@ -62,6 +66,7 @@ The current file accepts these settings:
 | `people.members[].email`, `.role` | Invite members and change existing non-owner roles |
 | `people.invite: email` | Uses the existing invitation email flow |
 | `teams[].name`, `.members` | Create teams and add joined members |
+| `agents.organization.enabled`, `.displayName`, `.description`, `.instructions` | Reconcile the existing organization agent; `plan` reads effective defaults without creating it |
 
 The parser refuses unknown keys, duplicate members or teams, unrecognized
 roles, and unsupported sections. Omitting a person or team never removes it.

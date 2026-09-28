@@ -42,6 +42,8 @@ func TestParseRejectsUnknownAndUnsupportedSettings(t *testing.T) {
 		{"unknown nested", strings.Replace(example, "name: Acme", "name: Acme, typo: yes", 1), "typo"},
 		{"unknown top level", example + "surprise: true\n", "surprise"},
 		{"unsupported section", example + "chat: {slack: {install: add_to_slack}}\n", "chat is not yet supported"},
+		{"unsupported agent policy", example + "agents: {personal: {style: concise}}\n", "personal"},
+		{"empty agent name", example + "agents: {organization: {displayName: ' '}}\n", "agents.organization.displayName"},
 		{"secret value", example + "secrets: {apiKey: plaintext}\n", "secrets is not yet supported"},
 		{"wrong domain", strings.Replace(example, "raya@acme.com", "raya@other.com", 1), "outside metadata.domains"},
 		{"duplicate member", strings.Replace(example, "  members:\n", "  members:\n    - {email: raya@acme.com}\n", 1), "duplicate email"},
@@ -54,5 +56,23 @@ func TestParseRejectsUnknownAndUnsupportedSettings(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestParseOrganizationAgentSettings(t *testing.T) {
+	document, err := Parse([]byte(example + "agents: {organization: {enabled: false, displayName: Atlas, description: Helper, instructions: Coordinate teams.}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := document.Agents.Organization
+	if agent.Enabled == nil || *agent.Enabled || *agent.DisplayName != "Atlas" || *agent.Instructions != "Coordinate teams." {
+		t.Fatalf("agent settings = %+v", agent)
+	}
+	encoded, err := document.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(encoded); err != nil {
+		t.Fatalf("agent settings did not round trip: %v", err)
 	}
 }
