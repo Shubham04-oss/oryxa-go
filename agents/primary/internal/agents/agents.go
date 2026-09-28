@@ -83,12 +83,16 @@ func Gemini(ctx context.Context, name, project, location string, credentials *au
 	if project == "" {
 		return nil, errors.New("a Google Cloud project is required: the agents reach Gemini through Vertex AI")
 	}
-	return gemini.NewModel(ctx, name, &genai.ClientConfig{
+	llm, err := gemini.NewModel(ctx, name, &genai.ClientConfig{
 		Backend:     genai.BackendVertexAI,
 		Project:     project,
 		Location:    location,
 		Credentials: credentials,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return foldedSignatures{llm}, nil
 }
 
 // GeminiClient returns a Gen AI client on the same Vertex AI project and
