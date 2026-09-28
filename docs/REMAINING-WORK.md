@@ -32,13 +32,26 @@ tag `archive/connections-and-integrations-2026-09-17`, and
 restores any of it. The provider research in `docs/research/` stays as
 reference.
 
-**Next, from 2026-09-28.** The owner's plan, not yet built: Nango as Oryxa's
-own integrations provider beside Composio — OAuth connections, and Nango's
-syncs and webhooks feeding rag — so that Composio is no longer the only way to
-an app; Cedar, through `cedar-go`, for access control and permissions;
-knowledge bases gaining access policies and metadata filtering; teams whose
-agents read what the member has on screen and work together; and the primary
-agent's name, Krude, reconsidered.
+**Next, from 2026-09-28.** Where the day's plans ended up:
+
+- **Integrations: our own sign-ins, not Nango.** Nango, Activepieces pieces
+  and AgentCore Identity were each researched and ruled out
+  ([integrations-research.md](design/integrations-research.md)). The archived
+  `connections` service is only a reference.
+- **The integrations plan** is in
+  [integrations-plan.md](design/integrations-plan.md). It has three phases:
+  1. One sign-in and token system in `apps`, covering OAuth2, API tokens and
+     basic credentials, with fields each integration declares. One webhook
+     ingress, where each integration declares how its app signs requests.
+     Phase 1 is being built, and ships switched off.
+  2. Integrations on official SDKs, built by cheap-model workers.
+  3. AgentCore Gateway in front of apps' MCP server.
+- **Composio stays the tool provider** meanwhile.
+- **Knowledge bases are postponed.** That includes the Cedar permission layer
+  (PR #109 and branches `feat/rag-authz` and `feat/kb-policies-web`), whose
+  review found policy bypasses to fix before any merge.
+- **The owner builds agents and teams in parallel:** screen context and
+  naming, in [agents-and-teams.md](design/agents-and-teams.md).
 
 First, [Open bugs](#open-bugs), then:
 
