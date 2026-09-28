@@ -7,7 +7,7 @@ is believed but not yet checked against the provider's current documentation.
 
 ## What it is for
 
-Setting a company up by hand is the bottleneck: registering its own Slack app,
+Setting a company up by hand is the bottleneck: installing and wiring Slack,
 linking its directory, adding teams and people, marking channels, telling
 Oryxa who owns what. The CLI does all of it in about a minute. It is built to
 be run by the company's own coding agent (Claude Code, Cursor, Windsurf) as
@@ -34,7 +34,7 @@ the same file and the same commands.
    memory, writes no token to disk, asks providers for the least they need,
    and deletes itself when done unless told to stay.
 5. **A person where the provider insists.** Some steps need a click by an
-   admin (a Slack configuration token, an admin consent screen). The CLI opens
+   admin (approving the Slack install, an admin consent screen). The CLI opens
    the exact page, waits, and checks the result.
 
 ## Getting the CLI
@@ -116,43 +116,37 @@ raw data; how that becomes the org chart is the organization's to define.
 - **Personal accounts:** whether employees may connect their personal Jira and
   GitHub in chat.
 
-**4. Slack.**
+**4. Slack.** Oryxa has ONE Slack app, distributed through the Slack
+Marketplace, and each company installs it. The CLI runs `oryxa connect slack`:
 
-> **Blocked on a decision: Slack's terms.** Since May 2025, Slack's API terms
-> make its Marketplace "the only appropriate channel for commercially
-> distributing apps built with Slack APIs", and that explicitly includes
-> giving customers "instructions for a templated custom app that connects to
-> your product" (Slack changelog, 2025-05-29, checked 2026-09-28). A
-> per-organization app created from Oryxa's template is exactly that.
->
-> The compliant route is one Oryxa Slack app, listed in the Marketplace:
-> - Each workspace installs it with "Add to Slack".
-> - The bot token goes to the vault.
-> - Events and clicks arrive at Oryxa's deployment-scope webhook endpoint.
-> - There is no configuration token and no per-organization app, so this step
->   gets simpler.
->
-> Until the app is approved, it is installed only in design partners'
-> workspaces. The per-organization route below stays only as a fallback, if
-> Slack confirms it counts as internal.
+- It opens Oryxa's "Add to Slack" link: Slack's OAuth v2 install for the bot,
+  approved by a workspace admin.
+- The callback stores that workspace's bot token in the vault. It links the
+  workspace (its `team_id`) to the organization and checks the token with
+  `auth.test`.
+- The app is the same for every company. Its scopes, events and interactivity
+  live in its manifest in Oryxa's repo:
+  - scopes: `app_mentions:read`, `chat:write`, `im:write`, `users:read`,
+    `users:read.email`, `channels:read`, `groups:read`;
+  - events: `app_mention`, `app_uninstalled`, `tokens_revoked`.
+  Events and button clicks from every workspace arrive at one Oryxa endpoint,
+  signed with the app's own secret. Nothing is configured per company.
+- There is no configuration token, no per-company app and nothing secret for
+  the admin to paste. The admin clicks "Allow".
 
-The fallback: the CLI creates the organization's own internal Slack app from
-Oryxa's app template, installs it, and wires it to Oryxa:
+**Until the listing is live,** companies install through Oryxa's install link
+as a clearly labelled beta. Slack requires 10 active workspaces before an app
+can be submitted, and its review takes up to 10 business days for the first
+check, then up to 10 weeks. So the first companies are design partners. See
+[slack-consent-loop.md](slack-consent-loop.md), "The Marketplace track".
 
-- It creates the app from the template through Slack's App Manifest API,
-  which needs an app configuration token that a workspace admin generates
-  once at api.slack.com. (verify) The CLI opens that page, and the admin
-  enters the token with `oryxa secret set slack-config-token`.
-- The template sets the bot's scopes (`app_mentions:read`, `chat:write`,
-  `im:write`, `im:history`, `users:read`, `users:read.email`, `channels:read`,
-  `groups:read`), its events (`app_mention`, `message.im`) and its
-  interactivity. Events and button clicks both point at Oryxa's webhook
-  ingress, which answers Slack's URL check itself.
-- The app's client ID, client secret and signing secret go straight to the
-  vault. (verify: which of these the create call returns)
-- The bot is installed through the browser, and its token goes to the vault.
-- An internal app skips Slack's Marketplace review and is exempt from its
-  2026 limits on apps distributed outside the Marketplace.
+**Why not a per-company app:** since May 2025, Slack's terms make its
+Marketplace "the only appropriate channel for commercially distributing apps
+built with Slack APIs". That explicitly includes giving customers
+"instructions for a templated custom app that connects to your product"
+(Slack changelog, 2025-05-29). The per-company route (create each
+company's app from a template with an app configuration token) stays only as
+a fallback, if Slack confirms in writing that it counts as internal.
 
 **5. External search (optional).** For Glean or any search with an MCP server:
 the server's address, how to sign in (OAuth in the browser, or a token entered
@@ -211,7 +205,7 @@ chat:
   slack:
     enabled: true
     workspace: acme.slack.com
-    app: {name: Oryxa, botName: oryxa}
+    install: add_to_slack         # Oryxa's Marketplace app, one install per workspace
   teams:
     enabled: false
 
@@ -262,7 +256,6 @@ rules:
     viewExpires: 15m
 
 secrets:                          # names only; values go to the vault
-  - slack-config-token
   - glean-mcp-token               # only with token auth
 ```
 
@@ -289,7 +282,7 @@ and every change is audited and published as an event.
 | `GET …/workspace` | The applied file and its versions |
 | `GET …/workspace/status` | Health of each piece |
 | `PUT …/secrets/{name}` | Write-only. Takes a secret into the vault; nothing ever reads one back out through the API |
-| `POST …/providers/slack/app` | Create the Slack app from the template with the configuration token |
+| `GET …/providers/slack/install` | The "Add to Slack" link for this organization, with a single-use state |
 | `GET /v1/apps/oauth/callback` | Existing: completes provider sign-ins |
 | `POST …/providers/{google\|microsoft}/link` | Link the directory |
 | `POST …/search/verify` | Test the external search connection |
@@ -310,7 +303,7 @@ and a loopback redirect.
 **New:**
 - the workspace service (validate, plan, apply, status);
 - the CLI and its release pipeline (signed builds, the install script);
-- Slack app creation through the manifest API;
+- Slack installs through "Add to Slack", and Oryxa's Slack app manifest;
 - directory import for Google and Microsoft;
 - the external search registry and its MCP client;
 - storage for the org chart, ownership hints and rules.
@@ -334,7 +327,7 @@ and a loopback redirect.
 
 - **v1, Slack first:**
   - sign-in;
-  - the Slack app, created and installed;
+  - Slack installed with "Add to Slack" (a beta until the Marketplace listing);
   - teams and members from lists;
   - identities by email;
   - high-priority channels, ownership hints and rules;
@@ -350,9 +343,10 @@ and a loopback redirect.
 
 ## Decisions
 
+**Settled on 2026-09-28:** Slack goes through one Oryxa app in the Slack Marketplace, installed with "Add to Slack". Design partners are a beta until it is listed.
+
 | Decision | Recommended default |
 | --- | --- |
-| Slack app model (Slack's terms) | One Oryxa app, submitted to the Marketplace now; design partners only until it is approved |
 | Download domain and signing | `get.oryxa.in`, with signed releases and checksums |
 | Google directory route | A guided client step for v1.1, keeping the customer in control, over domain-wide delegation |
 | Where the workspace service lives | A new `setup` package in the one binary, which calls auth, teams and apps rather than duplicating them |

@@ -1,10 +1,10 @@
 # Slack consent loop
 
-*Proposed 2026-09-28, checked against `main` at `403cebf`. Assumes the cross-member fix has landed: room agents answer only from the room, requests without a teamspace wait for their owner, and unattended runs cannot list or decide requests. Onboarding provisions the Slack app and is designed separately.*
+*Proposed 2026-09-28, checked against `main` at `403cebf`. Assumes the cross-member fix has landed: room agents answer only from the room, requests without a teamspace wait for their owner, and unattended runs cannot list or decide requests. Updated the same day to the Slack Marketplace route: one Oryxa app that every workspace installs. Onboarding is designed separately, in [onboarding.md](onboarding.md).*
 
 ## Rules for v1
 
-1. **Native.** Each organization has its own Slack app and bot, reached through `apps`. Composio has no part in this loop.
+1. **Native, through the Marketplace.** There is one Oryxa Slack app, distributed through the Slack Marketplace. Each workspace installs it with "Add to Slack", and its bot works through `apps`. Composio has no part in this loop.
 2. **Slack carries three things:** the entry, the owner's notice and the final answer. All processing happens in Oryxa.
 3. **One source of truth.** The interactions ledger holds every request. Slack messages and web-next cards are views of it.
 4. **The ask lives in Oryxa's DMs.** Both participants also see it in their own agent chat.
@@ -18,12 +18,15 @@
 - **Events:** `app_mention`, `app_uninstalled` and `tokens_revoked`. Job 2 adds `message.im`.
   - Interactivity is on.
   - The App Home Messages tab stays read-only until Job 2.
-- **URLs:** Event Subscriptions and Interactivity both point at the organization's hook endpoint, `POST /v1/apps/hooks/{id}`. hooks answers Slack's `url_verification`.
-- **Secrets:** onboarding hands them over in one admin-only call, `PUT …/apps/slack/installation`, with the bot token, signing secret, client ID and client secret.
-  - apps checks the token with `auth.test`, then seals it in `apps_slack_installs`. There is one install per organization, and it survives its installer leaving.
-  - The signing secret goes on the organization-scope endpoint, as `PUT …/oauth-clients/slack` already does.
+- **URLs:** Event Subscriptions and Interactivity both point at ONE deployment-scope hook endpoint, shared by every workspace. hooks verifies it with the app's signing secret and answers Slack's `url_verification`. The router maps each delivery's `team_id` to its organization.
+- **Installing.** An organization admin opens Oryxa's "Add to Slack" link, from Settings or with `oryxa connect slack`.
+  - It runs Slack's OAuth v2 install with the bot scopes above, through apps' sign-in callback.
+  - apps checks the bot token with `auth.test`, then seals it in `apps_slack_installs`, keyed by the workspace's `team_id` and linked to the organization.
+  - Each workspace has one install, and it survives its installer leaving. `app_uninstalled` and `tokens_revoked` end it.
+- **Secrets.** The app's client ID, client secret and signing secret are deployment secrets, held once in Secrets Manager. Only bot tokens are per workspace.
   - Members' own user tokens (`integrations/slack`) are unchanged.
   - Everything is off until `APPS_SLACK_SURFACE` is set.
+- **The app itself is code.** Its manifest lives in the repo, in `apps/internal/slackbot/manifest.yaml`, and is the only way scopes, events and URLs change.
 - **The 3-second acknowledgement:**
   - hooks verifies the v0 signature and dedupes: on `event_id`, or on a click's body hash.
   - A new surface branch hands the delivery to `apps/internal/slackbot`.
@@ -233,6 +236,16 @@ final answer ─▶ credentials stripped ─▶ apps posts it in the DM
 
 After that: remembered consent, N-of-M, claiming, takeover, Cedar, ownership from connectors, and Teams.
 
+**The Marketplace track runs alongside the slices.**
+- Slice 1 runs first in Oryxa's own workspace.
+- Design partners then install it through Oryxa's install link, as a beta, until there are at least 10 active workspaces. Slack requires that many before an app can be submitted.
+- Oryxa then submits. The review takes up to 10 business days for the first check, then up to 10 weeks for the full review of a new app, and slices 2 to 4 are built during it.
+- The submission kit:
+  - the scope justifications;
+  - privacy and support pages;
+  - the data-handling answers: inbound text is purged after 7 days, and secrets never go to Slack;
+  - a reviewer workspace with test accounts.
+
 | WP | Slices | Owns |
 |---|---|---|
 | S1 apps gateway | 1, 3 | `apps/internal/slackbot/**` (new); `apps/internal/hooks/{ingress,ports,service}.go`; `apps/internal/postgres/{slack.go (new),hooks.go}`, `…/migrations/008_slack_surface.sql`; `apps/internal/httpserver/slack.go` (new) plus its mount; `apps/internal/serviceconfig/config.go`; `apps/{mount,service}.go`; `apps/README.md`; `contracts/events/apps/v1/slack.go` (new) |
@@ -259,12 +272,13 @@ After that: remembered consent, N-of-M, claiming, takeover, Cedar, ownership fro
 
 ## 7. Risks
 
-- **Slack's terms.** Since May 2025, Slack's API terms name the Marketplace as the only channel for commercial distribution, and that includes "a templated custom app that connects to your product".
-  - Per-organization apps created by our CLI fit that description.
-  - Internal customer-built apps keep the full rate limits, but Slack doesn't say whether a templated app counts as internal.
-  - The deployment-scope endpoint keeps a Marketplace app possible.
+- **Slack's terms, decided: the Marketplace.** Since May 2025, the Marketplace is the only appropriate channel for distributing an app commercially, and that includes templated per-customer apps.
+  - So Oryxa has one app and lists it.
+  - Until it is listed, installs stay a clearly labelled beta with design partners.
+  - Per-organization templated apps are only a fallback, used if Slack confirms in writing that they count as internal.
+  - Listing needs 10 active workspaces first, and review can take about 3 months.
 - **Rate limits.**
-  - Distributed apps outside the Marketplace get `conversations.history` and `conversations.replies` at 1 request a minute and 15 objects. We call neither.
+  - Marketplace apps keep normal rate limits. Unlisted distributed apps get `conversations.history` and `conversations.replies` at 1 request a minute and 15 objects, but the loop calls neither.
   - `chat.postMessage` allows about one message a second per channel. `chat.update` is Tier 3; `users.info` and ephemeral messages are Tier 4.
   - Mitigations: a per-organization token bucket, honouring `Retry-After`, and at most 5 open asks per asker.
 - **Privacy.**
@@ -288,13 +302,12 @@ After that: remembered consent, N-of-M, claiming, takeover, Cedar, ownership fro
 - A bypass comes from admin-marked private channels, or from authority checked through an interface.
 - A bypass answer goes to the thread, or to the executive's DM with a note in the channel. Every bypass is audited, and the owner is told.
 - A secret appears only as a one-time, expiring view in Oryxa's DM.
-- Onboarding provisions the Slack app.
+- The Slack app is ONE Oryxa app, distributed through the Marketplace and installed per workspace with "Add to Slack". Design partners are a beta until it is listed.
 
 **Still open:**
 
 | Decision | Recommended default |
 |---|---|
-| Slack's terms on templated apps | Design partners only for now; start Marketplace review now |
 | The shape of authority | The owner defines it; `Outranks` returns false until then |
 | What "Give access for 1 hour" grants | Excerpts, plus the same asker's follow-ups in that thread; secrets as a one-time view |
 | What work that starts in Slack may read | Knowledge now; Oryxa-brokered apps later; never Composio |
