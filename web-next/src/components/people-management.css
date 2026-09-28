@@ -193,10 +193,6 @@
   padding: 11px 0;
   border-top: 1px solid #393939;
 }
-.workspace-person-row select {
-  flex: none;
-  max-width: 82px;
-}
 .workspace-person-confirm {
   display: flex;
   align-items: center;
@@ -260,6 +256,29 @@
   color: #cfcfcf;
   font-size: 10px;
   text-transform: capitalize;
+}
+.workspace-person-role-trigger {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.workspace-person-role-trigger:hover {
+  border-color: #6a6a6a;
+  color: #eee;
+}
+.workspace-person-role-trigger:focus-visible {
+  outline: 2px solid #8a8a8a;
+  outline-offset: 2px;
+}
+.workspace-person-role-trigger[data-popup-open] {
+  border-color: #8a8a8a;
+  color: #fff;
+}
+.workspace-person-role-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .workspace-invite-revoke {

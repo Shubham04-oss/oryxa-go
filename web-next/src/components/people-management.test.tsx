@@ -11,6 +11,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
   acceptReceivedInvitation,
+  changeMemberRole,
   getInvitations,
   getMembers,
   getReceivedInvitations,
@@ -21,6 +22,7 @@ import { PeopleManagement } from "./people-management"
 
 vi.mock("@/lib/auth/invitations", () => ({
   acceptReceivedInvitation: vi.fn(),
+  changeMemberRole: vi.fn(),
   getInvitations: vi.fn(),
   getMembers: vi.fn(),
   getReceivedInvitations: vi.fn(),
@@ -141,5 +143,52 @@ describe("PeopleManagement", () => {
     await screen.findByText("Launch team")
     expect(screen.getByRole("button", { name: "Join" })).toBeTruthy()
     expect(acceptReceivedInvitation).not.toHaveBeenCalled()
+  })
+
+  it("changes a member's role only when a different one is chosen from the menu", async () => {
+    vi.mocked(getMembers).mockResolvedValue([
+      {
+        organization_id: "org-1",
+        user_id: "person-2",
+        email: "jordan@example.com",
+        display_name: "Jordan Lee",
+        role: "member",
+        joined_at: "2026-09-20T00:00:00Z",
+      },
+    ])
+    vi.mocked(changeMemberRole).mockResolvedValue({
+      organization_id: "org-1",
+      user_id: "person-2",
+      email: "jordan@example.com",
+      display_name: "Jordan Lee",
+      role: "admin",
+      joined_at: "2026-09-20T00:00:00Z",
+    })
+    renderPeople("owner")
+    await screen.findByText("Jordan Lee")
+
+    // Opening the menu, by itself, must send nothing.
+    fireEvent.click(screen.getByRole("button", { name: "Role for Jordan Lee" }))
+    expect(changeMemberRole).not.toHaveBeenCalled()
+
+    // Arrow-key browsing (what a native select fired `change` for on every
+    // press) must not commit a role either.
+    fireEvent.keyDown(screen.getByRole("menuitemradio", { name: "Owner" }), {
+      key: "ArrowDown",
+    })
+    fireEvent.keyDown(screen.getByRole("menuitemradio", { name: "Admin" }), {
+      key: "ArrowDown",
+    })
+    expect(changeMemberRole).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Admin" }))
+    await waitFor(() =>
+      expect(changeMemberRole).toHaveBeenCalledWith(
+        "org-1",
+        "person-2",
+        "admin"
+      )
+    )
+    expect(changeMemberRole).toHaveBeenCalledTimes(1)
   })
 })
