@@ -22,7 +22,7 @@ import { WorkspaceEmailSettings } from "./workspace-email-settings"
 import { WorkspaceBillingSettings } from "./workspace-billing-settings"
 import { cn } from "@/lib/utils"
 
-type SettingsPage =
+export type SettingsPage =
   | "account"
   | "organization"
   | "people"
@@ -52,6 +52,7 @@ export function WorkspaceSettings({
   signingOut,
   signOutError,
   onOpenTools,
+  initialPage = "people",
 }: {
   onClose: () => void
   identity: AvatarIdentity
@@ -63,8 +64,9 @@ export function WorkspaceSettings({
   signingOut: boolean
   signOutError: string
   onOpenTools: () => void
+  initialPage?: SettingsPage
 }) {
-  const [page, setPage] = useState<SettingsPage>("people")
+  const [page, setPage] = useState<SettingsPage>(initialPage)
   const organization = selectedOrganization || session?.organizations[0]
 
   return (

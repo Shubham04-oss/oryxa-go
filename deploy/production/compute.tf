@@ -91,9 +91,11 @@ locals {
       RAG_ALLOWED_ORIGINS       = local.app_url
       TEAMS_ALLOWED_ORIGINS     = local.app_url
 
-      # Apps and billing are reached by third parties at the API host.
+      # Composio reaches apps at the API host. BILLING_URL is where Dodo's
+      # checkout and portal, and billing's emails, send a member back: the
+      # app's billing page, which both web-next and the old web/ app serve.
       APPS_PUBLIC_BASE_URL = local.api_url
-      BILLING_URL          = local.api_url
+      BILLING_URL          = "${local.app_url}/settings/billing"
 
       FILES_BUCKET_NAME = local.files_bucket
 
