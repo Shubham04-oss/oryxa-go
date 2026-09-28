@@ -10,12 +10,15 @@ Nothing here is a promise about behaviour. Where something was confirmed — by
 a command, by reading the code, or against a provider's documentation — it
 says so; where it was only noticed in passing, it says that instead.
 
-Brought up to date on 2026-09-26: every item below was checked again against
-`main` at `7f03a5a`. What that check closed moved to
+Brought up to date on 2026-09-28, after that day's release, against `main` at
+`4380f5c`: four reviews — this backlog against the code, web-next and the Go
+services each searched for bugs, and the deployment read for launch — and a
+reading of production itself: its queues, alarms, logs and traces, and one
+read-only look at the shape of a thread Krude failed on. The bugs it confirmed
+are in [Open bugs](#open-bugs); what it closed moved to
 [Done since the last update](#10-done-since-the-last-update), with its
-evidence, rather than being deleted; a few items learned a corrected count or
-date in place. Anything this pass could not confirm one way or the other is
-unchanged from the 2026-09-18 pass.
+evidence, rather than being deleted. Anything this pass could not confirm one
+way or the other is unchanged from the 2026-09-26 pass (`7f03a5a`).
 
 **Direction.** Third-party apps reach first users through Composio rather than
 Oryxa's own connection layer. The `apps` service is that: built, tested, and
@@ -29,6 +32,16 @@ tag `archive/connections-and-integrations-2026-09-17`, and
 restores any of it. The provider research in `docs/research/` stays as
 reference.
 
+**Next, from 2026-09-28.** The owner's plan, not yet built: Nango as Oryxa's
+own integrations provider beside Composio — OAuth connections, and Nango's
+syncs and webhooks feeding rag — so that Composio is no longer the only way to
+an app; Cedar, through `cedar-go`, for access control and permissions;
+knowledge bases gaining access policies and metadata filtering; teams whose
+agents read what the member has on screen and work together; and the primary
+agent's name, Krude, reconsidered.
+
+First, [Open bugs](#open-bugs), then:
+
 1. [The product loop is not closed](#1-the-product-loop-is-not-closed)
 2. [Web app](#2-web-app)
 3. [Decisions only the owner can make](#3-decisions-only-the-owner-can-make)
@@ -39,6 +52,86 @@ reference.
 8. [Housekeeping](#8-housekeeping)
 9. [Recently closed](#9-recently-closed)
 10. [Done since the last update](#10-done-since-the-last-update)
+
+## Open bugs
+
+Confirmed on 2026-09-28, each by following its code path end to end or by
+reproducing it. None is a security hole. Worst first.
+
+### Some of Krude's runs fail at Vertex with a 400
+
+In production on 2026-09-28, between 03:44 and 03:45 UTC, four runs on one
+member's thread ended `run failed` with Vertex's `400 INVALID_ARGUMENT`,
+"Request contains an invalid argument", on Krude's first model call. Short
+messages on the same thread worked before and between them, and a run on
+another thread in the same organization worked at the same moment. Ruled out,
+each against Vertex directly with `gemini-3.5-flash-lite`: every tool
+declaration Krude's toolboxes make, alone and all 39 together; an explicit
+cache on its own, holding those declarations; tool calls in the history,
+declared or not; and anything in the messages, which held no link, mention,
+address or unusual character. A tool call missing its thought signature fails
+too, but with a message of its own. The leading suspect is the explicit
+prompt cache (`agents/primary/internal/modelcache`) together with what a
+longer message brings into the prefix: memories from Memory Bank can make it
+large enough to be cached, where a greeting's is not. That combination has
+not been reproduced. Next: when a model call answers `400`, log the request's
+shape — roles, part kinds, whether it was cached and the prefix's estimated
+size, never its text — and see whether `AGENTS_PRIMARY_PROMPT_CACHE=false`
+stops it.
+
+### web-next
+
+- **A refresh that never answers wedges every request.** `lib/api/client.ts`
+  shares one refresh promise, cleared only once the fetch settles, and the
+  fetch has no timeout, so every 401 in the app waits on it. Give the refresh
+  an `AbortSignal.timeout`.
+- **Cancel does not cancel deleting or leaving an organization.** In
+  `workspace-organization-settings.tsx` the dialog's Cancel stays enabled while
+  the request runs and only closes the dialog: the request completes and the
+  page navigates away. Disable it while pending, or abort the request.
+- **A room's agent messages load images from anywhere.** `room-markdown.tsx`
+  renders an image, where `agent-timeline.tsx` makes it a link so that an
+  answer cannot fetch from a server on its own; with no CSP, a crafted reply
+  would tell another server every viewer's address. Make it a link there too.
+- **An email with a stray space is refused on every auth form.**
+  `lib/auth/schemas.ts` checks the format before it trims;
+  `z.string().trim().pipe(z.email(...))` checks the trimmed value.
+- **Cancelling a new knowledge base, or an upload, still creates it.**
+  `knowledge-bases.tsx` and `knowledge-base-detail.tsx` reset the form but let
+  the request finish, and its success opens or inserts what was cancelled; a
+  retry uploads it again.
+
+### Services
+
+- **Rag skips its Origin check when the header is missing.**
+  `rag/internal/httpserver/server.go` checks `Origin` on a cookie-authenticated
+  write only when one is sent; apps and knowledge refuse a missing one.
+- **Artifacts have no size limit.** `agents/primary/internal/s3artifact` stores
+  what it is given and reads it back with an unbounded `io.ReadAll`, in the
+  process every service shares.
+- **Smaller, each dormant today.** `internal/eventauth`'s KMS calls take
+  `context.Background()` and no timeout, which matters once services have KMS
+  signing keys (§5); teams' limit of 20 fan-out calls a minute is kept per
+  process, so it loosens with every replica; the ADK session write and its
+  `agents.session.created/deleted.v1` outbox row are separate transactions,
+  and nothing consumes those events yet; and S3 Vectors' search does not
+  filter by document access, relying on rag checking every hit again in
+  PostgreSQL, as it does today.
+
+### Edge
+
+- **`app.oryxa.in` sends no security headers**: no HSTS, CSP, frame
+  protection, `X-Content-Type-Options` or referrer policy.
+- **`/v1/internal/*` answers from the internet**, on both hosts. Its routes
+  refuse a call without a service token (`401`), but nothing needs them to be
+  public, and the tunnel forwards every path.
+
+Not bugs, written down so that nobody chases them again: Composio calls
+`/v1/apps/connect/callback` twice for each connection, and the second finds
+the state spent and answers `404` while the member's browser follows the
+first's redirect back into the app; and on 2026-09-21 a prefix of 3,974 tokens
+was below Vertex's 4,096-token minimum for a cache, so those requests went
+uncached, as designed.
 
 ## 1. The product loop is not closed
 
@@ -164,19 +257,22 @@ What is left:
   runner with a scripted model.
 - **A run ends with its request.** A closed tab or a deploy stops it; what it
   had stored stays in the thread. A durable run, one that outlives its
-  stream, comes with runs that start from triggers.
+  stream, comes with runs that start from triggers. Since 2026-09-28 every
+  merge to main deploys, so a run a deploy cuts short is routine, not rare.
 
-### Wake-ups have never run against a real queue
+### Wake-ups arrive through SQS; a run for an absent member is unproven
 
 App trigger events now wake Krude: `agents` reads `apps.trigger.received.v1`
 from its own queue, batches each member's events, and hands a batch to Krude
 in the member's "Updates from your apps" thread, as data to report on, with
 the member away ([agents/primary/README.md, Wake-ups](../agents/primary/README.md#wake-ups)).
 The same queue brings auth's member-removed and organization-deleted events,
-which remove the threads held there. Proven against the development
-PostgreSQL and ADK's runner with a scripted model; no queue has been
-provisioned, so nothing has been delivered through SQS, and the member-absent
-grant wake-ups rely on has never run against Cognito.
+which remove the threads held there. The queue has existed since the first
+production apply on 2026-09-19 (`deploy/production/main.tf`,
+`deploy/scripts/provision-app.sh`), and events reach it: agents logged
+`trigger batch recorded to wake Krude` 66 times on 2026-09-26 and 27. Not seen
+yet is a batch waking Krude for a member who is away, which needs their
+standing grant exchanged for a Cognito agent token (§6, Auth).
 Still open, each a product decision: what, if anything, skips the batch wait
 (a direct mention); and whether Krude should ever do more on waking than
 report, which would need the member to say what, per trigger.
@@ -191,27 +287,27 @@ It is proven against a stand-in for Bedrock only: no guardrail has been
 created in an AWS account, and which policies it holds — topics, words, PII,
 prompt attacks — is a decision for whoever owns the account.
 
+This is not the answer guard. `internal/answerguard`, which reads what one
+member's agent answers another before they see it, runs in production since
+2026-09-28 with a guardrail of its own (`deploy/production/answer_guard.tf`);
+the conversation guardrail has no guardrail, resource or setting in `deploy/`
+at all.
+
 ## 2. Web app
 
-The web app now reaches what a member needs day to day: conversations with
-Krude, streamed, with confirmations answered in place (PR #29); agent access,
-files and app updates in conversations, and the collections Krude searches
-(PR #31); and connections on the apps service, with triggers that wake Krude
-and knowledge sources that feed its search (PR #32). The screens that called
-the archived connections service are gone. `pnpm check`, `typecheck`, `test`
-and `build` pass on the three together. Krude's answers rendering as
-Markdown, and this web app running against the real binary, are both done —
-see [Done since the last update](#10-done-since-the-last-update). What is
-left:
+Since 2026-09-28 `app.oryxa.in` is web-next, released with every merge to
+main; the old `web/` app's Worker stays deployed, untouched, for a rollback
+([deploy/README.md, Releasing](../deploy/README.md#releasing)).
+[web-next/PARITY.md](../web-next/PARITY.md) maps it against the old app. What
+is left:
 
-- **Collections are read-only.** A member cannot make a rag corpus, add a
-  document or upload a file for Krude to search from the web app, and the
-  files source waits on §3.2. (web-next, the redesigned frontend, already
-  builds this on its own side — see
-  [web-next/PARITY.md](../web-next/PARITY.md).)
-- **Trigger settings are simple.** A trigger whose configuration needs more
-  than plain text, number or yes/no fields shows as needing setup.
-- The web app still deploys by hand (§5).
+- **Missing surfaces.** Files; editing and running agent workflows, which are
+  read-only; the agent-requests inbox, a count only, though side
+  conversations carry requests between teammates; the ⌘K palette; and a
+  history list and delete control for the primary agent's chat.
+- **Home's overview** is an empty canvas whose saved-view labels open nothing.
+  Its design is the owner's call.
+- Its bugs are in [Open bugs](#open-bugs).
 
 ## 3. Decisions only the owner can make
 
@@ -283,7 +379,9 @@ From [knowledge/TODO.md §3, §5 and §6](../knowledge/TODO.md#3-finished-but-in
   organization holds.
 - **`Files.Fetch` re-lists the organization for every page**, which is
   quadratic in the number of files.
-- **An end-to-end test** in `internal/e2e`, like the other services have.
+- **An end-to-end test** running the HTTP API, the application, the store and
+  the adapters together. No active service has one; the archived connections
+  and integrations services did.
 
 ### Rag
 
@@ -315,11 +413,11 @@ Done — see [Done since the last update](#10-done-since-the-last-update).
 
 ### Production deployment exists now
 
-Done — see [Done since the last update](#10-done-since-the-last-update). The
-web app (`web/`) still deploys by hand with `pnpm deploy`; the automated
-`deploy.yml` release cannot finish either, for its own reason (same section).
-Where to host was undecided when this line was first written; it no longer
-is.
+Done, and released from CI since 2026-09-28: every push to main that passes
+CI builds the image, rolls the service onto it, records the release on main
+and deploys web-next's Worker
+([deploy/README.md, Releasing](../deploy/README.md#releasing)).
+Infrastructure changes are still a `tofu apply` from a laptop.
 
 ### Services call one another over loopback HTTP, uncached
 
@@ -373,9 +471,9 @@ reads. They prove nothing about whether the provider agrees.
 | Rag | Bedrock reranking beyond construction — the least exercised code in the service; Cohere embedding; the S3 Vectors provisioner, which has never created anything (a temporary index was hand-created for two eval runs instead, then deleted). Vertex embedding and answering, and Bedrock answering (`Converse`), have all since run for real too — see [Done since the last update](#10-done-since-the-last-update) | An AWS account — S3 Vectors has no local emulation — and `RAG_ANSWER_MODEL` to answer ([rag/README.md](../rag/README.md#what-has-and-has-not-been-run)) |
 | Apps | The outbox reaching the bus: EventBridge was still pointed at a dead local endpoint in the 2026-09-19 run below, so an event was written and held, never published for real. Slack, Notion, Google Drive and Gmail accounts, in every respect. Connecting a GitHub account end to end ran for real on 2026-09-19; the catalog, tool marks, link creation, the webhook provisioner, webhook verification, MCP and the refusals all ran for real on 2026-09-18 ([apps/README.md](../apps/README.md#what-has-and-has-not-been-run); see also [Done since the last update](#10-done-since-the-last-update)) | LocalStack (or a real bus) up to prove the outbox for real, and a member at a browser for Slack, Notion, Drive and Gmail |
 | Auth | Whether a member has finished the agent grant against the agent client | A member to run the flow — the client itself is now provisioned, see [Done since the last update](#10-done-since-the-last-update) |
-| Agents | A tool that asks for confirmation, against a real model; the sandbox and browser; a wake-up. Runs Gemini answers, knowledge search through rag, and the web app's conversations ran on 2026-09-18 | AgentCore credentials or a connected app, and the `agents-events` queue |
+| Agents | A tool that asks for confirmation, against a real model; the sandbox and browser; a wake-up run for a member who is away (trigger batches do arrive, §1). Runs Gemini answers, knowledge search through rag, and the web app's conversations ran on 2026-09-18 | AgentCore credentials or a connected app, and a member's standing grant |
 | Journey | `test/run.sh` has not run since PR #17 rewrote it for the one binary, and it covers teams, files and email only | Docker |
-| Realtime | A purge against the real Worker. On 2026-09-24 the binary ran against LocalStack and a stand-in Worker that checks the signature from the contract alone: it purged, skipped a deleted organization's members, dropped a `400`, and retried a `503` into the dead-letter queue. That run used the body before `scope` and `removed_at`, which only unit tests have sent. On 2026-09-25 the binary served the Worker's `POST /v1/realtime/events` against PostgreSQL and LocalStack's bus, with the golden vectors signed by hand: it took both, acknowledged one sent again without a second event, refused a purge's signature and an invalid event, and published both events. It has never had a call from the real Worker, and nothing consumes the events ([realtime/README.md](../realtime/README.md)) | web-next serving `app.oryxa.in`, with its `POST /internal/realtime/purge` live, its `ORYXA_API_ORIGIN` set, and holding the same `REALTIME_PURGE_SECRET`; until then `realtime_purge` stays off |
+| Realtime | A purge against the real Worker. On 2026-09-24 the binary ran against LocalStack and a stand-in Worker that checks the signature from the contract alone: it purged, skipped a deleted organization's members, dropped a `400`, and retried a `503` into the dead-letter queue. That run used the body before `scope` and `removed_at`, which only unit tests have sent. On 2026-09-25 the binary served the Worker's `POST /v1/realtime/events` against PostgreSQL and LocalStack's bus, with the golden vectors signed by hand: it took both, acknowledged one sent again without a second event, refused a purge's signature and an invalid event, and published both events. Realtime has been on in production since 2026-09-28, with web-next serving `app.oryxa.in` and both sides holding the secret, but no purge and no Worker event had been observed there yet, and nothing consumes the events ([realtime/README.md](../realtime/README.md)) | A member leaving an organization or a teamspace, and a direct message, in production |
 
 ## 7. Before production
 
@@ -398,6 +496,35 @@ service that fails without them.
   [Done since the last update](#10-done-since-the-last-update). Still open:
   IP allowlisting, and — for security-conscious customers — a decision on the
   self-hosted or customer-managed-key tier (§1).
+
+Found by the 2026-09-28 launch review, each checked against the files or the
+account:
+
+- **An alarm on errors.** Nothing alarms on the application's own errors: a
+  TypeSafe key that no longer worked failed every Jev call for four days, and
+  only the logs said so. A metric filter on `level = "ERROR"` in
+  `/oryxa-production/app`, with an alarm, would have caught it.
+- **CI runs every database suite.** `ci.yml` names a test database for eight
+  services; knowledge, files, realtime and the outbox skip their integration
+  tests in CI, while every merge now deploys.
+- **Files that can be recovered.** The files, artifacts and knowledge-base
+  documents buckets have no versioning, and the task may delete from them.
+- **The auth key kept safe.** `aws_kms_key.auth` envelope-encrypts every agent
+  grant with the minimum deletion window of 7 days and no `prevent_destroy`;
+  the services' signing keys likewise.
+- **No single point of failure.** One Fargate task and a single-AZ
+  `db.t4g.micro` (backed up for 7 days, deletion-protected) carry everything;
+  deploy/README.md's "At launch" names a second task and Aurora or Multi-AZ.
+- **A schema change someone reviews.** Migrations run at start, and a merge now
+  releases with no approval. The ECS circuit breaker catches a task that never
+  turns healthy, not a migration that runs and does damage, and which builds
+  are safe to roll back to is kept in prose, release by release.
+- **Alarms on what is only graphed.** SES bounces and complaints, EventBridge
+  failed invocations and Bedrock throttling are on the dashboard with no
+  alarm, and every alarm mails one address.
+- **Smaller.** The RDS log group never expires; the task role's Cognito
+  statement allows `cognito-idp:*` on every pool; and nothing limits the rate
+  of sign-in attempts at Cloudflare.
 
 ## 8. Housekeeping
 
@@ -442,10 +569,49 @@ Kept short; the pull requests hold the detail.
 
 ## 10. Done since the last update
 
-Checked against `main` at `7f03a5a` on 2026-09-26. Each of these was still
-described above as open, unrun, or missing as recently as 2026-09-18; kept
-here with its evidence rather than simply deleted, so the backlog does not
-quietly lose its own history.
+Kept here with its evidence rather than simply deleted, so the backlog does
+not quietly lose its own history.
+
+### 2026-09-28
+
+- **Main releases from CI.** Every push to main that passes CI is released by
+  `deploy.yml`, into a `production` environment only main may deploy to, with
+  no required reviewer. Its first run found two things, both fixed in #105:
+  the repository's OIDC tokens carry GitHub's immutable subject
+  (`repo:Shubham04-oss@218535561/oryxa-go@1368173110:…`), which the deploy
+  role now trusts, and `aws ecs wait services-stable` returned while a
+  rollout still read `IN_PROGRESS`, which the workflow now waits out. It has
+  since released `e8ecab7a289d` and `c18e1136a921` on its own, recording each
+  on main and deploying the Worker.
+- **Production is current**, through #106. The release that carried #85 and
+  owner-approved requests stopped the old task first, as they need, which cost
+  the API about 80 seconds; the runbook's command for that needed
+  Availability Zone rebalancing off as well (#105).
+- **web-next serves `app.oryxa.in`** (#103). **Realtime is on**, and **the
+  answer guard is on**, both applied on 2026-09-28.
+- **Billing sent members to a 404.** `BILLING_URL` was the API host, so every
+  return from Dodo and every billing email link landed on nothing. It is
+  `app.oryxa.in/settings/billing`, which both frontends serve (#103).
+- **Jev had failed since about 2026-09-24.** Production's `TYPESAFE_API_KEY`
+  was refused with a 401, so batching fell back to its plain digest,
+  knowledge's sources waited as `quality_check_unavailable`, and the answer
+  guard's choice of tools had no Jev. The valid key in `.env` was stored on
+  2026-09-28.
+- **Images carry their release** as `service_version` (#105), and Krude's
+  shutdown no longer logs a 404 for each prompt cache Vertex had already let
+  expire (#105).
+- **web-next's settings and Tools:** role pickers commit only on an explicit
+  choice, team settings follow a self-demotion, the invitation page offers
+  another account (#104), and Tools asks Composio's catalog only from three
+  characters, the shortest search Composio takes (#106).
+- **Housekeeping.** 49 worktrees, about 22 GB, and 159 merged branches, 85
+  local and 74 on GitHub, were removed. `deploy/production-release` is kept;
+  main's deploy configuration supersedes it.
+
+### 2026-09-26
+
+Checked against `main` at `7f03a5a`. Each of these was still described above
+as open, unrun, or missing as recently as 2026-09-18.
 
 - **Composio, end to end for a real GitHub account.** Connecting it, a tool
   against it, a subscribed trigger, and a webhook delivery (recorded once
@@ -491,7 +657,8 @@ quietly lose its own history.
   `CLOUDFLARE_API_TOKEN` secret and the `HYPERDRIVE_ID` variable
   ([deploy/README.md, "Releasing"](../deploy/README.md#releasing)), so
   `deploy/scripts/release.sh` by hand is still what ships the binary, and the
-  web app (`web/`) still deploys by hand too, with `pnpm deploy`.
+  web app (`web/`) still deploys by hand too, with `pnpm deploy`. (Superseded
+  on 2026-09-28, above: main now releases from CI.)
 - **Traces carry across every internal call.**
   `internal/observability.Transport()` wraps `otelhttp.NewTransport` and is
   already used by every internal client package's `http.Client` (§5 used to

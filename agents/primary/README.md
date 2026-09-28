@@ -220,8 +220,9 @@ member's standing grant, since ADK's launcher has no member token to forward.
 
 **Member absent.** A wake-up runs with no token of the member's, so every
 tool that acts for them goes through `memberauth.TokenSource` and the grant
-they gave (see [Wake-ups](#wake-ups)). That grant has never been exchanged
-against a provisioned Cognito agent client.
+they gave (see [Wake-ups](#wake-ups)). The Cognito agent client is
+provisioned in production; exchanging a real member's grant against it has
+not yet been exercised live.
 
 ### Knowledge toolbox
 

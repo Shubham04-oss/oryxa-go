@@ -250,9 +250,10 @@ organization or it is deleted. It calls
 `REALTIME_PURGE_SECRET`, a secret the Worker holds too. It also serves
 `POST /v1/realtime/events`, where the Worker, signing with the same secret,
 sends the messages posted and conversations read in those conversations, for
-realtime to publish on the bus as `oryxa.realtime`. It ships off, and
-`realtime_purge` in `production/realtime.auto.tfvars.json`, committed as
-`false`, turns it on, the route with it.
+realtime to publish on the bus as `oryxa.realtime`. It was turned on in
+production on 2026-09-28: `realtime_purge` in
+`production/realtime.auto.tfvars.json` is `true`, and the route is live
+with it.
 
 **The Worker's events need the Worker configured and realtime on.**
 web-next's Worker needs `ORYXA_API_ORIGIN`, the API's origin
@@ -264,12 +265,14 @@ Nothing else is needed: the task role may already put events from any source
 on the bus, nothing consumes realtime's events yet, so no rule or queue is
 added, and realtime's tables are migrated by every release, on or off.
 
-**It stays off until web-next serves `app.oryxa.in`.** The old `web/`
-Worker has no purge route and answers `404`, so realtime turned on while it
-serves `app.oryxa.in` would send every purge to its dead-letter queue.
-web-next's production Worker, `oryxa-production-web-next` (`env.production`
-in its `wrangler.jsonc`), has the route; the Deploy workflow deploys it, and
-`production/web.auto.tfvars.json` routes `app.oryxa.in` to it once applied.
+**web-next now serves `app.oryxa.in` with the purge route.** The old
+`web/` Worker has no purge route and answers `404`, so realtime turned on
+while it served `app.oryxa.in` would have sent every purge to its
+dead-letter queue. web-next's production Worker,
+`oryxa-production-web-next` (`env.production` in its `wrangler.jsonc`), has
+the route; the Deploy workflow deploys it, and
+`production/web.auto.tfvars.json` routes `app.oryxa.in` to it. That has
+been true since web-next's release, which is what let realtime turn on.
 
 Releasing realtime needs nothing first. A production start requires its queue
 only once `REALTIME_WORKER_URL` or `REALTIME_PURGE_SECRET` is set, and while
@@ -282,8 +285,9 @@ queue's backlog alarm waits for the switch, since nothing reads the queue until
 then. Once `provision-app.sh` has made the queue and its rule, events wait
 there, for up to 14 days each, for realtime to be turned on.
 
-**Turning it on**, once web-next serves `app.oryxa.in` with
-`POST /internal/realtime/purge`. In this order:
+**Turning it on.** Realtime was turned on in production on 2026-09-28, in
+exactly this order, once web-next was serving `app.oryxa.in` with
+`POST /internal/realtime/purge`:
 
 1. Make the secret, and put it in the repository's `.env` as
    `REALTIME_PURGE_SECRET=…`, exactly the 64 hex characters this prints, with
@@ -357,6 +361,12 @@ there, for up to 14 days each, for realtime to be turned on.
      --source-arn "arn:aws:sqs:us-west-2:$(aws sts get-caller-identity --query Account --output text):oryxa-production-realtime-events-dlq"
    ```
 
+These same steps are how to turn realtime on again after it is turned off,
+and how to rotate the secret: put the new value in the repository's `.env`
+and Secrets Manager together (`deploy/scripts/put-secrets.sh`), give the
+Worker the same value (`wrangler secret put REALTIME_PURGE_SECRET --env
+production` from web-next), then apply.
+
 To turn it off, set `realtime_purge` to `false`, apply and commit. The stored
 secret stays, so turning it on again is step 4. The rule keeps filling the
 queue, which holds each event for 14 days, and the backlog alarm goes with the
@@ -389,6 +399,8 @@ before they read it`, naming the guardrail and its version. The service
 refuses to start with one of the two set and not the other; the apply always
 sets both. A later change to the guardrail makes a new version, and the next
 apply names it; the old version is kept.
+
+This guard was released and applied in production on 2026-09-28.
 
 In that order, no task older than this build ever reads the events the guard
 brings: an answer held for review is the completed event with status

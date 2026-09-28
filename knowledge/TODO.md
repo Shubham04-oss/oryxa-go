@@ -119,10 +119,10 @@ mapping.
 
 What is not:
 
-- **No end-to-end test.** Other services have an `internal/e2e` that runs the
-  HTTP API, the application, the store and the adapters together against a
-  fake provider. This service should have one; now that the entrypoint
-  exists, it is the test most likely to catch a wiring mistake.
+- **No end-to-end test.** A test that ran the HTTP API, the application, the
+  store and the adapters together against a fake provider would be the one
+  most likely to catch a wiring mistake, now that the entrypoint exists.
+  This service does not have one.
 
 ---
 
