@@ -34,6 +34,11 @@ reference.
 
 **Next, from 2026-09-28.** Where the day's plans ended up:
 
+- **The product's target is [north-star.md](north-star.md): Switchboard.** It
+  is an operator that brokers answers for others with the owner's one-click
+  consent, and does work for its own owner. From the evening of 2026-09-28
+  the focus is agents and teams, in that document's build order. Connectors
+  and knowledge bases are on hold.
 - **Integrations: our own sign-ins, not Nango.** Nango, Activepieces pieces
   and AgentCore Identity were each researched and ruled out
   ([integrations-research.md](design/integrations-research.md)). The archived
