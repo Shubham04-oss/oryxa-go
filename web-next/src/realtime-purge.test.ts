@@ -18,9 +18,11 @@ import {
 import type { PurgeRequest } from "./realtime-purge"
 import { RealtimeRegistryAgent, purgeMemoryMs } from "./realtime-registry-agent"
 import { SideConversationAgent } from "./side-conversation-agent"
+import { TeamspaceRoomAgent } from "./teamspace-room-agent"
 import { encodeRoster } from "./lib/side/protocol"
+import { teamspaceRoomAgentName } from "./lib/rooms/room-agent"
 import { World, drain, openSocket, say, settle } from "./test/durable-objects"
-import type { Harness } from "./test/durable-objects"
+import type { FakeSocket, Harness } from "./test/durable-objects"
 import type { ConversationEnv } from "./conversation-env"
 
 vi.mock(
@@ -50,6 +52,7 @@ function makeWorld(
       SideConversationAgent,
       InboxAgent,
       RealtimeRegistryAgent,
+      TeamspaceRoomAgent,
     } as unknown as ConstructorParameters<typeof World>[0],
     vars
   )
@@ -1984,5 +1987,232 @@ describe("Go's purge vectors", () => {
     expect(dm.sql<{ body: string }>`SELECT body FROM dm_messages`).toEqual([
       { body: "at 2026-09-24T09:00:00.000Z" },
     ])
+  })
+})
+
+type Room = TeamspaceRoomAgent &
+  Harness & { ctx: { storage: { kv: SyncKvStorage } } }
+
+/** The one message every room holds. */
+const roomMessage = {
+  id: "rmg_1",
+  room_id: launch,
+  seq: 1,
+  author_handle: "owner",
+  author_kind: "person",
+  author_user_id: owner,
+  body: "Launch at noon.",
+  created_at: "2026-09-24T11:00:00Z",
+}
+
+/**
+ * Go, as the teamspaces' rooms ask it: who each cookie is, that everybody is
+ * on every teamspace's team, and a room that holds one message; for anything
+ * else (the side conversations' requests), nothing.
+ */
+function roomsGo() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: URL | string, init: RequestInit = {}) => {
+      const url = new URL(String(input))
+      const cookie = new Headers(init.headers).get("Cookie") ?? ""
+      const userId = /oryxa_access=([\w-]+)/.exec(cookie)?.[1]
+      const [, teamspaceId, resource] =
+        /^\/v1\/organizations\/[\w-]+\/teamspaces\/([\w-]+)(\/[a-z]+)?$/.exec(
+          url.pathname
+        ) ?? []
+      if (url.pathname === "/v1/auth/me") {
+        return Response.json({ user: { id: userId } })
+      }
+      if (teamspaceId && !resource) {
+        return Response.json({ id: teamspaceId, is_member: true })
+      }
+      if (resource === "/catchup") {
+        return Response.json({
+          brief: { through_seq: 1 },
+          messages: [roomMessage],
+        })
+      }
+      if (resource === "/messages") {
+        return Response.json({ messages: [roomMessage], seats: [] })
+      }
+      return Response.json({ requests: [] })
+    })
+  )
+  return makeWorld({
+    REALTIME_PURGE_SECRET: secret,
+    ORYXA_API_ORIGIN: "http://go.test",
+  })
+}
+
+/** `userId` opens the room of `teamspace` in a tab, looking at it or not. */
+async function openRoom(
+  world: World,
+  teamspace: string,
+  userId: string,
+  visible = false
+) {
+  const room = await world.object<Room>(
+    "TeamspaceRoomAgent",
+    teamspaceRoomAgentName(org, teamspace)
+  )
+  const socket = await openSocket(
+    room,
+    { organizationId: org, userId },
+    {
+      "X-Oryxa-Cookie": `oryxa_access=${userId}`,
+      "X-Oryxa-Teamspace": teamspace,
+    }
+  )
+  await say(room, socket, { type: "room-visibility", visible })
+  return { room, socket }
+}
+
+/** What a room keeps in its storage, by key. */
+function roomKeys(room: Room) {
+  return [...room.ctx.storage.kv.list({ prefix: "room:" })].map(([key]) => key)
+}
+
+/** A socket a purge ended: told `gone`, and closed as a page does not reopen. */
+function expectGone(socket: FakeSocket) {
+  expect(socket.last("room-status")).toEqual({
+    type: "room-status",
+    status: "gone",
+  })
+  expect(socket.closed?.code).toBe(4404)
+}
+
+describe("a teamspace's room, purged", () => {
+  it("shuts a member who left the teamspace's team out of its room at once, through the Worker: their tabs from before close, and nothing else changes", async () => {
+    const world = roomsGo()
+    const { room, socket: adminTab } = await openRoom(
+      world,
+      launch,
+      admin,
+      true
+    )
+    const { socket: memberTab } = await openRoom(world, launch, member, true)
+    const { socket: adminDesign } = await openRoom(world, design, admin)
+    expect(adminTab.of("room-snapshot")).toHaveLength(1)
+    // A tab the admin opened after 12:00: let back on the team since.
+    later(60_000)
+    const { socket: adminBack } = await openRoom(world, launch, admin)
+
+    expect(
+      (await purge(world, await purgeRequest(teamspaceMemberLeft))).status
+    ).toBe(204)
+
+    expectGone(adminTab)
+    expect(adminBack.closed).toBeUndefined()
+    expect(memberTab.closed).toBeUndefined()
+    expect(adminDesign.closed).toBeUndefined()
+    expect(room.ctx.storage.kv.get("room:readers")).not.toHaveProperty(admin)
+    expect((room.state as { here: string[] }).here).toEqual([member])
+    expect(world.callsTo("TeamspaceRoomAgent", "purgeMember")).toEqual([
+      {
+        binding: "TeamspaceRoomAgent",
+        name: teamspaceRoomAgentName(org, launch),
+        method: "purgeMember",
+      },
+    ])
+  })
+
+  it("reaches every room of the organization, through its registry, when a member leaves it, and keeps the rooms registered", async () => {
+    const world = roomsGo()
+    const { socket: adminLaunch } = await openRoom(world, launch, admin, true)
+    const { socket: adminDesign } = await openRoom(world, design, admin)
+    const { socket: memberLaunch } = await openRoom(world, launch, member)
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.rooms()).toEqual([design, launch])
+
+    expect((await purge(world, await purgeRequest(memberLeft))).status).toBe(
+      204
+    )
+
+    expectGone(adminLaunch)
+    expectGone(adminDesign)
+    expect(memberLaunch.closed).toBeUndefined()
+    expect(await registry.rooms()).toEqual([design, launch])
+    // Done: the same event again does nothing.
+    const roomCalls = world.callsTo("TeamspaceRoomAgent").length
+    expect((await purge(world, await purgeRequest(memberLeft))).status).toBe(
+      204
+    )
+    expect(world.callsTo("TeamspaceRoomAgent")).toHaveLength(roomCalls)
+  })
+
+  it("empties every room of a deleted organization: every tab closes, each room lets go of all it held, and the registry of the rooms", async () => {
+    const world = roomsGo()
+    const { room: launchRoom, socket: adminTab } = await openRoom(
+      world,
+      launch,
+      admin,
+      true
+    )
+    const { socket: memberTab } = await openRoom(world, launch, member)
+    const { room: designRoom, socket: ownerTab } = await openRoom(
+      world,
+      design,
+      owner,
+      true
+    )
+    expect(roomKeys(launchRoom)).toContain("room:read-through")
+    expect(launchRoom.jobs).not.toEqual([])
+
+    expect(
+      (await purge(world, await purgeRequest(organizationDeleted))).status
+    ).toBe(204)
+
+    for (const tab of [adminTab, memberTab, ownerTab]) expectGone(tab)
+    for (const room of [launchRoom, designRoom]) {
+      expect(roomKeys(room)).toEqual([])
+      expect(room.state).toEqual({ seats: [], here: [] })
+      expect(room.jobs).toEqual([])
+    }
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.rooms()).toEqual([])
+  })
+
+  it("empties a deleted teamspace's room, through the registry, and no other", async () => {
+    const world = roomsGo()
+    const { room: launchRoom, socket: adminTab } = await openRoom(
+      world,
+      launch,
+      admin,
+      true
+    )
+    const { socket: memberTab } = await openRoom(world, launch, member)
+    const { socket: designTab } = await openRoom(world, design, admin, true)
+
+    expect(
+      (await purge(world, await purgeRequest(teamspaceDeleted))).status
+    ).toBe(204)
+
+    expectGone(adminTab)
+    expectGone(memberTab)
+    expect(roomKeys(launchRoom)).toEqual([])
+    expect(designTab.closed).toBeUndefined()
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.rooms()).toEqual([design])
+  })
+
+  it("answers 503 when a room could not be purged, and purges it when Go sends the event again", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const world = roomsGo()
+    const { socket: adminTab } = await openRoom(world, launch, admin, true)
+    world.failing.add(teamspaceRoomAgentName(org, launch))
+
+    for (const body of [teamspaceMemberLeft, memberLeft]) {
+      expect(
+        await codeOf(await purge(world, await purgeRequest(body)))
+      ).toEqual([503, "unavailable"])
+    }
+    expect(adminTab.closed).toBeUndefined()
+
+    world.failing.clear()
+    expect((await purge(world, await purgeRequest(memberLeft))).status).toBe(
+      204
+    )
+    expectGone(adminTab)
   })
 })

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { Mock } from "vitest"
 import type { Connection, ConnectionContext } from "agents"
 import { TeamspaceRoomAgent, roomTiming } from "./teamspace-room-agent"
-import type { RoomConnectionState } from "./teamspace-room-agent"
+import type { RoomConnectionState, RoomEnv } from "./teamspace-room-agent"
 import type { RoomMessage, RoomSeat } from "./lib/rooms/client"
 import type { TeamspaceRoomState } from "./lib/rooms/room-agent"
 import { roomGoneCloseCode } from "./lib/rooms/room-agent"
@@ -63,12 +63,17 @@ vi.mock("agents", () => {
       return this.stored ?? this.initialState
     }
     validateStateChange(_state: unknown, _source: unknown) {}
+    // As the SDK: sent to every socket open whose protocol is on.
     setState(state: unknown) {
       this.validateStateChange(state, "server")
       this.stored = state
       for (const open of this.getConnections()) {
+        if (!this.isConnectionProtocolEnabled(open)) continue
         open.send(JSON.stringify({ type: "cf_agent_state", state }))
       }
+    }
+    isConnectionProtocolEnabled(_connection: unknown) {
+      return true
     }
     getConnections() {
       return this.sockets.filter((held) => held.open)
@@ -93,7 +98,15 @@ vi.mock("agents", () => {
       return work()
     }
   }
-  return { Agent }
+  // Another object, as the room reaches one: the test's stand-in in `env`.
+  async function getAgentByName(
+    namespace: { get: (name: string) => unknown },
+    name: string
+  ) {
+    return namespace.get(name)
+  }
+  const MessageType = { CF_AGENT_STATE: "cf_agent_state" }
+  return { Agent, MessageType, getAgentByName }
 })
 
 const app = "http://localhost:3004"
@@ -177,15 +190,30 @@ type GoCall = {
 }
 
 /**
+ * How somebody stands with the team, as Go answers for their cookie: on it
+ * (`member`); `left`, which Go answers 404 to for the teamspace and its room;
+ * or `manager`, a manager of the team who is not on it, whom Go shows the
+ * teamspace to with `is_member` false and still lets read the room. Only
+ * those on the team have seats, unless `unseated` (no agent of their own).
+ */
+type Standing = "member" | "left" | "manager"
+
+/**
  * Go's room, as agents/primary/internal/rooms answers: reads after `after`,
- * a catch-up, and a post that answers only when the test says so. Each
+ * a catch-up, and a post that answers only when the test says so; and the
+ * teamspace itself, which says whether the cookie is on the team. Each
  * member is their cookie: `oryxa_access=member` is user-member.
  */
 function fakeGo(held: RoomMessage[] = []) {
   const calls: GoCall[] = []
   const refusals: Array<(call: GoCall) => Response | undefined> = []
+  const standings = new Map<string, Standing>()
+  const unseated = new Set<string>()
+  const holds = new Map<string, Promise<void>>()
   let answerPost: (call: GoCall) => Promise<Response> = async () =>
     json({ messages: [] }, 201)
+  const standing = (member: string | undefined) =>
+    (member && standings.get(member)) || "member"
   fetchMock.mockImplementation(
     async (input: URL | string, init: RequestInit = {}) => {
       const url = new URL(String(input))
@@ -198,24 +226,36 @@ function fakeGo(held: RoomMessage[] = []) {
         body: typeof init.body === "string" ? JSON.parse(init.body) : undefined,
       }
       calls.push(call)
+      const member = /oryxa_access=([\w-]+)/.exec(call.cookie ?? "")?.[1]
+      await holds.get(`${call.method} ${url.pathname} ${member}`)
       for (const refuse of refusals) {
         const refused = refuse(call)
         if (refused) return refused
       }
-      const member = /oryxa_access=([\w-]+)/.exec(call.cookie ?? "")?.[1]
       if (url.pathname === "/v1/auth/me") {
         return json({ user: { id: `user-${member}` }, organizations: [] })
       }
-      if (url.pathname === room) return json({ ...space, is_member: true })
+      if (url.pathname.startsWith(room) && standing(member) === "left") {
+        return goError(404, "not_found", "teamspace not found")
+      }
+      if (url.pathname === room) {
+        return json({ ...space, is_member: standing(member) === "member" })
+      }
       if (url.pathname === `${room}/catchup`) {
         return json({ brief: { through_seq: 0 }, messages: held.slice(0, 200) })
       }
       if (url.pathname === `${room}/messages` && call.method === "GET") {
         const after = Number(url.searchParams.get("after") ?? 0)
         const limit = Number(url.searchParams.get("limit") ?? 200)
+        const seated = (userId: string) => {
+          const name = userId.replace(/^user-/, "")
+          return standing(name) === "member" && !unseated.has(name)
+        }
         return json({
           messages: held.filter((item) => item.seq > after).slice(0, limit),
-          seats,
+          seats: seats.filter((seat) =>
+            seated(seat.speaks_for ?? seat.user_id)
+          ),
         })
       }
       if (url.pathname === `${room}/messages` && call.method === "POST") {
@@ -235,11 +275,32 @@ function fakeGo(held: RoomMessage[] = []) {
           call.path.startsWith(`${room}/`) &&
           call.cookie === `oryxa_access=${member}`
       ).length,
+    /** Times Go was asked, with a member's cookie, whether they are on the team. */
+    askedAbout: (member: string) =>
+      calls.filter(
+        (call) => call.path === room && call.cookie === `oryxa_access=${member}`
+      ).length,
     refuse: (refusal: (call: GoCall) => Response | undefined) =>
       refusals.push(refusal),
     posts: () => calls.filter((call) => call.method === "POST"),
     onPost: (answer: (call: GoCall) => Promise<Response>) => {
       answerPost = answer
+    },
+    /** How `member` stands with the team from now on. */
+    stand: (member: string, now: Standing) => standings.set(member, now),
+    /** `member` has no seat, though on the team: no agent of their own. */
+    unseat: (member: string) => unseated.add(member),
+    /**
+     * Go answers `method path` for `member` only once the returned release
+     * is called: the call is made, and waits.
+     */
+    hold: (method: string, path: string, member: string) => {
+      const gate = deferred<void>()
+      holds.set(`${method} ${path} ${member}`, gate.promise)
+      return () => {
+        holds.delete(`${method} ${path} ${member}`)
+        gate.resolve()
+      }
     },
   }
 }
@@ -259,10 +320,34 @@ type Harness = TeamspaceRoomAgent & {
   ctx: { storage: { kv: InstanceType<typeof sdk.Kv> } }
 }
 
-function makeRoom(): Harness {
+/**
+ * The organization's registry, as the room reaches it: the rooms registered
+ * with it, by registry, and whether it answers.
+ */
+function fakeRegistry() {
+  const registered: Array<{ registry: string; teamspaceId: string }> = []
+  let answering = true
+  return {
+    registered,
+    answers: (now: boolean) => {
+      answering = now
+    },
+    get: (registry: string) => ({
+      registerRoom: async (teamspaceId: string) => {
+        if (!answering) throw new Error("Durable Object reset")
+        registered.push({ registry, teamspaceId })
+      },
+    }),
+  }
+}
+
+function makeRoom(registry = fakeRegistry()): Harness {
   const agent = new TeamspaceRoomAgent(
     { storage: { kv: new sdk.Kv() } } as unknown as DurableObjectState,
-    { ORYXA_API_ORIGIN: go }
+    {
+      ORYXA_API_ORIGIN: go,
+      RealtimeRegistryAgent: registry,
+    } as unknown as RoomEnv
   )
   return agent as unknown as Harness
 }
@@ -381,9 +466,10 @@ afterEach(() => {
 })
 
 describe("TeamspaceRoomAgent: sockets", () => {
-  it("keeps what the Worker routed the socket with, and learns who it is without reading the room", async () => {
+  it("keeps what the Worker routed the socket with, and learns who it is and that they are on the team without reading the room", async () => {
     const goRoom = fakeGo([said(1)])
-    const agent = makeRoom()
+    const registry = fakeRegistry()
+    const agent = makeRoom(registry)
     const sock = await join(agent, "member", null)
 
     expect(sock.closed).toBeUndefined()
@@ -392,13 +478,22 @@ describe("TeamspaceRoomAgent: sockets", () => {
       organizationId: "org_sim",
       teamspaceId: "tsp_launch",
       origin: app,
+      connectedAt: new Date(start).toISOString(),
       visible: false,
       userId: "user-member",
     })
     // Reading marks the member present: nothing is read until the page says
-    // whether anybody is looking.
-    expect(goRoom.calls.map((call) => call.path)).toEqual(["/v1/auth/me"])
+    // whether anybody is looking. The teamspace itself marks nobody.
+    expect(goRoom.calls.map((call) => [call.path, call.cookie])).toEqual([
+      ["/v1/auth/me", "oryxa_access=member"],
+      [room, "oryxa_access=member"],
+    ])
     expect(sentOf(sock, "room-snapshot")).toEqual([])
+    // Let in, the room is in its organization's registry, once.
+    await join(agent, "ada", null)
+    expect(registry.registered).toEqual([
+      { registry: "org_sim", teamspaceId: "tsp_launch" },
+    ])
   })
 
   it("closes a socket the Worker did not route, or routed for another teamspace", async () => {
@@ -449,6 +544,8 @@ describe("TeamspaceRoomAgent: reading", () => {
         .filter((call) => call.path.startsWith(room))
         .map((call) => [call.path.replace(room, ""), call.cookie])
     ).toEqual([
+      // Let in: Go has them on the team.
+      ["", "oryxa_access=member"],
       ["/catchup", "oryxa_access=member"],
       ["/messages?after=0&limit=200", "oryxa_access=member"],
     ])
@@ -950,5 +1047,334 @@ describe("TeamspaceRoomAgent: refusals", () => {
       message: "teamspace conversations are not configured",
     })
     expect(ticks(agent)).toEqual([])
+  })
+})
+
+describe("TeamspaceRoomAgent: membership", () => {
+  it("closes a hidden tab of somebody who left the team, with no purge, once Go is asked in their turn, and never reads as them", async () => {
+    const goRoom = fakeGo([said(1)])
+    const agent = makeRoom()
+    const member = await join(agent, "member")
+    const ada = await join(agent, "ada", false)
+    expect(roomMessages(ada)).toEqual([1])
+
+    // Ada leaves the team, and no purge comes: Go stops seating her, and
+    // answers 404 for the teamspace and its room.
+    goRoom.stand("ada", "left")
+    await run(agent, roomTiming.memberCheckMs + roomTiming.minTickGapMs)
+    expect(sentOf(ada, "room-status")).toEqual([
+      { type: "room-status", status: "gone", message: "teamspace not found" },
+    ])
+    expect(ada.closed?.code).toBe(roomGoneCloseCode)
+    expect(goRoom.readsAs("ada")).toBe(0)
+
+    // The room goes on for the team, and her tab hears none of it.
+    goRoom.held.push(said(2, "juno"))
+    await run(agent, roomTiming.slowMs)
+    expect(roomMessages(member)).toEqual([1, 2])
+    expect(roomMessages(ada)).toEqual([1])
+    expect(member.closed).toBeUndefined()
+  })
+
+  it("sends a tab nothing once Go's word on its member is older than memberLeaseMs, and the room afresh once Go says it again", async () => {
+    const goRoom = fakeGo([said(1)])
+    const agent = makeRoom()
+    const member = await join(agent, "member")
+    const ada = await join(agent, "ada", false)
+    // Ada has no agent of her own, so no read's seats vouch for her, and Go
+    // cannot say for a while whether she is on the team.
+    goRoom.unseat("ada")
+    let failing = true
+    goRoom.refuse((call) =>
+      failing && call.path === room && call.cookie === "oryxa_access=ada"
+        ? goError(500, "internal", "internal server error")
+        : undefined
+    )
+
+    // Within Go's word on her, the room reaches her.
+    goRoom.held.push(said(2, "juno"))
+    await run(agent, roomTiming.slowMs)
+    expect(roomMessages(ada)).toEqual([1, 2])
+    // Past it, nothing does, and her tab stays open while Go is asked again.
+    goRoom.held.push(said(3, "juno"))
+    await run(agent, roomTiming.slowMs)
+    expect(roomMessages(member)).toEqual([1, 2, 3])
+    expect(roomMessages(ada)).toEqual([1, 2])
+    expect(ada.closed).toBeUndefined()
+    expect(goRoom.askedAbout("ada")).toBeGreaterThan(2)
+    // Nor does the synced state: who is here changes, and she is not told.
+    const told = sentOf(ada, "cf_agent_state").length
+    await see(agent, member, false)
+    await see(agent, member, true)
+    expect(sentOf(member, "cf_agent_state").length).toBeGreaterThan(1)
+    expect(sentOf(ada, "cf_agent_state")).toHaveLength(told)
+
+    // Go says she is on the team: she is sent the room afresh, what she
+    // missed with it, and the state as it stands.
+    failing = false
+    await run(agent, roomTiming.retryMs)
+    expect(sentOf(ada, "room-snapshot")).toHaveLength(2)
+    expect(roomMessages(ada)).toEqual([1, 2, 1, 2, 3])
+    expect(sentOf(ada, "cf_agent_state").at(-1)).toEqual({
+      type: "cf_agent_state",
+      state: agent.stored,
+    })
+    expect(ada.closed).toBeUndefined()
+  })
+
+  it("asks Go before it reads as somebody it has not lately vouched for: a manager who left the team is closed and never read as, though Go would let them read", async () => {
+    const goRoom = fakeGo([said(1)])
+    const agent = makeRoom()
+    const ada = await join(agent, "ada")
+    await see(agent, ada, false)
+    // Nobody looks for a while. Meanwhile ada leaves the team, though she
+    // still manages it: Go shows her the teamspace with is_member false, and
+    // would still answer her reads.
+    goRoom.stand("ada", "manager")
+    await run(agent, roomTiming.memberLeaseMs)
+    const reads = goRoom.readsAs("ada")
+
+    await see(agent, ada, true)
+    expect(goRoom.readsAs("ada")).toBe(reads)
+    expect(sentOf(ada, "room-status")).toEqual([
+      {
+        type: "room-status",
+        status: "gone",
+        message: "Only the teamspace's team can open its room.",
+      },
+    ])
+    expect(ada.closed?.code).toBe(roomGoneCloseCode)
+    expect(agent.stored?.here).toEqual([])
+  })
+
+  it("refuses a new socket of somebody not on the team: told gone and closed, sent nothing of the room, and never read as", async () => {
+    const goRoom = fakeGo([said(1)])
+    const agent = makeRoom()
+    const member = await join(agent, "member")
+    for (const [who, standing, message] of [
+      ["ada", "left", "teamspace not found"],
+      ["owen", "manager", "Only the teamspace's team can open its room."],
+    ] as const) {
+      goRoom.stand(who, standing)
+      const sock = await join(agent, who)
+      expect(sock.closed?.code).toBe(roomGoneCloseCode)
+      expect(sock.sent).toEqual([
+        { type: "room-status", status: "gone", message },
+      ])
+      expect(goRoom.readsAs(who)).toBe(0)
+    }
+    expect(member.closed).toBeUndefined()
+    expect(roomMessages(member)).toEqual([1])
+    expect(agent.stored?.here).toEqual(["user-member"])
+  })
+})
+
+describe("TeamspaceRoomAgent: purges", () => {
+  it("closes the sockets a member who left opened until then, lets go of what the room kept of them, and keeps a page opened since", async () => {
+    const goRoom = fakeGo([said(1)])
+    const agent = makeRoom()
+    const member = await join(agent, "member")
+    const ada = await join(agent, "ada")
+    const adaHidden = await join(agent, "ada", false)
+    goRoom.onPost(async () => json({ messages: [said(2, "ada", "Hi")] }, 201))
+    await post(agent, ada, "post-1", "Hi")
+    expect(agent.ctx.storage.kv.list({ prefix: "room:result:" })).toHaveLength(
+      1
+    )
+    expect(agent.stored?.here).toEqual(["user-ada", "user-member"])
+    const removedAt = new Date(Date.now()).toISOString()
+    // Let back in since, on a page opened after she left.
+    later(1_000)
+    const back = await join(agent, "ada", false)
+
+    await agent.purgeMember("user-ada", removedAt)
+
+    for (const sock of [ada, adaHidden]) {
+      expect(sentOf(sock, "room-status")).toEqual([
+        { type: "room-status", status: "gone" },
+      ])
+      expect(sock.closed?.code).toBe(roomGoneCloseCode)
+    }
+    expect(back.closed).toBeUndefined()
+    expect(member.closed).toBeUndefined()
+    // What the room kept of her goes: her reads and Go's word on her, her
+    // post's result, her presence and her seats.
+    expect(agent.ctx.storage.kv.get("room:readers")).not.toHaveProperty(
+      "user-ada"
+    )
+    expect(agent.ctx.storage.kv.list({ prefix: "room:result:" })).toEqual([])
+    expect(agent.stored?.here).toEqual(["user-member"])
+    expect(
+      agent.stored?.seats.filter(
+        (seat) => seat.user_id === "user-ada" || seat.speaks_for === "user-ada"
+      )
+    ).toEqual([])
+
+    // The page opened since hears the room once Go seats her again, and the
+    // same removal again does nothing.
+    goRoom.held.push(said(3, "juno"))
+    await run(agent, roomTiming.slowMs)
+    expect(roomMessages(member)).toEqual([1, 2, 3])
+    expect(roomMessages(back).at(-1)).toBe(3)
+    const vouched = agent.ctx.storage.kv.get("room:readers")
+    expect(vouched).toHaveProperty(["user-ada", "confirmed"])
+    await agent.purgeMember("user-ada", removedAt)
+    expect(back.closed).toBeUndefined()
+    expect(agent.ctx.storage.kv.get("room:readers")).toEqual(vouched)
+  })
+
+  it("counts for nothing what Go said of a member as of before their purge reached the room", async () => {
+    const goRoom = fakeGo([said(1)])
+    const agent = makeRoom()
+    await join(agent, "member")
+    const removedAt = new Date(Date.now()).toISOString()
+    later(1_000)
+    // Let back in since, her page opens, and Go is asked about her just as
+    // the purge of her removal arrives.
+    const release = goRoom.hold("GET", room, "ada")
+    const sock = socket("socket-back")
+    agent.sockets.push(sock)
+    const connecting = agent.onConnect(
+      sock as unknown as Connection,
+      upgrade("ada")
+    )
+    await vi.waitFor(() => expect(goRoom.askedAbout("ada")).toBe(1))
+    await agent.purgeMember("user-ada", removedAt)
+    release()
+    await connecting
+
+    expect(sock.closed).toBeUndefined()
+    expect(agent.ctx.storage.kv.get("room:readers")).not.toHaveProperty(
+      "user-ada"
+    )
+    expect(sock.sent).toEqual([])
+    // Asked afresh, Go says she is on the team: she is sent the room.
+    later(1_000)
+    await see(agent, sock, false)
+    expect(goRoom.askedAbout("ada")).toBe(2)
+    expect(roomMessages(sock)).toEqual([1])
+  })
+
+  it("closes a socket from before the removal that learns whose it is only after the purge, having sent it nothing", async () => {
+    const goRoom = fakeGo([said(1)])
+    const agent = makeRoom()
+    await join(agent, "member")
+    const release = goRoom.hold("GET", "/v1/auth/me", "ada")
+    const late = socket("socket-late")
+    agent.sockets.push(late)
+    const connecting = agent.onConnect(
+      late as unknown as Connection,
+      upgrade("ada")
+    )
+    await vi.waitFor(() =>
+      expect(
+        goRoom.calls.some(
+          (call) =>
+            call.path === "/v1/auth/me" && call.cookie === "oryxa_access=ada"
+        )
+      ).toBe(true)
+    )
+    later(1_000)
+    await agent.purgeMember("user-ada", new Date(Date.now()).toISOString())
+    expect(late.closed).toBeUndefined()
+
+    release()
+    await connecting
+    expect(late.closed?.code).toBe(roomGoneCloseCode)
+    expect(late.sent).toEqual([{ type: "room-status", status: "gone" }])
+    expect(goRoom.askedAbout("ada")).toBe(0)
+  })
+
+  it("neither answers nor keeps a post of a member who left while it was out, and the team still hears what Go recorded", async () => {
+    const goRoom = fakeGo([said(1)])
+    const agent = makeRoom()
+    const member = await join(agent, "member")
+    const ada = await join(agent, "ada")
+    const answer = deferred<Response>()
+    goRoom.onPost(() => answer.promise)
+    const posting = post(agent, ada, "post-1", "Leaving soon")
+    await vi.waitFor(() => expect(goRoom.posts()).toHaveLength(1))
+    later(1_000)
+
+    await agent.purgeMember("user-ada", new Date(Date.now()).toISOString())
+    answer.resolve(
+      json(
+        {
+          messages: [said(2, "ada", "Leaving soon"), said(3, "juno", "Noted.")],
+        },
+        201
+      )
+    )
+    await posting
+
+    expect(ada.closed?.code).toBe(roomGoneCloseCode)
+    expect(sentOf(ada, "room-posted")).toEqual([])
+    expect(agent.ctx.storage.kv.list({ prefix: "room:result:" })).toEqual([])
+    expect(roomMessages(member)).toEqual([1, 2, 3])
+  })
+
+  it("lets go of everything when the organization or the teamspace is gone: every socket closes, and a read under way keeps nothing", async () => {
+    const goRoom = fakeGo([said(1)])
+    const agent = makeRoom()
+    const member = await join(agent, "member")
+    const ada = await join(agent, "ada", false)
+    goRoom.held.push(said(2, "juno"))
+    later(roomTiming.returnMs)
+    const release = goRoom.hold("GET", `${room}/messages`, "member")
+    const seeing = see(agent, member, true)
+    await vi.waitFor(() => expect(goRoom.readsAs("member")).toBe(3))
+
+    await agent.purgeRoom()
+    release()
+    await seeing
+
+    for (const sock of [member, ada]) {
+      expect(sentOf(sock, "room-status").at(-1)).toEqual({
+        type: "room-status",
+        status: "gone",
+      })
+      expect(sock.closed?.code).toBe(roomGoneCloseCode)
+    }
+    expect(agent.ctx.storage.kv.list({ prefix: "room:" })).toEqual([])
+    expect(agent.stored).toEqual({ seats: [], here: [] })
+    expect(agent.jobs).toEqual([])
+    // Again, it finds nothing.
+    await agent.purgeRoom()
+    expect(agent.ctx.storage.kv.list({ prefix: "room:" })).toEqual([])
+  })
+
+  it("refuses what is not a member's purge of it", async () => {
+    fakeGo([said(1)])
+    const agent = makeRoom()
+    for (const [userId, removedAt] of [
+      ["", "2026-09-24T09:00:00.000Z"],
+      ["user~ada", "2026-09-24T09:00:00.000Z"],
+      ["user-ada", "2026-09-24T09:00:00Z"],
+      ["user-ada", "yesterday"],
+    ]) {
+      await expect(agent.purgeMember(userId, removedAt)).rejects.toThrow(
+        TypeError
+      )
+    }
+  })
+
+  it("tries its registration again when the organization's registry did not answer", async () => {
+    fakeGo([said(1)])
+    const registry = fakeRegistry()
+    registry.answers(false)
+    const agent = makeRoom(registry)
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    await join(agent, "member", null)
+    expect(registry.registered).toEqual([])
+    const retry = agent.jobs.find((job) => job.callback === "retryRegistration")
+    expect(retry && retry.time * 1000 - Date.now()).toBe(30_000)
+
+    registry.answers(true)
+    later(30_000)
+    await fire(agent)
+    expect(registry.registered).toEqual([
+      { registry: "org_sim", teamspaceId: "tsp_launch" },
+    ])
+    expect(agent.jobs).toEqual([])
   })
 })
