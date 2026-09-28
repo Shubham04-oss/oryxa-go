@@ -16,6 +16,7 @@ import { Route as AuthSignInRouteImport } from './routes/auth.sign-in'
 import { Route as AuthSignUpRouteImport } from './routes/auth.sign-up'
 import { Route as AuthVerifyEmailRouteImport } from './routes/auth.verify-email'
 import { Route as InvitationsAcceptRouteImport } from './routes/invitations.accept'
+import { Route as SettingsBillingRouteImport } from './routes/settings.billing'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -52,6 +53,11 @@ const InvitationsAcceptRoute = InvitationsAcceptRouteImport.update({
   path: '/invitations/accept',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsBillingRoute = SettingsBillingRouteImport.update({
+  id: '/settings/billing',
+  path: '/settings/billing',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -61,6 +67,7 @@ export interface FileRoutesByFullPath {
   '/auth/sign-up': typeof AuthSignUpRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/invitations/accept': typeof InvitationsAcceptRoute
+  '/settings/billing': typeof SettingsBillingRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -70,6 +77,7 @@ export interface FileRoutesByTo {
   '/auth/sign-up': typeof AuthSignUpRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/invitations/accept': typeof InvitationsAcceptRoute
+  '/settings/billing': typeof SettingsBillingRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -80,6 +88,7 @@ export interface FileRoutesById {
   '/auth/sign-up': typeof AuthSignUpRoute
   '/auth/verify-email': typeof AuthVerifyEmailRoute
   '/invitations/accept': typeof InvitationsAcceptRoute
+  '/settings/billing': typeof SettingsBillingRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,6 +100,7 @@ export interface FileRouteTypes {
     | '/auth/sign-up'
     | '/auth/verify-email'
     | '/invitations/accept'
+    | '/settings/billing'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -100,6 +110,7 @@ export interface FileRouteTypes {
     | '/auth/sign-up'
     | '/auth/verify-email'
     | '/invitations/accept'
+    | '/settings/billing'
   id:
     | '__root__'
     | '/'
@@ -109,6 +120,7 @@ export interface FileRouteTypes {
     | '/auth/sign-up'
     | '/auth/verify-email'
     | '/invitations/accept'
+    | '/settings/billing'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -119,6 +131,7 @@ export interface RootRouteChildren {
   AuthSignUpRoute: typeof AuthSignUpRoute
   AuthVerifyEmailRoute: typeof AuthVerifyEmailRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
+  SettingsBillingRoute: typeof SettingsBillingRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -172,6 +185,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InvitationsAcceptRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/billing': {
+      id: '/settings/billing'
+      path: '/settings/billing'
+      fullPath: '/settings/billing'
+      preLoaderRoute: typeof SettingsBillingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -183,6 +203,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthSignUpRoute: AuthSignUpRoute,
   AuthVerifyEmailRoute: AuthVerifyEmailRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
+  SettingsBillingRoute: SettingsBillingRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

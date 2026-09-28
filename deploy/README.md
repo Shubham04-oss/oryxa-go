@@ -32,7 +32,7 @@ Systems Manager (ECS Exec, Session Manager) is the administrative path.
 | The services' provisioners (`deploy/scripts/provision-app.sh`) | Each service's event queue, dead-letter queue and EventBridge rules (generated from the code that consumes them), the files, artifacts and vector buckets, email's tables, queue and SES configuration set, auth's Cognito user pool |
 | `deploy/scripts/memory-bank.sh` | The Vertex AI agent engine that holds Memory Bank |
 | `deploy/scripts/composio-webhook.sh` | Composio's webhook subscription |
-| `deploy/scripts/web.sh` (wrangler) | The web app's Worker |
+| `deploy/scripts/web.sh` (wrangler), or the Deploy workflow | The web app's Worker: web-next's `env.production`, `oryxa-production-web-next` |
 
 OpenTofu names everything the scripts create, so the task's configuration and
 IAM can refer to it before it exists. Its state is in S3
@@ -75,8 +75,9 @@ wrote: they are what the next apply runs.
 
 Main releases from CI. Every pull request and every push to main runs
 `.github/workflows/ci.yml`; once it passes on main,
-`.github/workflows/deploy.yml` waits for approval on the repository's
-`production` environment, and then:
+`.github/workflows/deploy.yml` runs in the repository's `production`
+environment, which only main may deploy to, and with no required reviewer
+releases every push to main that passes CI:
 
 1. builds the image for Fargate's arm64 and pushes it to ECR, tagged with the
    commit as `release.sh` would tag it;
@@ -84,7 +85,7 @@ Main releases from CI. Every pull request and every push to main runs
    rolls the service onto it, and fails if the circuit breaker rolled it back;
 3. records the tag in `release.auto.tfvars.json` on main, so the next
    `tofu apply` keeps that release rather than rolling back to the old one;
-4. builds the web app and deploys its Worker.
+4. builds web-next as its production Worker and deploys it.
 
 It runs as `oryxa-production-github-deploy` (`production/github.tf`) through
 GitHub's OIDC, which can push the image and roll the service and nothing
@@ -95,17 +96,24 @@ Before its first run, once:
 
 - `tofu apply` in `deploy/production`, which creates the GitHub OIDC provider
   and the role.
-- In the repository's settings, an environment named `production`: yourself
-  as required reviewer, and main as its only deployment branch. On a private
-  repository GitHub offers required reviewers only on some plans; without one
-  a release does not wait.
+- In the repository's settings, an environment named `production` with main
+  as its only deployment branch. A required reviewer would make every release
+  wait for an approval; on a private repository GitHub offers one only on some
+  plans.
 - In that environment, the secret `CLOUDFLARE_API_TOKEN` (the "Edit Cloudflare
-  Workers" template, for this account) and the variable `HYPERDRIVE_ID`, from
-  `tofu -chdir=deploy/production output -raw hyperdrive_id`.
+  Workers" template, for this account and the zone).
+
+A release that needs a step first, like the ones below, needs it before its
+pull request merges, since merging releases it.
 
 A release from a laptop still works: `deploy/scripts/release.sh` builds the
 image from the commit checked out, pushes it tagged with that commit and
 applies it, and `deploy/scripts/web.sh` deploys the Worker.
+
+The old `web/` app's Worker, `oryxa-production-web`, stays deployed as it last
+was, and nothing deploys it any more. Setting `web_worker_name` in
+`production/web.auto.tfvars.json` back to it and applying routes
+`app.oryxa.in` to the old app again.
 
 Either way the service starts a new task, waits for its health check and for
 cloudflared to connect, then stops the old one; one that never turns healthy
@@ -244,12 +252,12 @@ Nothing else is needed: the task role may already put events from any source
 on the bus, nothing consumes realtime's events yet, so no rule or queue is
 added, and realtime's tables are migrated by every release, on or off.
 
-**It stays off until web-next serves `app.oryxa.in`.** Production's
-`app.oryxa.in` is served by the old `web/` Worker, which has no purge route and
-answers `404`, so realtime turned on now would send every purge to its
-dead-letter queue. web-next, which has the route, has no production
-environment yet: its `wrangler.jsonc` has no `env.production`, so there is no
-production Worker to give the secret to, and step 2 below waits for one.
+**It stays off until web-next serves `app.oryxa.in`.** The old `web/`
+Worker has no purge route and answers `404`, so realtime turned on while it
+serves `app.oryxa.in` would send every purge to its dead-letter queue.
+web-next's production Worker, `oryxa-production-web-next` (`env.production`
+in its `wrangler.jsonc`), has the route; the Deploy workflow deploys it, and
+`production/web.auto.tfvars.json` routes `app.oryxa.in` to it once applied.
 
 Releasing realtime needs nothing first. A production start requires its queue
 only once `REALTIME_WORKER_URL` or `REALTIME_PURGE_SECRET` is set, and while
@@ -274,8 +282,7 @@ there, for up to 14 days each, for realtime to be turned on.
    ```
 
 2. Give the Worker the same 64 characters, in web-next's production
-   environment, which does not exist yet, and deploy the Worker with the
-   route:
+   environment, once the Worker with the route is deployed:
 
    ```sh
    npx wrangler secret put REALTIME_PURGE_SECRET --env production

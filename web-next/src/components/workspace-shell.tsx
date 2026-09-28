@@ -42,6 +42,7 @@ import type {
 } from "./workspace-agent-panel"
 import { PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
+import type { SettingsPage } from "./workspace-settings"
 import { useTeamspaces } from "@/hooks/use-teamspaces"
 import { useAgentsMode } from "@/hooks/use-agents-mode"
 import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
@@ -167,6 +168,8 @@ export function WorkspaceShell({
   const [signOutError, setSignOutError] = useState("")
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // The page Settings opens on, when a link asked for one.
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>()
   const agentsMode = useAgentsMode()
   const [chatRequest, setChatRequest] = useState<AgentPanelChatRequest | null>(
     null
@@ -224,17 +227,28 @@ export function WorkspaceShell({
   }, [])
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("view") !== "tools")
+    const view = new URLSearchParams(window.location.search).get("view")
+    // /settings/billing, where billing sends a member back, lands here.
+    if (view === "billing") {
+      setSettingsPage("billing")
+      setSettingsOpen(true)
       return
+    }
+    if (view !== "tools") return
     setActiveMode("home")
     setSectionsByMode((current) => ({ ...current, home: "tools" }))
   }, [])
+
+  function closeSettings() {
+    setSettingsOpen(false)
+    setSettingsPage(undefined)
+  }
 
   useEffect(() => {
     if (!settingsOpen && !profileMenuOpen) return
     function onEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return
-      if (settingsOpen) setSettingsOpen(false)
+      if (settingsOpen) closeSettings()
       else setProfileMenuOpen(false)
     }
     window.addEventListener("keydown", onEscape)
@@ -768,7 +782,8 @@ export function WorkspaceShell({
       />
       {settingsOpen && (
         <WorkspaceSettings
-          onClose={() => setSettingsOpen(false)}
+          onClose={closeSettings}
+          initialPage={settingsPage}
           identity={currentIdentity}
           session={session}
           selectedOrganization={selectedOrganization}
