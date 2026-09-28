@@ -4,6 +4,9 @@ Oryxa is an AWS-backed Go monorepo: one Go module, whose services build into one
 static binary, `oryxa`. Each service still owns its API, its data and its AWS
 resources; they deploy together.
 
+The separate [workspace CLI](docs/onboarding-cli.md) is the first executable
+part of configuring an organization from `oryxa.yaml`.
+
 ## Run
 
 Every service builds into one static binary, `oryxa`, from `cmd/oryxa`. It

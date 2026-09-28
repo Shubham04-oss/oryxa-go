@@ -1,0 +1,332 @@
+// Command oryxa-cli configures an Oryxa organization from oryxa.yaml.
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"slices"
+	"strings"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/runtime"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
+)
+
+func main() {
+	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr, os.Getenv))
+}
+
+type options struct {
+	api, org, file, output, preset, domains string
+	json, dryRun, noInput, yes              bool
+	noBrowser                               bool
+}
+
+func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	if len(args) == 0 || slices.Contains([]string{"help", "-h", "--help"}, args[0]) {
+		usage(stdout)
+		return 0
+	}
+	command := args[0]
+	var opts options
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&opts.api, "api", envOr(getenv, "ORYXA_API_URL", "https://api.oryxa.in"), "API base URL")
+	flags.StringVar(&opts.org, "org", getenv("ORYXA_ORG"), "organization slug")
+	flags.StringVar(&opts.file, "file", "oryxa.yaml", "workspace file")
+	flags.StringVar(&opts.file, "f", "oryxa.yaml", "workspace file")
+	flags.StringVar(&opts.output, "output", "", "write YAML to this file")
+	flags.StringVar(&opts.output, "o", "", "write YAML to this file")
+	flags.StringVar(&opts.preset, "preset", "team", "startup, team or regulated")
+	flags.StringVar(&opts.domains, "domains", "", "comma-separated member email domains for init")
+	flags.BoolVar(&opts.json, "json", false, "print machine-readable result")
+	flags.BoolVar(&opts.dryRun, "dry-run", false, "show changes without applying")
+	flags.BoolVar(&opts.noInput, "no-input", false, "never prompt for confirmation")
+	flags.BoolVar(&opts.noBrowser, "no-browser", false, "print sign-in URL without opening a browser")
+	flags.BoolVar(&opts.yes, "yes", false, "confirm setup plan or overwrite an output file")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 3
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "unexpected argument:", flags.Arg(0))
+		return 3
+	}
+	if command == "init" {
+		return initCommand(ctx, opts, stdout, stderr, getenv)
+	}
+	if command == "setup" {
+		document, err := readDocument(opts.file)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		if opts.org != "" && opts.org != document.Metadata.Organization {
+			return reportError(fmt.Errorf("--org does not match metadata.organization"), stderr)
+		}
+		token, err := nativeLogin(ctx, opts.api, opts.noBrowser, opts.json, stdout)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		client, err := runtime.NewClient(opts.api, token)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		state, err := client.Snapshot(ctx, document.Metadata.Organization)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		plan, err := runtime.BuildPlan(document, state)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		if code := report(stdout, opts.json, plan); code != 0 || opts.dryRun {
+			return code
+		}
+		if len(plan.Changes) == 0 {
+			if len(plan.NeedsHuman) > 0 {
+				return 2
+			}
+			return 0
+		}
+		if !opts.yes {
+			if opts.noInput {
+				return reportError(fmt.Errorf("apply requires --yes under --no-input"), stderr)
+			}
+			fmt.Fprint(stderr, "Apply these changes? [y/N] ")
+			answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+				return reportError(fmt.Errorf("apply was cancelled"), stderr)
+			}
+		}
+		remaining, err := runtime.Apply(ctx, client, document)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		status := "done"
+		code := 0
+		if len(remaining.NeedsHuman) > 0 {
+			status, code = "needs_human", 2
+		} else if len(remaining.Changes) > 0 {
+			status, code = "failed", 1
+		}
+		if report(stdout, opts.json, map[string]any{"step": "apply", "status": status, "remaining": remaining}) != 0 {
+			return 1
+		}
+		return code
+	}
+	if command == "validate" {
+		document, err := readDocument(opts.file)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		return report(stdout, opts.json, map[string]any{"step": "validate", "status": "done", "organization": document.Metadata.Organization})
+	}
+	if command == "plan" || command == "apply" || command == "diff" {
+		document, err := readDocument(opts.file)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		if opts.org != "" && opts.org != document.Metadata.Organization {
+			return reportError(fmt.Errorf("--org does not match metadata.organization"), stderr)
+		}
+		client, err := runtime.NewClient(opts.api, getenv("ORYXA_ACCESS_TOKEN"))
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		if command == "apply" && !opts.dryRun {
+			plan, err := runtime.Apply(ctx, client, document)
+			if err != nil {
+				return reportError(err, stderr)
+			}
+			status := "done"
+			if len(plan.NeedsHuman) > 0 {
+				status = "needs_human"
+			} else if len(plan.Changes) > 0 {
+				status = "failed"
+			}
+			if code := report(stdout, opts.json, map[string]any{"step": "apply", "status": status, "remaining": plan}); code != 0 {
+				return code
+			}
+			if status != "done" {
+				if status == "needs_human" {
+					return 2
+				}
+				return 1
+			}
+			return 0
+		}
+		state, err := client.Snapshot(ctx, document.Metadata.Organization)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		plan, err := runtime.BuildPlan(document, state)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		return report(stdout, opts.json, plan)
+	}
+	if command == "pull" || command == "status" || command == "whoami" {
+		client, err := runtime.NewClient(opts.api, getenv("ORYXA_ACCESS_TOKEN"))
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		if command == "whoami" {
+			var me json.RawMessage
+			if err := client.Whoami(ctx, &me); err != nil {
+				return reportError(err, stderr)
+			}
+			_, err := stdout.Write(append(me, '\n'))
+			if err != nil {
+				return reportError(err, stderr)
+			}
+			return 0
+		}
+		if opts.org == "" {
+			return reportError(fmt.Errorf("--org or ORYXA_ORG is required"), stderr)
+		}
+		state, err := client.Snapshot(ctx, opts.org)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		if state.Organization == nil {
+			return reportError(fmt.Errorf("organization was not found"), stderr)
+		}
+		if command == "status" {
+			return report(stdout, opts.json, map[string]any{"step": "status", "status": "done", "organization": opts.org, "members": len(state.Members), "teams": len(state.Teams), "pending_invitations": len(state.Invitations)})
+		}
+		document, err := runtime.Pull(state)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		return writeDocument(document, opts.output, opts.yes, stdout, stderr)
+	}
+	fmt.Fprintln(stderr, "unknown command:", command)
+	usage(stderr)
+	return 3
+}
+
+func initCommand(ctx context.Context, opts options, stdout, stderr io.Writer, getenv func(string) string) int {
+	if opts.org == "" {
+		return reportError(fmt.Errorf("--org or ORYXA_ORG is required"), stderr)
+	}
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: opts.org}, Preset: opts.preset}
+	domains := []string{}
+	if opts.domains != "" {
+		for _, domain := range strings.Split(opts.domains, ",") {
+			domains = append(domains, strings.TrimSpace(domain))
+		}
+	}
+	document.Metadata.Domains = domains
+	if token := getenv("ORYXA_ACCESS_TOKEN"); token != "" {
+		client, err := runtime.NewClient(opts.api, token)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		state, err := client.Snapshot(ctx, opts.org)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		if state.Organization != nil {
+			document, err = runtime.Pull(state)
+			if err != nil {
+				return reportError(err, stderr)
+			}
+			document.Preset = opts.preset
+			if opts.domains != "" {
+				document.Metadata.Domains = domains
+			}
+		}
+	}
+	return writeDocument(document, opts.output, opts.yes, stdout, stderr)
+}
+
+func readDocument(path string) (spec.Document, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return spec.Document{}, err
+	}
+	return spec.Parse(data)
+}
+
+func writeDocument(document spec.Document, path string, overwrite bool, stdout, stderr io.Writer) int {
+	data, err := document.YAML()
+	if err != nil {
+		return reportError(err, stderr)
+	}
+	if path == "" {
+		if _, err := stdout.Write(data); err != nil {
+			return reportError(err, stderr)
+		}
+		return 0
+	}
+	mode := os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	if overwrite {
+		mode = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	}
+	file, err := os.OpenFile(path, mode, 0600)
+	if err != nil {
+		return reportError(err, stderr)
+	}
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return reportError(err, stderr)
+	}
+	return 0
+}
+
+func report(writer io.Writer, asJSON bool, value any) int {
+	if asJSON {
+		if err := json.NewEncoder(writer).Encode(value); err != nil {
+			return 1
+		}
+		return 0
+	}
+	encoded, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return 1
+	}
+	_, err = fmt.Fprintln(writer, string(encoded))
+	if err != nil {
+		return 1
+	}
+	return 0
+}
+
+func reportError(err error, stderr io.Writer) int {
+	fmt.Fprintln(stderr, err)
+	return 3
+}
+
+func envOr(getenv func(string) string, key, fallback string) string {
+	if value := getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func usage(writer io.Writer) {
+	fmt.Fprint(writer, `Usage: oryxa-cli <command> [flags]
+
+Commands:
+  setup      browser sign-in, plan and apply in one process
+  init       write a starting oryxa.yaml to stdout or -o
+  validate   validate a workspace file without contacting Oryxa
+  plan       show changes against the current organization
+  apply      make the planned changes, then report any pending joins
+  diff       alias of plan
+  pull       write the current organization and team settings as YAML
+  status     show organization, member, team and invitation counts
+  whoami     show the authenticated user and organizations
+
+Setup keeps its browser session in memory. Other remote commands currently
+require ORYXA_ACCESS_TOKEN in the environment. The token is never written by
+this CLI. Use -f for the input file, --org for an organization
+slug, --api for the API URL, --json for machine-readable output, and --dry-run
+to plan an apply. Unsupported sections are rejected before any write.
+`)
+}

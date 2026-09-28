@@ -20,6 +20,7 @@ type Claims struct {
 
 type IdentityClaims struct {
 	Subject       string    `json:"sub"`
+	TokenUse      string    `json:"token_use"`
 	Email         string    `json:"email"`
 	EmailVerified claimBool `json:"email_verified"`
 	Name          string    `json:"name"`
@@ -53,20 +54,22 @@ func (value *claimBool) UnmarshalJSON(data []byte) error {
 type Verifier struct {
 	clientID              string
 	agentClientID         string
+	cliClientID           string
 	accessVerifier        *oidc.IDTokenVerifier
 	identityVerifier      *oidc.IDTokenVerifier
 	agentIdentityVerifier *oidc.IDTokenVerifier
+	cliIdentityVerifier   *oidc.IDTokenVerifier
 }
 
 // New verifies tokens Cognito issues to the web app client clientID and, when
 // agentClientID is set, to the agent app client too: an agent's access token
 // is the member's own, issued to the agent client, and verifies here like
 // the member's; what it may do is for the caller to decide.
-func New(provider *oidc.Provider, clientID, agentClientID string) *Verifier {
-	return newVerifier(provider.Verifier, clientID, agentClientID)
+func New(provider *oidc.Provider, clientID, agentClientID string, cliClientID ...string) *Verifier {
+	return newVerifier(provider.Verifier, clientID, agentClientID, cliClientID...)
 }
 
-func newVerifier(verifierFor func(*oidc.Config) *oidc.IDTokenVerifier, clientID, agentClientID string) *Verifier {
+func newVerifier(verifierFor func(*oidc.Config) *oidc.IDTokenVerifier, clientID, agentClientID string, cliClientID ...string) *Verifier {
 	verifier := &Verifier{
 		clientID:      clientID,
 		agentClientID: agentClientID,
@@ -82,6 +85,13 @@ func newVerifier(verifierFor func(*oidc.Config) *oidc.IDTokenVerifier, clientID,
 	if agentClientID != "" {
 		verifier.agentIdentityVerifier = verifierFor(&oidc.Config{
 			ClientID:             agentClientID,
+			SupportedSigningAlgs: []string{oidc.RS256},
+		})
+	}
+	if len(cliClientID) > 0 && cliClientID[0] != "" {
+		verifier.cliClientID = cliClientID[0]
+		verifier.cliIdentityVerifier = verifierFor(&oidc.Config{
+			ClientID:             cliClientID[0],
 			SupportedSigningAlgs: []string{oidc.RS256},
 		})
 	}
@@ -105,13 +115,33 @@ func (v *Verifier) Verify(ctx context.Context, rawToken string) (Claims, error) 
 	if claims.TokenUse != "access" {
 		return Claims{}, errors.New("token_use must be access")
 	}
-	if claims.ClientID != v.clientID && (v.agentClientID == "" || claims.ClientID != v.agentClientID) {
+	if claims.ClientID != v.clientID && (v.agentClientID == "" || claims.ClientID != v.agentClientID) && (v.cliClientID == "" || claims.ClientID != v.cliClientID) {
 		return Claims{}, errors.New("token client_id does not match")
 	}
 	if claims.Subject == "" {
 		return Claims{}, errors.New("token subject is required")
 	}
 
+	return claims, nil
+}
+
+// VerifyCLIIdentityToken accepts only the public CLI app client's ID token
+// and checks the nonce the native flow sent before auth admits the user.
+func (v *Verifier) VerifyCLIIdentityToken(ctx context.Context, rawToken, expectedNonce string) (IdentityClaims, error) {
+	if v.cliIdentityVerifier == nil || strings.TrimSpace(rawToken) == "" || expectedNonce == "" {
+		return IdentityClaims{}, errors.New("CLI identity token and nonce are required")
+	}
+	token, err := v.cliIdentityVerifier.Verify(ctx, rawToken)
+	if err != nil {
+		return IdentityClaims{}, fmt.Errorf("verify CLI identity token: %w", err)
+	}
+	var claims IdentityClaims
+	if err := token.Claims(&claims); err != nil {
+		return IdentityClaims{}, fmt.Errorf("decode CLI identity claims: %w", err)
+	}
+	if claims.Subject == "" || claims.TokenUse != "id" || claims.Email == "" || !claims.EmailVerified || claims.Nonce != expectedNonce {
+		return IdentityClaims{}, errors.New("CLI identity token claims are invalid")
+	}
 	return claims, nil
 }
 

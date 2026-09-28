@@ -31,6 +31,10 @@ type accessTokenVerifier interface {
 	Verify(context.Context, string) (authn.Claims, error)
 }
 
+type cliIdentityVerifier interface {
+	VerifyCLIIdentityToken(context.Context, string, string) (authn.IdentityClaims, error)
+}
+
 type authFlow interface {
 	Begin(context.Context, string) (string, string, error)
 	Complete(context.Context, string, string, string) (oauthflow.Session, error)
@@ -74,6 +78,10 @@ type Config struct {
 	CookieDomain       string
 	CookieSecure       bool
 	GoogleEnabled      bool
+	CLIClientID        string
+	CLICallbackURL     string
+	CLIVerifier        cliIdentityVerifier
+	CLICompleteLogin   func(context.Context, application.FederatedIdentity) (domain.User, bool, error)
 
 	// AgentClientID is COGNITO_AGENT_CLIENT_ID: the Cognito agent app
 	// client's ID. Whenever it is set, a verified access token whose
@@ -124,6 +132,7 @@ func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, s
 
 	server.handleFunc("GET /healthz", server.health)
 	server.handleFunc("GET /v1/auth/config", server.authConfig)
+	server.handleFunc("POST /v1/auth/cli/session", server.cliSession)
 	server.handleFunc("GET /v1/auth/login", server.login)
 	server.handleFunc("GET /v1/auth/callback", server.callback)
 	server.handleFunc("POST /v1/auth/refresh", server.refresh)
@@ -225,7 +234,54 @@ func (server *Server) authConfig(writer http.ResponseWriter, _ *http.Request) {
 		config["identity_provider"] = "Google"
 	}
 	config["identity_providers"] = identityProviders
+	if server.config.CLIClientID != "" {
+		config["cli_client_id"] = server.config.CLIClientID
+		config["cli_callback_url"] = server.config.CLICallbackURL
+		config["cognito_domain"] = server.config.CognitoDomain
+	}
 	writeJSON(writer, http.StatusOK, config)
+}
+
+// cliSession admits a native sign-in after Cognito's PKCE exchange. Both the
+// access and ID tokens must belong to the separate public CLI client and the
+// same person; the CLI must have checked its own random state first.
+func (server *Server) cliSession(writer http.ResponseWriter, request *http.Request) {
+	if server.config.CLIClientID == "" || server.config.CLIVerifier == nil || server.config.CLICompleteLogin == nil {
+		writeError(writer, http.StatusNotFound, "CLI sign-in is not configured")
+		return
+	}
+	rawAccess, ok := bearerToken(request.Header.Get("Authorization"))
+	if !ok {
+		writeError(writer, http.StatusUnauthorized, "CLI access token is required")
+		return
+	}
+	access, err := server.verifier.Verify(request.Context(), rawAccess)
+	if err != nil || access.ClientID != server.config.CLIClientID {
+		writeError(writer, http.StatusUnauthorized, "CLI access token is invalid")
+		return
+	}
+	var input struct {
+		IDToken string `json:"id_token"`
+		Nonce   string `json:"nonce"`
+	}
+	if err := readJSON(request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	identity, err := server.config.CLIVerifier.VerifyCLIIdentityToken(request.Context(), input.IDToken, input.Nonce)
+	if err != nil || identity.Subject != access.Subject {
+		writeError(writer, http.StatusUnauthorized, "CLI identity token is invalid")
+		return
+	}
+	user, _, err := server.config.CLICompleteLogin(request.Context(), application.FederatedIdentity{
+		Subject: identity.Subject, Email: identity.Email, DisplayName: identity.Name,
+		AvatarURL: identity.Picture, Provider: "Cognito CLI",
+	})
+	if err != nil {
+		server.handleError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"user": user})
 }
 
 func (server *Server) passwordSignUp(writer http.ResponseWriter, request *http.Request) {

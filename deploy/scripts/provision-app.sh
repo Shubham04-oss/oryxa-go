@@ -69,6 +69,7 @@ cognito=$(
     COGNITO_CALLBACK_URLS="$APP_URL/v1/auth/callback" \
     COGNITO_LOGOUT_URLS="$APP_URL" \
     COGNITO_AGENT_CALLBACK_URL="$APP_URL/v1/agent-grant/callback" \
+    COGNITO_CLI_CALLBACK_URL="http://127.0.0.1:8765/callback" \
     go run ./auth/infra/cognito/cmd/provision
 )
 jq -c . <<<"$cognito"
@@ -76,7 +77,8 @@ jq '{cognito: {
   user_pool_id: .user_pool_id,
   client_id: .app_client_id,
   domain: .cognito_domain,
-  agent_client_id: (.agent_app_client_id // "")
+  agent_client_id: (.agent_app_client_id // ""),
+  cli_client_id: (.cli_app_client_id // "")
 }}' <<<"$cognito" >"$TF/app.auto.tfvars.json"
 
 # The agent client is confidential. Its secret goes from Cognito straight to

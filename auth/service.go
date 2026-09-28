@@ -66,7 +66,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if err != nil {
 		return host.Service{}, fmt.Errorf("discover Cognito issuer: %w", err)
 	}
-	verifier := authn.New(provider, config.CognitoClientID, config.CognitoAgentClientID)
+	verifier := authn.New(provider, config.CognitoClientID, config.CognitoAgentClientID, config.CognitoCLIClientID)
 	store := postgres.New(platform.Database)
 	service := application.NewWithConfig(store, application.Config{
 		InvitationAcceptURL:  config.InvitationAcceptURL,
@@ -183,6 +183,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		CookieDomain:       config.CookieDomain,
 		CookieSecure:       config.CookieSecure,
 		GoogleEnabled:      config.GoogleEnabled,
+		CLIClientID:        config.CognitoCLIClientID,
+		CLICallbackURL:     config.CognitoCLICallbackURL,
+		CLIVerifier:        verifier,
+		CLICompleteLogin:   service.CompleteLogin,
 		AgentClientID:      config.CognitoAgentClientID,
 		AgentGrants:        agentGrants,
 		Services:           services,

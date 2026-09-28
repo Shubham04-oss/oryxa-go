@@ -25,6 +25,9 @@ type Config struct {
 	// URL}/v1/agent-grant/callback. Optional; the agent resource server and
 	// app client are provisioned only when it is set.
 	AgentCallbackURL string
+	// CLICallbackURL is a fixed loopback redirect for the public setup CLI.
+	// Empty leaves the native app client unprovisioned.
+	CLICallbackURL string
 }
 
 func FromEnv() (Config, error) {
@@ -39,6 +42,7 @@ func FromEnv() (Config, error) {
 		CallbackURLs:       splitList(os.Getenv("COGNITO_CALLBACK_URLS")),
 		LogoutURLs:         splitList(os.Getenv("COGNITO_LOGOUT_URLS")),
 		AgentCallbackURL:   strings.TrimSpace(os.Getenv("COGNITO_AGENT_CALLBACK_URL")),
+		CLICallbackURL:     strings.TrimSpace(os.Getenv("COGNITO_CLI_CALLBACK_URL")),
 	}
 
 	if config.DomainPrefix == "" {
@@ -65,6 +69,12 @@ func FromEnv() (Config, error) {
 	if config.AgentCallbackURL != "" {
 		if err := validateRedirectURL(config.AgentCallbackURL); err != nil {
 			return Config{}, err
+		}
+	}
+	if config.CLICallbackURL != "" {
+		parsed, err := url.Parse(config.CLICallbackURL)
+		if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || parsed.Path != "/callback" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return Config{}, errors.New("COGNITO_CLI_CALLBACK_URL must be http://127.0.0.1:<port>/callback")
 		}
 	}
 

@@ -21,15 +21,17 @@ type Config struct {
 	EventBridgeEndpoint string
 	// EventsQueueURL is the queue billing's entitlements arrive on. Without
 	// it no member limits are applied.
-	EventsQueueURL       string
-	SQSEndpoint          string
-	InvitationAcceptURL  string
-	EmailVerificationURL string
-	PasswordResetURL     string
-	AllowedReturnURLs    []string
-	CookieDomain         string
-	CookieSecure         bool
-	GoogleEnabled        bool
+	EventsQueueURL        string
+	SQSEndpoint           string
+	InvitationAcceptURL   string
+	EmailVerificationURL  string
+	PasswordResetURL      string
+	AllowedReturnURLs     []string
+	CookieDomain          string
+	CookieSecure          bool
+	GoogleEnabled         bool
+	CognitoCLIClientID    string
+	CognitoCLICallbackURL string
 
 	// Agent grants let an agent act for a member while the member is absent.
 	// All four of the following are optional; AgentGrantsEnabled reports
@@ -62,21 +64,23 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	config := Config{
-		CognitoIssuer:        strings.TrimSpace(getenv("COGNITO_ISSUER")),
-		CognitoUserPoolID:    strings.TrimSpace(getenv("COGNITO_USER_POOL_ID")),
-		CognitoClientID:      strings.TrimSpace(getenv("COGNITO_CLIENT_ID")),
-		CognitoDomain:        strings.TrimRight(strings.TrimSpace(getenv("COGNITO_DOMAIN")), "/"),
-		CognitoCallbackURL:   strings.TrimSpace(getenv("COGNITO_CALLBACK_URL")),
-		EventBridgeEndpoint:  strings.TrimRight(strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")), "/"),
-		EventsQueueURL:       strings.TrimSpace(getenv("AUTH_EVENTS_QUEUE_URL")),
-		SQSEndpoint:          strings.TrimRight(strings.TrimSpace(getenv("SQS_ENDPOINT")), "/"),
-		InvitationAcceptURL:  strings.TrimSpace(getenv("INVITATION_ACCEPT_URL")),
-		EmailVerificationURL: strings.TrimSpace(getenv("EMAIL_VERIFICATION_URL")),
-		PasswordResetURL:     strings.TrimSpace(getenv("PASSWORD_RESET_URL")),
-		AllowedReturnURLs:    splitList(getenv("AUTH_RETURN_URLS")),
-		CookieDomain:         strings.TrimSpace(getenv("AUTH_COOKIE_DOMAIN")),
-		CookieSecure:         cookieSecure,
-		GoogleEnabled:        googleEnabled,
+		CognitoIssuer:         strings.TrimSpace(getenv("COGNITO_ISSUER")),
+		CognitoUserPoolID:     strings.TrimSpace(getenv("COGNITO_USER_POOL_ID")),
+		CognitoClientID:       strings.TrimSpace(getenv("COGNITO_CLIENT_ID")),
+		CognitoDomain:         strings.TrimRight(strings.TrimSpace(getenv("COGNITO_DOMAIN")), "/"),
+		CognitoCallbackURL:    strings.TrimSpace(getenv("COGNITO_CALLBACK_URL")),
+		EventBridgeEndpoint:   strings.TrimRight(strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")), "/"),
+		EventsQueueURL:        strings.TrimSpace(getenv("AUTH_EVENTS_QUEUE_URL")),
+		SQSEndpoint:           strings.TrimRight(strings.TrimSpace(getenv("SQS_ENDPOINT")), "/"),
+		InvitationAcceptURL:   strings.TrimSpace(getenv("INVITATION_ACCEPT_URL")),
+		EmailVerificationURL:  strings.TrimSpace(getenv("EMAIL_VERIFICATION_URL")),
+		PasswordResetURL:      strings.TrimSpace(getenv("PASSWORD_RESET_URL")),
+		AllowedReturnURLs:     splitList(getenv("AUTH_RETURN_URLS")),
+		CookieDomain:          strings.TrimSpace(getenv("AUTH_COOKIE_DOMAIN")),
+		CookieSecure:          cookieSecure,
+		GoogleEnabled:         googleEnabled,
+		CognitoCLIClientID:    strings.TrimSpace(getenv("COGNITO_CLI_CLIENT_ID")),
+		CognitoCLICallbackURL: strings.TrimSpace(getenv("COGNITO_CLI_CALLBACK_URL")),
 
 		CognitoAgentClientID:     strings.TrimSpace(getenv("COGNITO_AGENT_CLIENT_ID")),
 		CognitoAgentClientSecret: strings.TrimSpace(getenv("COGNITO_AGENT_CLIENT_SECRET")),
@@ -85,6 +89,12 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	if config.CognitoIssuer == "" || config.CognitoUserPoolID == "" || config.CognitoClientID == "" || config.CognitoDomain == "" || config.CognitoCallbackURL == "" {
 		return Config{}, errors.New("COGNITO_ISSUER, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, COGNITO_DOMAIN, and COGNITO_CALLBACK_URL are required")
+	}
+	if config.CognitoCLIClientID != "" {
+		parsed, err := url.Parse(config.CognitoCLICallbackURL)
+		if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || parsed.Path != "/callback" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return Config{}, errors.New("COGNITO_CLI_CALLBACK_URL must be http://127.0.0.1:<port>/callback when COGNITO_CLI_CLIENT_ID is set")
+		}
 	}
 	if config.InvitationAcceptURL == "" || config.EmailVerificationURL == "" || config.PasswordResetURL == "" || len(config.AllowedReturnURLs) == 0 {
 		return Config{}, errors.New("INVITATION_ACCEPT_URL, EMAIL_VERIFICATION_URL, PASSWORD_RESET_URL, and AUTH_RETURN_URLS are required")
