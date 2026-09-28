@@ -65,6 +65,9 @@ import { ToolkitLogo } from "./workspace-tool-logo"
 type ViewState = "loading" | "live" | "preview"
 
 const detailId = "workspace-tools-connection-detail"
+// The shortest query Composio's catalog search takes: shorter ones it refuses
+// as a validation error, which apps passes on as a 400.
+const minimumCatalogSearch = 3
 
 /**
  * The Apps service is missing rather than failing: nothing answered with
@@ -286,18 +289,21 @@ export function WorkspaceTools({
   )
 
   const trimmed = query.trim()
-  const searchTerm = useDebouncedValue(trimmed, 300)
+  // Composio refuses a catalog search shorter than three characters, so a
+  // shorter query only filters the apps already on screen.
+  const searchable = [...trimmed].length >= minimumCatalogSearch
+  const searchTerm = useDebouncedValue(searchable ? trimmed : "", 300)
   const search = useInfiniteQuery({
     ...catalogSearchQueryOptions({ search: searchTerm, limit: 100 }),
     enabled: catalogUp && searchTerm !== "",
     placeholderData: keepPreviousData,
   })
   const results =
-    live && trimmed && search.data
+    live && searchable && search.data
       ? search.data.pages.flatMap((page) => page.toolkits)
       : null
   const searchBusy =
-    live && trimmed !== "" && (trimmed !== searchTerm || search.isFetching)
+    live && searchable && (trimmed !== searchTerm || search.isFetching)
 
   const knownToolkits = new Map<string, Toolkit>()
   for (const toolkit of isPreview ? previewToolkits : []) {
@@ -313,22 +319,21 @@ export function WorkspaceTools({
   const toolkitFor = (slug: string) =>
     knownToolkits.get(slug) ?? placeholderToolkit(slug)
 
-  const previewMatches =
-    isPreview && trimmed
-      ? previewToolkits.filter((toolkit) =>
+  const shownToolkits = isPreview ? previewToolkits : featuredToolkits
+  const localMatches =
+    trimmed && (isPreview || !searchable)
+      ? shownToolkits.filter((toolkit) =>
           `${toolkit.name} ${toolkit.description}`
             .toLowerCase()
             .includes(trimmed.toLowerCase())
         )
       : null
-  const visibleToolkits = (
-    results ??
-    previewMatches ??
-    (isPreview ? previewToolkits : featuredToolkits)
-  ).filter((toolkit) => !rowToolkits.has(toolkit.toolkit))
+  const visibleToolkits = (results ?? localMatches ?? shownToolkits).filter(
+    (toolkit) => !rowToolkits.has(toolkit.toolkit)
+  )
   const groups = groupToolkits(
     visibleToolkits,
-    results === null && previewMatches === null
+    results === null && localMatches === null
   )
 
   const connectApp = useMutation({
@@ -433,7 +438,7 @@ export function WorkspaceTools({
   const exploreProblem =
     live && !catalogUp
       ? appsErrorMessage(probe.error, "The app catalog could not be loaded.")
-      : live && trimmed && search.isError && !search.data
+      : live && searchable && search.isError && !search.data
         ? appsErrorMessage(search.error, "Search could not be loaded.")
         : ""
 
@@ -779,20 +784,25 @@ export function WorkspaceTools({
             searchBusy ||
             (live && results === null && !featuredSettled)
               ? "Loading tools…"
-              : "No tools found. Try a different search."}
+              : live && trimmed && !searchable
+                ? "Keep typing to search every app."
+                : "No tools found. Try a different search."}
           </p>
         )}
-        {live && trimmed && !search.isPlaceholderData && search.hasNextPage && (
-          <button
-            className="workspace-tools-more"
-            type="button"
-            disabled={search.isFetchingNextPage}
-            onClick={() => void search.fetchNextPage()}
-          >
-            {search.isFetchingNextPage ? "Loading…" : "Browse more"}{" "}
-            <ChevronDown size={16} />
-          </button>
-        )}
+        {live &&
+          searchable &&
+          !search.isPlaceholderData &&
+          search.hasNextPage && (
+            <button
+              className="workspace-tools-more"
+              type="button"
+              disabled={search.isFetchingNextPage}
+              onClick={() => void search.fetchNextPage()}
+            >
+              {search.isFetchingNextPage ? "Loading…" : "Browse more"}{" "}
+              <ChevronDown size={16} />
+            </button>
+          )}
         {search.isFetchNextPageError && (
           <p className="workspace-tool-inline-error" role="alert">
             {appsErrorMessage(search.error, "Could not load more tools.")}
