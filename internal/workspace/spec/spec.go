@@ -24,7 +24,7 @@ type Document struct {
 	Preset        string        `yaml:"preset,omitempty" json:"preset,omitempty"`
 	Organization  *Organization `yaml:"organization,omitempty" json:"organization,omitempty"`
 	People        *People       `yaml:"people,omitempty" json:"people,omitempty"`
-	Teams         []Team        `yaml:"teams,omitempty" json:"teams,omitempty"`
+	Teams         Teams         `yaml:"teams,omitempty" json:"teams,omitempty"`
 	Directory     *yaml.Node    `yaml:"directory,omitempty" json:"-"`
 	OrgChart      *yaml.Node    `yaml:"orgChart,omitempty" json:"-"`
 	Chat          *yaml.Node    `yaml:"chat,omitempty" json:"-"`
@@ -63,6 +63,54 @@ type Member struct {
 type Team struct {
 	Name    string   `yaml:"name" json:"name"`
 	Members []string `yaml:"members,omitempty" json:"members,omitempty"`
+}
+
+// Teams accepts the compact list form or {items, prune}. The latter is
+// explicit because omission alone must never remove a team or team member.
+type Teams struct {
+	Items []Team `yaml:"items" json:"items"`
+	Prune bool   `yaml:"prune,omitempty" json:"prune,omitempty"`
+}
+
+func (teams *Teams) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.SequenceNode:
+		return decodeKnownNode(node, &teams.Items)
+	case yaml.MappingNode:
+		var value struct {
+			Items []Team `yaml:"items"`
+			Prune bool   `yaml:"prune"`
+		}
+		if err := decodeKnownNode(node, &value); err != nil {
+			return err
+		}
+		teams.Items, teams.Prune = value.Items, value.Prune
+		return nil
+	default:
+		return fmt.Errorf("teams must be a list or {items, prune}")
+	}
+}
+
+func (teams Teams) MarshalYAML() (any, error) {
+	if !teams.Prune {
+		return teams.Items, nil
+	}
+	return struct {
+		Items []Team `yaml:"items"`
+		Prune bool   `yaml:"prune"`
+	}{Items: teams.Items, Prune: true}, nil
+}
+
+func (teams Teams) IsZero() bool { return len(teams.Items) == 0 && !teams.Prune }
+
+func decodeKnownNode(node *yaml.Node, target any) error {
+	data, err := yaml.Marshal(node)
+	if err != nil {
+		return err
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	return decoder.Decode(target)
 }
 
 // Agents exposes the organization agent settings backed by the agents API.
@@ -170,11 +218,8 @@ func (document Document) Validate() error {
 		}
 	}
 	if document.People != nil {
-		if document.People.Prune {
-			return fmt.Errorf("people.prune is not yet supported by the workspace applier")
-		}
-		if document.People.Invite != "" && document.People.Invite != "email" {
-			return fmt.Errorf("people.invite currently supports email only")
+		if document.People.Invite != "" && document.People.Invite != "email" && document.People.Invite != "quiet" {
+			return fmt.Errorf("people.invite must be email or quiet")
 		}
 	}
 	if document.Agents != nil && document.Agents.Organization != nil {
@@ -214,7 +259,7 @@ func (document Document) Validate() error {
 		}
 	}
 	seenTeams := map[string]bool{}
-	for _, team := range document.Teams {
+	for _, team := range document.Teams.Items {
 		if strings.TrimSpace(team.Name) == "" || len(team.Name) > 120 || seenTeams[team.Name] {
 			return fmt.Errorf("teams[].name must be unique and between 1 and 120 characters")
 		}

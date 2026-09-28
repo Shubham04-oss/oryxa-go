@@ -30,7 +30,7 @@ func TestParseRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("output cannot be read: %v", err)
 	}
-	if parsed.Metadata.Organization != "acme" || parsed.Teams[0].Members[0] != "raya@acme.com" {
+	if parsed.Metadata.Organization != "acme" || parsed.Teams.Items[0].Members[0] != "raya@acme.com" {
 		t.Fatalf("round trip changed the workspace: %+v", parsed)
 	}
 }
@@ -41,6 +41,7 @@ func TestParseRejectsUnknownAndUnsupportedSettings(t *testing.T) {
 	}{
 		{"unknown nested", strings.Replace(example, "name: Acme", "name: Acme, typo: yes", 1), "typo"},
 		{"unknown top level", example + "surprise: true\n", "surprise"},
+		{"unknown team mapping", strings.Replace(example, "name: Engineering", "name: Engineering, mystery: yes", 1), "mystery"},
 		{"unsupported section", example + "chat: {slack: {install: add_to_slack}}\n", "chat is not yet supported"},
 		{"unsupported agent policy", example + "agents: {personal: {style: concise}}\n", "personal"},
 		{"empty agent name", example + "agents: {organization: {displayName: ' '}}\n", "agents.organization.displayName"},
@@ -56,6 +57,29 @@ func TestParseRejectsUnknownAndUnsupportedSettings(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestParseTeamsPruneMapping(t *testing.T) {
+	input := `apiVersion: oryxa.in/v1
+kind: Workspace
+metadata: {organization: acme}
+teams:
+  prune: true
+  items:
+    - {name: Engineering, members: [owner@acme.com]}
+`
+	document, err := Parse([]byte(input))
+	if err != nil || !document.Teams.Prune || len(document.Teams.Items) != 1 {
+		t.Fatalf("teams = %+v, %v", document.Teams, err)
+	}
+	encoded, err := document.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(encoded)
+	if err != nil || !parsed.Teams.Prune || parsed.Teams.Items[0].Name != "Engineering" {
+		t.Fatalf("round trip = %+v, %v", parsed.Teams, err)
 	}
 }
 

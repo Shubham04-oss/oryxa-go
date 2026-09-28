@@ -12,10 +12,12 @@ import (
 )
 
 type Change struct {
-	Op   string `json:"op"`
-	Kind string `json:"kind"`
-	Name string `json:"name"`
-	Role string `json:"role,omitempty"`
+	Op    string `json:"op"`
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	Role  string `json:"role,omitempty"`
+	Team  string `json:"team,omitempty"`
+	Email string `json:"email,omitempty"`
 }
 
 type HumanStep struct {
@@ -66,8 +68,42 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 				plan.NeedsHuman = append(plan.NeedsHuman, HumanStep{Step: "people.join", Why: member.Email + " must accept the invitation"})
 			}
 		}
+		if document.People.Prune {
+			if state.Organization == nil {
+				return Plan{}, fmt.Errorf("people.prune requires an existing organization")
+			}
+			if state.ActorID == "" {
+				return Plan{}, fmt.Errorf("people.prune requires a signed-in member")
+			}
+			if state.ActorRole != "owner" || state.ActorIsAgent {
+				return Plan{}, fmt.Errorf("people.prune requires a human organization owner")
+			}
+			remainingOwners := 0
+			for email, member := range state.Members {
+				if wantedMembers[email] && member.Role == "owner" {
+					remainingOwners++
+				}
+				if wantedMembers[email] {
+					continue
+				}
+				if member.UserID == state.ActorID {
+					return Plan{}, fmt.Errorf("people.prune cannot remove the signed-in member")
+				}
+				plan.Changes = append(plan.Changes, Change{Op: "delete", Kind: "member", Name: email})
+			}
+			if remainingOwners == 0 {
+				return Plan{}, fmt.Errorf("people.prune must keep an existing owner")
+			}
+			for email := range state.Invitations {
+				if !wantedMembers[email] {
+					plan.Changes = append(plan.Changes, Change{Op: "delete", Kind: "invitation", Name: email})
+				}
+			}
+		}
 	}
-	for _, team := range document.Teams {
+	wantedTeams := map[string]spec.Team{}
+	for _, team := range document.Teams.Items {
+		wantedTeams[team.Name] = team
 		_, exists := state.Teams[team.Name]
 		if !exists {
 			plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "team", Name: team.Name})
@@ -84,6 +120,47 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 				plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "team_member", Name: team.Name + "/" + email})
 			}
 		}
+		if document.Teams.Prune && exists {
+			wantedTeamMembers := map[string]bool{}
+			for _, email := range team.Members {
+				wantedTeamMembers[email] = true
+			}
+			for email := range state.TeamMembers[team.Name] {
+				if !wantedTeamMembers[email] {
+					if state.TeamMembers[team.Name][email].UserID == state.ActorID {
+						return Plan{}, fmt.Errorf("teams.prune cannot remove the signed-in member from a kept team")
+					}
+					plan.Changes = append(plan.Changes, Change{Op: "delete", Kind: "team_member", Name: team.Name + "/" + email, Team: team.Name, Email: email})
+				}
+			}
+		}
+	}
+	if document.Teams.Prune {
+		if state.Organization == nil || state.ActorID == "" {
+			return Plan{}, fmt.Errorf("teams.prune requires a signed-in member of an existing organization")
+		}
+		if state.ActorRole != "owner" || state.ActorIsAgent {
+			return Plan{}, fmt.Errorf("teams.prune requires a human organization owner")
+		}
+		for _, team := range state.Teams {
+			if team.Path == "" {
+				return Plan{}, fmt.Errorf("teams.prune requires team hierarchy paths from the teams service")
+			}
+		}
+		for name, team := range state.Teams {
+			if _, keep := wantedTeams[name]; keep {
+				continue
+			}
+			for keptName := range wantedTeams {
+				if kept, exists := state.Teams[keptName]; exists && team.Path != "" && strings.HasPrefix(kept.Path, team.Path+".") {
+					return Plan{}, fmt.Errorf("teams.prune cannot remove a parent of a kept team")
+				}
+			}
+			plan.Changes = append(plan.Changes, Change{Op: "delete", Kind: "team", Name: name})
+			for email := range state.TeamMembers[name] {
+				plan.Changes = append(plan.Changes, Change{Op: "delete", Kind: "team_member", Name: name + "/" + email, Team: name, Email: email})
+			}
+		}
 	}
 	input, err := organizationAgentInput(document, state)
 	if err != nil {
@@ -94,6 +171,15 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 			plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "organization_agent", Name: field})
 		}
 	}
+	slices.SortFunc(plan.Changes, func(a, b Change) int {
+		if a.Op != b.Op {
+			return strings.Compare(a.Op, b.Op)
+		}
+		if a.Kind != b.Kind {
+			return strings.Compare(a.Kind, b.Kind)
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
 	return plan, nil
 }
 
@@ -134,11 +220,25 @@ func organizationAgentInput(document spec.Document, state Snapshot) (map[string]
 // applies skip previously created resources; members who have not accepted an
 // invitation are reported as human steps for the next run.
 func Apply(ctx context.Context, client *Client, document spec.Document) (Plan, error) {
+	return apply(ctx, client, document, nil)
+}
+
+// ApplyApproved applies removals only when the caller approved the exact
+// deletion set. A new join between plan and apply forces another review.
+func ApplyApproved(ctx context.Context, client *Client, document spec.Document, approved Plan) (Plan, error) {
+	return apply(ctx, client, document, &approved)
+}
+
+func apply(ctx context.Context, client *Client, document spec.Document, approved *Plan) (Plan, error) {
 	state, err := client.Snapshot(ctx, document.Metadata.Organization)
 	if err != nil {
 		return Plan{}, err
 	}
-	if _, err := BuildPlan(document, state); err != nil {
+	initial, err := BuildPlan(document, state)
+	if err != nil {
+		return Plan{}, err
+	}
+	if err := verifyApprovedRemovals(initial, approved); err != nil {
 		return Plan{}, err
 	}
 	if state.Organization == nil {
@@ -175,13 +275,13 @@ func Apply(ctx context.Context, client *Client, document spec.Document) (Plan, e
 					}
 				}
 			} else if _, invited := state.Invitations[member.Email]; !invited {
-				if err := client.Invite(ctx, state.Organization.ID, member.Email, role); err != nil {
+				if err := client.Invite(ctx, state.Organization.ID, member.Email, role, document.People.Invite == "quiet"); err != nil {
 					return Plan{}, err
 				}
 			}
 		}
 	}
-	for _, team := range document.Teams {
+	for _, team := range document.Teams.Items {
 		if _, exists := state.Teams[team.Name]; !exists {
 			if err := retryNotFound(ctx, func() error { return client.CreateTeam(ctx, state.Organization.ID, team.Name) }); err != nil {
 				return Plan{}, err
@@ -194,7 +294,7 @@ func Apply(ctx context.Context, client *Client, document spec.Document) (Plan, e
 	if err != nil {
 		return Plan{}, err
 	}
-	for _, team := range document.Teams {
+	for _, team := range document.Teams.Items {
 		current, exists := state.Teams[team.Name]
 		if !exists {
 			return Plan{}, fmt.Errorf("team creation has not appeared in the API yet; retry apply")
@@ -221,11 +321,101 @@ func Apply(ctx context.Context, client *Client, document spec.Document) (Plan, e
 			return Plan{}, err
 		}
 	}
+	if (document.People != nil && document.People.Prune) || document.Teams.Prune {
+		state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
+		if err != nil {
+			return Plan{}, err
+		}
+		currentPlan, err := BuildPlan(document, state)
+		if err != nil {
+			return Plan{}, err
+		}
+		if err := verifyApprovedRemovals(currentPlan, approved); err != nil {
+			return Plan{}, err
+		}
+		if err := applyRemovals(ctx, client, state, currentPlan); err != nil {
+			return Plan{}, err
+		}
+	}
 	state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
 	if err != nil {
 		return Plan{}, err
 	}
 	return BuildPlan(document, state)
+}
+
+func applyRemovals(ctx context.Context, client *Client, state Snapshot, plan Plan) error {
+	// Remove team members before teams, and children before parents. Removing a
+	// parent can cascade in the teams service, so deepest paths go first.
+	removeTeam := map[string]bool{}
+	for _, change := range plan.Changes {
+		if change.Op == "delete" && change.Kind == "team" {
+			removeTeam[change.Name] = true
+		}
+	}
+	for _, change := range plan.Changes {
+		if change.Op != "delete" || change.Kind != "team_member" || removeTeam[change.Team] {
+			continue
+		}
+		if err := client.RemoveTeamMember(ctx, state.Organization.ID, state.Teams[change.Team].ID, state.TeamMembers[change.Team][change.Email].UserID); err != nil {
+			return err
+		}
+	}
+	var removeTeams []Team
+	for _, change := range plan.Changes {
+		if change.Op == "delete" && change.Kind == "team" {
+			removeTeams = append(removeTeams, state.Teams[change.Name])
+		}
+	}
+	slices.SortFunc(removeTeams, func(a, b Team) int { return strings.Compare(b.Path, a.Path) })
+	for _, team := range removeTeams {
+		if err := client.DeleteTeam(ctx, state.Organization.ID, team.ID); err != nil {
+			return err
+		}
+	}
+	for _, change := range plan.Changes {
+		if change.Op != "delete" {
+			continue
+		}
+		switch change.Kind {
+		case "invitation":
+			if err := client.RevokeInvitation(ctx, state.Organization.ID, state.Invitations[change.Name].ID); err != nil {
+				return err
+			}
+		case "member":
+			if err := client.RemoveMember(ctx, state.Organization.ID, state.Members[change.Name].UserID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func verifyApprovedRemovals(plan Plan, approved *Plan) error {
+	wanted := deletions(plan)
+	if len(wanted) == 0 {
+		return nil
+	}
+	if approved == nil || !slices.Equal(wanted, deletions(*approved)) {
+		return fmt.Errorf("the removal plan changed or was not confirmed; run plan and confirm again")
+	}
+	return nil
+}
+
+func deletions(plan Plan) []Change {
+	var result []Change
+	for _, change := range plan.Changes {
+		if change.Op == "delete" {
+			result = append(result, change)
+		}
+	}
+	slices.SortFunc(result, func(a, b Change) int {
+		if a.Kind != b.Kind {
+			return strings.Compare(a.Kind, b.Kind)
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	return result
 }
 
 func settledSnapshot(ctx context.Context, client *Client, slug string) (Snapshot, error) {
@@ -281,9 +471,9 @@ func Pull(state Snapshot) (spec.Document, error) {
 			entry.Members = append(entry.Members, email)
 		}
 		slices.Sort(entry.Members)
-		document.Teams = append(document.Teams, entry)
+		document.Teams.Items = append(document.Teams.Items, entry)
 	}
-	slices.SortFunc(document.Teams, func(a, b spec.Team) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(document.Teams.Items, func(a, b spec.Team) int { return strings.Compare(a.Name, b.Name) })
 	if state.Agent != nil {
 		enabled := state.Agent.Status == "active"
 		document.Agents = &spec.Agents{Organization: &spec.OrganizationAgent{

@@ -57,6 +57,7 @@ type UpdateOrganizationInput struct {
 type InviteMemberInput struct {
 	Email string
 	Role  domain.Role
+	Quiet bool
 }
 
 func New(store Store, invitationAcceptBase string) *Service {
@@ -484,7 +485,10 @@ func (service *Service) InviteMember(ctx context.Context, actorID, organizationI
 		ExpiresAt:      now.Add(7 * 24 * time.Hour),
 		CreatedAt:      now,
 	}
-	acceptURL := tokenURL(service.invitationAcceptBase, token)
+	acceptURL := ""
+	if !input.Quiet {
+		acceptURL = tokenURL(service.invitationAcceptBase, token)
+	}
 	event, err := newEvent(autheventsv1.MemberInvitedDetailType, autheventsv1.MemberInvited{
 		InvitationID:     invitation.ID,
 		OrganizationID:   organizationID,
@@ -493,6 +497,7 @@ func (service *Service) InviteMember(ctx context.Context, actorID, organizationI
 		Role:             string(invitation.Role),
 		InvitedBy:        actorID,
 		AcceptURL:        acceptURL,
+		Quiet:            input.Quiet,
 		ExpiresAt:        invitation.ExpiresAt,
 	}, now)
 	if err != nil {

@@ -243,6 +243,24 @@ func TestInviteMemberCreatesHashedTokenAndDomainEvent(t *testing.T) {
 	}
 }
 
+func TestQuietInvitationKeepsInvitationButSuppressesEmail(t *testing.T) {
+	store := &fakeStore{
+		actorMembership: domain.Membership{OrganizationID: "org-1", UserID: "owner-1", Role: domain.RoleOwner},
+		organization:    domain.Organization{ID: "org-1", Name: "Acme"},
+	}
+	service := New(store, "https://app.example.com/invitations/accept")
+	_, _, err := service.InviteMember(context.Background(), "owner-1", "org-1", InviteMemberInput{
+		Email: "member@example.com", Role: domain.RoleMember, Quiet: true,
+	})
+	if err != nil || store.invitation.ID == "" || len(store.events) != 1 {
+		t.Fatalf("quiet invitation = %+v, events = %d, error = %v", store.invitation, len(store.events), err)
+	}
+	var event autheventsv1.MemberInvited
+	if err := json.Unmarshal(store.events[0].Data, &event); err != nil || !event.Quiet || event.AcceptURL != "" {
+		t.Fatalf("quiet event = %+v, %v", event, err)
+	}
+}
+
 // TestInviteMemberAcceptURLPreservesExistingQueryAndFragment guards against
 // the accept URL going back to plain concatenation: INVITATION_ACCEPT_URL
 // can itself carry a query (say, an analytics tag) or a fragment, and the

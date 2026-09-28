@@ -64,13 +64,17 @@ The current file accepts these settings:
 | `metadata.domains` | Local validation guard for member emails; not yet stored in auth |
 | `organization.name` | Organization display name |
 | `people.members[].email`, `.role` | Invite members and change existing non-owner roles |
-| `people.invite: email` | Uses the existing invitation email flow |
+| `people.invite: email` | Uses the invitation email flow |
+| `people.invite: quiet` | Creates invitations without sending email; members can find and accept them after signing in |
+| `people.prune: true` | Removes omitted members and pending invitations after an explicit removal plan and confirmation; the signed-in member and final owner are protected |
 | `teams[].name`, `.members` | Create teams and add joined members |
+| `teams: {items: [...], prune: true}` | Remove omitted teams and memberships after listing every removal for confirmation |
 | `agents.organization.enabled`, `.displayName`, `.description`, `.instructions` | Reconcile the existing organization agent; `plan` reads effective defaults without creating it |
 
 The parser refuses unknown keys, duplicate members or teams, unrecognized
-roles, and unsupported sections. Omitting a person or team never removes it.
-`people.prune`, quiet invitations, and owner role transfers are not yet
-supported. `preset` is accepted in the file so the file shape matches the
+roles, and unsupported sections. Omitting a person or team never removes it
+unless its section sets `prune: true`. The normal compact `teams: [...]` form
+is still supported.
+Owner role transfers are not yet supported. `preset` is accepted in the file so the file shape matches the
 design; preset policy settings do not take effect yet. The command does not
 currently lock concurrent applies or version files on the server.

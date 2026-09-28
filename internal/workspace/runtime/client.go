@@ -98,6 +98,7 @@ type Member struct {
 }
 
 type Invitation struct {
+	ID     string `json:"id"`
 	Email  string `json:"email"`
 	Role   string `json:"role"`
 	Status string `json:"status"`
@@ -106,6 +107,7 @@ type Invitation struct {
 type Team struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	Path string `json:"path"`
 }
 
 type TeamMember struct {
@@ -124,6 +126,9 @@ type OrganizationAgent struct {
 
 type Snapshot struct {
 	Organization *Organization
+	ActorID      string
+	ActorRole    string
+	ActorIsAgent bool
 	Members      map[string]Member
 	Invitations  map[string]Invitation
 	Teams        map[string]Team
@@ -142,6 +147,16 @@ func (client *Client) Snapshot(ctx context.Context, slug string) (Snapshot, erro
 		Members: map[string]Member{}, Invitations: map[string]Invitation{},
 		Teams: map[string]Team{}, TeamMembers: map[string]map[string]TeamMember{},
 	}
+	var current struct {
+		User struct {
+			ID    string `json:"id"`
+			Email string `json:"email"`
+		} `json:"user"`
+	}
+	if err := client.request(ctx, http.MethodGet, "/v1/auth/me", nil, &current); err != nil {
+		return Snapshot{}, err
+	}
+	state.ActorID = current.User.ID
 	for _, organization := range organizations.Organizations {
 		if organization.Slug == slug {
 			state.Organization = &organization
@@ -149,15 +164,6 @@ func (client *Client) Snapshot(ctx context.Context, slug string) (Snapshot, erro
 		}
 	}
 	if state.Organization == nil {
-		var current struct {
-			User struct {
-				ID    string `json:"id"`
-				Email string `json:"email"`
-			} `json:"user"`
-		}
-		if err := client.request(ctx, http.MethodGet, "/v1/auth/me", nil, &current); err != nil {
-			return Snapshot{}, err
-		}
 		if current.User.ID != "" && current.User.Email != "" {
 			state.Members[strings.ToLower(current.User.Email)] = Member{
 				UserID: current.User.ID, Email: strings.ToLower(current.User.Email), Role: "owner",
@@ -166,6 +172,20 @@ func (client *Client) Snapshot(ctx context.Context, slug string) (Snapshot, erro
 		return state, nil
 	}
 	base := "/v1/organizations/" + url.PathEscape(state.Organization.ID)
+	var access struct {
+		Membership struct {
+			UserID string `json:"user_id"`
+			Role   string `json:"role"`
+		} `json:"membership"`
+		Agent bool `json:"agent"`
+	}
+	if err := client.request(ctx, http.MethodGet, base, nil, &access); err != nil {
+		return Snapshot{}, err
+	}
+	if access.Membership.UserID != state.ActorID {
+		return Snapshot{}, fmt.Errorf("auth answered for a different member")
+	}
+	state.ActorRole, state.ActorIsAgent = access.Membership.Role, access.Agent
 	var members struct {
 		Members []Member `json:"members"`
 	}
@@ -231,12 +251,20 @@ func (client *Client) UpdateOrganization(ctx context.Context, id, name, slug str
 	return client.request(ctx, http.MethodPatch, "/v1/organizations/"+url.PathEscape(id), map[string]string{"name": name, "slug": slug}, nil)
 }
 
-func (client *Client) Invite(ctx context.Context, orgID, email, role string) error {
-	return client.request(ctx, http.MethodPost, "/v1/organizations/"+url.PathEscape(orgID)+"/invitations", map[string]string{"email": email, "role": role}, nil)
+func (client *Client) Invite(ctx context.Context, orgID, email, role string, quiet bool) error {
+	return client.request(ctx, http.MethodPost, "/v1/organizations/"+url.PathEscape(orgID)+"/invitations", map[string]any{"email": email, "role": role, "quiet": quiet}, nil)
 }
 
 func (client *Client) ChangeMemberRole(ctx context.Context, orgID, memberID, role string) error {
 	return client.request(ctx, http.MethodPatch, "/v1/organizations/"+url.PathEscape(orgID)+"/members/"+url.PathEscape(memberID), map[string]string{"role": role}, nil)
+}
+
+func (client *Client) RemoveMember(ctx context.Context, orgID, memberID string) error {
+	return client.request(ctx, http.MethodDelete, "/v1/organizations/"+url.PathEscape(orgID)+"/members/"+url.PathEscape(memberID), nil, nil)
+}
+
+func (client *Client) RevokeInvitation(ctx context.Context, orgID, invitationID string) error {
+	return client.request(ctx, http.MethodDelete, "/v1/organizations/"+url.PathEscape(orgID)+"/invitations/"+url.PathEscape(invitationID), nil, nil)
 }
 
 func (client *Client) CreateTeam(ctx context.Context, orgID, name string) error {
@@ -245,4 +273,12 @@ func (client *Client) CreateTeam(ctx context.Context, orgID, name string) error 
 
 func (client *Client) AddTeamMember(ctx context.Context, orgID, teamID, memberID string) error {
 	return client.request(ctx, http.MethodPost, "/v1/organizations/"+url.PathEscape(orgID)+"/teams/"+url.PathEscape(teamID)+"/members", map[string]string{"user_id": memberID, "role": "member"}, nil)
+}
+
+func (client *Client) RemoveTeamMember(ctx context.Context, orgID, teamID, memberID string) error {
+	return client.request(ctx, http.MethodDelete, "/v1/organizations/"+url.PathEscape(orgID)+"/teams/"+url.PathEscape(teamID)+"/members/"+url.PathEscape(memberID), nil, nil)
+}
+
+func (client *Client) DeleteTeam(ctx context.Context, orgID, teamID string) error {
+	return client.request(ctx, http.MethodDelete, "/v1/organizations/"+url.PathEscape(orgID)+"/teams/"+url.PathEscape(teamID), nil, nil)
 }

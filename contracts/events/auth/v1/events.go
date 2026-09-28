@@ -108,6 +108,7 @@ type MemberInvited struct {
 	Role             string    `json:"role"`
 	InvitedBy        string    `json:"invited_by"`
 	AcceptURL        string    `json:"accept_url"`
+	Quiet            bool      `json:"quiet,omitempty"`
 	ExpiresAt        time.Time `json:"expires_at"`
 }
 

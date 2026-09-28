@@ -102,6 +102,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			}
 			return 0
 		}
+		if hasRemoval(plan) && opts.noInput {
+			return reportError(fmt.Errorf("prune requires an interactive confirmation"), stderr)
+		}
 		if !opts.yes {
 			if opts.noInput {
 				return reportError(fmt.Errorf("apply requires --yes under --no-input"), stderr)
@@ -112,7 +115,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 				return reportError(fmt.Errorf("apply was cancelled"), stderr)
 			}
 		}
-		remaining, err := runtime.Apply(ctx, client, document)
+		remaining, err := runtime.ApplyApproved(ctx, client, document, plan)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -148,7 +151,30 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return reportError(err, stderr)
 		}
 		if command == "apply" && !opts.dryRun {
-			plan, err := runtime.Apply(ctx, client, document)
+			state, err := client.Snapshot(ctx, document.Metadata.Organization)
+			if err != nil {
+				return reportError(err, stderr)
+			}
+			approved, err := runtime.BuildPlan(document, state)
+			if err != nil {
+				return reportError(err, stderr)
+			}
+			if hasRemoval(approved) {
+				if opts.noInput {
+					return reportError(fmt.Errorf("prune requires an interactive confirmation"), stderr)
+				}
+				if code := report(stdout, opts.json, approved); code != 0 {
+					return code
+				}
+				if !opts.yes {
+					fmt.Fprint(stderr, "Confirm these removals? [y/N] ")
+					answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+					if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+						return reportError(fmt.Errorf("apply was cancelled"), stderr)
+					}
+				}
+			}
+			plan, err := runtime.ApplyApproved(ctx, client, document, approved)
 			if err != nil {
 				return reportError(err, stderr)
 			}
@@ -217,6 +243,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	fmt.Fprintln(stderr, "unknown command:", command)
 	usage(stderr)
 	return 3
+}
+
+func hasRemoval(plan runtime.Plan) bool {
+	for _, change := range plan.Changes {
+		if change.Op == "delete" {
+			return true
+		}
+	}
+	return false
 }
 
 func signedInClient(ctx context.Context, opts options, stdout io.Writer, getenv func(string) string) (*runtime.Client, error) {

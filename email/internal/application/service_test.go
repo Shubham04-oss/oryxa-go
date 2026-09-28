@@ -523,6 +523,16 @@ func TestInvitationRequiresOrganizationAndRole(t *testing.T) {
 	}
 }
 
+func TestQuietInvitationSendsNoEmail(t *testing.T) {
+	service, deliveries := newTestService(t)
+	err := service.MemberInvited(context.Background(), ref(autheventsv1.MemberInvitedDetailType), autheventsv1.MemberInvited{
+		Email: "ravi@example.com", Quiet: true,
+	})
+	if err != nil || len(deliveries.requests) != 0 {
+		t.Fatalf("quiet invitation error = %v, deliveries = %d", err, len(deliveries.requests))
+	}
+}
+
 func TestExpiresIn(t *testing.T) {
 	tests := map[time.Duration]string{
 		-time.Minute:                    "1 minute",

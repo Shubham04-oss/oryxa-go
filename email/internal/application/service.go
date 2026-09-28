@@ -79,6 +79,9 @@ func (s *Service) PasswordResetRequested(ctx context.Context, event delivery.Eve
 }
 
 func (s *Service) MemberInvited(ctx context.Context, event delivery.EventRef, data autheventsv1.MemberInvited) error {
+	if data.Quiet {
+		return nil
+	}
 	if data.OrganizationName == "" || data.Role == "" {
 		return errors.New("invitation has no organization name or role")
 	}
