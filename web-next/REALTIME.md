@@ -397,9 +397,48 @@ message, from what was shared of it.
 `waiting`, or `failed` with what it said before), the object asks Go's
 answer guard once, as the owner, with their cookie and page's origin, in
 the same keep-alive as the run: `POST …/answer-guard/check`, body `{"texts":
-[the answer], "origin": "owner", "request": what the owner asked}` (the
+[the answer], "origin": "owner", "request": what the owner asked,
+"sources": actual run tools, "context": shared conversation lines}` (the
 run's message, or for answers to confirmations the question of the message
 they continue; each at most 25,000 code points), within ten seconds.
+The Worker records only names from Go's actual `tool_call`/`tool_result`
+items, never from a browser or an agent's prose; arguments, results and files
+remain in the owner's thread. Sources are at most 64 names of 128 code points;
+an incomplete/overflowed record adds `run_sources_unrecorded`.
+Provider reads behind `transfer_to_agent`, and `interactions_get` (which
+reads other requests outside a pinned delivery), conservatively add the same
+marker. Reusing the owner's Go thread adds `thread_history`, including a
+confirmation continuation. Earlier shared side transcript is a source too:
+any nonempty prompt transcript adds `thread_history` even on the first Go
+run, in both the Worker check and the Go ledger guard. This records no extra
+transcript content and distinguishes conversation data from the clean question.
+Context is the last six lines of the shared transcript snapshot the run saw,
+each at most 1,000 code points, never the owner's private Go transcript. Go's
+existing workspace/member settings and deployment ceiling decide relevance.
+When private sources require judging, the check route requires the complete
+request and answer within the judge's caps (10,000 and 24,000 code points).
+An incomplete check is unchecked and shares no text in hold mode; shadow
+records would-hold and off remains off. This includes a maximum side body
+of 24,002 code points: it cannot share two middle runes omitted by the judge,
+and the object does not silently clip the answer to make that check pass.
+For a ledger publication during the same Go run, the fresh run body also
+has `publication_request: {request, context}` beside its wrapped `message`.
+Only the clean original question can authorize sharing; peer transcript and
+prompt framing remain context. This object contains no sources or guard
+settings. The Worker builds it from the socket question and shared transcript
+rather than accepting it from a browser, and never sends it on the wire.
+Go validates it only for a fresh owned side-origin run and keeps its bounded
+question/context in existing private session metadata for confirmations.
+A confirmation body supplies no replacement object: Go restores the original,
+including after a service restart. Older Go side sessions without it cannot
+fall back to the wrapped prompt as their Request; their ledger publications
+are unchecked when private sources require judging in hold mode.
+Only while waiting for confirmation, the existing agent-message `data` JSON
+keeps an optional bounded `guardInput` (original request, source names and
+shared context). It is never sent on the wire, put in an inbox or read into an
+agent's transcript, and is cleared when the run resumes/finishes. It survives
+a restart without a schema migration. A waiting row from an older build has
+no such metadata and conservatively adds `run_sources_unrecorded` on resume.
 `origin: "owner"` says the member started their own agent, so Go leaves the
 personal data they would say themselves (emails, phone numbers, addresses)
 as it is and still masks passwords, keys and card, bank and ID numbers. Go

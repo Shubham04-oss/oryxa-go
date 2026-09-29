@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -37,6 +38,10 @@ func TestARunBodyMayPinItToATeamspace(t *testing.T) {
 		},
 		"no teamspace":     {`{"message":"hi"}`, threads.RunInput{Message: "hi"}},
 		"a null teamspace": {`{"message":"hi","teamspace_id":null}`, threads.RunInput{Message: "hi"}},
+		"a separate publication question": {
+			`{"message":"wrapped side prompt","publication_request":{"request":"When is launch?","context":["Bo: It was Friday."]}}`,
+			threads.RunInput{Message: "wrapped side prompt", PublicationRequest: &threads.PublicationRequest{Request: "When is launch?", Context: []string{"Bo: It was Friday."}}},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			service := &fakeThreads{run: &fakeRun{}}
@@ -45,7 +50,7 @@ func TestARunBodyMayPinItToATeamspace(t *testing.T) {
 				t.Fatalf("run = %d %s with %d input(s), want the run started once", response.Code, response.Body.String(), len(service.inputs))
 			}
 			got := service.inputs[0]
-			if got.Message != testCase.want.Message || got.TeamspaceID != testCase.want.TeamspaceID ||
+			if got.Message != testCase.want.Message || got.TeamspaceID != testCase.want.TeamspaceID || !reflect.DeepEqual(got.PublicationRequest, testCase.want.PublicationRequest) ||
 				len(got.Confirmations) != len(testCase.want.Confirmations) {
 				t.Fatalf("the run was started with %+v, want %+v", got, testCase.want)
 			}
@@ -53,6 +58,22 @@ func TestARunBodyMayPinItToATeamspace(t *testing.T) {
 				t.Error("the run was not executed")
 			}
 		})
+	}
+}
+
+func TestPublicationQuestionCannotCarryProvenanceOrGuardSettings(t *testing.T) {
+	for _, question := range []string{
+		`{"request":"When is launch?","sources":[]}`,
+		`{"request":"When is launch?","mode":"off"}`,
+		`{"request":"When is launch?","exempt":true}`,
+		`{"request":123}`,
+		`{"request":"Question","context":"not a list"}`,
+	} {
+		service := &fakeThreads{run: &fakeRun{}}
+		response := serve(newTestServer(member(), service), http.MethodPost, runsPath, `{"message":"wrapped prompt","publication_request":`+question+`}`, bearer)
+		if response.Code != http.StatusBadRequest || len(service.inputs) != 0 {
+			t.Fatalf("untrusted metadata reached the run: status=%d inputs=%+v", response.Code, service.inputs)
+		}
 	}
 }
 

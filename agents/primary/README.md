@@ -1043,6 +1043,40 @@ not be checked is not said at all, a fixed line saying so in its place.
 What an agent publishes to a teamspace's ledger is read the same way before
 the team reads it (`teamspaces.Service.CollaborationPublish`, which
 `teamspaces_publish` calls; the guard is given with `teamspaces.WithGuard`).
+It uses `CheckWith`, under the member's peer level and the same effective
+workspace relevance/regulated settings and deployment ceiling as the check
+route (`WithGuardPolicy`). Actual attempted tool names are recorded before
+execution on the run's context, never from `tools_used` in the model's
+publication. A chat uses the actual user message (the original textual
+request when resuming confirmations), with at most six earlier member
+messages as context. A side run's prompt also holds shared, untrusted words,
+so the Worker sends its clean question and bounded shared context separately
+as `publication_request`. Go accepts that content only on a fresh owned
+side-origin run, validates its bounds, and keeps it as a serialized string
+under `publication_guard_request` in the existing private ADK session state.
+Confirmations restore that original value and cannot supply a replacement.
+This is metadata, not a table/schema migration, and thread detail never
+exposes it. An older side confirmation without it has no authorized Request
+and adds the unknown-source marker; the wrapped prompt is never a fallback.
+Private agent replies and tool results are never context sent to this judge;
+the side context may include peer-agent replies already shared there.
+Prior own-thread content and nonempty shared side context both add
+`thread_history`, including a first side run with no earlier ADK events.
+No additional transcript content is retained. Missing or
+overflowed provenance adds `run_sources_unrecorded`, so it cannot bypass the
+private-source gate. Tool provenance is bounded, held only for the run and
+never stored in thread state. Provider-tool reads behind an agent transfer are
+conservatively marked unrecorded. `interactions_get`, whose harmless
+classification assumes a pinned delivery, is conservatively marked too:
+general owner runs may read other requests. A relevance hold or failed judge
+stores no entry. When private sources require judging, the ledger also
+requires a nonempty request within the judge's 10,000-rune cap and all six
+publication texts together within its 24,000-rune answer cap: it never stores
+an omitted middle as though the judge read it. Missing or oversized input is
+unchecked without a model call, holds under `hold`, records would-hold under
+`shadow`, and leaves `off` unchanged. Rooms still use their existing masking
+check without relevance, and
+direct member/room-lifted publications still bypass this agent-only path.
 It reads the publication as the ledger would store it, so one the ledger would
 refuse for what it is (no title, an unsafe artifact location) is refused
 before a check is spent on it: the title and the summary, and the artifacts'

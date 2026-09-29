@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -30,6 +31,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/relevance"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 )
@@ -50,6 +52,10 @@ var errLeaseLost = errors.New("the run lost its hold on the thread")
 type RunInput struct {
 	Message       string
 	Confirmations []Answer
+	// PublicationRequest separates the member's question from a side run's
+	// wrapped prompt. It is content, not provenance: only fresh side-origin
+	// runs accept it, and confirmations restore what that message saved.
+	PublicationRequest *PublicationRequest
 	// StartedBy is who starts the run, agentsv1.StartedByMember unless set.
 	StartedBy string
 	// Wakeup names the batch of app events a message carries, for a run
@@ -73,6 +79,27 @@ type RunInput struct {
 	TeamspaceID string
 }
 
+// PublicationRequest is the original question and shared conversation around
+// it, never a source list, guard setting or authorization exemption.
+type PublicationRequest struct {
+	Request string   `json:"request"`
+	Context []string `json:"context"`
+}
+
+const statePublicationRequest = "publication_guard_request"
+
+func (input PublicationRequest) valid() bool {
+	if strings.TrimSpace(input.Request) == "" || utf8.RuneCountInString(input.Request) > maxMessageRunes || len(input.Context) > relevance.MaxContextLines {
+		return false
+	}
+	for _, line := range input.Context {
+		if utf8.RuneCountInString(line) > relevance.MaxContextLineRunes {
+			return false
+		}
+	}
+	return true
+}
+
 // Answer is the member's decision on one confirmation.
 type Answer struct {
 	// ID is the confirmation's call ID.
@@ -90,6 +117,7 @@ type Run struct {
 	startedBy  string
 	content    *genai.Content
 	stateDelta map[string]any
+	guardInput agents.RunGuardInput
 	started    time.Time
 	// teamspaceID is the teamspace the run is pinned to, or "". It lives on
 	// the run's context and nowhere else: not in stateDelta, not in the run's
@@ -119,6 +147,8 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 		return nil, fmt.Errorf("%w: a message holds at most %d characters", ErrInvalid, maxMessageRunes)
 	case input.Wakeup != "" && message == "":
 		return nil, fmt.Errorf("%w: a wake-up carries a message", ErrInvalid)
+	case input.PublicationRequest != nil && (message == "" || !input.PublicationRequest.valid()):
+		return nil, fmt.Errorf("%w: publication_request needs a fresh message, a nonempty question of at most %d characters and at most %d context lines of %d characters", ErrInvalid, maxMessageRunes, relevance.MaxContextLines, relevance.MaxContextLineRunes)
 	}
 	// A pin that is not one is the caller's mistake, refused rather than
 	// dropped: a run that was meant to be pinned and quietly is not would
@@ -137,11 +167,14 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 
 	// The thread must be the member's before this run takes it, even for a
 	// moment, or naming another member's thread could hold it from them.
-	if _, err := service.thread(ctx, member, threadID); err != nil {
+	stored, err := service.thread(ctx, member, threadID)
+	if err != nil {
 		return nil, err
 	}
+	if input.PublicationRequest != nil && stateString(stored.State(), stateOrigin) != OriginSideConversation {
+		return nil, fmt.Errorf("%w: publication_request is only for a side conversation", ErrInvalid)
+	}
 	run := &Run{service: service, member: member, threadID: threadID, startedBy: startedBy, teamspaceID: pinned}
-	var err error
 	if run.id, err = newRunID(); err != nil {
 		return nil, err
 	}
@@ -199,7 +232,26 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 		}
 		maps.Copy(run.stateDelta, agents.DeliveryState(input.Delivery))
 	}
-	pending := pendingConfirmations(sessionEvents(stored), service.agent.Name())
+	history := sessionEvents(stored)
+	run.guardInput = publicationGuardInput(history, message)
+	if stateString(stored.State(), stateOrigin) == OriginSideConversation {
+		// The wrapped prompt contains other people's untrusted words. It must
+		// never authorize a publication, including on old confirmations.
+		encoded := stateString(stored.State(), statePublicationRequest)
+		if message != "" {
+			encoded = ""
+			if input.PublicationRequest != nil {
+				bytes, _ := json.Marshal(input.PublicationRequest)
+				encoded = string(bytes)
+			}
+			if run.stateDelta == nil {
+				run.stateDelta = map[string]any{}
+			}
+			run.stateDelta[statePublicationRequest] = encoded
+		}
+		run.guardInput = sidePublicationGuardInput(encoded, len(history) > 0)
+	}
+	pending := pendingConfirmations(history, service.agent.Name())
 	if message != "" {
 		if len(pending) > 0 {
 			return ErrConfirmationPending
@@ -225,6 +277,25 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 	}
 	run.content = content
 	return nil
+}
+
+func sidePublicationGuardInput(encoded string, hasHistory bool) agents.RunGuardInput {
+	input := agents.RunGuardInput{}
+	if hasHistory {
+		input.Sources = []string{relevance.ThreadHistory}
+	}
+	var question PublicationRequest
+	if err := json.Unmarshal([]byte(encoded), &question); err != nil || !question.valid() {
+		input.Sources = append(input.Sources, agents.SourcesUnrecorded)
+		return input
+	}
+	input.Request, input.Context = question.Request, question.Context
+	if len(question.Context) > 0 && !hasHistory {
+		// A first side run still read earlier shared conversation, which can
+		// carry private facts beyond the question and the wider team's reach.
+		input.Sources = append(input.Sources, relevance.ThreadHistory)
+	}
+	return input
 }
 
 // answerContent is the member's answers as ADK reads them: one function
@@ -294,6 +365,7 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	runContext = memberauth.WithRunOrigin(runContext, run.startedBy)
 	// The pin rides on this run's context alone, beside the run's origin.
 	runContext = agents.WithPinnedTeamspace(runContext, run.teamspaceID)
+	runContext = agents.WithRunGuard(runContext, run.guardInput)
 	if run.member.AccessToken != "" {
 		runContext = memberauth.WithAccessToken(runContext, run.member.AccessToken)
 	}
@@ -330,6 +402,58 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	if run.remembering != nil {
 		run.remember(ctx, run.remembering)
 	}
+}
+
+// publicationGuardInput uses the actual thread, not a model's report. A
+// confirmation resumes the latest textual user request. Earlier member text
+// gives the request context; agent replies and tool results never go to the
+// judge as context. Any prior thread content is conservatively private.
+func publicationGuardInput(history []*session.Event, message string) agents.RunGuardInput {
+	input := agents.RunGuardInput{Request: message}
+	if len(history) > 0 {
+		input.Sources = []string{relevance.ThreadHistory}
+	}
+	var messages []string
+	requestFound := message != ""
+	// Read backwards and stop once the bounded context is full; a long
+	// thread must not allocate a second copy of every earlier user message.
+	for index := len(history) - 1; index >= 0; index-- {
+		event := history[index]
+		if event == nil || event.Author != adkUserAuthor || event.Content == nil {
+			continue
+		}
+		limit := relevance.MaxContextLineRunes
+		if !requestFound {
+			limit = 32_000
+		}
+		var text strings.Builder
+		for _, part := range event.Content.Parts {
+			if part != nil && !part.Thought {
+				piece := part.Text
+				left := limit - utf8.RuneCountInString(text.String())
+				if utf8.RuneCountInString(piece) > left {
+					piece = string([]rune(piece)[:left])
+				}
+				text.WriteString(piece)
+				if utf8.RuneCountInString(text.String()) >= limit {
+					break
+				}
+			}
+		}
+		if text.Len() > 0 {
+			if !requestFound {
+				input.Request, requestFound = text.String(), true
+				continue
+			}
+			messages = append(messages, text.String())
+			if len(messages) >= relevance.MaxContextLines {
+				break
+			}
+		}
+	}
+	slices.Reverse(messages)
+	input.Context = messages
+	return input
 }
 
 // unwatched reports whether nobody is there to see what a run does. An app

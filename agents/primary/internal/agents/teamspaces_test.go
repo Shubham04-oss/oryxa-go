@@ -14,14 +14,15 @@ import (
 )
 
 type fakeTeamspaceCollaboration struct {
-	actor      TeamspaceActor
-	token      string
-	id         string
-	input      SharedEntryInput
-	spaces     []Teamspace
-	entries    []SharedEntry
-	listCalls  int
-	entryCalls int
+	actor       TeamspaceActor
+	token       string
+	id          string
+	input       SharedEntryInput
+	spaces      []Teamspace
+	entries     []SharedEntry
+	listCalls   int
+	entryCalls  int
+	guardInputs []RunGuardInput
 }
 
 func (service *fakeTeamspaceCollaboration) CollaborationSpaces(_ context.Context, actor TeamspaceActor, token string) ([]Teamspace, error) {
@@ -81,7 +82,8 @@ func TestSelectTeamspaceRequiresOneSemanticMatch(t *testing.T) {
 	}
 }
 
-func (service *fakeTeamspaceCollaboration) CollaborationPublish(_ context.Context, actor TeamspaceActor, token, id string, input SharedEntryInput) (SharedEntry, error) {
+func (service *fakeTeamspaceCollaboration) CollaborationPublish(ctx context.Context, actor TeamspaceActor, token, id string, input SharedEntryInput) (SharedEntry, error) {
+	service.guardInputs = append(service.guardInputs, GuardRun(ctx))
 	service.actor, service.token, service.id, service.input = actor, token, id, input
 	return SharedEntry{
 		ID: "tse_1", TeamspaceID: id, AuthorUserID: actor.UserID,

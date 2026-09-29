@@ -14,6 +14,7 @@ import (
 
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardpolicy"
 )
 
 const (
@@ -51,7 +52,12 @@ type Directory interface {
 // reads them. *answerguard.Guard implements it; it never fails, holding what it
 // cannot check.
 type Guard interface {
-	Check(ctx context.Context, texts []string) answerguard.Verdict
+	CheckWith(ctx context.Context, texts []string, input *answerguard.RelevanceInput) answerguard.Verdict
+}
+
+// GuardPolicy is the existing member/workspace policy under deployment caps.
+type GuardPolicy interface {
+	Effective(context.Context, string, string) (guardpolicy.Effective, error)
 }
 
 type Service struct {
@@ -60,8 +66,9 @@ type Service struct {
 	// guard, when there is one, reads what an agent publishes through
 	// CollaborationPublish. What a member publishes is theirs: PublishEntry
 	// never asks it.
-	guard  Guard
-	logger *slog.Logger
+	guard       Guard
+	guardPolicy GuardPolicy
+	logger      *slog.Logger
 }
 
 // Option is something a Service may be given beyond what it cannot do without.
@@ -73,6 +80,13 @@ type Option func(*Service)
 // no option, reads nothing; a nil *answerguard.Guard boxed in the interface
 // would not read as none, so a caller passes the option only when it has one.
 func WithGuard(guard Guard) Option { return func(service *Service) { service.guard = guard } }
+
+// WithGuardPolicy applies the existing effective peer level, workspace
+// relevance settings and deployment cap. Without a policy, the legacy strict
+// masking check remains and relevance is off, as for the check route.
+func WithGuardPolicy(policy GuardPolicy) Option {
+	return func(service *Service) { service.guardPolicy = policy }
+}
 
 // WithLogger records what the guard found in a publication, by kind and never
 // by value. Without it, nothing is logged.

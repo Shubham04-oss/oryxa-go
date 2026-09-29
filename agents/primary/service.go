@@ -287,7 +287,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if organizationDirectory != nil {
 		// The guard is passed only when there is one: a nil *Guard in the
 		// interface would not read as none.
-		teamspaceOptions := []teamspaces.Option{teamspaces.WithLogger(logger)}
+		teamspaceOptions := []teamspaces.Option{teamspaces.WithLogger(logger), teamspaces.WithGuardPolicy(guardSettings)}
 		if answerGuard != nil {
 			teamspaceOptions = append(teamspaceOptions, teamspaces.WithGuard(answerGuard))
 		}
