@@ -85,9 +85,13 @@ type User struct {
 	Name     string
 	RealName string
 	Email    string
-	Title    string
-	Deleted  bool
-	Bot      bool
+	// EmailUnconfirmed is a person whose address Slack has not confirmed:
+	// users.info says is_email_confirmed false. The zero value is a person
+	// with a confirmed address, as nearly everyone is.
+	EmailUnconfirmed bool
+	Title            string
+	Deleted          bool
+	Bot              bool
 	// Guest and UltraRestricted are Slack's is_restricted and
 	// is_ultra_restricted.
 	Guest, UltraRestricted bool
@@ -553,7 +557,7 @@ func (f *Fake) usersInfoLocked(workspace *Workspace, id string) map[string]any {
 	return map[string]any{"ok": true, "user": map[string]any{
 		"id": user.ID, "team_id": user.TeamID, "name": user.Name, "real_name": user.RealName, "deleted": user.Deleted,
 		"is_bot": user.Bot, "is_app_user": false, "is_restricted": user.Guest, "is_ultra_restricted": user.UltraRestricted,
-		"is_stranger": user.Stranger, "profile": profile,
+		"is_stranger": user.Stranger, "is_email_confirmed": !user.EmailUnconfirmed, "profile": profile,
 	}}
 }
 

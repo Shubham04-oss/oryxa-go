@@ -166,6 +166,7 @@ func TestUsersAndChannelsAreAnsweredAsSlackAnswersThem(t *testing.T) {
 	fake := New(t)
 	fake.AddUser(User{ID: "U0RAYA", Name: "raya", Email: "raya@acme.test", Title: "Engineer"})
 	fake.AddUser(User{ID: "U0GUEST", Guest: true, Email: "guest@elsewhere.test"})
+	fake.AddUser(User{ID: "U0NEW", Email: "new@acme.test", EmailUnconfirmed: true})
 	fake.AddChannel(Channel{ID: "G0SECRET", Name: "secret", Private: true})
 	fake.AddChannel(Channel{ID: "G0GROUP", MPIM: true, Private: true})
 	fake.AddChannel(Channel{ID: "C0CONNECT", Name: "connect", Shared: true})
@@ -173,8 +174,13 @@ func TestUsersAndChannelsAreAnsweredAsSlackAnswersThem(t *testing.T) {
 	_, _, info := call(t, fake, "users.info", DefaultBotToken, map[string]any{"user": "U0RAYA"})
 	user, _ := info["user"].(map[string]any)
 	profile, _ := user["profile"].(map[string]any)
-	if profile["email"] != "raya@acme.test" || profile["title"] != "Engineer" || user["team_id"] != DefaultTeamID {
+	if profile["email"] != "raya@acme.test" || profile["title"] != "Engineer" || user["team_id"] != DefaultTeamID || user["is_email_confirmed"] != true {
 		t.Fatalf("users.info = %v", info)
+	}
+	// An address Slack has not confirmed says so.
+	_, _, unconfirmed := call(t, fake, "users.info", DefaultBotToken, map[string]any{"user": "U0NEW"})
+	if user, _ := unconfirmed["user"].(map[string]any); user["is_email_confirmed"] != false {
+		t.Fatalf("an unconfirmed address = %v", unconfirmed)
 	}
 	if _, _, unknown := call(t, fake, "users.info", DefaultBotToken, map[string]any{"user": "U0NOBODY"}); unknown["error"] != "user_not_found" {
 		t.Fatalf("an unknown user = %v", unknown)
