@@ -154,12 +154,16 @@ resource "aws_cloudwatch_metric_alarm" "service_pressure" {
   ok_actions          = local.alarm_actions
 }
 
-# The database.
+# The database. The connections alarm is set against RDS PostgreSQL's default
+# max_connections, LEAST({DBInstanceClassMemory/9531392}, 5000): about 80 to
+# 87 on a db.t4g.micro (1 GiB), where the 90 it used to be could never fire,
+# and about 190 on a db.t4g.small (2 GiB). 150 is about 80% of the small's
+# limit; move it with the instance class.
 resource "aws_cloudwatch_metric_alarm" "database" {
   for_each = {
     cpu         = { metric = "CPUUtilization", op = "GreaterThanThreshold", threshold = 80, statistic = "Average", description = "Database CPU above 80% for 10 minutes." }
     storage     = { metric = "FreeStorageSpace", op = "LessThanThreshold", threshold = 2147483648, statistic = "Minimum", description = "Under 2 GiB of database storage left." }
-    connections = { metric = "DatabaseConnections", op = "GreaterThanThreshold", threshold = 90, statistic = "Maximum", description = "Close to the instance's connection limit." }
+    connections = { metric = "DatabaseConnections", op = "GreaterThanThreshold", threshold = 150, statistic = "Maximum", description = "Close to the instance's connection limit." }
     memory      = { metric = "FreeableMemory", op = "LessThanThreshold", threshold = 67108864, statistic = "Minimum", description = "Under 64 MiB of database memory free." }
   }
   alarm_name          = "${local.name}-database-${each.key}"
