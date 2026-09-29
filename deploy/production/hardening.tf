@@ -129,3 +129,137 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
 
   depends_on = [aws_s3_bucket_versioning.provisioned]
 }
+
+# Alarms on the application's own errors, and on what dashboard.tf only
+# graphs. They mail the same SNS topic as every alarm in observability.tf.
+#
+# The application's errors: one metric filter counts every log line at level
+# ERROR in the app log group (the dashboard's Errors table reads the same
+# lines), and the alarm asks for 3 in 15 minutes, against a baseline of about
+# one every 9 hours. A quiet log group publishes nothing, which is fine, not a
+# fault.
+resource "aws_cloudwatch_log_metric_filter" "app_errors" {
+  name           = "${local.name}-app-errors"
+  log_group_name = aws_cloudwatch_log_group.task["app"].name
+  pattern        = "{ $.level = \"ERROR\" }"
+
+  metric_transformation {
+    name      = "AppErrors"
+    namespace = "Oryxa/Logs"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "app_errors" {
+  alarm_name          = "${local.name}-app-errors"
+  alarm_description   = "oryxa logged 3 or more errors in 15 minutes; about one every 9 hours is normal. The dashboard's Errors table lists them with their trace ids."
+  namespace           = aws_cloudwatch_log_metric_filter.app_errors.metric_transformation[0].namespace
+  metric_name         = aws_cloudwatch_log_metric_filter.app_errors.metric_transformation[0].name
+  statistic           = "Sum"
+  period              = 900
+  evaluation_periods  = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 3
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
+}
+
+# Mail, from the SES region: the metrics the dashboard's mail graph draws. The
+# alarms sit in that region and notify the topic in this one, as AWS's
+# guidance for alarms across Regions describes, and the topic's default policy
+# admits publishers from this account. After the first apply, set one to
+# ALARM to see the mail arrive:
+#   aws cloudwatch set-alarm-state --region ap-south-1 --alarm-name <name> \
+#     --state-value ALARM --state-reason test
+# A complaint is rare and counts against the account's sending reputation, so
+# one is enough; a bounce is usually a mistyped address, so it takes a few in
+# an hour.
+resource "aws_cloudwatch_metric_alarm" "ses" {
+  provider = aws.ses
+  for_each = {
+    complaints = { metric = "Complaint", threshold = 1, description = "An email was reported as spam. Complaints count against the account's sending reputation." }
+    bounces    = { metric = "Bounce", threshold = 3, description = "3 or more emails bounced in an hour, which puts SES's production access at risk if it goes on." }
+  }
+  alarm_name          = "${local.name}-ses-${each.key}"
+  alarm_description   = each.value.description
+  namespace           = "AWS/SES"
+  metric_name         = each.value.metric
+  statistic           = "Sum"
+  period              = 3600
+  evaluation_periods  = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = each.value.threshold
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
+}
+
+# EventBridge gave up delivering an event to a target: a consumer's queue
+# never got it, and nothing else says so. EventBridge publishes
+# FailedInvocations only when it is not zero. An alarm cannot use the SEARCH
+# the dashboard's graph does, so the first asks a Metrics Insights query for
+# the sum of the metric over every rule on every bus in the region. That holds
+# the dashboard's series (EventBusName and RuleName) and does not depend on
+# which dimensions EventBridge puts on a custom bus's rules: its reference
+# lists RuleName alone for this metric, and a dimension set that missed would
+# leave the alarm silent. The second watches the one rule OpenTofu makes, the
+# SES forwarder on the SES region's default bus, where the metric's only
+# dimension is RuleName.
+resource "aws_cloudwatch_metric_alarm" "event_deliveries_failed" {
+  alarm_name          = "${local.name}-eventbridge-failed-invocations"
+  alarm_description   = "EventBridge gave up delivering an event to a target, so a consumer's queue never got it. Look at the rule's target and the queue's policy."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
+
+  metric_query {
+    id          = "failed"
+    expression  = "SELECT SUM(FailedInvocations) FROM \"AWS/Events\""
+    period      = 300
+    return_data = true
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "ses_feedback_forwarding_failed" {
+  provider            = aws.ses
+  alarm_name          = "${local.name}-ses-feedback-forwarding"
+  alarm_description   = "SES's bounce and complaint events are not reaching ${var.aws_region}'s bus, so email's suppression list stops learning of them."
+  namespace           = "AWS/Events"
+  metric_name         = "FailedInvocations"
+  dimensions          = { RuleName = aws_cloudwatch_event_rule.ses_forward.name }
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
+}
+
+# Bedrock embeds, reranks and answers for rag. A throttled call is refused,
+# not queued, and the SDK's own retries hide a single one, so this asks for
+# throttling in two 5-minute periods running, over every model and dimension
+# set, which includes the dashboard's search on ModelId.
+resource "aws_cloudwatch_metric_alarm" "bedrock_throttles" {
+  alarm_name          = "${local.name}-bedrock-throttles"
+  alarm_description   = "Bedrock throttled calls in two 5-minute periods running: rag's embedding, reranking or answering is being refused for capacity or quota."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
+
+  metric_query {
+    id          = "throttles"
+    expression  = "SELECT SUM(InvocationThrottles) FROM \"AWS/Bedrock\""
+    period      = 300
+    return_data = true
+  }
+}

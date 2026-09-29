@@ -508,7 +508,11 @@ provider refuses or apps does not recognize.
   slower than 500 ms are logged to `/aws/rds/instance/oryxa-production/postgresql`.
 - **Alarms** mail `alarm_email`: no running task, CPU or memory high, database
   CPU, storage, memory or connections, a queue backing up, anything in a
-  dead-letter queue, the connector instance failing its checks.
+  dead-letter queue, the connector instance failing its checks, three or more
+  application errors in 15 minutes, an SES complaint or a few bounces in an
+  hour, EventBridge giving up on a delivery (including the forwarding of SES's
+  events), and Bedrock throttling. The three about mail are in ap-south-1,
+  beside SES; the rest are in us-west-2.
 
 A shell in the running task: `aws ecs execute-command --cluster
 oryxa-production --task <id> --container oryxa --interactive --command sh`

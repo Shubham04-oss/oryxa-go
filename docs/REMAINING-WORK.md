@@ -518,10 +518,11 @@ service that fails without them.
 Found by the 2026-09-28 launch review, each checked against the files or the
 account:
 
-- **An alarm on errors.** Nothing alarms on the application's own errors: a
-  TypeSafe key that no longer worked failed every Jev call for four days, and
-  only the logs said so. A metric filter on `level = "ERROR"` in
-  `/oryxa-production/app`, with an alarm, would have caught it.
+- **An alarm on errors.** Written and not applied. Nothing alarmed on the
+  application's own errors: a TypeSafe key that no longer worked failed every
+  Jev call for four days, and only the logs said so. `hardening.tf` now
+  counts `level = "ERROR"` in `/oryxa-production/app` and alarms on 3 in 15
+  minutes.
 - **CI runs every database suite.** `ci.yml` names a test database for eight
   services; knowledge, files, realtime and the outbox skip their integration
   tests in CI, while every merge now deploys.
@@ -545,8 +546,8 @@ account:
   turns healthy, not a migration that runs and does damage, and which builds
   are safe to roll back to is kept in prose, release by release.
 - **Alarms on what is only graphed.** SES bounces and complaints, EventBridge
-  failed invocations and Bedrock throttling are on the dashboard with no
-  alarm, and every alarm mails one address.
+  failed invocations and Bedrock throttling are now alarms, written and not
+  applied (`hardening.tf`). Still open: every alarm mails one address.
 - **Smaller.** The RDS log group never expires, and nothing limits the rate
   of sign-in attempts at Cloudflare. The task role's Cognito statement, which
   allowed `cognito-idp:*` on every pool, is written and not applied:
