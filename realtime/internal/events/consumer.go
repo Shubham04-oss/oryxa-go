@@ -488,6 +488,11 @@ func noteFor(data json.RawMessage) (note requests.Note, skipped string, err erro
 	case changed.RequesterUserID == changed.TargetUserID:
 		// A conversation is between two people.
 		return note, "it is between one member's own agents", nil
+	case changed.TeamspaceID != "":
+		// A request made in a teamspace is shown by the side conversation the two
+		// people have there, which is the place a teammate looks for it; a line in
+		// their direct message as well would say it twice.
+		return note, "it was made in a teamspace, where a side conversation shows it", nil
 	case !known:
 		return note, "no note says its status " + strconv.Quote(changed.Status), nil
 	case !requests.ValidOrigin(origin):

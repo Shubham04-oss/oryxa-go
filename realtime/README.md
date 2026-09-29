@@ -161,6 +161,7 @@ A pending or approved request past its expiry is `expired` when Go reads it. No 
 Two agents events about a request are not consumed: `agents.interaction.lease.revoked.v1` and `agents.interaction.secret.viewed.v1`. Neither changes a request's state, which is all a note says, and the Requests view shows them itself. An event that is one of the three but has nothing to note is logged as `realtime request not noted` at warning level, and its message is deleted, since sending it again would say no more:
 
 - a request between one member's own agents, which is no conversation between two people;
+- a request made in a teamspace, whose side conversation between the two people is where it is shown, and which a line in their direct message as well would only repeat;
 - a status no note says (`expired`, which no event carries, or one a later build adds);
 - an origin that is not a short lowercase word;
 - an id that a conversation's name cannot hold.
