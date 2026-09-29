@@ -548,6 +548,7 @@ func (server *Server) rollback(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusInternalServerError, "saved workspace file is invalid")
 		return
 	}
+	document = rollbackOrganizationDefaults(document)
 	server.applyDocument(writer, request, access, document, body.Approved, true)
 }
 
@@ -588,6 +589,7 @@ func (server *Server) rollbackPlan(writer http.ResponseWriter, request *http.Req
 		writeError(writer, http.StatusInternalServerError, "saved workspace file is invalid")
 		return
 	}
+	document = rollbackOrganizationDefaults(document)
 	client, err := server.client(access)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "workspace API URL is invalid")

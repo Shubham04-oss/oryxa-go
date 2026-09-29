@@ -180,7 +180,11 @@ func TestWorkspaceDirectoryMappingPlanApplyAndPrune(t *testing.T) {
 }
 
 func fakeOrganizationAPI(extraMember bool) *httptest.Server {
+	var mu sync.Mutex
+	organization := runtime.Organization{ID: "org1", Name: "Acme", Slug: "acme", Domains: []string{"acme.com"}, Timezone: "UTC"}
 	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
 		writer.Header().Set("Content-Type", "application/json")
 		if request.Header.Get("Authorization") != "Bearer owner-token" {
 			writer.WriteHeader(http.StatusUnauthorized)
@@ -190,9 +194,31 @@ func fakeOrganizationAPI(extraMember bool) *httptest.Server {
 		case "/v1/auth/me":
 			_, _ = io.WriteString(writer, `{"user":{"id":"u1","email":"owner@acme.com"}}`)
 		case "/v1/organizations":
-			_, _ = io.WriteString(writer, `{"organizations":[{"id":"org1","name":"Acme","slug":"acme","domains":["acme.com"],"timezone":"UTC"}]}`)
+			_ = json.NewEncoder(writer).Encode(map[string]any{"organizations": []runtime.Organization{organization}})
 		case "/v1/organizations/org1":
-			_, _ = io.WriteString(writer, `{"organization":{"id":"org1","name":"Acme","slug":"acme","domains":["acme.com"],"timezone":"UTC"},"membership":{"organization_id":"org1","user_id":"u1","role":"owner"}}`)
+			if request.Method == http.MethodPatch {
+				var update struct {
+					Name          string    `json:"name"`
+					Domains       *[]string `json:"domains"`
+					Timezone      *string   `json:"timezone"`
+					GuestsAllowed *bool     `json:"guests_allowed"`
+				}
+				if err := json.NewDecoder(request.Body).Decode(&update); err != nil {
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				organization.Name = update.Name
+				if update.Domains != nil {
+					organization.Domains = *update.Domains
+				}
+				if update.Timezone != nil {
+					organization.Timezone = *update.Timezone
+				}
+				if update.GuestsAllowed != nil {
+					organization.GuestsAllowed = *update.GuestsAllowed
+				}
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"organization": organization, "membership": map[string]string{"organization_id": "org1", "user_id": "u1", "role": "owner"}})
 		case "/v1/organizations/org1/members":
 			if extraMember {
 				_, _ = io.WriteString(writer, `{"members":[{"user_id":"u1","email":"owner@acme.com","role":"owner"},{"user_id":"u2","email":"other@acme.com","role":"member"}]}`)
@@ -375,7 +401,7 @@ func TestWorkspaceRollbackRestoresEarlierFileAsNewVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	response.Body.Close()
-	if result.Version != 3 || len(repo.versions) != 3 || !bytes.Equal(repo.versions[0].Document, repo.versions[2].Document) {
+	if result.Version != 3 || len(repo.versions) != 3 || !bytes.Equal(rollbackExpected(t, repo.versions[0].Document), repo.versions[2].Document) {
 		t.Fatalf("rollback result %+v, versions %d", result, len(repo.versions))
 	}
 }
@@ -449,7 +475,7 @@ func TestWorkspaceContextPlanApplyReadAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	response.Body.Close()
-	if response.StatusCode != http.StatusOK || len(plan.Changes) != 4 {
+	if response.StatusCode != http.StatusOK || len(plan.Changes) != 5 {
 		t.Fatalf("rollback plan status=%d plan=%+v", response.StatusCode, plan)
 	}
 	response = workspaceRequest(t, workspace, http.MethodPost, path+":rollback", "owner-token", map[string]any{"to": 1, "approved_plan": plan})
@@ -546,12 +572,12 @@ func TestWorkspacePoliciesApplyAndRollbackAsVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	response.Body.Close()
-	if response.StatusCode != http.StatusOK || len(plan.Changes) != 4 {
+	if response.StatusCode != http.StatusOK || len(plan.Changes) != 5 {
 		t.Fatalf("policy rollback plan status=%d plan=%+v", response.StatusCode, plan)
 	}
 	response = workspaceRequest(t, workspace, http.MethodPost, path+":rollback", "owner-token", map[string]any{"to": 1, "approved_plan": plan})
 	response.Body.Close()
-	if response.StatusCode != http.StatusOK || len(repo.versions) != 3 || !bytes.Equal(repo.versions[0].Document, repo.versions[2].Document) {
+	if response.StatusCode != http.StatusOK || len(repo.versions) != 3 || !bytes.Equal(rollbackExpected(t, repo.versions[0].Document), repo.versions[2].Document) {
 		t.Fatalf("policy rollback status=%d versions=%d", response.StatusCode, len(repo.versions))
 	}
 }
