@@ -236,7 +236,7 @@ func (server *Server) previous(ctx context.Context, organizationID string) (spec
 	if err != nil {
 		return spec.Document{}, err
 	}
-	return spec.Parse(latest.Document)
+	return spec.ParseStored(latest.Document)
 }
 
 func (server *Server) documentPlan(ctx context.Context, organizationID string, document spec.Document, state runtime.Snapshot, replaceContext bool) (runtime.Plan, spec.Document, error) {
@@ -420,7 +420,7 @@ func (server *Server) pull(writer http.ResponseWriter, request *http.Request) {
 	}
 	latest, err := server.repository.Latest(request.Context(), request.PathValue("organizationID"))
 	if err == nil {
-		previous, parseErr := spec.Parse(latest.Document)
+		previous, parseErr := spec.ParseStored(latest.Document)
 		if parseErr != nil {
 			writeError(writer, http.StatusInternalServerError, "saved workspace file is invalid")
 			return
@@ -543,7 +543,7 @@ func (server *Server) rollback(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusInternalServerError, "workspace version could not be read")
 		return
 	}
-	document, err := spec.Parse(version.Document)
+	document, err := spec.ParseStored(version.Document)
 	if err != nil || document.Metadata.Organization != access.Slug {
 		writeError(writer, http.StatusInternalServerError, "saved workspace file is invalid")
 		return
@@ -584,7 +584,7 @@ func (server *Server) rollbackPlan(writer http.ResponseWriter, request *http.Req
 		writeError(writer, http.StatusInternalServerError, "workspace version could not be read")
 		return
 	}
-	document, err := spec.Parse(version.Document)
+	document, err := spec.ParseStored(version.Document)
 	if err != nil || document.Metadata.Organization != access.Slug {
 		writeError(writer, http.StatusInternalServerError, "saved workspace file is invalid")
 		return
@@ -691,7 +691,7 @@ func (server *Server) status(writer http.ResponseWriter, request *http.Request) 
 		writeError(writer, http.StatusInternalServerError, "workspace history could not be read")
 		return
 	}
-	document, err := spec.Parse(latest.Document)
+	document, err := spec.ParseStored(latest.Document)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "saved workspace file is invalid")
 		return
