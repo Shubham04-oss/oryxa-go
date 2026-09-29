@@ -14,7 +14,7 @@ import (
 
 const Name = "workspace"
 
-var Definition = host.Definition{Name: Name, Migrate: Migrate, Mount: Mount}
+var Definition = host.Definition{Name: Name, URLVariable: "WORKSPACE_URL", Migrate: Migrate, Mount: Mount}
 
 func Migrate(ctx context.Context, platform host.Platform) error {
 	if platform.Database == nil {

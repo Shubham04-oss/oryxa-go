@@ -43,6 +43,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/workspaceclient"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
@@ -181,6 +182,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	registryStore := managedagents.NewStore(platform.Database)
 	interactionStore := agentinteractions.NewStore(platform.Database)
 	var organizationDirectory agents.Directory
+	var organizationContext agents.ContextDirectory
 	if settings.TeamsURL != "" {
 		organizationDirectory, err = directoryclient.New(settings.TeamsURL, &http.Client{Transport: observability.Transport(nil)}, registryStore)
 		if err != nil {
@@ -189,6 +191,13 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		}
 	} else {
 		logger.Warn("TEAMS_URL is not set: agents cannot discover people or teams")
+	}
+	if settings.WorkspaceURL != "" {
+		organizationContext, err = workspaceclient.New(settings.WorkspaceURL, &http.Client{Timeout: 15 * time.Second, Transport: observability.Transport(nil)})
+		if err != nil {
+			sessionStore.Close()
+			return host.Service{}, err
+		}
 	}
 	// One agent-token exchange serves Krude's tools and the request ledger,
 	// which reads a request's teamspace again as its addressed member.
@@ -247,7 +256,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	agentSystemBinding := agents.NewAgentSystemBinding()
 	assemblyOptions := assembly.Options{
 		Settings: settings, AWS: platform.AWS, Google: platform.Google, Logger: logger,
-		Directory: organizationDirectory, AgentSystem: agentSystemBinding, Tokens: memberTokens,
+		Directory: organizationDirectory, Context: organizationContext, AgentSystem: agentSystemBinding, Tokens: memberTokens,
 	}
 	// interactionService and teamspaceService are concrete *Service pointers,
 	// nil when TEAMS_URL is unset. Boxed directly into these interface fields

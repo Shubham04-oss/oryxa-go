@@ -4,6 +4,7 @@ package main
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -26,8 +27,12 @@ type options struct {
 	api, org, file, output, preset, domains string
 	json, dryRun, noInput, yes              bool
 	noBrowser                               bool
+	agentHelp                               bool
 	to                                      int64
 }
+
+//go:embed agent-help.md
+var agentHelp string
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
 	if len(args) == 0 || slices.Contains([]string{"help", "-h", "--help"}, args[0]) {
@@ -50,6 +55,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	flags.BoolVar(&opts.dryRun, "dry-run", false, "show changes without applying")
 	flags.BoolVar(&opts.noInput, "no-input", false, "never prompt for confirmation")
 	flags.BoolVar(&opts.noBrowser, "no-browser", false, "print sign-in URL without opening a browser")
+	flags.BoolVar(&opts.agentHelp, "agent-help", false, "print the coding-agent workspace mapping guide")
 	flags.BoolVar(&opts.yes, "yes", false, "confirm setup plan or overwrite an output file")
 	flags.Int64Var(&opts.to, "to", 0, "workspace version to restore (rollback)")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -58,6 +64,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	if flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "unexpected argument:", flags.Arg(0))
 		return 3
+	}
+	if command == "agent-help" || (command == "setup" && opts.agentHelp) {
+		if opts.json {
+			return report(stdout, true, map[string]string{"instructions": agentHelp})
+		}
+		_, err := io.WriteString(stdout, agentHelp)
+		if err != nil {
+			return reportError(err, stderr)
+		}
+		return 0
 	}
 	if command == "init" {
 		return initCommand(ctx, opts, stdout, stderr, getenv)
@@ -143,11 +159,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if state.Organization == nil {
 			return reportError(fmt.Errorf("organization was not found"), stderr)
 		}
-		document, err := client.WorkspaceVersion(ctx, state.Organization.ID, opts.to)
-		if err != nil {
-			return reportError(err, stderr)
-		}
-		plan, err := client.WorkspacePlan(ctx, state.Organization.ID, document)
+		plan, err := client.WorkspaceRollbackPlan(ctx, state.Organization.ID, opts.to)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -292,7 +304,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 
 func workspacePlan(ctx context.Context, client *runtime.Client, document spec.Document, state runtime.Snapshot) (runtime.Plan, error) {
 	if state.Organization == nil {
-		return runtime.BuildPlan(document, state)
+		servicePlan, err := runtime.BuildPlan(document, state)
+		if err != nil {
+			return runtime.Plan{}, err
+		}
+		_, contextPlan, err := runtime.MergeContext(spec.Document{}, document, state, false)
+		if err != nil {
+			return runtime.Plan{}, err
+		}
+		return runtime.CombinePlans(servicePlan, contextPlan), nil
 	}
 	return client.WorkspacePlan(ctx, state.Organization.ID, document)
 }
@@ -489,6 +509,7 @@ func usage(writer io.Writer) {
 
 Commands:
   setup      browser sign-in, plan and apply in one process
+  agent-help print the coding-agent workspace mapping guide
   login      browser sign-in and show the current account (no saved session)
   init       write a starting oryxa.yaml to stdout or -o
   validate   validate a workspace file without contacting Oryxa

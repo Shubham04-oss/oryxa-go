@@ -50,7 +50,9 @@ func New(repository Repository, apiURL string) (*Server, error) {
 	server.handle("GET /v1/organizations/{organizationID}/workspace/versions", server.versions)
 	server.handle("GET /v1/organizations/{organizationID}/workspace/versions/{version}", server.version)
 	server.handle("POST /v1/organizations/{organizationID}/workspace:rollback", server.rollback)
+	server.handle("POST /v1/organizations/{organizationID}/workspace:rollback-plan", server.rollbackPlan)
 	server.handle("GET /v1/organizations/{organizationID}/workspace/status", server.status)
+	server.handle("GET /v1/organizations/{organizationID}/workspace/context", server.context)
 	return server, nil
 }
 
@@ -73,6 +75,10 @@ type actor struct {
 }
 
 func (server *Server) authorize(writer http.ResponseWriter, request *http.Request) (actor, bool) {
+	return server.authorizeRole(writer, request, true)
+}
+
+func (server *Server) authorizeRole(writer http.ResponseWriter, request *http.Request, admin bool) (actor, bool) {
 	parts := strings.Fields(request.Header.Get("Authorization"))
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
 		writeError(writer, http.StatusUnauthorized, "a member bearer token is required")
@@ -116,7 +122,7 @@ func (server *Server) authorize(writer http.ResponseWriter, request *http.Reques
 		writeError(writer, http.StatusBadGateway, "auth returned an invalid organization")
 		return actor{}, false
 	}
-	if access.Agent || (access.Membership.Role != "owner" && access.Membership.Role != "admin") {
+	if admin && (access.Agent || (access.Membership.Role != "owner" && access.Membership.Role != "admin")) {
 		writeError(writer, http.StatusForbidden, "an organization owner or admin is required")
 		return actor{}, false
 	}
@@ -188,7 +194,7 @@ func (server *Server) plan(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadGateway, err.Error())
 		return
 	}
-	plan, err := runtime.BuildPlan(document, state)
+	plan, _, err := server.documentPlan(request.Context(), request.PathValue("organizationID"), document, state, false)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err.Error())
 		return
@@ -205,10 +211,37 @@ func (server *Server) apply(writer http.ResponseWriter, request *http.Request) {
 	if !ok {
 		return
 	}
-	server.applyDocument(writer, request, access, document, body.Approved)
+	server.applyDocument(writer, request, access, document, body.Approved, false)
 }
 
-func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Request, access actor, document spec.Document, approved runtime.Plan) {
+func (server *Server) previous(ctx context.Context, organizationID string) (spec.Document, error) {
+	latest, err := server.repository.Latest(ctx, organizationID)
+	if errors.Is(err, store.ErrVersionNotFound) {
+		return spec.Document{}, nil
+	}
+	if err != nil {
+		return spec.Document{}, err
+	}
+	return spec.Parse(latest.Document)
+}
+
+func (server *Server) documentPlan(ctx context.Context, organizationID string, document spec.Document, state runtime.Snapshot, replaceContext bool) (runtime.Plan, spec.Document, error) {
+	previous, err := server.previous(ctx, organizationID)
+	if err != nil {
+		return runtime.Plan{}, spec.Document{}, err
+	}
+	servicePlan, err := runtime.BuildPlan(document, state)
+	if err != nil {
+		return runtime.Plan{}, spec.Document{}, err
+	}
+	effective, contextPlan, err := runtime.MergeContext(previous, document, state, replaceContext)
+	if err != nil {
+		return runtime.Plan{}, spec.Document{}, err
+	}
+	return runtime.CombinePlans(servicePlan, contextPlan), effective, nil
+}
+
+func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Request, access actor, document spec.Document, approved runtime.Plan, replaceContext bool) {
 	client, err := server.client(access)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "workspace API URL is invalid")
@@ -224,21 +257,26 @@ func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Re
 		if state.Organization == nil || state.Organization.ID != request.PathValue("organizationID") {
 			return fmt.Errorf("workspace organization is not available")
 		}
-		plan, err := runtime.BuildPlan(document, state)
+		plan, effective, err := server.documentPlan(request.Context(), state.Organization.ID, document, state, replaceContext)
 		if err != nil {
 			return err
 		}
 		if runtime.RemovalsDiffer(plan, approved) {
 			return errApprovalChanged
 		}
-		remaining, err = runtime.ApplyApproved(request.Context(), client, document, approved)
+		remaining, err = runtime.ApplyApproved(request.Context(), client, document, runtime.RuntimeRemovals(approved))
 		if err != nil {
 			return err
 		}
 		if len(remaining.Changes) != 0 {
 			return nil
 		}
-		encoded, err := document.YAML()
+		_, contextPlan, err := runtime.MergeContext(effective, effective, state, false)
+		if err != nil {
+			return err
+		}
+		remaining = runtime.CombinePlans(remaining, contextPlan)
+		encoded, err := effective.YAML()
 		if err != nil {
 			return err
 		}
@@ -298,6 +336,8 @@ func (server *Server) pull(writer http.ResponseWriter, request *http.Request) {
 			document.People.Prune = previous.People.Prune
 		}
 		document.Teams.Prune = previous.Teams.Prune
+		document.Ownership = previous.Ownership
+		document.OrgChart = previous.OrgChart
 	} else if !errors.Is(err, store.ErrVersionNotFound) {
 		writeError(writer, http.StatusInternalServerError, "workspace history could not be read")
 		return
@@ -385,7 +425,121 @@ func (server *Server) rollback(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusInternalServerError, "saved workspace file is invalid")
 		return
 	}
-	server.applyDocument(writer, request, access, document, body.Approved)
+	server.applyDocument(writer, request, access, document, body.Approved, true)
+}
+
+func (server *Server) rollbackPlan(writer http.ResponseWriter, request *http.Request) {
+	access, ok := server.authorize(writer, request)
+	if !ok {
+		return
+	}
+	var body struct {
+		To int64 `json:"to"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(request.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil || body.To <= 0 {
+		writeError(writer, http.StatusBadRequest, "a positive to version is required")
+		return
+	}
+	var extra any
+	if decoder.Decode(&extra) != io.EOF {
+		writeError(writer, http.StatusBadRequest, "one request body is required")
+		return
+	}
+	version, err := server.repository.AtVersion(request.Context(), request.PathValue("organizationID"), body.To)
+	if errors.Is(err, store.ErrVersionNotFound) {
+		writeError(writer, http.StatusNotFound, "workspace version was not found")
+		return
+	}
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "workspace version could not be read")
+		return
+	}
+	document, err := spec.Parse(version.Document)
+	if err != nil || document.Metadata.Organization != access.Slug {
+		writeError(writer, http.StatusInternalServerError, "saved workspace file is invalid")
+		return
+	}
+	client, err := server.client(access)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "workspace API URL is invalid")
+		return
+	}
+	state, err := client.Snapshot(request.Context(), access.Slug)
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, err.Error())
+		return
+	}
+	plan, _, err := server.documentPlan(request.Context(), request.PathValue("organizationID"), document, state, true)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(writer, http.StatusOK, plan)
+}
+
+func (server *Server) context(writer http.ResponseWriter, request *http.Request) {
+	access, ok := server.authorizeRole(writer, request, false)
+	if !ok {
+		return
+	}
+	previous, err := server.previous(request.Context(), request.PathValue("organizationID"))
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "workspace context could not be read")
+		return
+	}
+	path := "/v1/organizations/" + url.PathEscape(request.PathValue("organizationID")) + "/directory"
+	membersRequest, err := http.NewRequestWithContext(request.Context(), http.MethodGet, server.apiURL+path, nil)
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, "members could not be reached")
+		return
+	}
+	membersRequest.Header.Set("Authorization", "Bearer "+access.Token)
+	response, err := server.http.Do(membersRequest)
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, "members could not be reached")
+		return
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		writeError(writer, http.StatusBadGateway, "members could not be read")
+		return
+	}
+	var members struct {
+		Members []struct {
+			Email string `json:"email"`
+		} `json:"members"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&members); err != nil {
+		writeError(writer, http.StatusBadGateway, "members response was invalid")
+		return
+	}
+	joined := map[string]bool{}
+	for _, member := range members.Members {
+		joined[strings.ToLower(member.Email)] = true
+	}
+	owners := make([]spec.OwnerHint, 0)
+	for _, hint := range previous.Ownership.Items {
+		if joined[hint.Owner] {
+			owners = append(owners, hint)
+		}
+	}
+	chart := spec.OrgChart{Relationships: []spec.Relationship{}, Authority: []string{}, Executives: []string{}}
+	if previous.OrgChart != nil {
+		chart.Authority = previous.OrgChart.Authority
+		for _, relation := range previous.OrgChart.Relationships {
+			if joined[relation.From] && joined[relation.To] {
+				chart.Relationships = append(chart.Relationships, relation)
+			}
+		}
+		for _, email := range previous.OrgChart.Executives {
+			if joined[email] {
+				chart.Executives = append(chart.Executives, email)
+			}
+		}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"ownership": owners, "orgChart": chart})
 }
 
 func (server *Server) status(writer http.ResponseWriter, request *http.Request) {
@@ -417,11 +571,16 @@ func (server *Server) status(writer http.ResponseWriter, request *http.Request) 
 		writeError(writer, http.StatusBadGateway, err.Error())
 		return
 	}
-	plan, err := runtime.BuildPlan(document, state)
+	servicePlan, err := runtime.BuildPlan(document, state)
 	if err != nil {
 		writeError(writer, http.StatusBadGateway, err.Error())
 		return
 	}
+	_, contextPlan, err := runtime.MergeContext(document, document, state, false)
+	if err != nil {
+		contextPlan.NeedsHuman = []runtime.HumanStep{{Step: "context.review", Why: err.Error()}}
+	}
+	plan := runtime.CombinePlans(servicePlan, contextPlan)
 	status := "done"
 	if len(plan.NeedsHuman) > 0 {
 		status = "needs_human"

@@ -5,12 +5,15 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"strings"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/runtime"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 )
 
 //go:embed toolboxes/directory.md
@@ -73,8 +76,18 @@ type Directory interface {
 	FindAgents(context.Context, string, string, string, int) ([]DirectoryAgent, error)
 }
 
+type DirectoryContext struct {
+	Ownership []spec.OwnerHint `json:"ownership"`
+	OrgChart  spec.OrgChart    `json:"orgChart"`
+}
+
+type ContextDirectory interface {
+	Load(context.Context, string, string) (DirectoryContext, error)
+}
+
 type DirectoryConfig struct {
 	Directory Directory
+	Context   ContextDirectory
 	Tokens    memberauth.TokenSource
 }
 
@@ -84,7 +97,7 @@ func DirectoryToolbox(config DirectoryConfig) (Toolbox, error) {
 	if config.Directory == nil {
 		return Toolbox{}, errors.New("agents: DirectoryToolbox requires a directory")
 	}
-	tools := directoryTools{directory: config.Directory, tokens: config.Tokens}
+	tools := directoryTools{directory: config.Directory, context: config.Context, tokens: config.Tokens}
 	load, err := functiontool.New(functiontool.Config{
 		Name: "directory_load", Description: "Loads the caller-visible organization directory: people, team tree, and each person's active primary and specialist agents.",
 	}, tools.load)
@@ -109,16 +122,46 @@ func DirectoryToolbox(config DirectoryConfig) (Toolbox, error) {
 	if err != nil {
 		return Toolbox{}, err
 	}
+	available := []tool.Tool{load, people, teams, agentsTool}
+	if config.Context != nil {
+		owners, err := functiontool.New(functiontool.Config{
+			Name: "directory_find_owners", Description: "Finds joined members explicitly mapped as owners of a topic, system, channel, or tag in the workspace file.",
+		}, tools.owners)
+		if err != nil {
+			return Toolbox{}, err
+		}
+		above, err := functiontool.New(functiontool.Config{
+			Name: "directory_is_above", Description: "Checks whether one joined member is above another in the configured organization chart.",
+		}, tools.above)
+		if err != nil {
+			return Toolbox{}, err
+		}
+		available = append(available, owners, above)
+	}
 	return Toolbox{
 		Name: "directory", Description: "The member's organization: people, the visible team tree, and active member-owned agents, with semantic lookup by identity or purpose.",
 		Instructions: directoryInstructions,
-		Toolset:      fixedTools{name: "directory", tools: []tool.Tool{load, people, teams, agentsTool}},
+		Toolset:      fixedTools{name: "directory", tools: available},
 	}, nil
 }
 
 type directoryTools struct {
 	directory Directory
+	context   ContextDirectory
 	tokens    memberauth.TokenSource
+}
+
+type directoryRelationQuery struct {
+	From string `json:"from" jsonschema:"Email of the person who might be above."`
+	To   string `json:"to" jsonschema:"Email of the person who might be below."`
+}
+
+type directoryAboveResult struct {
+	Above bool `json:"above"`
+}
+
+type directoryOwnersResult struct {
+	Ownership []spec.OwnerHint `json:"ownership"`
 }
 
 type directoryQuery struct {
@@ -192,6 +235,47 @@ func (tools directoryTools) agents(ctx agent.Context, args directoryQuery) (dire
 		return directoryAgentsResult{}, directoryError(err)
 	}
 	return directoryAgentsResult{Agents: result}, nil
+}
+
+func (tools directoryTools) owners(ctx agent.Context, args directoryQuery) (directoryOwnersResult, error) {
+	member, token, err := tools.auth(ctx)
+	if err != nil {
+		return directoryOwnersResult{}, err
+	}
+	query := strings.ToLower(strings.TrimSpace(args.Query))
+	if query == "" {
+		return directoryOwnersResult{}, fmt.Errorf("an ownership query is required")
+	}
+	result, err := tools.context.Load(ctx, member.OrganizationID, token)
+	if err != nil {
+		return directoryOwnersResult{}, directoryError(err)
+	}
+	found := make([]spec.OwnerHint, 0)
+	for _, hint := range result.Ownership {
+		parts := append([]string{hint.What, hint.System, hint.Channel}, hint.Tags...)
+		for _, part := range parts {
+			if strings.Contains(strings.ToLower(part), query) {
+				found = append(found, hint)
+				break
+			}
+		}
+		if len(found) >= 20 {
+			break
+		}
+	}
+	return directoryOwnersResult{Ownership: found}, nil
+}
+
+func (tools directoryTools) above(ctx agent.Context, args directoryRelationQuery) (directoryAboveResult, error) {
+	member, token, err := tools.auth(ctx)
+	if err != nil {
+		return directoryAboveResult{}, err
+	}
+	result, err := tools.context.Load(ctx, member.OrganizationID, token)
+	if err != nil {
+		return directoryAboveResult{}, directoryError(err)
+	}
+	return directoryAboveResult{Above: runtime.Above(result.OrgChart, strings.ToLower(strings.TrimSpace(args.From)), strings.ToLower(strings.TrimSpace(args.To)))}, nil
 }
 
 func directoryError(err error) error {

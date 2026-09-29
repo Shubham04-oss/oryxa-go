@@ -61,6 +61,7 @@ type Options struct {
 	// Directory is the caller-visible people, team and agent directory. When
 	// nil, the directory toolbox is absent.
 	Directory agents.Directory
+	Context   agents.ContextDirectory
 	// Interactions is the durable cross-user request ledger. When nil, agents
 	// can discover one another but cannot exchange requests.
 	Interactions agents.InteractionService
@@ -371,7 +372,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 	}
 	if options.Directory != nil {
-		directoryToolbox, err := agents.DirectoryToolbox(agents.DirectoryConfig{Directory: options.Directory, Tokens: tokens})
+		directoryToolbox, err := agents.DirectoryToolbox(agents.DirectoryConfig{Directory: options.Directory, Context: options.Context, Tokens: tokens})
 		if err != nil {
 			return fail("organization directory toolbox", err)
 		}

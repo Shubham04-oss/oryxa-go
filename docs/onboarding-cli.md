@@ -1,9 +1,10 @@
 # Workspace CLI: first implementation
 
-This implements the organization, people, teams, and organization-agent slice
-of [the onboarding design](design/onboarding.md). Slack installation is a
-manual prerequisite. The remaining sections in the design still need runtime
-owners and are rejected before an apply makes any change.
+This implements the organization, people, teams, ownership, org chart, and
+organization-agent slice of [the onboarding design](design/onboarding.md).
+Slack installation is a manual prerequisite. The remaining sections in the
+design still need runtime owners and are rejected before an apply makes any
+change.
 
 Build the standalone command from the repository root:
 
@@ -17,6 +18,7 @@ Create a starting file and inspect it:
 ```sh
 ./bin/oryxa init --org acme --domains acme.com -o oryxa.yaml
 ./bin/oryxa validate -f oryxa.yaml
+./bin/oryxa setup --agent-help        # mapping instructions for your coding agent
 ```
 
 After filling in members and teams, run the one-process setup flow. It opens
@@ -81,6 +83,9 @@ The current file accepts these settings:
 | `teams[].name`, `.members`, `.leads` | Create teams, add joined members, and grant team-admin rights to leads |
 | `teams: {items: [...], prune: true}` | Remove omitted teams and memberships after listing every removal for confirmation |
 | `agents.organization.enabled`, `.displayName`, `.description`, `.instructions` | Reconcile the existing organization agent; `plan` reads effective defaults without creating it |
+| `ownership[]` | Give agents explicit owner hints for a topic, system, or channel; only joined members appear in the agent's read view |
+| `orgChart.relationships`, `.authority`, `.executives` | Supply explicit reporting and authority relationships for agents to query |
+| `ownership: {items: [...], prune: true}`, `orgChart.prune: true` | Remove omitted owner hints or chart facts after a reviewed removal plan |
 
 The parser refuses unknown keys, duplicate members or teams, unrecognized
 roles, and unsupported sections. Omitting a person or team never removes it
@@ -89,8 +94,10 @@ is still supported.
 Owner role transfers are not yet supported. `preset` is accepted in the file
 so the file shape matches the design; its consent, retention, and security
 defaults do not take effect yet. Organization timezone is stored but the
-scheduler does not yet read it. Directory sync, org chart, governance, safety,
-tool allowlists, external search, notifications, retention, security policy,
-ownership hints, and personal-agent defaults remain unimplemented. A local
+scheduler does not yet read it. The agent service reads ownership and chart
+context when `WORKSPACE_URL` is set; the all-in-one host supplies that URL
+automatically. Directory sync, governance, safety, tool allowlists, external
+search, notifications, retention, security policy, and personal-agent defaults
+remain unimplemented. A local
 `go test ./...` run exercises the code paths, but PostgreSQL migrations and a
 live deployment still need integration verification.

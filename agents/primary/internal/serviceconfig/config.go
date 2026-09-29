@@ -90,6 +90,9 @@ type Config struct {
 	// TeamsURL is Teams' own URL. When set, primary and specialist agents get
 	// a read-only organization directory toolbox.
 	TeamsURL string
+	// WorkspaceURL exposes read-only ownership and org-chart context to
+	// member agents through the workspace service.
+	WorkspaceURL string
 	// KnowledgeMinRelevance is the reranker relevance below which Krude's
 	// knowledge search leaves a passage out; zero keeps every passage. It is
 	// on the scale of the reranker rag runs (see agents.KnowledgeConfig).
@@ -292,6 +295,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		RagURL:                    strings.TrimSpace(getenv("RAG_URL")),
 		KnowledgeURL:              strings.TrimRight(strings.TrimSpace(getenv("KNOWLEDGE_URL")), "/"),
 		TeamsURL:                  strings.TrimRight(strings.TrimSpace(getenv("TEAMS_URL")), "/"),
+		WorkspaceURL:              strings.TrimRight(strings.TrimSpace(getenv("WORKSPACE_URL")), "/"),
 		KnowledgeMinRelevance:     knowledgeMinRelevance,
 		MemoryAgentEngine:         strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")),
 		MemoryRecalled:            memoryRecalled,

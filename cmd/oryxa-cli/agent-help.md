@@ -1,0 +1,69 @@
+# Prepare an Oryxa workspace file
+
+You are the customer's coding agent. Gather facts from the company sources you
+can access, prepare a reviewable `oryxa.yaml`, and let an organization admin
+review the plan before applying it. Slack installation remains a manual step.
+
+## Map source facts
+
+1. Start with `oryxa init --org SLUG --domains example.com -o oryxa.yaml`.
+   Use `oryxa pull --org SLUG -o current.yaml` for an existing organization.
+2. Put canonical lowercase work emails in `people.members`. Map administrator
+   and owner roles only when the source or admin confirms them. Use `guest:
+   true` for an outside-domain person. Do not invent an email from a name.
+3. Map departments and working groups to `teams`. Put each member's email in
+   `members`; put confirmed team admins in `leads`. A lead is added to the
+   team automatically. A title by itself does not prove a team-admin role.
+4. Map explicit ownership statements to `ownership`: `owner` plus at least
+   one of `what`, `system`, or `channel`. Use `tags` for alternate search
+   terms. One selector set has one owner; raise conflicting claims for review.
+5. Map confirmed reporting or authority edges to `orgChart.relationships`.
+   Each edge has `from`, `relation`, and `to`. `from` is the person above or
+   otherwise related to `to`. List only relation names that confer authority
+   in `orgChart.authority`. Put confirmed top-level executives in
+   `orgChart.executives`. Do not infer authority from team membership alone.
+6. Leave uncertain facts out and ask the admin about them. Keep source evidence
+   and unresolved questions in your review message, not in unsupported YAML
+   fields. Never put passwords, tokens, or secrets in the file or your chat.
+
+Example:
+
+```yaml
+apiVersion: oryxa.in/v1
+kind: Workspace
+metadata:
+  organization: acme
+  domains: [acme.com]
+people:
+  invite: quiet
+  members:
+    - {email: maya@acme.com, role: admin}
+    - {email: sam@acme.com, role: member}
+teams:
+  - name: Engineering
+    members: [maya@acme.com, sam@acme.com]
+    leads: [maya@acme.com]
+ownership:
+  - {owner: sam@acme.com, system: billing, tags: [payments]}
+orgChart:
+  relationships:
+    - {from: maya@acme.com, relation: manages, to: sam@acme.com}
+  authority: [manages]
+  executives: [maya@acme.com]
+```
+
+## Review and apply
+
+Run `oryxa validate -f oryxa.yaml` for schema errors, then `oryxa plan -f
+oryxa.yaml --json` for live identity checks and every proposed change. Show
+the admin the file, source evidence, unresolved questions, and plan. Apply
+with `oryxa apply -f oryxa.yaml` after review. If an invite is pending, wait
+for the person to join and run apply again. Run `oryxa status --org SLUG
+--json` to check the result.
+
+Omission preserves existing people, teams, ownership hints, and chart facts.
+Explicit `prune: true` under the relevant section plans removals and requires
+review. Unsupported sections fail validation before any write. In particular,
+the CLI does not currently configure Slack, external directory providers,
+search providers, governance, safety, retention, or organization-wide tool
+policies.

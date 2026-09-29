@@ -74,6 +74,12 @@ func fakeOrganizationAPI(extraMember bool) *httptest.Server {
 			} else {
 				_, _ = io.WriteString(writer, `{"members":[{"user_id":"u1","email":"owner@acme.com","role":"owner"}]}`)
 			}
+		case "/v1/organizations/org1/directory":
+			if extraMember {
+				_, _ = io.WriteString(writer, `{"members":[{"email":"owner@acme.com"},{"email":"other@acme.com"}]}`)
+			} else {
+				_, _ = io.WriteString(writer, `{"members":[{"email":"owner@acme.com"}]}`)
+			}
 		case "/v1/organizations/org1/invitations":
 			_, _ = io.WriteString(writer, `{"invitations":[]}`)
 		case "/v1/organizations/org1/teams":
@@ -239,5 +245,122 @@ func TestWorkspaceRollbackRestoresEarlierFileAsNewVersion(t *testing.T) {
 	response.Body.Close()
 	if result.Version != 3 || len(repo.versions) != 3 || !bytes.Equal(repo.versions[0].Document, repo.versions[2].Document) {
 		t.Fatalf("rollback result %+v, versions %d", result, len(repo.versions))
+	}
+}
+
+func TestWorkspaceContextPlanApplyReadAndRollback(t *testing.T) {
+	api := fakeOrganizationAPI(true)
+	defer api.Close()
+	repo := &memoryRepository{}
+	server, err := New(repo, api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := httptest.NewServer(server)
+	defer workspace.Close()
+	path := "/v1/organizations/org1/workspace"
+	first := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\nownership: [{owner: owner@acme.com, system: billing}]\norgChart:\n  authority: [manages]\n  executives: [owner@acme.com]\n  relationships: [{from: owner@acme.com, relation: manages, to: other@acme.com}]\n"
+	response := workspaceRequest(t, workspace, http.MethodPost, path+":plan", "owner-token", map[string]string{"document": first})
+	var plan runtime.Plan
+	if err := json.NewDecoder(response.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(plan.Changes) != 4 {
+		t.Fatalf("context plan status=%d plan=%+v", response.StatusCode, plan)
+	}
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": first, "approved_plan": plan})
+	if response.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(response.Body)
+		t.Fatalf("apply status=%d body=%s", response.StatusCode, data)
+	}
+	response.Body.Close()
+	response = workspaceRequest(t, workspace, http.MethodGet, path+"/context", "owner-token", nil)
+	var context struct {
+		Ownership []spec.OwnerHint `json:"ownership"`
+		OrgChart  spec.OrgChart    `json:"orgChart"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&context); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(context.Ownership) != 1 || len(context.OrgChart.Relationships) != 1 {
+		t.Fatalf("context status=%d context=%+v", response.StatusCode, context)
+	}
+	second := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\n"
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": second, "approved_plan": runtime.Plan{}})
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(repo.versions) != 1 {
+		t.Fatalf("omission changed context: status=%d versions=%d", response.StatusCode, len(repo.versions))
+	}
+	pruned := second + "ownership: {items: [], prune: true}\norgChart: {prune: true}\n"
+	response = workspaceRequest(t, workspace, http.MethodPost, path+":plan", "owner-token", map[string]string{"document": pruned})
+	if err := json.NewDecoder(response.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if !runtime.RemovalsDiffer(plan, runtime.Plan{}) {
+		t.Fatalf("prune did not plan removals: %+v", plan)
+	}
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": pruned, "approved_plan": runtime.Plan{}})
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("unapproved context removal returned %d", response.StatusCode)
+	}
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": pruned, "approved_plan": plan})
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(repo.versions) != 2 {
+		t.Fatalf("approved context removal returned %d, versions=%d", response.StatusCode, len(repo.versions))
+	}
+	response = workspaceRequest(t, workspace, http.MethodPost, path+":rollback-plan", "owner-token", map[string]any{"to": 1})
+	if err := json.NewDecoder(response.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(plan.Changes) != 4 {
+		t.Fatalf("rollback plan status=%d plan=%+v", response.StatusCode, plan)
+	}
+	response = workspaceRequest(t, workspace, http.MethodPost, path+":rollback", "owner-token", map[string]any{"to": 1, "approved_plan": plan})
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(repo.versions) != 3 {
+		t.Fatalf("rollback status=%d versions=%d", response.StatusCode, len(repo.versions))
+	}
+}
+
+func TestWorkspaceContextReadsAsMemberAndFiltersPendingPeople(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer member-token" {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch request.URL.Path {
+		case "/v1/organizations/org1":
+			_, _ = io.WriteString(writer, `{"organization":{"id":"org1","slug":"acme"},"membership":{"organization_id":"org1","user_id":"u1","role":"member"}}`)
+		case "/v1/organizations/org1/directory":
+			_, _ = io.WriteString(writer, `{"members":[{"email":"joined@acme.com"}]}`)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer api.Close()
+	file := []byte("apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\nownership:\n  - {owner: joined@acme.com, system: billing}\n  - {owner: pending@acme.com, system: payroll}\norgChart:\n  authority: [manages]\n  executives: [pending@acme.com]\n  relationships: [{from: pending@acme.com, relation: manages, to: joined@acme.com}]\n")
+	repo := &memoryRepository{versions: []store.Version{{Number: 1, Document: file}}}
+	server, err := New(repo, api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := httptest.NewServer(server)
+	defer workspace.Close()
+	response := workspaceRequest(t, workspace, http.MethodGet, "/v1/organizations/org1/workspace/context", "member-token", nil)
+	var context struct {
+		Ownership []spec.OwnerHint `json:"ownership"`
+		OrgChart  spec.OrgChart    `json:"orgChart"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&context); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(context.Ownership) != 1 || context.Ownership[0].System != "billing" || len(context.OrgChart.Executives) != 0 || len(context.OrgChart.Relationships) != 0 {
+		t.Fatalf("status=%d context=%+v", response.StatusCode, context)
 	}
 }

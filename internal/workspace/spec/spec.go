@@ -27,7 +27,7 @@ type Document struct {
 	People        *People       `yaml:"people,omitempty" json:"people,omitempty"`
 	Teams         Teams         `yaml:"teams,omitempty" json:"teams,omitempty"`
 	Directory     *yaml.Node    `yaml:"directory,omitempty" json:"-"`
-	OrgChart      *yaml.Node    `yaml:"orgChart,omitempty" json:"-"`
+	OrgChart      *OrgChart     `yaml:"orgChart,omitempty" json:"orgChart,omitempty"`
 	Chat          *yaml.Node    `yaml:"chat,omitempty" json:"-"`
 	Agents        *Agents       `yaml:"agents,omitempty" json:"agents,omitempty"`
 	Rules         *yaml.Node    `yaml:"rules,omitempty" json:"-"`
@@ -37,7 +37,7 @@ type Document struct {
 	Notifications *yaml.Node    `yaml:"notifications,omitempty" json:"-"`
 	Data          *yaml.Node    `yaml:"data,omitempty" json:"-"`
 	Security      *yaml.Node    `yaml:"security,omitempty" json:"-"`
-	Ownership     *yaml.Node    `yaml:"ownership,omitempty" json:"-"`
+	Ownership     Ownership     `yaml:"ownership,omitempty" json:"ownership,omitempty"`
 	Secrets       *yaml.Node    `yaml:"secrets,omitempty" json:"-"`
 }
 
@@ -68,6 +68,65 @@ type Team struct {
 	Name    string   `yaml:"name" json:"name"`
 	Members []string `yaml:"members,omitempty" json:"members,omitempty"`
 	Leads   []string `yaml:"leads,omitempty" json:"leads,omitempty"`
+}
+
+// Ownership hints are explicit claims about who owns a topic, system, or
+// channel. A key can have one owner; the CLI never guesses one from a title.
+type OwnerHint struct {
+	Owner   string   `yaml:"owner" json:"owner"`
+	What    string   `yaml:"what,omitempty" json:"what,omitempty"`
+	Channel string   `yaml:"channel,omitempty" json:"channel,omitempty"`
+	System  string   `yaml:"system,omitempty" json:"system,omitempty"`
+	Tags    []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+}
+
+type Ownership struct {
+	Items []OwnerHint `yaml:"items" json:"items"`
+	Prune bool        `yaml:"prune,omitempty" json:"prune,omitempty"`
+}
+
+func (ownership *Ownership) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.SequenceNode:
+		return decodeKnownNode(node, &ownership.Items)
+	case yaml.MappingNode:
+		var value struct {
+			Items []OwnerHint `yaml:"items"`
+			Prune bool        `yaml:"prune"`
+		}
+		if err := decodeKnownNode(node, &value); err != nil {
+			return err
+		}
+		ownership.Items, ownership.Prune = value.Items, value.Prune
+		return nil
+	default:
+		return fmt.Errorf("ownership must be a list or {items, prune}")
+	}
+}
+
+func (ownership Ownership) MarshalYAML() (any, error) {
+	if !ownership.Prune {
+		return ownership.Items, nil
+	}
+	return struct {
+		Items []OwnerHint `yaml:"items"`
+		Prune bool        `yaml:"prune"`
+	}{Items: ownership.Items, Prune: true}, nil
+}
+
+func (ownership Ownership) IsZero() bool { return len(ownership.Items) == 0 && !ownership.Prune }
+
+type Relationship struct {
+	From     string `yaml:"from" json:"from"`
+	Relation string `yaml:"relation" json:"relation"`
+	To       string `yaml:"to" json:"to"`
+}
+
+type OrgChart struct {
+	Relationships []Relationship `yaml:"relationships,omitempty" json:"relationships,omitempty"`
+	Authority     []string       `yaml:"authority,omitempty" json:"authority,omitempty"`
+	Executives    []string       `yaml:"executives,omitempty" json:"executives,omitempty"`
+	Prune         bool           `yaml:"prune,omitempty" json:"prune,omitempty"`
 }
 
 // Teams accepts the compact list form or {items, prune}. The latter is
@@ -133,6 +192,7 @@ type OrganizationAgent struct {
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var domainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$`)
+var relationPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 // Parse refuses unknown keys, aliases that hide settings, and multiple YAML
 // documents. Error messages name paths, never submitted values.
@@ -174,7 +234,7 @@ func rejectUnsupportedSections(root *yaml.Node) error {
 	for i := 0; i < len(root.Content[0].Content); i += 2 {
 		name := root.Content[0].Content[i].Value
 		switch name {
-		case "directory", "orgChart", "chat", "rules", "safety", "tools", "search", "notifications", "data", "security", "ownership", "secrets":
+		case "directory", "chat", "rules", "safety", "tools", "search", "notifications", "data", "security", "secrets":
 			return fmt.Errorf("%s is not yet supported by the workspace applier", name)
 		}
 	}
@@ -212,11 +272,11 @@ func (document Document) Validate() error {
 		name string
 		node *yaml.Node
 	}{
-		{"directory", document.Directory}, {"orgChart", document.OrgChart},
+		{"directory", document.Directory},
 		{"chat", document.Chat}, {"rules", document.Rules},
 		{"safety", document.Safety}, {"tools", document.Tools}, {"search", document.Search},
 		{"notifications", document.Notifications}, {"data", document.Data},
-		{"security", document.Security}, {"ownership", document.Ownership},
+		{"security", document.Security},
 		{"secrets", document.Secrets},
 	} {
 		if section.node != nil {
@@ -315,7 +375,82 @@ func (document Document) Validate() error {
 			seenLeads[email] = true
 		}
 	}
+	return document.validateContext()
+}
+
+func (document Document) validateContext() error {
+	seenHints := map[string]bool{}
+	for _, hint := range document.Ownership.Items {
+		if err := validateEmail(hint.Owner, nil); err != nil {
+			return fmt.Errorf("ownership[].owner: %w", err)
+		}
+		if hint.What == "" && hint.Channel == "" && hint.System == "" {
+			return fmt.Errorf("ownership[] needs what, channel, or system")
+		}
+		for _, field := range []string{hint.What, hint.Channel, hint.System} {
+			if len(field) > 200 || strings.ContainsAny(field, "\x00\r\n") || (field != "" && strings.TrimSpace(field) != field) {
+				return fmt.Errorf("ownership[] selectors must be trimmed single-line text up to 200 bytes")
+			}
+		}
+		key := hint.Key()
+		if seenHints[key] {
+			return fmt.Errorf("ownership[] has duplicate selectors")
+		}
+		seenHints[key] = true
+		seenTags := map[string]bool{}
+		for _, tag := range hint.Tags {
+			if tag == "" || len(tag) > 64 || strings.ContainsAny(tag, "\x00\r\n") || seenTags[tag] {
+				return fmt.Errorf("ownership[].tags must be unique short single-line values")
+			}
+			seenTags[tag] = true
+		}
+	}
+	if document.OrgChart == nil {
+		return nil
+	}
+	seenRelations := map[string]bool{}
+	for _, relationship := range document.OrgChart.Relationships {
+		if err := validateEmail(relationship.From, nil); err != nil {
+			return fmt.Errorf("orgChart.relationships[].from: %w", err)
+		}
+		if err := validateEmail(relationship.To, nil); err != nil {
+			return fmt.Errorf("orgChart.relationships[].to: %w", err)
+		}
+		if relationship.From == relationship.To || !relationPattern.MatchString(relationship.Relation) {
+			return fmt.Errorf("orgChart.relationships[] needs distinct people and a lowercase relation name")
+		}
+		key := relationship.Key()
+		if seenRelations[key] {
+			return fmt.Errorf("orgChart.relationships[] has a duplicate relation")
+		}
+		seenRelations[key] = true
+	}
+	seenAuthority := map[string]bool{}
+	for _, relation := range document.OrgChart.Authority {
+		if !relationPattern.MatchString(relation) || seenAuthority[relation] {
+			return fmt.Errorf("orgChart.authority must contain unique lowercase relation names")
+		}
+		seenAuthority[relation] = true
+	}
+	seenExecutives := map[string]bool{}
+	for _, email := range document.OrgChart.Executives {
+		if err := validateEmail(email, nil); err != nil {
+			return fmt.Errorf("orgChart.executives: %w", err)
+		}
+		if seenExecutives[email] {
+			return fmt.Errorf("orgChart.executives has a duplicate email")
+		}
+		seenExecutives[email] = true
+	}
 	return nil
+}
+
+func (hint OwnerHint) Key() string {
+	return hint.What + "\x00" + hint.Channel + "\x00" + hint.System
+}
+
+func (relationship Relationship) Key() string {
+	return relationship.From + "\x00" + relationship.Relation + "\x00" + relationship.To
 }
 
 func validateEmail(email string, domains map[string]bool) error {

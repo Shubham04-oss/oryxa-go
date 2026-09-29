@@ -45,3 +45,11 @@ func TestRemoteCommandNeedsSignInWithoutInput(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 }
+
+func TestAgentHelpNeedsNoSession(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"setup", "--agent-help"}, &stdout, &stderr, func(string) string { return "" })
+	if code != 0 || !strings.Contains(stdout.String(), "orgChart.relationships") || !strings.Contains(stdout.String(), "oryxa plan") {
+		t.Fatalf("exit=%d output=%q error=%q", code, stdout.String(), stderr.String())
+	}
+}

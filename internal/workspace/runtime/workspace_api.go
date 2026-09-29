@@ -88,6 +88,15 @@ func (client *Client) WorkspaceRollback(ctx context.Context, organizationID stri
 	return result, err
 }
 
+func (client *Client) WorkspaceRollbackPlan(ctx context.Context, organizationID string, number int64) (Plan, error) {
+	if number <= 0 {
+		return Plan{}, fmt.Errorf("workspace version must be positive")
+	}
+	var plan Plan
+	err := client.request(ctx, http.MethodPost, workspacePath(organizationID)+":rollback-plan", map[string]int64{"to": number}, &plan)
+	return plan, err
+}
+
 func (client *Client) WorkspaceStatus(ctx context.Context, organizationID string) (json.RawMessage, error) {
 	var status json.RawMessage
 	err := client.request(ctx, http.MethodGet, workspacePath(organizationID)+"/status", nil, &status)
