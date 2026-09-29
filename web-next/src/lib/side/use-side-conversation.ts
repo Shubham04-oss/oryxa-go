@@ -71,8 +71,9 @@ export class SideActionError extends Error {
  *   object stored it, or `failed` (`retry(clientId)` sends it again under the
  *   same page id, so it is never stored twice).
  * - `askMyAgent(body)`: a message that asks the viewer's own agent
- *   (`agents.mine`), which answers for both people to see; its answer
- *   streams in as an agent message whose `replyTo` is the question's seq.
+ *   (`agents.mine`); its answer is an agent message whose `replyTo` is the
+ *   question's seq. It streams in live on the asker's view alone: the other
+ *   person reads it once it has ended and the answer guard has checked it.
  *   The page calls this when the member picks "ask my agent", rather than
  *   the conversation guessing from what they typed.
  * - `askTeammateAgent(agentId, body)`: asks one of `agents.theirs` for
