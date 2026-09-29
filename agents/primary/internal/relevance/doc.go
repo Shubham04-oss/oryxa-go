@@ -69,6 +69,16 @@
 // seconds. Run it before changing the instruction, the model or its thinking
 // level.
 //
-// Nothing calls this package yet: it is the judge and its measurements, for a
-// later change to wire in front of an answer another member reads.
+// # Where it runs
+//
+// The answer guard calls it. A guard built with answerguard.WithRelevance runs
+// the judge from CheckWith, after its read for personal data, for an answer
+// whose sources NeedsJudging lets through, in the mode the caller asks for:
+// hold (an answer ShouldHold holds is held for its owner, as OFF_TOPIC, and
+// shares nothing), shadow (the finding is recorded and logged, and holds
+// nothing, so the check can be watched first) or off. The check route of the
+// agents service is the first caller; the deployment's ceiling and each
+// organization's policy decide the mode (package guardpolicy). Regulated is
+// the organization's, and the guard applies ShouldHold itself, from what the
+// judge found, so a judge cannot loosen it.
 package relevance

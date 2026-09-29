@@ -34,12 +34,14 @@ type Outcome struct {
 	// IntensityStrict a held kind, whose masked version is what is shared,
 	// and, where the guard's word is taken at all, an answer that could not be
 	// checked, which shares nothing. IntensityOff acts on nothing, so it is
-	// always clear.
+	// always clear, except for an answer the relevance check held, which is
+	// held at every intensity.
 	State string
 	// Kinds are the kinds acted on at this level, sorted, and never nil: at
 	// IntensitySecrets only the ones that are always masked, so a held kind
 	// that was left as written is not named; [Unchecked] for an answer that
-	// could not be checked. Never a value.
+	// could not be checked; OffTopic, with the categories of what it carried,
+	// for an answer the relevance check held. Never a value.
 	Kinds []string
 	// Shareable are the texts that may be shared, one for each asked for, or
 	// nil when none may. It is the one way to tell that nothing may be shared,
@@ -59,7 +61,14 @@ func unreadable() Outcome {
 // does not carry a text for each of the n texts, one in a state this code does
 // not know, or, at IntensitySecrets and IntensityStrict, one for an answer
 // that could not be checked; none of those is ever read as clear.
+//
+// An answer the relevance check held is held at every intensity, IntensityOff
+// included, and shares nothing: how much personal data is taken out of a text
+// is no answer to a text that should not be shared at all.
 func (verdict Verdict) At(n int, level Intensity) Outcome {
+	if verdict.heldForRelevance() {
+		return verdict.relevanceHeld()
+	}
 	switch level {
 	case IntensityOff:
 		return verdict.atOff(n)
