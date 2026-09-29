@@ -87,7 +87,7 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 				}
 			} else if invitation, ok := state.Invitations[member.Email]; ok {
 				if invitation.Role != role || invitation.Guest != member.Guest {
-					return Plan{}, fmt.Errorf("people.members has a pending invitation with another role or guest setting")
+					return Plan{}, fmt.Errorf("people.members[%s]: pending invitation has another role or guest setting", member.Email)
 				}
 				plan.NeedsHuman = append(plan.NeedsHuman, HumanStep{Step: "people.join", Why: member.Email + " must accept the invitation"})
 			} else {
@@ -95,7 +95,7 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 					return Plan{}, fmt.Errorf("people.members[%s]: only a human organization owner may invite an admin", member.Email)
 				}
 				if role == "owner" {
-					return Plan{}, fmt.Errorf("people.members cannot invite an owner")
+					return Plan{}, fmt.Errorf("people.members[%s]: cannot invite an owner", member.Email)
 				}
 				domains := document.Metadata.Domains
 				if domains == nil && state.Organization != nil {
