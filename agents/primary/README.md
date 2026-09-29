@@ -1058,7 +1058,8 @@ Confirmations restore that original value and cannot supply a replacement.
 This is metadata, not a table/schema migration, and thread detail never
 exposes it. An older side confirmation without it has no authorized Request
 and adds the unknown-source marker; the wrapped prompt is never a fallback.
-Agent replies and tool results are never context sent to this judge.
+Private agent replies and tool results are never context sent to this judge;
+the side context may include peer-agent replies already shared there.
 Prior thread content adds `thread_history`; missing or
 overflowed provenance adds `run_sources_unrecorded`, so it cannot bypass the
 private-source gate. Tool provenance is bounded, held only for the run and

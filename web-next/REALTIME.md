@@ -412,6 +412,12 @@ confirmation continuation.
 Context is the last six lines of the shared transcript snapshot the run saw,
 each at most 1,000 code points, never the owner's private Go transcript. Go's
 existing workspace/member settings and deployment ceiling decide relevance.
+When private sources require judging, the check route requires the complete
+request and answer within the judge's caps (10,000 and 24,000 code points).
+An incomplete check is unchecked and shares no text in hold mode; shadow
+records would-hold and off remains off. This includes a maximum side body
+of 24,002 code points: it cannot share two middle runes omitted by the judge,
+and the object does not silently clip the answer to make that check pass.
 For a ledger publication during the same Go run, the fresh run body also
 has `publication_request: {request, context}` beside its wrapped `message`.
 Only the clean original question can authorize sharing; peer transcript and

@@ -98,6 +98,54 @@ func relevanceBlock(t *testing.T, result checkResult) (judged, wouldHold, held b
 	return block["judged"], block["would_hold"], block["held"]
 }
 
+func TestTheCheckRouteNeverSharesTextOmittedByTheRelevanceCap(t *testing.T) {
+	for _, test := range []struct {
+		name, mode, request string
+		texts               []string
+		public, incomplete  bool
+	}{
+		{"exact side answer cap", "hold", "When is launch?", []string{strings.Repeat("é", relevance.MaxAnswerRunes)}, false, false},
+		{"maximum side body", "hold", "When is launch?", []string{strings.Repeat("a", 12_000) + "私病" + strings.Repeat("b", 12_000)}, false, true},
+		{"aggregate answer cap", "hold", "When is launch?", []string{strings.Repeat("a", 12_001), strings.Repeat("b", 12_000)}, false, true},
+		{"missing request", "hold", "", []string{"An answer."}, false, true},
+		{"oversized request", "hold", strings.Repeat("é", relevance.MaxRequestRunes+1), []string{"An answer."}, false, true},
+		{"shadow records incomplete", "shadow", "When is launch?", []string{strings.Repeat("é", relevance.MaxAnswerRunes+2)}, false, true},
+		{"off preserves its cap", "off", "When is launch?", []string{strings.Repeat("é", relevance.MaxAnswerRunes+2)}, false, true},
+		{"public sources skip judging", "hold", "", []string{strings.Repeat("é", relevance.MaxAnswerRunes+2)}, true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			judge := &routeJudge{result: routeClean}
+			settings := &fakeAnswerGuardPreferences{ceiling: guardpolicy.Cap{Relevance: guardpolicy.RelevanceMode(test.mode)}}
+			server := judgedServer(t, judge, settings, nil)
+			sources := routeSources
+			if test.public {
+				sources = []string{"directory_load"}
+			}
+			response, got := postCheck(t, server, checkPath, checkBody(t, map[string]any{"texts": test.texts, "request": test.request, "sources": sources, "origin": "owner"}))
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d", response.Code)
+			}
+			active := test.mode != "off" && !test.public
+			wouldHold := active && test.incomplete
+			held := wouldHold && test.mode == "hold"
+			judged, recorded, blocked := relevanceBlock(t, got)
+			if judged != active || recorded != wouldHold || blocked != held || (got.Shareable == nil) != held {
+				t.Fatalf("state=%s shareable=%t relevance=%s want active=%t wouldHold=%t held=%t", got.State, got.Shareable != nil, got.raw["relevance"], active, wouldHold, held)
+			}
+			wantCalls := 0
+			if active && !test.incomplete {
+				wantCalls = 1
+			}
+			if judge.calls() != wantCalls {
+				t.Fatalf("judge calls=%d want=%d", judge.calls(), wantCalls)
+			}
+			if !held && !slices.Equal(got.Shareable, test.texts) {
+				t.Fatal("a nonholding cap silently clipped the shared text")
+			}
+		})
+	}
+}
+
 // TestTheCheckRouteRefusesSourcesAndContextOutOfBounds: at most 64 sources of
 // at most 128 characters and at most 6 lines of context of at most 1,000, in
 // characters and not bytes, each a piece of text with no NUL in it; anything
