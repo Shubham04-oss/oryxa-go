@@ -36,6 +36,7 @@ type Plan struct {
 	BaseVersion int64       `json:"base_version"`
 	Changes     []Change    `json:"changes"`
 	NeedsHuman  []HumanStep `json:"needs_human"`
+	Notes       []string    `json:"notes,omitempty"`
 }
 
 // SensitiveChanges is the exact set that needs a bound, reviewed server plan.

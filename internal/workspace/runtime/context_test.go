@@ -70,3 +70,16 @@ func TestContextRejectsPruningItsOwnerMember(t *testing.T) {
 		t.Fatal("accepted an ownership hint for a member being removed")
 	}
 }
+
+func TestRetainedDepartedContextIsDroppedButExplicitInvalidFactsFail(t *testing.T) {
+	previous := contextDocument()
+	previous.Ownership.Items = []spec.OwnerHint{{Owner: "departed@acme.com", System: "billing"}}
+	previous.OrgChart = &spec.OrgChart{Relationships: []spec.Relationship{{From: "chief@acme.com", Relation: "manages", To: "departed@acme.com"}}, Executives: []string{"departed@acme.com"}}
+	effective, plan, err := MergeContext(previous, contextDocument(), contextState(), false)
+	if err != nil || len(effective.Ownership.Items) != 0 || len(effective.OrgChart.Relationships) != 0 || len(effective.OrgChart.Executives) != 0 || len(plan.Notes) != 3 {
+		t.Fatalf("stale context prevented unrelated apply: %+v %+v %v", effective, plan, err)
+	}
+	if _, _, err := MergeContext(previous, previous, contextState(), false); err == nil {
+		t.Fatal("explicit invalid context silently removed")
+	}
+}

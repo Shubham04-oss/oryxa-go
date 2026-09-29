@@ -92,3 +92,15 @@ func TestDirectoryMappingMustBePrunedWithRemovedMember(t *testing.T) {
 		t.Fatalf("paired prune = %+v %v", plan, err)
 	}
 }
+
+func TestRetainedDeletedDirectoryTargetsAreDropped(t *testing.T) {
+	previous := contextDocument()
+	previous.Directory = &spec.Directory{Identities: []spec.ExternalIdentity{{Source: "google_workspace:acme.com", ExternalID: "departed1", Member: "departed@acme.com"}}, Groups: []spec.ExternalGroup{{Source: "google_workspace:acme.com", ExternalID: "deleted1", Team: "Deleted"}}}
+	effective, plan, err := MergeDirectory(previous, contextDocument(), directoryState(), nil, false)
+	if err != nil || len(effective.Directory.Identities) != 0 || len(effective.Directory.Groups) != 0 || len(plan.Notes) != 2 {
+		t.Fatalf("stale directory prevented unrelated apply: %+v %+v %v", effective.Directory, plan, err)
+	}
+	if _, _, err := MergeDirectory(previous, previous, directoryState(), nil, false); err == nil {
+		t.Fatal("explicit invalid mapping silently removed")
+	}
+}

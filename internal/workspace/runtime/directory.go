@@ -45,7 +45,21 @@ func MergeDirectory(previous, submitted spec.Document, state Snapshot, mapped []
 	next := map[string]directoryRecord{}
 	if !replace && (submitted.Directory == nil || !submitted.Directory.Prune) {
 		for key, record := range old {
-			next[key] = record
+			known := contextMemberKnown(record.reference, state, submitted)
+			if record.kind == "team" {
+				_, known = state.Teams[record.reference]
+				for _, team := range submitted.Teams.Items {
+					if team.Name == record.reference {
+						known = true
+						break
+					}
+				}
+			}
+			if known {
+				next[key] = record
+			} else {
+				plan.Notes = append(plan.Notes, "Dropped retained external "+record.kind+" mapping for departed resource "+record.reference)
+			}
 		}
 	}
 	for key, record := range records(submitted.Directory) {

@@ -21,7 +21,11 @@ func MergeContext(previous, submitted spec.Document, state Snapshot, replace boo
 	newHints := map[string]spec.OwnerHint{}
 	if !replace && !submitted.Ownership.Prune {
 		for key, hint := range oldHints {
-			newHints[key] = hint
+			if contextMemberKnown(hint.Owner, state, submitted) {
+				newHints[key] = hint
+			} else {
+				plan.Notes = append(plan.Notes, "Dropped retained ownership for departed member "+hint.Owner)
+			}
 		}
 	}
 	for _, hint := range submitted.Ownership.Items {
@@ -52,7 +56,21 @@ func MergeContext(previous, submitted spec.Document, state Snapshot, replace boo
 	}
 	newChart := spec.OrgChart{}
 	if !replace && (submitted.OrgChart == nil || !submitted.OrgChart.Prune) {
-		newChart = oldChart
+		newChart.Authority = slices.Clone(oldChart.Authority)
+		for _, relationship := range oldChart.Relationships {
+			if contextMemberKnown(relationship.From, state, submitted) && contextMemberKnown(relationship.To, state, submitted) {
+				newChart.Relationships = append(newChart.Relationships, relationship)
+			} else {
+				plan.Notes = append(plan.Notes, "Dropped retained relationship involving a departed member: "+relationship.From+" "+relationship.Relation+" "+relationship.To)
+			}
+		}
+		for _, email := range oldChart.Executives {
+			if contextMemberKnown(email, state, submitted) {
+				newChart.Executives = append(newChart.Executives, email)
+			} else {
+				plan.Notes = append(plan.Notes, "Dropped retained executive for departed member "+email)
+			}
+		}
 	}
 	if submitted.OrgChart != nil {
 		newChart.Relationships = mergeRelationships(newChart.Relationships, submitted.OrgChart.Relationships)
@@ -153,6 +171,23 @@ func checkContextMember(email string, state Snapshot, submitted spec.Document, p
 		}
 	}
 	return fmt.Errorf("%s is not a member or planned invitee", email)
+}
+
+func contextMemberKnown(email string, state Snapshot, submitted spec.Document) bool {
+	if _, ok := state.Members[email]; ok {
+		return true
+	}
+	if _, ok := state.Invitations[email]; ok {
+		return true
+	}
+	if submitted.People != nil {
+		for _, member := range submitted.People.Members {
+			if member.Email == email {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func mergeRelationships(old, added []spec.Relationship) []spec.Relationship {
@@ -336,6 +371,7 @@ func CombinePlans(plans ...Plan) Plan {
 	for _, plan := range plans {
 		combined.Changes = append(combined.Changes, plan.Changes...)
 		combined.NeedsHuman = append(combined.NeedsHuman, plan.NeedsHuman...)
+		combined.Notes = append(combined.Notes, plan.Notes...)
 	}
 	slices.SortFunc(combined.Changes, func(a, b Change) int {
 		if a.Op != b.Op {
@@ -353,5 +389,7 @@ func CombinePlans(plans ...Plan) Plan {
 		return strings.Compare(a.Why, b.Why)
 	})
 	combined.NeedsHuman = slices.CompactFunc(combined.NeedsHuman, func(a, b HumanStep) bool { return a == b })
+	slices.Sort(combined.Notes)
+	combined.Notes = slices.Compact(combined.Notes)
 	return combined
 }
