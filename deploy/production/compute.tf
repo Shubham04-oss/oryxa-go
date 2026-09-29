@@ -357,10 +357,25 @@ resource "aws_iam_role_policy" "task" {
         }
       },
       {
-        Sid      = "Cognito"
-        Effect   = "Allow"
-        Action   = "cognito-idp:*"
-        Resource = "arn:aws:cognito-idp:${var.aws_region}:${local.account_id}:userpool/*"
+        # The eight admin calls password sign-up, email verification, sign-in
+        # and password reset sign with the task role
+        # (auth/internal/passwordflow), and nothing else auth asks Cognito.
+        # InitiateAuth and GetTokensFromRefreshToken are its other two calls;
+        # Cognito authorizes those by app client and never reads IAM for
+        # them, so they need no statement. DescribeUserPoolClient, which
+        # answers with a client's secret, is left out on purpose: only
+        # deploy/scripts/provision-app.sh reads it, as the operator.
+        Sid    = "Cognito"
+        Effect = "Allow"
+        Action = [
+          "cognito-idp:AdminCreateUser", "cognito-idp:AdminDeleteUser", "cognito-idp:AdminSetUserPassword",
+          "cognito-idp:AdminDisableUser", "cognito-idp:AdminEnableUser", "cognito-idp:AdminGetUser",
+          "cognito-idp:AdminUpdateUserAttributes", "cognito-idp:AdminUserGlobalSignOut",
+        ]
+        # The one pool auth's provisioner made, which app.auto.tfvars.json
+        # names. Until the provisioner has run there is no pool to name, and
+        # any pool matches.
+        Resource = "arn:aws:cognito-idp:${var.aws_region}:${local.account_id}:userpool/${var.cognito.user_pool_id == "" ? "*" : var.cognito.user_pool_id}"
       },
       {
         Sid      = "SendMail"

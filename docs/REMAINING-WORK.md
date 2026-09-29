@@ -540,9 +540,10 @@ account:
 - **Alarms on what is only graphed.** SES bounces and complaints, EventBridge
   failed invocations and Bedrock throttling are on the dashboard with no
   alarm, and every alarm mails one address.
-- **Smaller.** The RDS log group never expires; the task role's Cognito
-  statement allows `cognito-idp:*` on every pool; and nothing limits the rate
-  of sign-in attempts at Cloudflare.
+- **Smaller.** The RDS log group never expires, and nothing limits the rate
+  of sign-in attempts at Cloudflare. The task role's Cognito statement, which
+  allowed `cognito-idp:*` on every pool, is written and not applied:
+  `compute.tf` now names the eight admin calls auth makes, on the one pool.
 
 ## 8. Housekeeping
 
