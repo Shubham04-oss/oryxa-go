@@ -1,15 +1,5 @@
 package appsclient
 
-// The pages route's contract, mirrored here.
-//
-// Go's internal rule stops knowledge importing apps/internal/integration,
-// which is where these shapes are written once and are pinned by
-// docs/design/integrations-plan.md. They are mirrored rather than shared so
-// that nothing here can drift quietly: the wire format is the contract, and
-// the tests below post and read these shapes against a fake apps, so a change
-// on either side that the other has not made fails here first. Every change
-// is additive only.
-
 import (
 	"bytes"
 	"context"
@@ -23,6 +13,16 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 )
+
+// This file is the pages route's contract, mirrored.
+//
+// Go's internal rule stops knowledge importing apps/internal/integration,
+// which is where these shapes are written once and are pinned by
+// docs/design/integrations-plan.md. They are mirrored rather than shared so
+// that nothing here can drift quietly: the wire format is the contract, and
+// the tests post and read these shapes whole, against a fake apps and through
+// the extractor, so a change on either side that the other has not made fails
+// here first. Every change is additive only.
 
 // maxPageBytes is what apps promises a page may weigh, at most 6 MiB. It is
 // the only answer here that is large — one connection, never a listing — so
