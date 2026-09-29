@@ -23,7 +23,7 @@ func (store *Store) CreateOrganization(ctx context.Context, organization domain.
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO auth_organizations (id, name, slug, domains, timezone, guests_allowed, created_by, created_at, updated_at)
-		VALUES ($1, $2, lower($3), $4, $5, $6, $7, $8, $8)`,
+		VALUES ($1, $2, lower($3), COALESCE($4::text[], '{}'::text[]), $5, $6, $7, $8, $8)`,
 		organization.ID, organization.Name, organization.Slug, organization.Domains, organization.Timezone, organization.GuestsAllowed, organization.CreatedBy, organization.CreatedAt)
 	if err != nil {
 		return mapWriteError("insert organization", err)
@@ -113,7 +113,7 @@ func (store *Store) UpdateOrganization(ctx context.Context, organization domain.
 
 	result, err := tx.Exec(ctx, `
 		UPDATE auth_organizations
-		SET name = $2, slug = lower($3), domains = $4, timezone = $5,
+		SET name = $2, slug = lower($3), domains = COALESCE($4::text[], '{}'::text[]), timezone = $5,
 		    guests_allowed = $6, updated_at = $7
 		WHERE id = $1`, organization.ID, organization.Name, organization.Slug,
 		organization.Domains, organization.Timezone, organization.GuestsAllowed, organization.UpdatedAt)
