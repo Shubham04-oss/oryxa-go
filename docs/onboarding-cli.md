@@ -27,10 +27,15 @@ Cognito hosted page for email/password or Google, then returns an authorization
 code to the CLI on `127.0.0.1`. Create account opens the Oryxa web sign-up page
 in a new tab; after verifying email, return to the original tab and sign in.
 No password is entered in the CLI. The authorization code exchange uses PKCE,
-state, and nonce. The CLI saves only the resulting access token in a private
-local file scoped to the API URL, reports its expiry, and reuses it for later
-commands until shortly before the token expires. It never saves the refresh
-or ID token. The provisioned CLI app client issues a 15-minute access token.
+state, and nonce. The CLI verifies the signed ID token against its retained
+nonce, issuer, audience, and expiry. It saves only the resulting access token
+and expiry in the OS credential store (macOS Keychain, Windows Credential
+Manager, or Linux Secret Service), scoped to the API URL. If secure storage is
+unavailable, the session remains in the current process only. It never saves
+the refresh or ID token. The provisioned CLI app client issues a 15-minute
+access token. Auth identifies this client as a CLI token, and each service
+limits it to the setup routes it needs; threads, files, agent decisions and
+reviews, and organization deletion refuse CLI tokens.
 The browser sign-in window closes after 20
 minutes. Setup creates a missing starter file only after sign-in, then shows
 the plan and asks before applying. The auth server must expose
@@ -46,16 +51,17 @@ If the file is absent, `setup --org acme` writes a starter file after sign-in
 and before planning. Without `--org`, it asks for the slug. It also accepts
 `--preset` and `--domains` for that first file.
 
-Separate remote commands reuse the cached session while it is valid, then open
-browser sign-in again. They can also read a short-lived member access token
+Separate remote commands reuse the securely saved session while it is valid,
+then open browser sign-in again. They can also read a short-lived access token
 from `ORYXA_ACCESS_TOKEN`; an environment-provided token is never cached. No
 token is accepted in the workspace file or as a flag. `oryxa login` shows the
 current account using the cached session, and `oryxa login --force-login`
 starts a new browser flow. `oryxa logout` removes the cached access token for
-the selected `--api` without changing the browser's Cognito session. The cache
-is stored in the user's config directory under `oryxa/cli-sessions` with
-private file permissions; set `ORYXA_SESSION_DIR` to choose another private
-directory.
+the selected `--api` without changing the browser's Cognito session. `setup`,
+`apply`, and `rollback` purge the saved session on exit. Legacy plaintext cache
+files under `oryxa/cli-sessions` are removed and are never loaded;
+`ORYXA_SESSION_DIR` only identifies that legacy location. Human sign-in messages
+go to stderr, keeping redirected YAML and JSON output clean.
 
 ```sh
 ./bin/oryxa plan -f oryxa.yaml --json
