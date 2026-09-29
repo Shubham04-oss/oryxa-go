@@ -22,6 +22,7 @@ import (
 
 type Repository interface {
 	WithApplyLock(context.Context, string, func() error) error
+	VersionNumber(context.Context, string) (int64, error)
 	Latest(context.Context, string) (store.Version, error)
 	AtVersion(context.Context, string, int64) (store.Version, error)
 	Versions(context.Context, string) ([]store.Version, error)
@@ -39,6 +40,7 @@ type Server struct {
 	http       *http.Client
 	mux        *http.ServeMux
 	patterns   []string
+	contexts   contextCache
 }
 
 func New(repository Repository, apiURL string) (*Server, error) {
@@ -623,7 +625,7 @@ func (server *Server) context(writer http.ResponseWriter, request *http.Request)
 	if !ok {
 		return
 	}
-	previous, err := server.previous(request.Context(), request.PathValue("organizationID"))
+	previous, err := server.contexts.Get(request.Context(), server.repository, request.PathValue("organizationID"))
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "workspace context could not be read")
 		return

@@ -30,11 +30,11 @@ func documentHash(document spec.Document, rollback bool) (string, error) {
 }
 
 func (server *Server) currentVersion(ctx context.Context, organizationID string) (int64, error) {
-	version, err := server.repository.Latest(ctx, organizationID)
+	version, err := server.repository.VersionNumber(ctx, organizationID)
 	if errors.Is(err, store.ErrVersionNotFound) {
 		return 0, nil
 	}
-	return version.Number, err
+	return version, err
 }
 
 func (server *Server) issuePlan(ctx context.Context, organizationID string, access actor, document spec.Document, plan runtime.Plan, rollback bool, version int64) (runtime.Plan, error) {

@@ -92,6 +92,13 @@ func (repo *memoryRepository) Latest(context.Context, string) (store.Version, er
 	return repo.versions[len(repo.versions)-1], nil
 }
 
+func (repo *memoryRepository) VersionNumber(context.Context, string) (int64, error) {
+	if len(repo.versions) == 0 {
+		return 0, store.ErrVersionNotFound
+	}
+	return repo.versions[len(repo.versions)-1].Number, nil
+}
+
 func (repo *memoryRepository) Mappings(context.Context, string) ([]store.ExternalMapping, error) {
 	return append([]store.ExternalMapping{}, repo.mappings...), nil
 }
