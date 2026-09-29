@@ -29,7 +29,16 @@ auth ── organization deleted, member removed ──▶ apps-events queue
 member ── connect with Oryxa ──▶ apps ── authorization URL ──▶ the app
 the app ── code ──▶ browser ──▶ app.oryxa.in/v1/apps/oauth/callback ──▶ apps
 the app ── webhook ──▶ api.oryxa.in/v1/apps/hooks/{endpoint} ──▶ apps
+
+Slack ── @-mention, click ──▶ api.oryxa.in/v1/apps/slack/{events,interactivity} ──▶ apps
+apps ── apps.slack.message.received.v1 (ids only) ──▶ the bus ──▶ agents
+agents ── internal API, purpose slack ──▶ apps ── posts, updates ──▶ Slack
 ```
+
+Beside all that, apps is the gateway of **Oryxa's Slack bot**: one Slack app
+that workspaces install, through which people ask Oryxa a question by mentioning
+it and owners answer with three buttons. It is off unless `APPS_SLACK_SURFACE`
+is set, and is described in [The Slack surface](#the-slack-surface).
 
 ## Composio holds the credentials, apps holds the rules
 
@@ -300,6 +309,250 @@ first):
 | Runs the daily health checks that are due (`signin.CheckDue`) | A connection the app refuses expires, announced with `refresh_rejected` or `credential_rejected` |
 | Tries again the revocations an app did not answer (`signin.RetryRevocations`) | A removed connection's credential is revoked, or forgotten after eight attempts |
 | Deletes webhook endpoints whose subscriptions lapsed (`hooks.SweepExpired`) | A lapsed endpoint answers as an unknown one |
+
+## The Slack surface
+
+One Slack app, installed by a workspace for one organization. Slack carries
+three things and nothing else: the **entry** (an @-mention of the bot), the
+**owner's notice** (a direct message with three buttons) and the **answer**.
+Everything that decides anything happens in agents, which reads what arrived
+from apps and asks apps to post. Apps is the gateway and keeps four
+promises: it answers Slack inside its three seconds without calling anything;
+it puts ids and nothing else on the bus; it is the only place the bot's token
+exists; and it says only what its templates let it say.
+
+It is off unless `APPS_SLACK_SURFACE=true`. Off, no route below is served, no
+worker runs and none of its variables is read, so a deployment that has not
+adopted it is exactly what it was. It is no integration: nothing about it is in
+the registry that members' own Slack sign-in (`integrations/slack`) belongs to,
+and the two Slack apps share nothing. The design is
+[`docs/design/slack-consent-loop.md`](../docs/design/slack-consent-loop.md);
+the code is `internal/slackbot`, with `internal/hooks` in front of it and
+`internal/postgres/slack.go` behind.
+
+### The Slack app is code
+
+`internal/slackbot/manifest.yaml` is the app's manifest and the only way its
+scopes, events and URLs change. `manifest_test.go` pins every value in it, and
+holds `slackbot.BotScopes` (which the Add to Slack link asks for) and
+`slackfake`'s default scopes to it, so they cannot drift.
+
+- **Bot scopes**, each with its reason in the file: `app_mentions:read`,
+  `chat:write`, `im:write`, `users:read`, `users:read.email`, `channels:read`,
+  `groups:read`. No user scope, no channel-history scope: the bot reads only
+  messages that mention it.
+- **Events** (`bot_events`): `app_mention`, `app_uninstalled`, `tokens_revoked`.
+  Interactivity on. Messages tab read-only, no Home tab. Org deploy, socket mode
+  and **token rotation off**: the install refuses a token that rotates, because
+  Slack turns rotation on for good and nothing here refreshes a token yet.
+- **URLs**, under `https://api.oryxa.in` (production's `APPS_PUBLIC_BASE_URL`):
+  `/v1/apps/slack/events`, `/v1/apps/slack/interactivity`, and the OAuth
+  redirect `/v1/apps/slack/install/callback`. A deployment on another host
+  changes the manifest and its test together.
+
+Slack does not check a request URL when an app is created from a manifest, so
+the owner verifies both in the app's settings after the first deploy. The
+owner's steps: create the app from the manifest; put its Client ID, Client
+Secret and Signing Secret in Secrets Manager as the JSON `APPS_SLACK_APP`
+reads; deploy with `APPS_SLACK_SURFACE=true`; verify the two URLs; activate
+public distribution.
+
+### Ingress
+
+`POST /v1/apps/slack/events` and `POST /v1/apps/slack/interactivity` are static
+aliases of hooks' ingress for the toolkit `slackbot`, whose deployment endpoint
+is made the first time either is asked (hooks' `Surface` port, `hooks.Alias`).
+Hooks verifies the delivery exactly as it does an integration's, with the v0
+scheme (`X-Slack-Signature`, `v0:{timestamp}:{body}`, hex HMAC-SHA256, five
+minutes' tolerance), the signing secret from `APPS_SLACK_APP`, and answers
+Slack's `url_verification`. Only then does `slackbot` see it.
+
+- **Taken:** `app_mention`, `app_uninstalled`, `tokens_revoked`, and a click on
+  a button (`block_actions`, form-encoded with the JSON in `payload`). Anything
+  else is acknowledged and dropped, as is a delivery for a workspace with no
+  active install, a mention by the bot itself, and one whose ids are not Slack's.
+- **Deduped** on the event's `event_id`, or for a click on the SHA-256 of its
+  body. A retry, a replay and a race are one delivery.
+- **Recorded in one transaction:** the dedupe mark, an `apps_slack_inbound` row
+  (or, for an uninstall, the install ended) and the outbox event. Then 200.
+- **The ack path calls nothing.** No Slack call, no KMS call, no other service,
+  and the database gets a **2 s deadline** (`hooks.DefaultSurfaceDeadline`).
+  When it cannot record in time the answer is 503 and nothing is marked, so
+  Slack's retry (at once, after a minute, after five) is handled.
+- `app_uninstalled` ends the install, and so does `tokens_revoked` when it names
+  the bot's own user (a revoked user token is no concern of a bot that holds
+  none). Either may arrive first; the second finds nothing to end.
+- A mention is `channel_id`, `user_id`, its `ts`, its thread's root
+  (`thread_ts`, or its own `ts` when it started one) and the people it names.
+  Text and tickets are in the record and nowhere else: not in the event, not in
+  a log line.
+
+### The events
+
+Published on `oryxa.apps`, ids only (`contracts/events/apps/v1/slack.go`):
+
+| Detail type | Data |
+| --- | --- |
+| `apps.slack.message.received.v1` | `inbound_id`, `organization_id`, `team_id`, `received_at` |
+| `apps.slack.action.received.v1` | the same four |
+| `apps.slack.install.changed.v1` | `organization_id`, `team_id`, `state` (`active` or `ended`), `reason`, `actor_id` when a member did it, `changed_at`. Reasons: `installed`, `reinstalled`, `app_uninstalled`, `tokens_revoked`, `removed_by_admin`, `token_invalid` |
+
+### Installing
+
+An organization's owner or admin (a member's session, never an agent's):
+
+| Route | Does |
+| --- | --- |
+| `GET /v1/organizations/{org}/apps/slack/install` | The install's status (`not_installed`, `active`, `ended`, with the workspace, bot user, scopes and dates) and `add_to_slack_url`, Slack's OAuth v2 consent page asking for the bot scopes, with a **single-use state** good for ten minutes. `?return_to=` names a page under `APPS_ALLOWED_ORIGINS` for the browser to come back to |
+| `GET /v1/apps/slack/install/callback` | Where Slack sends the browser. Spends the state, exchanges the code, checks the token with `auth.test`, seals it, and answers JSON or, with a `return_to`, redirects there with `slack=connected` or `slack=error&slack_error={reason}` |
+| `DELETE /v1/organizations/{org}/apps/slack/install` | Disconnect: `apps.uninstall` at Slack (best effort), the token discarded, the install ended |
+| `GET /v1/organizations/{org}/apps/slack/channels` | The private channels the bot is in, each with whether it can be marked, and the ones marked |
+| `PUT /v1/organizations/{org}/apps/slack/channels` | `{"high_priority": ["G…", …]}` makes exactly those the high-priority channels. Each must be a **private channel shared with nobody**, checked with Slack now; otherwise 400 and nothing changes |
+
+The state binds the install to the organization and to the admin who asked; only
+its hash is kept. An install is refused, with nothing kept and no token
+revoked, when the workspace is **active for another organization** (409
+`conflict`, reason `team_bound`), when the organization **already serves another
+workspace** (409, `organization_bound`), for an Enterprise Grid workspace
+(`enterprise`), a token that rotates (`rotation`), an install not granted every
+scope (`scopes`; 422 `not_connectable`), and when Slack refuses or cannot be
+reached (`slack_refused`, `unavailable`). A workspace whose install ended can be
+installed again, by the same organization or another. The bot token is sealed
+with `APPS_SIGNIN_KMS_KEY_ID`, bound to `service=oryxa-apps`, resource type
+`slack_install` and the team id.
+
+The link's state is bound to the admin who asked, not to their browser: the
+callback lands on `APPS_PUBLIC_BASE_URL`, a host the web app's session cookie
+does not reach. Its lifetime, single use and organization binding are what
+limit it.
+
+### The internal API
+
+For services with the purpose `slack`: a service token
+(`X-Oryxa-Service-Token`, audience `apps`, purpose `slack`, `internal/serviceauth`)
+from a caller `APPS_SERVICE_CALLERS` allows that purpose. A token for another
+purpose is 403 here, and a token for `slack` is 403 on the deployment-endpoint
+routes. Only apps knows the bot token.
+
+`GET /v1/internal/apps/slack/inbound/{id}` — one record, until it is forgotten
+(7 days; then 404):
+
+```json
+{"id":"asi_…","organization_id":"…","team_id":"T…","kind":"message","received_at":"…",
+ "channel_id":"C…","user_id":"U…","message_ts":"…","thread_ts":"…","bot_user_id":"U…",
+ "event_id":"Ev…","text":"<@Ubot> ask <@Uraya> …","mentions":["Uraya"],"channel_type":"…","ext_shared":false}
+```
+
+For a click, `kind` is `action` and `message`'s fields are replaced by
+`action_id` (`consent_summary`, `consent_access` or `consent_deny`) and
+`action_value`, the button's opaque ticket. `message_ts` and `thread_ts` are
+the message that was clicked. `mentions` leaves the bot out; `channel_type` and
+`ext_shared` are there only when Slack said.
+
+`POST /v1/internal/apps/slack/profiles` — `{"organization_id","user_ids":[…]}`
+(one to twenty) answers `{"profiles":[{"user_id","team_id","email","email_confirmed",
+"name","title","is_guest","is_bot","is_deleted","is_stranger","fetched_at"}],
+"missing":[…]}` from a 24-hour cache. `email_confirmed` is Slack's
+`is_email_confirmed`, false when Slack does not say: only a confirmed address
+is one to match a person to a member by. `is_stranger` is Slack's flag or a
+`team_id` that is not the workspace's; `missing` is people Slack does not know.
+
+`GET /v1/internal/apps/slack/channels/{id}?organization_id=` — read from Slack
+now, every time: `{"channel_id","name","is_private","is_shared","is_mpim","is_im",
+"is_archived","high_priority"}`. `is_shared` is every kind of sharing. A
+conversation the bot's scopes cannot describe (a group message needs
+`mpim:read`, which the app does not ask for) is 422 `channel_unreadable`, and
+a channel Slack does not know is 404.
+
+`POST /v1/internal/apps/slack/post`:
+
+```json
+{"organization_id":"…","idempotency_key":"…8 to 128 characters…",
+ "target":{"channel_id":"C…","thread_ts":"…","user_id":"U…"},
+ "template":"answer","params":{…}}
+```
+
+answers `{"channel_id","ts"}`, and `"ephemeral":true` for one only a person sees,
+`"replayed":true` for a key already used. The target is one of a **thread**
+(`channel_id`, `thread_ts`), a **person in a thread** (adding `user_id`: an
+ephemeral message) or a **person** (`user_id` alone: a direct message, opened
+first). Posts go only where people opened a conversation with the bot: the
+thread must be one a verified message or click was in, and the person one who
+wrote or was named in one, within the last 7 days (403 `forbidden` otherwise).
+Naming a thread by any message in it posts to its root.
+
+`POST /v1/internal/apps/slack/update` —
+`{"organization_id","channel_id","ts","template","params"}` replaces a message
+apps posted (and only that; not an ephemeral one) with `chat.update`, always
+with blocks, so a decided notice loses its buttons. Answers `{"channel_id","ts"}`.
+
+Failures: 400 `invalid_request` (params, target or a template that may not go
+there), 403 `forbidden` (a conversation never seen), 404 `not_found`, 409
+`not_connected` (no active install, or Slack said the token is dead, which
+also ends the install as `token_invalid`), 409 `conflict` (a key reused for a
+different message, or still being posted), 422 `channel_unreadable`, **429
+`rate_limited` with `Retry-After`**, 502 `slack_error` (Slack refused; the
+message names its code), 503 `unavailable`. A failed post gives its key back,
+so a retry with the same key posts.
+
+**Rate limits.** Each organization has a token bucket of 3 posts a second with
+a burst of 15 (per replica); over it, 429 with the wait. Slack's own
+`ratelimited` (HTTP 429 with `Retry-After`, or HTTP 200 with that error) is
+passed on the same way, with its `Retry-After`, and the key is free to try
+again.
+
+### Templates
+
+Every message is a template rendered here from typed parameters, with link and
+media unfurling **off**: a caller supplies text and ids and never Block Kit, so
+nothing but a template's own structure reaches Slack. Every text is escaped for
+Slack's markup (`&`, `<`, `>`), so it cannot become `@channel`, a mention or a
+link; scrubbed of anything that looks like a credential (Slack, AWS, GitHub and
+Google keys, private keys, JWTs, `password: …`) and of the app's own secrets,
+which become `[credential removed]`; and cut to length. Nothing has a place for
+a secret, and none is ever shown. Parameters with a field a template does not
+have are 400.
+
+| Template | Goes to | Params | Says |
+| --- | --- | --- | --- |
+| `owner_notice` | a direct message | `asker_user_id` or `asker_name`; `question`; `tickets` `{summary, access, deny}` | The asker, the question, and three buttons: **Share AI summary only**, **Give access for 1 hour**, **Deny**, whose values are the tickets, passed along and never read or logged. Nothing else |
+| `notice_settled` | a direct message | asker; `question`; `decision` (`approved_summary`, `approved_access`, `denied`, `answered_by_other`, `expired`, `withdrawn`); `decided_by_user_id` or `_name`; `decided_at` | The same asker and question, no buttons, and "Approved by … at …". For `chat.update` |
+| `ask_ack` | a thread or one person in it | `owners` `[{user_id\|name}]` (1–5); `open_url` (a page of the web app, or nothing) | "Asked Raya and Maya · Open in Oryxa" |
+| `answer` | a thread or a direct message | `text`; `owner_name`; `mode` (`summary`, `access`, `lease`, `bypass`) | The text, and "From Raya's agent · approved by Raya (AI summary only)". Names the owner and never mentions them |
+| `status` | a thread, one person in it, or a direct message | `state` (`waiting`, `working`, `held`, `denied`, `expired`, `answered_elsewhere`); `owner_name` | One content-free line, such as "The answer is held for Raya's review." |
+| `refusal` | a thread or one person in it | `reason` (`not_member`, `owner_not_member`, `group_dm`, `external_channel`, `no_owner`, `too_many_asks`; another is a plain no); `organization_name`; `user_id` or `name` | Fixed wording, never the question |
+| `private_note` | a thread or one person in it | none | "Answered privately." |
+| `bypass_notice` | a direct message | asker; `question`; `reason` (`priority_channel`, `org_chart`); `channel_id` | Tells an owner at once that their agent answered without asking |
+
+### Retention
+
+An inbound record, with what was typed and clicked, is forgotten **7 days**
+after it arrived (and a thread with it: apps posts nowhere it cannot show it
+saw). Profiles are used for a day and forgotten after a week; posts are
+remembered for 30 days, for their keys and for updates; a lapsed install state
+is gone within the hour. Dedupe marks go with the rest of `apps_handled_events`
+after 7 days. `RunMaintenance` does the sweep, every 15 minutes, in a worker
+of its own that exists only with the surface on.
+
+### Settings
+
+| Variable | Is |
+| --- | --- |
+| `APPS_SLACK_SURFACE` | `true` switches it on. Off unless set |
+| `APPS_SLACK_APP` | The app, JSON `{"client_id","client_secret","signing_secret"}`, from Secrets Manager. Required with the surface |
+| `APPS_SLACK_API_BASE_URL` | Slack's Web API, for a fake only: **loopback only**, refused otherwise. Empty is Slack itself |
+
+With the surface on, apps also needs `APPS_SIGNIN_KMS_KEY_ID` (it seals bot
+tokens), an `APPS_SERVICE_CALLERS` caller allowed the purpose `slack`, and an
+`APPS_PUBLIC_BASE_URL` Slack can reach (https, or http on loopback); it refuses
+to start without them. The `oryxa connect slack` command the design imagines
+would need `GET …/apps/slack/install` added to `internal/cliscope`'s allowlist.
+
+`internal/slackfake` is a fake Slack for tests, including other services': it
+serves the Web API methods the client calls on a loopback address (point
+`APPS_SLACK_API_BASE_URL` at `fake.URL()`), records every call and the messages
+posted, answers any error or a 429 on demand, and builds the signed mentions,
+clicks, uninstalls and `url_verification` requests Slack sends.
 
 ## Running tools
 
@@ -578,11 +831,17 @@ needs an `Origin` in `APPS_ALLOWED_ORIGINS`.
 | `GET/PUT/DELETE /v1/organizations/{org}/apps/oauth-clients/{client}` | An organization's own OAuth app, for its admins |
 | `POST /v1/organizations/{org}/apps/webhooks/{toolkit}/verification-token` | Reveal, once, the token an organization's own app sent its endpoint |
 | `POST /v1/apps/hooks/{endpointID}` | Where Oryxa's own integrations' apps deliver |
+| `POST /v1/apps/slack/events`, `POST /v1/apps/slack/interactivity` | Where Slack delivers, with the surface on — see [The Slack surface](#the-slack-surface) |
+| `GET /v1/apps/slack/install/callback` | Where Slack returns an admin's browser from installing the bot |
+| `GET/DELETE /v1/organizations/{org}/apps/slack/install` | An organization's Slack install and its Add to Slack link, for its admins; disconnect |
+| `GET/PUT /v1/organizations/{org}/apps/slack/channels` | The private channels an admin may mark high priority |
+| `/v1/internal/apps/slack/…` | `inbound/{id}`, `profiles`, `channels/{id}`, `post` and `update`, for a service with the purpose `slack` |
 
 Errors are `{"error":{"code","message"}}` with the codes
 `invalid_request`, `invalid_credentials`, `unauthorized`, `forbidden`,
 `not_read_only`, `not_found`, `not_connected`, `needs_reconnect`,
-`not_connectable`, `conflict`, `rate_limited`, `unavailable`, `internal`.
+`not_connectable`, `conflict`, `rate_limited`, `unavailable`, `internal`, and the
+Slack surface's `slack_error` (502) and `channel_unreadable` (422).
 `invalid_credentials` (400) is a key, a password or a field that broke its
 rule or that the app refused; it also carries `"field"`, the field's name,
 and never quotes the value.
@@ -611,6 +870,9 @@ happened is visible only in a log line.
 | `apps.credential.replaced.v1` | A member replaced an Oryxa connection's key, with its kind — never the key |
 | `apps.oauth_client.saved.v1` | An admin saved their organization's own OAuth app, or the deployment saved one of Oryxa's (`organization_id` empty, `actor_id` `deployment`) — never its secret |
 | `apps.oauth_client.removed.v1` | An admin removed their organization's own OAuth app |
+| `apps.slack.message.received.v1` | A verified @-mention of the Slack bot: ids only, the text stays in a record for 7 days |
+| `apps.slack.action.received.v1` | A verified click on one of the bot's buttons: ids only |
+| `apps.slack.install.changed.v1` | A workspace's Slack install became active or ended, and why |
 
 The connection events of an Oryxa connection carry `"broker": "oryxa"`, and
 its `removed` carries `provider_revoked`. Both are left out for Composio's,
@@ -666,6 +928,12 @@ Apps uses `/internal/postgreskit`. Other services never read these tables.
 | `apps_oauth_clients` | OAuth clients: organizations' own and Oryxa's (organization `''`), the secret sealed; a replaced one stays for its connections |
 | `apps_signin_flows` | OAuth sign-ins in flight, by the state's SHA-256: ten minutes, spent once |
 | `apps_hook_endpoints` | Webhook endpoints, each with its scheme frozen at creation and its secret sealed |
+| `apps_slack_installs` | A Slack workspace's install, by team id, for one organization: the bot token sealed, status active or ended. One active per organization |
+| `apps_slack_install_flows` | Slack installs in flight, by the state's SHA-256: ten minutes, spent once |
+| `apps_slack_channels` | The private channels an organization's admins marked high priority |
+| `apps_slack_inbound` | What verified deliveries became, by id: a mention's text and mentions, a click's action and ticket. Forgotten after 7 days |
+| `apps_slack_posts` | The messages apps posted, once per idempotency key, and where they went |
+| `apps_slack_profiles` | What Slack said about a person, with whether their address is confirmed, kept for a day |
 
 No Composio credential is anywhere in there. Composio's answer for a
 connected account carries the connection's state, and the client leaves it
@@ -784,6 +1052,9 @@ Oryxa's own sign-in needs nothing until a toolkit is switched on. Then:
 | `APPS_HOOK_SECRETS` | The deployment's webhook secrets, `{"slack": ["current", "previous"]}` |
 | `APPS_HOOK_VALUES` | What a manifest names as `{config:name}`, `{"pubsub_push_account": "…"}` |
 | `APPS_SERVICE_CALLERS` | The services that may call apps' internal routes, as `internal/serviceauth` reads them |
+| `APPS_SLACK_SURFACE` | `true` switches the Slack bot's gateway on; needs the key above, a caller with the purpose `slack`, and the two below |
+| `APPS_SLACK_APP` | The Slack app, JSON `{"client_id","client_secret","signing_secret"}`, from Secrets Manager |
+| `APPS_SLACK_API_BASE_URL` | Slack's Web API for a test's fake, loopback only. Empty is Slack itself |
 
 Webhook URLs are built on `APPS_PUBLIC_BASE_URL`. The task role needs
 `kms:GenerateDataKey` and `kms:Decrypt` on the key, conditioned on
@@ -846,6 +1117,17 @@ stand-in OAuth app: connect, callback with the state cookie, a key and its
 replacement, disconnect with revocation, a signed Slack `url_verification`,
 the upkeep expiring a refused key, and a member leaving.
 
+The Slack surface is tested against `internal/slackfake`, a fake Slack that
+signs what Slack signs and answers what the Web API answers: the ingress end to
+end through hooks (signature vectors, a stale timestamp, a replay, the dedupe
+race, a form-encoded click, an unknown workspace, the 2 s deadline, and that
+nothing on the ack path calls out), the install and its 409s, the internal API
+and its posting rules, the 429 and `Retry-After` paths, every template as a
+golden under `internal/slackbot/testdata/templates/` (`go test -run
+TestEveryTemplateRendersAsPinned -update` rewrites them), and the manifest. The
+Slack store's SQL runs with the rest of the store's, under
+`APPS_TEST_DATABASE_URL`.
+
 **The trigger pipeline is tested by shape, not by app.** Composio has
 thousands of triggers and no test can name them, but each is some combination
 of a few shapes, and the pipeline is blind to which app an event came from.
@@ -906,6 +1188,19 @@ stand-in, the database a throwaway schema, no tunnel):
 
 Not yet run, and not to be described as working:
 
+- **The Slack surface, against a real workspace.** Everything above is proven
+  against `slackfake` and an in-memory store. Its SQL (migration 008) has not
+  run against a PostgreSQL. To check against Slack itself: that
+  `app_uninstalled` and `tokens_revoked` are delivered under `bot_events`, and
+  their payloads; that `app_mention` reaches the bot in a group message and
+  carries `channel_type` and `is_ext_shared_channel`; whether Slack's
+  app-approval flow keeps the install link's `state`; `apps.uninstall`'s
+  arguments; that `conversations.info` answers `missing_scope` for a group
+  message with these scopes; `is_stranger` for Slack Connect people; that
+  `users.info` carries `is_email_confirmed` (absent, a person is unconfirmed);
+  and which of `team_id`, `context_team_id` and `authorizations` names the
+  install for a delivery from a shared channel (the surface tries them in that
+  order and takes the first with an active install).
 - **Slack and Notion accounts.** Their targets (a member's own channels; parent databases) are proven only against a stand-in.
 - **Google Drive and Gmail accounts, in every respect.** Connecting either,
   their targets (the whole Drive, a shared drive, `INBOX`/`SENT`), and
