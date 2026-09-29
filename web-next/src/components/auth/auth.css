@@ -297,6 +297,25 @@
   text-align: center;
 }
 
+.auth-legal-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 16px;
+}
+
+.auth-legal-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+.auth-legal-links a:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid #777;
+  outline-offset: 3px;
+}
+
 .auth-notice {
   margin: 0 0 18px;
   padding: 11px 13px;
