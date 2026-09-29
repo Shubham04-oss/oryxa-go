@@ -137,6 +137,9 @@ func (service *fakeThreads) Artifact(_ context.Context, member threads.Member, t
 		return threads.File{Name: name, MIMEType: "text/html", Data: []byte("<script>alert(1)</script>"), Version: 2}, nil
 	case name == "user:plan.txt":
 		return threads.File{Name: name, MIMEType: "text/plain; charset=utf-8", Data: []byte("plan"), Version: 1}, nil
+	case name == "trap.docx":
+		// Named like an Office file, typed like a page.
+		return threads.File{Name: name, MIMEType: "text/html", Data: []byte("<script>alert(1)</script>"), Version: 1}, nil
 	case name == "draft.docx":
 		if len(service.edited) > 0 {
 			return threads.File{Name: name, MIMEType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Data: service.edited, Version: 2}, nil

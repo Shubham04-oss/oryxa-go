@@ -1433,6 +1433,11 @@ func (server *Server) deleteThread(writer http.ResponseWriter, request *http.Req
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+// artifactContentPolicy is sent with every file a run kept, wherever it is
+// served from: it may load nothing and run nothing, and it is sandboxed away
+// from this origin.
+const artifactContentPolicy = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"
+
 // shownInline are the kinds of file a browser may show in place. Everything
 // else a run kept — HTML, scripts, anything a page could run — is only ever
 // downloaded, since it is served from the app's own origin.
@@ -1473,7 +1478,7 @@ func (server *Server) artifact(writer http.ResponseWriter, request *http.Request
 	}
 	// Nothing a run kept may run as a page of this origin, even if a
 	// browser is talked into rendering it.
-	header.Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox")
+	header.Set("Content-Security-Policy", artifactContentPolicy)
 	disposition := "attachment"
 	if shownInline[mediaType] {
 		disposition = "inline"

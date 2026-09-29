@@ -185,11 +185,16 @@ func (server *Server) documentSource(writer http.ResponseWriter, request *http.R
 		server.handleError(writer, request, err)
 		return
 	}
-	writer.Header().Set("Content-Type", file.MIMEType)
-	writer.Header().Set("Cache-Control", "no-store")
-	writer.Header().Set("Referrer-Policy", "no-referrer")
-	writer.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(file.Name)}))
-	writer.Header().Set("Content-Length", strconv.Itoa(len(file.Data)))
+	header := writer.Header()
+	// Docs reads these bytes as the file type its configuration names, so what
+	// the file says it is matters to no one, and a browser handed the ticket's
+	// URL must never take it for a page: whatever a run kept is opaque bytes.
+	header.Set("Content-Type", "application/octet-stream")
+	header.Set("Content-Security-Policy", artifactContentPolicy)
+	header.Set("Cache-Control", "no-store")
+	header.Set("Referrer-Policy", "no-referrer")
+	header.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(file.Name)}))
+	header.Set("Content-Length", strconv.Itoa(len(file.Data)))
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(file.Data)
 }

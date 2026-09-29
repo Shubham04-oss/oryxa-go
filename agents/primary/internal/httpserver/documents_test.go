@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -148,5 +149,38 @@ func TestDocumentEditorUsesSignedScopedSourceAndCallback(t *testing.T) {
 	refused := serve(server, http.MethodPost, callbackURL.RequestURI(), string(convertedBody), map[string]string{"Authorization": "Bearer " + convertedSignature})
 	if refused.Code != http.StatusOK || !strings.Contains(refused.Body.String(), `"error":1`) {
 		t.Fatalf("converted callback = %d %s", refused.Code, refused.Body.String())
+	}
+}
+
+// What Docs is given is opaque bytes: a file named like an Office file and
+// typed like a page must not be one if a browser is ever handed its URL.
+func TestTheSourceIsServedAsBytesThatCannotRunAsAPage(t *testing.T) {
+	server := New(member(), &fakeThreads{}, Config{Documents: DocumentsConfig{
+		PublicURL: "https://docs.oryxa.test", InternalURL: "https://docs.oryxa.test",
+		APIURL: "https://api.oryxa.test", JWTSecret: "an-example-secret-with-more-than-32-characters",
+	}}, nil)
+	for name, want := range map[string]string{"draft.docx": "docx-original", "trap.docx": "<script>alert(1)</script>"} {
+		ticket, err := server.signDocumentTicket(documentTicket{
+			Purpose: "source", Organization: "org_1", User: "user_1", Thread: "thread_1", Name: name, Version: 1,
+			Key:              documentKey("org_1", "user_1", "thread_1", name, 1),
+			RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/"+name+"/editor-source?ticket="+url.QueryEscape(ticket), "", nil)
+		if response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("%s = %d %q", name, response.Code, response.Body.String())
+		}
+		header := response.Header()
+		if header.Get("Content-Type") != "application/octet-stream" {
+			t.Fatalf("%s is served as %q, want opaque bytes whatever type the file carries", name, header.Get("Content-Type"))
+		}
+		if header.Get("Content-Security-Policy") != artifactContentPolicy || !strings.Contains(header.Get("Content-Security-Policy"), "sandbox") {
+			t.Fatalf("%s carries the policy %q, want the one every file a run kept carries: %q", name, header.Get("Content-Security-Policy"), artifactContentPolicy)
+		}
+		if !strings.HasPrefix(header.Get("Content-Disposition"), "attachment") || header.Get("X-Content-Type-Options") != "nosniff" || header.Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s headers = %v", name, header)
+		}
 	}
 }
