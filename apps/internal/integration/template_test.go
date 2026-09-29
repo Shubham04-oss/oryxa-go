@@ -1,4 +1,4 @@
-package integrations
+package integration_test
 
 import (
 	"os"
@@ -8,14 +8,18 @@ import (
 	"testing"
 )
 
-// The template is a directory the go tool ignores, because its name begins
-// with an underscore: nothing is compiled from it and a copy is the first
+// The template a toolkit worker copies lives at
+// apps/internal/integrations/_template. Its name begins with an underscore, so
+// the go tool ignores it: nothing is compiled from it and a copy is the first
 // thing a worker does with it. That is also how a broken template would sit
-// here unnoticed, copying itself into six toolkits that all fail the same
-// way, so it is built and run from this test by naming it explicitly.
+// there unnoticed, copying itself into six toolkits that all fail the same
+// way, so it is built and run from here by naming it explicitly. The go tool
+// only ignores a directory like that for a wildcard pattern: naming it
+// outright builds it.
 //
-// The go tool only ignores a directory like this for a wildcard pattern:
-// naming it outright builds it.
+// This test lives beside the contract the template is written against rather
+// than beside the template, because the template's own directory is not a
+// package the go tool will look in.
 func TestTheTemplateBuildsAndPassesItsOwnConformance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("the template is compiled with the go tool, which -short asks not to spend on")
@@ -23,7 +27,9 @@ func TestTheTemplateBuildsAndPassesItsOwnConformance(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("the go tool is not on PATH, so the template cannot be built here")
 	}
-	built := exec.Command("go", "test", "./_template")
+	// The go tool resolves the pattern against the working directory, which is
+	// this package's, so the path is spelled from here.
+	built := exec.Command("go", "test", "../integrations/_template")
 	output, err := built.CombinedOutput()
 	if err != nil {
 		t.Fatalf("the template does not build or does not pass its own conformance: %v\n%s",
@@ -41,7 +47,7 @@ func TestTheTemplateBuildsAndPassesItsOwnConformance(t *testing.T) {
 // exists to stop.
 func TestTheTemplateCarriesItsOwnCassettes(t *testing.T) {
 	t.Parallel()
-	root := filepath.Join("_template", "testdata")
+	root := templatePath(t)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatalf("the template has no testdata: %v", err)
@@ -99,4 +105,20 @@ func readTree(t *testing.T, root string) string {
 		t.Fatal(err)
 	}
 	return held.String()
+}
+
+// templatePath is where the template sits relative to this package, which is
+// the contract's own directory: integrations/_template is two levels down and
+// across.
+func templatePath(t *testing.T) string {
+	t.Helper()
+	working, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(working, "..", "integrations", "_template", "testdata")
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("the template has no testdata at %s: %v", root, err)
+	}
+	return root
 }
