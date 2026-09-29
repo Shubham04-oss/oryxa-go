@@ -2,6 +2,8 @@ package observability
 
 import (
 	"context"
+	"net/url"
+	"slices"
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -62,13 +64,36 @@ var keptOnToolSpans = map[attribute.Key]struct{}{
 	exceptionTypeKey: {},
 }
 
+// A URL is not only an address. Its query string is what somebody typed into a
+// search box or a filter: the directory's find_people, find_teams and
+// find_agents put a member's words in ?q=, and the client span of that call
+// carries the whole URL, so the words would reach X-Ray from a span that is no
+// tool's. So every span, a tool's or not, goes out with the query and the
+// fragment of each URL it carries left out, on the span and on its events.
+// What stays is where the request went: the scheme, the host and the path.
+const (
+	// The attributes a URL comes in: the current names, and the older ones an
+	// instrumentation may still write. http.target is a path with its query
+	// and no host.
+	urlFullKey    = attribute.Key("url.full")
+	urlQueryKey   = attribute.Key("url.query")
+	httpURLKey    = attribute.Key("http.url")
+	httpTargetKey = attribute.Key("http.target")
+
+	// redactedQuery is what an export carries in place of a URL's query, and
+	// of a URL attribute that is not a URL.
+	redactedQuery = "[redacted]"
+)
+
 // RedactToolCalls wraps exporter so that no tool span it exports carries what
 // the call held. The arguments and the response are replaced by a marker,
 // with how many bytes each held beside it, and so is every attribute the
 // allowlist does not name. An error's message is replaced too, on the span's
 // status and on its exception events, and its type is kept. A tool span keeps
 // its name, its status, its timing and its ids. Every other span goes out as
-// it is.
+// it is, save for the URLs on it and on its events: no span keeps a URL's
+// query or its fragment, and a query reads [redacted]. A span with no such URL
+// is exported itself, not a copy.
 func RedactToolCalls(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
 	return redactingExporter{SpanExporter: exporter}
 }
@@ -83,7 +108,8 @@ func (exporter redactingExporter) ExportSpans(ctx context.Context, spans []sdktr
 	return exporter.SpanExporter.ExportSpans(ctx, exported)
 }
 
-// redactedSpan is a span with what its call held replaced.
+// redactedSpan is a span with its attributes, its events and its status
+// replaced.
 type redactedSpan struct {
 	sdktrace.ReadOnlySpan
 	attributes []attribute.KeyValue
@@ -98,7 +124,7 @@ func (span redactedSpan) Status() sdktrace.Status          { return span.status 
 func redactSpan(span sdktrace.ReadOnlySpan) sdktrace.ReadOnlySpan {
 	attributes := span.Attributes()
 	if !isToolSpan(span.Name(), attributes) {
-		return span
+		return withoutQueries(span, attributes)
 	}
 	events := span.Events()
 	redactedEvents := make([]sdktrace.Event, len(events))
@@ -118,6 +144,105 @@ func redactSpan(span sdktrace.ReadOnlySpan) sdktrace.ReadOnlySpan {
 		events:       redactedEvents,
 		status:       status,
 	}
+}
+
+// withoutQueries is span with the query and the fragment of every URL it
+// carries left out, on the span and on each of its events. It is span itself
+// when none carries either.
+func withoutQueries(span sdktrace.ReadOnlySpan, attributes []attribute.KeyValue) sdktrace.ReadOnlySpan {
+	cleanedAttributes, changed := redactURLs(attributes)
+	events := span.Events()
+	var cleanedEvents []sdktrace.Event
+	for index, event := range events {
+		cleaned, eventChanged := redactURLs(event.Attributes)
+		if !eventChanged {
+			continue
+		}
+		if cleanedEvents == nil {
+			cleanedEvents = slices.Clone(events)
+		}
+		event.Attributes = cleaned
+		cleanedEvents[index] = event
+	}
+	if !changed && cleanedEvents == nil {
+		return span
+	}
+	if cleanedEvents == nil {
+		cleanedEvents = events
+	}
+	return redactedSpan{ReadOnlySpan: span, attributes: cleanedAttributes, events: cleanedEvents, status: span.Status()}
+}
+
+// redactURLs is attributes with each URL among them redacted, and whether any
+// was changed. It is attributes itself, not a copy, when none was.
+func redactURLs(attributes []attribute.KeyValue) ([]attribute.KeyValue, bool) {
+	var cleaned []attribute.KeyValue
+	for index, value := range attributes {
+		replaced, changed := redactURLAttribute(value)
+		if !changed {
+			continue
+		}
+		if cleaned == nil {
+			cleaned = slices.Clone(attributes)
+		}
+		cleaned[index] = replaced
+	}
+	if cleaned == nil {
+		return attributes, false
+	}
+	return cleaned, true
+}
+
+// redactURLAttribute is value as it may be exported, and whether that is not
+// value as it was. A URL keeps its scheme, host and path (redactURL); a query
+// on its own is replaced whole, and so is a URL attribute of any type but a
+// string.
+func redactURLAttribute(value attribute.KeyValue) (attribute.KeyValue, bool) {
+	var replacement string
+	switch value.Key {
+	case urlQueryKey:
+		replacement = redactedQuery
+	case urlFullKey, httpURLKey, httpTargetKey:
+		if value.Value.Type() != attribute.STRING {
+			replacement = redactedQuery
+		} else {
+			replacement = redactURL(value.Value.AsString())
+		}
+	default:
+		return value, false
+	}
+	if value.Value.Type() == attribute.STRING && value.Value.AsString() == replacement {
+		return value, false
+	}
+	return value.Key.String(replacement), true
+}
+
+// redactURL is rawURL as it may be exported: its scheme, host and path, with
+// redactedQuery after a "?" where there was a query, and no userinfo and no
+// fragment. It is rawURL itself when there was nothing to leave out. A value
+// that is neither an absolute URL nor a path is not one to trust with a query
+// in it, and comes back as redactedQuery whole, as does one that does not
+// parse.
+func redactURL(rawURL string) string {
+	if rawURL == "" {
+		return rawURL
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return redactedQuery
+	}
+	if (parsed.Scheme == "" || parsed.Host == "") && !strings.HasPrefix(rawURL, "/") {
+		return redactedQuery
+	}
+	hasQuery := parsed.RawQuery != "" || parsed.ForceQuery
+	if !hasQuery && parsed.Fragment == "" && parsed.User == nil {
+		return rawURL
+	}
+	kept := url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path, RawPath: parsed.RawPath}
+	if hasQuery {
+		return kept.String() + "?" + redactedQuery
+	}
+	return kept.String()
 }
 
 // redactAttributes keeps the attributes the allowlist names and replaces the

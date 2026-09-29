@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -240,15 +243,18 @@ func TestNoToolCallsContentLeavesInATrace(t *testing.T) {
 	}
 }
 
-// TestASpanThatIsNoToolCallGoesOutAsItIs: the redaction is for tool calls. A
-// request's server span, an agent's and a model's go out with everything they
-// carry, errors included.
+// TestASpanThatIsNoToolCallGoesOutAsItIs: the redaction of a tool call is for
+// tool calls. A request's server span, an agent's and a model's go out with
+// everything they carry, errors included, and a URL with no query or fragment
+// in it as it is.
 func TestASpanThatIsNoToolCallGoesOutAsItIs(t *testing.T) {
 	failure := errors.New("the model refused: quota")
 	plain, exported := exportBoth(t, func(tracer trace.Tracer) {
 		_, request := tracer.Start(context.Background(), "GET /v1/organizations/{organizationID}/corpora",
 			trace.WithSpanKind(trace.SpanKindServer),
-			trace.WithAttributes(attribute.String("http.route", "/v1/organizations/{organizationID}/corpora"), attribute.String("url.query", "team_id=team_1")))
+			trace.WithAttributes(attribute.String("http.route", "/v1/organizations/{organizationID}/corpora"),
+				attribute.String("url.path", "/v1/organizations/org_1/corpora"),
+				attribute.String("url.full", "https://teams.internal:8443/v1/organizations/org_1/members")))
 		request.End()
 		_, agent := tracer.Start(context.Background(), "invoke_agent krude", trace.WithAttributes(
 			attribute.String("gen_ai.operation.name", "invoke_agent"), attribute.String("gen_ai.agent.name", "krude")))
@@ -327,7 +333,8 @@ func TestOnlyTheAllowlistIsKeptOnAToolSpan(t *testing.T) {
 			attribute.String("a.future.adk.attribute", "Priya's salary is 210k"),
 			attribute.Int("a.number", 210000),
 			attribute.StringSlice("a.list", []string{"210k"}),
-			attribute.Bool("a.flag", true)))
+			attribute.Bool("a.flag", true),
+			urlFullKey.String("https://x/v1/directory/people?q=raya+secret")))
 		span.AddEvent("progress", trace.WithAttributes(
 			attribute.String("exception.type", "kind"), attribute.String("detail", "Priya's salary is 210k")))
 		span.End()
@@ -337,7 +344,7 @@ func TestOnlyTheAllowlistIsKeptOnAToolSpan(t *testing.T) {
 	if values[adkToolNameKey] != "browser_snapshot" || values[adkOperationKey] != toolOperation {
 		t.Errorf("attributes = %v, want the name and the operation kept", values)
 	}
-	for _, key := range []attribute.Key{"a.future.adk.attribute", "a.number", "a.list", "a.flag"} {
+	for _, key := range []attribute.Key{"a.future.adk.attribute", "a.number", "a.list", "a.flag", urlFullKey} {
 		if values[key] != redacted {
 			t.Errorf("%s = %q, want it redacted", key, values[key])
 		}
@@ -385,5 +392,266 @@ func TestRedactionLeavesTheSpansItWasGiven(t *testing.T) {
 	}
 	if got := attributeValues(ended[0].Events()[0].Attributes)["exception.message"]; got != "no corpus called hr-private" {
 		t.Errorf("the recorded span's exception = %q, want it untouched", got)
+	}
+}
+
+// endedSpan is a span as the SDK hands it to an exporter once it has ended.
+func endedSpan(t *testing.T, name string, record func(span trace.Span)) sdktrace.ReadOnlySpan {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	_, span := provider.Tracer("test").Start(context.Background(), name, trace.WithSpanKind(trace.SpanKindClient))
+	record(span)
+	span.End()
+	ended := recorder.Ended()
+	if len(ended) != 1 {
+		t.Fatalf("recorded %d spans", len(ended))
+	}
+	return ended[0]
+}
+
+// TestAURLKeepsItsSchemeHostAndPathAndLosesTheRest: what somebody typed into a
+// URL is its query, and a fragment and userinfo are as little for a trace.
+// Where the request went is the rest, and stays. A value that is no URL is
+// not trusted to hold no query, and goes whole.
+func TestAURLKeepsItsSchemeHostAndPathAndLosesTheRest(t *testing.T) {
+	for rawURL, want := range map[string]string{
+		"https://x/v1/directory/people?q=raya+secret":      "https://x/v1/directory/people?[redacted]",
+		"https://x/v1/directory/people?q=raya&limit=5":     "https://x/v1/directory/people?[redacted]",
+		"https://x/v1/directory/people?":                   "https://x/v1/directory/people?[redacted]",
+		"https://x/v1/directory/people?q=raya#raya-secret": "https://x/v1/directory/people?[redacted]",
+		"https://x/v1/directory/people#raya-secret":        "https://x/v1/directory/people",
+		"https://raya:secret@x:8443/a%2Fb/c?q=1":           "https://x:8443/a%2Fb/c?[redacted]",
+		"https://raya:secret@x/v1/directory/people":        "https://x/v1/directory/people",
+		"http://[2606:4700::1]:8080/a?b=c":                 "http://[2606:4700::1]:8080/a?[redacted]",
+		"https://x?q=raya":                                 "https://x?[redacted]",
+		"https://x/p?q=%zz":                                "https://x/p?[redacted]",
+		"https://x/v1/directory/people?q=[redacted]":       "https://x/v1/directory/people?[redacted]",
+		"/v1/directory/people?q=raya+secret":               "/v1/directory/people?[redacted]",
+		"//x/v1/directory/people?q=raya":                   "//x/v1/directory/people?[redacted]",
+		"https://x/v1/directory/people":                    "https://x/v1/directory/people",
+		"https://x":                                        "https://x",
+		"https://x:8443/a%2Fb/c":                           "https://x:8443/a%2Fb/c",
+		"/v1/directory/people":                             "/v1/directory/people",
+		"/":                                                "/",
+		"":                                                 "",
+		"raya secret":                                      "[redacted]",
+		"raya?q=secret":                                    "[redacted]",
+		"not a url":                                        "[redacted]",
+		"%zz":                                              "[redacted]",
+		"https://x/%zz?q=raya+secret":                      "[redacted]",
+		"mailto:raya@example.com?subject=secret":           "[redacted]",
+		"https://":                                         "[redacted]",
+		"https:///v1/directory/people?q=raya":              "[redacted]",
+		"x.internal:8443":                                  "[redacted]",
+		"https://x/v1/directory/people?q=raya\nsecret":     "[redacted]",
+	} {
+		if got := redactURL(rawURL); got != want {
+			t.Errorf("redactURL(%q) = %q, want %q", rawURL, got, want)
+		}
+	}
+}
+
+// TestNoQueryStringLeavesOnAnySpan: a client span's URL, in either of the
+// names it goes by, a request target, and a query on its own, lose what was
+// typed and keep the rest of the span. It does not take a tool call for this.
+func TestNoQueryStringLeavesOnAnySpan(t *testing.T) {
+	const people = "https://x/v1/directory/people"
+	for name, test := range map[string]struct {
+		attribute attribute.KeyValue
+		want      string
+	}{
+		"a client span's URL":          {urlFullKey.String(people + "?q=raya+secret"), people + "?[redacted]"},
+		"the older name for it":        {httpURLKey.String(people + "?q=raya+secret"), people + "?[redacted]"},
+		"a request target":             {httpTargetKey.String("/v1/directory/people?q=raya+secret"), "/v1/directory/people?[redacted]"},
+		"a query on its own":           {urlQueryKey.String("q=raya+secret"), "[redacted]"},
+		"an empty query on its own":    {urlQueryKey.String(""), "[redacted]"},
+		"a fragment":                   {urlFullKey.String(people + "#raya-secret"), people},
+		"a query and a fragment":       {httpURLKey.String(people + "?q=raya#raya-secret"), people + "?[redacted]"},
+		"userinfo":                     {urlFullKey.String("https://raya:secret@x/v1/directory/people"), people},
+		"a value that is no URL":       {urlFullKey.String("raya secret"), "[redacted]"},
+		"an older value that is none":  {httpURLKey.String("raya?q=secret"), "[redacted]"},
+		"a value that is not a string": {urlFullKey.Int(200), "[redacted]"},
+		"a URL with no query":          {urlFullKey.String(people), people},
+		"a target with no query":       {httpTargetKey.String("/v1/directory/people"), "/v1/directory/people"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			plain, exported := exportBoth(t, func(tracer trace.Tracer) {
+				_, span := tracer.Start(context.Background(), "HTTP GET x", trace.WithSpanKind(trace.SpanKindClient),
+					trace.WithAttributes(test.attribute, attribute.String("http.request.method", "GET"), attribute.String("server.address", "x")))
+				span.SetAttributes(attribute.Int("http.response.status_code", 200))
+				span.End()
+			})
+			before, after := plain["HTTP GET x"], exported["HTTP GET x"]
+			values := attributeValues(after.Attributes)
+			if got := values[test.attribute.Key]; got != test.want {
+				t.Errorf("%s = %q, want %q", test.attribute.Key, got, test.want)
+			}
+			for key, want := range attributeValues(before.Attributes) {
+				if key != test.attribute.Key && values[key] != want {
+					t.Errorf("%s = %q, want it untouched: %q", key, values[key], want)
+				}
+			}
+			if len(after.Attributes) != len(before.Attributes) || after.Status != before.Status ||
+				!after.StartTime.Equal(before.StartTime) || !after.EndTime.Equal(before.EndTime) ||
+				!after.SpanContext.Equal(before.SpanContext) || after.SpanKind != before.SpanKind {
+				t.Errorf("the span changed in more than the URL: %+v, was %+v", after, before)
+			}
+			for _, text := range everyText(after) {
+				for _, secret := range []string{"raya", "secret"} {
+					if strings.Contains(text, secret) {
+						t.Errorf("the span carries %q, which holds %q", text, secret)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestNoQueryStringLeavesOnAnEvent: an event on a span, a redirect say, carries
+// a URL as a span does, and loses the same of it.
+func TestNoQueryStringLeavesOnAnEvent(t *testing.T) {
+	plain, exported := exportBoth(t, func(tracer trace.Tracer) {
+		_, span := tracer.Start(context.Background(), "HTTP GET x", trace.WithSpanKind(trace.SpanKindClient))
+		span.AddEvent("redirect", trace.WithAttributes(
+			urlFullKey.String("https://x/v1/directory/people?q=raya+secret#raya-secret"),
+			httpURLKey.String("https://x/v1/directory/teams?q=raya+secret"),
+			urlQueryKey.String("q=raya+secret"),
+			attribute.String("http.response.status_code", "302"),
+			attribute.String("note", "kept")))
+		span.AddEvent("retry", trace.WithAttributes(urlFullKey.String("https://x/v1/directory/agents")))
+		span.End()
+	})
+	before, after := plain["HTTP GET x"], exported["HTTP GET x"]
+	if len(after.Events) != 2 || after.Events[0].Name != "redirect" || after.Events[1].Name != "retry" {
+		t.Fatalf("events = %+v, want the two the span had", after.Events)
+	}
+	redirect, retry := attributeValues(after.Events[0].Attributes), attributeValues(after.Events[1].Attributes)
+	for key, want := range map[attribute.Key]string{
+		urlFullKey: "https://x/v1/directory/people?[redacted]", httpURLKey: "https://x/v1/directory/teams?[redacted]",
+		urlQueryKey: "[redacted]", "http.response.status_code": "302", "note": "kept",
+	} {
+		if redirect[key] != want {
+			t.Errorf("the redirect's %s = %q, want %q", key, redirect[key], want)
+		}
+	}
+	if retry[urlFullKey] != "https://x/v1/directory/agents" {
+		t.Errorf("the retry's URL = %q, want it untouched", retry[urlFullKey])
+	}
+	if !after.Events[0].Time.Equal(before.Events[0].Time) || len(after.Events[0].Attributes) != len(before.Events[0].Attributes) {
+		t.Errorf("the redirect changed in more than its URLs: %+v, was %+v", after.Events[0], before.Events[0])
+	}
+	for _, text := range everyText(after) {
+		for _, secret := range []string{"raya", "secret"} {
+			if strings.Contains(text, secret) {
+				t.Errorf("the span carries %q, which holds %q", text, secret)
+			}
+		}
+	}
+}
+
+// TestASpanWithNothingToLeaveOutIsTheSameSpan: the exporter hands on the span
+// it was given, not a copy of it, unless a URL on it or on an event has a
+// query or a fragment to lose.
+func TestASpanWithNothingToLeaveOutIsTheSameSpan(t *testing.T) {
+	sameSpan := func(got, want sdktrace.ReadOnlySpan) bool {
+		_, copied := got.(redactedSpan)
+		return !copied && got == want
+	}
+	for name, record := range map[string]func(span trace.Span){
+		"no attributes": func(trace.Span) {},
+		"attributes but no URL": func(span trace.Span) {
+			span.SetAttributes(attribute.String("http.route", "/v1/x"), attribute.Int("http.response.status_code", 200))
+		},
+		"a URL with no query": func(span trace.Span) {
+			span.SetAttributes(urlFullKey.String("https://x/v1/directory/people"), httpTargetKey.String("/v1/directory/people"))
+		},
+		"a URL the redaction already left": func(span trace.Span) {
+			span.SetAttributes(urlFullKey.String("https://x/v1/directory/people?[redacted]"), urlQueryKey.String("[redacted]"))
+		},
+		"an event with a URL with no query": func(span trace.Span) {
+			span.AddEvent("redirect", trace.WithAttributes(urlFullKey.String("https://x/v1/directory/people")))
+		},
+		"an error and its event": func(span trace.Span) {
+			span.RecordError(errors.New("the model refused: quota"))
+			span.SetStatus(codes.Error, "the model refused: quota")
+		},
+	} {
+		span := endedSpan(t, "HTTP GET x", record)
+		if got := redactSpan(span); !sameSpan(got, span) {
+			t.Errorf("%s: got a copy of the span, want the span itself", name)
+		}
+	}
+	for name, record := range map[string]func(span trace.Span){
+		"a query on the span": func(span trace.Span) { span.SetAttributes(urlFullKey.String("https://x/p?q=1")) },
+		"a fragment":          func(span trace.Span) { span.SetAttributes(httpURLKey.String("https://x/p#top")) },
+		"a query on its own":  func(span trace.Span) { span.SetAttributes(urlQueryKey.String("q=1")) },
+		"a query on an event": func(span trace.Span) {
+			span.AddEvent("redirect", trace.WithAttributes(urlFullKey.String("https://x/p?q=1")))
+		},
+		"a URL that is no URL": func(span trace.Span) { span.SetAttributes(urlFullKey.String("raya secret")) },
+	} {
+		span := endedSpan(t, "HTTP GET x", record)
+		if got := redactSpan(span); sameSpan(got, span) {
+			t.Errorf("%s: got the span itself, want it redacted", name)
+		}
+	}
+}
+
+// TestNoQueryStringOfAnHTTPCallReachesATrace: the case the redaction is for, as
+// the process makes it. A caller asks a service's directory for a member by
+// name through Transport, the service answers through HTTPHandler, and
+// instrumentation writes both spans. The name is in neither, or in an event,
+// while where the call went, and what came of it, still are.
+func TestNoQueryStringOfAnHTTPCallReachesATrace(t *testing.T) {
+	exported := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSyncer(RedactToolCalls(exported)))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		otel.SetTracerProvider(previous)
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/directory/people", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	})
+	directory := httptest.NewServer(HTTPHandler("oryxa-teams", mux))
+	t.Cleanup(directory.Close)
+
+	client := &http.Client{Transport: Transport(nil)}
+	response, err := client.Get(directory.URL + "/v1/directory/people?q=raya+secret#raya-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if err := provider.ForceFlush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var clientSpan *tracetest.SpanStub
+	spans := exported.GetSpans()
+	for index := range spans {
+		if spans[index].SpanKind == trace.SpanKindClient {
+			clientSpan = &spans[index]
+		}
+		for _, text := range everyText(spans[index]) {
+			for _, secret := range []string{"raya", "secret"} {
+				if strings.Contains(text, secret) {
+					t.Errorf("%s carries %q, which holds %q", spans[index].Name, text, secret)
+				}
+			}
+		}
+	}
+	if len(spans) < 2 || clientSpan == nil {
+		t.Fatalf("exported %d spans, want the client's and the server's", len(spans))
+	}
+	values := attributeValues(clientSpan.Attributes)
+	if want := directory.URL + "/v1/directory/people?[redacted]"; values[urlFullKey] != want {
+		t.Errorf("the client span's URL = %q, want %q", values[urlFullKey], want)
+	}
+	if values["http.response.status_code"] != "204" || values["http.request.method"] != "GET" {
+		t.Errorf("the client span = %v, want the call's method and status kept", values)
 	}
 }
