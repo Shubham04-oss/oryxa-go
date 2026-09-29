@@ -1,14 +1,18 @@
 package surfaces
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/slackrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
@@ -208,5 +212,109 @@ func TestWithoutAThreadServiceNothingIsNotedAndEverythingElseIsSaid(t *testing.T
 	}
 	if h.notes.calls != 0 {
 		t.Fatal("notes were written with no service to write them")
+	}
+}
+
+// fakeMembers says who still belongs to the organization, and counts asking.
+type fakeMembers struct {
+	mu     sync.Mutex
+	member bool
+	err    error
+	calls  int
+	asked  []string
+}
+
+func (m *fakeMembers) IsMember(_ context.Context, organizationID, userID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	m.asked = append(m.asked, organizationID+"/"+userID)
+	return m.member, m.err
+}
+
+// serviceWithMembers is the harness's service that also checks who still belongs.
+func (h *harness) serviceWithMembers(members Members) *Service {
+	h.t.Helper()
+	service, err := NewService(h.links, Deps{
+		Requests: h.ledger, Asks: h.ledger, Tickets: h.ledger, Slack: h.client, Users: h.users, Notes: h.notes,
+		Members: members, Now: func() time.Time { return h.now },
+	})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return service
+}
+
+func TestNoNoteIsWrittenForAnAskerWhoHasLeftTheOrganizationAndEverythingElseIsStillSaid(t *testing.T) {
+	h := newHarness(t)
+	members := &fakeMembers{member: false}
+	service := h.serviceWithMembers(members)
+	h.ledger.put(pendingRequest())
+	if err := service.Handle(t.Context(), Job{RequestID: "irq_1", OrganizationID: "org_1"}); err != nil {
+		t.Fatalf("pass = %v, want an asker who left to be no reason to fail", err)
+	}
+	if h.notes.calls != 0 {
+		t.Fatalf("the thread service was called %d times for a member who left", h.notes.calls)
+	}
+	if got := members.asked; len(got) != 1 || got[0] != "org_1/user_asker" {
+		t.Fatalf("membership was asked of %v, want the asker in their organization", got)
+	}
+	if _, ok := h.links.get("irq_1", roleNotePrefix+threads.NoteAsked); ok {
+		t.Fatal("a line was recorded for one that was not written")
+	}
+	// What Slack is told does not depend on it.
+	if got := templates(h.api.sent()); fmt.Sprint(got) != "[owner_notice]" {
+		t.Fatalf("posted %v", got)
+	}
+}
+
+func TestAnAskerWhoStillBelongsGetsTheirLinesAndMembershipIsNotAskedAgainOnceTheyAreWritten(t *testing.T) {
+	h := newHarness(t)
+	members := &fakeMembers{member: true}
+	service := h.serviceWithMembers(members)
+	h.ledger.put(pendingRequest())
+	for range 3 {
+		if err := service.Handle(t.Context(), Job{RequestID: "irq_1", OrganizationID: "org_1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := h.notes.texts(); len(got) != 1 {
+		t.Fatalf("notes = %q", got)
+	}
+	if members.calls != 1 {
+		t.Fatalf("membership was asked %d times, want once: nothing was due on the passes after the first", members.calls)
+	}
+	// An ending is due, and asks again.
+	h.ledger.put(completedWith(memberDecided(pendingRequest(), interactions.DecisionApproved, interactions.ConsentSummary, interactions.SurfaceSlack), "The 14th."))
+	if err := service.Handle(t.Context(), Job{RequestID: "irq_1", OrganizationID: "org_1"}); err != nil {
+		t.Fatal(err)
+	}
+	if members.calls != 2 || len(h.notes.texts()) != 2 {
+		t.Fatalf("membership asked %d times, notes %q", members.calls, h.notes.texts())
+	}
+}
+
+func TestAMembershipCheckThatFailsIsTriedAgainAndWritesNothingUntilItAnswers(t *testing.T) {
+	h := newHarness(t)
+	members := &fakeMembers{err: errors.New("auth's tables are unavailable")}
+	service := h.serviceWithMembers(members)
+	h.ledger.put(pendingRequest())
+	err := service.Handle(t.Context(), Job{RequestID: "irq_1", OrganizationID: "org_1"})
+	if err == nil || slackrouter.IsPermanent(err) || !strings.Contains(err.Error(), "belongs") {
+		t.Fatalf("pass = %v, want a failure to try again", err)
+	}
+	if h.notes.calls != 0 {
+		t.Fatal("a line was written before it was known that the asker belongs")
+	}
+	members.err, members.member = nil, true
+	if err := service.Handle(t.Context(), Job{RequestID: "irq_1", OrganizationID: "org_1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.notes.texts(); len(got) != 1 {
+		t.Fatalf("notes = %q", got)
+	}
+	// The notice went once, whichever pass it went in.
+	if len(h.api.sentWith("owner_notice")) != 1 {
+		t.Fatalf("posted %v", templates(h.api.sent()))
 	}
 }

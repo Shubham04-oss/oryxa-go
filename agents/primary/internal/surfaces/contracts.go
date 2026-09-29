@@ -66,6 +66,16 @@ type Notes interface {
 	Note(ctx context.Context, member threads.Member, note threads.Note) error
 }
 
+// Members says whether a member still belongs to an organization, as auth's
+// tables have it. *adksession.Store implements it.
+//
+// A note makes a thread in the asker's agent chat that they did not ask for in
+// Oryxa: they asked in Slack. As for a wake-up, a member who left must not have
+// threads made for them, so the note is written only for one who still belongs.
+type Members interface {
+	IsMember(ctx context.Context, organizationID, userID string) (bool, error)
+}
+
 // links is the part of the store a pass needs. *Store implements it.
 type links interface {
 	Link(ctx context.Context, requestID, role string) (Link, bool, error)

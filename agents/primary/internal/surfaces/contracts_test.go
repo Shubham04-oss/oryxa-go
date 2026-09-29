@@ -1,6 +1,7 @@
 package surfaces
 
 import (
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/appsclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/slackrouter"
@@ -18,6 +19,7 @@ var (
 	_ Slack      = (*appsclient.Client)(nil)
 	_ SlackUsers = (*slackrouter.Store)(nil)
 	_ Notes      = (*threads.Service)(nil)
+	_ Members    = (*adksession.Store)(nil)
 	_ links      = (*Store)(nil)
 	_ jobQueue   = (*Store)(nil)
 	_ jobHandler = (*Service)(nil)

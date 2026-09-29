@@ -44,15 +44,34 @@ func (p *pass) note(ctx context.Context) error {
 		UserID: p.request.Requester.UserID, OrganizationID: p.request.OrganizationID,
 		AgentID: p.request.Requester.AgentID, AgentName: p.request.Requester.AgentName, AgentKind: primaryAgentKind,
 	}
+	var due []string
 	for _, state := range p.noteStates() {
-		role := roleNotePrefix + state
-		link, said, err := p.said(ctx, role)
+		link, said, err := p.said(ctx, roleNotePrefix+state)
 		if err != nil {
 			return err
 		}
-		if said && link.State != "" {
-			continue
+		if !said || link.State == "" {
+			due = append(due, state)
 		}
+	}
+	if len(due) == 0 {
+		return nil
+	}
+	if members := p.service.deps.Members; members != nil {
+		stillMember, err := members.IsMember(ctx, member.OrganizationID, member.UserID)
+		if err != nil {
+			return fmt.Errorf("check that the asker still belongs to the organization: %w", err)
+		}
+		if !stillMember {
+			// Nothing is written for a member who left, and nothing is recorded:
+			// there is nobody for a line to be for.
+			p.service.logger.InfoContext(ctx, "no note is written for an asker who has left the organization",
+				"request_id", p.request.ID, "organization_id", p.request.OrganizationID)
+			return nil
+		}
+	}
+	for _, state := range due {
+		role := roleNotePrefix + state
 		text, err := p.noteText(ctx, state)
 		if err != nil {
 			return err

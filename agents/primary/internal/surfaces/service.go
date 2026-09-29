@@ -23,8 +23,11 @@ type Deps struct {
 	Users    SlackUsers
 	// Notes writes the asker's line in their own agent chat. Without it none is
 	// written, and everything else is said as it would be.
-	Notes  Notes
-	Logger *slog.Logger
+	Notes Notes
+	// Members, when set, has a note written only for an asker who still belongs
+	// to the organization. Without it a note is written for whoever asked.
+	Members Members
+	Logger  *slog.Logger
 	// Now is the clock; time.Now when nil.
 	Now func() time.Time
 }
