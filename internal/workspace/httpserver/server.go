@@ -646,7 +646,7 @@ func (server *Server) context(writer http.ResponseWriter, request *http.Request)
 			Email string `json:"email"`
 		} `json:"members"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&members); err != nil {
+	if err := json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(&members); err != nil {
 		writeError(writer, http.StatusBadGateway, "members response was invalid")
 		return
 	}
