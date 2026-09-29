@@ -474,7 +474,8 @@ nothing else pending in this configuration, in this order:
 ```sh
 (cd deploy/production && tofu apply \
   -target=aws_kms_key.apps_signin -target=aws_kms_alias.apps_signin \
-  -target=aws_iam_role_policy.task -target=aws_secretsmanager_secret.external \
+  -target=aws_iam_role_policy.task -target=aws_iam_role_policy.execution_secrets \
+  -target=aws_secretsmanager_secret.external \
   -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
 deploy/scripts/put-secrets.sh   # APPS_DEFAULT_OAUTH_CLIENTS, APPS_HOOK_SECRETS
 echo '{"apps_signin_secrets_ready": true}' | jq . > deploy/production/apps_signin.auto.tfvars.json
@@ -496,6 +497,15 @@ the task definition does not reference `APPS_DEFAULT_OAUTH_CLIENTS` or
 `APPS_HOOK_SECRETS` until `apps_signin_secrets_ready` says `put-secrets.sh`
 has filled them in; commit `apps_signin.auto.tfvars.json` once it is `true`,
 so every other checkout's apply keeps naming them.
+
+The first apply names `aws_iam_role_policy.execution_secrets` because the task
+definition does not depend on it: it is the policy that lets ECS read each
+secret the definition names as a task starts, and it lists the secrets'
+containers, so a targeted apply that leaves it out makes a task that names a
+secret it may not read. That task fails to start and the deployment is rolled
+back. If you applied this section before that target was in it, run
+`(cd deploy/production && tofu apply -target=aws_iam_role_policy.execution_secrets)`
+before turning `apps_signin_secrets_ready` on.
 
 **Switching a toolkit on** is the plan's gate G4: change
 `APPS_ORYXA_TOOLKITS = ""` in `compute.tf` to a comma list naming it
@@ -561,14 +571,19 @@ task does nothing new. Run it from a checkout that has main's
 `release.auto.tfvars.json` (main's head, or this branch after main is merged
 into it), which names the release that is running: an older copy would roll the
 service back to an older image. Read the plan first. It should show the key, its
-alias, the two containers, the task role's policy and a new task definition, and
-nothing else, and the definition's image should not change.
+alias, the two containers, the task role's and the execution role's policies and
+a new task definition, and nothing else, and the definition's image should not
+change. The execution role's is the one that lets ECS read a secret the
+definition names as a task starts, and the task definition does not depend on it,
+so the targets name it: without it the switch below makes a task that names two
+secrets it may not read, which fails to start and is rolled back.
 
 ```sh
 git pull
 (cd deploy/production && tofu apply \
   -target=aws_kms_key.agents_secrets -target=aws_kms_alias.agents_secrets \
-  -target=aws_secretsmanager_secret.external -target=aws_iam_role_policy.task \
+  -target=aws_secretsmanager_secret.external \
+  -target=aws_iam_role_policy.task -target=aws_iam_role_policy.execution_secrets \
   -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
 ```
 
@@ -605,6 +620,7 @@ commands:
    ```sh
    echo '{"slack_app_ready": true}' | jq . > deploy/production/slack.auto.tfvars.json
    (cd deploy/production && tofu apply \
+     -target=aws_iam_role_policy.execution_secrets \
      -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
    ```
 
