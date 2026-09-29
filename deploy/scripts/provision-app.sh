@@ -30,7 +30,7 @@ provision() {
 # yet, and stopping on it part way through would leave the services after it
 # unprovisioned, without a word.
 missing=()
-for service in agents apps auth batching billing files knowledge rag realtime teams; do
+for service in agents apps auth batching billing files knowledge rag realtime teams workspace; do
   queue_name "$service" >/dev/null || missing+=("$service")
 done
 if ((${#missing[@]} > 0)); then
@@ -41,6 +41,7 @@ fi
 for service in apps auth batching billing knowledge realtime teams; do
   provision "$service/infra/events" "$(tr '[:lower:]' '[:upper:]' <<<"$service")_EVENTS_QUEUE_NAME=$(queue_name "$service")"
 done
+provision internal/workspace/infra/events "WORKSPACE_EVENTS_QUEUE_NAME=$(queue_name workspace)"
 provision agents/primary/infra/events "AGENTS_EVENTS_QUEUE_NAME=$(queue_name agents)"
 provision files/infra/storage "FILES_EVENTS_QUEUE_NAME=$(queue_name files)"
 provision rag/infra/vectors "RAG_EVENTS_QUEUE_NAME=$(queue_name rag)"
