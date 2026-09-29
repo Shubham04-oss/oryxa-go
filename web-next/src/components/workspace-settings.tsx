@@ -24,6 +24,7 @@ import {
   useSigninAppsAvailable,
 } from "./workspace-signin-apps-settings"
 import { WorkspaceEmailSettings } from "./workspace-email-settings"
+import { SlackMark, WorkspaceSlackSettings } from "./slack-settings"
 import { WorkspaceBillingSettings } from "./workspace-billing-settings"
 import { cn } from "@/lib/utils"
 
@@ -34,6 +35,7 @@ export type SettingsPage =
   | "teams"
   | "tools"
   | "signin"
+  | "slack"
   | "email"
   | "billing"
 
@@ -44,6 +46,7 @@ const pageTitles: Record<SettingsPage, string> = {
   teams: "Teams",
   tools: "Tool access",
   signin: "Sign-in apps",
+  slack: "Slack",
   email: "Email",
   billing: "Billing",
 }
@@ -150,6 +153,16 @@ export function WorkspaceSettings({
                 <KeyRound size={18} strokeWidth={1.7} /> Sign-in apps
               </button>
             )}
+            {/* Owners and admins manage the organisation's Slack connection. */}
+            {(organizationRole === "owner" || organizationRole === "admin") && (
+              <button
+                type="button"
+                className={cn(page === "slack" && "is-active")}
+                onClick={() => setPage("slack")}
+              >
+                <SlackMark size={18} /> Slack
+              </button>
+            )}
             <button
               type="button"
               className={cn(page === "email" && "is-active")}
@@ -231,6 +244,12 @@ export function WorkspaceSettings({
               />
             ) : page === "signin" ? (
               <WorkspaceSigninAppsSettings
+                organization={organization}
+                role={organizationRole}
+                preview={preview}
+              />
+            ) : page === "slack" ? (
+              <WorkspaceSlackSettings
                 organization={organization}
                 role={organizationRole}
                 preview={preview}

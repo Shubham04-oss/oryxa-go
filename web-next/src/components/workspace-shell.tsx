@@ -242,6 +242,12 @@ export function WorkspaceShell({
       setSettingsOpen(true)
       return
     }
+    // Slack's install sends its admin back here (slack-settings.tsx).
+    if (view === "slack") {
+      setSettingsPage("slack")
+      setSettingsOpen(true)
+      return
+    }
     if (view !== "tools") return
     setActiveMode("home")
     setSectionsByMode((current) => ({ ...current, home: "tools" }))

@@ -20,7 +20,7 @@ import {
   primary,
   request,
 } from "./agents-fake-backend"
-import type { Session } from "@/lib/auth/client"
+import type { Role, Session } from "@/lib/auth/client"
 
 // A specialist's focused view holds its chat object's socket; the Agents
 // SDK stands in (src/test/room-socket.ts, src/test/agent-chat.ts).
@@ -51,6 +51,7 @@ function renderShell(
     section?: "agents" | "requests" | "specialists"
     signedIn?: boolean
     mode?: "home" | "agents"
+    organizationRole?: Role
   } = {}
 ) {
   const backend = fakeAgentsBackend({
@@ -74,6 +75,16 @@ function renderShell(
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
       }
+      if (path === `/v1/organizations/${ORG}/apps/slack/install`) {
+        return new Response(
+          JSON.stringify({
+            status: "not_installed",
+            add_to_slack_url: "https://slack.com/oauth/v2/authorize?state=abc",
+            add_to_slack_expires_at: "2999-01-01T00:00:00Z",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      }
       return backend.fetch(input, init)
     })
   )
@@ -84,6 +95,7 @@ function renderShell(
       <WorkspaceShell
         session={signedIn ? session : undefined}
         selectedOrganization={signedIn ? session.organizations[0] : undefined}
+        organizationRole={initial.organizationRole}
         initialMode={initial.mode ?? "agents"}
         initialSection={initial.section}
       />
@@ -225,6 +237,40 @@ describe("Requests in the workspace shell", () => {
     expect(
       await screen.findByText(
         "Your requests appear here once you're signed in."
+      )
+    ).toBeTruthy()
+  })
+})
+
+describe("Slack's install coming back to the workspace", () => {
+  it("opens Settings on Slack, for an admin", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      `/?org=${ORG}&view=slack&slack=connected`
+    )
+    vi.spyOn(window.history, "replaceState").mockImplementation(() => {})
+
+    renderShell({ mode: "home", organizationRole: "admin" })
+
+    const settings = await screen.findByRole("dialog", { name: "Settings" })
+    expect(
+      within(settings).getByRole("heading", { level: 2, name: "Slack" })
+    ).toBeTruthy()
+    expect(
+      await within(settings).findByText("Slack is connected.")
+    ).toBeTruthy()
+  })
+
+  it("tells a member who opened it that admins manage Slack", async () => {
+    window.history.replaceState({}, "", `/?org=${ORG}&view=slack`)
+
+    renderShell({ mode: "home", organizationRole: "member" })
+
+    const settings = await screen.findByRole("dialog", { name: "Settings" })
+    expect(
+      await within(settings).findByText(
+        "Organisation owners and admins manage Slack."
       )
     ).toBeTruthy()
   })

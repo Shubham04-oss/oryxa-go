@@ -144,7 +144,11 @@ export const slackKeys = {
 
 /**
  * `getSlackInstall`, read once and kept a few minutes: every read makes a
- * new single-use link, so it is never re-read on focus or on a timer.
+ * new single-use link, so it is never re-read on focus or on a timer. A
+ * return page apps does not allow (a build served from another origin) is a
+ * 400: the install is read again without one, so it can still be connected,
+ * and Slack's callback then answers in JSON instead of sending the browser
+ * back.
  */
 export function slackInstallQueryOptions(
   organizationId: string,
@@ -152,8 +156,16 @@ export function slackInstallQueryOptions(
 ) {
   return queryOptions({
     queryKey: [...slackKeys.install(organizationId), returnTo ?? ""] as const,
-    queryFn: ({ signal }) =>
-      getSlackInstall(organizationId, { returnTo, signal }),
+    queryFn: async ({ signal }) => {
+      try {
+        return await getSlackInstall(organizationId, { returnTo, signal })
+      } catch (error) {
+        if (returnTo && error instanceof ApiError && error.status === 400) {
+          return getSlackInstall(organizationId, { signal })
+        }
+        throw error
+      }
+    },
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
     retry: false,

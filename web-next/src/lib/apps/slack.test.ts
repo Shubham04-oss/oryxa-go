@@ -182,6 +182,44 @@ describe("Slack availability", () => {
     expect(slackKeys.channels("org-1")[0]).toBe("apps")
   })
 
+  it("reads the install again without a return page apps refuses", async () => {
+    const fetchMock = stubFetch((url) =>
+      url.includes("return_to")
+        ? json(
+            {
+              error: {
+                code: "invalid_request",
+                message: "return_to is not an allowed page",
+              },
+            },
+            400
+          )
+        : json(install)
+    )
+    const options = slackInstallQueryOptions("org-1", "http://localhost:3001/")
+
+    const read = await options.queryFn?.({
+      signal: new AbortController().signal,
+    } as never)
+
+    expect(read).toEqual(install)
+    expect(sent(fetchMock).map(([, url]) => url)).toEqual([
+      "/v1/organizations/org-1/apps/slack/install?return_to=http%3A%2F%2Flocalhost%3A3001%2F",
+      "/v1/organizations/org-1/apps/slack/install",
+    ])
+  })
+
+  it("does not hide any other refusal behind that second read", async () => {
+    stubFetch(() =>
+      json({ error: { code: "forbidden", message: "admins only" } }, 403)
+    )
+    const options = slackInstallQueryOptions("org-1", "https://app/")
+
+    await expect(
+      options.queryFn?.({ signal: new AbortController().signal } as never)
+    ).rejects.toMatchObject({ status: 403 })
+  })
+
   it("lets only Slack's own https pages take the browser away", () => {
     expect(isSlackAuthorizeUrl(install.add_to_slack_url)).toBe(true)
     expect(isSlackAuthorizeUrl("https://acme.slack.com/oauth")).toBe(true)
