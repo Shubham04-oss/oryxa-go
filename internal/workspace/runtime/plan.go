@@ -55,6 +55,7 @@ func SensitiveChanges(plan Plan) []Change {
 }
 
 func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
+	document = document.Normalize()
 	if err := document.Validate(); err != nil {
 		return Plan{}, err
 	}
@@ -351,6 +352,7 @@ func ApplyApproved(ctx context.Context, client *Client, document spec.Document, 
 }
 
 func apply(ctx context.Context, client *Client, document spec.Document, approved *Plan) (Plan, error) {
+	document = document.Normalize()
 	state, err := client.Snapshot(ctx, document.Metadata.Organization)
 	if err != nil {
 		return Plan{}, err

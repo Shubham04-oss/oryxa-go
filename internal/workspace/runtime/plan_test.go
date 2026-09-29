@@ -463,6 +463,29 @@ func TestOrganizationAgentPlanApplyAndPull(t *testing.T) {
 	}
 }
 
+func TestApplyNormalizesAgentTextBeforePlanningAndWriting(t *testing.T) {
+	state := &fakeState{orgExists: true, members: []Member{{UserID: "u1", Email: "owner@acme.com", Role: "owner"}},
+		agent: &OrganizationAgent{Name: "Old", Description: "Old", Instructions: "Old", Status: "active", CanManage: true}}
+	server := httptest.NewServer(http.HandlerFunc(state.serve))
+	defer server.Close()
+	client, err := NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, description, instructions := " My   Agent ", "Summary.\n", "Do the work.\n"
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"},
+		Agents: &spec.Agents{Organization: &spec.OrganizationAgent{DisplayName: &name, Description: &description, Instructions: &instructions}}}
+	for i := 0; i < 2; i++ {
+		remaining, err := Apply(context.Background(), client, document)
+		if err != nil || len(remaining.Changes) != 0 {
+			t.Fatalf("apply %d = %+v, %v", i, remaining, err)
+		}
+	}
+	if state.agentUpdates != 1 || state.agent.Name != "My Agent" || state.agent.Description != "Summary." || state.agent.Instructions != "Do the work." {
+		t.Fatalf("nonconvergent normalization: %+v, writes=%d", state.agent, state.agentUpdates)
+	}
+}
+
 func TestOrganizationAgentPlanRejectsMemberUpdates(t *testing.T) {
 	name := "Atlas"
 	document := spec.Document{
@@ -635,11 +658,11 @@ func (state *fakeState) serve(writer http.ResponseWriter, request *http.Request)
 		for key, value := range fields {
 			switch key {
 			case "name":
-				state.agent.Name = value
+				state.agent.Name = strings.Join(strings.Fields(value), " ")
 			case "description":
-				state.agent.Description = value
+				state.agent.Description = strings.TrimSpace(value)
 			case "instructions":
-				state.agent.Instructions = value
+				state.agent.Instructions = strings.TrimSpace(value)
 			case "status":
 				state.agent.Status = value
 			}
