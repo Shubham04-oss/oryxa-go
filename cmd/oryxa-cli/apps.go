@@ -25,7 +25,7 @@ func connectApp(ctx context.Context, toolkit string, opts options, stdout, stder
 	if opts.org == "" {
 		return reportError(fmt.Errorf("connect-app requires --org or ORYXA_ORG"), stderr)
 	}
-	client, err := signedInClient(ctx, opts, stdout, getenv)
+	client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 	if err != nil {
 		return reportError(err, stderr)
 	}

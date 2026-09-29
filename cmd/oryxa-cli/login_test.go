@@ -17,7 +17,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func TestNativeLoginKeepsTokenInMemory(t *testing.T) {
+func TestNativeLoginReturnsExpiringSession(t *testing.T) {
 	reserved, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -61,15 +61,15 @@ func TestNativeLoginKeepsTokenInMemory(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 	result := make(chan struct {
-		token string
-		err   error
+		session cliSession
+		err     error
 	}, 1)
 	go func() {
-		token, err := nativeLogin(ctx, api.URL, true, true, writer)
+		session, err := nativeLogin(ctx, api.URL, true, true, writer)
 		result <- struct {
-			token string
-			err   error
-		}{token, err}
+			session cliSession
+			err     error
+		}{session, err}
 	}()
 	lines := bufio.NewReader(reader)
 	line, err := lines.ReadString('\n')
@@ -153,8 +153,8 @@ func TestNativeLoginKeepsTokenInMemory(t *testing.T) {
 	}
 	select {
 	case done := <-result:
-		if done.err != nil || done.token != "access" {
-			t.Fatalf("login = %q, %v", done.token, done.err)
+		if done.err != nil || done.session.AccessToken != "access" || done.session.ExpiresAt.Before(time.Now().Add(14*time.Minute)) {
+			t.Fatalf("login = %+v, %v", done.session, done.err)
 		}
 	case <-ctx.Done():
 		t.Fatal("login did not finish")

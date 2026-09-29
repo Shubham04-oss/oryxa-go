@@ -32,33 +32,38 @@ type callbackResult struct {
 	err  error
 }
 
-func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout io.Writer) (string, error) {
+type cliSession struct {
+	AccessToken string    `json:"access_token"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout io.Writer) (cliSession, error) {
 	config, err := fetchLoginConfig(ctx, api)
 	if err != nil {
-		return "", err
+		return cliSession{}, err
 	}
 	callback, err := url.Parse(config.CallbackURL)
 	if err != nil || callback.Scheme != "http" || callback.Hostname() != "127.0.0.1" || callback.Port() == "" || callback.Path != "/callback" || callback.User != nil || callback.RawQuery != "" || callback.Fragment != "" {
-		return "", fmt.Errorf("the server's CLI callback URL is invalid")
+		return cliSession{}, fmt.Errorf("the server's CLI callback URL is invalid")
 	}
 	listener, err := net.Listen("tcp", callback.Host)
 	if err != nil {
-		return "", fmt.Errorf("listen for browser sign-in at %s: %w", callback.Host, err)
+		return cliSession{}, fmt.Errorf("listen for browser sign-in at %s: %w", callback.Host, err)
 	}
 	defer listener.Close()
 	flowCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	state, err := randomURLValue()
 	if err != nil {
-		return "", err
+		return cliSession{}, err
 	}
 	launchKey, err := randomURLValue()
 	if err != nil {
-		return "", err
+		return cliSession{}, err
 	}
 	nonce, err := randomURLValue()
 	if err != nil {
-		return "", err
+		return cliSession{}, err
 	}
 	verifier := oauth2.GenerateVerifier()
 	oauth := oauth2.Config{
@@ -142,32 +147,32 @@ func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout
 	var result callbackResult
 	select {
 	case <-flowCtx.Done():
-		return "", fmt.Errorf("browser sign-in timed out or was cancelled")
+		return cliSession{}, fmt.Errorf("browser sign-in timed out or was cancelled")
 	case result = <-results:
 	}
 	if result.err != nil {
-		return "", result.err
+		return cliSession{}, result.err
 	}
 	token, err := oauth.Exchange(flowCtx, result.code, oauth2.VerifierOption(verifier))
 	if err != nil {
-		return "", fmt.Errorf("exchange browser sign-in code: %w", err)
+		return cliSession{}, fmt.Errorf("exchange browser sign-in code: %w", err)
 	}
 	idToken, ok := token.Extra("id_token").(string)
 	if !ok || idToken == "" || token.AccessToken == "" {
-		return "", fmt.Errorf("identity provider did not issue both required tokens")
+		return cliSession{}, fmt.Errorf("identity provider did not issue both required tokens")
 	}
 	if token.Expiry.IsZero() || !token.Valid() {
-		return "", fmt.Errorf("identity provider did not issue an unexpired access token with a TTL")
+		return cliSession{}, fmt.Errorf("identity provider did not issue an unexpired access token with a TTL")
 	}
 	if err := registerCLISession(flowCtx, api, token.AccessToken, idToken, nonce); err != nil {
-		return "", err
+		return cliSession{}, err
 	}
 	if asJSON {
 		_ = json.NewEncoder(stdout).Encode(map[string]string{"step": "login", "status": "done", "expires_at": token.Expiry.UTC().Format(time.RFC3339)})
 	} else {
 		fmt.Fprintf(stdout, "Signed in. Access expires at %s.\n", token.Expiry.Local().Format(time.RFC3339))
 	}
-	return token.AccessToken, nil
+	return cliSession{AccessToken: token.AccessToken, ExpiresAt: token.Expiry}, nil
 }
 
 func fetchLoginConfig(ctx context.Context, api string) (loginConfig, error) {

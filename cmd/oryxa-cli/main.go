@@ -14,6 +14,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/runtime"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
@@ -27,6 +28,7 @@ type options struct {
 	api, org, file, output, preset, domains string
 	json, dryRun, noInput, yes              bool
 	noBrowser                               bool
+	forceLogin                              bool
 	agentHelp                               bool
 	to                                      int64
 }
@@ -60,6 +62,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	flags.BoolVar(&opts.dryRun, "dry-run", false, "show changes without applying")
 	flags.BoolVar(&opts.noInput, "no-input", false, "never prompt for confirmation")
 	flags.BoolVar(&opts.noBrowser, "no-browser", false, "print sign-in URL without opening a browser")
+	flags.BoolVar(&opts.forceLogin, "force-login", false, "sign in again instead of using the cached session")
 	flags.BoolVar(&opts.agentHelp, "agent-help", false, "print the coding-agent workspace mapping guide")
 	flags.BoolVar(&opts.yes, "yes", false, "confirm setup plan or overwrite an output file")
 	flags.Int64Var(&opts.to, "to", 0, "workspace version to restore (rollback)")
@@ -89,7 +92,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return initCommand(ctx, opts, stdout, stderr, getenv)
 	}
 	if command == "login" {
-		client, err := signedInClient(ctx, opts, stdout, getenv)
+		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -102,8 +105,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		}
 		return 0
 	}
+	if command == "logout" {
+		if err := clearSession(opts.api, getenv); err != nil {
+			return reportError(err, stderr)
+		}
+		return report(stdout, opts.json, map[string]string{"step": "logout", "status": "done"})
+	}
 	if command == "setup" {
-		client, err := signedInClient(ctx, opts, stdout, getenv)
+		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -158,7 +167,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if opts.org == "" || opts.to <= 0 {
 			return reportError(fmt.Errorf("rollback requires --org and a positive --to version"), stderr)
 		}
-		client, err := signedInClient(ctx, opts, stdout, getenv)
+		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -205,7 +214,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if opts.org != "" && opts.org != document.Metadata.Organization {
 			return reportError(fmt.Errorf("--org does not match metadata.organization"), stderr)
 		}
-		client, err := signedInClient(ctx, opts, stdout, getenv)
+		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -253,7 +262,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return report(stdout, opts.json, plan)
 	}
 	if command == "pull" || command == "status" || command == "doctor" || command == "mappings" || command == "whoami" {
-		client, err := signedInClient(ctx, opts, stdout, getenv)
+		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -415,16 +424,34 @@ func hasRemoval(plan runtime.Plan) bool {
 	return false
 }
 
-func signedInClient(ctx context.Context, opts options, stdout io.Writer, getenv func(string) string) (*runtime.Client, error) {
+func signedInClient(ctx context.Context, opts options, stdout, stderr io.Writer, getenv func(string) string) (*runtime.Client, error) {
 	token := getenv("ORYXA_ACCESS_TOKEN")
 	if token == "" {
+		if !opts.forceLogin {
+			session, ok, err := loadSession(opts.api, getenv)
+			if err != nil {
+				fmt.Fprintln(stderr, "Could not read cached CLI session:", err)
+			} else if ok {
+				if opts.json {
+					_ = json.NewEncoder(stdout).Encode(map[string]string{"step": "login", "status": "done", "source": "cache", "expires_at": session.ExpiresAt.UTC().Format(time.RFC3339)})
+				} else {
+					fmt.Fprintf(stdout, "Using saved sign-in. Access expires at %s.\n", session.ExpiresAt.Local().Format(time.RFC3339))
+				}
+				return runtime.NewClient(opts.api, session.AccessToken)
+			}
+		}
 		if opts.noInput {
 			return nil, fmt.Errorf("browser sign-in is required under --no-input; run without --no-input or provide a short-lived ORYXA_ACCESS_TOKEN")
 		}
 		var err error
-		token, err = nativeLogin(ctx, opts.api, opts.noBrowser, opts.json, stdout)
+		var session cliSession
+		session, err = nativeLogin(ctx, opts.api, opts.noBrowser, opts.json, stdout)
 		if err != nil {
 			return nil, err
+		}
+		token = session.AccessToken
+		if err := saveSession(opts.api, session, getenv); err != nil {
+			fmt.Fprintln(stderr, "Could not save short-lived CLI session:", err)
 		}
 	}
 	return runtime.NewClient(opts.api, token)
@@ -540,6 +567,7 @@ Commands:
   setup      sign in or create an account, plan and apply in one process
   agent-help print the coding-agent workspace mapping guide
   login      sign in or create an account and show the current account
+  logout     remove the saved short-lived CLI access token
   init       write a starting oryxa.yaml to stdout or -o
   validate   validate a workspace file without contacting Oryxa
   plan       show changes against the current organization
@@ -553,8 +581,9 @@ Commands:
   whoami     show the authenticated user and organizations
   connect-app TOOLKIT  connect your own Composio app through its browser page
 
-Remote commands prompt for Google or email sign-in when ORYXA_ACCESS_TOKEN is absent.
-Each command keeps its session in memory and never saves the token. Use -f for
+Remote commands reuse a private, short-lived access token cache, then prompt for
+browser sign-in when it expires. Use login --force-login to switch accounts or
+logout to remove the cached token. Use -f for
 the input file, --org for an organization
 slug, --api for the API URL, --json for machine-readable output, and --dry-run
 to plan an apply. Unsupported sections are rejected before any write.
