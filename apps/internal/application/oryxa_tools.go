@@ -271,6 +271,9 @@ func ownError(slug string, err error) error {
 		return fmt.Errorf("%s: the app has no such thing: %w", slug, domain.ErrNotFound)
 	case isRateLimited(err):
 		return fmt.Errorf("%s: the app is rate limiting: %w", slug, domain.ErrRateLimited)
+	case errors.Is(err, signin.ErrNotActive):
+		// The connection ended between choosing it and calling through it.
+		return fmt.Errorf("%s: the connection is no longer active: %w", slug, domain.ErrNotConnected)
 	default:
 		return fmt.Errorf("%s: the app did not answer: %w", slug, domain.ErrUnavailable)
 	}
@@ -320,17 +323,4 @@ func ownReason(err error) string {
 func notOwnTool(slug string) error {
 	return fmt.Errorf("%s is not a tool Oryxa's own integrations carry, so it cannot run on an Oryxa connection: %w",
 		slug, domain.ErrNotConnectable)
-}
-
-// ownToolToolkits answers the toolkits this build's integrations carry tools
-// for, in order, for the catalog to say which apps a member can move.
-func (s *Service) ownToolToolkits() []string {
-	if s.oryxa == nil {
-		return nil
-	}
-	toolkits := make([]string, 0, len(s.oryxa.tools))
-	for _, tool := range s.oryxa.tools {
-		toolkits = append(toolkits, tool.Toolkit)
-	}
-	return slices.Compact(slices.Sorted(slices.Values(toolkits)))
 }
