@@ -84,8 +84,14 @@ prints the plan. JSON output on plan and apply contains `changes` and
 their team membership can be added. Applied files and actor IDs are versioned
 in PostgreSQL by the workspace service. Existing organizations use a
 per-organization apply lock; a concurrent apply returns exit code `5`.
-`rollback` applies a saved version as a new version after checking its removal
-plan. The all-in-one host serves the workspace API. Split deployments must set
+Plans carry a server-issued `plan_id`, `plan_hash`, and `base_version`, expire
+after 15 minutes, and belong to the actor and organization that requested them.
+Apply checks the submitted document, saved version, and sensitive changes again;
+a stale or fabricated approval returns `409 stale_plan` and requires a new plan.
+Removals, role changes, large invitation batches, policy changes, and mapping
+rebinding require explicit confirmation. `rollback` applies a saved version as
+a new version through the same review checks. The all-in-one host serves the
+workspace API. Split deployments must set
 `WORKSPACE_API_URL` to the gateway carrying auth, teams, agents, and workspace
 routes.
 
