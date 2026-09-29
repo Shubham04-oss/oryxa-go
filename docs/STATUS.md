@@ -38,13 +38,40 @@ The one page to read before picking up work, whatever agent you are. [LANES.md](
 | **#139** | `lane/i-2b` → main (draft) | Knowledge's apps extractor (2B), reviewed | Merge after #141, whose pages route it calls. |
 | #109 | Cedar (draft) | Parked: 3 high-severity bypasses | Do not merge. |
 
+**The merge sequence, as commands.** Run each only after its CI is green. Each merge deploys.
+
+1. #137 is the owner's call: `gh pr merge 137 --merge`, then wait for the Deploy run: `gh run list --branch main`.
+2. Update #140:
+   - `git fetch origin && git switch slack/base && git merge origin/main`;
+   - resolve `workspace-shell.tsx` so `openRequestsSection` also calls `closePrimaryWork()`;
+   - run `go build ./... && go vet ./...`, and `npm run typecheck && npm test && npm run build` in `web-next/`;
+   - `git push origin slack/base`, then wait for `gh pr checks 140`.
+3. Run the production-safety check below on #140, and fix anything it finds.
+4. Apply the Slack runbook's step 1 (tofu, switch off), then `gh pr merge 140 --merge`. After the rollout: `deploy/scripts/provision-app.sh`.
+5. `gh pr edit 141 --base main`; update the branch (`git merge origin/main`), wait for CI, `gh pr ready 141`, then `gh pr merge 141 --merge`.
+6. `gh pr ready 139 && gh pr merge 139 --merge`.
+
+**The production-safety check for #140.** It must be clean before merging. Answer each for production with the loop OFF: `AGENTS_PRIMARY_SLACK_CONSENT` unset, `APPS_SLACK_SURFACE=false`, no Slack secrets, rules not yet widened.
+1. **Migrations on live data:**
+   - apps `008_slack_surface`;
+   - interactions `013`–`015`, which widen `agent_interactions` checks `NOT VALID` then validate them against existing rows;
+   - slackrouter lock 719, surfaces 720, secretshares 721.
+
+   Do they run at start? Could any fail on existing rows, or clash on a lock id?
+2. **Startup** with production's env (`deploy/production/compute.tf`): does every service start? Does any new variable validation refuse? Is the event-queue guard (`ORYXA_REQUIRE_EVENT_QUEUES`) still satisfied?
+3. **agents' inbound consumer:** with the loop off, is every event that succeeded before still handled, with no new errors?
+4. **The now-wired `GuardPolicy`:** could an agent-request answer now be held or fail closed where it wasn't? Relevance is capped at shadow.
+5. **realtime:** the purge relay and its signature are unchanged, and nothing new arrives until the rules widen.
+6. **web-next:** Requests, Settings → Slack and the DM request line render and fail soft against today's Go.
+7. **Tofu** with `slack_app_ready=false`: no reference to a missing secret, nothing that stops tasks starting, and the IAM policies stay valid.
+
 Behaviour change when #140 merges, even switched off: `interactions.Config.GuardPolicy` is now wired (main never wired it). Members' "What your agents share" levels and the org floor now apply to agent-request answers, and relevance runs on them in shadow.
 
 ## The Slack runbook, after #140 merges
 
 Details are in `deploy/README.md` → "The Slack bot" and `docs/design/slack-implementation.md` §5.
 
-1. **Apply tofu with the switch off.** `slack_app_ready` stays false. The apply adds the consent guardrail and its version, the `agents-secrets` KMS key, and empty secret containers.
+1. **Apply tofu with the switch off.** It needs the owner's AWS session (`aws login`) and their OK. Run `cd deploy/production && tofu init && tofu plan -out=slack-off.tfplan`, review the plan, then `tofu apply slack-off.tfplan`. `slack_app_ready` stays false. The apply adds the consent guardrail and its version, the `agents-secrets` KMS key, and empty secret containers. If `tofu` complains about Google credentials, the owner runs `gcloud auth application-default login`.
 2. **Merge #140.** CD releases Go, then the Worker. Wait for the rollout to finish.
 3. **Run `deploy/scripts/provision-app.sh`.** It widens the agents and realtime rules to the new exact event types.
 4. **The owner:**
@@ -90,6 +117,24 @@ Details are in `deploy/README.md` → "The Slack bot" and `docs/design/slack-imp
   4. Migration 009 marks old invitations quiet.
 
   Also CLI-ON: set `cli_client_id` in `deploy/production/app.auto.tfvars.json` to the Cognito CLI client that `provision-app.sh` created, then apply.
+
+## Prompts to hand an agent
+
+**An integration app**, after #141 merges; swap in the app:
+```text
+Read docs/STATUS.md, docs/LANES.md and the "Work-package template" in docs/design/integrations-plan.md. Take lane I-GITHUB: create branch lane/i-github from origin/main in a new worktree, and open a draft PR titled "[I-GITHUB] GitHub integration". Own only apps/internal/integrations/github/**, follow the template's steps exactly, and use the SDK STATUS.md names for this app. Build end to end: MCP tools (each read or write, with its scopes), readers into knowledge, and triggers (poll, or push through hooks). Record cassettes from the provider's documented responses. Pass go test ./apps/internal/integrations/github/... and go run ./apps/internal/integration/cmd/check github. List every tool, reader and trigger in the PR. Do not enable the toolkit (gate G4 is the orchestrator's).
+```
+**A web lane**, after #137 merges:
+```text
+Read docs/STATUS.md and docs/LANES.md, then web-next/AGENTS.md and web-next/DESIGN.md in full. Take lane W-HOME: create branch lane/w-home from origin/main in a new worktree, and open a draft PR titled "[W-HOME] Home overview". Edit only the files the lane owns, show no example data, give every block its own loading, empty and error states, and run npm run typecheck, npm test and npm run build in web-next before marking it ready.
+```
+
+## Design documents
+
+- **Slack:** `docs/design/slack-consent-loop.md` is the design. `docs/design/slack-implementation.md` has the contracts, the lanes and the §5 live checklist.
+- **Integrations:** `docs/design/integrations-plan.md`.
+- **The owner's direction:** `docs/north-star.md`.
+- **web-next:** `web-next/DESIGN.md`, `PARITY.md` and `REALTIME.md`.
 
 ## Follow-ups noticed, not yet lanes
 
