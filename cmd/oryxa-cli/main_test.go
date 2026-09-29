@@ -154,3 +154,35 @@ func TestStructuredAPIFailuresHaveStableExitCodesAndJSON(t *testing.T) {
 		t.Fatalf("network failure: %d %s", code, stdout.String())
 	}
 }
+
+func TestCachedPullUsesOnlySlugLookupAndProducesValidYAML(t *testing.T) {
+	testSessionStore(t)
+	calls := 0
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		switch r.URL.Path {
+		case "/v1/organizations":
+			fmt.Fprint(w, `{"organizations":[{"id":"org","slug":"acme"}]}`)
+		case "/v1/organizations/org/workspace":
+			fmt.Fprint(w, "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\n")
+		default:
+			t.Errorf("unnecessary pull request: %s", r.URL.Path)
+			w.WriteHeader(403)
+		}
+	}))
+	defer api.Close()
+	getenv := func(key string) string {
+		if key == "ORYXA_API_URL" {
+			return api.URL
+		}
+		return ""
+	}
+	if err := saveSession(api.URL, cliSession{AccessToken: "access", ExpiresAt: time.Now().Add(time.Minute)}, getenv); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"pull", "--org", "acme", "--no-input"}, &stdout, &stderr, getenv)
+	if _, err := spec.Parse(stdout.Bytes()); err != nil || code != 0 || calls != 2 {
+		t.Fatalf("cached pull exit%d calls%d err%v stdout%s stderr%s", code, calls, err, stdout.String(), stderr.String())
+	}
+}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
+	"golang.org/x/sync/errgroup"
 )
 
 // Client talks to the existing organization and team APIs with a person's
@@ -105,7 +106,7 @@ func (client *Client) request(ctx context.Context, method, path string, input, o
 	if output == nil {
 		return nil
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(output); err != nil {
+	if err := json.NewDecoder(io.LimitReader(response.Body, responseLimit(path))).Decode(output); err != nil {
 		return fmt.Errorf("%s %s: invalid API response: %w", method, path, err)
 	}
 	return nil
@@ -143,6 +144,8 @@ func statusError(response *http.Response, method, path string) *StatusError {
 	return result
 }
 
+var ErrOrganizationNotFound = errors.New("organization was not found")
+
 type Organization struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
@@ -166,7 +169,7 @@ func (client *Client) OrganizationBySlug(ctx context.Context, slug string) (Orga
 			return organization, nil
 		}
 	}
-	return Organization{}, fmt.Errorf("organization %q was not found", slug)
+	return Organization{}, fmt.Errorf("organization %q: %w", slug, ErrOrganizationNotFound)
 }
 
 type AppConnection struct {
@@ -335,14 +338,30 @@ func (client *Client) Snapshot(ctx context.Context, slug string) (Snapshot, erro
 		return Snapshot{}, fmt.Errorf("auth answered for a different member")
 	}
 	state.ActorRole, state.ActorIsAgent = access.Membership.Role, access.Agent
-	var members struct {
-		Members []Member `json:"members"`
-	}
-	if err := client.request(ctx, http.MethodGet, base+"/members", nil, &members); err != nil {
-		return Snapshot{}, err
-	}
-	for _, member := range members.Members {
-		state.Members[strings.ToLower(member.Email)] = member
+	if state.ActorRole == "owner" {
+		var members struct {
+			Members []Member `json:"members"`
+		}
+		if err := client.request(ctx, http.MethodGet, base+"/members", nil, &members); err != nil {
+			return Snapshot{}, err
+		}
+		for _, member := range members.Members {
+			state.Members[strings.ToLower(member.Email)] = member
+		}
+	} else {
+		var directory struct {
+			Members []struct {
+				UserID string `json:"user_id"`
+				Email  string `json:"email"`
+				Role   string `json:"org_role"`
+			} `json:"members"`
+		}
+		if err := client.request(ctx, http.MethodGet, base+"/directory", nil, &directory); err != nil {
+			return Snapshot{}, err
+		}
+		for _, member := range directory.Members {
+			state.Members[strings.ToLower(member.Email)] = Member{UserID: member.UserID, Email: member.Email, Role: member.Role}
+		}
 	}
 	var invitations struct {
 		Invitations []Invitation `json:"invitations"`
@@ -361,16 +380,28 @@ func (client *Client) Snapshot(ctx context.Context, slug string) (Snapshot, erro
 	if err := client.request(ctx, http.MethodGet, base+"/teams", nil, &teams); err != nil {
 		return Snapshot{}, err
 	}
-	for _, team := range teams.Teams {
+	results := make([][]TeamMember, len(teams.Teams))
+	reads, readCtx := errgroup.WithContext(ctx)
+	reads.SetLimit(8)
+	for index, team := range teams.Teams {
+		reads.Go(func() error {
+			var result struct {
+				Members []TeamMember `json:"members"`
+			}
+			if err := client.request(readCtx, http.MethodGet, base+"/teams/"+url.PathEscape(team.ID)+"/members", nil, &result); err != nil {
+				return err
+			}
+			results[index] = result.Members
+			return nil
+		})
+	}
+	if err := reads.Wait(); err != nil {
+		return Snapshot{}, err
+	}
+	for index, team := range teams.Teams {
 		state.Teams[team.Name] = team
-		var result struct {
-			Members []TeamMember `json:"members"`
-		}
-		if err := client.request(ctx, http.MethodGet, base+"/teams/"+url.PathEscape(team.ID)+"/members", nil, &result); err != nil {
-			return Snapshot{}, err
-		}
 		state.TeamMembers[team.Name] = map[string]TeamMember{}
-		for _, member := range result.Members {
+		for _, member := range results[index] {
 			state.TeamMembers[team.Name][strings.ToLower(member.Email)] = member
 		}
 	}
@@ -458,4 +489,11 @@ func (client *Client) RemoveTeamMember(ctx context.Context, orgID, teamID, membe
 
 func (client *Client) DeleteTeam(ctx context.Context, orgID, teamID string) error {
 	return client.request(ctx, http.MethodDelete, "/v1/organizations/"+url.PathEscape(orgID)+"/teams/"+url.PathEscape(teamID), nil, nil)
+}
+
+func responseLimit(path string) int64 {
+	if strings.HasSuffix(path, "/directory") {
+		return 8 << 20
+	}
+	return 2 << 20
 }

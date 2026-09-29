@@ -131,7 +131,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if opts.org != "" && opts.org != document.Metadata.Organization {
 			return reportInputError(fmt.Errorf("--org does not match metadata.organization"), stderr)
 		}
-		state, err := client.Snapshot(ctx, document.Metadata.Organization)
+		state, err := planningState(ctx, client, document.Metadata.Organization)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -179,14 +179,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if err != nil {
 			return reportError(err, stderr)
 		}
-		state, err := client.Snapshot(ctx, opts.org)
+		organization, err := client.OrganizationBySlug(ctx, opts.org)
 		if err != nil {
 			return reportError(err, stderr)
 		}
-		if state.Organization == nil {
-			return reportInputError(fmt.Errorf("organization was not found"), stderr)
-		}
-		plan, err := client.WorkspaceRollbackPlan(ctx, state.Organization.ID, opts.to)
+		plan, err := client.WorkspaceRollbackPlan(ctx, organization.ID, opts.to)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -205,7 +202,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 				}
 			}
 		}
-		result, err := client.WorkspaceRollback(ctx, state.Organization.ID, opts.to, plan)
+		result, err := client.WorkspaceRollback(ctx, organization.ID, opts.to, plan)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -227,7 +224,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return reportError(err, stderr)
 		}
 		if command == "apply" && !opts.dryRun {
-			state, err := client.Snapshot(ctx, document.Metadata.Organization)
+			state, err := planningState(ctx, client, document.Metadata.Organization)
 			if err != nil {
 				return reportError(err, stderr)
 			}
@@ -259,7 +256,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			}
 			return applyExitCode(result.Status)
 		}
-		state, err := client.Snapshot(ctx, document.Metadata.Organization)
+		state, err := planningState(ctx, client, document.Metadata.Organization)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -299,15 +296,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			}
 			return report(stdout, opts.json, map[string]any{"mappings": mappings})
 		}
-		state, err := client.Snapshot(ctx, opts.org)
+		organization, err := client.OrganizationBySlug(ctx, opts.org)
 		if err != nil {
 			return reportError(err, stderr)
 		}
-		if state.Organization == nil {
-			return reportInputError(fmt.Errorf("organization was not found"), stderr)
-		}
 		if command == "status" || command == "doctor" {
-			status, err := client.WorkspaceStatus(ctx, state.Organization.ID)
+			status, err := client.WorkspaceStatus(ctx, organization.ID)
 			if err != nil {
 				return reportError(err, stderr)
 			}
@@ -329,7 +323,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			}
 			return report(stdout, opts.json, status)
 		}
-		document, err := client.WorkspacePull(ctx, state.Organization.ID)
+		document, err := client.WorkspacePull(ctx, organization.ID)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -667,4 +661,15 @@ the input file, --org for an organization
 slug, --api for the API URL, --json for machine-readable output, and --dry-run
 to plan an apply. Unsupported sections are rejected before any write.
 `)
+}
+
+func planningState(ctx context.Context, client *runtime.Client, slug string) (runtime.Snapshot, error) {
+	organization, err := client.OrganizationBySlug(ctx, slug)
+	if errors.Is(err, runtime.ErrOrganizationNotFound) {
+		return client.Snapshot(ctx, slug)
+	}
+	if err != nil {
+		return runtime.Snapshot{}, err
+	}
+	return runtime.Snapshot{Organization: &organization}, nil
 }
