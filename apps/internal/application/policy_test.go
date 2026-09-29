@@ -5,7 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/integration"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
@@ -136,5 +138,42 @@ func TestEmployeeConnectionPreferenceAlsoAppliesToOryxaSignin(t *testing.T) {
 	}
 	if _, err := h.service.ConnectOryxa(context.Background(), adminToken, "org_1", input); err != nil || len(h.signin.starts) != 1 {
 		t.Fatalf("admin Oryxa sign-in = %v, starts = %d", err, len(h.signin.starts))
+	}
+}
+
+func TestWorkspacePolicyChecksCredentialReplacementBeforeProviderAccess(t *testing.T) {
+	noApps := []string{}
+	off := false
+	for name, test := range map[string]struct {
+		settings  policy.Settings
+		policyErr error
+		caller    authclient.Credentials
+		memberID  string
+		want      error
+	}{
+		"unoffered app for member":            {settings: policy.Settings{Offer: &noApps}, caller: memberToken, memberID: "user-1", want: domain.ErrForbidden},
+		"unoffered app for admin":             {settings: policy.Settings{Offer: &noApps}, caller: adminToken, memberID: "user-3", want: domain.ErrForbidden},
+		"employee connections disabled":       {settings: policy.Settings{EmployeeConnections: &off}, caller: memberToken, memberID: "user-1", want: domain.ErrForbidden},
+		"policy unavailable":                  {policyErr: errors.New("policy store down"), caller: memberToken, memberID: "user-1", want: domain.ErrUnavailable},
+		"admin retains own connection access": {settings: policy.Settings{EmployeeConnections: &off}, caller: adminToken, memberID: "user-3"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newOryxaHarness(t, "github")
+			h.oryxaConnection("apc_key", test.memberID, "github", domain.ConnectionActive, integration.KindAPIToken)
+			h.service.policy = &fakePolicySource{settings: test.settings, err: test.policyErr}
+			_, err := h.service.ReplaceCredential(context.Background(), test.caller, "org_1", "apc_key", ReplaceCredentialInput{
+				Fields: map[string]string{"token": "replacement-key"},
+			})
+			if !errors.Is(err, test.want) {
+				t.Fatalf("replacement error = %v, want %v", err, test.want)
+			}
+			if test.want != nil {
+				if len(h.signin.saves) != 0 || len(h.store.events) != 0 {
+					t.Fatalf("blocked replacement contacted provider or published events: saves=%d events=%d", len(h.signin.saves), len(h.store.events))
+				}
+			} else if len(h.signin.saves) != 1 {
+				t.Fatalf("allowed replacement saves = %d", len(h.signin.saves))
+			}
+		})
 	}
 }

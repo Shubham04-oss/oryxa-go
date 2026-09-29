@@ -370,6 +370,14 @@ func (s *Service) ReplaceCredential(ctx context.Context, credentials authclient.
 	if connection.MemberID != caller.UserID {
 		return domain.Connection{}, domain.ErrNotFound
 	}
+	// Replacing a key establishes access to the provider just as connecting
+	// does. An existing connection must not bypass a changed workspace policy.
+	if err := s.allowToolkit(ctx, organizationID, connection.Toolkit); err != nil {
+		return domain.Connection{}, err
+	}
+	if err := s.allowEmployeeConnect(ctx, organizationID, caller.Role.IsOrgAdmin()); err != nil {
+		return domain.Connection{}, err
+	}
 	if !connection.Oryxa() {
 		return domain.Connection{}, fmt.Errorf("the %s connection's credential is Composio's, so it is replaced by connecting again: %w",
 			connection.Toolkit, domain.ErrInvalid)
