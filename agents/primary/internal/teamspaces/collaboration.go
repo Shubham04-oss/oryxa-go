@@ -103,10 +103,11 @@ var ErrUnchecked = errors.New("the publication couldn't be checked, so it wasn't
 
 // The texts of a publication the guard reads, in the order it is handed them:
 // the title and the summary as they are, and the artifacts' names, URIs and
-// media types and the tools used, each list as one text, one to a line. A
-// publication so costs six checks whatever it lists, and each of those lines
-// is one line: names, media types and tool names are cleaned to one, and a URI
-// that holds a line break is not a URI.
+// media types and the tools used, each list as one text, one element to a
+// line. A publication costs at most six checks whatever it lists (a text with
+// nothing in it is not sent on), and every element is one line: names, media
+// types and tool names are cleaned to one, and a URI that holds a line break
+// is not a URI.
 const (
 	titleText = iota
 	summaryText
