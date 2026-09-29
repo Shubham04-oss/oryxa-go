@@ -83,7 +83,7 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 					if existing.Role == "owner" || role == "owner" {
 						return Plan{}, fmt.Errorf("people.members[%s]: role changes involving an owner are not supported", member.Email)
 					}
-					plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "member_role", Name: member.Email, Role: role})
+					plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "member_role", Name: member.Email, Role: role, Email: member.Email, ResourceID: existing.UserID})
 				}
 			} else if invitation, ok := state.Invitations[member.Email]; ok {
 				if invitation.Role != role || invitation.Guest != member.Guest {
@@ -165,9 +165,9 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 				continue
 			}
 			if existing, already := state.TeamMembers[team.Name][email]; !already {
-				plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "team_member", Name: team.Name + "/" + email, Role: roles[email]})
+				plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "team_member", Name: team.Name + "/" + email, Role: roles[email], Team: team.Name, Email: email, ResourceID: state.Members[email].UserID, TeamID: state.Teams[team.Name].ID})
 			} else if roles[email] == "admin" && existing.Role != "admin" {
-				plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "team_member_role", Name: team.Name + "/" + email, Role: "admin"})
+				plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "team_member_role", Name: team.Name + "/" + email, Role: "admin", Team: team.Name, Email: email, ResourceID: state.Members[email].UserID, TeamID: state.Teams[team.Name].ID})
 			} else if document.Teams.Prune && joinedLead && roles[email] == "member" && existing.Role == "admin" {
 				plan.Changes = append(plan.Changes, Change{Op: "delete", Kind: "team_admin", Name: team.Name + "/" + email, Team: team.Name, Email: email})
 			}
@@ -224,9 +224,17 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 		}
 	}
 	// Approval must identify the resource reviewed, not just a reusable name or
-	// email. Replacements and role changes require a fresh removal review.
+	// email. Replacements require a fresh review for removal or elevation.
 	for i := range plan.Changes {
 		change := &plan.Changes[i]
+		if change.Kind == "member_role" || change.Kind == "team_member_role" || change.Kind == "team_member" {
+			if state.Organization != nil {
+				change.OrganizationID = state.Organization.ID
+			}
+			if change.Op != "delete" && state.Organization != nil && (change.OrganizationID == "" || change.ResourceID == "") {
+				return Plan{}, fmt.Errorf("changing %s for %s requires stable organization and resource IDs", change.Kind, change.Email)
+			}
+		}
 		if change.Op != "delete" {
 			continue
 		}
@@ -447,6 +455,10 @@ func applyState(ctx context.Context, client *Client, document spec.Document, app
 		if state.Organization == nil {
 			return Plan{}, fmt.Errorf("organization creation has not appeared in the API yet; retry apply")
 		}
+		initial, err = BuildPlan(document, *state)
+		if err != nil {
+			return Plan{}, err
+		}
 	}
 	if organizationChanged(document, *state.Organization) {
 		if err := client.UpdateOrganization(ctx, state.Organization.ID, *state.Organization, document); err != nil {
@@ -483,6 +495,13 @@ func applyState(ctx context.Context, client *Client, document spec.Document, app
 	if createdTeams {
 		*state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
 		if err != nil {
+			return Plan{}, err
+		}
+		refreshed, err := BuildPlan(document, *state)
+		if err != nil {
+			return Plan{}, err
+		}
+		if err := verifyTeamElevations(initial, refreshed); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -605,6 +624,31 @@ func applyRemovals(ctx context.Context, client *Client, state Snapshot, plan Pla
 }
 
 var ErrApprovalChanged = errors.New("the removal plan changed or was not confirmed; run plan and confirm again")
+
+// Team creation refreshes IDs and membership before seating leads. Keep those
+// elevations bound to the people and existing teams reviewed at apply's start.
+func verifyTeamElevations(reviewed, current Plan) error {
+	newTeams := map[string]bool{}
+	targets := map[Change]bool{}
+	for _, change := range reviewed.Changes {
+		targets[change] = true
+		if change.Op == "create" && change.Kind == "team" {
+			newTeams[change.Name] = true
+		}
+	}
+	for _, change := range current.Changes {
+		if change.Role != "admin" || (change.Kind != "team_member" && change.Kind != "team_member_role") || change.Op == "delete" {
+			continue
+		}
+		if newTeams[change.Team] {
+			change.TeamID = "" // this apply created the previously absent team
+		}
+		if !targets[change] {
+			return ErrApprovalChanged
+		}
+	}
+	return nil
+}
 
 func verifyApprovedRemovals(plan Plan, approved *Plan) error {
 	wanted := deletions(plan)
