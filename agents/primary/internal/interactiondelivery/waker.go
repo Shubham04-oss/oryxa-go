@@ -278,6 +278,19 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 		waker.drop(ctx, delivery, "interaction organization does not match its event", logger)
 		return
 	}
+	if !forTheTarget(delivery.Kind) && request.Origin == interactions.OriginSlack {
+		// The member who asked wrote in Slack, and is told there, in a note
+		// Oryxa writes without a model (surfaces): their agent is not woken to
+		// tell them how it went. What it would say is nothing the ledger does
+		// not already hold, and every run of it is a model call spent on
+		// words that a person in a Slack thread has already read.
+		if err := waker.store.Done(context.WithoutCancel(ctx), delivery.EventID); err != nil {
+			logger.ErrorContext(ctx, "finish interaction delivery that no longer wakes its asker's agent", "error", err)
+			return
+		}
+		logger.InfoContext(ctx, "the request was asked in Slack, so the asking agent is not woken to report on it")
+		return
+	}
 	if deliverySatisfied(delivery, request, time.Now()) {
 		if err := waker.store.Done(context.WithoutCancel(ctx), delivery.EventID); err != nil {
 			logger.ErrorContext(ctx, "finish superseded interaction delivery", "error", err)
@@ -386,8 +399,10 @@ func (waker *Waker) start(ctx context.Context, delivery Delivery, message string
 		Message: message, StartedBy: agentsv1.StartedByTrigger, Wakeup: delivery.EventID,
 		Toolboxes: []string{agents.InteractionsToolboxName},
 		// Its interactions tools act on this request alone, and only as its
-		// purpose allows: a run deciding does not answer.
-		Delivery: agents.Delivery{RequestID: delivery.RequestID, Purpose: purpose(delivery.Kind)},
+		// purpose allows: a run deciding does not answer. What it may read of
+		// the member's is what its reach loads, and the answer guard is told so
+		// when it answers.
+		Delivery: agents.Delivery{RequestID: delivery.RequestID, Purpose: purpose(delivery.Kind), Sources: sourcesOf(profile)},
 	}
 	member := threads.Member{UserID: delivery.RecipientUserID, OrganizationID: delivery.OrganizationID}
 	started, err := waker.agents.StartUnattendedRun(ctx, member, delivery.RecipientAgentID, threadID, input, profile)
@@ -528,6 +543,30 @@ func reach(kind string, request agents.Interaction) managedagents.UnattendedProf
 	return managedagents.DeliveryReport
 }
 
+// sourcesOf are the toolboxes a run of the reach reads the member's private
+// material through, by name, for the relevance check of the answer it gives: a
+// delivery run has no tool but those its reach loads and the request's own
+// (package agents' delivering root), so this is everything it can have read,
+// and never depends on what it says it did. A report reads nothing private: an
+// empty list, which says so, where nil says nothing was recorded, as it does for
+// a reach this code does not know.
+func sourcesOf(profile managedagents.UnattendedProfile) []string {
+	switch profile {
+	case managedagents.DeliveryReads:
+		return []string{agents.AppsToolboxName, agents.KnowledgeToolboxName}
+	case managedagents.DeliveryApps:
+		return []string{agents.AppsToolboxName}
+	case managedagents.DeliveryQuiet:
+		return []string{agents.KnowledgeToolboxName}
+	case managedagents.DeliveryReport:
+		return []string{}
+	default:
+		// A reach this code does not know says nothing of what it loads, so
+		// nothing is recorded, and an answer from it is judged.
+		return nil
+	}
+}
+
 // purpose is what a run delivering an interaction of kind is for.
 func purpose(kind string) string {
 	switch kind {
@@ -582,7 +621,36 @@ func messageFor(delivery Delivery, request agents.Interaction, named between) st
 	if delivery.Kind == KindRequesterCompleted && request.Status == interactions.StatusWithheld {
 		return withheldMessage(delivery)
 	}
-	return message(delivery, interactions.DecidedByItsOwner(request), named)
+	text := message(delivery, interactions.DecidedByItsOwner(request), named)
+	if delivery.Kind == KindTargetApproved {
+		text += consentSentence(request)
+	}
+	return text
+}
+
+// What an owner allowed of the answer to a request made from Slack, told to the
+// agent doing the work so that it does not write what it will not be let to
+// send. The guard enforces it either way: it is what the answer would be held
+// for, or refused.
+const (
+	summaryOnly = " Your owner allowed an AI summary only: answer in your own words, copy no run of 20 or more words of what you read, and give no links to it."
+	excerptsOK  = " Your owner allowed access: you may quote short excerpts of what you read."
+)
+
+// consentSentence is what the approval's consent adds to the message that wakes
+// the agent for the work, for a request made from Slack; nothing for any other,
+// whose approval says nothing of how the answer is to read.
+func consentSentence(request agents.Interaction) string {
+	if request.Origin != interactions.OriginSlack || request.Decision == nil {
+		return ""
+	}
+	switch request.Decision.Consent {
+	case interactions.ConsentSummary:
+		return summaryOnly
+	case interactions.ConsentAccess:
+		return excerptsOK
+	}
+	return ""
 }
 
 // withheldMessage tells the requester's agent that the answer to its
