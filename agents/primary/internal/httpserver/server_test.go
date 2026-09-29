@@ -149,7 +149,7 @@ func (service *fakeThreads) Artifact(_ context.Context, member threads.Member, t
 	return threads.File{}, threads.ErrNotFound
 }
 
-func (service *fakeThreads) SaveArtifact(_ context.Context, member threads.Member, threadID, name string, expectedVersion int64, data []byte, _ string) (int64, error) {
+func (service *fakeThreads) SaveArtifact(_ context.Context, member threads.Member, threadID, name string, expectedVersion int64, data []byte) (int64, error) {
 	service.members = append(service.members, member)
 	if threadID != "thread_1" || name != "draft.docx" {
 		return 0, threads.ErrNotFound

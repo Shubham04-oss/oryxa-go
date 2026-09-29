@@ -83,7 +83,7 @@ func TestAFileARunKeepsShowsInTheThreadAndCanBeRead(t *testing.T) {
 	if _, err := service.Artifact(context.Background(), someoneElse, created.ID, "shot.png", 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another member reading it = %v, want ErrNotFound", err)
 	}
-	version, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("edited-png"), "image/png")
+	version, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("edited-png"))
 	if err != nil || version != 2 {
 		t.Fatalf("edited artifact version = %d, %v", version, err)
 	}
@@ -95,13 +95,59 @@ func TestAFileARunKeepsShowsInTheThreadAndCanBeRead(t *testing.T) {
 	if err != nil || string(old.Data) != "png-bytes" {
 		t.Fatalf("previous version = %+v, %v", old, err)
 	}
-	if _, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("different"), "image/png"); !errors.Is(err, ErrConflict) {
+	if _, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("different")); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale edit = %v, want conflict", err)
 	}
-	if version, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("edited-png"), "image/png"); err != nil || version != 2 {
+	if version, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("edited-png")); err != nil || version != 2 {
 		t.Fatalf("retry of saved edit = %d, %v", version, err)
 	}
-	if _, err := service.SaveArtifact(context.Background(), someoneElse, created.ID, "shot.png", 2, []byte("stolen"), "image/png"); !errors.Is(err, ErrNotFound) {
+	if _, err := service.SaveArtifact(context.Background(), someoneElse, created.ID, "shot.png", 2, []byte("stolen")); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another member editing it = %v, want not found", err)
+	}
+}
+
+// An edit is saved as the file it replaces, whatever type that file carries,
+// not as what its extension says.
+func TestAnEditedFileKeepsTheTypeOfTheVersionItReplaces(t *testing.T) {
+	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("Done.", genai.RoleModel), nil
+	}}
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: llm, Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := artifact.InMemoryService()
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(), Artifacts: artifacts,
+		Runs: newFakeRuns(), Prices: prices, RunTimeout: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	created, err := service.Create(ctx, asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An agent kept the file with a type of its own choosing: not the one
+	// its extension would give it.
+	const kept = "application/octet-stream"
+	if _, err := artifacts.Save(ctx, &artifact.SaveRequest{
+		AppName: "krude", UserID: asha.UserID, SessionID: created.ID, FileName: "plan.docx",
+		Part: genai.NewPartFromBytes([]byte("docx-v1"), kept),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := service.SaveArtifact(ctx, asha, created.ID, "plan.docx", 1, []byte("docx-v2"))
+	if err != nil || saved != 2 {
+		t.Fatalf("SaveArtifact() = %d, %v; want version 2", saved, err)
+	}
+	edited, err := service.Artifact(ctx, asha, created.ID, "plan.docx", 0)
+	if err != nil || edited.Version != 2 || string(edited.Data) != "docx-v2" || edited.MIMEType != kept {
+		t.Fatalf("the edited file = %+v, %v; want version 2 still typed %q", edited, err, kept)
 	}
 }

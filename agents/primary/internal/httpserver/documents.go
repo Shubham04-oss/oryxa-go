@@ -268,11 +268,9 @@ func (server *Server) documentCallback(writer http.ResponseWriter, request *http
 		writeJSON(writer, http.StatusOK, map[string]int{"error": 1})
 		return
 	}
-	mediaType := mime.TypeByExtension("." + strings.TrimPrefix(strings.ToLower(path.Ext(ticket.Name)), "."))
-	if mediaType == "" {
-		mediaType = "application/octet-stream"
-	}
-	_, err = server.threads.SaveArtifact(request.Context(), threads.Member{UserID: ticket.User, OrganizationID: ticket.Organization}, ticket.Thread, ticket.Name, ticket.Version, content, mediaType)
+	// The new version is the file it replaces, edited: it keeps that version's
+	// media type, which SaveArtifact reads from the file itself.
+	_, err = server.threads.SaveArtifact(request.Context(), threads.Member{UserID: ticket.User, OrganizationID: ticket.Organization}, ticket.Thread, ticket.Name, ticket.Version, content)
 	if err != nil {
 		server.logger.ErrorContext(request.Context(), "save edited document", "error", err)
 		writeJSON(writer, http.StatusOK, map[string]int{"error": 1})

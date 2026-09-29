@@ -59,7 +59,9 @@ type Threads interface {
 	Delete(ctx context.Context, member threads.Member, threadID string) error
 	StartRun(ctx context.Context, member threads.Member, threadID string, input threads.RunInput) (Run, error)
 	Artifact(ctx context.Context, member threads.Member, threadID, name string, version int64) (threads.File, error)
-	SaveArtifact(ctx context.Context, member threads.Member, threadID, name string, expectedVersion int64, data []byte, mimeType string) (int64, error)
+	// SaveArtifact stores an edit as the next version, if expectedVersion is
+	// still the current one, typed as the version it replaces.
+	SaveArtifact(ctx context.Context, member threads.Member, threadID, name string, expectedVersion int64, data []byte) (int64, error)
 }
 
 // Run is a started run. *threads.Run implements it.

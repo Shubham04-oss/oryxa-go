@@ -471,9 +471,11 @@ func (service *Service) Artifact(ctx context.Context, member Member, threadID, n
 
 // SaveArtifact stores an edited version only if the version the editor opened
 // is still current. Explicit version allocation also prevents lost updates in
-// the S3 artifact store when two saves race.
-func (service *Service) SaveArtifact(ctx context.Context, member Member, threadID, name string, expectedVersion int64, data []byte, mimeType string) (int64, error) {
-	if expectedVersion < 1 || len(data) == 0 || strings.TrimSpace(mimeType) == "" {
+// the S3 artifact store when two saves race. The new version keeps the media
+// type of the one it replaces: what an editor made of a file is not a reason
+// to change what the file is.
+func (service *Service) SaveArtifact(ctx context.Context, member Member, threadID, name string, expectedVersion int64, data []byte) (int64, error) {
+	if expectedVersion < 1 || len(data) == 0 {
 		return 0, ErrInvalid
 	}
 	service.artifactSaveMu.Lock()
@@ -488,6 +490,7 @@ func (service *Service) SaveArtifact(ctx context.Context, member Member, threadI
 	if current.Version != expectedVersion {
 		return 0, ErrConflict
 	}
+	mimeType := cmp.Or(strings.TrimSpace(current.MIMEType), "application/octet-stream")
 	saved, err := service.artifacts.Save(ctx, &artifact.SaveRequest{
 		AppName: service.appName, UserID: member.UserID, SessionID: threadID, FileName: name,
 		Version: expectedVersion + 1, Part: genai.NewPartFromBytes(data, mimeType),
