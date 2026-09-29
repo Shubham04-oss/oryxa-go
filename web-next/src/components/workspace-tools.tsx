@@ -195,7 +195,11 @@ export function WorkspaceTools({
     : isUnauthorized(session.error)
   const signedIn = organizationId ? !signedOut : Boolean(session.data)
   const canConnect =
-    live && Boolean(organizationId) && signedIn && Boolean(offerQuery.data)
+    live &&
+    Boolean(organizationId) &&
+    signedIn &&
+    Boolean(offerQuery.data) &&
+    offerQuery.data?.can_connect !== false
   const isOffered = (toolkit: string) =>
     !organizationId ||
     (Boolean(offerQuery.data) &&
@@ -637,6 +641,7 @@ export function WorkspaceTools({
               organizationId={organizationId ?? ""}
               preview={isPreview}
               offered={!offerQuery.data || isOffered(selected.toolkit)}
+              canConnect={canConnect}
               replaced={replacedExpiredIds.has(selected.id)}
               reconnecting={connectingToolkit === selected.toolkit}
               connectBusy={Boolean(connectingToolkit)}
@@ -686,6 +691,12 @@ export function WorkspaceTools({
             )}
           </label>
         </div>
+        {live && offerQuery.data?.can_connect === false && (
+          <p className="workspace-tools-no-results">
+            Your organization has turned off employee app connections. Ask an
+            admin to enable them if you need to connect an app.
+          </p>
+        )}
         {exploreProblem ? (
           <p
             className="workspace-tools-no-results workspace-tools-problem"

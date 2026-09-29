@@ -24,6 +24,7 @@ type Repository interface {
 	AtVersion(context.Context, string, int64) (store.Version, error)
 	Versions(context.Context, string) ([]store.Version, error)
 	Save(context.Context, string, string, []byte) (store.Version, error)
+	Mappings(context.Context, string) ([]store.ExternalMapping, error)
 }
 
 type Server struct {
@@ -53,6 +54,7 @@ func New(repository Repository, apiURL string) (*Server, error) {
 	server.handle("POST /v1/organizations/{organizationID}/workspace:rollback-plan", server.rollbackPlan)
 	server.handle("GET /v1/organizations/{organizationID}/workspace/status", server.status)
 	server.handle("GET /v1/organizations/{organizationID}/workspace/context", server.context)
+	server.handle("GET /v1/organizations/{organizationID}/workspace/mappings", server.mappings)
 	return server, nil
 }
 
@@ -238,11 +240,19 @@ func (server *Server) documentPlan(ctx context.Context, organizationID string, d
 	if err != nil {
 		return runtime.Plan{}, spec.Document{}, err
 	}
+	mappings, err := server.repository.Mappings(ctx, organizationID)
+	if err != nil {
+		return runtime.Plan{}, spec.Document{}, err
+	}
+	effective, directoryPlan, err := runtime.MergeDirectory(previous, effective, state, mappings, replaceContext)
+	if err != nil {
+		return runtime.Plan{}, spec.Document{}, err
+	}
 	effective, policyPlan, err := runtime.MergePolicies(previous, effective, replaceContext)
 	if err != nil {
 		return runtime.Plan{}, spec.Document{}, err
 	}
-	return runtime.CombinePlans(servicePlan, contextPlan, policyPlan), effective, nil
+	return runtime.CombinePlans(servicePlan, contextPlan, directoryPlan, policyPlan), effective, nil
 }
 
 func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Request, access actor, document spec.Document, approved runtime.Plan, replaceContext bool) {
@@ -342,6 +352,7 @@ func (server *Server) pull(writer http.ResponseWriter, request *http.Request) {
 		document.Teams.Prune = previous.Teams.Prune
 		document.Ownership = previous.Ownership
 		document.OrgChart = previous.OrgChart
+		document.Directory = previous.Directory
 		document.Rules = previous.Rules
 		document.Safety = previous.Safety
 		document.Tools = previous.Tools
@@ -365,6 +376,19 @@ func (server *Server) pull(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(encoded)
+}
+
+func (server *Server) mappings(writer http.ResponseWriter, request *http.Request) {
+	_, ok := server.authorize(writer, request)
+	if !ok {
+		return
+	}
+	mappings, err := server.repository.Mappings(request.Context(), request.PathValue("organizationID"))
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "external mappings could not be read")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"mappings": mappings})
 }
 
 func (server *Server) versions(writer http.ResponseWriter, request *http.Request) {
@@ -594,7 +618,16 @@ func (server *Server) status(writer http.ResponseWriter, request *http.Request) 
 	if err != nil {
 		contextPlan.NeedsHuman = []runtime.HumanStep{{Step: "context.review", Why: err.Error()}}
 	}
-	plan := runtime.CombinePlans(servicePlan, contextPlan)
+	mappings, err := server.repository.Mappings(request.Context(), request.PathValue("organizationID"))
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "external mappings could not be read")
+		return
+	}
+	_, directoryPlan, err := runtime.MergeDirectory(document, document, state, mappings, false)
+	if err != nil {
+		directoryPlan.NeedsHuman = []runtime.HumanStep{{Step: "directory.review", Why: err.Error()}}
+	}
+	plan := runtime.CombinePlans(servicePlan, contextPlan, directoryPlan)
 	status := "done"
 	if len(plan.NeedsHuman) > 0 {
 		status = "needs_human"

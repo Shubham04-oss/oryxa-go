@@ -92,12 +92,36 @@ func MergePolicies(previous, submitted spec.Document, replace bool) (spec.Docume
 		effective.Tools.Offer = nextOffer
 	} else if effective.Tools != nil {
 		effective.Tools.Offer = nil
-		if effective.Tools.Provider == "" && effective.Tools.AutoSubscribe == nil && effective.Tools.WakeUpWithin == nil {
+		if effective.Tools.Provider == "" && effective.Tools.EmployeeConnections == nil && effective.Tools.AutoSubscribe == nil && effective.Tools.WakeUpWithin == nil {
 			effective.Tools = nil
 		}
 	}
 	if !equalList(oldOffer, nextOffer) {
 		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "policy", Name: "tools.offer"})
+	}
+	var oldEmployeeConnections, nextEmployeeConnections *bool
+	if previous.Tools != nil {
+		oldEmployeeConnections = previous.Tools.EmployeeConnections
+	}
+	if submitted.Tools != nil {
+		nextEmployeeConnections = submitted.Tools.EmployeeConnections
+	}
+	if !replace && nextEmployeeConnections == nil {
+		nextEmployeeConnections = oldEmployeeConnections
+	}
+	if nextEmployeeConnections != nil {
+		if effective.Tools == nil {
+			effective.Tools = &spec.Tools{}
+		}
+		effective.Tools.EmployeeConnections = nextEmployeeConnections
+	} else if effective.Tools != nil {
+		effective.Tools.EmployeeConnections = nil
+		if effective.Tools.Provider == "" && effective.Tools.Offer == nil && effective.Tools.AutoSubscribe == nil && effective.Tools.WakeUpWithin == nil {
+			effective.Tools = nil
+		}
+	}
+	if !equalBool(oldEmployeeConnections, nextEmployeeConnections) {
+		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "policy", Name: "tools.employeeConnections"})
 	}
 	var oldAutoSubscribe, nextAutoSubscribe *bool
 	if previous.Tools != nil {
@@ -116,7 +140,7 @@ func MergePolicies(previous, submitted spec.Document, replace bool) (spec.Docume
 		effective.Tools.AutoSubscribe = nextAutoSubscribe
 	} else if effective.Tools != nil {
 		effective.Tools.AutoSubscribe = nil
-		if effective.Tools.Provider == "" && effective.Tools.Offer == nil && effective.Tools.WakeUpWithin == nil {
+		if effective.Tools.Provider == "" && effective.Tools.Offer == nil && effective.Tools.EmployeeConnections == nil && effective.Tools.WakeUpWithin == nil {
 			effective.Tools = nil
 		}
 	}
@@ -140,7 +164,7 @@ func MergePolicies(previous, submitted spec.Document, replace bool) (spec.Docume
 		effective.Tools.WakeUpWithin = nextWakeUp
 	} else if effective.Tools != nil {
 		effective.Tools.WakeUpWithin = nil
-		if effective.Tools.Provider == "" && effective.Tools.Offer == nil && effective.Tools.AutoSubscribe == nil {
+		if effective.Tools.Provider == "" && effective.Tools.Offer == nil && effective.Tools.EmployeeConnections == nil && effective.Tools.AutoSubscribe == nil {
 			effective.Tools = nil
 		}
 	}

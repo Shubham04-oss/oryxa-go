@@ -252,7 +252,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		}
 		return report(stdout, opts.json, plan)
 	}
-	if command == "pull" || command == "status" || command == "doctor" || command == "whoami" {
+	if command == "pull" || command == "status" || command == "doctor" || command == "mappings" || command == "whoami" {
 		client, err := signedInClient(ctx, opts, stdout, getenv)
 		if err != nil {
 			return reportError(err, stderr)
@@ -270,6 +270,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		}
 		if opts.org == "" {
 			return reportError(fmt.Errorf("--org or ORYXA_ORG is required"), stderr)
+		}
+		if command == "mappings" {
+			organization, err := client.OrganizationBySlug(ctx, opts.org)
+			if err != nil {
+				return reportError(err, stderr)
+			}
+			mappings, err := client.WorkspaceMappings(ctx, organization.ID)
+			if err != nil {
+				return reportError(err, stderr)
+			}
+			return report(stdout, opts.json, map[string]any{"mappings": mappings})
 		}
 		state, err := client.Snapshot(ctx, opts.org)
 		if err != nil {
@@ -322,11 +333,15 @@ func workspacePlan(ctx context.Context, client *runtime.Client, document spec.Do
 		if err != nil {
 			return runtime.Plan{}, err
 		}
+		_, directoryPlan, err := runtime.MergeDirectory(spec.Document{}, document, state, nil, false)
+		if err != nil {
+			return runtime.Plan{}, err
+		}
 		_, policyPlan, err := runtime.MergePolicies(spec.Document{}, document, false)
 		if err != nil {
 			return runtime.Plan{}, err
 		}
-		return runtime.CombinePlans(servicePlan, contextPlan, policyPlan), nil
+		return runtime.CombinePlans(servicePlan, contextPlan, directoryPlan, policyPlan), nil
 	}
 	return client.WorkspacePlan(ctx, state.Organization.ID, document)
 }
@@ -531,6 +546,7 @@ Commands:
   apply      make the planned changes, then report any pending joins
   diff       alias of plan
   pull       write live organization settings as YAML
+  mappings  show external directory IDs and their Oryxa bindings
   status     check the applied workspace for drift and pending steps
   doctor     show status and the next corrective command
   rollback  restore a saved workspace version with --to VERSION

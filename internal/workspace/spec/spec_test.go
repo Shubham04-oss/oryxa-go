@@ -35,6 +35,30 @@ func TestParseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDirectoryMappingsValidateAndRoundTrip(t *testing.T) {
+	input := example + "directory:\n  identities: [{source: 'google_workspace:acme.com', externalId: '100', member: raya@acme.com}]\n  groups: [{source: 'google_workspace:acme.com', externalId: 'grp-1', team: Engineering}]\n"
+	document, err := Parse([]byte(input))
+	if err != nil || document.Directory == nil || len(document.Directory.Identities) != 1 || len(document.Directory.Groups) != 1 {
+		t.Fatalf("directory = %+v, %v", document.Directory, err)
+	}
+	encoded, err := document.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(encoded); err != nil {
+		t.Fatalf("directory round trip: %v", err)
+	}
+	for _, invalid := range []string{
+		"directory: {identities: [{source: google_workspace, externalId: '100', member: raya@acme.com}]}\n",
+		"directory: {identities: [{source: 'google_workspace:acme.com', externalId: '100', member: raya@acme.com}, {source: 'google_workspace:acme.com', externalId: '100', member: raya@acme.com}]}\n",
+		"directory: {groups: [{source: 'google_workspace:acme.com', externalId: '', team: Engineering}]}\n",
+	} {
+		if _, err := Parse([]byte(example + invalid)); err == nil {
+			t.Fatalf("accepted %s", invalid)
+		}
+	}
+}
+
 func TestParseRejectsUnknownAndUnsupportedSettings(t *testing.T) {
 	for _, test := range []struct {
 		name, content, want string
@@ -156,9 +180,9 @@ func TestParseOperationalConsentAndSafetyPolicy(t *testing.T) {
 }
 
 func TestParseToolsPolicyDistinguishesOmittedAndEmptyOffer(t *testing.T) {
-	file := example + "tools: {provider: composio, offer: [], autoSubscribe: false, wakeUpWithin: 30m}\n"
+	file := example + "tools: {provider: composio, offer: [], employeeConnections: false, autoSubscribe: false, wakeUpWithin: 30m}\n"
 	document, err := Parse([]byte(file))
-	if err != nil || document.Tools == nil || document.Tools.Offer == nil || len(*document.Tools.Offer) != 0 || document.Tools.AutoSubscribe == nil || *document.Tools.AutoSubscribe || document.Tools.WakeUpWithin == nil || *document.Tools.WakeUpWithin != "30m" {
+	if err != nil || document.Tools == nil || document.Tools.Offer == nil || len(*document.Tools.Offer) != 0 || document.Tools.EmployeeConnections == nil || *document.Tools.EmployeeConnections || document.Tools.AutoSubscribe == nil || *document.Tools.AutoSubscribe || document.Tools.WakeUpWithin == nil || *document.Tools.WakeUpWithin != "30m" {
 		t.Fatalf("tools policy = %+v, %v", document.Tools, err)
 	}
 	encoded, err := document.YAML()

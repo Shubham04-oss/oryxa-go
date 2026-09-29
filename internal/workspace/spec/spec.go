@@ -27,7 +27,7 @@ type Document struct {
 	Organization  *Organization `yaml:"organization,omitempty" json:"organization,omitempty"`
 	People        *People       `yaml:"people,omitempty" json:"people,omitempty"`
 	Teams         Teams         `yaml:"teams,omitempty" json:"teams,omitempty"`
-	Directory     *yaml.Node    `yaml:"directory,omitempty" json:"-"`
+	Directory     *Directory    `yaml:"directory,omitempty" json:"directory,omitempty"`
 	OrgChart      *OrgChart     `yaml:"orgChart,omitempty" json:"orgChart,omitempty"`
 	Chat          *yaml.Node    `yaml:"chat,omitempty" json:"-"`
 	Agents        *Agents       `yaml:"agents,omitempty" json:"agents,omitempty"`
@@ -70,13 +70,16 @@ type GuardSafety struct {
 	HoldForReview *bool `yaml:"holdForReview,omitempty" json:"holdForReview,omitempty"`
 }
 
-// Tools controls which Composio toolkits members may connect and use.
+// Tools controls which app toolkits members may connect and use.
 // A missing offer leaves every toolkit available; an empty offer allows none.
 type Tools struct {
-	Provider      string    `yaml:"provider,omitempty" json:"provider,omitempty"`
-	Offer         *[]string `yaml:"offer,omitempty" json:"offer,omitempty"`
-	AutoSubscribe *bool     `yaml:"autoSubscribe,omitempty" json:"autoSubscribe,omitempty"`
-	WakeUpWithin  *string   `yaml:"wakeUpWithin,omitempty" json:"wakeUpWithin,omitempty"`
+	Provider string    `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Offer    *[]string `yaml:"offer,omitempty" json:"offer,omitempty"`
+	// EmployeeConnections controls whether ordinary members can create their
+	// own connections. Organization admins can still connect allowed toolkits.
+	EmployeeConnections *bool   `yaml:"employeeConnections,omitempty" json:"employeeConnections,omitempty"`
+	AutoSubscribe       *bool   `yaml:"autoSubscribe,omitempty" json:"autoSubscribe,omitempty"`
+	WakeUpWithin        *string `yaml:"wakeUpWithin,omitempty" json:"wakeUpWithin,omitempty"`
 }
 
 // Search selects the knowledge path available to organization agents.
@@ -96,6 +99,28 @@ type Member struct {
 	Email string `yaml:"email" json:"email"`
 	Role  string `yaml:"role,omitempty" json:"role,omitempty"`
 	Guest bool   `yaml:"guest,omitempty" json:"guest,omitempty"`
+}
+
+// Directory is a reviewed snapshot produced from external directories by the
+// customer's agent. A source includes its tenant so IDs from two tenants do
+// not collide. Reapplying a new snapshot reconciles the mappings; pruning is
+// explicit, just as it is for people and teams.
+type Directory struct {
+	Identities []ExternalIdentity `yaml:"identities,omitempty" json:"identities,omitempty"`
+	Groups     []ExternalGroup    `yaml:"groups,omitempty" json:"groups,omitempty"`
+	Prune      bool               `yaml:"prune,omitempty" json:"prune,omitempty"`
+}
+
+type ExternalIdentity struct {
+	Source     string `yaml:"source" json:"source"`
+	ExternalID string `yaml:"externalId" json:"externalId"`
+	Member     string `yaml:"member" json:"member"`
+}
+
+type ExternalGroup struct {
+	Source     string `yaml:"source" json:"source"`
+	ExternalID string `yaml:"externalId" json:"externalId"`
+	Team       string `yaml:"team" json:"team"`
 }
 
 type Team struct {
@@ -233,6 +258,7 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var domainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$`)
 var relationPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 var toolkitPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+var sourcePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}:[A-Za-z0-9._-]{1,128}$`)
 
 // Parse refuses unknown keys, aliases that hide settings, and multiple YAML
 // documents. Error messages name paths, never submitted values.
@@ -274,7 +300,7 @@ func rejectUnsupportedSections(root *yaml.Node) error {
 	for i := 0; i < len(root.Content[0].Content); i += 2 {
 		name := root.Content[0].Content[i].Value
 		switch name {
-		case "directory", "chat", "notifications", "data", "security", "secrets":
+		case "chat", "notifications", "data", "security", "secrets":
 			return fmt.Errorf("%s is not yet supported by the workspace applier", name)
 		}
 	}
@@ -312,7 +338,6 @@ func (document Document) Validate() error {
 		name string
 		node *yaml.Node
 	}{
-		{"directory", document.Directory},
 		{"chat", document.Chat},
 		{"notifications", document.Notifications}, {"data", document.Data},
 		{"security", document.Security},
@@ -419,6 +444,35 @@ func (document Document) Validate() error {
 			}
 		}
 	}
+	if document.Directory != nil {
+		seen := map[string]bool{}
+		for _, identity := range document.Directory.Identities {
+			if err := validateExternalMapping(identity.Source, identity.ExternalID); err != nil {
+				return fmt.Errorf("directory.identities: %w", err)
+			}
+			if err := validateEmail(identity.Member, nil); err != nil {
+				return fmt.Errorf("directory.identities[].member: %w", err)
+			}
+			key := "user/" + identity.Source + "/" + identity.ExternalID
+			if seen[key] {
+				return fmt.Errorf("directory.identities has a duplicate external ID")
+			}
+			seen[key] = true
+		}
+		for _, group := range document.Directory.Groups {
+			if err := validateExternalMapping(group.Source, group.ExternalID); err != nil {
+				return fmt.Errorf("directory.groups: %w", err)
+			}
+			if strings.TrimSpace(group.Team) == "" || len(group.Team) > 120 || strings.TrimSpace(group.Team) != group.Team {
+				return fmt.Errorf("directory.groups[].team must name a team")
+			}
+			key := "team/" + group.Source + "/" + group.ExternalID
+			if seen[key] {
+				return fmt.Errorf("directory.groups has a duplicate external ID")
+			}
+			seen[key] = true
+		}
+	}
 	seenTeams := map[string]bool{}
 	for _, team := range document.Teams.Items {
 		if strings.TrimSpace(team.Name) == "" || len(team.Name) > 120 || seenTeams[team.Name] {
@@ -455,6 +509,16 @@ func (document Document) Validate() error {
 		}
 	}
 	return document.validateContext()
+}
+
+func validateExternalMapping(source, externalID string) error {
+	if !sourcePattern.MatchString(source) {
+		return fmt.Errorf("source must be provider:tenant, with a stable tenant identifier")
+	}
+	if externalID == "" || len(externalID) > 256 || strings.TrimSpace(externalID) != externalID || strings.ContainsAny(externalID, "\x00\r\n\t") {
+		return fmt.Errorf("externalId must be a non-empty, single-line stable ID up to 256 bytes")
+	}
+	return nil
 }
 
 // ParseDuration accepts Go durations and whole days for workspace policies.

@@ -25,8 +25,9 @@ type Settings struct {
 	SearchMode string
 	// Offer is nil when all Composio toolkits are allowed. An empty list
 	// explicitly disables every toolkit for this organization.
-	Offer         *[]string
-	AutoSubscribe *bool
+	Offer               *[]string
+	EmployeeConnections *bool
+	AutoSubscribe       *bool
 	// WakeUpWithin is zero when the workspace uses the deployment default.
 	WakeUpWithin time.Duration
 }
@@ -65,6 +66,7 @@ func (loader *Loader) Get(ctx context.Context, organizationID string) (Settings,
 		settings.Offer = &copyOfOffer
 	}
 	if document.Tools != nil {
+		settings.EmployeeConnections = document.Tools.EmployeeConnections
 		settings.AutoSubscribe = document.Tools.AutoSubscribe
 		if document.Tools.WakeUpWithin != nil {
 			settings.WakeUpWithin, err = spec.ParseDuration(*document.Tools.WakeUpWithin)

@@ -312,8 +312,9 @@ func Above(chart spec.OrgChart, from, to string) bool {
 	return walk(from)
 }
 
-// RuntimeRemovals retains only deletion approvals for live service resources.
-// The workspace API checks context deletions against the full approved plan.
+// RuntimeRemovals retains only deletion approvals for live auth and teams
+// resources. The workspace API checks context and mapping deletions against
+// the full approved plan.
 func RuntimeRemovals(plan Plan) Plan {
 	filtered := Plan{Changes: []Change{}}
 	for _, change := range plan.Changes {
@@ -321,7 +322,7 @@ func RuntimeRemovals(plan Plan) Plan {
 			continue
 		}
 		switch change.Kind {
-		case "ownership", "org_relationship", "authority_relation", "executive":
+		case "ownership", "org_relationship", "authority_relation", "executive", "external_user", "external_team":
 			continue
 		default:
 			filtered.Changes = append(filtered.Changes, change)

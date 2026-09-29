@@ -98,3 +98,43 @@ func TestOfferedToolsRequiresMembershipAndKeepsEmptyDistinct(t *testing.T) {
 		t.Fatalf("empty offer = %+v, %v", result, err)
 	}
 }
+
+func TestEmployeeConnectionPreferenceAllowsAdminsAndExistingMemberUse(t *testing.T) {
+	h := newHarness(t)
+	h.readTool()
+	h.activeConnection("apc_1", "user-1", "github", "ca_1")
+	h.composio.toolkits["github"] = composio.Toolkit{Slug: "github", ComposioManagedAuthSchemes: []string{"OAUTH2"}}
+	off := false
+	h.service.policy = &fakePolicySource{settings: policy.Settings{EmployeeConnections: &off}}
+	ctx := context.Background()
+	if _, _, err := h.service.Connect(ctx, memberToken, "org_1", ConnectInput{Toolkit: "github"}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("member connect = %v", err)
+	}
+	if _, _, err := h.service.Connect(ctx, adminToken, "org_1", ConnectInput{Toolkit: "github"}); err != nil {
+		t.Fatalf("admin connect = %v", err)
+	}
+	if _, err := h.service.SearchTools(ctx, memberToken, "org_1", "github", "", 0); err != nil {
+		t.Fatalf("existing connection tool access = %v", err)
+	}
+	result, err := h.service.OfferedTools(ctx, memberToken, "org_1")
+	if err != nil || result.EmployeeConnections || result.CanConnect {
+		t.Fatalf("connection preference = %+v, %v", result, err)
+	}
+	adminOffer, err := h.service.OfferedTools(ctx, adminToken, "org_1")
+	if err != nil || !adminOffer.CanConnect {
+		t.Fatalf("admin connection preference = %+v, %v", adminOffer, err)
+	}
+}
+
+func TestEmployeeConnectionPreferenceAlsoAppliesToOryxaSignin(t *testing.T) {
+	h := newOryxaHarness(t, "github")
+	off := false
+	h.service.policy = &fakePolicySource{settings: policy.Settings{EmployeeConnections: &off}}
+	input := ConnectInput{Toolkit: "github", Host: "app.oryxa.test"}
+	if _, err := h.service.ConnectOryxa(context.Background(), memberToken, "org_1", input); !errors.Is(err, domain.ErrForbidden) || len(h.signin.starts) != 0 {
+		t.Fatalf("member Oryxa sign-in = %v, starts = %d", err, len(h.signin.starts))
+	}
+	if _, err := h.service.ConnectOryxa(context.Background(), adminToken, "org_1", input); err != nil || len(h.signin.starts) != 1 {
+		t.Fatalf("admin Oryxa sign-in = %v, starts = %d", err, len(h.signin.starts))
+	}
+}

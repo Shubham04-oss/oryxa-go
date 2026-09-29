@@ -67,10 +67,16 @@ orgChart:
 tools:
   provider: composio
   offer: [github, jira]
+  employeeConnections: true
   autoSubscribe: false
   wakeUpWithin: 30m
 search:
   mode: native
+directory:
+  identities:
+    - {source: 'google_workspace:acme.com', externalId: '112233', member: maya@acme.com}
+  groups:
+    - {source: 'google_workspace:acme.com', externalId: 'eng-uuid', team: Engineering}
 ```
 
 ## Review and apply
@@ -89,7 +95,14 @@ Composio toolkit, while `offer: []` allows none. Research actual toolkit slugs
 before listing them; a disallowed app's existing connection cannot act or
 deliver events or refresh knowledge sources until it is allowed again.
 Previously indexed documents remain. `tools.autoSubscribe` is the default for
-new connections. Unsupported sections fail validation before any write.
-The CLI does not currently configure Slack, external directory providers,
+new connections. `tools.employeeConnections: false` reserves new connections
+for owners and admins; it does not share an admin's credential with employees.
+For directory snapshots, map every external ID with a stable provider-and-tenant
+source, then run `oryxa plan`, review the changes, and `oryxa apply`. Run
+`oryxa mappings --org SLUG --json` to inspect bound and pending IDs. Never
+guess a UUID from an email. If a provider email changes, preserve the external
+ID and verify that the new email still belongs to the same Oryxa member.
+Unsupported sections fail validation before any write.
+The CLI does not currently configure Slack, direct directory provider fetching,
 external search providers, the other governance and safety controls, retention, or the
 other tool settings.

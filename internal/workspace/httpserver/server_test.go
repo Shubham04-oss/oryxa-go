@@ -19,6 +19,7 @@ import (
 type memoryRepository struct {
 	mu       sync.Mutex
 	versions []store.Version
+	mappings []store.ExternalMapping
 }
 
 func (repo *memoryRepository) WithApplyLock(_ context.Context, _ string, operation func() error) error {
@@ -34,6 +35,10 @@ func (repo *memoryRepository) Latest(context.Context, string) (store.Version, er
 	return repo.versions[len(repo.versions)-1], nil
 }
 
+func (repo *memoryRepository) Mappings(context.Context, string) ([]store.ExternalMapping, error) {
+	return append([]store.ExternalMapping{}, repo.mappings...), nil
+}
+
 func (repo *memoryRepository) Versions(context.Context, string) ([]store.Version, error) {
 	return append([]store.Version(nil), repo.versions...), nil
 }
@@ -46,12 +51,87 @@ func (repo *memoryRepository) AtVersion(_ context.Context, _ string, number int6
 }
 
 func (repo *memoryRepository) Save(_ context.Context, _, actor string, document []byte) (store.Version, error) {
+	parsed, err := spec.Parse(document)
+	if err != nil {
+		return store.Version{}, err
+	}
+	repo.mappings = nil
+	if parsed.Directory != nil {
+		for _, identity := range parsed.Directory.Identities {
+			resourceID := ""
+			if identity.Member == "owner@acme.com" {
+				resourceID = "u1"
+			}
+			repo.mappings = append(repo.mappings, store.ExternalMapping{
+				Source: identity.Source, Kind: "user", ExternalID: identity.ExternalID,
+				Reference: identity.Member, ResourceID: resourceID,
+			})
+		}
+	}
 	if len(repo.versions) > 0 && bytes.Equal(repo.versions[len(repo.versions)-1].Document, document) {
 		return repo.versions[len(repo.versions)-1], nil
 	}
 	version := store.Version{Number: int64(len(repo.versions) + 1), AppliedBy: actor, AppliedAt: time.Now(), Document: document}
 	repo.versions = append(repo.versions, version)
 	return version, nil
+}
+
+func TestWorkspaceDirectoryMappingPlanApplyAndPrune(t *testing.T) {
+	api := fakeOrganizationAPI(false)
+	defer api.Close()
+	repo := &memoryRepository{}
+	server, err := New(repo, api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := httptest.NewServer(server)
+	defer workspace.Close()
+	path := "/v1/organizations/org1/workspace"
+	file := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\ndirectory:\n  identities: [{source: 'google_workspace:acme.com', externalId: '100', member: owner@acme.com}]\n"
+	response := workspaceRequest(t, workspace, http.MethodPost, path+":plan", "owner-token", map[string]string{"document": file})
+	var plan runtime.Plan
+	if err := json.NewDecoder(response.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(plan.Changes) != 1 || plan.Changes[0].Kind != "external_user" {
+		t.Fatalf("mapping plan = %d %+v", response.StatusCode, plan)
+	}
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": file, "approved_plan": plan})
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(repo.mappings) != 1 || repo.mappings[0].ResourceID != "u1" {
+		t.Fatalf("mapping apply = %d %+v", response.StatusCode, repo.mappings)
+	}
+	response = workspaceRequest(t, workspace, http.MethodGet, path+"/mappings", "owner-token", nil)
+	var listed struct {
+		Mappings []store.ExternalMapping `json:"mappings"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(listed.Mappings) != 1 || listed.Mappings[0].ExternalID != "100" {
+		t.Fatalf("mapping read = %d %+v", response.StatusCode, listed)
+	}
+	response = workspaceRequest(t, workspace, http.MethodGet, path+"/mappings", "invalid", nil)
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized mapping read = %d", response.StatusCode)
+	}
+	prune := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\ndirectory: {prune: true}\n"
+	response = workspaceRequest(t, workspace, http.MethodPost, path+":plan", "owner-token", map[string]string{"document": prune})
+	if err := json.NewDecoder(response.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(plan.Changes) != 1 || plan.Changes[0].Op != "delete" {
+		t.Fatalf("mapping prune plan = %d %+v", response.StatusCode, plan)
+	}
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": prune, "approved_plan": plan})
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(repo.mappings) != 0 {
+		t.Fatalf("mapping prune apply = %d %+v", response.StatusCode, repo.mappings)
+	}
 }
 
 func fakeOrganizationAPI(extraMember bool) *httptest.Server {

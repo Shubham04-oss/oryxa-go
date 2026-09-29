@@ -121,6 +121,25 @@ type AppConnection struct {
 	AutoSubscribe bool   `json:"auto_subscribe"`
 }
 
+type ExternalMapping struct {
+	Source     string `json:"source"`
+	Kind       string `json:"kind"`
+	ExternalID string `json:"external_id"`
+	Reference  string `json:"reference"`
+	ResourceID string `json:"resource_id,omitempty"`
+}
+
+func (client *Client) WorkspaceMappings(ctx context.Context, organizationID string) ([]ExternalMapping, error) {
+	var listed struct {
+		Mappings []ExternalMapping `json:"mappings"`
+	}
+	path := "/v1/organizations/" + url.PathEscape(organizationID) + "/workspace/mappings"
+	if err := client.request(ctx, http.MethodGet, path, nil, &listed); err != nil {
+		return nil, err
+	}
+	return listed.Mappings, nil
+}
+
 func (client *Client) AppOffer(ctx context.Context, organizationID string) (*[]string, error) {
 	var policy struct {
 		Offer *[]string `json:"offer"`

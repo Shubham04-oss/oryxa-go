@@ -55,6 +55,8 @@ export type CatalogPage = {
 /** The organization's applied Composio offer. Null means the whole catalog. */
 export type ToolOffer = {
   offer: string[] | null
+  employee_connections: boolean
+  can_connect: boolean
   auto_subscribe_default: boolean
 }
 

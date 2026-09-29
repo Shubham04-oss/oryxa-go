@@ -319,6 +319,30 @@ describe("WorkspaceTools", () => {
     expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy()
   })
 
+  it("keeps the catalog visible when employee connections are disabled", async () => {
+    fakeFetch(
+      ({ path }) =>
+        path === `${org}/apps/offer`
+          ? json({
+              offer: ["gmail"],
+              employee_connections: false,
+              can_connect: false,
+              auto_subscribe_default: true,
+            })
+          : undefined,
+      catalog(),
+      connections({ connections: [] }),
+      quietDetails()
+    )
+    render(<WorkspaceTools organizationId="org-1" />)
+    expect(await screen.findByRole("heading", { name: "Gmail" })).toBeTruthy()
+    expect(
+      screen.getByText(/turned off employee app connections/)
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Gmail details" }))
+    expect(screen.queryByRole("button", { name: "Connect Gmail" })).toBeNull()
+  })
+
   it("stays live and says so when apps answers but the catalog is down", async () => {
     const state = { connections: [connection()] }
     fakeFetch(

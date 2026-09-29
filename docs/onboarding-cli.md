@@ -51,6 +51,7 @@ daemon or a different security design.
 ./bin/oryxa doctor --org acme --json
 ./bin/oryxa pull --org acme -o current-oryxa.yaml
 ./bin/oryxa rollback --org acme --to 1
+./bin/oryxa mappings --org acme --json
 ./bin/oryxa connect-app github --org acme --json
 ```
 
@@ -90,6 +91,9 @@ The current file accepts these settings:
 | `people.invite: email` | Uses the invitation email flow |
 | `people.invite: quiet` | Creates invitations without sending email; members can find and accept them after signing in |
 | `people.prune: true` | Removes omitted members and pending invitations after an explicit removal plan and confirmation; the signed-in member and final owner are protected |
+| `directory.identities[]` | Maps a stable external user ID to a member email with `{source, externalId, member}`; `source` is `provider:tenant`, for example `google_workspace:acme.com` |
+| `directory.groups[]` | Maps a stable external group ID to a team with `{source, externalId, team}`; the team must exist or be declared in `teams` |
+| `directory.prune: true` | Removes mappings omitted from a reviewed source snapshot; omission keeps prior mappings |
 | `teams[].name`, `.members`, `.leads` | Create teams, add joined members, and grant team-admin rights to leads |
 | `teams: {items: [...], prune: true}` | Remove omitted teams and memberships after listing every removal for confirmation |
 | `agents.organization.enabled`, `.displayName`, `.description`, `.instructions` | Reconcile the existing organization agent; `plan` reads effective defaults without creating it |
@@ -99,8 +103,9 @@ The current file accepts these settings:
 | `rules.consent.expireAfter` | Sets the default and maximum lifetime of cross-member requests (`5m` through `7d`) |
 | `safety.guard.holdForReview` | Holds every cross-member answer for the addressed member to review; `regulated` defaults this to `true` |
 | `agents.personal.proactive: on\|off` | Sets the organization default for app update wake-ups; a member's explicit preference takes precedence |
-| `tools.provider: composio` | Declares the existing Composio provider |
-| `tools.offer` | Allows only the listed toolkit slugs to connect or act in this organization; omitting it allows all, and `[]` allows none. Existing connections stay recorded but cannot run, read, subscribe, deliver events, or refresh knowledge sources while disallowed. Previously indexed documents remain until their normal removal lifecycle |
+| `tools.provider: composio` | Declares the existing Composio provider; Oryxa's own enabled app integrations use the same organization offer policy |
+| `tools.offer` | Enables only the listed toolkit slugs for this organization; omitting it enables all, and `[]` enables none. Existing connections stay recorded but cannot run, read, subscribe, deliver events, or refresh knowledge sources while disallowed. Previously indexed documents remain until their normal removal lifecycle |
+| `tools.employeeConnections` | Allows ordinary members to start their own connections (`true` by default); `false` reserves new connections for organization owners and admins. Existing member connections continue to work while their toolkit is offered |
 | `tools.autoSubscribe` | Sets the default for new app connections; a member's per-connection choice takes precedence, and deployment-wide `APPS_AUTO_SUBSCRIBE=false` still disables automatic subscriptions |
 | `tools.wakeUpWithin` | Sets the maximum cadence used to schedule new digest triggers (`1m` through `90m`); omission uses `BATCHING_MAX_WAIT` (one hour by default). Already scheduled triggers keep their deadlines |
 | `search.mode: native\|none` | Enables the existing RAG knowledge toolbox or prevents organization agents from using its search and source tools; omission keeps existing behavior |
@@ -109,6 +114,17 @@ The parser refuses unknown keys, duplicate members or teams, unrecognized
 roles, and unsupported sections. Omitting a person or team never removes it
 unless its section sets `prune: true`. The normal compact `teams: [...]` form
 is still supported.
+Directory snapshots use the same `plan` and `apply` flow as people and teams.
+The customer's coding agent exports and maps source data into the file, then
+reruns `oryxa apply` for each new snapshot. External IDs are stored in a
+normalized mapping table keyed by organization, source, kind, and external ID.
+The same file must declare imported people and team memberships in `people`
+and `teams`; ID mappings alone do not add them.
+Once bound to an Oryxa user or team, a mapping cannot silently move to another
+resource. Members who have not joined retain an unbound mapping until a later
+apply. Run `oryxa mappings --org SLUG --json` to inspect current bindings.
+Provider credentials and direct scheduled Google/Microsoft fetching are not
+configured by this snapshot workflow.
 Owner role transfers are not yet supported. `preset` is accepted in the file;
 its safety hold-for-review default takes effect for `regulated`, while its
 other consent, retention, and security defaults do not. Organization timezone
@@ -116,7 +132,7 @@ is stored but the scheduler does not yet read it. The agent, apps, knowledge,
 and batching services
 read applied workspace policies when `WORKSPACE_URL` is set; the all-in-one
 host supplies that URL automatically. Split deployments must share the
-workspace PostgreSQL schema for these reads. Directory sync, the remaining
+workspace PostgreSQL schema for these reads. Direct directory provider fetching, the remaining
 governance and safety controls, external search providers, notifications, retention,
 security policy, other tool settings, and other personal-agent defaults remain
 unimplemented. A local

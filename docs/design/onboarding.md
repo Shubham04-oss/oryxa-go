@@ -1,5 +1,18 @@
 # Onboarding: the setup CLI and the workspace file
 
+> Implementation update, 2026-09-29: The customer's coding agent prepares a
+> reviewable `oryxa.yaml` from source data. The CLI reconciles people, teams,
+> external user and group ID mappings, and organization tool preferences.
+> `tools.offer` enables toolkits for an organization; `tools.employeeConnections`
+> controls whether ordinary members can connect their own accounts. Existing
+> app credentials remain member scoped. Directory snapshots are reapplied by
+> the CLI; direct scheduled Google/Microsoft fetching is not implemented.
+> Slack installation remains manual. Native search is the default path;
+> Glean and generic MCP search are optional integrations. The examples and
+> roadmap below predate this decision and are design proposals, not a list of
+> currently shipped capabilities. See [onboarding-cli.md](../onboarding-cli.md)
+> for the implemented file fields and behavior.
+
 *Draft, 2026-09-28. The owner's priority: onboarding first, then agents. This
 document is the complete package the setup CLI implements: what it does, the
 one file it applies, every setting from the smallest preference to the

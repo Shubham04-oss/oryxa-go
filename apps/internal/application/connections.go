@@ -74,6 +74,9 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
 		return domain.Connection{}, "", err
 	}
+	if err := s.allowEmployeeConnect(ctx, organizationID, caller.Role.IsOrgAdmin()); err != nil {
+		return domain.Connection{}, "", err
+	}
 	autoSubscribe, err := s.defaultAutoSubscribe(ctx, organizationID)
 	if err != nil {
 		return domain.Connection{}, "", err

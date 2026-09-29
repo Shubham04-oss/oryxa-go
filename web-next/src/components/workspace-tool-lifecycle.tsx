@@ -95,6 +95,7 @@ export function ConnectionSummary({
   organizationId,
   preview,
   offered = true,
+  canConnect = true,
   replaced,
   reconnecting,
   connectBusy,
@@ -107,6 +108,7 @@ export function ConnectionSummary({
   organizationId: string
   preview: boolean
   offered?: boolean
+  canConnect?: boolean
   /** An expired connection a newer active connection to the app replaced. */
   replaced: boolean
   /** The page is starting a new connection to this app. */
@@ -215,7 +217,7 @@ export function ConnectionSummary({
         )}
         {!preview && !confirming && (
           <div className="workspace-tools-lifecycle">
-            {offered && canReconnect(status) && !replaced && (
+            {offered && canConnect && canReconnect(status) && !replaced && (
               <button
                 type="button"
                 className="workspace-tools-pill"
