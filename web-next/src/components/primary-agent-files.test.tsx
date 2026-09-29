@@ -11,6 +11,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
 import {
+  isEditableDocument,
   PrimaryAgentFiles,
   PrimaryAgentFileViewer,
 } from "./primary-agent-files"
@@ -89,15 +90,17 @@ describe("primary agent work files", () => {
         onBack={onBack}
       />
     )
+    // A text file is never edited, so nothing writes a later version of it:
+    // the version the conversation named is the one to show.
     await waitFor(() =>
       expect(fetchArtifactLink).toHaveBeenCalledWith("org-1", "thread-1", {
         name: "draft.txt",
-        version: undefined,
+        version: 2,
       })
     )
     expect(await screen.findByText("Preview draft.txt")).toBeTruthy()
     expect(fetchArtifactEditorSession).not.toHaveBeenCalled()
-    expect(screen.getByRole("button", { name: "Edit draft.txt" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Edit draft.txt" })).toBeNull()
     fireEvent.click(
       screen.getByRole("button", { name: "Back to Agent overview" })
     )
@@ -164,5 +167,72 @@ describe("primary agent work files", () => {
     expect(destroyed).toHaveBeenCalledOnce()
     view.unmount()
     expect(destroyed).toHaveBeenCalledOnce()
+  })
+})
+
+describe("which files can be edited", () => {
+  it("names only the formats ONLYOFFICE saves back as they were", () => {
+    for (const name of [
+      "report.docx",
+      "budget.xlsx",
+      "deck.pptx",
+      "REPORT.DOCX",
+      "notes.v2.pptx",
+    ])
+      expect(isEditableDocument(name), name).toBe(true)
+    for (const name of [
+      "old.doc",
+      "notes.odt",
+      "letter.rtf",
+      "old.xls",
+      "macros.xlsm",
+      "sheet.ods",
+      "data.csv",
+      "old.ppt",
+      "show.ppsx",
+      "talk.odp",
+      "paper.pdf",
+      "notes.txt",
+      "plan.md",
+      "image.png",
+      "noextension",
+      "docx",
+    ])
+      expect(isEditableDocument(name), name).toBe(false)
+  })
+
+  it.each([
+    ["report.docx", true],
+    ["budget.xlsx", true],
+    ["deck.pptx", true],
+    ["old.doc", false],
+    ["notes.odt", false],
+    ["data.csv", false],
+    ["paper.pdf", false],
+    ["plan.md", false],
+  ])("offers Edit on %s: %s", async (name: string, editable: boolean) => {
+    fetchArtifactLink.mockResolvedValue({
+      url: `/artifacts/${name}`,
+      contentType: "application/octet-stream",
+      inline: false,
+    })
+    withThread(
+      <PrimaryAgentFileViewer
+        organizationId="org-1"
+        threadId="thread-1"
+        file={{ threadId: "thread-1", name, version: 3 }}
+        onBack={vi.fn()}
+      />
+    )
+    expect(await screen.findByText(`Preview ${name}`)).toBeTruthy()
+    expect(!!screen.queryByRole("button", { name: `Edit ${name}` })).toBe(
+      editable
+    )
+    // Only a file that can be edited follows its latest version, which is
+    // what an edit saves; any other is the version it was made as.
+    expect(fetchArtifactLink).toHaveBeenCalledWith("org-1", "thread-1", {
+      name,
+      version: editable ? undefined : 3,
+    })
   })
 })

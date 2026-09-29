@@ -24,27 +24,16 @@ export type PrimaryAgentFileTarget = {
   version?: number
 }
 
-const officeExtensions = new Set([
-  "doc",
-  "docx",
-  "odt",
-  "rtf",
-  "txt",
-  "md",
-  "xls",
-  "xlsx",
-  "xlsm",
-  "ods",
-  "csv",
-  "ppt",
-  "pptx",
-  "ppsx",
-  "odp",
-  "pdf",
-])
+// The formats an edit is saved back as they were: ONLYOFFICE returns these
+// three in the format it was given (editableDocuments in
+// agents/primary/internal/httpserver/documents.go). Any other type it converts
+// or reworks when it saves, and a converted file cannot be written back as
+// the file it was, so those open for viewing and downloading only.
+const editableExtensions = new Set(["docx", "xlsx", "pptx"])
 
-export function isOfficeDocument(name: string): boolean {
-  return officeExtensions.has(name.split(".").at(-1)?.toLowerCase() ?? "")
+export function isEditableDocument(name: string): boolean {
+  const dot = name.lastIndexOf(".")
+  return dot >= 0 && editableExtensions.has(name.slice(dot + 1).toLowerCase())
 }
 
 /** Follow the chat's selected thread, or its latest thread before the panel opens. */
@@ -174,12 +163,12 @@ export function PrimaryAgentFileViewer({
     pending,
   } = useCurrentFiles(organizationId, threadId)
   const current = file ?? files.at(0)
-  const office = current ? isOfficeDocument(current.name) : false
+  const editable = current ? isEditableDocument(current.name) : false
   const activeThreadId = file?.threadId ?? currentThreadId
   const currentFileKey =
     current && activeThreadId ? `${activeThreadId}\0${current.name}` : ""
   const [editingFileKey, setEditingFileKey] = useState<string | null>(null)
-  const editing = office && editingFileKey === currentFileKey
+  const editing = editable && editingFileKey === currentFileKey
   const [link, setLink] = useState<ArtifactLink>()
   const [error, setError] = useState("")
   useEffect(() => setEditingFileKey(null), [currentFileKey])
@@ -190,9 +179,10 @@ export function PrimaryAgentFileViewer({
     let cancelled = false
     void fetchArtifactLink(organizationId, activeThreadId, {
       name: current.name,
-      // The Office editor saves a new artifact version. Its download always
-      // follows the latest, even if the conversation event names an older one.
-      version: office ? undefined : current.version,
+      // The Office editor saves a new artifact version. An editable file's
+      // download always follows the latest, even if the conversation event
+      // names an older one.
+      version: editable ? undefined : current.version,
     }).then(
       (value) => {
         if (!cancelled) setLink(value)
@@ -209,7 +199,13 @@ export function PrimaryAgentFileViewer({
     return () => {
       cancelled = true
     }
-  }, [organizationId, activeThreadId, current?.name, current?.version, office])
+  }, [
+    organizationId,
+    activeThreadId,
+    current?.name,
+    current?.version,
+    editable,
+  ])
   const name = current ? artifactFileName(current.name) : "File"
 
   return (
@@ -225,7 +221,7 @@ export function PrimaryAgentFileViewer({
         </button>
         <FileText size={17} strokeWidth={1.7} aria-hidden="true" />
         <strong>{name}</strong>
-        {office && link && (
+        {editable && link && (
           <button
             type="button"
             className="workspace-primary-file-edit-button"
