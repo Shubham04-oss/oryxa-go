@@ -69,14 +69,11 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 	if document.People != nil {
 		for _, member := range document.People.Members {
 			wantedMembers[member.Email] = true
-			role := member.Role
-			if role == "" {
-				role = "member"
-			}
+			role := desiredMemberRole(member, state)
 			if existing, ok := state.Members[member.Email]; ok {
 				if existing.Role != role {
 					if existing.Role == "owner" || role == "owner" {
-						return Plan{}, fmt.Errorf("people.members role changes involving an owner are not supported")
+						return Plan{}, fmt.Errorf("people.members[%s]: role changes involving an owner are not supported", member.Email)
 					}
 					plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "member_role", Name: member.Email, Role: role})
 				}
@@ -268,6 +265,19 @@ func teamMemberRoles(team spec.Team) ([]string, map[string]string) {
 	return emails, roles
 }
 
+func desiredMemberRole(member spec.Member, state Snapshot) string {
+	if member.Role != "" {
+		return member.Role
+	}
+	if existing, ok := state.Members[member.Email]; ok {
+		return existing.Role
+	}
+	if existing, ok := state.Invitations[member.Email]; ok {
+		return existing.Role
+	}
+	return "member"
+}
+
 func guestsEnabled(document spec.Document, state Snapshot) bool {
 	if document.People != nil && document.People.Guests != nil {
 		return *document.People.Guests
@@ -387,10 +397,7 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 	}
 	if document.People != nil {
 		for _, member := range document.People.Members {
-			role := member.Role
-			if role == "" {
-				role = "member"
-			}
+			role := desiredMemberRole(member, state)
 			if existing, ok := state.Members[member.Email]; ok {
 				if existing.Role != role {
 					if err := client.ChangeMemberRole(ctx, state.Organization.ID, existing.UserID, role); err != nil {

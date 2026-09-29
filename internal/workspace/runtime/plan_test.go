@@ -252,6 +252,27 @@ func TestPeoplePruneCannotRemoveSignedInMember(t *testing.T) {
 	}
 }
 
+func TestOmittedRolesKeepExistingMembersAndPendingInvitations(t *testing.T) {
+	state := &fakeState{orgExists: true, members: []Member{
+		{UserID: "u1", Email: "owner@acme.com", Role: "owner"}, {UserID: "u2", Email: "admin@acme.com", Role: "admin"},
+	}, otherInvitations: []Invitation{{ID: "inv_pending", Email: "pending@acme.com", Role: "admin", Status: "pending"}}}
+	server := httptest.NewServer(http.HandlerFunc(state.serve))
+	defer server.Close()
+	client, err := NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"},
+		People: &spec.People{Members: []spec.Member{{Email: "owner@acme.com"}, {Email: "admin@acme.com"}, {Email: "pending@acme.com"}}}}
+	remaining, err := Apply(context.Background(), client, document)
+	if err != nil || len(remaining.Changes) != 0 || state.invites != 0 {
+		t.Fatalf("omitted roles = %+v, %v", remaining, err)
+	}
+	if state.members[0].Role != "owner" || state.members[1].Role != "admin" {
+		t.Fatal("omitted role demoted member")
+	}
+}
+
 func TestRemovalApprovalIsBoundToStableResourcesAndRoles(t *testing.T) {
 	for _, scenario := range []string{"member replacement", "member promotion", "invitation replacement", "team replacement", "team member replacement", "team admin replacement", "organization replacement"} {
 		t.Run(scenario, func(t *testing.T) {
