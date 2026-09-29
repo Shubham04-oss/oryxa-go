@@ -48,7 +48,7 @@ func TestValidateRefusesUnknownSetting(t *testing.T) {
 func TestRemoteCommandNeedsSignInWithoutInput(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{"status", "--org", "acme", "--no-input"}, &stdout, &stderr, func(string) string { return "" })
-	if code != 3 || !strings.Contains(stderr.String(), "browser sign-in is required") {
+	if code != 2 || !strings.Contains(stderr.String(), "browser sign-in is required") {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 }
@@ -128,5 +128,29 @@ func TestBootstrapCreatesOnlyOrganizationThenUsesServerPlanAndApply(t *testing.T
 	result, err := workspaceApply(context.Background(), client, document, runtime.Snapshot{}, runtime.Plan{}, options{yes: true}, io.Discard, io.Discard)
 	if err != nil || result.Version != 1 || len(calls) != 4 {
 		t.Fatalf("bootstrap: %+v %v calls=%v", result, err, calls)
+	}
+}
+
+func TestStructuredAPIFailuresHaveStableExitCodesAndJSON(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		code   string
+		want   int
+	}{{"unauthorized", 401, "unauthorized", 1}, {"forbidden", 403, "forbidden", 1}, {"server", 500, "", 1}, {"slug", 409, "slug_taken", 1}, {"lock", 409, "apply_lock", 5}, {"stale", 409, "stale_plan", 1}, {"input", 400, "invalid_input", 3}} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			output := &commandErrorOutput{Writer: &stderr, stdout: &stdout, step: "apply", json: true}
+			code := reportError(&runtime.StatusError{Status: test.status, Code: test.code, Path: "/workspace", Method: "PUT"}, output)
+			var result struct{ Step, Status, Error, Code string }
+			if json.Unmarshal(stdout.Bytes(), &result) != nil || code != test.want || result.Status != "failed" || result.Step != "apply" || result.Error == "" {
+				t.Fatalf("code%d result%s stderr%s", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+	var stdout, stderr bytes.Buffer
+	code := reportError(fmt.Errorf("dial: connection refused"), &commandErrorOutput{Writer: &stderr, stdout: &stdout, step: "whoami", json: true})
+	if code != 1 || !json.Valid(stdout.Bytes()) {
+		t.Fatalf("network failure: %d %s", code, stdout.String())
 	}
 }

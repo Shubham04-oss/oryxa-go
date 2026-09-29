@@ -10,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"slices"
 	"strings"
@@ -42,6 +41,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return 0
 	}
 	command := args[0]
+	stderr = &commandErrorOutput{Writer: stderr, stdout: stdout, step: command, json: slices.Contains(args, "--json") || slices.Contains(args, "--json=true")}
 	flagArgs := args[1:]
 	connectToolkit := ""
 	if command == "connect-app" && len(flagArgs) > 0 && !strings.HasPrefix(flagArgs[0], "-") {
@@ -67,13 +67,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	flags.BoolVar(&opts.yes, "yes", false, "confirm setup plan or overwrite an output file")
 	flags.Int64Var(&opts.to, "to", 0, "workspace version to restore (rollback)")
 	if err := flags.Parse(flagArgs); err != nil {
-		return 3
+		return reportInputError(err, stderr)
 	}
 	if command == "connect-app" && connectToolkit == "" && flags.NArg() == 1 {
 		connectToolkit = flags.Arg(0)
 	} else if flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "unexpected argument:", flags.Arg(0))
-		return 3
+		return reportInputError(fmt.Errorf("unexpected argument: %s", flags.Arg(0)), stderr)
 	}
 	if (command == "setup" || command == "apply" || command == "rollback") && !opts.dryRun && !opts.agentHelp {
 		defer func() {
@@ -128,7 +127,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return reportError(err, stderr)
 		}
 		if opts.org != "" && opts.org != document.Metadata.Organization {
-			return reportError(fmt.Errorf("--org does not match metadata.organization"), stderr)
+			return reportInputError(fmt.Errorf("--org does not match metadata.organization"), stderr)
 		}
 		state, err := client.Snapshot(ctx, document.Metadata.Organization)
 		if err != nil {
@@ -142,16 +141,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return code
 		}
 		if hasSensitiveChanges(plan) && opts.noInput {
-			return reportError(fmt.Errorf("sensitive changes require an interactive confirmation"), stderr)
+			return reportHumanError(fmt.Errorf("sensitive changes require an interactive confirmation"), stderr)
 		}
 		if !opts.yes && len(plan.Changes) > 0 {
 			if opts.noInput {
-				return reportError(fmt.Errorf("apply requires --yes under --no-input"), stderr)
+				return reportHumanError(fmt.Errorf("apply requires --yes under --no-input"), stderr)
 			}
 			fmt.Fprint(stderr, "Apply these changes? [y/N] ")
 			answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 			if strings.TrimSpace(strings.ToLower(answer)) != "y" {
-				return reportError(fmt.Errorf("apply was cancelled"), stderr)
+				return reportInputError(fmt.Errorf("apply was cancelled"), stderr)
 			}
 		}
 		result, err := workspaceApply(ctx, client, document, state, plan, opts, stdout, stderr)
@@ -172,7 +171,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	}
 	if command == "rollback" {
 		if opts.org == "" || opts.to <= 0 {
-			return reportError(fmt.Errorf("rollback requires --org and a positive --to version"), stderr)
+			return reportInputError(fmt.Errorf("rollback requires --org and a positive --to version"), stderr)
 		}
 		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 		if err != nil {
@@ -183,7 +182,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return reportError(err, stderr)
 		}
 		if state.Organization == nil {
-			return reportError(fmt.Errorf("organization was not found"), stderr)
+			return reportInputError(fmt.Errorf("organization was not found"), stderr)
 		}
 		plan, err := client.WorkspaceRollbackPlan(ctx, state.Organization.ID, opts.to)
 		if err != nil {
@@ -194,13 +193,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		}
 		if hasSensitiveChanges(plan) {
 			if opts.noInput {
-				return reportError(fmt.Errorf("sensitive changes require an interactive confirmation"), stderr)
+				return reportHumanError(fmt.Errorf("sensitive changes require an interactive confirmation"), stderr)
 			}
 			if !opts.yes {
 				fmt.Fprint(stderr, "Confirm these sensitive changes? [y/N] ")
 				answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 				if strings.TrimSpace(strings.ToLower(answer)) != "y" {
-					return reportError(fmt.Errorf("rollback was cancelled"), stderr)
+					return reportInputError(fmt.Errorf("rollback was cancelled"), stderr)
 				}
 			}
 		}
@@ -219,7 +218,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return reportError(err, stderr)
 		}
 		if opts.org != "" && opts.org != document.Metadata.Organization {
-			return reportError(fmt.Errorf("--org does not match metadata.organization"), stderr)
+			return reportInputError(fmt.Errorf("--org does not match metadata.organization"), stderr)
 		}
 		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 		if err != nil {
@@ -236,7 +235,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			}
 			if hasSensitiveChanges(approved) {
 				if opts.noInput {
-					return reportError(fmt.Errorf("sensitive changes require an interactive confirmation"), stderr)
+					return reportHumanError(fmt.Errorf("sensitive changes require an interactive confirmation"), stderr)
 				}
 				if code := report(stdout, opts.json, approved); code != 0 {
 					return code
@@ -245,7 +244,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 					fmt.Fprint(stderr, "Confirm these sensitive changes? [y/N] ")
 					answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 					if strings.TrimSpace(strings.ToLower(answer)) != "y" {
-						return reportError(fmt.Errorf("apply was cancelled"), stderr)
+						return reportInputError(fmt.Errorf("apply was cancelled"), stderr)
 					}
 				}
 			}
@@ -285,7 +284,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return 0
 		}
 		if opts.org == "" {
-			return reportError(fmt.Errorf("--org or ORYXA_ORG is required"), stderr)
+			return reportInputError(fmt.Errorf("--org or ORYXA_ORG is required"), stderr)
 		}
 		if command == "mappings" {
 			organization, err := client.OrganizationBySlug(ctx, opts.org)
@@ -303,7 +302,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return reportError(err, stderr)
 		}
 		if state.Organization == nil {
-			return reportError(fmt.Errorf("organization was not found"), stderr)
+			return reportInputError(fmt.Errorf("organization was not found"), stderr)
 		}
 		if command == "status" || command == "doctor" {
 			status, err := client.WorkspaceStatus(ctx, state.Organization.ID)
@@ -334,9 +333,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		}
 		return writeDocument(document, opts.output, opts.yes, stdout, stderr)
 	}
-	fmt.Fprintln(stderr, "unknown command:", command)
-	usage(stderr)
-	return 3
+	return reportInputError(fmt.Errorf("unknown command: %s", command), stderr)
 }
 
 func workspacePlan(ctx context.Context, client *runtime.Client, document spec.Document, state runtime.Snapshot) (runtime.Plan, error) {
@@ -463,7 +460,7 @@ func signedInClient(ctx context.Context, opts options, stdout, stderr io.Writer,
 			}
 		}
 		if opts.noInput {
-			return nil, fmt.Errorf("browser sign-in is required under --no-input; run without --no-input or provide a short-lived ORYXA_ACCESS_TOKEN")
+			return nil, &humanError{fmt.Errorf("browser sign-in is required under --no-input; run without --no-input or provide a short-lived ORYXA_ACCESS_TOKEN")}
 		}
 		var err error
 		var session cliSession
@@ -481,7 +478,7 @@ func signedInClient(ctx context.Context, opts options, stdout, stderr io.Writer,
 
 func initCommand(ctx context.Context, opts options, stdout, stderr io.Writer, getenv func(string) string) int {
 	if opts.org == "" {
-		return reportError(fmt.Errorf("--org or ORYXA_ORG is required"), stderr)
+		return reportInputError(fmt.Errorf("--org or ORYXA_ORG is required"), stderr)
 	}
 	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: opts.org}, Preset: opts.preset}
 	domains := []string{}
@@ -517,9 +514,13 @@ func initCommand(ctx context.Context, opts options, stdout, stderr io.Writer, ge
 func readDocument(path string) (spec.Document, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return spec.Document{}, err
+		return spec.Document{}, &inputError{err}
 	}
-	return spec.Parse(data)
+	document, err := spec.Parse(data)
+	if err != nil {
+		return spec.Document{}, &inputError{err}
+	}
+	return document, nil
 }
 
 func writeDocument(document spec.Document, path string, overwrite bool, stdout, stderr io.Writer) int {
@@ -567,12 +568,54 @@ func report(writer io.Writer, asJSON bool, value any) int {
 	return 0
 }
 
+type inputError struct{ error }
+
+func (err *inputError) Unwrap() error { return err.error }
+
+type humanError struct{ error }
+
+func (err *humanError) Unwrap() error { return err.error }
+
+type commandErrorOutput struct {
+	io.Writer
+	stdout io.Writer
+	step   string
+	json   bool
+}
+
+func reportHumanError(err error, stderr io.Writer) int { return reportError(&humanError{err}, stderr) }
+
+func reportInputError(err error, stderr io.Writer) int { return reportError(&inputError{err}, stderr) }
+
 func reportError(err error, stderr io.Writer) int {
-	fmt.Fprintln(stderr, err)
-	if runtime.IsStatus(err, http.StatusConflict) {
-		return 5
+	exitCode, code := 1, "operation_failed"
+	var input *inputError
+	var human *humanError
+	var remote *runtime.StatusError
+	switch {
+	case errors.As(err, &human):
+		exitCode, code = 2, "needs_human"
+	case errors.As(err, &input):
+		exitCode, code = 3, "invalid_input"
+	case errors.As(err, &remote):
+		if remote.Code != "" {
+			code = remote.Code
+		}
+		if remote.Code == "apply_lock" {
+			exitCode = 5
+		}
+		if remote.Code == "invalid_input" {
+			exitCode = 3
+		}
 	}
-	return 3
+	if output, ok := stderr.(*commandErrorOutput); ok && output.json {
+		if report(output.stdout, true, map[string]any{"step": output.step, "status": "failed", "error": err.Error(), "code": code}) != 0 {
+			return 1
+		}
+	} else {
+		fmt.Fprintln(stderr, err)
+	}
+	return exitCode
 }
 
 func envOr(getenv func(string) string, key, fallback string) string {

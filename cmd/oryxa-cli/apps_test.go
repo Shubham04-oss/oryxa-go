@@ -135,7 +135,7 @@ func TestConnectAppRefusesRestrictedExistingConnection(t *testing.T) {
 		return ""
 	}
 	code := run(context.Background(), []string{"connect-app", "github", "--org", "acme", "--api", api.URL, "--no-input"}, &stdout, &stderr, getenv)
-	if code != 3 || !strings.Contains(stderr.String(), "not offered") {
+	if code != 1 || !strings.Contains(stderr.String(), "not offered") {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 }

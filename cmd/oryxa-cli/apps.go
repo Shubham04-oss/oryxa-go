@@ -21,10 +21,10 @@ var appToolkitPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 // callback has made it active, and returns a resumable connection ID.
 func connectApp(ctx context.Context, toolkit string, opts options, stdout, stderr io.Writer, getenv func(string) string) int {
 	if !appToolkitPattern.MatchString(toolkit) {
-		return reportError(fmt.Errorf("connect-app requires a lowercase toolkit slug"), stderr)
+		return reportInputError(fmt.Errorf("connect-app requires a lowercase toolkit slug"), stderr)
 	}
 	if opts.org == "" {
-		return reportError(fmt.Errorf("connect-app requires --org or ORYXA_ORG"), stderr)
+		return reportInputError(fmt.Errorf("connect-app requires --org or ORYXA_ORG"), stderr)
 	}
 	client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 	if err != nil {
@@ -97,7 +97,7 @@ func connectApp(ctx context.Context, toolkit string, opts options, stdout, stder
 				if code := report(stdout, opts.json, appConnectionResult("failed", toolkit, updated, "", updated.StatusReason)); code != 0 {
 					return code
 				}
-				return 4
+				return 1
 			}
 		}
 	}
