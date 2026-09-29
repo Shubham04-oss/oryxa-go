@@ -63,6 +63,9 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 	if state.Organization == nil {
 		plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "organization", Name: document.Metadata.Organization})
 	} else if organizationChanged(document, *state.Organization) {
+		if state.ActorRole != "owner" || state.ActorIsAgent {
+			return Plan{}, fmt.Errorf("organization %s: only a human organization owner may change organization settings", document.Metadata.Organization)
+		}
 		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "organization", Name: document.Metadata.Organization})
 	}
 	wantedMembers := map[string]bool{}
@@ -72,6 +75,9 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 			role := desiredMemberRole(member, state)
 			if existing, ok := state.Members[member.Email]; ok {
 				if existing.Role != role {
+					if state.Organization != nil && (state.ActorRole != "owner" || state.ActorIsAgent) {
+						return Plan{}, fmt.Errorf("people.members[%s]: only a human organization owner may change member roles", member.Email)
+					}
 					if existing.Role == "owner" || role == "owner" {
 						return Plan{}, fmt.Errorf("people.members[%s]: role changes involving an owner are not supported", member.Email)
 					}
@@ -83,6 +89,9 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 				}
 				plan.NeedsHuman = append(plan.NeedsHuman, HumanStep{Step: "people.join", Why: member.Email + " must accept the invitation"})
 			} else {
+				if role == "admin" && state.Organization != nil && (state.ActorRole != "owner" || state.ActorIsAgent) {
+					return Plan{}, fmt.Errorf("people.members[%s]: only a human organization owner may invite an admin", member.Email)
+				}
 				if role == "owner" {
 					return Plan{}, fmt.Errorf("people.members cannot invite an owner")
 				}

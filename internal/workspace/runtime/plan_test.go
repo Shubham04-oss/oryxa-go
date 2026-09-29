@@ -103,7 +103,7 @@ func TestApplyOrganizationDomainTimezoneAndGuestPolicy(t *testing.T) {
 
 func TestGuestInvitationNeedsOrganizationGuestPolicy(t *testing.T) {
 	state := Snapshot{Organization: &Organization{ID: "org_1", Slug: "acme", Domains: []string{"acme.com"}},
-		Members: map[string]Member{}, Invitations: map[string]Invitation{}, Teams: map[string]Team{}, TeamMembers: map[string]map[string]TeamMember{}}
+		ActorID: "u1", ActorRole: "owner", Members: map[string]Member{}, Invitations: map[string]Invitation{}, Teams: map[string]Team{}, TeamMembers: map[string]map[string]TeamMember{}}
 	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace",
 		Metadata: spec.Metadata{Organization: "acme", Domains: []string{"acme.com"}},
 		People:   &spec.People{Members: []spec.Member{{Email: "guest@example.com", Guest: true}}},
@@ -270,6 +270,31 @@ func TestOmittedRolesKeepExistingMembersAndPendingInvitations(t *testing.T) {
 	}
 	if state.members[0].Role != "owner" || state.members[1].Role != "admin" {
 		t.Fatal("omitted role demoted member")
+	}
+}
+
+func TestAdminPlanRejectsOwnerOnlyChangesBeforeMutations(t *testing.T) {
+	for _, scenario := range []string{"organization settings", "member role", "admin invitation"} {
+		t.Run(scenario, func(t *testing.T) {
+			state := Snapshot{Organization: &Organization{ID: "org_1", Slug: "acme", Name: "Acme"}, ActorID: "u1", ActorRole: "admin",
+				Members: map[string]Member{"admin@acme.com": {UserID: "u1", Email: "admin@acme.com", Role: "admin"}, "old@acme.com": {UserID: "u2", Email: "old@acme.com", Role: "member"}}}
+			document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"},
+				People: &spec.People{Members: []spec.Member{{Email: "new@acme.com"}}}, Teams: spec.Teams{Items: []spec.Team{{Name: "New team"}}}}
+			reason := "acme"
+			switch scenario {
+			case "organization settings":
+				document.Organization = &spec.Organization{Name: "New name"}
+			case "member role":
+				document.People.Members = append(document.People.Members, spec.Member{Email: "old@acme.com", Role: "admin"})
+				reason = "old@acme.com"
+			case "admin invitation":
+				document.People.Members = append(document.People.Members, spec.Member{Email: "new-admin@acme.com", Role: "admin"})
+				reason = "new-admin@acme.com"
+			}
+			if _, err := BuildPlan(document, state); err == nil || !strings.Contains(err.Error(), "owner") || !strings.Contains(err.Error(), reason) {
+				t.Fatalf("owner-only preflight failed: %v", err)
+			}
+		})
 	}
 }
 
