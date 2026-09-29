@@ -97,7 +97,9 @@ type Verdict struct {
 	Masked []string
 	// Given are the texts exactly as Check was handed them, whatever was
 	// found in them: what may be shared where nothing at all is to be masked
-	// (IntensityOff).
+	// (IntensityOff). They hold the secrets Texts has masked, so a verdict is
+	// never logged, kept or sent anywhere: it lives for the request it was
+	// made for, and what is shared from it is read out with Shareable or At.
 	Given []string
 	// SecretKinds are the kinds that are always masked (MaskedKinds) that
 	// were found, sorted, whatever the state: the ones the guardrail masked in
