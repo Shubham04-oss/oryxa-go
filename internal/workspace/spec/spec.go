@@ -516,6 +516,7 @@ func (document Document) Validate() error {
 	}
 	if document.Directory != nil {
 		seen := map[string]bool{}
+		seenReferences := map[string]bool{}
 		for _, identity := range document.Directory.Identities {
 			if err := validateExternalMapping(identity.Source, identity.ExternalID); err != nil {
 				return fmt.Errorf("directory.identities: %w", err)
@@ -528,6 +529,11 @@ func (document Document) Validate() error {
 				return fmt.Errorf("directory.identities has a duplicate external ID")
 			}
 			seen[key] = true
+			reference := "user/" + identity.Source + "/" + identity.Member
+			if seenReferences[reference] {
+				return fmt.Errorf("directory.identities[].member must be unique within its source")
+			}
+			seenReferences[reference] = true
 		}
 		for _, group := range document.Directory.Groups {
 			if err := validateExternalMapping(group.Source, group.ExternalID); err != nil {
@@ -541,6 +547,11 @@ func (document Document) Validate() error {
 				return fmt.Errorf("directory.groups has a duplicate external ID")
 			}
 			seen[key] = true
+			reference := "team/" + group.Source + "/" + TeamKey(group.Team)
+			if seenReferences[reference] {
+				return fmt.Errorf("directory.groups[].team must be unique within its source")
+			}
+			seenReferences[reference] = true
 		}
 	}
 	seenTeams := map[string]bool{}

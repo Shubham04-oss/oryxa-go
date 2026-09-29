@@ -299,6 +299,20 @@ func TestTeamNamesMirrorServiceNormalization(t *testing.T) {
 	}
 }
 
+func TestDirectoryRejectsDuplicateReferencesBeforeResourcesExist(t *testing.T) {
+	for _, input := range []string{
+		"directory: {identities: [{source: 'hr:acme', externalId: first, member: new@acme.com}, {source: 'hr:acme', externalId: second, member: new@acme.com}]}",
+		"directory: {groups: [{source: 'hr:acme', externalId: first, team: New}, {source: 'hr:acme', externalId: second, team: ' new '}]}",
+	} {
+		if _, err := Parse([]byte(example + input)); err == nil || !strings.Contains(err.Error(), "unique within its source") {
+			t.Fatalf("duplicate reference accepted: %v", err)
+		}
+	}
+	if _, err := Parse([]byte(example + "directory: {identities: [{source: 'hr:acme', externalId: first, member: new@acme.com}, {source: 'idp:acme', externalId: second, member: new@acme.com}]}")); err != nil {
+		t.Fatalf("independent source mapping rejected: %v", err)
+	}
+}
+
 func TestAnswerGuardPoliciesValidateAndRoundTrip(t *testing.T) {
 	input := example + "safety: {guard: {pii: {minimum: {owner: secrets, peer: strict}}, relevance: off}}\n"
 	document, err := Parse([]byte(input))
