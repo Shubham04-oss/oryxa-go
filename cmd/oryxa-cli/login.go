@@ -42,6 +42,12 @@ type cliSession struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 }
 
+type loginChallenge struct {
+	State     string    `json:"state"`
+	Nonce     string    `json:"nonce"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout io.Writer) (cliSession, error) {
 	config, err := fetchLoginConfig(ctx, api)
 	if err != nil {
@@ -53,17 +59,14 @@ func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout
 	}
 	config.CallbackURL = callback.String()
 	defer listener.Close()
-	flowCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	challenge, err := fetchLoginChallenge(ctx, api)
+	if err != nil {
+		return cliSession{}, err
+	}
+	flowCtx, cancel := context.WithDeadline(ctx, challenge.ExpiresAt)
 	defer cancel()
-	state, err := randomURLValue()
-	if err != nil {
-		return cliSession{}, err
-	}
+	state, nonce := challenge.State, challenge.Nonce
 	launchKey, err := randomURLValue()
-	if err != nil {
-		return cliSession{}, err
-	}
-	nonce, err := randomURLValue()
 	if err != nil {
 		return cliSession{}, err
 	}
@@ -169,15 +172,19 @@ func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout
 	if err := verifyLoginIDToken(flowCtx, config, idToken, nonce); err != nil {
 		return cliSession{}, err
 	}
-	if err := registerCLISession(flowCtx, api, token.AccessToken, idToken, nonce); err != nil {
+	expiresAt, err := registerCLISession(flowCtx, api, token.AccessToken, idToken, state)
+	if err != nil {
 		return cliSession{}, err
 	}
-	if asJSON {
-		_ = json.NewEncoder(stdout).Encode(map[string]string{"step": "login", "status": "done", "expires_at": token.Expiry.UTC().Format(time.RFC3339)})
-	} else {
-		fmt.Fprintf(stdout, "Signed in. Access expires at %s.\n", token.Expiry.Local().Format(time.RFC3339))
+	if expiresAt.After(token.Expiry) {
+		return cliSession{}, fmt.Errorf("server CLI session outlives its access token")
 	}
-	return cliSession{AccessToken: token.AccessToken, ExpiresAt: token.Expiry}, nil
+	if asJSON {
+		_ = json.NewEncoder(stdout).Encode(map[string]string{"step": "login", "status": "done", "expires_at": expiresAt.UTC().Format(time.RFC3339)})
+	} else {
+		fmt.Fprintf(stdout, "Signed in. Access expires at %s.\n", expiresAt.Local().Format(time.RFC3339))
+	}
+	return cliSession{AccessToken: token.AccessToken, ExpiresAt: expiresAt}, nil
 }
 
 func fetchLoginConfig(ctx context.Context, api string) (loginConfig, error) {
@@ -222,26 +229,61 @@ func fetchAuthConfig(ctx context.Context, api string) (loginConfig, error) {
 	return config, nil
 }
 
-func registerCLISession(ctx context.Context, api, accessToken, idToken, nonce string) error {
-	body, err := json.Marshal(map[string]string{"id_token": idToken, "nonce": nonce})
+func fetchLoginChallenge(ctx context.Context, api string) (loginChallenge, error) {
+	api, err := workspaceruntime.ValidateAPIURL(api)
 	if err != nil {
-		return err
+		return loginChallenge{}, &inputError{err}
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, api+"/v1/auth/cli/challenge", nil)
+	if err != nil {
+		return loginChallenge{}, err
+	}
+	response, err := loginHTTPClient(ctx).Do(request)
+	if err != nil {
+		return loginChallenge{}, fmt.Errorf("start CLI sign-in: server request failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusCreated {
+		return loginChallenge{}, fmt.Errorf("start CLI sign-in: API returned %d", response.StatusCode)
+	}
+	var challenge loginChallenge
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&challenge); err != nil {
+		return loginChallenge{}, fmt.Errorf("start CLI sign-in: invalid server challenge")
+	}
+	state, stateErr := base64.RawURLEncoding.DecodeString(challenge.State)
+	nonce, nonceErr := base64.RawURLEncoding.DecodeString(challenge.Nonce)
+	if stateErr != nil || nonceErr != nil || len(state) != 32 || len(nonce) != 32 || !challenge.ExpiresAt.After(time.Now()) || challenge.ExpiresAt.After(time.Now().Add(20*time.Minute+30*time.Second)) {
+		return loginChallenge{}, fmt.Errorf("start CLI sign-in: invalid or expired server challenge")
+	}
+	return challenge, nil
+}
+
+func registerCLISession(ctx context.Context, api, accessToken, idToken, state string) (time.Time, error) {
+	body, err := json.Marshal(map[string]string{"id_token": idToken, "state": state})
+	if err != nil {
+		return time.Time{}, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(api, "/")+"/v1/auth/cli/session", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	request.Header.Set("Authorization", "Bearer "+accessToken)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := loginHTTPClient(ctx).Do(request)
 	if err != nil {
-		return err
+		return time.Time{}, fmt.Errorf("register CLI sign-in: server request failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("register CLI sign-in: API returned %d", response.StatusCode)
+		return time.Time{}, fmt.Errorf("register CLI sign-in: API returned %d", response.StatusCode)
 	}
-	return nil
+	var result struct {
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); err != nil || !result.ExpiresAt.After(time.Now()) || result.ExpiresAt.After(time.Now().Add(15*time.Minute+30*time.Second)) {
+		return time.Time{}, fmt.Errorf("register CLI sign-in: invalid session TTL")
+	}
+	return result.ExpiresAt, nil
 }
 
 // OAuth exchanges carry the authorization code and PKCE verifier in their

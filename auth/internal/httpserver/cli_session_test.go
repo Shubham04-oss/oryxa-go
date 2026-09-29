@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/authn"
@@ -50,8 +51,10 @@ func TestCLISessionRequiresMatchingNativeTokens(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			called = false
+			config.CLISessions = newFakeCLISessions()
+			test.claims.ExpiresAt = time.Now().Add(time.Hour).Unix()
 			server := New(fakeVerifier{claims: test.claims}, &fakeAuthFlow{}, &fakePasswordAuth{}, &fakeAuthService{}, config)
-			request := httptest.NewRequest(http.MethodPost, "/v1/auth/cli/session", strings.NewReader(`{"id_token":"identity","nonce":"nonce"}`))
+			request := httptest.NewRequest(http.MethodPost, "/v1/auth/cli/session", strings.NewReader(`{"id_token":"identity","state":"state"}`))
 			request.Header.Set("Authorization", "Bearer access")
 			response := httptest.NewRecorder()
 			server.ServeHTTP(response, request)
@@ -86,7 +89,7 @@ func TestAuthConfigPublishesOnlyNativeClientMetadata(t *testing.T) {
 
 func TestCLITokenIsSetupOnlyAndIntrospectionMarksItsClass(t *testing.T) {
 	service := &fakeAuthService{user: domain.User{ID: "user-1"}, organization: domain.Organization{ID: "org_1"}, membership: domain.Membership{UserID: "user-1", Role: domain.RoleOwner}}
-	server := New(fakeVerifier{claims: authn.Claims{Subject: "user-1", ClientID: "cli-client"}}, &fakeAuthFlow{}, &fakePasswordAuth{}, service, Config{CLIClientID: "cli-client"})
+	server := New(fakeVerifier{claims: authn.Claims{Subject: "user-1", ClientID: "cli-client"}}, &fakeAuthFlow{}, &fakePasswordAuth{}, service, Config{CLIClientID: "cli-client", CLISessions: newFakeCLISessions()})
 	for _, route := range []struct{ method, path string }{
 		{http.MethodDelete, "/v1/organizations/org_1"},
 		{http.MethodPost, "/v1/invitations/accept"},

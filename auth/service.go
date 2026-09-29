@@ -126,6 +126,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		})
 	}), logger)
 	workers := []host.Worker{dispatcher.Run}
+	if config.CognitoCLIClientID != "" {
+		workers = append(workers, cliSessionSweeper(store, logger))
+	}
 
 	if config.EventsQueueURL != "" {
 		sqsConfig := platform.AWS
@@ -196,6 +199,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		CLISignUpURL:       cliSignUpURL,
 		CLIVerifier:        verifier,
 		CLICompleteLogin:   service.CompleteLogin,
+		CLISessions:        store,
 		AgentClientID:      config.CognitoAgentClientID,
 		AgentGrants:        agentGrants,
 		Services:           services,

@@ -65,8 +65,9 @@ later change, from renaming an agent to restructuring teams.
    refers to them by name. The CLI refuses a secret passed as a flag and never
    prints one, `--json` included.
 6. **Short-lived and least-privileged.** The CLI holds one short-lived session
-   in memory, writes no token to disk, asks every provider for the least it
-   needs, and deletes itself when done unless told to stay.
+   in memory or encrypted OS credential storage, writes no plaintext token to
+   disk, asks every provider for the least it needs, and purges the session when
+   setup/apply/rollback finishes.
 7. **People only where providers insist.** Approving the Slack install and
    granting directory consent need an admin's click. The CLI opens the exact
    page, waits, and verifies the result.
@@ -199,6 +200,24 @@ is invalid, or input is missing under `--no-input` · `4` a provider refused ·
   content or audit history; those have their own controls in the web app.
 
 ### Signing in and the setup session
+
+**Current implementation:** the native CLI uses the separate Cognito public
+client with authorization-code + PKCE and a registered loopback port. Auth issues
+a twenty-minute state/nonce challenge, verifies the signed nonce and consumes
+that challenge once; the CLI independently verifies its retained nonce locally.
+The Cognito CLI access JWT is accepted only after server admission, for at most
+fifteen minutes, on setup routes, and binds to the first authorized organization
+(or the organization created by that session). The server stores its hash and
+binding, never the raw token. The CLI caches it in the OS credential store, falls
+back to memory only when secure storage is unavailable, and purges it after
+setup/apply/rollback/logout. No plaintext-token fallback exists. Ordinary data,
+agent request decisions and reviews, and organization deletion reject CLI tokens.
+
+The pairing page, opaque sixty-minute setup token, `--keep`, browser-only secret
+entry, and `--device` flow below are the target design, not current features.
+`--no-browser` currently prints a loopback URL and still needs a browser with
+access to that loopback listener. See [the implemented CLI](../onboarding-cli.md).
+
 
 - **The loopback only carries Oryxa's pairing code.**
   - The CLI listens on `127.0.0.1`, on a random port, for one request, and
@@ -651,8 +670,10 @@ asks auth whether the approving admin is still an admin.
 
 - The install script: HTTPS only, a pinned version, a verified checksum and
   signature, no `sudo`, a temporary directory.
-- Sign-in: loopback OAuth with PKCE and state; the session lives in memory
-  only.
+- Current sign-in: loopback OAuth with PKCE, a server-issued one-use state/nonce
+  challenge, and verification by both CLI and server. The admitted CLI token
+  lasts at most fifteen minutes, binds one organization, and lives in memory or
+  encrypted OS credential storage on the client.
 - Secrets: never in flags, files, logs or JSON output; sealed in the vault;
   write-only through the API.
 - Least privilege: only the scopes each step needs; admin-only commands.

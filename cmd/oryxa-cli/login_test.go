@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -48,15 +49,21 @@ func TestNativeLoginReturnsExpiringSession(t *testing.T) {
 	}))
 	defer cognito.Close()
 	registered := make(chan bool, 1)
+	challenge := loginChallenge{State: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("s", 32))), Nonce: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("n", 32))), ExpiresAt: time.Now().Add(20 * time.Minute)}
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/v1/auth/config":
 			_ = json.NewEncoder(writer).Encode(loginConfig{ClientID: "cli", CallbackURL: callback, Domain: cognito.URL, Issuer: cognito.URL, SignUpURL: "https://app.example.com/auth/sign-up"})
+		case "/v1/auth/cli/challenge":
+			if request.Method != http.MethodPost || request.Header.Get("Authorization") != "" {
+				t.Error("challenge must be an unauthenticated POST")
+			}
+			_ = json.NewEncoder(writer).Encode(challenge)
 		case "/v1/auth/cli/session":
 			var body map[string]string
 			_ = json.NewDecoder(request.Body).Decode(&body)
-			registered <- request.Header.Get("Authorization") == "Bearer access" && body["id_token"] != "" && body["nonce"] != ""
-			fmt.Fprint(writer, `{"user":{"id":"u1"}}`)
+			registered <- request.Header.Get("Authorization") == "Bearer access" && body["id_token"] != "" && body["state"] == challenge.State && body["nonce"] == ""
+			_ = json.NewEncoder(writer).Encode(map[string]any{"user": map[string]string{"id": "u1"}, "expires_at": time.Now().Add(8 * time.Minute)})
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -132,6 +139,9 @@ func TestNativeLoginReturnsExpiringSession(t *testing.T) {
 	if err != nil || authorize.StatusCode != http.StatusFound || authURL.Query().Get("code_challenge") == "" || authURL.Query().Get("nonce") == "" || authURL.Query().Get("identity_provider") != "" {
 		t.Fatalf("invalid authorization URL: %s, %v", authorize.Header.Get("Location"), err)
 	}
+	if authURL.Query().Get("state") != challenge.State || authURL.Query().Get("nonce") != challenge.Nonce {
+		t.Fatal("authorization URL did not use the server-issued challenge")
+	}
 	loginNonce.Store(authURL.Query().Get("nonce"))
 	wrongState, err := http.Get(callback + "?code=code&state=wrong")
 	if err != nil {
@@ -157,12 +167,12 @@ func TestNativeLoginReturnsExpiringSession(t *testing.T) {
 	var completed struct {
 		ExpiresAt time.Time `json:"expires_at"`
 	}
-	if err := json.Unmarshal([]byte(completion), &completed); err != nil || completed.ExpiresAt.Before(time.Now().Add(14*time.Minute)) || completed.ExpiresAt.After(time.Now().Add(16*time.Minute)) {
+	if err := json.Unmarshal([]byte(completion), &completed); err != nil || completed.ExpiresAt.Before(time.Now().Add(7*time.Minute)) || completed.ExpiresAt.After(time.Now().Add(9*time.Minute)) {
 		t.Fatalf("login expiry = %q, %v", completion, err)
 	}
 	select {
 	case done := <-result:
-		if done.err != nil || done.session.AccessToken != "access" || done.session.ExpiresAt.Before(time.Now().Add(14*time.Minute)) {
+		if done.err != nil || done.session.AccessToken != "access" || done.session.ExpiresAt.Before(time.Now().Add(7*time.Minute)) || done.session.ExpiresAt.After(time.Now().Add(9*time.Minute)) {
 			t.Fatalf("login = %+v, %v", done.session, done.err)
 		}
 	case <-ctx.Done():

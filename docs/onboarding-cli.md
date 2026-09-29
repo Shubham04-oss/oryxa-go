@@ -36,6 +36,24 @@ the refresh or ID token. The provisioned CLI app client issues a 15-minute
 access token. Auth identifies this client as a CLI token, and each service
 limits it to the setup routes it needs; threads, files, agent decisions and
 reviews, and organization deletion refuse CLI tokens.
+
+Before opening the browser the CLI obtains a twenty-minute, one-use challenge
+from `POST /v1/auth/cli/challenge`. Both the local CLI and the server verify the
+signed ID token's nonce against that issued challenge; `/cli/session` consumes
+its state once and admits only a SHA-256 fingerprint of the access token, for at
+most fifteen minutes. A raw Cognito CLI token cannot bypass this admission.
+Challenge issuance is rate limited per network peer and process, with a global
+cap on pending challenges in PostgreSQL. Expired challenge/session records are
+purged at startup, periodically, and when new challenges are issued.
+
+The first authorized organization request binds the session to that organization;
+creating a new organization reserves and binds the same session atomically with
+respect to competing setup requests. It cannot configure or create a second
+organization. Bound discovery responses show only that organization. Use
+`login --force-login` when deliberately switching organizations. Current admin
+authority is checked on every use, including discovery; demotion or departure
+ends the session's setup access.
+
 The browser sign-in window closes after 20
 minutes. Setup creates a missing starter file only after sign-in, then shows
 the plan and asks before applying. The auth server must expose
@@ -60,7 +78,8 @@ and before planning. Without `--org`, it asks for the slug. It also accepts
 
 Separate remote commands reuse the securely saved session while it is valid,
 then open browser sign-in again. They can also read a short-lived access token
-from `ORYXA_ACCESS_TOKEN`; an environment-provided token is never cached. No
+from `ORYXA_ACCESS_TOKEN`; an environment-provided token is never cached. CLI-client
+tokens supplied this way must already have completed server challenge admission. No
 token is accepted in the workspace file or as a flag. `oryxa login` shows the
 current account using the cached session, and `oryxa login --force-login`
 starts a new browser flow. `oryxa logout` removes the cached access token for

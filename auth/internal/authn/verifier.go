@@ -12,10 +12,11 @@ import (
 )
 
 type Claims struct {
-	Subject  string `json:"sub"`
-	ClientID string `json:"client_id"`
-	TokenUse string `json:"token_use"`
-	Scope    string `json:"scope"`
+	ExpiresAt int64  `json:"exp"`
+	Subject   string `json:"sub"`
+	ClientID  string `json:"client_id"`
+	TokenUse  string `json:"token_use"`
+	Scope     string `json:"scope"`
 }
 
 type IdentityClaims struct {
