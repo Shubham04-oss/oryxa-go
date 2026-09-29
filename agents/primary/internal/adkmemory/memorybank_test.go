@@ -3,15 +3,21 @@ package adkmemory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/aiplatform/apiv1beta1/aiplatformpb"
 	"cloud.google.com/go/auth"
 	"google.golang.org/genai"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"google.golang.org/adk/v2/session"
 )
@@ -21,13 +27,21 @@ const testParent = "projects/oryxa/locations/us-central1/reasoningEngines/1234"
 // fakeBank records what the backend asked Memory Bank for and answers with
 // what it was given.
 type fakeBank struct {
+	// mutex guards removed and held, which Forget's deletes reach from several
+	// goroutines at once.
+	mutex     sync.Mutex
 	generated []*aiplatformpb.GenerateMemoriesRequest
 	retrieved []*aiplatformpb.RetrieveMemoriesRequest
-	// held is what the bank already holds, as a listing returns it.
+	// held is what the bank already holds, as a listing returns it. A memory
+	// that is removed is no longer held.
 	held    []*aiplatformpb.Memory
 	found   []*aiplatformpb.Memory
 	removed []string
+	// listErr ends a listing, after the memories held.
 	listErr error
+	// removing, when set, is what deleting a memory does before it is deleted:
+	// it may wait, or fail the delete.
+	removing func(ctx context.Context, name string) error
 }
 
 func (f *fakeBank) generate(_ context.Context, request *aiplatformpb.GenerateMemoriesRequest, _ bool) error {
@@ -42,27 +56,37 @@ func (f *fakeBank) retrieve(_ context.Context, request *aiplatformpb.RetrieveMem
 
 func (f *fakeBank) list(_ context.Context, _ string) iter.Seq2[*aiplatformpb.Memory, error] {
 	return func(yield func(*aiplatformpb.Memory, error) bool) {
-		if f.listErr != nil {
-			yield(nil, f.listErr)
-			return
-		}
-		for _, remembered := range f.held {
+		f.mutex.Lock()
+		held := slices.Clone(f.held)
+		f.mutex.Unlock()
+		for _, remembered := range held {
 			if !yield(remembered, nil) {
 				return
 			}
 		}
+		if f.listErr != nil {
+			yield(nil, f.listErr)
+		}
 	}
 }
 
-func (f *fakeBank) remove(_ context.Context, name string) error {
+func (f *fakeBank) remove(ctx context.Context, name string) error {
+	if f.removing != nil {
+		if err := f.removing(ctx, name); err != nil {
+			return err
+		}
+	}
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
 	f.removed = append(f.removed, name)
+	f.held = slices.DeleteFunc(f.held, func(remembered *aiplatformpb.Memory) bool { return remembered.GetName() == name })
 	return nil
 }
 
 func (f *fakeBank) Close() error { return nil }
 
 func bankWith(api memoryBankAPI) *MemoryBank {
-	return &MemoryBank{api: api, parent: testParent, recalled: defaultRecalled}
+	return &MemoryBank{api: api, parent: testParent, recalled: defaultRecalled, deleting: make(chan struct{}, forgetParallelism)}
 }
 
 // memoryIn returns a memory the bank holds in the given scope.
@@ -275,6 +299,218 @@ func TestMemoryBankForgetReportsAFailedListing(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("error = %v, want the listing's own failure", err)
+	}
+}
+
+// heldIn returns count memories the bank holds in one scope.
+func heldIn(count int, organizationID, userID string) []*aiplatformpb.Memory {
+	held := make([]*aiplatformpb.Memory, 0, count)
+	for index := range count {
+		held = append(held, memoryIn(fmt.Sprintf("memories/%02d", index), organizationID, userID, fmt.Sprintf("fact %d", index)))
+	}
+	return held
+}
+
+// TestMemoryBankForgetDeletesSeveralMemoriesAtOnceButOnlyAFew is the speed of
+// forgetting: deleting is a long-running operation waited on, so one at a time
+// made a member with many memories a cleanup of minutes. A few at once, and
+// never more, is what keeps it to seconds without a burst Memory Bank may
+// refuse.
+func TestMemoryBankForgetDeletesSeveralMemoriesAtOnceButOnlyAFew(t *testing.T) {
+	var running, most atomic.Int32
+	atBound := make(chan struct{})
+	var reached sync.Once
+	release := make(chan struct{})
+	api := &fakeBank{held: heldIn(3*forgetParallelism, "org-acme", "user-1")}
+	api.removing = func(ctx context.Context, _ string) error {
+		now := running.Add(1)
+		defer running.Add(-1)
+		for previous := most.Load(); now > previous && !most.CompareAndSwap(previous, now); previous = most.Load() {
+		}
+		if now == forgetParallelism {
+			reached.Do(func() { close(atBound) })
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}
+
+	forgot := make(chan error, 1)
+	go func() { forgot <- bankWith(api).Forget(context.Background(), "org-acme", "user-1") }()
+	select {
+	case <-atBound:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("only %d deletes ran at once, want %d", most.Load(), forgetParallelism)
+	}
+	// Room for any that would run beyond the bound to have started.
+	time.Sleep(50 * time.Millisecond)
+	if got := running.Load(); got != forgetParallelism {
+		t.Fatalf("%d deletes running at once, want the bound of %d", got, forgetParallelism)
+	}
+	close(release)
+	if err := <-forgot; err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	if got := most.Load(); got != forgetParallelism {
+		t.Fatalf("at most %d deletes ran at once, want %d", got, forgetParallelism)
+	}
+	if got := len(api.removed); got != 3*forgetParallelism {
+		t.Fatalf("removed %d memories, want %d", got, 3*forgetParallelism)
+	}
+}
+
+// An organization going takes each of its members with it, so several Forgets
+// run at once. Together they send Memory Bank no more deletes at once than
+// one does.
+func TestMemoryBankForgetsOverlappingDeleteNoMoreAtOnceThanOne(t *testing.T) {
+	var running, most atomic.Int32
+	atBound := make(chan struct{})
+	var reached sync.Once
+	release := make(chan struct{})
+	api := &fakeBank{held: append(heldIn(3*forgetParallelism, "org-acme", "user-1"), heldIn(3*forgetParallelism, "org-initech", "user-2")...)}
+	api.removing = func(ctx context.Context, _ string) error {
+		now := running.Add(1)
+		defer running.Add(-1)
+		for previous := most.Load(); now > previous && !most.CompareAndSwap(previous, now); previous = most.Load() {
+		}
+		if now == forgetParallelism {
+			reached.Do(func() { close(atBound) })
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}
+	bank := bankWith(api)
+
+	forgot := make(chan error, 2)
+	for _, organizationID := range []string{"org-acme", "org-initech"} {
+		go func() { forgot <- bank.Forget(context.Background(), organizationID, "") }()
+	}
+	select {
+	case <-atBound:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("only %d deletes ran at once, want %d", most.Load(), forgetParallelism)
+	}
+	// Room for the second Forget's deletes to have started, were they let.
+	time.Sleep(50 * time.Millisecond)
+	if got := running.Load(); got != forgetParallelism {
+		t.Fatalf("%d deletes running at once across two Forgets, want the bound of %d", got, forgetParallelism)
+	}
+	close(release)
+	for range 2 {
+		if err := <-forgot; err != nil {
+			t.Fatalf("Forget: %v", err)
+		}
+	}
+	if got := most.Load(); got != forgetParallelism {
+		t.Fatalf("at most %d deletes ran at once, want %d", got, forgetParallelism)
+	}
+	if got := len(api.removed); got != 6*forgetParallelism {
+		t.Fatalf("removed %d memories, want %d", got, 6*forgetParallelism)
+	}
+}
+
+// One memory that will not delete must not keep the rest, which are worth
+// forgetting on their own, from being forgotten; and what is left is what the
+// next Forget finds, so it finishes the job without repeating the rest.
+func TestMemoryBankForgetKeepsGoingPastAMemoryItCannotDelete(t *testing.T) {
+	api := &fakeBank{held: heldIn(6, "org-acme", "user-1")}
+	stuck := map[string]bool{"memories/01": true, "memories/04": true}
+	api.removing = func(_ context.Context, name string) error {
+		if stuck[name] {
+			return errors.New("the bank refused the delete")
+		}
+		return nil
+	}
+	bank := bankWith(api)
+
+	err := bank.Forget(context.Background(), "org-acme", "user-1")
+	if err == nil {
+		t.Fatal("a Forget that left two memories behind reported everything forgotten")
+	}
+	if !strings.Contains(err.Error(), "forgot 4 of 6") || !strings.Contains(err.Error(), "refused the delete") {
+		t.Fatalf("error = %v, want how many were left and why", err)
+	}
+	slices.Sort(api.removed)
+	if want := []string{"memories/00", "memories/02", "memories/03", "memories/05"}; !slices.Equal(api.removed, want) {
+		t.Fatalf("removed %v, want everything the bank did not refuse: %v", api.removed, want)
+	}
+
+	clear(stuck)
+	if err := bank.Forget(context.Background(), "org-acme", "user-1"); err != nil {
+		t.Fatalf("Forget again: %v", err)
+	}
+	if got := len(api.removed); got != 6 {
+		t.Fatalf("%d memories removed in all, want each of the six once", got)
+	}
+}
+
+// A bank too slow to empty in the time allowed is left for the next Forget,
+// and Forget says so and comes back, instead of holding what called it.
+func TestMemoryBankForgetStopsAtItsDeadlineAndSaysWhatItLeft(t *testing.T) {
+	api := &fakeBank{held: heldIn(10, "org-acme", "user-1")}
+	api.removing = func(ctx context.Context, _ string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	bank := bankWith(api)
+	bank.forgetTimeout = 50 * time.Millisecond
+
+	started := time.Now()
+	err := bank.Forget(context.Background(), "org-acme", "user-1")
+	if took := time.Since(started); took > 5*time.Second {
+		t.Fatalf("Forget took %s against a deadline of %s", took, bank.forgetTimeout)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "forgot 0 of 10") {
+		t.Fatalf("error = %v, want the deadline, and how many were left", err)
+	}
+}
+
+// Its caller giving up, a deploy stopping the queue's consumer, ends the
+// deleting as its own deadline does.
+func TestMemoryBankForgetStopsWhenItsCallerDoes(t *testing.T) {
+	api := &fakeBank{held: heldIn(10, "org-acme", "user-1")}
+	ctx, cancel := context.WithCancel(context.Background())
+	api.removing = func(ctx context.Context, _ string) error {
+		cancel()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	err := bankWith(api).Forget(ctx, "org-acme", "user-1")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want the caller's own cancellation", err)
+	}
+}
+
+// Two Forgets can overlap, an organization going while one of its members
+// does: the memory one deleted first is gone when the other comes to it, which
+// is what the other meant.
+func TestMemoryBankForgetTakesAMemoryThatIsAlreadyGoneAsForgotten(t *testing.T) {
+	api := &fakeBank{held: heldIn(3, "org-acme", "user-1")}
+	api.removing = func(_ context.Context, name string) error {
+		if name == "memories/01" {
+			return fmt.Errorf("wait for the memory to be deleted: %w", status.Error(codes.NotFound, "the memory is not there"))
+		}
+		return nil
+	}
+	if err := bankWith(api).Forget(context.Background(), "org-acme", "user-1"); err != nil {
+		t.Fatalf("Forget = %v, want a memory that was already gone to count as forgotten", err)
+	}
+}
+
+// A listing that breaks off partway has still found memories worth deleting.
+func TestMemoryBankForgetDeletesWhatItFoundBeforeAListingFailed(t *testing.T) {
+	api := &fakeBank{held: heldIn(2, "org-acme", "user-1"), listErr: errors.New("the listing broke off")}
+	err := bankWith(api).Forget(context.Background(), "org-acme", "user-1")
+	if err == nil || !strings.Contains(err.Error(), "the listing broke off") {
+		t.Fatalf("error = %v, want the listing's own failure", err)
+	}
+	if got := len(api.removed); got != 2 {
+		t.Fatalf("removed %d memories, want the two found before the listing failed", got)
 	}
 }
 

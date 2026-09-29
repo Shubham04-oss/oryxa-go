@@ -200,14 +200,30 @@ func (processor *Processor) process(ctx context.Context, delivery Delivery) {
 		return
 	}
 	if _, err := processor.store.Apply(context.WithoutCancel(ctx), delivery, definition.ID, result); err != nil {
-		processor.retry(ctx, delivery, err, logger)
+		// Applying is not cut short with the processor, so what goes wrong
+		// there is its own doing, whether or not the processor is stopping.
+		processor.retry(context.WithoutCancel(ctx), delivery, err, logger)
 		return
 	}
 	logger.InfoContext(ctx, "organization synthesis advanced", "source_entry_id", entry.ID)
 }
 
+// interrupted reports whether ctx has ended because the processor is
+// stopping, a deploy say. Whatever was under way when it did was cut short,
+// which is not the same as having failed.
+func interrupted(ctx context.Context) bool { return ctx.Err() != nil }
+
+// retry gives a delivery back to be claimed again, and counts the attempt
+// against it unless the processor is stopping. A synthesis cut short did not
+// fail, whatever error the run it was cut short in reports: it is tried again,
+// and the attempt does not count toward dropping the delivery.
 func (processor *Processor) retry(ctx context.Context, delivery Delivery, cause error, logger *slog.Logger) {
-	dropped, err := processor.store.Release(context.WithoutCancel(ctx), delivery.EventID, true, processorMaxAttempts, processorRetryAfter, cause.Error())
+	failed, reason := true, cause.Error()
+	if interrupted(ctx) {
+		logger.InfoContext(ctx, "organization synthesis interrupted; it is tried again", "reason", reason)
+		failed, reason = false, "interrupted: "+reason
+	}
+	dropped, err := processor.store.Release(context.WithoutCancel(ctx), delivery.EventID, failed, processorMaxAttempts, processorRetryAfter, reason)
 	if err != nil {
 		logger.ErrorContext(ctx, "release organization-agent delivery", "error", err)
 		return

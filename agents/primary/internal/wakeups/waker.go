@@ -159,7 +159,7 @@ func (waker *Waker) wake(ctx context.Context, batch Batch) {
 	// news that they left, and must not make them a thread there again.
 	member, err := waker.members.IsMember(ctx, batch.OrganizationID, batch.MemberID)
 	if err != nil {
-		logger.ErrorContext(ctx, "check a wake-up's member", "error", err)
+		report(ctx, logger, slog.LevelError, "check a wake-up's member", "error", err)
 		waker.release(ctx, batch, false, logger)
 		return
 	}
@@ -175,7 +175,7 @@ func (waker *Waker) wake(ctx context.Context, batch Batch) {
 	// what was recorded before they did.
 	wanted, err := waker.store.AppUpdates(ctx, batch.OrganizationID, batch.MemberID)
 	if err != nil {
-		logger.ErrorContext(ctx, "read a member's app updates preference", "error", err)
+		report(ctx, logger, slog.LevelError, "read a member's app updates preference", "error", err)
 		waker.release(ctx, batch, false, logger)
 		return
 	}
@@ -196,7 +196,7 @@ func (waker *Waker) wake(ctx context.Context, batch Batch) {
 			left = append(left, event.ID)
 		}
 		if err := waker.store.Unclaim(ctx, left); err != nil {
-			logger.ErrorContext(ctx, "give back the events a wake-up had no room for", "error", err)
+			report(ctx, logger, slog.LevelError, "give back the events a wake-up had no room for", "error", err)
 			waker.release(ctx, batch, false, logger)
 			return
 		}
@@ -215,7 +215,7 @@ func (waker *Waker) wake(ctx context.Context, batch Batch) {
 		waker.release(ctx, batch, false, logger)
 		return
 	case err != nil:
-		logger.ErrorContext(ctx, "wake-up could not start", "error", err)
+		report(ctx, logger, slog.LevelError, "wake-up could not start", "error", err)
 		waker.release(ctx, batch, true, logger)
 		return
 	}
@@ -228,11 +228,13 @@ func (waker *Waker) wake(ctx context.Context, batch Batch) {
 		return nil
 	})
 	if ended != threads.ItemRunCompleted {
-		logger.WarnContext(ctx, "wake-up run did not complete", "run_id", run.ID())
+		report(ctx, logger, slog.LevelWarn, "wake-up run did not complete", "run_id", run.ID())
 		waker.release(ctx, batch, true, logger)
 		return
 	}
-	if err := waker.store.Done(ctx, batch.ID); err != nil {
+	// A run that completed is recorded as such even as the waker stops: what is
+	// not recorded is told again.
+	if err := waker.store.Done(context.WithoutCancel(ctx), batch.ID); err != nil {
 		// The claim runs out and the events come round again: better told
 		// twice than lost.
 		logger.ErrorContext(ctx, "finish wake-up batch", "error", err)
@@ -271,7 +273,30 @@ func (waker *Waker) start(ctx context.Context, member threads.Member, input thre
 	return waker.threads.StartRun(ctx, member, winner, input)
 }
 
+// interrupted reports whether ctx has ended because the waker is stopping, a
+// deploy say. Whatever was under way when it did was cut short, which is not
+// the same as having failed.
+func interrupted(ctx context.Context) bool { return ctx.Err() != nil }
+
+// report logs what went wrong with a wake-up, unless the waker is stopping: a
+// call cut short by that did not go wrong, and release says once that the
+// wake-up was interrupted.
+func report(ctx context.Context, logger *slog.Logger, level slog.Level, message string, args ...any) {
+	if !interrupted(ctx) {
+		logger.Log(ctx, level, message, args...)
+	}
+}
+
+// release gives a batch's events back to be claimed again. failed says the
+// wake-up went wrong for a reason of its own, which counts against its events.
 func (waker *Waker) release(ctx context.Context, batch Batch, failed bool, logger *slog.Logger) {
+	// A wake-up cut short because the waker is stopping did not fail: its
+	// events are tried again, and the attempt does not count toward giving
+	// them up.
+	if interrupted(ctx) {
+		logger.InfoContext(ctx, "wake-up interrupted; its events are tried again")
+		failed = false
+	}
 	dropped, err := waker.store.Release(context.WithoutCancel(ctx), batch.ID, failed, maxAttempts, retryAfter)
 	if err != nil {
 		logger.ErrorContext(ctx, "release wake-up batch", "error", err)

@@ -3,6 +3,7 @@ package organizationagents
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,12 +13,20 @@ import (
 )
 
 type fakeDeliveryStore struct {
-	previous Synthesis
-	result   Result
-	applied  bool
-	dropped  string
-	setAside string
-	released string
+	previous     Synthesis
+	synthesisErr error
+	applyErr     error
+	result       Result
+	applied      bool
+	dropped      string
+	setAside     string
+	released     string
+	// releases is how many times a delivery was released, and releasedFailed
+	// whether the last of them counted an attempt against it.
+	releases       int
+	releasedFailed bool
+	// releaseContext is what the context the last release was made under said.
+	releaseContext error
 }
 
 func (*fakeDeliveryStore) Claim(context.Context, time.Duration, int) ([]Delivery, error) {
@@ -25,17 +34,23 @@ func (*fakeDeliveryStore) Claim(context.Context, time.Duration, int) ([]Delivery
 }
 
 func (store *fakeDeliveryStore) Synthesis(_ context.Context, _ string) (Synthesis, error) {
-	return store.previous, nil
+	return store.previous, store.synthesisErr
 }
 
 func (store *fakeDeliveryStore) Apply(_ context.Context, _ Delivery, _ string, result Result) (Synthesis, error) {
+	if store.applyErr != nil {
+		return Synthesis{}, store.applyErr
+	}
 	store.applied = true
 	store.result = result
 	return store.previous, nil
 }
 
-func (store *fakeDeliveryStore) Release(_ context.Context, _ string, _ bool, _ int, _ time.Duration, reason string) (bool, error) {
+func (store *fakeDeliveryStore) Release(ctx context.Context, _ string, failed bool, _ int, _ time.Duration, reason string) (bool, error) {
 	store.released = reason
+	store.releases++
+	store.releasedFailed = failed
+	store.releaseContext = ctx.Err()
 	return false, nil
 }
 
@@ -212,7 +227,117 @@ func TestProcessorRetriesModelAndValidationFailures(t *testing.T) {
 			if !test.runtime.called || store.applied || store.dropped != "" || !strings.Contains(store.released, test.want) {
 				t.Fatalf("called=%v applied=%v dropped=%q released=%q", test.runtime.called, store.applied, store.dropped, store.released)
 			}
+			if !store.releasedFailed {
+				t.Fatal("a synthesis that failed on its own was released without counting an attempt")
+			}
 		})
+	}
+}
+
+// erringRelevance is a Relevance that cannot say.
+type erringRelevance struct{ failure error }
+
+func (relevance erringRelevance) OrganizationRelevant(context.Context, teamspaces.Entry) (bool, string, error) {
+	return false, "", relevance.failure
+}
+
+// A deploy stops the processor while a synthesis runs. The run was cut short,
+// and reports it as any run does, with an error of its own: it was not the
+// synthesis that failed. Its delivery is released to be tried again by whoever
+// runs next, and the attempt does not count toward dropping it, or three
+// deploys in a row would drop a publication nothing was wrong with. Whatever
+// fails while the processor goes on is what it always was: a failure, counted.
+func TestProcessorRetriesASynthesisCutShortByShutdownWithoutUsingAnAttempt(t *testing.T) {
+	type breakage func(*fakeSharedSources, *fakeDeliveryStore, *Processor)
+	tests := []struct {
+		name   string
+		break_ breakage
+	}{
+		{"reading the entry", func(sources *fakeSharedSources, _ *fakeDeliveryStore, _ *Processor) {
+			sources.entryErr = errors.New("database unavailable")
+		}},
+		{"reading the teamspace", func(sources *fakeSharedSources, _ *fakeDeliveryStore, _ *Processor) {
+			sources.spaceErr = errors.New("database unavailable")
+		}},
+		{"reading the organization agent", func(sources *fakeSharedSources, _ *fakeDeliveryStore, _ *Processor) {
+			sources.agentErr = errors.New("database unavailable")
+		}},
+		{"judging whether it is relevant", func(_ *fakeSharedSources, _ *fakeDeliveryStore, processor *Processor) {
+			processor.relevance = erringRelevance{errors.New("Jev unreachable")}
+		}},
+		{"reading the earlier synthesis", func(_ *fakeSharedSources, store *fakeDeliveryStore, _ *Processor) {
+			store.synthesisErr = errors.New("database unavailable")
+		}},
+		// The run itself reports a run it was cut short in as an error with no
+		// trace of the context that ended it.
+		{"running the synthesis", func(_ *fakeSharedSources, _ *fakeDeliveryStore, processor *Processor) {
+			processor.runtime = &fakeSynthesizer{err: errors.New("The run was cancelled.")}
+		}},
+	}
+	for _, test := range tests {
+		for _, stopping := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, stopping=%v", test.name, stopping), func(t *testing.T) {
+				delivery, sources := synthesisFixture()
+				store := &fakeDeliveryStore{}
+				processor, err := NewProcessor(store, sources, &fakeSynthesizer{result: Result{Summary: "ok"}}, ProcessorConfig{}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				test.break_(sources, store, processor)
+				ctx, stop := context.WithCancel(context.Background())
+				defer stop()
+				if stopping {
+					stop()
+				}
+				processor.process(ctx, delivery)
+
+				if store.applied || store.dropped != "" || store.releases != 1 {
+					t.Fatalf("applied=%v dropped=%q releases=%d, want one release and nothing else", store.applied, store.dropped, store.releases)
+				}
+				if store.releasedFailed == stopping {
+					t.Fatalf("released with failed=%v while stopping=%v: only a synthesis that was not cut short counts an attempt", store.releasedFailed, stopping)
+				}
+				if stopping && !strings.HasPrefix(store.released, "interrupted: ") {
+					t.Fatalf("released with reason %q, want it recorded as an interruption", store.released)
+				}
+				if store.releaseContext != nil {
+					t.Fatalf("released under a context that said %v, so releasing it could be cut short", store.releaseContext)
+				}
+			})
+		}
+	}
+}
+
+// stoppingSynthesizer stops the processor as its synthesis finishes.
+type stoppingSynthesizer struct {
+	stop   context.CancelFunc
+	result Result
+}
+
+func (runtime stoppingSynthesizer) Synthesize(context.Context, teamspaces.OrganizationAgent, Synthesis, teamspaces.Space, teamspaces.Entry) (Result, error) {
+	runtime.stop()
+	return runtime.result, nil
+}
+
+// What goes wrong recording a finished synthesis was not the processor
+// stopping, which recording is not cut short by: it counts, whether or not the
+// processor is stopping when it does.
+func TestProcessorCountsAFailureToRecordASynthesisEvenWhileStopping(t *testing.T) {
+	delivery, sources := synthesisFixture()
+	store := &fakeDeliveryStore{applyErr: errors.New("database unavailable")}
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	// The processor stops after the synthesis ran, before it is recorded.
+	processor, err := NewProcessor(store, sources, stoppingSynthesizer{stop: stop, result: Result{Summary: "ok"}}, ProcessorConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor.process(ctx, delivery)
+	if ctx.Err() == nil {
+		t.Fatal("the test never stopped the processor")
+	}
+	if store.releases != 1 || !store.releasedFailed || store.applied {
+		t.Fatalf("releases=%d failed=%v applied=%v, want one release that counts an attempt", store.releases, store.releasedFailed, store.applied)
 	}
 }
 

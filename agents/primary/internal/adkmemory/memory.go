@@ -79,6 +79,9 @@ type Backend interface {
 	Search(ctx context.Context, scope Scope, query string) ([]memory.Entry, error)
 	// Forget removes every memory in organizationID — only userID's, when
 	// one is named. Forgetting what is already gone removes nothing more.
+	// An implementation may stop short, at its own deadline or at memories it
+	// could not remove, and say so: what it left is what the next Forget
+	// finds, so the caller tries again rather than treating it as done.
 	Forget(ctx context.Context, organizationID, userID string) error
 }
 
