@@ -26,8 +26,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/slackfake"
+	workspacestore "github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
 	"github.com/Shubham04-oss/oryxa-go/test/identities"
 	"github.com/Shubham04-oss/oryxa-go/test/internal/authstub"
 )
@@ -244,10 +246,19 @@ func bootStack(t *testing.T, databaseServerURL string) *stack {
 // what a deployment ships as until its Slack app's secrets are stored: apps
 // takes deliveries from Slack, and agents, which has no loop, hears of them.
 func bootStackWith(t *testing.T, databaseServerURL string, consent bool) *stack {
+	return bootStackWithWorkspace(t, databaseServerURL, consent, nil)
+}
+
+// bootStackWithWorkspace seeds an applied policy before host startup, so the
+// shipped binary discovers the workspace schema and wires its real provider.
+func bootStackWithWorkspace(t *testing.T, databaseServerURL string, consent bool, workspace []byte) *stack {
 	t.Helper()
 	binary := build(t, t.TempDir())
 	databaseURL := createDatabase(t, databaseServerURL)
 	seedAuth(t, databaseURL)
+	if workspace != nil {
+		seedWorkspace(t, databaseURL, workspace)
+	}
 
 	s := &stack{t: t, logs: &syncBuffer{}}
 	pool, err := pgxpool.New(context.Background(), databaseURL)
@@ -375,6 +386,23 @@ func bootStackWith(t *testing.T, databaseServerURL string, consent bool) *stack 
 	s.waitUntilServing(done, &waited)
 	s.install()
 	return s
+}
+
+func seedWorkspace(t testing.TB, databaseURL string, document []byte) {
+	t.Helper()
+	ctx := context.Background()
+	database, err := postgreskit.Open(ctx, postgreskit.Config{URL: databaseURL, ApplicationName: "oryxa-slack-workspace-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	store := workspacestore.New(database)
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save(ctx, organizationID, root.UserID, document, nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // tail is the last max bytes of text.

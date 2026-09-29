@@ -1076,13 +1076,17 @@ which their agent gave. A member who chose nothing gets `secrets` for `owner`
 and `strict` for `peer`. What applies is the stricter of the organization's
 minimum for that origin and the member's choice, or the default when they made
 none. A choice below the minimum is kept, and shown, and the minimum wins; the
-choice applies again if the minimum is lowered. An organization's minimum is
-meant to come from its workspace policy, read through `guardpolicy.OrgPolicies`
-and never kept here. No source of it is wired yet
-(`guardpolicy.NoOrgPolicies`), so every organization has none, which is
-`secrets`, the lowest level there is. A source that is missing or fails is never
-a failed check: the defaults apply, and the failure is logged once for as long
-as it lasts. A level this code does not know is read as `strict`.
+choice applies again if the minimum is lowered. The organization's minimums,
+relevance mode and regulated status come from the host's workspace policy
+provider through `guardpolicy.NewWorkspacePolicies`, and are never kept here.
+A host without the workspace schema uses `policy.Noop`; a successful empty
+policy also supplies defaults, with no extra minimum. A policy read failure
+instead applies `strict` floors for both origins and regulated handling, with
+relevance still under the deployment's ceiling. It is logged once for each
+organization's outage; a cancelled caller is not logged as an outage. Saved
+choices resume when the policy can be read again. These settings also apply to
+agent-request answers while the Slack consent loop is off. A level this code
+does not know is read as `strict`.
 
 ```text
 GET /v1/organizations/{org}/answer-guard/preferences

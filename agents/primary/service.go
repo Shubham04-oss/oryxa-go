@@ -210,11 +210,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	wakeupStore := wakeups.NewStoreWithPolicy(platform.Database, workspacePolicy)
 	// What each member chose about how strictly the answer guard reads what
 	// their agent says, apart for an answer they started themselves and one
-	// another member reads. No organization's policy can be read yet, so every
-	// organization gets the defaults: NoOrgPolicies says so without a warning,
-	// where nil would say it on the first check. The deployment's ceiling holds
-	// the relevance check to what it has earned.
-	guardSettings := guardpolicy.New(platform.Database, guardpolicy.NoOrgPolicies{}, guardpolicy.Cap{
+	// another member reads. The workspace provider supplies the organization's
+	// minimums, relevance mode and regulated status. Unreadable policy applies
+	// strict floors and regulated handling; the deployment's ceiling still
+	// holds the relevance check to what it has earned.
+	guardSettings := guardpolicy.New(platform.Database, guardpolicy.NewWorkspacePolicies(workspacePolicy), guardpolicy.Cap{
 		Relevance: settings.GuardRelevanceCap, HoldOrgs: settings.GuardHoldOrgs,
 	}).WithLogger(logger)
 	logger.Info("the answer guard's relevance check is held to a ceiling",
