@@ -22,7 +22,9 @@ func TestAdminStatusOfOwnerPruneConfigurationIsReadableAndNonDestructive(t *test
 		case "/v1/organizations/org1":
 			io.WriteString(w, `{"organization":{"id":"org1","slug":"acme"},"membership":{"organization_id":"org1","user_id":"admin1","role":"admin"}}`)
 		case "/v1/organizations/org1/members":
-			io.WriteString(w, `{"members":[{"user_id":"owner1","email":"owner@acme.com","role":"owner"},{"user_id":"admin1","email":"admin@acme.com","role":"admin"},{"user_id":"joined1","email":"joined@acme.com","role":"member"}]}`)
+			w.WriteHeader(http.StatusForbidden)
+		case "/v1/organizations/org1/directory":
+			io.WriteString(w, `{"members":[{"user_id":"owner1","email":"owner@acme.com","org_role":"owner"},{"user_id":"admin1","email":"admin@acme.com","org_role":"admin"},{"user_id":"joined1","email":"joined@acme.com","org_role":"member"}]}`)
 		case "/v1/organizations/org1/invitations":
 			io.WriteString(w, `{"invitations":[]}`)
 		case "/v1/organizations/org1/teams":
