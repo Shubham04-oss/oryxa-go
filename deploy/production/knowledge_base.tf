@@ -105,6 +105,25 @@ resource "aws_s3_bucket_lifecycle_configuration" "knowledge_base_documents" {
       days = 7
     }
   }
+
+  # The bucket is versioned (hardening.tf), so what is deleted, and what the
+  # rules above expire, stays as an older version: this removes those after
+  # 30 days, and the delete markers left over once they are gone. The first
+  # rule already drops unfinished uploads after a day, sooner than a looser
+  # one would.
+  rule {
+    id     = "recoverable-deletes"
+    status = "Enabled"
+    filter {}
+    noncurrent_version_expiration {
+      noncurrent_days = local.deleted_object_retention_days
+    }
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.knowledge_base_documents]
 }
 
 resource "aws_iam_role" "knowledge_base" {

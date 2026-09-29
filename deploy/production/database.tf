@@ -56,6 +56,11 @@ resource "aws_iam_role_policy_attachment" "rds_monitoring" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }
 
+locals {
+  # What RDS exports to CloudWatch Logs. hardening.tf gives each its log group.
+  database_log_exports = ["postgresql", "upgrade"]
+}
+
 resource "aws_db_instance" "main" {
   identifier     = local.name
   engine         = "postgres"
@@ -88,11 +93,15 @@ resource "aws_db_instance" "main" {
   skip_final_snapshot       = false
   final_snapshot_identifier = "${local.name}-final"
 
-  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
+  enabled_cloudwatch_logs_exports = local.database_log_exports
   monitoring_interval             = 60
   monitoring_role_arn             = aws_iam_role.rds_monitoring.arn
   # Database Insights' standard mode: query-level load, kept seven days free.
   performance_insights_enabled = true
+
+  # RDS makes a log group of its own, with no expiry, for any it finds missing
+  # when it starts exporting: hardening.tf declares them first.
+  depends_on = [aws_cloudwatch_log_group.database]
 }
 
 resource "aws_secretsmanager_secret" "database_url" {
