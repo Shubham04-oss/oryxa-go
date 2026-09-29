@@ -336,9 +336,7 @@ describe("WorkspaceTools", () => {
     )
     render(<WorkspaceTools organizationId="org-1" />)
     expect(await screen.findByRole("heading", { name: "Gmail" })).toBeTruthy()
-    expect(
-      screen.getByText(/turned off employee app connections/)
-    ).toBeTruthy()
+    expect(screen.getByText(/turned off employee app connections/)).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Gmail details" }))
     expect(screen.queryByRole("button", { name: "Connect Gmail" })).toBeNull()
   })
