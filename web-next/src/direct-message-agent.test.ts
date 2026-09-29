@@ -13,6 +13,8 @@ import {
   DM_TYPING_TTL_MS,
   conversationGoneCloseCode,
 } from "./lib/dms/protocol"
+import { DM_REQUEST_LIMIT } from "./lib/dms/request-notes"
+import type { RequestNote } from "./lib/dms/request-notes"
 import { realtimeEventTypes } from "./realtime-events"
 import { RealtimeRegistryAgent } from "./realtime-registry-agent"
 import {
@@ -1229,5 +1231,340 @@ describe("DirectMessageAgent: events for Go", () => {
       )
     }
     expect(go.requests).toEqual([])
+  })
+})
+
+describe("DirectMessageAgent: requests", () => {
+  /** A request Ada made of Bo's agent, a minute before the tests begin, less what `overrides` change. */
+  function note(overrides: Partial<RequestNote> = {}): RequestNote {
+    return {
+      requestId: "irq_1",
+      revision: 1,
+      askerId: ada,
+      ownerId: bo,
+      origin: "agent",
+      state: "waiting",
+      changedAt: "2026-09-24T08:59:00.000Z",
+      ...overrides,
+    }
+  }
+
+  const line = (
+    overrides: Record<string, unknown> = {}
+  ): Record<string, unknown> => ({
+    requestId: "irq_1",
+    revision: 1,
+    askerId: ada,
+    ownerId: bo,
+    origin: "agent",
+    state: "waiting",
+    changedAt: "2026-09-24T08:59:00.000Z",
+    at: "2026-09-24T08:59:00.000Z",
+    ...overrides,
+  })
+
+  it("keeps one note for each request at its highest revision, and tells every socket the line as it is new or changes", async () => {
+    const { dm } = await setup()
+    const adaTab = await join(dm, ada)
+    const adaPanel = await join(dm, ada)
+    const boTab = await join(dm, bo)
+    for (const socket of [adaTab, adaPanel, boTab]) socket.clear()
+
+    expect(await dm.noteRequest(note())).toBe("noted")
+    // Told twice, or late, or after a later one: nothing changes, nobody is told.
+    expect(await dm.noteRequest(note())).toBe("repeated")
+    expect(
+      await dm.noteRequest(
+        note({
+          revision: 3,
+          state: "answered",
+          changedAt: "2026-09-24T08:59:50.000Z",
+        })
+      )
+    ).toBe("noted")
+    expect(
+      await dm.noteRequest(
+        note({
+          revision: 2,
+          state: "approved",
+          changedAt: "2026-09-24T08:59:30.000Z",
+        })
+      )
+    ).toBe("repeated")
+    expect(await dm.noteRequest(note({ revision: 3, state: "held" }))).toBe(
+      "repeated"
+    )
+
+    // The line's place stays where the request first was noted; its state and time move.
+    const answered = line({
+      revision: 3,
+      state: "answered",
+      changedAt: "2026-09-24T08:59:50.000Z",
+    })
+    for (const socket of [adaTab, adaPanel, boTab]) {
+      expect(socket.of("dm-request")).toEqual([
+        { type: "dm-request", request: line() },
+        { type: "dm-request", request: answered },
+      ])
+    }
+    expect(
+      dm.sql`SELECT request_id, revision, state, first_at, changed_at FROM dm_requests`
+    ).toEqual([
+      {
+        request_id: "irq_1",
+        revision: 3,
+        state: "answered",
+        first_at: "2026-09-24T08:59:00.000Z",
+        changed_at: "2026-09-24T08:59:50.000Z",
+      },
+    ])
+  })
+
+  it("sends a socket that opens the requests it holds, oldest first, and none of what anyone said", async () => {
+    const { dm } = await setup()
+    const empty = await join(dm, ada)
+    expect(empty.last("dm-snapshot")).not.toHaveProperty("requests")
+
+    await dm.noteRequest(
+      note({ requestId: "irq_b", changedAt: "2026-09-24T08:58:00.000Z" })
+    )
+    await dm.noteRequest(
+      note({
+        requestId: "irq_a",
+        askerId: bo,
+        ownerId: ada,
+        origin: "slack",
+        changedAt: "2026-09-24T08:50:00.000Z",
+      })
+    )
+    const late = await join(dm, bo)
+    expect(late.last("dm-snapshot")?.requests).toEqual([
+      line({
+        requestId: "irq_a",
+        askerId: bo,
+        ownerId: ada,
+        origin: "slack",
+        changedAt: "2026-09-24T08:50:00.000Z",
+        at: "2026-09-24T08:50:00.000Z",
+      }),
+      line({
+        requestId: "irq_b",
+        changedAt: "2026-09-24T08:58:00.000Z",
+        at: "2026-09-24T08:58:00.000Z",
+      }),
+    ])
+    // A note has no message's fields: no body, no author, no seq.
+    expect(JSON.stringify(late.last("dm-snapshot")?.requests)).not.toMatch(
+      /"body"|"seq"|"authorId"/
+    )
+  })
+
+  it("is no message: no seq, no unread, no read, and nothing for Go", async () => {
+    const go = new FakeGoEvents()
+    vi.stubGlobal("fetch", routeFetch(go))
+    try {
+      const { dm, world } = await setup({
+        ORYXA_API_ORIGIN: eventsOrigin,
+        REALTIME_PURGE_SECRET: eventsSecret,
+      })
+      const adaTab = await join(dm, ada)
+      adaTab.clear()
+      await dm.noteRequest(note())
+      await runDueJobs(dm)
+
+      expect(dm.sql`SELECT * FROM dm_messages`).toEqual([])
+      expect(dm.sql`SELECT * FROM dm_reads`).toEqual([])
+      expect(dm.jobs.filter((job) => job.callback === "drainEvents")).toEqual(
+        []
+      )
+      expect(go.taken).toEqual([])
+      // Nothing was said to either inbox about a message, either.
+      expect(world.callsTo("InboxAgent", "noteMessage")).toEqual([])
+      expect(world.callsTo("InboxAgent", "markRead")).toEqual([])
+      // A message after the note is the conversation's first: seq 1.
+      await send(dm, adaTab, "hello")
+      expect(messagesOf(adaTab)).toEqual([expect.objectContaining({ seq: 1 })])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("keeps at most DM_REQUEST_LIMIT, the latest by where their lines stand", async () => {
+    const { dm } = await setup()
+    const adaTab = await join(dm, ada)
+    for (let index = 0; index < DM_REQUEST_LIMIT + 5; index += 1) {
+      await dm.noteRequest(
+        note({
+          requestId: `irq_${String(index).padStart(3, "0")}`,
+          changedAt: new Date(
+            Date.parse("2026-09-24T08:00:00.000Z") + index * 1000
+          ).toISOString(),
+        })
+      )
+    }
+    const kept = dm.sql<{
+      request_id: string
+    }>`SELECT request_id FROM dm_requests ORDER BY first_at`.map(
+      (row) => row.request_id
+    )
+    expect(kept).toHaveLength(DM_REQUEST_LIMIT)
+    expect(kept[0]).toBe("irq_005")
+    expect(kept.at(-1)).toBe(
+      `irq_${String(DM_REQUEST_LIMIT + 4).padStart(3, "0")}`
+    )
+    // A request that fell past the limit as it arrived is kept, and told, by no one.
+    adaTab.clear()
+    expect(
+      await dm.noteRequest(
+        note({
+          requestId: "irq_ancient",
+          changedAt: "2026-09-24T07:00:00.000Z",
+        })
+      )
+    ).toBe("noted")
+    expect(adaTab.of("dm-request")).toEqual([])
+    expect(dm.sql`SELECT * FROM dm_requests`).toHaveLength(DM_REQUEST_LIMIT)
+  })
+
+  it("keeps its two people's requests apart from a message's order, and a socket sees them beside the messages", async () => {
+    const { dm } = await setup()
+    const adaTab = await join(dm, ada)
+    await send(dm, adaTab, "before")
+    vi.setSystemTime(new Date("2026-09-24T09:01:00.000Z"))
+    await dm.noteRequest(note({ changedAt: "2026-09-24T09:00:30.000Z" }))
+    await send(dm, adaTab, "after")
+    const snapshot = (await join(dm, bo)).last("dm-snapshot")
+    expect(
+      (snapshot?.messages as Array<{ seq: number; body: string }>).map(
+        (message) => [message.seq, message.body]
+      )
+    ).toEqual([
+      [1, "before"],
+      [2, "after"],
+    ])
+    expect(snapshot?.requests).toEqual([
+      line({
+        changedAt: "2026-09-24T09:00:30.000Z",
+        at: "2026-09-24T09:00:30.000Z",
+      }),
+    ])
+  })
+
+  it("refuses a note that is not its own, read as whatever arrived over RPC", async () => {
+    const { dm } = await setup()
+    for (const bad of [
+      note({ ownerId: "user-cy" }),
+      note({ askerId: "user-cy" }),
+      note({ ownerId: ada }),
+      note({ revision: 0 }),
+      note({ revision: 1.5 }),
+      note({ requestId: "irq~1" }),
+      note({ origin: "Slack" }),
+      note({ state: "expired" as RequestNote["state"] }),
+      note({ changedAt: "2026-09-24T08:59:00Z" }),
+      undefined as unknown as RequestNote,
+      "irq_1" as unknown as RequestNote,
+    ]) {
+      await expect(dm.noteRequest(bad)).rejects.toThrow(TypeError)
+    }
+    expect(dm.sql`SELECT * FROM dm_requests`).toEqual([])
+  })
+
+  it("is emptied of its notes with the messages when the organization goes", async () => {
+    const { dm } = await setup()
+    const adaTab = await join(dm, ada)
+    await send(dm, adaTab, "one")
+    await dm.noteRequest(note())
+    await dm.purge()
+    expect(dm.sql`SELECT * FROM dm_requests`).toEqual([])
+    const again = await join(dm, bo)
+    expect(again.last("dm-snapshot")).not.toHaveProperty("requests")
+  })
+
+  describe("when one of its people left", () => {
+    const removedAt = "2026-09-24T09:00:30.000Z"
+
+    it("takes the notes whose lines stand at or before then, and empties itself when nothing else stays", async () => {
+      const { dm, world } = await setup()
+      // Only a note, with nobody having opened the conversation.
+      await dm.noteRequest(note({ changedAt: "2026-09-24T09:00:10.000Z" }))
+      // The inboxes were told directly, by the Worker.
+      const inbox = await world.object<Inbox>("InboxAgent", inboxName(org, bo))
+      await inbox.noteRequest(
+        { kind: "dm", name: dmName, peerId: ada },
+        note({ changedAt: "2026-09-24T09:00:10.000Z" })
+      )
+      vi.setSystemTime(new Date("2026-09-24T09:05:00.000Z"))
+
+      expect(await dm.purge({ userId: ada, removedAt })).toEqual({
+        emptied: true,
+      })
+      expect(dm.sql`SELECT * FROM dm_requests`).toEqual([])
+    })
+
+    it("keeps a note newer than then, as a new run, restates both inboxes by it, and sends the sockets opened since", async () => {
+      const { dm, world } = await setup()
+      const boOld = await join(dm, bo)
+      await send(dm, boOld, "before")
+      await dm.noteRequest(
+        note({ requestId: "irq_old", changedAt: "2026-09-24T09:00:10.000Z" })
+      )
+      // Ada leaves at 09:00:30 and is back at 09:01, asked again since.
+      vi.setSystemTime(new Date("2026-09-24T09:01:00.000Z"))
+      const adaNew = await join(dm, ada)
+      await dm.noteRequest(
+        note({
+          requestId: "irq_new",
+          askerId: bo,
+          ownerId: ada,
+          revision: 2,
+          state: "held",
+          changedAt: "2026-09-24T09:01:00.000Z",
+        })
+      )
+      adaNew.clear()
+
+      expect(await dm.purge({ userId: ada, removedAt })).toEqual({
+        emptied: false,
+      })
+
+      // The old request and the old message went; the new request stays.
+      expect(dm.sql`SELECT request_id, first_at FROM dm_requests`).toEqual([
+        { request_id: "irq_new", first_at: "2026-09-24T09:01:00.000Z" },
+      ])
+      expect(dm.sql`SELECT * FROM dm_messages`).toEqual([])
+      expect(boOld.sent.at(-1)).toEqual({ type: "dm-gone" })
+      expect(adaNew.closed).toBeUndefined()
+      const run = adaNew.last("dm-snapshot")
+      expect(run?.requests).toEqual([
+        line({
+          requestId: "irq_new",
+          askerId: bo,
+          ownerId: ada,
+          revision: 2,
+          state: "held",
+          changedAt: "2026-09-24T09:01:00.000Z",
+          at: "2026-09-24T09:01:00.000Z",
+        }),
+      ])
+      // Both inboxes say what stays: the request alone, listed by it.
+      expect(await inboxOf(world, ada)).toEqual([
+        {
+          kind: "dm",
+          name: dmName,
+          peerId: bo,
+          lastMessage: {
+            authorId: bo,
+            body: "Asked your agent · held",
+            createdAt: "2026-09-24T09:01:00.000Z",
+          },
+          unread: 0,
+          updatedAt: "2026-09-24T09:01:00.000Z",
+        },
+      ])
+      expect((await inboxOf(world, bo))[0].lastMessage?.body).toBe(
+        "You asked their agent · held"
+      )
+    })
   })
 })
