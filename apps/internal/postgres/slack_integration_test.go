@@ -54,7 +54,7 @@ func TestSlackInstallsAreBoundToOneOrganizationAndOneWorkspaceEach(t *testing.T)
 		t.Fatal(err)
 	}
 	got, err := store.InstallByTeam(ctx, "T0ACME01")
-	if err != nil || !got.Active() || got.OrganizationID != "org_1" || got.BotUserID != "U0BOTACME01" || got.TeamName != "Acme" ||
+	if err != nil || !got.Active() || got.OrganizationID != "org_1" || got.BotUserID != "U0BOT0ACME01" || got.TeamName != "Acme" ||
 		got.Sealed == nil || string(got.Sealed.Ciphertext) != "cipher-T0ACME01" || len(got.Scopes) != 2 || !got.InstalledAt.Equal(testClock) {
 		t.Fatalf("InstallByTeam = %+v, %v", got, err)
 	}
