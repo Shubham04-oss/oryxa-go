@@ -27,18 +27,18 @@ type RegisterInput struct {
 // rather than a third-party app, so it takes no connection.
 const filesProvider = "files"
 
-// appsReaders is which toolkits' mounted extractor reads through apps itself
-// rather than through Composio's proxy, and so can serve a source registered
-// on an oryxa connection. Empty until phase 2's apps extractor exists (WP
-// 2B): a toolkit is added here once its own reader is mounted, which is the
-// one thing that changes to let that toolkit's oryxa connections register.
+// readsThroughApps says whether the extractor mounted for a toolkit reads
+// through apps' own reader rather than through Composio's proxy. Only such an
+// extractor can serve a source registered on an oryxa connection.
 //
-// This is properly a property of extractor registration, which belongs on
-// the registry (knowledge/internal/sources.Registry) once such a thing
-// exists there — but adding it means widening the Extractor interface and
-// touching every extractor that implements it, well outside this file. A
-// local set is the narrowest stand-in until 2B needs the real thing.
-var appsReaders = map[string]bool{}
+// This is asked of the registry rather than kept in a set beside it, so the
+// answer cannot fall behind what is mounted: a toolkit's extractor is what
+// says whether it reads through apps, and mounting a reader for one is the
+// single thing that lets that toolkit's oryxa connections register.
+func readsThroughApps(extractor sources.Extractor) bool {
+	reader, ok := extractor.(sources.AppsReader)
+	return ok && reader.ReadsThroughApps()
+}
 
 // RegisterSource records something to index and schedules its first run.
 //
@@ -129,7 +129,7 @@ func (s *Service) register(ctx context.Context, credentials authclient.Credentia
 			source.TeamID = team
 		}
 	} else {
-		connection, err := s.usableConnection(ctx, credentials, organizationID, connectionID, provider, caller.UserID)
+		connection, err := s.usableConnection(ctx, credentials, organizationID, connectionID, provider, caller.UserID, extractor)
 		if err != nil {
 			return domain.Source{}, err
 		}
@@ -145,10 +145,12 @@ func (s *Service) register(ctx context.Context, credentials authclient.Credentia
 		return domain.Source{}, err
 	}
 	source.TeamID, source.MemberID = teamID, memberID
-	if checker, ok := extractor.(sources.Checker); ok && provider == filesProvider {
-		// A source reads as the member who registers it. One they cannot read
-		// would be refused on every pass, and would hold the placement
-		// against anyone who can, so Files is asked as them first.
+	// A source reads as the member who registers it. One they cannot read
+	// would be refused on every pass, and would hold the placement against
+	// anyone who can, so it is asked now, while a member is present to be
+	// told. Files is asked for the listing every pass of it would make, and
+	// an apps-backed source for a single item of the target it names.
+	if checker, ok := extractor.(sources.Checker); ok && (provider == filesProvider || readsThroughApps(extractor)) {
 		credential, err := memberCredential(credentials)
 		if err != nil {
 			return domain.Source{}, err
@@ -193,7 +195,7 @@ func memberCredential(credentials authclient.Credentials) (domain.Credential, er
 // the caller's own. A member indexes only through their own connection —
 // there is no admin override, unlike an internal source — since a Composio
 // connection is one member's credential, not the organization's.
-func (s *Service) usableConnection(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID, provider, callerID string) (domain.AppConnection, error) {
+func (s *Service) usableConnection(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID, provider, callerID string, extractor sources.Extractor) (domain.AppConnection, error) {
 	if connectionID == "" {
 		return domain.AppConnection{}, fmt.Errorf("%s needs a connection_id: %w", provider, domain.ErrInvalid)
 	}
@@ -212,11 +214,11 @@ func (s *Service) usableConnection(ctx context.Context, credentials authclient.C
 	if connection.Status != "active" {
 		return domain.AppConnection{}, fmt.Errorf("the connection is %s: %w", connection.Status, domain.ErrConflict)
 	}
-	if connection.Broker == appsv1.BrokerOryxa && !appsReaders[provider] {
-		// Composio-backed extractors read through Composio's own proxy, which
-		// cannot see a connection Oryxa's own sign-in holds instead. Nothing
-		// could ever complete a pass on it until 2B mounts an extractor for
-		// this toolkit that reads through apps.
+	if connection.Broker == appsv1.BrokerOryxa && !readsThroughApps(extractor) {
+		// The extractor mounted for this toolkit reads through Composio's own
+		// proxy, which cannot see a connection Oryxa's own sign-in holds
+		// instead. Nothing could ever complete a pass on it until a reader is
+		// mounted for this toolkit, and the check below would refuse it then.
 		return domain.AppConnection{}, fmt.Errorf(
 			"%s reads through this connection once its own integration arrives: %w", provider, domain.ErrConflict)
 	}
