@@ -97,8 +97,12 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 				if role == "owner" {
 					return Plan{}, fmt.Errorf("people.members cannot invite an owner")
 				}
-				if member.Guest && !guestsEnabled(document, state) {
-					return Plan{}, fmt.Errorf("people.members guest invitations require people.guests: true")
+				domains := document.Metadata.Domains
+				if domains == nil && state.Organization != nil {
+					domains = state.Organization.Domains
+				}
+				if memberIsGuest(member.Email, domains) && (!member.Guest || !guestsEnabled(document, state)) {
+					return Plan{}, fmt.Errorf("people.members[%s]: email is outside the effective allowed domains; guest invitations require guest: true and people.guests: true", member.Email)
 				}
 				plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "invitation", Name: member.Email, Role: role})
 				plan.NeedsHuman = append(plan.NeedsHuman, HumanStep{Step: "people.join", Why: member.Email + " must accept the invitation"})

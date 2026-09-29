@@ -118,6 +118,24 @@ func TestGuestInvitationNeedsOrganizationGuestPolicy(t *testing.T) {
 	}
 }
 
+func TestInvitePreflightUsesLiveDomainsWhenManifestOmitsThem(t *testing.T) {
+	state := Snapshot{Organization: &Organization{ID: "org_1", Slug: "acme", Domains: []string{"acme.com"}}, ActorID: "u1", ActorRole: "owner"}
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"}, People: &spec.People{Members: []spec.Member{{Email: "valid@acme.com"}, {Email: "blocked@example.com"}}}, Teams: spec.Teams{Items: []spec.Team{{Name: "Never created"}}}}
+	if _, err := BuildPlan(document, state); err == nil || !strings.Contains(err.Error(), "blocked@example.com") {
+		t.Fatalf("live domain preflight missed invalid invite: %v", err)
+	}
+	document.Metadata.Domains = []string{}
+	if _, err := BuildPlan(document, state); err != nil {
+		t.Fatalf("explicit clear domains rejected: %v", err)
+	}
+	document.Metadata.Domains = nil
+	document.People.Members[1].Guest = true
+	state.Organization.GuestsAllowed = true
+	if _, err := BuildPlan(document, state); err != nil {
+		t.Fatalf("allowed live guest rejected: %v", err)
+	}
+}
+
 func TestApplyTeamLeadPromotesExistingMember(t *testing.T) {
 	state := &fakeState{orgExists: true,
 		members:       []Member{{UserID: "u1", Email: "owner@acme.com", Role: "owner"}, {UserID: "u2", Email: "lead@acme.com", Role: "member"}},
