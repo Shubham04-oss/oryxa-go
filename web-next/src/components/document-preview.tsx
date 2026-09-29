@@ -217,37 +217,99 @@ function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
   )
 }
 
-function DocxPreview({ bytes }: { bytes: ArrayBuffer }) {
-  const host = useRef<HTMLDivElement>(null)
+/**
+ * What a Word document is drawn into: a page of its own, with nothing the
+ * document holds able to reach out of it. The sandbox on the frame that shows
+ * it gives it no scripts, popups or navigation of the app; this page adds that
+ * it may fetch nothing and load only what the document itself carries (its
+ * images and fonts, as blob or data URLs). The styles are the app's own
+ * surround for the pages: the dark ground, no shadow, no padding of the
+ * library's.
+ */
+const docxFrameDocument = `<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; font-src data: blob:; style-src 'unsafe-inline'">
+<style>
+html, body { margin: 0; background: #252525; }
+body { box-sizing: border-box; padding: 20px; }
+body .docx-wrapper { padding: 0; background: transparent; }
+body .docx-wrapper > section.docx { max-width: 100%; margin: 0 auto 16px; box-shadow: none; }
+</style></head><body></body></html>`
+
+// Where a link in a document may go: a web page, a mail address, or a place in
+// the document itself. Anything else (javascript:, data:, a relative path)
+// loses its address.
+const linkTarget = /^(?:https?:|mailto:|#)/i
+
+function neutralizeLinks(root: HTMLElement) {
+  for (const link of root.querySelectorAll("a[href], area[href]")) {
+    const href = link.getAttribute("href")?.trim() ?? ""
+    if (linkTarget.test(href)) {
+      link.setAttribute("href", href)
+      link.setAttribute("rel", "noopener noreferrer")
+      link.removeAttribute("target")
+    } else {
+      link.removeAttribute("href")
+    }
+    link.removeAttributeNS("http://www.w3.org/1999/xlink", "href")
+  }
+}
+
+function DocxPreview({ bytes, name }: { bytes: ArrayBuffer; name: string }) {
+  // The frame's body, once its document has loaded: what the Word document is
+  // drawn into, and all of the page it may touch.
+  const [body, setBody] = useState<HTMLElement | null>(null)
   const [error, setError] = useState("")
   const [ready, setReady] = useState(false)
   useEffect(() => {
-    const element = host.current
-    if (!element) return
+    if (!body) return
     let cancelled = false
-    element.replaceChildren()
+    const frameDocument = body.ownerDocument
+    body.replaceChildren()
     setError("")
     setReady(false)
+    // The frame may not open a page, so a link is opened from here, by the
+    // app, in a tab of its own; a place in the document stays in the frame.
+    const openLink = (event: MouseEvent) => {
+      const link = (event.target as Element | null)?.closest("a[href]")
+      const href = link?.getAttribute("href") ?? ""
+      if (!link || href.startsWith("#")) return
+      event.preventDefault()
+      if (/^mailto:/i.test(href)) window.location.href = href
+      else window.open(href, "_blank", "noopener,noreferrer")
+    }
+    frameDocument.addEventListener("click", openLink)
     void loadDocxPreview()
       .then(({ renderAsync }) =>
-        renderAsync(bytes, element, undefined, { renderAltChunks: false })
+        renderAsync(bytes, body, undefined, { renderAltChunks: false })
       )
       .then(() => {
-        if (!cancelled) setReady(true)
+        if (cancelled) return
+        neutralizeLinks(body)
+        setReady(true)
       })
       .catch(() => {
         if (!cancelled) setError("Could not render this document.")
       })
     return () => {
       cancelled = true
-      element.replaceChildren()
+      frameDocument.removeEventListener("click", openLink)
+      body.replaceChildren()
     }
-  }, [bytes])
+  }, [bytes, body])
   return (
     <div className="workspace-document-scroll workspace-document-word">
       {error && <p role="alert">{error}</p>}
       {!error && !ready && <p role="status">Rendering document…</p>}
-      <div ref={host} />
+      <iframe
+        className="workspace-document-frame"
+        title={name}
+        sandbox="allow-same-origin"
+        srcDoc={docxFrameDocument}
+        data-ready={ready}
+        onLoad={(event) =>
+          setBody(event.currentTarget.contentDocument?.body ?? null)
+        }
+      />
     </div>
   )
 }
@@ -448,7 +510,7 @@ export function DocumentPreview({
   if (error) return <p role="alert">{error}</p>
   if (!bytes) return <p role="status">Opening preview…</p>
   if (kind === "pdf") return <PdfPreview bytes={bytes} />
-  if (kind === "docx") return <DocxPreview bytes={bytes} />
+  if (kind === "docx") return <DocxPreview bytes={bytes} name={name} />
   if (kind === "pptx") return <PptxPreview bytes={bytes} />
   if (kind === "xlsx") return <SpreadsheetPreview bytes={bytes} />
   const text = new TextDecoder().decode(bytes)

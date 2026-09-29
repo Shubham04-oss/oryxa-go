@@ -103,9 +103,11 @@ not permission to copy every incidental value into a new component.
   viewer while the mounted chat remains on the left, even if the agent panel
   was never opened. Markdown uses the same rendering as chat, and PDF, DOCX,
   PPTX, XLSX, CSV, text and images use small in-app rendering libraries, with
-  only page or sheet navigation when needed. The viewer has no annotation or
-  office-editor chrome. A compact Edit button opens the full ONLYOFFICE editor,
-  and View returns to the simple viewer.
+  only page or sheet navigation when needed. A Word document is drawn in a
+  sandboxed frame of its own, so nothing it carries (styles, links, scripts)
+  can reach the app around it. The viewer has no annotation or office-editor
+  chrome. A compact Edit button opens the full ONLYOFFICE editor, and View
+  returns to the simple viewer.
   Edits save as new conversation-file versions. A missing editor preserves
   native PDF, image and text previews where available. Back returns to the
   overview within that panel. On a phone, the chat and
