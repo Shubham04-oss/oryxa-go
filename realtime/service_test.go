@@ -19,6 +19,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/postgres"
 )
@@ -27,12 +28,13 @@ import (
 // mounting builds realtime's store and outbox, and queries neither.
 func platform(values map[string]string, logs *bytes.Buffer) host.Platform {
 	return host.Platform{
-		EventAuth:    host.TestRegistry(),
-		Logger:       slog.New(slog.NewTextHandler(logs, nil)),
-		Database:     postgreskit.Detached(nil),
-		AWS:          aws.Config{Region: "ap-south-1", Credentials: aws.AnonymousCredentials{}},
-		EventBusName: "default",
-		Getenv:       func(name string) string { return values[name] },
+		WorkspacePolicy: policy.Noop{},
+		EventAuth:       host.TestRegistry(),
+		Logger:          slog.New(slog.NewTextHandler(logs, nil)),
+		Database:        postgreskit.Detached(nil),
+		AWS:             aws.Config{Region: "ap-south-1", Credentials: aws.AnonymousCredentials{}},
+		EventBusName:    "default",
+		Getenv:          func(name string) string { return values[name] },
 	}
 }
 
