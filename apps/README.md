@@ -519,8 +519,8 @@ have are 400.
 | `notice_settled` | a direct message | asker; `question`; `decision` (`approved_summary`, `approved_access`, `denied`, `answered_by_other`, `expired`, `withdrawn`); `decided_by_user_id` or `_name`; `decided_at` | The same asker and question, no buttons, and "Approved by … at …". For `chat.update` |
 | `ask_ack` | a thread or one person in it | `owners` `[{user_id\|name}]` (1–5); `open_url` (a page of the web app, or nothing) | "Asked Raya and Maya · Open in Oryxa" |
 | `answer` | a thread or a direct message | `text`; `owner_name`; `mode` (`summary`, `access`, `lease`, `bypass`) | The text, and "From Raya's agent · approved by Raya (AI summary only)". Names the owner and never mentions them |
-| `status` | a thread, one person in it, or a direct message | `state` (`waiting`, `working`, `held`, `denied`, `expired`, `answered_elsewhere`); `owner_name` | One content-free line, such as "The answer is held for Raya's review." |
-| `refusal` | a thread or one person in it | `reason` (`not_member`, `owner_not_member`, `group_dm`, `external_channel`, `no_owner`, `too_many_asks`; another is a plain no); `organization_name`; `user_id` or `name` | Fixed wording, never the question |
+| `status` | a thread, one person in it, or a direct message | `state` (`waiting`, `working`, `held`, `denied`, `expired`, `failed`, `answered_elsewhere`); `owner_name` | One content-free line, such as "The answer is held for Raya's review." |
+| `refusal` | a thread or one person in it | `reason` (`not_member`, `owner_not_member`, `group_dm`, `external_channel`, `no_owner`, `too_many_asks`, `screen_failed`, `not_work`, `no_grant`, `owner_department`; `injection`, `implausible` and any other are a plain no); `organization_name`; `user_id` or `name` | Fixed wording, never the question |
 | `private_note` | a thread or one person in it | none | "Answered privately." |
 | `bypass_notice` | a direct message | asker; `question`; `reason` (`priority_channel`, `org_chart`); `channel_id` | Tells an owner at once that their agent answered without asking |
 
