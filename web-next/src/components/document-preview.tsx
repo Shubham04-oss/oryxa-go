@@ -101,6 +101,51 @@ function PageNavigation({
   )
 }
 
+/**
+ * The most of a file the viewer reads into memory to decode. A larger one
+ * would freeze the tab while it was read and drawn, so the viewer says so and
+ * leaves the file to a download.
+ */
+export const MAX_PREVIEW_BYTES = 25 * 1024 * 1024
+const tooLargeMessage = `This file is over ${MAX_PREVIEW_BYTES / (1024 * 1024)} MB, too large to preview here. Download it to open it.`
+
+class PreviewTooLarge extends Error {}
+
+/** The response's body, unless it runs past the cap: it is not read further than that. */
+async function readCapped(response: Response): Promise<ArrayBuffer> {
+  // A server that says how big the file is saves reading any of it.
+  if (Number(response.headers.get("content-length")) > MAX_PREVIEW_BYTES) {
+    void response.body?.cancel()
+    throw new PreviewTooLarge()
+  }
+  if (!response.body) {
+    const bytes = await response.arrayBuffer()
+    if (bytes.byteLength > MAX_PREVIEW_BYTES) throw new PreviewTooLarge()
+    return bytes
+  }
+  // One that does not, or is wrong about it, is stopped at the cap.
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > MAX_PREVIEW_BYTES) {
+      void reader.cancel()
+      throw new PreviewTooLarge()
+    }
+    chunks.push(value)
+  }
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return bytes.buffer
+}
+
 function useFileBytes(url: string, enabled: boolean) {
   const [result, setResult] = useState<{ bytes?: ArrayBuffer; error?: string }>(
     {}
@@ -113,12 +158,17 @@ function useFileBytes(url: string, enabled: boolean) {
       .then(async (response) => {
         if (!response.ok)
           throw new Error(`File request failed: ${response.status}`)
-        const bytes = await response.arrayBuffer()
+        const bytes = await readCapped(response)
         if (!controller.signal.aborted) setResult({ bytes })
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!controller.signal.aborted)
-          setResult({ error: "Could not load this preview." })
+          setResult({
+            error:
+              error instanceof PreviewTooLarge
+                ? tooLargeMessage
+                : "Could not load this preview.",
+          })
       })
     return () => controller.abort()
   }, [url, enabled])

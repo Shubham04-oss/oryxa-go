@@ -8,7 +8,11 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react"
-import { DocumentPreview, previewKind } from "./document-preview"
+import {
+  DocumentPreview,
+  MAX_PREVIEW_BYTES,
+  previewKind,
+} from "./document-preview"
 
 const renderAsync = vi.hoisted(() => vi.fn())
 vi.mock("docx-preview", () => ({ renderAsync }))
@@ -122,6 +126,71 @@ describe("a Markdown file", () => {
     )
     await screen.findByText(/Hello/)
     expect(view.container.querySelector("img, script")).toBeNull()
+  })
+})
+
+describe("a file too large to preview", () => {
+  const tooLarge = /over 25 MB.*too large to preview.*download/i
+
+  it("says so from its declared size, without reading it", async () => {
+    const response = new Response("tiny", {
+      headers: { "content-length": String(MAX_PREVIEW_BYTES + 1) },
+    })
+    const cancel = vi.spyOn(response.body!, "cancel")
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response)
+    )
+    render(
+      <DocumentPreview url="/big.txt" name="big.txt" contentType="text/plain" />
+    )
+    expect((await screen.findByRole("alert")).textContent).toMatch(tooLarge)
+    expect(cancel).toHaveBeenCalled()
+  })
+
+  it("is stopped at the cap when the size is not declared, not read to the end", async () => {
+    const chunk = new Uint8Array(1024 * 1024)
+    let pulled = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1
+        if (pulled > 60) controller.close()
+        else controller.enqueue(chunk)
+      },
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body))
+    )
+    render(
+      <DocumentPreview url="/big.txt" name="big.txt" contentType="text/plain" />
+    )
+    expect((await screen.findByRole("alert")).textContent).toMatch(tooLarge)
+    // The 25 MB the cap allows and a few chunks the stream had queued, not
+    // the 60 it holds.
+    expect(pulled).toBeGreaterThan(25)
+    expect(pulled).toBeLessThan(40)
+  })
+
+  it("previews a file exactly at the cap", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("all of it", {
+            headers: { "content-length": String(MAX_PREVIEW_BYTES) },
+          })
+      )
+    )
+    render(
+      <DocumentPreview
+        url="/edge.txt"
+        name="edge.txt"
+        contentType="text/plain"
+      />
+    )
+    expect(await screen.findByText("all of it")).toBeTruthy()
+    expect(screen.queryByRole("alert")).toBeNull()
   })
 })
 
