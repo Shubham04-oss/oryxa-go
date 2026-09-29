@@ -318,6 +318,7 @@ type fakeJev struct {
 	mu      sync.Mutex
 	states  []string
 	answers func(state string) map[string]float64
+	down    bool
 }
 
 func newFakeJev(t testing.TB) *fakeJev {
@@ -341,7 +342,19 @@ func cleanAsk(state string) map[string]float64 {
 	if strings.Contains(lower, "sing me a song") {
 		answers["work"] = 0.03
 	}
+	if strings.Contains(lower, "zoning permit") {
+		// The one owner named is plainly the wrong department for it.
+		answers["fit_0"] = 0.05
+	}
 	return answers
+}
+
+// setDown makes Jev answer every question with a server error, as it does when
+// it is down, and returns what brings it back.
+func (j *fakeJev) setDown(down bool) {
+	j.mu.Lock()
+	j.down = down
+	j.mu.Unlock()
 }
 
 func (j *fakeJev) serve(writer http.ResponseWriter, request *http.Request) {
@@ -358,6 +371,11 @@ func (j *fakeJev) serve(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	j.mu.Lock()
+	if j.down {
+		j.mu.Unlock()
+		http.Error(writer, "Jev is down", http.StatusInternalServerError)
+		return
+	}
 	j.states = append(j.states, string(in.State))
 	answers := j.answers(string(in.State))
 	j.mu.Unlock()
@@ -441,12 +459,12 @@ func (r *fakeRag) readers() []string {
 // ---- Teams: the organization directory ----
 
 // fakeTeams answers the directory as it stands in the test organization: the
-// members, each on no team, so no department is known and every owner is asked.
+// members, each on the team departments gives them, if any.
 type fakeTeams struct {
 	server *httptest.Server
 }
 
-func newFakeTeams(t testing.TB, organizationID string, members []person) *fakeTeams {
+func newFakeTeams(t testing.TB, organizationID string, members []person, departments map[string]string) *fakeTeams {
 	t.Helper()
 	teams := &fakeTeams{}
 	teams.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -456,9 +474,13 @@ func newFakeTeams(t testing.TB, organizationID string, members []person) *fakeTe
 		}
 		listed := make([]any, 0, len(members))
 		for _, member := range members {
+			teams := []any{}
+			if name := departments[member.UserID]; name != "" {
+				teams = append(teams, map[string]any{"id": "team_" + strings.ToLower(name), "name": name})
+			}
 			listed = append(listed, map[string]any{
 				"user_id": member.UserID, "email": member.Email, "display_name": member.Name, "org_role": member.Role,
-				"teams": []any{}, "agents": []any{},
+				"teams": teams, "agents": []any{},
 			})
 		}
 		writeJSON(writer, map[string]any{

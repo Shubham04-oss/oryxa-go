@@ -47,10 +47,15 @@ var (
 	raya = person{UserID: "user-raya", Email: "raya@acme.test", Name: "Raya", Role: "member", Token: "raya", SlackID: "U0RAYA"}
 	// root is an administrator, who installs the app.
 	root = person{UserID: "user-root", Email: "root@acme.test", Name: "Root", Role: "admin", Token: "root", SlackID: "U0ROOT"}
+	// nina is a member who has never given agents standing access to act for her.
+	nina = person{UserID: "user-nina", Email: "nina@acme.test", Name: "Nina", Role: "member", Token: "nina", SlackID: "U0NINA"}
 	// gus is a guest in the Slack workspace: not a member of Oryxa in any way.
 	gus = person{UserID: "user-gus", Email: "gus@acme.test", Name: "Gus", Role: "member", Token: "gus", SlackID: "U0GUS"}
 
-	members = []person{ada, raya, root}
+	members = []person{ada, raya, root, nina}
+
+	// departments are the teams the directory shows some of them on.
+	departments = map[string]string{ada.UserID: "Sales", raya.UserID: "Finance"}
 )
 
 func init() {
@@ -232,6 +237,13 @@ func build(t testing.TB, dir string) string {
 // bootStack starts everything: the stand-ins, the database, the process, and
 // installs the Slack app in the organization the way an administrator does.
 func bootStack(t *testing.T, databaseServerURL string) *stack {
+	return bootStackWith(t, databaseServerURL, true)
+}
+
+// bootStackWith is bootStack with agents' Slack consent loop on or off. Off is
+// what a deployment ships as until its Slack app's secrets are stored: apps
+// takes deliveries from Slack, and agents, which has no loop, hears of them.
+func bootStackWith(t *testing.T, databaseServerURL string, consent bool) *stack {
 	t.Helper()
 	binary := build(t, t.TempDir())
 	databaseURL := createDatabase(t, databaseServerURL)
@@ -252,9 +264,10 @@ func bootStack(t *testing.T, databaseServerURL string) *stack {
 	s.slack.AddUser(slackfake.User{ID: ada.SlackID, Name: "ada", RealName: "Ada", Email: ada.Email, Title: "Account executive"})
 	s.slack.AddUser(slackfake.User{ID: raya.SlackID, Name: "raya", RealName: "Raya", Email: raya.Email, Title: "Head of finance"})
 	s.slack.AddUser(slackfake.User{ID: root.SlackID, Name: "root", RealName: "Root", Email: root.Email})
+	s.slack.AddUser(slackfake.User{ID: nina.SlackID, Name: "Nina", RealName: "Nina", Email: nina.Email})
 	s.slack.AddUser(slackfake.User{ID: gus.SlackID, Name: "gus", RealName: "Gus", Email: gus.Email, Guest: true})
 	s.slack.AddChannel(slackfake.Channel{ID: channelGeneral, Name: "general"})
-	teams := newFakeTeams(t, organizationID, members)
+	teams := newFakeTeams(t, organizationID, members, departments)
 
 	// auth, as far as the two services ask it: who a token is, and the agent
 	// token an agent exchanges a member's standing grant for, which it proves
@@ -270,7 +283,7 @@ func bootStack(t *testing.T, databaseServerURL string) *stack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth := httptest.NewServer(authstub.NewHandler(authstub.Config{Services: verifier}))
+	auth := httptest.NewServer(authstub.NewHandler(authstub.Config{Services: verifier, Ungranted: map[string]bool{nina.UserID: true}}))
 	t.Cleanup(auth.Close)
 
 	port := freePort(t)
@@ -319,6 +332,12 @@ func bootStack(t *testing.T, databaseServerURL string) *stack {
 		"AGENTS_PRIMARY_SLACK_TICKET_KEY": ticketKeyHex,
 		"AGENTS_EVENTS_QUEUE_URL":         s.aws.QueueURL(),
 		"TYPESAFE_API_KEY":                jevKey, "TYPESAFE_BASE_URL": s.jev.URL(),
+	}
+	if !consent {
+		environment["AGENTS_PRIMARY_SLACK_CONSENT"] = "off"
+		for _, name := range []string{"AGENTS_PRIMARY_SLACK_TICKET_KEY", "AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID", "AGENTS_PRIMARY_CONSENT_GUARDRAIL_VERSION"} {
+			delete(environment, name)
+		}
 	}
 	command := exec.Command(binary)
 	command.Dir = t.TempDir()

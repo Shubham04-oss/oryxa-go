@@ -657,6 +657,52 @@ func TestSlackConsentLoop(t *testing.T) {
 		}
 	})
 
+	t.Run("each refusal of the screen and the department check says what it means, in apps' own words, to the asker alone", func(t *testing.T) {
+		s.quiet()
+		for _, test := range []struct {
+			name   string
+			asker  person
+			text   string
+			setup  func() (restore func())
+			expect string
+		}{
+			{"words that are not work", ada, "ask <@" + raya.SlackID + "> to sing me a song", nil, "I only pass on work questions."},
+			{"a screen that could not finish", ada, "ask <@" + raya.SlackID + "> for the Q3 numbers", func() func() {
+				s.jev.setDown(true)
+				return func() { s.jev.setDown(false) }
+			}, "I couldn't check that just now, so I didn't ask anyone. Try again in a moment."},
+			{"an asker who has not let agents act for them", nina, "ask <@" + raya.SlackID + "> for the Q3 numbers", nil,
+				"Give Oryxa's agent access to act for you in Settings, then ask again."},
+			{"an owner whose department is plainly the wrong one", ada, "ask <@" + raya.SlackID + "> about the zoning permit", nil,
+				"I didn't ask <@" + raya.SlackID + ">: this looks like a question for another team."},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				if test.setup != nil {
+					defer test.setup()()
+				}
+				before := s.count()
+				thread := s.mention(test.asker, test.text, "")
+				var refusal slackfake.Message
+				s.eventually("the refusal", 40*time.Second, func() bool {
+					for _, message := range s.fromIndex(before) {
+						if message.Channel == channelGeneral && message.ThreadTS == thread {
+							refusal = message
+							return true
+						}
+					}
+					return false
+				})
+				if !refusal.Ephemeral || refusal.User != test.asker.SlackID || !strings.Contains(wording(refusal), test.expect) {
+					t.Errorf("the refusal is %+v, want an ephemeral note to %s saying %q", refusal, test.asker.Name, test.expect)
+				}
+				s.quiet()
+				if got := s.count() - before; got != 1 {
+					t.Errorf("%d messages were posted, want the refusal alone: %+v", got, s.fromIndex(before))
+				}
+			})
+		}
+	})
+
 	t.Run("Slack delivering a mention twice, as it does when it is not answered in time, is one ask and one notice", func(t *testing.T) {
 		s.quiet()
 		before := s.count()
@@ -986,4 +1032,38 @@ func (s *stack) quiet() {
 func asSlice(value any) []any {
 	items, _ := value.([]any)
 	return items
+}
+
+// With the loop off, which is how a deployment ships until its Slack app's
+// secrets are stored, apps takes a mention and says so on the bus, and agents,
+// whose rule may already deliver it, acknowledges it and does nothing: nobody is
+// asked, nothing is said in Slack, and the queue is left empty, where a failed
+// event would sit until it moved to the dead-letter queue and rang its alarm.
+func TestTheSlackLoopOffDropsWhatItHears(t *testing.T) {
+	server := os.Getenv("SLACK_TEST_DATABASE_URL")
+	if server == "" {
+		t.Skip("SLACK_TEST_DATABASE_URL is not set")
+	}
+	s := bootStackWith(t, server, false)
+	before := s.count()
+	s.mention(ada, "ask <@"+raya.SlackID+"> for the Q3 numbers", "")
+	s.eventually("agents to take the delivery off its queue", 40*time.Second, func() bool {
+		return len(s.aws.published("apps.slack.message.received.v1")) == 1 && s.aws.queueDepth() == 0
+	})
+	s.quiet()
+	if got := s.count() - before; got != 0 {
+		t.Errorf("with the loop off, %d messages were posted: %+v", got, s.fromIndex(before))
+	}
+	if !strings.Contains(s.logs.String(), "the Slack consent loop is off; it is dropped") {
+		t.Error("agents never said it dropped the delivery")
+	}
+	_, listed := s.api(raya, http.MethodGet, "/v1/organizations/"+organizationID+"/agent-requests?box=inbox&origin=slack&limit=100", nil)
+	if got := len(asSlice(listed["requests"])); got != 0 {
+		t.Errorf("with the loop off, the owner has %d requests from Slack", got)
+	}
+	// Nothing the loop would have made exists either: no ask, in the ledger's own table.
+	var asks int
+	if err := s.database.QueryRow(context.Background(), "SELECT count(*) FROM agents_primary.interaction_asks").Scan(&asks); err != nil || asks != 0 {
+		t.Errorf("with the loop off there are %d asks (%v)", asks, err)
+	}
 }
