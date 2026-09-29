@@ -425,12 +425,23 @@ function callerIn(
   const answer = organization.answer as {
     membership?: { user_id?: unknown } | null
     agent?: unknown
+    cli?: unknown
   } | null
   if (answer?.agent === true) {
     return failure(
       403,
       "forbidden",
       "An agent cannot open a member's conversations."
+    )
+  }
+  // A token the setup CLI signed in with is the member's, but it is for
+  // configuring the workspace and nothing else: auth marks it (cli: true)
+  // and it opens none of a member's conversations here.
+  if (answer?.cli === true) {
+    return failure(
+      403,
+      "forbidden",
+      "A setup session cannot open a member's conversations."
     )
   }
   const userId = answer?.membership?.user_id
