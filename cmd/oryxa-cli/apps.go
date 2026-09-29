@@ -137,10 +137,19 @@ func pendingAppAccount(api, organization, connection string) string {
 	return sessionAccount(api + "/" + organization + "/" + connection)
 }
 func savePendingAppURL(api, organization, connection, target string) {
+	if !validAppRedirect(target) {
+		return
+	}
 	encoded, _ := json.Marshal(struct {
 		URL       string
 		ExpiresAt time.Time
 	}{target, time.Now().Add(30 * time.Minute)})
+	// Provider authorization URLs can be large. Do not ask an OS credential
+	// helper to store a value beyond its supported limit; the current command
+	// still returns the URL to the user for immediate authorization.
+	if len(encoded) > maxCredentialSize {
+		return
+	}
 	_ = sessionStore.Set(sessionService+".connections", pendingAppAccount(api, organization, connection), string(encoded))
 }
 func pendingAppURL(api, organization, connection string) string {
@@ -153,7 +162,7 @@ func pendingAppURL(api, organization, connection string) string {
 		URL       string
 		ExpiresAt time.Time
 	}
-	if json.Unmarshal([]byte(encoded), &pending) != nil || time.Now().After(pending.ExpiresAt) || !validAppRedirect(pending.URL) {
+	if len(encoded) > maxCredentialSize || json.Unmarshal([]byte(encoded), &pending) != nil || time.Now().After(pending.ExpiresAt) || !validAppRedirect(pending.URL) {
 		_ = sessionStore.Delete(sessionService+".connections", account)
 		return ""
 	}

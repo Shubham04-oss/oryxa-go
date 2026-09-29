@@ -170,3 +170,23 @@ func TestPendingAppConnectionIsResumableNeedsHuman(t *testing.T) {
 		t.Fatalf("pending connection: exit%d %s %s", code, stdout.String(), stderr.String())
 	}
 }
+
+func TestPendingAppAuthorizationURLRespectsSecureStoreItemLimit(t *testing.T) {
+	store := testSessionStore(t)
+	api, org, connection := "https://api.example.com", "org", "connection"
+	oversized := "https://provider.example/authorize?state=" + strings.Repeat("x", maxCredentialSize)
+	savePendingAppURL(api, org, connection, oversized)
+	if len(store.values) != 0 {
+		t.Fatal("oversized authorization URL reached the OS credential helper")
+	}
+	account := sessionService + ".connections" + pendingAppAccount(api, org, connection)
+	store.values[account] = strings.Repeat("x", maxCredentialSize+1)
+	if got := pendingAppURL(api, org, connection); got != "" || len(store.values) != 0 {
+		t.Fatal("oversized stored authorization URL was reused")
+	}
+	valid := "https://provider.example/authorize?state=short"
+	savePendingAppURL(api, org, connection, valid)
+	if got := pendingAppURL(api, org, connection); got != valid {
+		t.Fatalf("bounded authorization URL was not resumable: %q", got)
+	}
+}

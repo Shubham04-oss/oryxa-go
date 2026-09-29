@@ -17,6 +17,10 @@ import (
 
 const sessionService = "in.oryxa.cli.sessions.v1"
 
+// Leave room for OS-store encoding and command overhead. In particular,
+// macOS keyring writes encode secrets into security's bounded stdin command.
+const maxCredentialSize = 2400
+
 type credentialStore interface {
 	Get(service, account string) (string, error)
 	Set(service, account, value string) error
@@ -121,7 +125,7 @@ func saveSession(api string, session cliSession, getenv func(string) string) err
 		return err
 	}
 	// This also stays below the smallest supported credential-store item limit.
-	if len(encoded) > 2400 {
+	if len(encoded) > maxCredentialSize {
 		return fmt.Errorf("CLI session exceeds secure storage limit; retained in memory only")
 	}
 	if err := sessionStore.Set(sessionService, account, string(encoded)); err != nil {
