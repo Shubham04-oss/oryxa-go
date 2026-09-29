@@ -535,9 +535,11 @@ account:
   `agents/primary/infra/artifacts`) put their own lifecycle rule alone back on
   every run of `provision-app.sh`, which drops that one until the next
   `tofu apply`. They need to write it too.
-- **The auth key kept safe.** `aws_kms_key.auth` envelope-encrypts every agent
-  grant with the minimum deletion window of 7 days and no `prevent_destroy`;
-  the services' signing keys likewise.
+- **The auth key kept safe.** Written and not applied. `aws_kms_key.auth`
+  envelope-encrypts every agent grant, and had the minimum deletion window of
+  7 days and no `prevent_destroy`, as the services' signing keys did. Every
+  key in `keys.tf` (auth's, the three signing keys, and the apps sign-in key,
+  which already had both) now has a 30-day window and `prevent_destroy`.
 - **No single point of failure.** One Fargate task and a single-AZ
   `db.t4g.small` (backed up for 7 days, deletion-protected) carry everything;
   deploy/README.md's "At launch" names a second task and Aurora or Multi-AZ.
