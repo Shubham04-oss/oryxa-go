@@ -43,6 +43,7 @@ import {
   capitalized,
   cardState,
   delegationWords,
+  guardNote,
   isSideMessage,
   isSideNews,
   sideNews,
@@ -544,8 +545,11 @@ function AgentsHere({
 
 /**
  * An agent's message: its avatar, name and whose it is, its Markdown (a
- * working line while it has no words yet), what it waits on, and, for a
- * request's result, the quiet line that says for whom and approved by whom.
+ * working line while it has no words yet: the other person's copy of an
+ * answer is only that until the answer guard has checked it), what it waits
+ * on, and, for its owner alone, the quiet line that says what the guard hid
+ * from the other person in it and, for a request's result, the quiet line that
+ * says for whom and approved by whom.
  */
 function AgentMessage({
   item,
@@ -560,6 +564,9 @@ function AgentMessage({
 }) {
   const role = agentRole(item.agentId, item.ownerId, agents, reader)
   const mine = item.ownerId === reader.viewerId
+  // What the guard hid is the owner's to know: the other person is never
+  // told, even were their page handed it.
+  const hidden = mine && item.guard ? guardNote(item.guard) : undefined
   return (
     <article
       className="workspace-side-agent"
@@ -599,6 +606,7 @@ function AgentMessage({
             {item.error || `${item.agentName} couldn't answer.`}
           </p>
         )}
+        {hidden && <p className="workspace-side-via">{hidden}</p>}
         {item.via && (
           <p className="workspace-side-via">{viaLine(item.via, reader)}</p>
         )}
