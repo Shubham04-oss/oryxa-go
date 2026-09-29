@@ -1,4 +1,4 @@
-# PostgreSQL 17 on the smallest RDS instance, until launch moves it to Aurora
+# PostgreSQL 17 on a small RDS instance, until launch moves it to Aurora
 # Serverless v2. The services need vector, ltree and pg_trgm, which teams'
 # migrations create and RDS PostgreSQL ships.
 
