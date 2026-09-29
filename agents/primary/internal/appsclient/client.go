@@ -421,10 +421,13 @@ type profileView struct {
 	Email          string `json:"email"`
 	EmailConfirmed bool   `json:"email_confirmed"`
 	Name           string `json:"name"`
-	IsGuest        bool   `json:"is_guest"`
-	IsBot          bool   `json:"is_bot"`
-	IsDeleted      bool   `json:"is_deleted"`
-	IsStranger     bool   `json:"is_stranger"`
+	// Title is the job title the person set in Slack. apps leaves it out for
+	// one who set none.
+	Title      string `json:"title"`
+	IsGuest    bool   `json:"is_guest"`
+	IsBot      bool   `json:"is_bot"`
+	IsDeleted  bool   `json:"is_deleted"`
+	IsStranger bool   `json:"is_stranger"`
 }
 
 // Profiles reads the profiles of some users of the organization's workspace,
@@ -452,7 +455,7 @@ func (c *Client) Profiles(ctx context.Context, organizationID, _ string, userIDs
 		for _, profile := range view.Profiles {
 			profiles = append(profiles, slackrouter.Profile{
 				UserID: profile.UserID, TeamID: profile.TeamID, Email: profile.Email, EmailConfirmed: profile.EmailConfirmed,
-				Name: profile.Name, Guest: profile.IsGuest, Bot: profile.IsBot, Deleted: profile.IsDeleted, Stranger: profile.IsStranger,
+				Name: profile.Name, Title: profile.Title, Guest: profile.IsGuest, Bot: profile.IsBot, Deleted: profile.IsDeleted, Stranger: profile.IsStranger,
 			})
 		}
 	}
