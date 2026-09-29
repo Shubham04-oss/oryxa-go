@@ -461,7 +461,9 @@ func renderAskAck(r renderer, raw json.RawMessage) (Rendered, error) {
 		if err != nil {
 			return Rendered{}, err
 		}
-		line += " · <" + link + "|Open in Oryxa>"
+		// A link's own ampersands are escaped, as Slack asks of all its markup:
+		// the web app's links carry several parameters.
+		line += " · <" + strings.ReplaceAll(link, "&", "&amp;") + "|Open in Oryxa>"
 	}
 	return Rendered{Text: plain(line), Blocks: []any{section(line)}}, nil
 }
@@ -584,6 +586,10 @@ const (
 	StatusDenied            = "denied"
 	StatusExpired           = "expired"
 	StatusAnsweredElsewhere = "answered_elsewhere"
+	// StatusFailed is a request that ended without an answer for a reason of
+	// its own, not for want of time: the work could not be done, or Oryxa closed
+	// it. It says no more than that, and never why.
+	StatusFailed = "failed"
 )
 
 type statusParams struct {
@@ -616,6 +622,8 @@ func renderStatus(r renderer, raw json.RawMessage) (Rendered, error) {
 		line = "The request expired without an answer."
 	case StatusAnsweredElsewhere:
 		line = "Someone else answered."
+	case StatusFailed:
+		line = "The request could not be completed."
 	default:
 		return Rendered{}, invalid("state %q is not one a status says", truncate(p.State, 32))
 	}
@@ -631,6 +639,16 @@ const (
 	RefusalExternal       = "external_channel"
 	RefusalNoOwner        = "no_owner"
 	RefusalTooManyAsks    = "too_many_asks"
+	// What the screen of a question's words, and the department check, refuse
+	// for. None quotes the words. An injection and an implausible question get
+	// the plain no on purpose: saying which of the screen's questions was
+	// tripped would tell a person how to rephrase around it.
+	RefusalScreenFailed    = "screen_failed"
+	RefusalNotWork         = "not_work"
+	RefusalInjection       = "injection"
+	RefusalImplausible     = "implausible"
+	RefusalNoGrant         = "no_grant"
+	RefusalOwnerDepartment = "owner_department"
 )
 
 type refusalParams struct {
@@ -671,6 +689,20 @@ func renderRefusal(r renderer, raw json.RawMessage) (Rendered, error) {
 		line = "Tell me who to ask: mention the person who would know, like `@Oryxa ask @raya about the launch date`."
 	case RefusalTooManyAsks:
 		line = "You have too many open questions. Wait for some to be answered."
+	case RefusalScreenFailed:
+		line = "I couldn't check that just now, so I didn't ask anyone. Try again in a moment."
+	case RefusalNotWork:
+		line = "I only pass on work questions."
+	case RefusalNoGrant:
+		line = "Give Oryxa's agent access to act for you in Settings, then ask again."
+	case RefusalOwnerDepartment:
+		who, err := r.mention(person{UserID: p.UserID, Name: p.Name}, "They")
+		if err != nil {
+			return Rendered{}, err
+		}
+		line = "I didn't ask " + who + ": this looks like a question for another team."
+	case RefusalInjection, RefusalImplausible:
+		line = "I can't help with that here."
 	default:
 		line = "I can't help with that here."
 	}
