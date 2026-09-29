@@ -12,7 +12,7 @@ func TestVersionNumberTracksOnlyRequestedWorkspace(t *testing.T) {
 	if _, err := storage.VersionNumber(ctx, org); !errors.Is(err, ErrVersionNotFound) {
 		t.Fatalf("missing workspace version: %v", err)
 	}
-	for i, preset := range []string{"solo", "team"} {
+	for i, preset := range []string{"startup", "team"} {
 		document := []byte("apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\npreset: " + preset + "\n")
 		if _, err := storage.Save(ctx, org, "api-actor", document, nil); err != nil {
 			t.Fatal(err)
