@@ -52,6 +52,9 @@ type fakeThreads struct {
 	createOrigins []string
 	listOrigins   []string
 	edited        []byte
+	// fileReads and versionReads count the reads of a file's bytes and of
+	// only its version, which the document editor's routes tell apart.
+	fileReads, versionReads int
 }
 
 // resolvedFakeOrigin trims origin and defaults blank to chat, the way
@@ -127,6 +130,17 @@ func (service *fakeThreads) StartRun(_ context.Context, member threads.Member, _
 }
 
 func (service *fakeThreads) Artifact(_ context.Context, member threads.Member, threadID, name string, version int64) (threads.File, error) {
+	service.fileReads++
+	return service.lookup(member, threadID, name, version)
+}
+
+func (service *fakeThreads) ArtifactVersion(_ context.Context, member threads.Member, threadID, name string) (int64, error) {
+	service.versionReads++
+	file, err := service.lookup(member, threadID, name, 0)
+	return file.Version, err
+}
+
+func (service *fakeThreads) lookup(member threads.Member, threadID, name string, version int64) (threads.File, error) {
 	service.members = append(service.members, member)
 	switch {
 	case threadID != "thread_1":

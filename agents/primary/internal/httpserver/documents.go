@@ -36,6 +36,15 @@ func (config DocumentsConfig) ready() bool {
 	return config.PublicURL != "" && config.InternalURL != "" && config.APIURL != "" && len(config.JWTSecret) >= 32
 }
 
+const (
+	// Docs fetches the file once, when it opens a version; the tickets in an
+	// editing session's URLs outlive that only as long as the session may.
+	sourceTicketLifetime = time.Hour
+	// The longest an editing session can go on saving, and so the longest the
+	// callback ticket, and the editor configuration that carries it, live.
+	editingSessionLifetime = 24 * time.Hour
+)
+
 type documentTicket struct {
 	Purpose      string `json:"purpose"`
 	Organization string `json:"organization"`
@@ -106,27 +115,32 @@ func (server *Server) documentEditor(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusUnsupportedMediaType, "unsupported_document", "This file type cannot be edited here.")
 		return
 	}
-	file, err := server.threads.Artifact(request.Context(), member, request.PathValue("threadID"), name, 0)
-	if err != nil {
-		server.handleError(writer, request, err)
-		return
-	}
+	// Nothing is read for a deployment that has no editor to hand it to.
 	if !server.documents.ready() {
 		writeError(writer, http.StatusServiceUnavailable, "document_editor_unavailable", "Document editing is not configured.")
 		return
 	}
-	if file.Version < 1 {
+	// The editor opens the latest version, and only its number is needed to
+	// say which: the file itself can be tens of megabytes, and Docs fetches it
+	// on its own, through a ticket.
+	version, err := server.threads.ArtifactVersion(request.Context(), member, request.PathValue("threadID"), name)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	if version < 1 {
 		writeError(writer, http.StatusInternalServerError, "document_version_missing", "Could not identify this file version.")
 		return
 	}
-	key := documentKey(member.OrganizationID, member.UserID, request.PathValue("threadID"), name, file.Version)
+	key := documentKey(member.OrganizationID, member.UserID, request.PathValue("threadID"), name, version)
 	baseTicket := documentTicket{
 		Organization: member.OrganizationID, User: member.UserID, Thread: request.PathValue("threadID"),
-		Name: name, Version: file.Version, Key: key,
+		Name: name, Version: version, Key: key,
 	}
+	now := time.Now()
 	sourceTicket := baseTicket
 	sourceTicket.Purpose = "source"
-	sourceTicket.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Hour))
+	sourceTicket.ExpiresAt = jwt.NewNumericDate(now.Add(sourceTicketLifetime))
 	signedSource, err := server.signDocumentTicket(sourceTicket)
 	if err != nil {
 		server.handleError(writer, request, err)
@@ -134,7 +148,7 @@ func (server *Server) documentEditor(writer http.ResponseWriter, request *http.R
 	}
 	callbackTicket := baseTicket
 	callbackTicket.Purpose = "callback"
-	callbackTicket.ExpiresAt = jwt.NewNumericDate(time.Now().Add(24 * time.Hour))
+	callbackTicket.ExpiresAt = jwt.NewNumericDate(now.Add(editingSessionLifetime))
 	signedCallback, err := server.signDocumentTicket(callbackTicket)
 	if err != nil {
 		server.handleError(writer, request, err)
@@ -157,7 +171,13 @@ func (server *Server) documentEditor(writer http.ResponseWriter, request *http.R
 			"customization": map[string]any{"autosave": true, "forcesave": false, "theme": "theme-dark"},
 		},
 	}
-	signature, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims(config)).SignedString([]byte(server.documents.JWTSecret))
+	// Docs reads its configuration from this token, so it expires with the
+	// session it opens: no longer than the callback ticket it carries.
+	claims := jwt.MapClaims{"exp": now.Add(editingSessionLifetime).Unix()}
+	for field, value := range config {
+		claims[field] = value
+	}
+	signature, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(server.documents.JWTSecret))
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -168,7 +188,7 @@ func (server *Server) documentEditor(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"server_url": strings.TrimRight(server.documents.PublicURL, "/"),
 		"config":     config,
-		"version":    file.Version,
+		"version":    version,
 	})
 }
 
@@ -212,9 +232,11 @@ func (server *Server) signedDocumentCallback(request *http.Request) (documentCal
 		return documentCallbackBody{}, false
 	}
 	claims := jwt.MapClaims{}
+	// Docs signs each callback with an expiry (five minutes by default), so a
+	// signature that never expires is not one of its own and could be replayed.
 	parsed, err := jwt.ParseWithClaims(strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer ")), claims, func(token *jwt.Token) (any, error) {
 		return []byte(server.documents.JWTSecret), nil
-	}, jwt.WithValidMethods([]string{"HS256"}))
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 	if err != nil || !parsed.Valid {
 		return documentCallbackBody{}, false
 	}

@@ -417,15 +417,16 @@ type File struct {
 	Version  int64
 }
 
-// Artifact reads a file one of the member's threads kept: the latest
-// version, or the one named. A "user:" file is the member's own, shared by
-// all their threads, and is read through any of them.
-func (service *Service) Artifact(ctx context.Context, member Member, threadID, name string, version int64) (File, error) {
+// resolveArtifact checks that the thread is the member's and that the file has
+// the version asked for, the latest when version is 0, reading only what the
+// store keeps about the file and not its bytes. It returns the request that
+// loads exactly that version, so bytes and version come from one revision.
+func (service *Service) resolveArtifact(ctx context.Context, member Member, threadID, name string, version int64) (*artifact.LoadRequest, int64, error) {
 	if service.artifacts == nil || strings.TrimSpace(name) == "" || version < 0 {
-		return File{}, ErrNotFound
+		return nil, 0, ErrNotFound
 	}
 	if _, err := service.thread(ctx, member, threadID); err != nil {
-		return File{}, err
+		return nil, 0, err
 	}
 	request := &artifact.LoadRequest{
 		AppName: service.appName, UserID: member.UserID, SessionID: threadID, FileName: name, Version: version,
@@ -433,22 +434,32 @@ func (service *Service) Artifact(ctx context.Context, member Member, threadID, n
 	// A name ADK would refuse, such as one with a path separator, names no
 	// file a run could have kept.
 	if request.Validate() != nil {
-		return File{}, ErrNotFound
+		return nil, 0, ErrNotFound
 	}
 	metadata, err := service.artifacts.GetArtifactVersion(ctx, &artifact.GetArtifactVersionRequest{
 		AppName: service.appName, UserID: member.UserID, SessionID: threadID, FileName: name, Version: version,
 	})
 	if errors.Is(err, fs.ErrNotExist) {
-		return File{}, ErrNotFound
+		return nil, 0, ErrNotFound
 	}
 	if err != nil {
-		return File{}, fmt.Errorf("read artifact version: %w", err)
+		return nil, 0, fmt.Errorf("read artifact version: %w", err)
 	}
 	if metadata == nil || metadata.ArtifactVersion == nil {
-		return File{}, ErrNotFound
+		return nil, 0, ErrNotFound
 	}
-	version = metadata.ArtifactVersion.Version
-	request.Version = version // keep bytes and version from the same revision
+	request.Version = metadata.ArtifactVersion.Version
+	return request, request.Version, nil
+}
+
+// Artifact reads a file one of the member's threads kept: the latest
+// version, or the one named. A "user:" file is the member's own, shared by
+// all their threads, and is read through any of them.
+func (service *Service) Artifact(ctx context.Context, member Member, threadID, name string, version int64) (File, error) {
+	request, version, err := service.resolveArtifact(ctx, member, threadID, name, version)
+	if err != nil {
+		return File{}, err
+	}
 	loaded, err := service.artifacts.Load(ctx, request)
 	if errors.Is(err, fs.ErrNotExist) {
 		return File{}, ErrNotFound
@@ -467,6 +478,14 @@ func (service *Service) Artifact(ctx context.Context, member Member, threadID, n
 	default:
 		return File{}, ErrNotFound
 	}
+}
+
+// ArtifactVersion is the version a file is at now, from what the store keeps
+// about it: the file itself, which can be tens of megabytes, is not read. The
+// document editor asks it to name the version it opens.
+func (service *Service) ArtifactVersion(ctx context.Context, member Member, threadID, name string) (int64, error) {
+	_, version, err := service.resolveArtifact(ctx, member, threadID, name, 0)
+	return version, err
 }
 
 // SaveArtifact stores an edited version only if the version the editor opened
