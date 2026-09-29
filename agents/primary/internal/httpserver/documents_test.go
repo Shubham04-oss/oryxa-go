@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,6 +56,11 @@ func signedTicket(t *testing.T, purpose string, expires *time.Time, method jwt.S
 		t.Fatal(err)
 	}
 	return signed
+}
+
+func goodTicket(t *testing.T, purpose string) string {
+	t.Helper()
+	return signedTicket(t, purpose, fromNow(time.Hour), jwt.SigningMethodHS256, []byte(ticketSecret), nil)
 }
 
 // docsSignature is what Docs sends as the Bearer of a save callback.
@@ -392,4 +398,111 @@ func TestTheSourceIsServedAsBytesThatCannotRunAsAPage(t *testing.T) {
 			t.Fatalf("%s headers = %v", name, header)
 		}
 	}
+}
+
+// An edit is saved as the file it edits: only the formats Docs returns as they
+// were are ever opened for one, and no callback saves any other.
+func TestOnlyFormatsThatRoundTripAreEditable(t *testing.T) {
+	for extension, editable := range map[string]bool{
+		"docx": true, "xlsx": true, "pptx": true,
+		"doc": false, "odt": false, "rtf": false, "txt": false, "md": false,
+		"xls": false, "xlsm": false, "ods": false, "csv": false,
+		"ppt": false, "ppsx": false, "odp": false, "pdf": false,
+	} {
+		if editableDocuments[extension] != editable {
+			t.Errorf("editable(%s) = %v, want %v", extension, editableDocuments[extension], editable)
+		}
+		if _, _, viewable := documentType("file." + extension); !viewable {
+			t.Errorf("%s is not viewable", extension)
+		}
+	}
+
+	files := &fakeThreads{}
+	server := New(member(), files, Config{Documents: documentsAt("https://docs.oryxa.test", "https://docs.oryxa.test")}, nil)
+	legacy := "/v1/organizations/org_1/threads/thread_1/artifacts/legacy.odt/editor"
+	if response := serve(server, http.MethodGet, legacy+"?mode=edit", "", bearer); response.Code != http.StatusUnsupportedMediaType || errorCode(t, response) != "unsupported_document" {
+		t.Fatalf("editing an ODT = %d %s, want 415", response.Code, response.Body.String())
+	}
+	if files.fileReads != 0 || files.versionReads != 0 {
+		t.Fatal("a file that cannot be edited was read before it was refused")
+	}
+	// Viewing one is allowed: it gets as far as looking for the file, which
+	// this fake does not have.
+	if response := serve(server, http.MethodGet, legacy+"?mode=view", "", bearer); response.Code != http.StatusNotFound || files.versionReads != 1 {
+		t.Fatalf("viewing an ODT = %d after %d version reads, want it to look for the file", response.Code, files.versionReads)
+	}
+
+	// Even a properly signed callback for one saves nothing.
+	rig := newDocumentRig(t)
+	odt := documentCallbackBody{Key: documentKey("org_1", "user_1", "thread_1", "legacy.odt", 1), Status: 2, FileType: "odt", URL: rig.internalURL + "/x"}
+	body, _ := json.Marshal(odt)
+	ticket := signedTicket(t, "callback", fromNow(time.Hour), jwt.SigningMethodHS256, []byte(ticketSecret), func(ticket *documentTicket) {
+		ticket.Name = "legacy.odt"
+		ticket.Key = documentKey(ticket.Organization, ticket.User, ticket.Thread, ticket.Name, ticket.Version)
+	})
+	response := serve(rig.server, http.MethodPost, "/v1/organizations/org_1/threads/thread_1/artifacts/legacy.odt/editor-callback?ticket="+url.QueryEscape(ticket), string(body),
+		map[string]string{"Authorization": "Bearer " + docsSignature(t, jwt.SigningMethodHS256, []byte(docsSecret), signedBy(odt))})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"error":1`) || len(rig.files.edited) != 0 || rig.internalHits.Load() != 0 {
+		t.Fatalf("a callback for an ODT = %d %s; saved %q", response.Code, response.Body.String(), rig.files.edited)
+	}
+}
+
+// documentRig is a server set up with a document server whose public and
+// internal addresses are two servers, and a third that is neither, each
+// counting how often it is asked for a file.
+type documentRig struct {
+	t                                     *testing.T
+	server                                *Server
+	files                                 *fakeThreads
+	publicHits, internalHits, foreignHits atomic.Int32
+	lastInternal                          atomic.Value
+	publicURL, internalURL, foreignURL    string
+	publicHost, internalHost, foreignHost string
+	ticket                                string
+}
+
+func newDocumentRig(t *testing.T) *documentRig {
+	t.Helper()
+	rig := &documentRig{t: t, files: &fakeThreads{}}
+	public := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		rig.publicHits.Add(1)
+		_, _ = writer.Write([]byte("from-public"))
+	}))
+	internal := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		rig.internalHits.Add(1)
+		rig.lastInternal.Store(request.URL.RequestURI())
+		_, _ = writer.Write([]byte("from-internal"))
+	}))
+	foreign := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		rig.foreignHits.Add(1)
+		_, _ = writer.Write([]byte("from-foreign"))
+	}))
+	t.Cleanup(public.Close)
+	t.Cleanup(internal.Close)
+	t.Cleanup(foreign.Close)
+	rig.publicURL, rig.internalURL, rig.foreignURL = public.URL, internal.URL, foreign.URL
+	rig.publicHost = strings.TrimPrefix(public.URL, "http://")
+	rig.internalHost = strings.TrimPrefix(internal.URL, "http://")
+	rig.foreignHost = strings.TrimPrefix(foreign.URL, "http://")
+	rig.server = New(member(), rig.files, Config{Documents: documentsAt(public.URL, internal.URL)}, nil)
+	rig.ticket = goodTicket(t, "callback")
+	return rig
+}
+
+// reset forgets what the servers were asked and what was saved.
+func (rig *documentRig) reset() {
+	rig.publicHits.Store(0)
+	rig.internalHits.Store(0)
+	rig.foreignHits.Store(0)
+	rig.lastInternal = atomic.Value{}
+	rig.files.edited = nil
+}
+
+// post sends Docs' callback for the edited draft, signed as Docs signs it.
+func (rig *documentRig) post(callback documentCallbackBody) (int, string) {
+	rig.t.Helper()
+	body, _ := json.Marshal(callback)
+	headers := map[string]string{"Authorization": "Bearer " + docsSignature(rig.t, jwt.SigningMethodHS256, []byte(docsSecret), signedBy(callback))}
+	response := serve(rig.server, http.MethodPost, draftPath+"/editor-callback?ticket="+url.QueryEscape(rig.ticket), string(body), headers)
+	return response.Code, strings.TrimSpace(response.Body.String())
 }

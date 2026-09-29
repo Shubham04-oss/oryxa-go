@@ -113,6 +113,12 @@ var documentTypes = map[string]string{
 	"pdf": "pdf",
 }
 
+// editableDocuments are the types an edit is saved back as: Docs returns the
+// same OOXML format it was given. Any other type it converts, or reworks, when
+// it saves, and a file cannot be written back as something it is not, so those
+// are for viewing and downloading.
+var editableDocuments = map[string]bool{"docx": true, "xlsx": true, "pptx": true}
+
 func documentType(name string) (string, string, bool) {
 	extension := strings.TrimPrefix(strings.ToLower(path.Ext(name)), ".")
 	kind, ok := documentTypes[extension]
@@ -163,6 +169,10 @@ func (server *Server) documentEditor(writer http.ResponseWriter, request *http.R
 	extension, kind, supported := documentType(name)
 	if !supported {
 		writeError(writer, http.StatusUnsupportedMediaType, "unsupported_document", "This file type cannot be edited here.")
+		return
+	}
+	if editing && !editableDocuments[extension] {
+		writeError(writer, http.StatusUnsupportedMediaType, "unsupported_document", "Only DOCX, XLSX and PPTX files can be edited here.")
 		return
 	}
 	// Nothing is read for a deployment that has no editor to hand it to.
@@ -327,9 +337,10 @@ func (server *Server) documentCallback(writer http.ResponseWriter, request *http
 	}
 	// Docs may return an OOXML conversion for a legacy source when it cannot
 	// assemble the original format. Never write those bytes under the source
-	// extension: the next open would misidentify the file.
+	// extension: the next open would misidentify the file. Only the types an
+	// edit round-trips are ever opened for one, so nothing else is saved.
 	extension, _, supported := documentType(ticket.Name)
-	if !supported || !strings.EqualFold(callback.FileType, extension) {
+	if !supported || !editableDocuments[extension] || !strings.EqualFold(callback.FileType, extension) {
 		server.logger.ErrorContext(request.Context(), "edited document changed format", "name", ticket.Name, "returned_type", callback.FileType)
 		writeJSON(writer, http.StatusOK, map[string]int{"error": 1})
 		return
