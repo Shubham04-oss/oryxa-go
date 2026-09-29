@@ -177,7 +177,7 @@ func (s *Service) RunTool(ctx context.Context, credentials authclient.Credential
 		}
 		return s.runOwnTool(ctx, caller, connection, route.own, key, arguments, input.OnlyReads)
 	}
-	return s.runComposioTool(ctx, caller, organizationID, connection, route.slug, key, arguments)
+	return s.runComposioTool(ctx, caller, organizationID, connection, route.slug, key, input.IdempotencyKey, input.OnlyReads, arguments)
 }
 
 // runComposioTool runs a tool the way it ran before Oryxa's own integrations
@@ -189,12 +189,25 @@ func (s *Service) runComposioTool(
 	caller domain.OrgMembership,
 	organizationID string,
 	connection domain.Connection,
-	slug, key string,
+	slug, key, idempotencyKey string,
+	onlyReads bool,
 	arguments json.RawMessage,
 ) (ToolRun, error) {
 	tool, err := s.composioTool(ctx, slug)
 	if err != nil {
 		return ToolRun{}, err
+	}
+	// The call is Composio's, so Composio's own mark says whether it only
+	// reads, whatever the registry says of a tool of the same name: a read in
+	// the registry that Composio runs as a write still waits for the member,
+	// and still needs its idempotency key.
+	if onlyReads && !tool.ReadOnly() {
+		return ToolRun{}, fmt.Errorf("%s changes things, so it runs only once the member confirms: %w", tool.Slug, domain.ErrNotReadOnly)
+	}
+	if !tool.ReadOnly() && key == "" {
+		if key, err = domain.CheckIdempotencyKey(idempotencyKey); err != nil {
+			return ToolRun{}, err
+		}
 	}
 	id, err := newID("apa")
 	if err != nil {

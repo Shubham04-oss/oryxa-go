@@ -634,6 +634,37 @@ func TestRunToolOnlyReadsRefusesAnOwnWrite(t *testing.T) {
 	}
 }
 
+// A member on a Composio connection runs Composio's tool, so Composio's own
+// mark decides whether it may run unconfirmed and whether it needs a key, even
+// when the registry carries a tool of the same name marked as a read.
+func TestRunToolOverComposioJudgesReadOnlyByComposiosOwnMark(t *testing.T) {
+	t.Parallel()
+	h, own := newToolHarness(t)
+	h.composioConnection("apc_composio", "user-1", "acme")
+	// The registry says ACME_LIST_ISSUES only reads; Composio's tool of that
+	// name carries no read-only hint, so Composio runs it as a write.
+	h.composio.tools["ACME_LIST_ISSUES"] = composio.Tool{Slug: "ACME_LIST_ISSUES", Toolkit: "acme", Name: "List issues"}
+	ctx := context.Background()
+	arguments := json.RawMessage(`{"owner":"acme"}`)
+
+	if _, err := h.service.RunTool(ctx, agentToken, "org_1", RunToolInput{
+		Tool: "ACME_LIST_ISSUES", Arguments: arguments, OnlyReads: true,
+	}); !errors.Is(err, domain.ErrNotReadOnly) {
+		t.Fatalf("an unconfirmed run = %v, want not read only", err)
+	}
+	if _, err := h.service.RunTool(ctx, memberToken, "org_1", RunToolInput{
+		Tool: "ACME_LIST_ISSUES", Arguments: arguments,
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("a write without an idempotency key = %v, want invalid", err)
+	}
+	h.composio.mu.Lock()
+	executed := len(h.composio.executed)
+	h.composio.mu.Unlock()
+	if executed != 0 || len(own.allCalls()) != 0 {
+		t.Fatalf("a refused run reached an app: composio %d, own %d", executed, len(own.allCalls()))
+	}
+}
+
 // An agent may run a member's own tools, as it may their Composio ones, and
 // the run is recorded as the agent's.
 func TestRunToolOverAnOryxaConnectionActsForTheMember(t *testing.T) {
