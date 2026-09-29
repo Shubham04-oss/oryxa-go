@@ -9,15 +9,18 @@
 //     and who is being asked, from Slack profiles and auth's members, asks the
 //     policy (consentpolicy) whether the ask is refused, needs the owner's
 //     consent or bypasses it, and files the ask with the consent core. It posts
-//     only what it must: a refusal, or an acknowledgement, each shown to the
-//     asker alone.
+//     only what it must, each shown to the asker alone: a refusal, who was
+//     left out, and who was asked.
 //   - A click on a button is handed, unchanged, to the consent core, with the
-//     member who clicked. The router never decides.
+//     member who clicked. The router never decides it.
 //   - Everything else is dropped.
 //
-// It decides nothing itself and holds nothing worth stealing: a job is ids, a
-// match between a Slack user and a member is kept for whoever must go from one
-// to the other, and what people wrote stays in apps, which purges it.
+// What the router never does is decide an ask: the owner does, or a bypass the
+// policy allows, and the consent core records it. It holds nothing worth
+// stealing. A job is ids. A match between a Slack user and a member is kept for
+// whoever must go from one to the other, and authorizes nothing: every message
+// and click is matched again from a fresh Slack profile and auth's members.
+// What people wrote stays in apps, which purges it.
 //
 // Where the router meets the rest of Oryxa it does so through the interfaces
 // in contracts.go, defined here and satisfied by adapters the service wires.
@@ -47,6 +50,11 @@ type Deps struct {
 	// the asker's acknowledgement. Without it the acknowledgement has no link.
 	// It must be a page on an origin apps has been told is the web app's.
 	OpenURL func(askID string) string
+	// SkipAck leaves the acknowledgement of an ask to the surfaces service,
+	// which can tell the asker who was asked from the ask's own event. Set it
+	// where that service does, so the asker is not told twice: the router's
+	// acknowledgement and that one are different messages.
+	SkipAck bool
 	Logger  *slog.Logger
 }
 

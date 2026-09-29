@@ -282,11 +282,12 @@ type AskOwner struct {
 	Person
 	// Bypass, when set, lets this owner's request go ahead without their
 	// consent, for the reason it says. The reason is the code recorded with the
-	// decision (decided_by {bypass, reason}); AnswerTo says where the answer
-	// goes, which whoever posts it derives from the reason as well: the thread
-	// for priority_channel, the asker's direct message for org_chart. Telling
-	// the owner and auditing it are the consent core's and the surfaces
-	// service's; the router only says it.
+	// decision (decided_by {bypass, reason}), and the only part of it the
+	// consent core keeps. AnswerTo says where the answer goes; whoever posts
+	// the answer has only the recorded reason, and gets the same place from
+	// consentpolicy.AnswerFor: the thread for priority_channel, the asker's
+	// direct message for anything else. Telling the owner and auditing it are
+	// the consent core's and the surfaces service's; the router only says it.
 	Bypass *consentpolicy.Bypass
 }
 

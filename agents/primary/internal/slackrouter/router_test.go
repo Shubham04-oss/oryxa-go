@@ -93,6 +93,24 @@ func TestTheAckHasNoLinkWithoutAWebAddress(t *testing.T) {
 	}
 }
 
+// TestTheAckIsLeftToTheSurfacesWhenTheyDoIt: with SkipAck the ask is made and
+// the asker is told nothing by the router, but still told who was left out.
+func TestTheAckIsLeftToTheSurfacesWhenTheyDoIt(t *testing.T) {
+	h := newHarness(t)
+	h.member("URAYA", "Raya")
+	h.slack.profiles["UMAYA"] = Profile{UserID: "UMAYA", TeamID: testTeam, Email: "maya@acme.com", EmailConfirmed: true, Name: "Maya"}
+	h.router.deps.SkipAck = true
+	job := h.mention(toBot("ask <@URAYA> or <@UMAYA>"))
+	h.mustRun(job)
+	if len(h.asks.created) != 1 {
+		t.Fatal("the ask was not made")
+	}
+	posts := h.slack.sent()
+	if len(posts) != 1 || posts[0].Template != TemplateRefusal || posts[0].Params.(RefusalParams).UserID != "UMAYA" {
+		t.Fatalf("posts = %+v, want only the word about Maya", posts)
+	}
+}
+
 func TestAMentionInAThreadIsAnsweredThere(t *testing.T) {
 	h := newHarness(t)
 	h.member("URAYA", "Raya")

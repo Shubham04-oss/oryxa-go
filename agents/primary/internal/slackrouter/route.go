@@ -150,7 +150,9 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	router.logger.InfoContext(ctx, "a mention became an ask",
 		"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "ask_id", ask.ID,
 		"owners", len(asked), "bypassed", countBypassed(asked), "skipped", len(skipped))
-	router.acknowledge(ctx, job, mention, ask, asked)
+	if !router.deps.SkipAck {
+		router.acknowledge(ctx, job, mention, ask, asked)
+	}
 	if len(skipped) > 0 {
 		// The ask is made and is the job's outcome: a person who could not be
 		// told who was left out has the ask all the same.

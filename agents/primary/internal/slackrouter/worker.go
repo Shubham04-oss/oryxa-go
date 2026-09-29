@@ -145,6 +145,9 @@ func (worker *Worker) Run(ctx context.Context) {
 	ticker := time.NewTicker(worker.config.Interval)
 	defer ticker.Stop()
 	defer worker.running.Wait()
+	// Jobs recorded before this start, or by a replica that has since gone,
+	// are due now, not after the first tick.
+	worker.Nudge()
 	for {
 		select {
 		case <-ctx.Done():
@@ -215,7 +218,10 @@ func (worker *Worker) process(ctx context.Context, job Job) {
 	case err == nil:
 		if err := worker.queue.Done(settle, job.InboundID); err != nil {
 			logger.ErrorContext(ctx, "finish Slack job", "error", err)
+			return
 		}
+		logger.InfoContext(ctx, "slack job done", "attempts", job.Attempts+1,
+			"age", worker.now().Sub(job.ReceivedAt).Round(time.Millisecond).String())
 	case IsPermanent(err):
 		logger.WarnContext(ctx, "dropped a Slack job that cannot be routed", "reason", err)
 		if err := worker.queue.Drop(settle, job.InboundID, err.Error()); err != nil {
