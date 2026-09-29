@@ -74,6 +74,13 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	if err != nil {
 		return domain.Connection{}, "", err
 	}
+	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
+		return domain.Connection{}, "", err
+	}
+	autoSubscribe, err := s.defaultAutoSubscribe(ctx, organizationID)
+	if err != nil {
+		return domain.Connection{}, "", err
+	}
 	if err := s.oneCurrentConnection(ctx, organizationID, caller.UserID, toolkit); err != nil {
 		return domain.Connection{}, "", err
 	}
@@ -109,7 +116,7 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	connection := domain.Connection{
 		ID: id, OrganizationID: organizationID, MemberID: caller.UserID, Toolkit: toolkit,
 		AuthConfigID: config.AuthConfigID, ComposioUserID: userID, ComposioAccountID: link.ConnectedAccountID,
-		Status: domain.ConnectionPending, ReturnTo: returnTo, AutoSubscribe: s.autoSubscribe,
+		Status: domain.ConnectionPending, ReturnTo: returnTo, AutoSubscribe: autoSubscribe,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if input.AutoSubscribe != nil {

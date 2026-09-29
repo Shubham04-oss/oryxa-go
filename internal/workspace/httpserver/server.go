@@ -238,7 +238,11 @@ func (server *Server) documentPlan(ctx context.Context, organizationID string, d
 	if err != nil {
 		return runtime.Plan{}, spec.Document{}, err
 	}
-	return runtime.CombinePlans(servicePlan, contextPlan), effective, nil
+	effective, policyPlan, err := runtime.MergePolicies(previous, effective, replaceContext)
+	if err != nil {
+		return runtime.Plan{}, spec.Document{}, err
+	}
+	return runtime.CombinePlans(servicePlan, contextPlan, policyPlan), effective, nil
 }
 
 func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Request, access actor, document spec.Document, approved runtime.Plan, replaceContext bool) {
@@ -338,6 +342,15 @@ func (server *Server) pull(writer http.ResponseWriter, request *http.Request) {
 		document.Teams.Prune = previous.Teams.Prune
 		document.Ownership = previous.Ownership
 		document.OrgChart = previous.OrgChart
+		document.Rules = previous.Rules
+		document.Safety = previous.Safety
+		document.Tools = previous.Tools
+		if previous.Agents != nil && previous.Agents.Personal != nil {
+			if document.Agents == nil {
+				document.Agents = &spec.Agents{}
+			}
+			document.Agents.Personal = previous.Agents.Personal
+		}
 	} else if !errors.Is(err, store.ErrVersionNotFound) {
 		writeError(writer, http.StatusInternalServerError, "workspace history could not be read")
 		return

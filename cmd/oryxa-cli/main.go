@@ -312,7 +312,11 @@ func workspacePlan(ctx context.Context, client *runtime.Client, document spec.Do
 		if err != nil {
 			return runtime.Plan{}, err
 		}
-		return runtime.CombinePlans(servicePlan, contextPlan), nil
+		_, policyPlan, err := runtime.MergePolicies(spec.Document{}, document, false)
+		if err != nil {
+			return runtime.Plan{}, err
+		}
+		return runtime.CombinePlans(servicePlan, contextPlan, policyPlan), nil
 	}
 	return client.WorkspacePlan(ctx, state.Organization.ID, document)
 }

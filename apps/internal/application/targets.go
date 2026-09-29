@@ -65,6 +65,9 @@ func (s *Service) ConnectionTargets(ctx context.Context, credentials authclient.
 	if connection.MemberID != caller.UserID {
 		return nil, domain.ErrNotFound
 	}
+	if err := s.allowToolkit(ctx, organizationID, connection.Toolkit); err != nil {
+		return nil, err
+	}
 	switch connection.Status {
 	case domain.ConnectionActive:
 	case domain.ConnectionExpired:

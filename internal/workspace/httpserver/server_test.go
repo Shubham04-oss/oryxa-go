@@ -364,3 +364,62 @@ func TestWorkspaceContextReadsAsMemberAndFiltersPendingPeople(t *testing.T) {
 		t.Fatalf("status=%d context=%+v", response.StatusCode, context)
 	}
 }
+
+func TestWorkspacePoliciesApplyAndRollbackAsVersions(t *testing.T) {
+	api := fakeOrganizationAPI(false)
+	defer api.Close()
+	repo := &memoryRepository{}
+	server, err := New(repo, api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := httptest.NewServer(server)
+	defer workspace.Close()
+	path := "/v1/organizations/org1/workspace"
+	first := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\nrules: {consent: {expireAfter: 6h}}\nsafety: {guard: {holdForReview: true}}\ntools: {offer: [github], autoSubscribe: false}\n"
+	response := workspaceRequest(t, workspace, http.MethodPost, path+":plan", "owner-token", map[string]string{"document": first})
+	var plan runtime.Plan
+	if err := json.NewDecoder(response.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(plan.Changes) != 4 {
+		t.Fatalf("policy plan status=%d plan=%+v", response.StatusCode, plan)
+	}
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": first, "approved_plan": plan})
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(repo.versions) != 1 {
+		t.Fatalf("policy apply status=%d versions=%d", response.StatusCode, len(repo.versions))
+	}
+	response = workspaceRequest(t, workspace, http.MethodGet, path, "owner-token", nil)
+	pulled, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !bytes.Contains(pulled, []byte("offer:")) || !bytes.Contains(pulled, []byte("autoSubscribe: false")) {
+		t.Fatalf("pull omitted tools policy: status=%d document=%s", response.StatusCode, pulled)
+	}
+	omitted := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\n"
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": omitted, "approved_plan": runtime.Plan{}})
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(repo.versions) != 1 {
+		t.Fatalf("policy omission status=%d versions=%d", response.StatusCode, len(repo.versions))
+	}
+	second := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\nrules: {consent: {expireAfter: 2h}}\nsafety: {guard: {holdForReview: false}}\ntools: {offer: [], autoSubscribe: true}\n"
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": second, "approved_plan": runtime.Plan{}})
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(repo.versions) != 2 {
+		t.Fatalf("policy update status=%d versions=%d", response.StatusCode, len(repo.versions))
+	}
+	response = workspaceRequest(t, workspace, http.MethodPost, path+":rollback-plan", "owner-token", map[string]any{"to": 1})
+	if err := json.NewDecoder(response.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(plan.Changes) != 4 {
+		t.Fatalf("policy rollback plan status=%d plan=%+v", response.StatusCode, plan)
+	}
+	response = workspaceRequest(t, workspace, http.MethodPost, path+":rollback", "owner-token", map[string]any{"to": 1, "approved_plan": plan})
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(repo.versions) != 3 || !bytes.Equal(repo.versions[0].Document, repo.versions[2].Document) {
+		t.Fatalf("policy rollback status=%d versions=%d", response.StatusCode, len(repo.versions))
+	}
+}

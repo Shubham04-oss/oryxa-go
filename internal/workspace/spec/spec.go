@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/mail"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -30,9 +31,9 @@ type Document struct {
 	OrgChart      *OrgChart     `yaml:"orgChart,omitempty" json:"orgChart,omitempty"`
 	Chat          *yaml.Node    `yaml:"chat,omitempty" json:"-"`
 	Agents        *Agents       `yaml:"agents,omitempty" json:"agents,omitempty"`
-	Rules         *yaml.Node    `yaml:"rules,omitempty" json:"-"`
-	Safety        *yaml.Node    `yaml:"safety,omitempty" json:"-"`
-	Tools         *yaml.Node    `yaml:"tools,omitempty" json:"-"`
+	Rules         *Rules        `yaml:"rules,omitempty" json:"rules,omitempty"`
+	Safety        *Safety       `yaml:"safety,omitempty" json:"safety,omitempty"`
+	Tools         *Tools        `yaml:"tools,omitempty" json:"tools,omitempty"`
 	Search        *yaml.Node    `yaml:"search,omitempty" json:"-"`
 	Notifications *yaml.Node    `yaml:"notifications,omitempty" json:"-"`
 	Data          *yaml.Node    `yaml:"data,omitempty" json:"-"`
@@ -49,6 +50,32 @@ type Metadata struct {
 type Organization struct {
 	Name     string  `yaml:"name,omitempty" json:"name,omitempty"`
 	Timezone *string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
+}
+
+// Rules and Safety contain only policies that the agent request ledger reads
+// from the applied workspace version. Unknown policy fields are rejected.
+type Rules struct {
+	Consent *ConsentRules `yaml:"consent,omitempty" json:"consent,omitempty"`
+}
+
+type ConsentRules struct {
+	ExpireAfter *string `yaml:"expireAfter,omitempty" json:"expireAfter,omitempty"`
+}
+
+type Safety struct {
+	Guard *GuardSafety `yaml:"guard,omitempty" json:"guard,omitempty"`
+}
+
+type GuardSafety struct {
+	HoldForReview *bool `yaml:"holdForReview,omitempty" json:"holdForReview,omitempty"`
+}
+
+// Tools controls which Composio toolkits members may connect and use.
+// A missing offer leaves every toolkit available; an empty offer allows none.
+type Tools struct {
+	Provider      string    `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Offer         *[]string `yaml:"offer,omitempty" json:"offer,omitempty"`
+	AutoSubscribe *bool     `yaml:"autoSubscribe,omitempty" json:"autoSubscribe,omitempty"`
 }
 
 type People struct {
@@ -181,6 +208,11 @@ func decodeKnownNode(node *yaml.Node, target any) error {
 // Other agent policy fields remain unsupported until they affect the runtime.
 type Agents struct {
 	Organization *OrganizationAgent `yaml:"organization,omitempty" json:"organization,omitempty"`
+	Personal     *PersonalAgent     `yaml:"personal,omitempty" json:"personal,omitempty"`
+}
+
+type PersonalAgent struct {
+	Proactive *string `yaml:"proactive,omitempty" json:"proactive,omitempty"`
 }
 
 type OrganizationAgent struct {
@@ -193,6 +225,7 @@ type OrganizationAgent struct {
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var domainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$`)
 var relationPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+var toolkitPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // Parse refuses unknown keys, aliases that hide settings, and multiple YAML
 // documents. Error messages name paths, never submitted values.
@@ -234,7 +267,7 @@ func rejectUnsupportedSections(root *yaml.Node) error {
 	for i := 0; i < len(root.Content[0].Content); i += 2 {
 		name := root.Content[0].Content[i].Value
 		switch name {
-		case "directory", "chat", "rules", "safety", "tools", "search", "notifications", "data", "security", "secrets":
+		case "directory", "chat", "search", "notifications", "data", "security", "secrets":
 			return fmt.Errorf("%s is not yet supported by the workspace applier", name)
 		}
 	}
@@ -273,8 +306,7 @@ func (document Document) Validate() error {
 		node *yaml.Node
 	}{
 		{"directory", document.Directory},
-		{"chat", document.Chat}, {"rules", document.Rules},
-		{"safety", document.Safety}, {"tools", document.Tools}, {"search", document.Search},
+		{"chat", document.Chat}, {"search", document.Search},
 		{"notifications", document.Notifications}, {"data", document.Data},
 		{"security", document.Security},
 		{"secrets", document.Secrets},
@@ -286,6 +318,26 @@ func (document Document) Validate() error {
 	if document.People != nil {
 		if document.People.Invite != "" && document.People.Invite != "email" && document.People.Invite != "quiet" {
 			return fmt.Errorf("people.invite must be email or quiet")
+		}
+	}
+	if document.Rules != nil && document.Rules.Consent != nil && document.Rules.Consent.ExpireAfter != nil {
+		duration, err := ParseDuration(*document.Rules.Consent.ExpireAfter)
+		if err != nil || duration < 5*time.Minute || duration > 7*24*time.Hour {
+			return fmt.Errorf("rules.consent.expireAfter must be between 5m and 7d")
+		}
+	}
+	if document.Tools != nil {
+		if document.Tools.Provider != "" && document.Tools.Provider != "composio" {
+			return fmt.Errorf("tools.provider must be composio")
+		}
+		if document.Tools.Offer != nil {
+			seen := map[string]bool{}
+			for _, toolkit := range *document.Tools.Offer {
+				if !toolkitPattern.MatchString(toolkit) || seen[toolkit] {
+					return fmt.Errorf("tools.offer must contain unique lowercase toolkit slugs")
+				}
+				seen[toolkit] = true
+			}
 		}
 	}
 	if document.Organization != nil && document.Organization.Timezone != nil {
@@ -306,6 +358,13 @@ func (document Document) Validate() error {
 		}
 		if agent.Instructions != nil && (strings.TrimSpace(*agent.Instructions) == "" || utf8.RuneCountInString(*agent.Instructions) > 20000) {
 			return fmt.Errorf("agents.organization.instructions must be between 1 and 20000 characters")
+		}
+	}
+	if document.Agents != nil && document.Agents.Personal != nil && document.Agents.Personal.Proactive != nil {
+		switch *document.Agents.Personal.Proactive {
+		case "on", "off":
+		default:
+			return fmt.Errorf("agents.personal.proactive must be on or off")
 		}
 	}
 	seenDomains := map[string]bool{}
@@ -376,6 +435,18 @@ func (document Document) Validate() error {
 		}
 	}
 	return document.validateContext()
+}
+
+// ParseDuration accepts Go durations and whole days for workspace policies.
+func ParseDuration(value string) (time.Duration, error) {
+	if strings.HasSuffix(value, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(value, "d"))
+		if err != nil || days < 0 || days > 36500 {
+			return 0, fmt.Errorf("invalid day duration")
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(value)
 }
 
 func (document Document) validateContext() error {

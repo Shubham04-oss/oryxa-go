@@ -1,7 +1,8 @@
 # Workspace CLI: first implementation
 
-This implements the organization, people, teams, ownership, org chart, and
-organization-agent slice of [the onboarding design](design/onboarding.md).
+This implements the organization, people, teams, ownership, org chart,
+organization-agent, tool offer, and selected operational policy settings from
+[the onboarding design](design/onboarding.md).
 Slack installation is a manual prerequisite. The remaining sections in the
 design still need runtime owners and are rejected before an apply makes any
 change.
@@ -86,18 +87,26 @@ The current file accepts these settings:
 | `ownership[]` | Give agents explicit owner hints for a topic, system, or channel; only joined members appear in the agent's read view |
 | `orgChart.relationships`, `.authority`, `.executives` | Supply explicit reporting and authority relationships for agents to query |
 | `ownership: {items: [...], prune: true}`, `orgChart.prune: true` | Remove omitted owner hints or chart facts after a reviewed removal plan |
+| `rules.consent.expireAfter` | Sets the default and maximum lifetime of cross-member requests (`5m` through `7d`) |
+| `safety.guard.holdForReview` | Holds every cross-member answer for the addressed member to review; `regulated` defaults this to `true` |
+| `agents.personal.proactive: on\|off` | Sets the organization default for app update wake-ups; a member's explicit preference takes precedence |
+| `tools.provider: composio` | Declares the existing Composio provider |
+| `tools.offer` | Allows only the listed toolkit slugs to connect or act in this organization; omitting it allows all, and `[]` allows none. Existing connections stay recorded but cannot run, read, subscribe, or deliver events while disallowed |
+| `tools.autoSubscribe` | Sets the default for new app connections; a member's per-connection choice takes precedence, and deployment-wide `APPS_AUTO_SUBSCRIBE=false` still disables automatic subscriptions |
 
 The parser refuses unknown keys, duplicate members or teams, unrecognized
 roles, and unsupported sections. Omitting a person or team never removes it
 unless its section sets `prune: true`. The normal compact `teams: [...]` form
 is still supported.
-Owner role transfers are not yet supported. `preset` is accepted in the file
-so the file shape matches the design; its consent, retention, and security
-defaults do not take effect yet. Organization timezone is stored but the
-scheduler does not yet read it. The agent service reads ownership and chart
-context when `WORKSPACE_URL` is set; the all-in-one host supplies that URL
-automatically. Directory sync, governance, safety, tool allowlists, external
-search, notifications, retention, security policy, and personal-agent defaults
-remain unimplemented. A local
+Owner role transfers are not yet supported. `preset` is accepted in the file;
+its safety hold-for-review default takes effect for `regulated`, while its
+other consent, retention, and security defaults do not. Organization timezone
+is stored but the scheduler does not yet read it. The agent and apps services
+read applied workspace policies when `WORKSPACE_URL` is set; the all-in-one
+host supplies that URL automatically. Split deployments must share the
+workspace PostgreSQL schema for these reads. Directory sync, the remaining
+governance and safety controls, external search, notifications, retention,
+security policy, other tool settings, and other personal-agent defaults remain
+unimplemented. A local
 `go test ./...` run exercises the code paths, but PostgreSQL migrations and a
 live deployment still need integration verification.

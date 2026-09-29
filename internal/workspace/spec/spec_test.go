@@ -43,7 +43,7 @@ func TestParseRejectsUnknownAndUnsupportedSettings(t *testing.T) {
 		{"unknown top level", example + "surprise: true\n", "surprise"},
 		{"unknown team mapping", strings.Replace(example, "name: Engineering", "name: Engineering, mystery: yes", 1), "mystery"},
 		{"unsupported section", example + "chat: {slack: {install: add_to_slack}}\n", "chat is not yet supported"},
-		{"unsupported agent policy", example + "agents: {personal: {style: concise}}\n", "personal"},
+		{"unsupported agent policy", example + "agents: {personal: {style: concise}}\n", "style"},
 		{"empty agent name", example + "agents: {organization: {displayName: ' '}}\n", "agents.organization.displayName"},
 		{"secret value", example + "secrets: {apiKey: plaintext}\n", "secrets is not yet supported"},
 		{"wrong domain", strings.Replace(example, "raya@acme.com", "raya@other.com", 1), "outside metadata.domains"},
@@ -98,6 +98,63 @@ func TestParseOrganizationAgentSettings(t *testing.T) {
 	}
 	if _, err := Parse(encoded); err != nil {
 		t.Fatalf("agent settings did not round trip: %v", err)
+	}
+}
+
+func TestParseOperationalConsentAndSafetyPolicy(t *testing.T) {
+	file := example + "rules: {consent: {expireAfter: 6h}}\nsafety: {guard: {holdForReview: true}}\nagents: {personal: {proactive: off}}\n"
+	document, err := Parse([]byte(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *document.Rules.Consent.ExpireAfter != "6h" || !*document.Safety.Guard.HoldForReview {
+		t.Fatalf("policy = %+v %+v", document.Rules, document.Safety)
+	}
+	if document.Agents == nil || document.Agents.Personal == nil || *document.Agents.Personal.Proactive != "off" {
+		t.Fatalf("personal default = %+v", document.Agents)
+	}
+	encoded, err := document.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(encoded); err != nil {
+		t.Fatalf("policy did not round trip: %v", err)
+	}
+	for _, invalid := range []string{
+		example + "rules: {consent: {expireAfter: 2m}}\n",
+		example + "rules: {consent: {expireAfter: 8d}}\n",
+		example + "safety: {guard: {unknown: true}}\n",
+		example + "agents: {personal: {proactive: digest}}\n",
+	} {
+		if _, err := Parse([]byte(invalid)); err == nil {
+			t.Fatalf("accepted policy %q", invalid)
+		}
+	}
+}
+
+func TestParseToolsPolicyDistinguishesOmittedAndEmptyOffer(t *testing.T) {
+	file := example + "tools: {provider: composio, offer: [], autoSubscribe: false}\n"
+	document, err := Parse([]byte(file))
+	if err != nil || document.Tools == nil || document.Tools.Offer == nil || len(*document.Tools.Offer) != 0 || document.Tools.AutoSubscribe == nil || *document.Tools.AutoSubscribe {
+		t.Fatalf("tools policy = %+v, %v", document.Tools, err)
+	}
+	encoded, err := document.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(encoded)
+	if err != nil || parsed.Tools == nil || parsed.Tools.Offer == nil || len(*parsed.Tools.Offer) != 0 {
+		t.Fatalf("round trip = %+v, %v", parsed.Tools, err)
+	}
+	for _, invalid := range []string{
+		example + "tools: {provider: other}\n",
+		example + "tools: {offer: [github, github]}\n",
+		example + "tools: {offer: [GitHub]}\n",
+		example + "tools: {personal: {github: true}}\n",
+	} {
+		if _, err := Parse([]byte(invalid)); err == nil {
+			t.Fatalf("accepted tools policy %q", invalid)
+		}
 	}
 }
 

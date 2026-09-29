@@ -48,6 +48,8 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
+	workspacestore "github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
 )
 
 // Name is how ORYXA_SERVICES selects agents primary.
@@ -181,6 +183,12 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 
 	registryStore := managedagents.NewStore(platform.Database)
 	interactionStore := agentinteractions.NewStore(platform.Database)
+	wakeupStore := wakeups.NewStore(platform.Database)
+	var workspacePolicy *policy.Loader
+	if settings.WorkspaceURL != "" {
+		workspacePolicy = policy.New(workspacestore.New(platform.Database))
+		wakeupStore = wakeups.NewStoreWithPolicy(platform.Database, workspacePolicy)
+	}
 	var organizationDirectory agents.Directory
 	var organizationContext agents.ContextDirectory
 	if settings.TeamsURL != "" {
@@ -225,6 +233,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		interactionConfig := agentinteractions.Config{
 			Repository: interactionStore, Directory: organizationDirectory, Teamspaces: teamspaceService, Tokens: memberTokens,
 			Logger: logger,
+		}
+		if settings.WorkspaceURL != "" {
+			interactionConfig.Policy = workspacePolicy
 		}
 		if typeSafe != nil {
 			interactionConfig.Jev = typeSafe.Ask
@@ -496,7 +507,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		TeamRooms:           teamRoomService,
 		Workflows:           workflowService,
 		OrganizationContext: organizationStore,
-		Preferences:         wakeups.NewStore(platform.Database),
+		Preferences:         wakeupStore,
 	}
 	// Same reasoning as assemblyOptions above: a nil *Service must leave the
 	// interface field unset, or server.interactions/.teamspaces/.rooms would
@@ -559,7 +570,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			"state_machine", settings.WorkflowStateMachineARN, "scheduler", workflowScheduler != nil)
 	}
 	if settings.EventsQueueURL != "" {
-		store := wakeups.NewStore(platform.Database)
+		store := wakeupStore
 		deliveryStore := interactiondelivery.NewStore(platform.Database)
 		deliveryCleaner := interactiondelivery.NewCleaner(deliveryStore, agentRegistry)
 		consumer, err := inbound.NewConsumer(store, deliveryStore, []inbound.Forgetter{

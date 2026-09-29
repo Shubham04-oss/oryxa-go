@@ -19,6 +19,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 var (
@@ -156,6 +157,11 @@ type Teamspaces interface {
 type Config struct {
 	Repository Repository
 	Directory  agents.Directory
+	// Policy reads the last applied organization workspace policy. Nil uses
+	// the original defaults for deployments without the workspace service.
+	Policy interface {
+		Get(context.Context, string) (policy.Settings, error)
+	}
 	// Teamspaces enables requests made inside a teamspace. Without it a
 	// request naming one is refused.
 	Teamspaces Teamspaces
@@ -191,6 +197,9 @@ type Service struct {
 	guard      Guard
 	logger     *slog.Logger
 	now        func() time.Time
+	policy     interface {
+		Get(context.Context, string) (policy.Settings, error)
+	}
 }
 
 func New(config Config) (*Service, error) {
@@ -213,7 +222,7 @@ func New(config Config) (*Service, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Service{
-		repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens,
+		repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens, policy: config.Policy,
 		jev: config.Jev, jevTimeout: jevTimeout, guard: config.Guard, logger: logger, now: now,
 	}, nil
 }
@@ -280,7 +289,19 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 		return agents.Interaction{}, err
 	}
 	now := service.now().UTC()
+	settings, err := service.organizationPolicy(ctx, actor.OrganizationID)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
 	expires := time.Duration(input.ExpiresInSeconds) * time.Second
+	if settings.ExpireAfter > 0 {
+		if expires > settings.ExpireAfter {
+			return agents.Interaction{}, fmt.Errorf("%w: expires_in_seconds exceeds the organization's consent expiry", ErrInvalid)
+		}
+		if expires == 0 {
+			expires = settings.ExpireAfter
+		}
+	}
 	if expires == 0 {
 		expires = defaultExpiry
 	}
@@ -307,6 +328,17 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 		return service.replay(actor, created, input)
 	}
 	return created, nil
+}
+
+func (service *Service) organizationPolicy(ctx context.Context, organizationID string) (policy.Settings, error) {
+	if service.policy == nil {
+		return policy.Settings{}, nil
+	}
+	settings, err := service.policy.Get(ctx, organizationID)
+	if err != nil {
+		return policy.Settings{}, fmt.Errorf("read organization workspace policy: %w", err)
+	}
+	return settings, nil
 }
 
 // replay answers a create whose idempotency key already names a stored
@@ -534,9 +566,18 @@ func (service *Service) Respond(ctx context.Context, actor agents.InteractionAct
 	if err := validateResponse(request, input); err != nil {
 		return agents.Interaction{}, err
 	}
+	settings, err := service.organizationPolicy(ctx, request.OrganizationID)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
 	// Another member reads what is recorded here, so the guard reads it
 	// first, outside the ledger's transaction.
-	return service.viewed(actor)(service.repository.Respond(ctx, request.ID, service.answer(ctx, request, input), service.now().UTC()))
+	answer := service.answer(ctx, request, input)
+	if settings.HoldForReview && request.Requester.UserID != request.Target.UserID && answer.Result != nil {
+		answer.Held = &agents.InteractionHeld{Result: *answer.Result}
+		answer.Result = nil
+	}
+	return service.viewed(actor)(service.repository.Respond(ctx, request.ID, answer, service.now().UTC()))
 }
 
 func (service *Service) view(request agents.Interaction) agents.Interaction {
@@ -613,7 +654,7 @@ func validateCreate(input agents.InteractionCreateInput) error {
 		return fmt.Errorf("%w: context holds at most %d items", ErrInvalid, maxContextItems)
 	case len(input.RequestedTools) > maxListItems || len(input.RequestedPermissions) > maxListItems:
 		return fmt.Errorf("%w: tools and permissions each hold at most %d items", ErrInvalid, maxListItems)
-	case input.ExpiresInSeconds != 0 && (time.Duration(input.ExpiresInSeconds)*time.Second < minimumExpiry || time.Duration(input.ExpiresInSeconds)*time.Second > maximumExpiry):
+	case input.ExpiresInSeconds != 0 && (input.ExpiresInSeconds < int(minimumExpiry/time.Second) || input.ExpiresInSeconds > int(maximumExpiry/time.Second)):
 		return fmt.Errorf("%w: expires_in_seconds must be between 300 and 604800", ErrInvalid)
 	}
 	for _, item := range input.Context {

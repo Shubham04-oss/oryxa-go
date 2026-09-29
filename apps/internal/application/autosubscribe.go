@@ -97,6 +97,10 @@ func (s *Service) subscribeConnections(ctx context.Context) {
 			// call, which an Oryxa connection has no account for.
 			continue
 		}
+		if err := s.allowToolkit(ctx, connection.OrganizationID, connection.Toolkit); err != nil {
+			s.logger.WarnContext(ctx, "skip automatic subscriptions under workspace app policy", "connection_id", connection.ID, "error", err)
+			continue
+		}
 		s.subscribeEverything(ctx, connection)
 	}
 }

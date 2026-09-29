@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 //go:embed migrations/*.sql
@@ -56,12 +57,21 @@ type Rule struct {
 // Store keeps the events waiting to wake Krude.
 type Store struct {
 	database *postgreskit.Database
+	policy   interface {
+		Get(context.Context, string) (policy.Settings, error)
+	}
 }
 
 // NewStore returns the store over database. Its tables are named with their
 // schema, so the pool's search_path does not matter.
 func NewStore(database *postgreskit.Database) *Store {
 	return &Store{database: database}
+}
+
+func NewStoreWithPolicy(database *postgreskit.Database, provider interface {
+	Get(context.Context, string) (policy.Settings, error)
+}) *Store {
+	return &Store{database: database, policy: provider}
 }
 
 // Migrate installs the tables. Running it twice is harmless.
@@ -72,9 +82,20 @@ func (store *Store) Migrate(ctx context.Context) error {
 // appUpdatesOn holds, in a statement whose $2 and $3 are an event's
 // organization and member, unless that member turned updates from their apps
 // off: what arrives while they are off is not kept to tell them later.
-const appUpdatesOn = `NOT EXISTS (
-	SELECT 1 FROM agents_primary.wakeup_preferences preference
-	WHERE preference.organization_id = $2 AND preference.member_id = $3 AND NOT preference.app_updates)`
+const appUpdatesOn = `COALESCE((
+	SELECT preference.app_updates FROM agents_primary.wakeup_preferences preference
+	WHERE preference.organization_id = $2 AND preference.member_id = $3), $9)`
+
+func (store *Store) defaultAppUpdates(ctx context.Context, organizationID string) (bool, error) {
+	if store.policy == nil {
+		return true, nil
+	}
+	settings, err := store.policy.Get(ctx, organizationID)
+	if err != nil {
+		return false, fmt.Errorf("read organization app update policy: %w", err)
+	}
+	return settings.Proactive != "off", nil
+}
 
 // Record keeps an event until it is handed to Krude. It reports false for an
 // event it already has, which the bus may deliver more than once, and for one
@@ -87,13 +108,17 @@ func (store *Store) Record(ctx context.Context, event Event) (bool, error) {
 	if len(event.Data) > 0 {
 		data = event.Data
 	}
+	defaultOn, err := store.defaultAppUpdates(ctx, event.OrganizationID)
+	if err != nil {
+		return false, err
+	}
 	tag, err := store.database.Pool.Exec(ctx, `
 		INSERT INTO agents_primary.wakeup_events
 			(id, organization_id, member_id, toolkit, trigger, data, data_omitted, received_at)
 		SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8
 		WHERE `+appUpdatesOn+`
 		ON CONFLICT (id) DO NOTHING`,
-		event.ID, event.OrganizationID, event.MemberID, event.Toolkit, event.Trigger, data, event.DataOmitted, event.ReceivedAt)
+		event.ID, event.OrganizationID, event.MemberID, event.Toolkit, event.Trigger, data, event.DataOmitted, event.ReceivedAt, defaultOn)
 	if err != nil {
 		return false, fmt.Errorf("record wake-up event: %w", err)
 	}
@@ -106,9 +131,17 @@ func (store *Store) Record(ctx context.Context, event Event) (bool, error) {
 // new; the bus may deliver a batch, or a trigger in it, more than once, and a
 // member who turned updates from their apps off has none kept.
 func (store *Store) RecordBatch(ctx context.Context, events []Event) (int, error) {
+	defaults := map[string]bool{}
 	for _, event := range events {
 		if event.ID == "" || event.OrganizationID == "" || event.MemberID == "" {
 			return 0, errors.New("a wake-up event needs its id, organization and member")
+		}
+		if _, known := defaults[event.OrganizationID]; !known {
+			on, err := store.defaultAppUpdates(ctx, event.OrganizationID)
+			if err != nil {
+				return 0, err
+			}
+			defaults[event.OrganizationID] = on
 		}
 	}
 	recorded := 0
@@ -124,7 +157,7 @@ func (store *Store) RecordBatch(ctx context.Context, events []Event) (int, error
 				SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8
 				WHERE `+appUpdatesOn+`
 				ON CONFLICT (id) DO NOTHING`,
-				event.ID, event.OrganizationID, event.MemberID, event.Toolkit, event.Trigger, data, event.DataOmitted, event.ReceivedAt)
+				event.ID, event.OrganizationID, event.MemberID, event.Toolkit, event.Trigger, data, event.DataOmitted, event.ReceivedAt, defaults[event.OrganizationID])
 			if err != nil {
 				return fmt.Errorf("record wake-up event: %w", err)
 			}
@@ -404,15 +437,15 @@ func (store *Store) ReplaceThread(ctx context.Context, organizationID, memberID,
 	return current, nil
 }
 
-// AppUpdates says whether a member wants Krude to tell them what their apps
-// report in an organization: yes, unless they turned it off.
+// AppUpdates uses the member's explicit choice when present and otherwise
+// the organization's applied workspace default.
 func (store *Store) AppUpdates(ctx context.Context, organizationID, memberID string) (bool, error) {
 	var on bool
 	err := store.database.Pool.QueryRow(ctx, `
 		SELECT app_updates FROM agents_primary.wakeup_preferences
 		WHERE organization_id = $1 AND member_id = $2`, organizationID, memberID).Scan(&on)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return true, nil
+		return store.defaultAppUpdates(ctx, organizationID)
 	}
 	if err != nil {
 		return false, fmt.Errorf("read app updates preference: %w", err)

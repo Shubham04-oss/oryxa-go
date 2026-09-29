@@ -51,6 +51,12 @@ func (s *Service) ReceiveWebhook(ctx context.Context, header http.Header, body [
 		if err != nil || connection.ID != trigger.ConnectionID || connection.Oryxa() {
 			return s.drop(ctx, delivery, "account does not match the trigger")
 		}
+		if err := s.allowToolkit(ctx, trigger.OrganizationID, trigger.Toolkit); err != nil {
+			if errors.Is(err, domain.ErrForbidden) {
+				return s.drop(ctx, delivery, "app no longer offered")
+			}
+			return err
+		}
 		received := appsv1.TriggerReceived{
 			TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID, OrganizationID: trigger.OrganizationID,
 			MemberID: trigger.MemberID, Toolkit: trigger.Toolkit, Trigger: trigger.Slug, ReceivedAt: now,

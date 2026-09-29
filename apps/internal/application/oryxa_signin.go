@@ -57,6 +57,13 @@ func (s *Service) ConnectOryxa(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return OryxaConnect{}, err
 	}
+	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
+		return OryxaConnect{}, err
+	}
+	autoSubscribe, err := s.defaultAutoSubscribe(ctx, organizationID)
+	if err != nil {
+		return OryxaConnect{}, err
+	}
 	manifest, err := s.enabled(toolkit)
 	if err != nil {
 		return OryxaConnect{}, err
@@ -82,7 +89,7 @@ func (s *Service) ConnectOryxa(ctx context.Context, credentials authclient.Crede
 		return OryxaConnect{}, err
 	}
 
-	connection, err := s.createOryxaConnection(ctx, organizationID, caller.UserID, toolkit, returnTo, input.AutoSubscribe)
+	connection, err := s.createOryxaConnection(ctx, organizationID, caller.UserID, toolkit, returnTo, input.AutoSubscribe, autoSubscribe)
 	if err != nil {
 		return OryxaConnect{}, err
 	}
@@ -150,7 +157,7 @@ func (s *Service) oneCurrentConnection(ctx context.Context, organizationID, memb
 // createOryxaConnection records a pending Oryxa connection, announcing that
 // it began. It carries no state hash: an Oryxa sign-in's state lives in its
 // flow, which signin keeps.
-func (s *Service) createOryxaConnection(ctx context.Context, organizationID, memberID, toolkit, returnTo string, autoSubscribe *bool) (domain.Connection, error) {
+func (s *Service) createOryxaConnection(ctx context.Context, organizationID, memberID, toolkit, returnTo string, autoSubscribe *bool, defaultAutoSubscribe bool) (domain.Connection, error) {
 	id, err := newID("apc")
 	if err != nil {
 		return domain.Connection{}, err
@@ -158,7 +165,7 @@ func (s *Service) createOryxaConnection(ctx context.Context, organizationID, mem
 	now := s.now().UTC()
 	connection := domain.Connection{
 		ID: id, OrganizationID: organizationID, MemberID: memberID, Toolkit: toolkit, Broker: domain.BrokerOryxa,
-		Status: domain.ConnectionPending, ReturnTo: returnTo, AutoSubscribe: s.autoSubscribe,
+		Status: domain.ConnectionPending, ReturnTo: returnTo, AutoSubscribe: defaultAutoSubscribe,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if autoSubscribe != nil {

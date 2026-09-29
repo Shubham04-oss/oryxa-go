@@ -73,6 +73,9 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 	if connection.MemberID != caller.UserID {
 		return domain.Trigger{}, domain.ErrNotFound
 	}
+	if err := s.allowToolkit(ctx, organizationID, connection.Toolkit); err != nil {
+		return domain.Trigger{}, err
+	}
 	switch connection.Status {
 	case domain.ConnectionActive:
 	case domain.ConnectionExpired:

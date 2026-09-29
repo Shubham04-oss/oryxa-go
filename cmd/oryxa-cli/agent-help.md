@@ -25,6 +25,10 @@ review the plan before applying it. Slack installation remains a manual step.
 6. Leave uncertain facts out and ask the admin about them. Keep source evidence
    and unresolved questions in your review message, not in unsupported YAML
    fields. Never put passwords, tokens, or secrets in the file or your chat.
+7. If the admin provides a request expiry or review rule, map it to
+   `rules.consent.expireAfter` and `safety.guard.holdForReview`. Map the
+   organization default for app update wake-ups to
+   `agents.personal.proactive: on` or `off`. Do not infer these policies.
 
 Example:
 
@@ -50,6 +54,10 @@ orgChart:
     - {from: maya@acme.com, relation: manages, to: sam@acme.com}
   authority: [manages]
   executives: [maya@acme.com]
+tools:
+  provider: composio
+  offer: [github, jira]
+  autoSubscribe: false
 ```
 
 ## Review and apply
@@ -63,7 +71,11 @@ for the person to join and run apply again. Run `oryxa status --org SLUG
 
 Omission preserves existing people, teams, ownership hints, and chart facts.
 Explicit `prune: true` under the relevant section plans removals and requires
-review. Unsupported sections fail validation before any write. In particular,
-the CLI does not currently configure Slack, external directory providers,
-search providers, governance, safety, retention, or organization-wide tool
-policies.
+review. `tools.offer` is an organization allowlist: omission allows every
+Composio toolkit, while `offer: []` allows none. Research actual toolkit slugs
+before listing them; a disallowed app's existing connection cannot act or
+deliver events until it is allowed again. `tools.autoSubscribe` is the default
+for new connections. Unsupported sections fail validation before any write.
+The CLI does not currently configure Slack, external directory providers,
+search providers, the other governance and safety controls, retention, or the
+other tool settings.

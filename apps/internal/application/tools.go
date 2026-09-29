@@ -57,6 +57,9 @@ func (s *Service) SearchTools(ctx context.Context, credentials authclient.Creden
 	if err != nil {
 		return nil, err
 	}
+	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
+		return nil, err
+	}
 	if err := s.notThroughOryxa(ctx, organizationID, caller.UserID, toolkit); err != nil {
 		return nil, err
 	}
@@ -255,6 +258,9 @@ func (s *Service) tool(ctx context.Context, slug string) (composio.Tool, error) 
 // connectionFor is the member's own connection a tool runs with: the one
 // named, or their only active connection to the app.
 func (s *Service) connectionFor(ctx context.Context, organizationID, memberID, toolkit, connectionID string) (domain.Connection, error) {
+	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
+		return domain.Connection{}, err
+	}
 	if connectionID != "" {
 		connection, err := s.store.Connection(ctx, organizationID, connectionID)
 		if err != nil {

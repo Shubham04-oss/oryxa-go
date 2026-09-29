@@ -25,6 +25,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 // Config is what the application needs to know about where it runs.
@@ -50,6 +51,7 @@ type Dependencies struct {
 	Store     Store
 	Directory Directory
 	Composio  Composio
+	Policy    PolicySource
 	// Oryxa is Oryxa's own sign-in, when this deployment has one: signin,
 	// hooks and the integrations. Without it every Oryxa request is refused.
 	Oryxa  *Oryxa
@@ -57,10 +59,16 @@ type Dependencies struct {
 	Clock  func() time.Time
 }
 
+// PolicySource reads the organization's last applied workspace file.
+type PolicySource interface {
+	Get(context.Context, string) (policy.Settings, error)
+}
+
 type Service struct {
 	store         Store
 	directory     Directory
 	composio      Composio
+	policy        PolicySource
 	logger        *slog.Logger
 	now           func() time.Time
 	publicBaseURL string
@@ -95,6 +103,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		store:         dependencies.Store,
 		directory:     dependencies.Directory,
 		composio:      dependencies.Composio,
+		policy:        dependencies.Policy,
 		logger:        dependencies.Logger,
 		now:           dependencies.Clock,
 		publicBaseURL: strings.TrimRight(config.PublicBaseURL, "/"),
