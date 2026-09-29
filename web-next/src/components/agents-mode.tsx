@@ -17,7 +17,10 @@ import { SpecialistFocus } from "./specialist-focus"
 import { SpecialistsSection } from "./specialists-section"
 import { AgentTeamFocus } from "./multi-agent-team-focus"
 import { AgentTeamsSection } from "./multi-agent-teams-section"
+import { PrimaryAgentFiles } from "./primary-agent-files"
+import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
+import type { ScreenContext } from "@/lib/agents/screen-context"
 import { afterUpdateAgent } from "@/lib/agents/invalidation"
 import { updateAgent } from "@/lib/agents/managed-agents"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
@@ -56,6 +59,8 @@ export function AgentsCanvas({
   section,
   organizationId,
   viewerId,
+  primaryThreadId,
+  onOpenFile,
   onOpen,
   onNavigate,
 }: {
@@ -63,6 +68,8 @@ export function AgentsCanvas({
   /** The signed-in member's organization; without one there is nothing to read. */
   organizationId?: string
   viewerId?: string
+  primaryThreadId?: string | null
+  onOpenFile?: (file: PrimaryAgentFileTarget) => void
   onOpen: (target: AgentsFocusTarget) => void
   onNavigate: (section: AgentsSection) => void
 }) {
@@ -88,6 +95,8 @@ export function AgentsCanvas({
     <AgentsOverview
       organizationId={organizationId}
       viewerId={viewerId}
+      primaryThreadId={primaryThreadId}
+      onOpenFile={onOpenFile}
       onOpen={onOpen}
       onNavigate={onNavigate}
     />
@@ -100,6 +109,7 @@ export function AgentsFocus({
   onBack,
   onOpen,
   onChat,
+  getScreenContext,
 }: {
   target: AgentsFocusTarget
   organizationId: string
@@ -112,6 +122,7 @@ export function AgentsFocus({
    * conversation column is that chat.
    */
   onChat?: (agentId: string) => void
+  getScreenContext?: () => ScreenContext
 }) {
   return target.kind === "specialist" ? (
     <SpecialistFocus
@@ -120,6 +131,7 @@ export function AgentsFocus({
       agentId={target.agentId}
       onBack={onBack}
       onOpen={onOpen}
+      getScreenContext={getScreenContext}
     />
   ) : (
     <AgentTeamFocus
@@ -187,11 +199,15 @@ function Stat({
 function AgentsOverview({
   organizationId,
   viewerId,
+  primaryThreadId,
+  onOpenFile,
   onOpen,
   onNavigate,
 }: {
   organizationId: string
   viewerId?: string
+  primaryThreadId?: string | null
+  onOpenFile?: (file: PrimaryAgentFileTarget) => void
   onOpen: (target: AgentsFocusTarget) => void
   onNavigate: (section: AgentsSection) => void
 }) {
@@ -273,6 +289,9 @@ function AgentsOverview({
         <section
           className="workspace-agents-primary"
           aria-label="Primary agent"
+          data-screen-context-kind="primary_agent"
+          data-screen-context-id={primary.id}
+          data-screen-context-name={primary.name}
         >
           <AgentFace agent={primary} />
           <div className="workspace-agents-primary-copy">
@@ -331,6 +350,12 @@ function AgentsOverview({
           onOpen={{ label: "View requests", open: () => openRequests() }}
         />
       </dl>
+
+      <PrimaryAgentFiles
+        organizationId={organizationId}
+        threadId={primaryThreadId}
+        onOpenFile={onOpenFile}
+      />
 
       <section aria-labelledby="agents-overview-work">
         <p className="workspace-eyebrow" id="agents-overview-work">

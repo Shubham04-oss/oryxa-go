@@ -133,8 +133,9 @@ var privateSources = map[string]string{
 	ThreadHistory:    "the member's earlier turns in the thread, in the run's context",
 
 	// The member's files and account.
-	"load_artifacts":   "the member's artifacts, including the ones every thread of theirs shares",
-	"get_user_details": "the member's own account details: their email and what they wrote about themselves",
+	"load_artifacts":     "the member's artifacts, including the ones every thread of theirs shares",
+	"get_user_details":   "the member's own account details: their email and what they wrote about themselves",
+	"get_current_screen": "what the member had open on Oryxa when they sent the message: a page, a selected item, a document's name",
 
 	// Other people's requests.
 	"interactions_inbox": "the requests other members made of this member's agents",

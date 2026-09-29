@@ -1515,6 +1515,21 @@ happens before the stream opens, so a refusal is an ordinary JSON error:
 | `confirmation_pending` | 409 | A message while a tool waits for the member's answer |
 | `agents_unavailable` | 503 | This server has no Google Cloud project to run Krude on |
 
+Either body may also carry `screen_context`, what the member had open when
+they sent it, so that Krude, or a specialist, can read "this" and "here" with
+`get_current_screen` (in the member's own runs only, never an unattended, room
+or delivery run):
+`{"view": "team/teamspace", "selection": {"kind": "teamspace", "id": "...", "name": "..."}, "visible_items": [{"kind": "...", "id": "...", "name": "..."}]}`.
+The `view` is `home`, `team` or `agents`, a slash and a section; at most twelve
+items are visible; an item's `kind` holds at most 40 characters, its `id` (its
+handle) and `name` at most 120, and none of them a line break. Hints point the
+agent at things and authorize nothing: every tool still checks the member. So a
+hint that breaks a rule is left out and the run goes on with the rest, rather
+than the member's message being refused; the log says how many were left out
+and never what they said, and a `view` that is no Oryxa page leaves the whole
+snapshot out. The snapshot is ADK temporary state (`temp:`), for that one run:
+it is not stored with the thread, and a run without one finds none.
+
 Once the run starts, the response is `text/event-stream`, with the run's ID in
 `X-Oryxa-Run`. Each event is named after the item it carries and its data is
 the item as JSON; a `: keep-alive` comment goes out every 15 seconds, so a
@@ -2283,6 +2298,34 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 ```
 
 ## Configuration
+
+### Document editing
+
+Oryxa opens conversation artifacts for viewing first inside the primary agent's work panel. The viewer renders PDF, DOCX, PPTX, XLSX, CSV, Markdown, text and images in the browser without ONLYOFFICE chrome, and reads at most 25 MB of a file to do it (a larger one says so, and is downloaded instead). The file-header Edit button opens [ONLYOFFICE Docs](https://api.onlyoffice.com/docs/docs-api/get-started/basic-concepts/) for **DOCX, XLSX and PPTX**, the formats Docs returns as it was given. Every other type (DOC, ODT, RTF, XLS, ODS, CSV, PPT, ODP, PDF, text) is for viewing and downloading: Docs converts or reworks those when it saves, and a converted file cannot be written back as the file it was, so the editor route answers `mode=edit` for them with `415 unsupported_document` and no callback saves one. The editor gets a signed, expiring URL for the member's exact file version and sends a JWT-signed save callback. Oryxa saves the edited bytes as the next artifact version, typed as the version it replaces; an older editor cannot overwrite a newer version. The callback must return the original file type, so a failed conversion cannot corrupt a file under the wrong extension.
+
+Two secrets are needed, each at least 32 bytes and different from the other (`openssl rand -hex 32` makes one), and neither may be the sample secret this README and `.env.example` once printed:
+
+- `AGENTS_PRIMARY_DOCUMENT_JWT_SECRET` is Docs' own `JWT_SECRET`. It signs the editor's configuration, which expires with the session it opens (a day at most), and verifies each save callback, which Docs signs with an expiry: a callback without one is refused.
+- `AGENTS_PRIMARY_DOCUMENT_TICKET_SECRET` is Oryxa's alone and is never sent to Docs. It signs the two URLs Docs is handed: one to read the file (good for an hour) and one to save through (good for a day). A ticket reads or replaces a member's file, so a secret Docs holds must not be able to make one.
+
+Without both, or with one shorter, alike or published, the editor answers `503 document_editor_unavailable` before it reads anything, honours no ticket, and the server logs why once at start-up (`document editing is off`), naming the variable and never its value.
+
+For local development, put the secrets in `.env`, run `docker compose --profile documents up -d documents` from the repository root and start Go with the same `.env`:
+
+```sh
+# Docs' JWT_SECRET, which docker-compose.yml reads, and the same value for Go
+ORYXA_DOCUMENT_JWT_SECRET=<openssl rand -hex 32>
+AGENTS_PRIMARY_DOCUMENT_JWT_SECRET=<the same value>
+# Oryxa's own, a second value
+AGENTS_PRIMARY_DOCUMENT_TICKET_SECRET=<another openssl rand -hex 32>
+AGENTS_PRIMARY_DOCUMENT_SERVER_URL=http://localhost:8082
+AGENTS_PRIMARY_DOCUMENT_SERVER_INTERNAL_URL=http://localhost:8082
+AGENTS_PRIMARY_DOCUMENT_API_URL=http://host.docker.internal:3001
+```
+
+The compose service has no secret of its own to fall back on, and binds `127.0.0.1` only: started without `ORYXA_DOCUMENT_JWT_SECRET`, Docs makes up a secret Oryxa cannot sign with, and the editor reports that it cannot open the document.
+
+`AGENTS_PRIMARY_DOCUMENT_API_URL` must be reachable **from the Docs container**; the example uses the Vite `/v1/` proxy. `AGENTS_PRIMARY_DOCUMENT_SERVER_URL` must be reachable from the member's browser. Use HTTPS for both public URLs in a deployed environment. The Community Edition compose service is for local evaluation; [ONLYOFFICE's licensing FAQ](https://helpcenter.onlyoffice.com/docs/faq/docs-community.aspx) states the AGPL terms for SaaS integrations and says Community Edition has no mobile web version. Production needs an edition and license compatible with Oryxa's distribution and phone editing requirements. Docs is a separate service with its own capacity requirements; it is not included in the existing production Fargate task.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

@@ -59,6 +59,11 @@ type Threads interface {
 	Delete(ctx context.Context, member threads.Member, threadID string) error
 	StartRun(ctx context.Context, member threads.Member, threadID string, input threads.RunInput) (Run, error)
 	Artifact(ctx context.Context, member threads.Member, threadID, name string, version int64) (threads.File, error)
+	// ArtifactVersion is the version a file is at now, read without the file.
+	ArtifactVersion(ctx context.Context, member threads.Member, threadID, name string) (int64, error)
+	// SaveArtifact stores an edit as the next version, if expectedVersion is
+	// still the current one, typed as the version it replaces.
+	SaveArtifact(ctx context.Context, member threads.Member, threadID, name string, expectedVersion int64, data []byte) (int64, error)
 }
 
 // Run is a started run. *threads.Run implements it.
@@ -186,6 +191,8 @@ type Rooms interface {
 
 // Config is how the server runs.
 type Config struct {
+	// Documents configures the external ONLYOFFICE Docs editing service.
+	Documents DocumentsConfig
 	// AllowedOrigins may send cookie-authenticated requests that change
 	// something, such as starting a run.
 	AllowedOrigins []string
@@ -239,6 +246,7 @@ type Config struct {
 
 // Server serves the API.
 type Server struct {
+	documents           DocumentsConfig
 	directory           Directory
 	threads             Threads
 	agents              ManagedAgents
@@ -269,6 +277,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		logger = slog.New(slog.DiscardHandler)
 	}
 	server := &Server{
+		documents:           config.Documents,
 		directory:           directory,
 		threads:             service,
 		agents:              config.Agents,
@@ -305,6 +314,9 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("DELETE /v1/organizations/{organizationID}/threads/{threadID}", server.deleteThread)
 	server.handle("POST /v1/organizations/{organizationID}/threads/{threadID}/runs", server.run)
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}", server.artifact)
+	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor", server.documentEditor)
+	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor-source", server.documentSource)
+	server.handle("POST /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor-callback", server.documentCallback)
 	server.handle("GET /v1/organizations/{organizationID}/agents", server.listAgents)
 	server.handle("POST /v1/organizations/{organizationID}/agents", server.createAgent)
 	server.handle("GET /v1/organizations/{organizationID}/agents/{agentID}", server.getAgent)
@@ -699,6 +711,19 @@ func (server *Server) deleteAgent(writer http.ResponseWriter, request *http.Requ
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+// screenHints reduces the screen snapshot a run's body carried to the hints
+// that are usable. The snapshot only points the agent at things the member had
+// open, so a hint that breaks a rule is left out, and the run goes on with the
+// rest, rather than the member's message being refused over a file name. What
+// the member had open is theirs: only how many hints were left out is logged.
+func (server *Server) screenHints(ctx context.Context, sent *primaryagents.ScreenContext) *primaryagents.ScreenContext {
+	usable, dropped := sent.Sanitize()
+	if dropped > 0 {
+		server.logger.WarnContext(ctx, "left out screen hints that break a rule", "count", dropped)
+	}
+	return usable
+}
+
 func (server *Server) runAgent(writer http.ResponseWriter, request *http.Request) {
 	member, ok := server.member(writer, request)
 	if !ok {
@@ -709,8 +734,9 @@ func (server *Server) runAgent(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	var body struct {
-		ThreadID      string `json:"thread_id"`
-		Message       string `json:"message"`
+		ThreadID      string                       `json:"thread_id"`
+		Message       string                       `json:"message"`
+		ScreenContext *primaryagents.ScreenContext `json:"screen_context"`
 		Confirmations []struct {
 			ID        string `json:"id"`
 			Confirmed *bool  `json:"confirmed"`
@@ -719,7 +745,7 @@ func (server *Server) runAgent(writer http.ResponseWriter, request *http.Request
 	if !server.decode(writer, request, &body) {
 		return
 	}
-	input := threads.RunInput{Message: body.Message}
+	input := threads.RunInput{Message: body.Message, ScreenContext: server.screenHints(request.Context(), body.ScreenContext)}
 	for _, answer := range body.Confirmations {
 		if answer.ID == "" || answer.Confirmed == nil {
 			writeError(writer, http.StatusBadRequest, "invalid_request", "every confirmation needs an id and whether it is confirmed")
@@ -1450,6 +1476,11 @@ func (server *Server) deleteThread(writer http.ResponseWriter, request *http.Req
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+// artifactContentPolicy is sent with every file a run kept, wherever it is
+// served from: it may load nothing and run nothing, and it is sandboxed away
+// from this origin.
+const artifactContentPolicy = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"
+
 // shownInline are the kinds of file a browser may show in place. Everything
 // else a run kept — HTML, scripts, anything a page could run — is only ever
 // downloaded, since it is served from the app's own origin.
@@ -1483,13 +1514,14 @@ func (server *Server) artifact(writer http.ResponseWriter, request *http.Request
 		mediaType = "application/octet-stream"
 	}
 	header := writer.Header()
+	header.Set("Cache-Control", "no-store")
 	header.Set("Content-Type", mediaType)
 	if mediaType == "text/plain" {
 		header.Set("Content-Type", "text/plain; charset=utf-8")
 	}
 	// Nothing a run kept may run as a page of this origin, even if a
 	// browser is talked into rendering it.
-	header.Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox")
+	header.Set("Content-Security-Policy", artifactContentPolicy)
 	disposition := "attachment"
 	if shownInline[mediaType] {
 		disposition = "inline"
@@ -1517,9 +1549,10 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 	// told apart from one left out: a pin the caller meant, and did not get,
 	// would leave the run free to work in any teamspace the model names.
 	var body struct {
-		Message            string                      `json:"message"`
-		TeamspaceID        *string                     `json:"teamspace_id"`
-		PublicationRequest *threads.PublicationRequest `json:"publication_request"`
+		Message            string                       `json:"message"`
+		ScreenContext      *primaryagents.ScreenContext `json:"screen_context"`
+		TeamspaceID        *string                      `json:"teamspace_id"`
+		PublicationRequest *threads.PublicationRequest  `json:"publication_request"`
 		Confirmations      []struct {
 			ID        string `json:"id"`
 			Confirmed *bool  `json:"confirmed"`
@@ -1528,7 +1561,7 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 	if !server.decode(writer, request, &body) {
 		return
 	}
-	input := threads.RunInput{Message: body.Message, PublicationRequest: body.PublicationRequest}
+	input := threads.RunInput{Message: body.Message, PublicationRequest: body.PublicationRequest, ScreenContext: server.screenHints(request.Context(), body.ScreenContext)}
 	for _, answer := range body.Confirmations {
 		if answer.ID == "" || answer.Confirmed == nil {
 			writeError(writer, http.StatusBadRequest, "invalid_request", "every confirmation needs an id and whether it is confirmed")
@@ -1884,6 +1917,8 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusConflict, "agent_disabled"
 	case errors.Is(err, threads.ErrInvalid):
 		return http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, threads.ErrConflict):
+		return http.StatusConflict, "artifact_conflict"
 	case errors.Is(err, authclient.ErrUnauthorized):
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, authclient.ErrForbidden):

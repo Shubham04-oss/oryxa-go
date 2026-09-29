@@ -3,6 +3,7 @@ package threads
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,7 +71,7 @@ func TestAFileARunKeepsShowsInTheThreadAndCanBeRead(t *testing.T) {
 	}
 
 	file, err := service.Artifact(context.Background(), asha, created.ID, "shot.png", 0)
-	if err != nil || file.MIMEType != "image/png" || string(file.Data) != "png-bytes" {
+	if err != nil || file.MIMEType != "image/png" || string(file.Data) != "png-bytes" || file.Version != 1 {
 		t.Fatalf("Artifact() = %+v, %v", file, err)
 	}
 	if _, err := service.Artifact(context.Background(), asha, created.ID, "missing.png", 0); !errors.Is(err, ErrNotFound) {
@@ -82,5 +83,148 @@ func TestAFileARunKeepsShowsInTheThreadAndCanBeRead(t *testing.T) {
 	someoneElse := Member{UserID: "user_ravi", OrganizationID: asha.OrganizationID}
 	if _, err := service.Artifact(context.Background(), someoneElse, created.ID, "shot.png", 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another member reading it = %v, want ErrNotFound", err)
+	}
+	version, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("edited-png"))
+	if err != nil || version != 2 {
+		t.Fatalf("edited artifact version = %d, %v", version, err)
+	}
+	latest, err := service.Artifact(context.Background(), asha, created.ID, "shot.png", 0)
+	if err != nil || latest.Version != 2 || string(latest.Data) != "edited-png" {
+		t.Fatalf("latest edited artifact = %+v, %v", latest, err)
+	}
+	old, err := service.Artifact(context.Background(), asha, created.ID, "shot.png", 1)
+	if err != nil || string(old.Data) != "png-bytes" {
+		t.Fatalf("previous version = %+v, %v", old, err)
+	}
+	if _, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("different")); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale edit = %v, want conflict", err)
+	}
+	if version, err := service.SaveArtifact(context.Background(), asha, created.ID, "shot.png", 1, []byte("edited-png")); err != nil || version != 2 {
+		t.Fatalf("retry of saved edit = %d, %v", version, err)
+	}
+	if _, err := service.SaveArtifact(context.Background(), someoneElse, created.ID, "shot.png", 2, []byte("stolen")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another member editing it = %v, want not found", err)
+	}
+}
+
+// An edit is saved as the file it replaces, whatever type that file carries,
+// not as what its extension says.
+func TestAnEditedFileKeepsTheTypeOfTheVersionItReplaces(t *testing.T) {
+	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("Done.", genai.RoleModel), nil
+	}}
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: llm, Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := artifact.InMemoryService()
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(), Artifacts: artifacts,
+		Runs: newFakeRuns(), Prices: prices, RunTimeout: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	created, err := service.Create(ctx, asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An agent kept the file with a type of its own choosing: not the one
+	// its extension would give it.
+	const kept = "application/octet-stream"
+	if _, err := artifacts.Save(ctx, &artifact.SaveRequest{
+		AppName: "krude", UserID: asha.UserID, SessionID: created.ID, FileName: "plan.docx",
+		Part: genai.NewPartFromBytes([]byte("docx-v1"), kept),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := service.SaveArtifact(ctx, asha, created.ID, "plan.docx", 1, []byte("docx-v2"))
+	if err != nil || saved != 2 {
+		t.Fatalf("SaveArtifact() = %d, %v; want version 2", saved, err)
+	}
+	edited, err := service.Artifact(ctx, asha, created.ID, "plan.docx", 0)
+	if err != nil || edited.Version != 2 || string(edited.Data) != "docx-v2" || edited.MIMEType != kept {
+		t.Fatalf("the edited file = %+v, %v; want version 2 still typed %q", edited, err, kept)
+	}
+}
+
+// countingArtifacts counts the reads of a file's bytes.
+type countingArtifacts struct {
+	artifact.Service
+	loads atomic.Int32
+}
+
+func (counting *countingArtifacts) Load(ctx context.Context, request *artifact.LoadRequest) (*artifact.LoadResponse, error) {
+	counting.loads.Add(1)
+	return counting.Service.Load(ctx, request)
+}
+
+// The document editor needs a file's version, not the file: naming the version
+// it opens must not read tens of megabytes.
+func TestAnArtifactVersionIsReadWithoutTheFile(t *testing.T) {
+	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("Done.", genai.RoleModel), nil
+	}}
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: llm, Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := &countingArtifacts{Service: artifact.InMemoryService()}
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(), Artifacts: artifacts,
+		Runs: newFakeRuns(), Prices: prices, RunTimeout: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	created, err := service.Create(ctx, asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, content := range []string{"docx-v1", "docx-v2"} {
+		if _, err := artifacts.Save(ctx, &artifact.SaveRequest{
+			AppName: "krude", UserID: asha.UserID, SessionID: created.ID, FileName: "plan.docx",
+			Part: genai.NewPartFromBytes([]byte(content), "application/octet-stream"),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	version, err := service.ArtifactVersion(ctx, asha, created.ID, "plan.docx")
+	if err != nil || version != 2 {
+		t.Fatalf("ArtifactVersion() = %d, %v; want the latest, 2", version, err)
+	}
+	if loads := artifacts.loads.Load(); loads != 0 {
+		t.Fatalf("ArtifactVersion() read the file's bytes %d time(s), want none", loads)
+	}
+	someoneElse := Member{UserID: "user_ravi", OrganizationID: asha.OrganizationID}
+	for name, call := range map[string]func() error{
+		"a file that is not there": func() error { _, err := service.ArtifactVersion(ctx, asha, created.ID, "missing.docx"); return err },
+		"another member's thread":  func() error { _, err := service.ArtifactVersion(ctx, someoneElse, created.ID, "plan.docx"); return err },
+		"a thread that is not there": func() error {
+			_, err := service.ArtifactVersion(ctx, asha, "no-such-thread", "plan.docx")
+			return err
+		},
+		"a name with a path": func() error { _, err := service.ArtifactVersion(ctx, asha, created.ID, "../plan.docx"); return err },
+		"a blank name":       func() error { _, err := service.ArtifactVersion(ctx, asha, created.ID, " "); return err },
+	} {
+		if err := call(); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("ArtifactVersion() of %s = %v, want ErrNotFound", name, err)
+		}
+	}
+	// Reading the file still reads it, at the version the metadata named.
+	file, err := service.Artifact(ctx, asha, created.ID, "plan.docx", 0)
+	if err != nil || file.Version != 2 || string(file.Data) != "docx-v2" || artifacts.loads.Load() != 1 {
+		t.Fatalf("Artifact() = %+v, %v after %d load(s)", file, err, artifacts.loads.Load())
 	}
 }

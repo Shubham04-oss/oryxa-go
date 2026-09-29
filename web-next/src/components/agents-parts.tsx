@@ -117,6 +117,9 @@ export function SpecialistEntry({
       className="workspace-entry"
       type="button"
       aria-label={`Open ${agent.name}`}
+      data-screen-context-kind="specialist"
+      data-screen-context-id={agent.id}
+      data-screen-context-name={agent.name}
       onClick={onOpen}
     >
       <span className="workspace-entry-kind">
@@ -150,6 +153,9 @@ export function AgentTeamEntry({
       className="workspace-entry"
       type="button"
       aria-label={`Open ${team.name}`}
+      data-screen-context-kind="agent_team"
+      data-screen-context-id={team.id}
+      data-screen-context-name={team.name}
       onClick={onOpen}
     >
       <span className="workspace-entry-kind">
@@ -287,7 +293,12 @@ export function WorkflowRow({
     workflow.status === "disabled" ? "Paused" : undefined,
   ].filter(Boolean)
   return (
-    <li className="workspace-agents-workflow">
+    <li
+      className="workspace-agents-workflow"
+      data-screen-context-kind="workflow"
+      data-screen-context-id={workflow.id}
+      data-screen-context-name={workflow.name}
+    >
       <span className="workspace-agents-workflow-icon" aria-hidden="true">
         <GitBranch size={16} strokeWidth={1.7} />
       </span>

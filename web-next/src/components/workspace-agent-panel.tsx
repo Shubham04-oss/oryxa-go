@@ -35,6 +35,7 @@ import { isNameId, sideConversationName } from "@/lib/dms/names"
 import type { Teamspace } from "@/lib/teamspaces/client"
 import { teamspaceKeys, teamspaceQueryOptions } from "@/lib/teamspaces/queries"
 import { cn } from "@/lib/utils"
+import type { ScreenContext } from "@/lib/agents/screen-context"
 
 export type AgentPanelTab = "agents" | "dms" | "teams"
 
@@ -99,6 +100,12 @@ export function WorkspaceAgentPanel({
   tabRequest,
   directMessages,
   teamspaceId,
+  primaryWork,
+  onOpenAgentOverview,
+  onPrimaryThreadChange,
+  onPrimaryFileCreated,
+  onPrimaryComposingChange,
+  getScreenContext,
 }: {
   expanded: boolean
   onExpand: () => void
@@ -116,8 +123,27 @@ export function WorkspaceAgentPanel({
    * offers its teammates, each opening a side conversation.
    */
   teamspaceId?: string
+  primaryWork?: boolean
+  onOpenAgentOverview?: () => void
+  onPrimaryThreadChange?: (threadId: string | null) => void
+  onPrimaryFileCreated?: (file: {
+    threadId: string
+    name: string
+    version?: number
+  }) => void
+  onPrimaryComposingChange?: (composing: boolean) => void
+  getScreenContext?: () => ScreenContext
 }) {
   const [tab, setTab] = useState<AgentPanelTab>("agents")
+  const visibleTabs = primaryWork
+    ? panelTabs.filter((item) => item.key !== "agents")
+    : panelTabs
+  const activeTab = primaryWork && tab === "agents" ? "dms" : tab
+  // A collapsed panel keeps its primary chat alive until its run finishes.
+  const hasOpened = useRef(false)
+  // Agent overview moves this mounted conversation into its left column.
+  // Opening a file can enter that view before the side panel was ever opened.
+  if (expanded || primaryWork) hasOpened.current = true
   // Whom the Agents tab talks to: one of the member's specialists by id,
   // or null for their primary agent.
   const [agentId, setAgentId] = useState<string | null>(null)
@@ -196,8 +222,8 @@ export function WorkspaceAgentPanel({
   useEffect(() => {
     if (!expanded || !focusTabOnExpand.current) return
     focusTabOnExpand.current = false
-    tabRefs.current[tab]?.focus()
-  }, [expanded, tab])
+    tabRefs.current[activeTab]?.focus()
+  }, [expanded, activeTab])
 
   // A chat asked for elsewhere (a team member's Chat button) brings the
   // Agents tab forward, and focus with it, as the rail's buttons do.
@@ -266,7 +292,7 @@ export function WorkspaceAgentPanel({
     event: KeyboardEvent<HTMLButtonElement>,
     index: number
   ) {
-    const last = panelTabs.length - 1
+    const last = visibleTabs.length - 1
     const moves: Partial<Record<string, number>> = {
       ArrowRight: index === last ? 0 : index + 1,
       ArrowLeft: index === 0 ? last : index - 1,
@@ -276,8 +302,8 @@ export function WorkspaceAgentPanel({
     const next = moves[event.key]
     if (next === undefined) return
     event.preventDefault()
-    setTab(panelTabs[next].key)
-    tabRefs.current[panelTabs[next].key]?.focus()
+    setTab(visibleTabs[next].key)
+    tabRefs.current[visibleTabs[next].key]?.focus()
   }
 
   return (
@@ -285,7 +311,11 @@ export function WorkspaceAgentPanel({
       id="workspace-agent-panel"
       className="workspace-right"
       aria-label="Agent panel"
-      style={visibleHeight ? { height: visibleHeight } : undefined}
+      style={
+        expanded && !primaryWork && visibleHeight
+          ? { height: visibleHeight }
+          : undefined
+      }
     >
       <div className="workspace-right-top">
         {expanded && (
@@ -294,9 +324,9 @@ export function WorkspaceAgentPanel({
             role="tablist"
             aria-label="Agent panel views"
           >
-            {panelTabs.map((item, index) => {
+            {visibleTabs.map((item, index) => {
               const Icon = item.icon
-              const selected = tab === item.key
+              const selected = activeTab === item.key
               return (
                 <button
                   className={cn(
@@ -380,16 +410,32 @@ export function WorkspaceAgentPanel({
         </button>
       </div>
 
-      {expanded ? (
+      {hasOpened.current &&
         panelTabs.map((item) => (
           <div
             className="workspace-agent-view"
-            role="tabpanel"
+            role={primaryWork && item.key === "agents" ? "region" : "tabpanel"}
             key={item.key}
             id={`workspace-agent-view-${item.key}`}
-            aria-labelledby={`workspace-agent-tab-${item.key}`}
+            aria-labelledby={
+              primaryWork && item.key === "agents"
+                ? undefined
+                : `workspace-agent-tab-${item.key}`
+            }
+            aria-label={
+              primaryWork && item.key === "agents"
+                ? `Conversation with ${agentName ?? "primary agent"}`
+                : undefined
+            }
+            data-primary-chat={
+              primaryWork && item.key === "agents" ? "true" : undefined
+            }
             tabIndex={0}
-            hidden={tab !== item.key}
+            hidden={
+              item.key === "agents" && primaryWork
+                ? false
+                : !expanded || activeTab !== item.key
+            }
           >
             {item.key === "agents" ? (
               <>
@@ -398,7 +444,8 @@ export function WorkspaceAgentPanel({
                 {agentsSide &&
                   organizationId &&
                   directMessages &&
-                  tab === "agents" && (
+                  tab === "agents" &&
+                  expanded && (
                     <AgentsTabSide
                       key={`${agentsSide.teamspaceId}~${agentsSide.peerId}`}
                       organizationId={organizationId}
@@ -435,7 +482,21 @@ export function WorkspaceAgentPanel({
                     onSelectAgent={setAgentId}
                     agentName={agentName}
                     agentSeed={agentSeed}
-                    onComposingChange={setComposing}
+                    onComposingChange={(value) => {
+                      setComposing(value)
+                      if (primaryWork) onPrimaryComposingChange?.(value)
+                    }}
+                    inAgentOverview={primaryWork}
+                    onOpenAgentOverview={onOpenAgentOverview}
+                    onPrimaryThreadChange={onPrimaryThreadChange}
+                    onPrimaryFileCreated={
+                      (primaryWork || tab === "agents") &&
+                      !agentsSide &&
+                      !agentId
+                        ? onPrimaryFileCreated
+                        : undefined
+                    }
+                    getScreenContext={getScreenContext}
                     teammates={
                       offersTeammates && directMessages ? (
                         <TeamspaceTeammates
@@ -471,7 +532,8 @@ export function WorkspaceAgentPanel({
             ) : item.key === "dms" && organizationId && directMessages ? (
               // Mounted only while it shows: an open conversation is what
               // makes the member online in it (REALTIME.md, "Presence").
-              tab === "dms" && (
+              activeTab === "dms" &&
+              expanded && (
                 <DirectMessagesTab
                   organizationId={organizationId}
                   viewerId={directMessages.viewerId}
@@ -492,10 +554,10 @@ export function WorkspaceAgentPanel({
               <p className="workspace-agent-empty">{item.empty}</p>
             )}
           </div>
-        ))
-      ) : (
+        ))}
+      {!expanded && (
         <div className="workspace-right-rail">
-          {panelTabs.map((item) => {
+          {visibleTabs.map((item) => {
             const Icon = item.icon
             return (
               <button
@@ -603,6 +665,11 @@ function AgentsView({
   agentSeed,
   onComposingChange,
   teammates,
+  inAgentOverview,
+  onOpenAgentOverview,
+  onPrimaryThreadChange,
+  onPrimaryFileCreated,
+  getScreenContext,
 }: {
   organizationId?: string
   /** The member's agents, once read. */
@@ -615,6 +682,15 @@ function AgentsView({
   onComposingChange: (composing: boolean) => void
   /** On a teamspace page: its teammates, below the switch. */
   teammates?: ReactNode
+  inAgentOverview?: boolean
+  onOpenAgentOverview?: () => void
+  onPrimaryThreadChange?: (threadId: string | null) => void
+  onPrimaryFileCreated?: (file: {
+    threadId: string
+    name: string
+    version?: number
+  }) => void
+  getScreenContext?: () => ScreenContext
 }) {
   const specialists = agents ? specialistAgents(agents) : []
   const selectedId = agentId === agentSeed ? null : agentId
@@ -661,12 +737,18 @@ function AgentsView({
           specialist={inUse}
           missing={agents !== undefined && !listed}
           onComposingChange={onComposingChange}
+          getScreenContext={getScreenContext}
         />
       ) : organizationId ? (
         <AgentChat
           organizationId={organizationId}
           agentName={agentName}
           onComposingChange={onComposingChange}
+          inOverview={inAgentOverview}
+          onOpenOverview={onOpenAgentOverview}
+          onThreadChange={onPrimaryThreadChange}
+          onFileCreated={onPrimaryFileCreated}
+          getScreenContext={getScreenContext}
         />
       ) : (
         <OfflineChat
