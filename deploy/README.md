@@ -38,12 +38,13 @@ OpenTofu names everything the scripts create, so the task's configuration and
 IAM can refer to it before it exists. Its state is in S3
 (`oryxa-tofu-state-<account>`), locked with a lock file.
 
-OpenTofu and the provisioners both set the lifecycle rules of the files and
-artifacts buckets. S3 keeps one lifecycle configuration per bucket, and every
-run of `provision-app.sh` puts each provisioner's own rule back alone, which
-drops the rule OpenTofu adds to remove the versions a delete leaves behind
-(`production/hardening.tf`). Run `tofu apply` after `provision-app.sh`, until
-the two provisioners write that rule themselves.
+Each bucket's lifecycle rules have one owner, since S3 keeps one lifecycle
+configuration per bucket and a put replaces it whole. The files and artifacts
+buckets are the provisioners': every run of `provision-app.sh` puts their
+rules again, including the one that removes the older versions a delete leaves
+behind, so that rule is in their code. OpenTofu turns their versioning on
+(`production/hardening.tf`), and owns the rules of the knowledge-base
+documents bucket, which it creates.
 
 ## Before the first deploy
 
@@ -75,12 +76,11 @@ deploy/scripts/web.sh               # the web app at app.oryxa.in
 ```
 
 `first_deploy=true` belongs to that first apply alone. The files and artifacts
-buckets are made by `provision-app.sh`, after it, so their versioning and
-lifecycle rules cannot be put on yet; the apply that follows the script, run
-without the flag, does. The flag also has OpenTofu create the database's two
-log groups itself, before the instance. Without it, OpenTofu adopts the ones
-RDS made (`import` blocks in `production/hardening.tf`), and an empty account
-has none to adopt.
+buckets are made by `provision-app.sh`, after it, so their versioning cannot be
+turned on yet; the apply that follows the script, run without the flag, does.
+The flag also has OpenTofu create the database's two log groups itself, before
+the instance. Without it, OpenTofu adopts the ones RDS made (`import` blocks in
+`production/hardening.tf`), and an empty account has none to adopt.
 
 Then add the `google_redirect_uri` provision-app.sh printed to the Google
 OAuth client's authorized redirect URIs, and confirm the alarm subscription
@@ -507,18 +507,24 @@ provider refuses or apps does not recognize.
 ### Applying the launch-review hardening
 
 `production/hardening.tf`, with small edits in `compute.tf`, `database.tf`,
-`keys.tf`, `knowledge_base.tf`, `observability.tf` and `variables.tf`, answers
-the findings of the 2026-09-28 launch review (`docs/REMAINING-WORK.md`,
-section 7): recoverable files, more alarms, a 30-day expiry on the database's
-log groups, keys that cannot be destroyed, a narrower Cognito grant, a pinned
-collector image, and two Cloudflare rules. It was written without applying
-anything. It is a plain `tofu apply`, and removes nothing but the task
-definition's old revision; the rulesets and the lifecycle configurations are
-worth checking first:
+`keys.tf`, `knowledge_base.tf`, `observability.tf` and `variables.tf`, and a
+lifecycle rule in the files and artifacts provisioners, answers the findings of
+the 2026-09-28 launch review (`docs/REMAINING-WORK.md`, section 7):
+recoverable files, more alarms, a 30-day expiry on the database's log groups,
+keys that cannot be destroyed, a narrower Cognito grant, a pinned collector
+image, and two Cloudflare rules. It was written without applying anything. The
+apply is a plain `tofu apply`, and removes nothing but the task definition's
+old revision. Before it:
 
-1. **The API token has Zone WAF edit** (see "Before the first deploy"), or the
+1. **Run `deploy/scripts/provision-app.sh` first,** from a checkout with this
+   change. It puts the rule that removes older versions on the files and
+   artifacts buckets. They are not versioned yet, and S3 documents that rule as
+   having no effect on a bucket that is not. The apply then turns versioning on
+   with the rule already in place. In the other order, older versions in those
+   two buckets are not removed until the script has run.
+2. **The API token has Zone WAF edit** (see "Before the first deploy"), or the
    two rulesets fail.
-2. **The zone has no rules of its own at Cloudflare yet.** A zone has one
+3. **The zone has no rules of its own at Cloudflare yet.** A zone has one
    entry-point ruleset for each phase, and OpenTofu takes each over whole. If
    the dashboard's Security, WAF, Custom rules or Rate limiting rules already
    hold anything, creating these fails, or replaces it. Import that ruleset
@@ -530,14 +536,6 @@ worth checking first:
    tofu import cloudflare_ruleset.custom_rules zones/<zone id>/<ruleset id>
    tofu import cloudflare_ruleset.rate_limits zones/<zone id>/<ruleset id>
    ```
-
-3. **The files and artifacts buckets' lifecycle rules are the provisioners'.**
-   The apply puts each bucket's lifecycle configuration again with the
-   provisioner's own rule as written in the code (files: `expire-objects`
-   under `org/`, 90 days; artifacts: `expire-artifacts`, 30 days; both drop an
-   unfinished upload after a day) and the new one. Read what is live first
-   with `aws s3api get-bucket-lifecycle-configuration --bucket <bucket>`, and
-   if it differs, change `hardening.tf` to match before applying.
 
 The apply rolls the service once, because the collector's image is pinned to a
 release and its digest, in a new task definition. Once it is done:
@@ -551,8 +549,6 @@ release and its digest, in a new task definition. Once it is done:
     --state-value ALARM --state-reason test
   ```
 
-- Run `tofu apply` again after any run of `provision-app.sh`, which puts its
-  buckets' own lifecycle rules back alone.
 - Deletes from the files, artifacts and knowledge-base documents buckets are
   now soft for 30 days (see "Recovering a deleted file").
 
@@ -611,7 +607,9 @@ laid over its newest version, an overwrite keeps the version it replaced, and
 S3 removes those older versions 30 days after they stopped being the newest.
 The task role cannot delete a version itself. An object a lifecycle rule
 expires (a file after 90 days, an artifact after 30) is kept for 30 more days
-after that, the same way.
+after that, the same way. The rule that removes the older versions reaches the
+files and artifacts buckets with `provision-app.sh`, so until that has run
+their older versions are kept without limit.
 
 To bring a deleted object back, find its delete marker and remove it, which
 makes the newest real version current again; to bring an overwritten one back,

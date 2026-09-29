@@ -1,10 +1,9 @@
 # What the 2026-09-28 launch review found missing (docs/REMAINING-WORK.md,
 # section 7), kept in one file so it can be read, reviewed and applied as one
-# change. It adds recovery, alarms and rules at the edge around the service,
-# and touches neither its code nor its configuration.
+# change. It adds recovery, alarms and rules at the edge around the service.
 
 variable "first_deploy" {
-  description = "True only for the first apply into an empty account (deploy/README.md, First deploy). deploy/scripts/provision-app.sh makes the files and artifacts buckets after that apply, so their versioning and lifecycle rules wait for the next one, and RDS has not yet made the database's log groups, so they are created here rather than adopted."
+  description = "True only for the first apply into an empty account (deploy/README.md, First deploy). deploy/scripts/provision-app.sh makes the files and artifacts buckets after that apply, so their versioning waits for the next one, and RDS has not yet made the database's log groups, so they are created here rather than adopted."
   type        = bool
   default     = false
 }
@@ -15,11 +14,25 @@ variable "first_deploy" {
 # documents buckets stays recoverable for 30 days. The buckets are versioned,
 # so the task's DeleteObject only lays a delete marker over the newest version
 # (the task role holds no s3:DeleteObjectVersion), and a lifecycle rule removes
-# the versions a delete or an overwrite left behind 30 days later. That adds
-# to the expiry some objects already have: a file the 90-day rule expires, or
-# an artifact the 30-day rule does, is kept 30 days more after it. Getting an
-# object back is in deploy/README.md, "Recovering a deleted file".
+# the versions a delete or an overwrite left behind 30 days later, and the
+# delete marker once none remain. That adds to the expiry some objects already
+# have: a file the 90-day rule expires, or an artifact the 30-day rule does, is
+# kept 30 days more after it. Getting an object back is in deploy/README.md,
+# "Recovering a deleted file".
+#
+# Each bucket's lifecycle configuration has one owner, because S3 keeps one
+# per bucket and a put replaces it whole. OpenTofu owns the versioning of all
+# three buckets, and the lifecycle of the knowledge-base documents bucket,
+# which it creates (knowledge_base.tf, beside the rules that bucket already
+# had). The files and artifacts buckets are the provisioners': they make the
+# buckets and put their lifecycle again on every run of provision-app.sh, so
+# the rule for those two is in their code (recoverableDeleteDays in
+# files/infra/storage/internal/provision and in
+# agents/primary/infra/artifacts), and takes effect on the next run of
+# provision-app.sh. Until it has run, older versions in those two buckets do
+# not expire, so run it before the apply that turns their versioning on.
 locals {
+  # Also recoverableDeleteDays in the two provisioners: keep the three equal.
   deleted_object_retention_days = 30
 
   # The buckets deploy/scripts/provision-app.sh makes, named in main.tf.
@@ -46,89 +59,6 @@ resource "aws_s3_bucket_versioning" "knowledge_base_documents" {
   versioning_configuration {
     status = "Enabled"
   }
-}
-
-# S3 keeps one lifecycle configuration per bucket, and putting one replaces
-# it whole. The files and artifacts buckets already have one, which the
-# provisioners put again on every run of provision-app.sh
-# (files/infra/storage/internal/provision, agents/primary/infra/artifacts),
-# so the two below carry each provisioner's own rule as it writes it, beside
-# the rule that clears up after versioning. Keep those rules equal to the
-# provisioners' constants (lifecycleExpireDays, expireDays and
-# abortMultipartDays). A provisioner run puts its rule alone back, which
-# leaves deleted versions unexpired until the next `tofu apply`, so apply
-# after provision-app.sh until the provisioners write the rule too.
-#
-# The rule everywhere: versions a delete or overwrite left behind expire
-# after 30 days, and a delete marker whose versions have all gone is removed,
-# so that it does not pile up in listings. Unfinished multipart uploads need no
-# rule of their own: every bucket already drops them after a day, which is
-# sooner than the 7 days a looser rule would allow (files' rule covers org/,
-# where every key it writes begins). The knowledge-base documents bucket,
-# which OpenTofu creates, has the same rule in knowledge_base.tf, beside the
-# two it already had.
-resource "aws_s3_bucket_lifecycle_configuration" "files" {
-  count  = var.first_deploy ? 0 : 1
-  bucket = local.files_bucket
-
-  rule {
-    id     = "expire-objects"
-    status = "Enabled"
-    filter {
-      prefix = "org/"
-    }
-    expiration {
-      days = 90
-    }
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 1
-    }
-  }
-
-  rule {
-    id     = "recoverable-deletes"
-    status = "Enabled"
-    filter {}
-    noncurrent_version_expiration {
-      noncurrent_days = local.deleted_object_retention_days
-    }
-    expiration {
-      expired_object_delete_marker = true
-    }
-  }
-
-  depends_on = [aws_s3_bucket_versioning.provisioned]
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
-  count  = var.first_deploy ? 0 : 1
-  bucket = local.artifacts_bucket
-
-  rule {
-    id     = "expire-artifacts"
-    status = "Enabled"
-    filter {}
-    expiration {
-      days = 30
-    }
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 1
-    }
-  }
-
-  rule {
-    id     = "recoverable-deletes"
-    status = "Enabled"
-    filter {}
-    noncurrent_version_expiration {
-      noncurrent_days = local.deleted_object_retention_days
-    }
-    expiration {
-      expired_object_delete_marker = true
-    }
-  }
-
-  depends_on = [aws_s3_bucket_versioning.provisioned]
 }
 
 # Alarms on the application's own errors, and on what dashboard.tf only

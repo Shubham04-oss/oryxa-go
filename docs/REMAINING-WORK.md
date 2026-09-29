@@ -526,15 +526,16 @@ account:
 - **CI runs every database suite.** `ci.yml` names a test database for eight
   services; knowledge, files, realtime and the outbox skip their integration
   tests in CI, while every merge now deploys.
-- **Files that can be recovered.** Written and not applied: the files,
-  artifacts and knowledge-base documents buckets are versioned, and a
-  lifecycle rule removes older versions after 30 days, so a deleted object
-  stays recoverable for 30 days (`hardening.tf`, `knowledge_base.tf`). Still
-  open: the files and artifacts provisioners
-  (`files/infra/storage/internal/provision`,
-  `agents/primary/infra/artifacts`) put their own lifecycle rule alone back on
-  every run of `provision-app.sh`, which drops that one until the next
-  `tofu apply`. They need to write it too.
+- **Files that can be recovered.** Written and not applied: OpenTofu versions
+  the files, artifacts and knowledge-base documents buckets (`hardening.tf`),
+  and a lifecycle rule removes older versions 30 days after they stop being the
+  newest, so a deleted object stays recoverable for 30 days. Each bucket's
+  lifecycle has one owner: OpenTofu's for the knowledge-base documents bucket
+  (`knowledge_base.tf`), the provisioners' for the other two
+  (`files/infra/storage/internal/provision`, `agents/primary/infra/artifacts`,
+  which put their rules again on every run of `provision-app.sh`). The rule
+  reaches those two on the next `provision-app.sh` run; until then their older
+  versions do not expire, so run it before the apply that turns versioning on.
 - **The auth key kept safe.** Written and not applied. `aws_kms_key.auth`
   envelope-encrypts every agent grant, and had the minimum deletion window of
   7 days and no `prevent_destroy`, as the services' signing keys did. Every
