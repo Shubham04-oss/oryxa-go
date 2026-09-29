@@ -204,6 +204,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f # v1.0.8
+        with:
+          # We only need the CLI's exit status; the Node wrapper needs a Node
+          # executable on PATH, which the self-hosted runner does not provide.
+          tofu_wrapper: false
       - name: Validate deploy/production
         # Without the S3 backend: this checks the configuration, not the state.
         run: |
