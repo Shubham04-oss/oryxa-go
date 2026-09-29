@@ -15,6 +15,10 @@ const (
 	// maxNameRunes is the most of a person's name that goes into a message
 	// about them.
 	maxNameRunes = 40
+	// maxTitleRunes and maxTeamRunes are the most of a Slack title, and of a
+	// team's name, that the screen is shown.
+	maxTitleRunes = 80
+	maxTeamRunes  = 60
 	// unknownName stands for a person Slack could not name.
 	unknownName = "someone"
 )
@@ -125,7 +129,26 @@ func plainToken(inner, botUserID string, names map[string]string) string {
 // the rest is shortened and put on one line. apps escapes it again when it
 // renders, so this is the second lock, not the only one.
 func cleanName(name string) string {
-	name = strings.Map(func(r rune) rune {
+	if name = singleLine(name, maxNameRunes); name != "" {
+		return name
+	}
+	return unknownName
+}
+
+// cleanTitle makes a Slack title fit to show the screen, or "" when nothing is
+// left of it. It is as much a person's own words as a name is, and is cleaned
+// the same way, but it never goes into a message: it is only ever data in the
+// screen's state.
+func cleanTitle(title string) string { return singleLine(title, maxTitleRunes) }
+
+// cleanTeam is the same for a team's name.
+func cleanTeam(name string) string { return singleLine(name, maxTeamRunes) }
+
+// singleLine puts text on one line: markup and invisible formatting removed,
+// control characters made spaces, runs of space made one, and at most limit
+// runes kept. Nothing left is "".
+func singleLine(text string, limit int) string {
+	text = strings.Map(func(r rune) rune {
 		switch {
 		case r == '<', r == '>', r == '&', r == '|':
 			return -1
@@ -137,15 +160,12 @@ func cleanName(name string) string {
 			return ' '
 		}
 		return r
-	}, strings.ToValidUTF8(name, ""))
-	name = strings.Join(strings.Fields(name), " ")
-	if utf8.RuneCountInString(name) > maxNameRunes {
-		name = strings.TrimSpace(string([]rune(name)[:maxNameRunes]))
+	}, strings.ToValidUTF8(text, ""))
+	text = strings.Join(strings.Fields(text), " ")
+	if utf8.RuneCountInString(text) > limit {
+		text = strings.TrimSpace(string([]rune(text)[:limit]))
 	}
-	if name == "" {
-		return unknownName
-	}
-	return name
+	return text
 }
 
 // nameOf is what to call a person Slack described.

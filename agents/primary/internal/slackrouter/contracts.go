@@ -39,6 +39,18 @@ const (
 // SurfaceSlack is what Consent is told a click came from.
 const SurfaceSlack = "slack"
 
+// The kinds of ask, which are the consent core's own (interactions.AskQuestion
+// and interactions.AskSecret), by value: this package does not import it, and
+// a test pins that the values agree, since a kind the core does not know is an
+// ask it refuses for good.
+const (
+	// AskQuestion asks for an answer.
+	AskQuestion = "question"
+	// AskSecret asks for a credential. Its owner shares it as a one-time view in
+	// Oryxa, and Slack is told only that it was answered privately.
+	AskSecret = "secret"
+)
+
 // Slack template names, rendered only in apps. The router posts these two;
 // the owner's notice, the settled notice, the answer, the status and the
 // private-answer and bypass notes are the surfaces service's.
@@ -132,6 +144,10 @@ type Profile struct {
 	EmailConfirmed bool
 	// Name is what Slack calls them: their display name, or else their name.
 	Name string
+	// Title is the job title they set in Slack, as they wrote it, or empty. It
+	// is a person's own words and is only ever shown to the screen, as one
+	// more hint at what they do.
+	Title string
 	// Guest is a single- or multi-channel guest. Bot, Deleted and Stranger
 	// (a Slack Connect user from another workspace) are what they say.
 	Guest    bool
@@ -299,6 +315,9 @@ type AskInput struct {
 	// Question is what the asker wrote, without the mention of the bot and
 	// with the other mentions written as names.
 	Question string
+	// Kind is AskQuestion, or AskSecret when the screen found that the words
+	// ask for a credential. It is one for the whole ask.
+	Kind string
 	// Owners are the people asked, in parallel: the first answer that is
 	// delivered wins and the rest are closed.
 	Owners []AskOwner
@@ -333,6 +352,107 @@ type Authority interface {
 	// say: an asker who has given agents no standing grant, or a chart that
 	// names neither of them. An error is a chart that could not be read.
 	Outranks(ctx context.Context, organizationID string, asker, owner Person) (bool, error)
+}
+
+// ErrNoGrant is what Directory answers for an asker who has not given agents
+// standing access: there is no token to read the directory as them with, and
+// nothing was read. It is the asker's to fix, in Settings.
+var ErrNoGrant = errors.New("slackrouter: the asker has not allowed agents to act for them")
+
+// Directory reads the organization's directory as the asker sees it. It is the
+// same view their own agent has, by the same token path Authority reads the
+// chart with, so what the router learns about a person is what the asker was
+// already free to learn.
+//
+// Teams' visibility rules decide what that is: a member sees the teams they
+// are on and no others. So an owner's teams are the ones they share with the
+// asker, an owner who shares none has none listed, and a department that is
+// not listed is a department that is not known, not one that does not exist.
+type Directory interface {
+	// Teams returns the names of the teams each of the members is on, by member
+	// user id, as the directory shows them to asker. A member it says nothing of
+	// has no entry. ErrNoGrant when the asker has given agents no standing
+	// access; any other error is a directory that could not be read.
+	Teams(ctx context.Context, organizationID string, asker Person, userIDs []string) (map[string][]string, error)
+}
+
+// ScreenInput is what the screen reads of an ask before anyone is asked. Every
+// field is data for the screen to judge, and none of it is an instruction to
+// it, whoever wrote it.
+type ScreenInput struct {
+	// Question is the asker's words: the message without the mention of the
+	// bot and with the other mentions written as names. It is exactly what the
+	// owners' agents would be asked, so it is exactly what is screened.
+	Question string
+	Asker    ScreenAsker
+	// Owners are the people the ask could go to whose department is known, in
+	// the order they were named. An owner whose department is not known is not
+	// here: the screen has nothing to judge them by, and they are asked.
+	Owners []ScreenOwner
+}
+
+// ScreenAsker is who is asking, for the screen to weigh what they ask against.
+type ScreenAsker struct {
+	// OrgRole is their role in the organization: owner, admin or member.
+	OrgRole string
+	// Title is their Slack title, cleaned, or empty.
+	Title string
+	// Teams are the names of their teams in the organization's directory.
+	Teams []string
+}
+
+// ScreenOwner is one person the ask could go to, and what says which
+// department they are in.
+type ScreenOwner struct {
+	// UserID is the member's id. It is how ScreenResult.Misfits names them, and
+	// it is not shown to the screen.
+	UserID string
+	Name   string
+	// Title is their Slack title, cleaned, or empty.
+	Title string
+	// Teams are the names of the teams the asker can see them on. It is never
+	// empty, and it may not be all of them.
+	Teams []string
+}
+
+// ScreenScores are the probabilities of yes the screen read for its four
+// questions, kept for logs: what fails a screen is decided from these, and
+// tuning what counts as plainly not work or plainly a request for a credential
+// needs the numbers and none of the words.
+type ScreenScores struct {
+	Work, Injection, Plausible, Credential float64
+}
+
+// ScreenResult is the screen's judgment of an ask.
+type ScreenResult struct {
+	// Verdict is what the screen found in the words. The zero value refuses.
+	Verdict consentpolicy.Screen
+	// AsksForSecret is whether the words ask for a credential. It does not
+	// refuse the ask: an ask that clears the screen is filed as an ask for a
+	// secret, AskSecret, and put to its owners as any other is.
+	AsksForSecret bool
+	// Misfits are the owners, by member user id, whose department the screen
+	// judged plainly the wrong one for the question. Only the owners it was
+	// shown can be in it.
+	Misfits map[string]bool
+	Scores  ScreenScores
+	// Model is the exact model version that judged, or empty.
+	Model string
+}
+
+// Screen judges the words of an ask before anyone is asked or pinged: is it
+// work, is it aimed at the agents, is it plausible for this asker, does it ask
+// for a credential (which decides the kind of the ask and refuses nothing); and
+// whether each owner's department fits it.
+//
+// An error is a screen that could not finish, for whatever reason: nothing is
+// configured, the call failed or timed out, the answer made no sense. The
+// router refuses the ask, and asks no one. It never treats an error as a pass,
+// and a Router with no Screen at all refuses every mention the same way.
+// Judge must not put the words, or anything of what it was given, in an error
+// it returns.
+type Screen interface {
+	Judge(ctx context.Context, input ScreenInput) (ScreenResult, error)
 }
 
 // Identity is the match between a Slack user and a member, as last resolved.

@@ -3,9 +3,10 @@ package consentpolicy
 import "testing"
 
 // ask is a fine ask: a member asks a member in a public channel, with nothing
-// open. Each case changes what it is about and leaves the rest.
+// open, and the screen cleared the words. Each case changes what it is about
+// and leaves the rest.
 func ask(change func(*Facts)) Facts {
-	facts := Facts{AskerMember: true, OwnersNamed: 1, OwnerMember: true}
+	facts := Facts{AskerMember: true, OwnersNamed: 1, OwnerMember: true, Screen: Cleared}
 	if change != nil {
 		change(&facts)
 	}
@@ -26,6 +27,12 @@ func TestDecideRefusesEveryReason(t *testing.T) {
 		{"an asker at the limit of open asks", ask(func(f *Facts) { f.OpenAsks = MaxOpenAsks }), TooManyAsks},
 		{"an asker past the limit of open asks", ask(func(f *Facts) { f.OpenAsks = MaxOpenAsks + 3 }), TooManyAsks},
 		{"an owner who is not a member", ask(func(f *Facts) { f.OwnerMember = false }), OwnerNotMember},
+		{"words nobody screened", ask(func(f *Facts) { f.Screen = Unscreened }), ScreenFailed},
+		{"words the screen found are not work", ask(func(f *Facts) { f.Screen = FoundNotWork }), NotWork},
+		{"words the screen found to be an injection", ask(func(f *Facts) { f.Screen = FoundInjection }), Injection},
+		{"words implausible for the asker", ask(func(f *Facts) { f.Screen = FoundImplausible }), Implausible},
+		{"a screen this package has not heard of", ask(func(f *Facts) { f.Screen = Screen(99) }), ScreenFailed},
+		{"an owner whose department does not fit", ask(func(f *Facts) { f.OwnerMisfit = true }), OwnerDepartment},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			decision := Decide(test.facts)
@@ -45,7 +52,7 @@ func TestDecideRefusesEveryReason(t *testing.T) {
 func TestDecideRefusalOrder(t *testing.T) {
 	everything := Facts{
 		AskerMember: false, OwnersNamed: 0, OwnerMember: false, OpenAsks: MaxOpenAsks,
-		Channel: Channel{GroupDM: true, Shared: true},
+		Channel: Channel{GroupDM: true, Shared: true}, Screen: FoundInjection, OwnerMisfit: true,
 	}
 	steps := []struct {
 		fix    func(*Facts)
@@ -57,6 +64,8 @@ func TestDecideRefusalOrder(t *testing.T) {
 		{func(f *Facts) { f.Channel.Shared = false }, NoOwner},
 		{func(f *Facts) { f.OwnersNamed = 1 }, TooManyAsks},
 		{func(f *Facts) { f.OpenAsks = 0 }, OwnerNotMember},
+		{func(f *Facts) { f.OwnerMember = true }, Injection},
+		{func(f *Facts) { f.Screen = Cleared }, OwnerDepartment},
 	}
 	for _, step := range steps {
 		if step.fix != nil {
@@ -66,7 +75,7 @@ func TestDecideRefusalOrder(t *testing.T) {
 			t.Fatalf("decision = %+v, want deny with %q", decision, step.reason)
 		}
 	}
-	everything.OwnerMember = true
+	everything.OwnerMisfit = false
 	if decision := Decide(everything); decision.Outcome != NeedsConsent {
 		t.Fatalf("with every refusal cleared, decision = %+v, want needs consent", decision)
 	}
@@ -192,6 +201,89 @@ func TestFailsClosed(t *testing.T) {
 	if decision := Decide(Facts{Outranks: true, OwnersNamed: 1, OwnerMember: true}); decision.Outcome != Deny {
 		t.Fatalf("authority without membership: %+v", decision)
 	}
+	// Everything else in order, but no screen: an ask nobody screened is
+	// refused, and its zero value is the reason, not a pass.
+	unscreened := Facts{AskerMember: true, OwnersNamed: 1, OwnerMember: true}
+	if decision := Decide(unscreened); decision.Outcome != Deny || decision.Reason != ScreenFailed {
+		t.Fatalf("an ask nobody screened: decision = %+v, want screen_failed", decision)
+	}
+	if (Facts{}).Screen != Unscreened {
+		t.Fatal("the zero Screen is not Unscreened")
+	}
+}
+
+// TestNothingBypassesTheScreen: a marked private channel, an asker above the
+// owner, and both together allow nothing when the screen did not clear the
+// words. The screen's refusal is the ask's, in any channel and whoever asks.
+func TestNothingBypassesTheScreen(t *testing.T) {
+	for name, channel := range map[string]Channel{
+		"a public channel":       {},
+		"a marked private one":   {Private: true, HighPriority: true},
+		"a private unmarked one": {Private: true},
+	} {
+		for _, outranks := range []bool{false, true} {
+			for _, screen := range []Screen{Unscreened, FoundNotWork, FoundInjection, FoundImplausible, Screen(-1)} {
+				decision := Decide(ask(func(f *Facts) { f.Channel, f.Outranks, f.Screen = channel, outranks, screen }))
+				if decision.Outcome != Deny || decision.Reason != screen.refusal() || decision.Bypass != (Bypass{}) {
+					t.Fatalf("%s, outranks %v, screen %v: decision = %+v, want %q", name, outranks, screen, decision, screen.refusal())
+				}
+			}
+		}
+	}
+	// Cleared, the same facts bypass as they did.
+	if got := Decide(ask(func(f *Facts) { f.Channel = Channel{Private: true, HighPriority: true} })); got.Outcome != Allow {
+		t.Fatalf("a cleared ask in a marked channel: decision = %+v", got)
+	}
+}
+
+// TestAnOwnerWhoDoesNotFitIsLeftOutWhoeverAsks: a department that plainly does
+// not fit is not overridden by the channel or by the asker's authority.
+func TestAnOwnerWhoDoesNotFitIsLeftOutWhoeverAsks(t *testing.T) {
+	for name, change := range map[string]func(*Facts){
+		"a marked private channel": func(f *Facts) { f.Channel = Channel{Private: true, HighPriority: true} },
+		"an asker who outranks":    func(f *Facts) { f.Outranks = true },
+		"both":                     func(f *Facts) { f.Channel, f.Outranks = Channel{Private: true, HighPriority: true}, true },
+	} {
+		decision := Decide(ask(func(f *Facts) { change(f); f.OwnerMisfit = true }))
+		if decision.Outcome != Deny || decision.Reason != OwnerDepartment {
+			t.Fatalf("%s: decision = %+v, want owner_department", name, decision)
+		}
+	}
+	// A person who is not a member is left out for that first.
+	if got := Decide(ask(func(f *Facts) { f.OwnerMember, f.OwnerMisfit = false, true })); got.Reason != OwnerNotMember {
+		t.Fatalf("a non-member who also does not fit: decision = %+v", got)
+	}
+	// A refusal of the whole ask is not about one owner, and one about a
+	// person is.
+	for reason, want := range map[Reason]bool{
+		OwnerNotMember: true, OwnerDepartment: true,
+		NotMember: false, GroupDM: false, ExternalChannel: false, NoOwner: false, TooManyAsks: false,
+		ScreenFailed: false, NotWork: false, Injection: false, Implausible: false, NoGrant: false,
+	} {
+		if reason.AboutOneOwner() != want {
+			t.Errorf("%q.AboutOneOwner() = %v, want %v", reason, reason.AboutOneOwner(), want)
+		}
+	}
+}
+
+func TestScreenStringsAndRefusals(t *testing.T) {
+	for screen, want := range map[Screen]struct {
+		text   string
+		reason Reason
+	}{
+		Unscreened:       {"unscreened", ScreenFailed},
+		FoundNotWork:     {"not_work", NotWork},
+		FoundInjection:   {"injection", Injection},
+		FoundImplausible: {"implausible", Implausible},
+		Screen(99):       {"unscreened", ScreenFailed},
+	} {
+		if screen.String() != want.text || screen.refusal() != want.reason {
+			t.Errorf("Screen(%d) prints %q and refuses %q, want %q and %q", screen, screen.String(), screen.refusal(), want.text, want.reason)
+		}
+	}
+	if Cleared.String() != "cleared" {
+		t.Fatalf("Cleared prints %q", Cleared.String())
+	}
 }
 
 func TestOutcomeStrings(t *testing.T) {
@@ -208,6 +300,8 @@ func TestReasonCodesAreTheContract(t *testing.T) {
 	for reason, want := range map[Reason]string{
 		NotMember: "not_member", OwnerNotMember: "owner_not_member", GroupDM: "group_dm",
 		ExternalChannel: "external_channel", NoOwner: "no_owner", TooManyAsks: "too_many_asks",
+		ScreenFailed: "screen_failed", NotWork: "not_work", Injection: "injection",
+		Implausible: "implausible", NoGrant: "no_grant", OwnerDepartment: "owner_department",
 	} {
 		if string(reason) != want {
 			t.Fatalf("reason %q, want %q", reason, want)
