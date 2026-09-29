@@ -310,6 +310,9 @@ func Parse(data []byte) (Document, error) {
 	if err := rejectAliases(&root); err != nil {
 		return Document{}, err
 	}
+	if err := scanManifestSecrets(&root, ""); err != nil {
+		return Document{}, err
+	}
 	if err := rejectUnsupportedSections(&root); err != nil {
 		return Document{}, err
 	}
@@ -370,6 +373,13 @@ func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
 }
 
 func (document Document) Validate() error {
+	var node yaml.Node
+	if err := node.Encode(document); err != nil {
+		return fmt.Errorf("encode workspace values: %w", err)
+	}
+	if err := scanManifestSecrets(&node, ""); err != nil {
+		return err
+	}
 	if document.APIVersion != APIVersion {
 		return fmt.Errorf("apiVersion must be %s", APIVersion)
 	}
