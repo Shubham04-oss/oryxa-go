@@ -1,6 +1,6 @@
 # Lanes: parallel work
 
-Updated 2026-09-29, evening. Read this before starting work beside other workers. A lane is a unit of work one worker can finish alone, with files that no other open lane touches. [REMAINING-WORK.md](REMAINING-WORK.md) stays the index of everything unfinished. This file covers what is being built now, and by whom.
+Updated 2026-09-29, evening. **Read [STATUS.md](STATUS.md) first**: what is live, what's open and what's next. Then read this before starting work beside other workers. A lane is a unit of work one worker can finish alone, with files that no other open lane touches. [REMAINING-WORK.md](REMAINING-WORK.md) stays the index of everything unfinished. This file covers what is being built now, and by whom.
 
 ## How lanes work
 
