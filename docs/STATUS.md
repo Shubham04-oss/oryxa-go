@@ -2,6 +2,13 @@
 
 The one page to read before picking up work, whatever agent you are. [LANES.md](LANES.md) says who owns which files, and [REMAINING-WORK.md](REMAINING-WORK.md) is the full backlog. This page says what is true **now**, and what to do next, in order.
 
+## ⚠ First: GitHub Actions is blocked (2026-09-30)
+
+Every CI job fails without starting: "recent account payments have failed or your spending limit needs to be increased". So **no CI runs and no deploys happen**, since CD runs on Actions too.
+- Until the owner fixes billing (GitHub → Settings → Billing & plans), **don't merge anything but docs**. A merge would move main away from what production runs, with no release recorded.
+- After billing is fixed, re-run the failed checks on open PRs (`gh run rerun <id>`) before merging.
+- If something did merge meanwhile, dispatch the Deploy workflow (`gh workflow run Deploy`) and verify the release.
+
 ## Rules that are not negotiable
 
 - **Main auto-deploys.** Every merge to main runs CD: the Go image goes to ECS, then the web-next Worker to Cloudflare. A PR that adds an event consumer, a queue, a secret or an env var needs its infrastructure applied first, and widened EventBridge rules come **after** the release (`deploy/scripts/provision-app.sh`). Otherwise the old consumer dead-letters the new types.
