@@ -567,18 +567,12 @@ release and its digest, in a new task definition. Once it is done:
   slower than 500 ms are logged to `/aws/rds/instance/oryxa-production/postgresql`.
   That log group and `/upgrade` beside it keep 30 days, as the task's do.
 - **Cloudflare's rules on the zone** (`production/hardening.tf`): `app.` and
-  `api.` block every path under `/v1/internal`, and a client IP that makes
-  more than `signin_requests_per_period` (10) requests to `/v1/auth/password/`
-  in 10 seconds, counted at each Cloudflare data center, is blocked for 10
-  seconds. Ten seconds is the only window and block the Free plan allows, so
-  the rule stays inside them, and it matches on the path alone, since the
-  Free plan has no method or host to match on; every route under that path is
-  a POST. A paid plan allows longer ones, which suit sign-in better: Pro
-  counts up to a minute and blocks for up to an hour, Business counts up to
-  ten minutes; then lower `signin_requests_per_period` to a handful and
-  lengthen `period` and `mitigation_timeout` in the file. Blocked requests
-  are in the zone's Security events, and a blocked one gets Cloudflare's own
-  429 page.
+  `api.` block every path under `/v1/internal`, and a client IP that POSTs to
+  `/v1/auth/password/` more than `signin_requests_per_period` (20) times in a
+  minute, counted at each Cloudflare data center, is blocked for ten minutes.
+  The zone is on the Enterprise plan, which allows the window, the block and
+  matching on the method. Blocked requests are in the zone's Security events,
+  and a blocked one gets Cloudflare's own 429 page.
 - **Alarms** mail `alarm_email`: no running task, CPU or memory high, database
   CPU, storage, memory or connections, a queue backing up, anything in a
   dead-letter queue, the connector instance failing its checks, three or more
