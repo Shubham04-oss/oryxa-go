@@ -71,8 +71,10 @@ const (
 const (
 	// statePending is a notice that still has its buttons.
 	statePending = "pending"
-	// stateSent is a message that was posted.
-	stateSent = "sent"
+	// stateSent is a message that was posted, and stateSentPrivately an answer
+	// that was posted to the asker's direct message and not to the thread.
+	stateSent          = "sent"
+	stateSentPrivately = "sent_private"
 	// stateFailed is a message that could not be sent and never will be, so
 	// that no pass tries again.
 	stateFailed = "failed"
