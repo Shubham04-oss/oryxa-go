@@ -1,0 +1,197 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/runtime"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
+)
+
+func TestInitProducesValidWorkspaceWithoutCredentials(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"init", "--org", "acme", "--domains", "acme.com, example.com"}, &stdout, &stderr, func(string) string { return "" })
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	document, err := spec.Parse(stdout.Bytes())
+	if err != nil {
+		t.Fatalf("generated file is invalid: %v", err)
+	}
+	if document.Metadata.Organization != "acme" || len(document.Metadata.Domains) != 2 || document.Metadata.Domains[1] != "example.com" {
+		t.Fatalf("generated file = %+v", document)
+	}
+}
+
+func TestValidateRefusesUnknownSetting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "oryxa.yaml")
+	if err := os.WriteFile(path, []byte("apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\norganization: {unknown: true}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "-f", path}, &stdout, &stderr, func(string) string { return "" })
+	if code != 3 || !strings.Contains(stderr.String(), "unknown") {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+}
+
+func TestRemoteCommandNeedsSignInWithoutInput(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"status", "--org", "acme", "--no-input"}, &stdout, &stderr, func(string) string { return "" })
+	if code != 2 || !strings.Contains(stderr.String(), "browser sign-in is required") {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+}
+
+func TestAgentHelpNeedsNoSession(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"setup", "--agent-help"}, &stdout, &stderr, func(string) string { return "" })
+	if code != 0 || !strings.Contains(stdout.String(), "orgChart.relationships") || !strings.Contains(stdout.String(), "oryxa plan") {
+		t.Fatalf("exit=%d output=%q error=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestCachedSignInKeepsWhoamiOutputJSON(t *testing.T) {
+	testSessionStore(t)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"user":{"id":"owner"}}`) }))
+	defer api.Close()
+	getenv := func(key string) string {
+		if key == "ORYXA_API_URL" {
+			return api.URL
+		}
+		return ""
+	}
+	if err := saveSession(api.URL, cliSession{AccessToken: "access", ExpiresAt: time.Now().Add(15 * time.Minute)}, getenv); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), []string{"whoami", "--no-input"}, &stdout, &stderr, getenv); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout polluted by login: %s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "saved sign-in") {
+		t.Fatalf("missing diagnostic: %s", stderr.String())
+	}
+}
+
+func TestSensitiveReviewIncludesRoleElevationAndPolicyChanges(t *testing.T) {
+	for _, change := range []runtime.Change{{Op: "update", Kind: "member_role", Name: "member@acme.com", Role: "admin"}, {Op: "update", Kind: "policy", Name: "holdForReview"}, {Op: "delete", Kind: "team", Name: "Old"}} {
+		if !hasSensitiveChanges(runtime.Plan{Changes: []runtime.Change{change}}) {
+			t.Fatalf("sensitive change escaped review: %+v", change)
+		}
+	}
+}
+
+func TestBootstrapCreatesOnlyOrganizationThenUsesServerPlanAndApply(t *testing.T) {
+	calls := []string{}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v1/organizations":
+			fmt.Fprint(w, `{"id":"org_1"}`)
+		case "GET /v1/organizations":
+			fmt.Fprint(w, `{"organizations":[{"id":"org_1","slug":"acme"}]}`)
+		case "POST /v1/organizations/org_1/workspace:plan":
+			fmt.Fprint(w, `{"plan_id":"issued","plan_hash":"hash","base_version":0,"changes":[]}`)
+		case "PUT /v1/organizations/org_1/workspace":
+			var body struct {
+				Approved runtime.Plan `json:"approved_plan"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Approved.PlanID != "issued" {
+				t.Errorf("unissued bootstrap plan: %+v %v", body, err)
+			}
+			fmt.Fprint(w, `{"step":"apply","status":"done","version":1}`)
+		default:
+			t.Errorf("CLI directly mutated bootstrap members/teams: %s", r.URL.Path)
+			w.WriteHeader(400)
+		}
+	}))
+	defer api.Close()
+	client, err := runtime.NewClient(api.URL, "access")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"}}
+	result, err := workspaceApply(context.Background(), client, document, runtime.Snapshot{}, runtime.Plan{}, options{yes: true}, io.Discard, io.Discard)
+	if err != nil || result.Version != 1 || len(calls) != 4 {
+		t.Fatalf("bootstrap: %+v %v calls=%v", result, err, calls)
+	}
+}
+
+func TestStructuredAPIFailuresHaveStableExitCodesAndJSON(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		code   string
+		want   int
+	}{{"unauthorized", 401, "unauthorized", 1}, {"forbidden", 403, "forbidden", 1}, {"server", 500, "", 1}, {"slug", 409, "slug_taken", 1}, {"lock", 409, "apply_lock", 5}, {"stale", 409, "stale_plan", 1}, {"input", 400, "invalid_input", 3}} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			output := &commandErrorOutput{Writer: &stderr, stdout: &stdout, step: "apply", json: true}
+			code := reportError(&runtime.StatusError{Status: test.status, Code: test.code, Path: "/workspace", Method: "PUT"}, output)
+			var result struct{ Step, Status, Error, Code string }
+			if json.Unmarshal(stdout.Bytes(), &result) != nil || code != test.want || result.Status != "failed" || result.Step != "apply" || result.Error == "" {
+				t.Fatalf("code%d result%s stderr%s", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+	var stdout, stderr bytes.Buffer
+	code := reportError(fmt.Errorf("dial: connection refused"), &commandErrorOutput{Writer: &stderr, stdout: &stdout, step: "whoami", json: true})
+	if code != 1 || !json.Valid(stdout.Bytes()) {
+		t.Fatalf("network failure: %d %s", code, stdout.String())
+	}
+}
+
+func TestCachedPullUsesOnlySlugLookupAndProducesValidYAML(t *testing.T) {
+	testSessionStore(t)
+	calls := 0
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		switch r.URL.Path {
+		case "/v1/organizations":
+			fmt.Fprint(w, `{"organizations":[{"id":"org","slug":"acme"}]}`)
+		case "/v1/organizations/org/workspace":
+			fmt.Fprint(w, "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\n")
+		default:
+			t.Errorf("unnecessary pull request: %s", r.URL.Path)
+			w.WriteHeader(403)
+		}
+	}))
+	defer api.Close()
+	getenv := func(key string) string {
+		if key == "ORYXA_API_URL" {
+			return api.URL
+		}
+		return ""
+	}
+	if err := saveSession(api.URL, cliSession{AccessToken: "access", ExpiresAt: time.Now().Add(time.Minute)}, getenv); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"pull", "--org", "acme", "--no-input"}, &stdout, &stderr, getenv)
+	if _, err := spec.Parse(stdout.Bytes()); err != nil || code != 0 || calls != 2 {
+		t.Fatalf("cached pull exit%d calls%d err%v stdout%s stderr%s", code, calls, err, stdout.String(), stderr.String())
+	}
+}
+
+func TestPartialApplyJSONReportsCompletedWorkAndResumeStep(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	failure := &runtime.StatusError{Method: "PUT", Path: "/workspace", Status: 502, Code: "upstream_rejected", Partial: true, ApplyID: "apply_123", Completed: []runtime.CompletedOperation{{Method: "POST", Path: "/v1/organizations/org/teams"}}}
+	code := reportError(failure, &commandErrorOutput{Writer: &stderr, stdout: &stdout, step: "apply", json: true})
+	if code != 1 || !strings.Contains(stdout.String(), `"apply_id":"apply_123"`) || !strings.Contains(stdout.String(), `"completed":[`) || !strings.Contains(stdout.String(), "rerun apply") {
+		t.Fatalf("partial progress hidden: %d %s", code, stdout.String())
+	}
+}

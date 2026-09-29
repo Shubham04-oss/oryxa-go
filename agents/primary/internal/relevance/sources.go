@@ -63,6 +63,8 @@ var readsNothingPrivate = map[string]string{
 	"directory_find_people": "the directory's people, by name",
 	"directory_find_teams":  "the directory's teams, by name",
 	"directory_find_agents": "the directory's agents, by name or purpose",
+	"directory_find_owners": "the workspace ownership hints every joined member may see",
+	"directory_is_above":    "a relation in the member-visible workspace organization chart",
 
 	// Toolbox and helper bookkeeping: names and descriptions of what could
 	// be loaded or is running, and sub-agents that have no tools and see only

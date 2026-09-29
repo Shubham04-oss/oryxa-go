@@ -47,17 +47,9 @@ func (store *Store) EnsureOrganizationAgent(ctx context.Context, organizationID,
 		if err != nil {
 			return err
 		}
-		name := cleanLine(organizationName + " Agent")
-		if name == "Agent" {
-			name = "Organization Agent"
-		}
 		now := time.Now().UTC()
-		result = OrganizationAgent{
-			ID: id, OrganizationID: organizationID, Name: name,
-			Description:  "Coordinates shared organizational context and synthesizes work published by team members and their agents.",
-			Instructions: "Maintain organization-wide context from shared teamspace entries. Delegate bounded work to member agents, preserve attribution, and never assume a member's identity, connections, or private context.",
-			Status:       StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
-		}
+		result = defaultOrganizationAgent(organizationID, organizationName)
+		result.ID, result.Revision, result.CreatedAt, result.UpdatedAt = id, 1, now, now
 		insertErr := scanOrganizationAgent(tx.QueryRow(ctx, `INSERT INTO agents_primary.organization_agents
 			(organization_id, id, name, description, instructions, status, revision, created_by_user_id, created_at, updated_at)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)
@@ -77,6 +69,19 @@ func (store *Store) EnsureOrganizationAgent(ctx context.Context, organizationID,
 		return OrganizationAgent{}, fmt.Errorf("ensure organization agent: %w", err)
 	}
 	return result, nil
+}
+
+func defaultOrganizationAgent(organizationID, organizationName string) OrganizationAgent {
+	name := cleanLine(organizationName + " Agent")
+	if name == "Agent" {
+		name = "Organization Agent"
+	}
+	return OrganizationAgent{
+		OrganizationID: organizationID, Name: name,
+		Description:  "Coordinates shared organizational context and synthesizes work published by team members and their agents.",
+		Instructions: "Maintain organization-wide context from shared teamspace entries. Delegate bounded work to member agents, preserve attribution, and never assume a member's identity, connections, or private context.",
+		Status:       StatusActive,
+	}
 }
 
 func (store *Store) GetOrganizationAgent(ctx context.Context, organizationID string) (OrganizationAgent, error) {

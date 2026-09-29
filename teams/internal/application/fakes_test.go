@@ -67,7 +67,9 @@ func (store *fakeStore) CreateTeam(_ context.Context, organizationName string, t
 		creator.Path = domain.MemberPath(team.Path, creator.UserID)
 	}
 	store.teams[team.ID] = team
-	store.memberships[membershipKey(creator.TeamID, creator.UserID)] = creator
+	if creator.UserID != "" {
+		store.memberships[membershipKey(creator.TeamID, creator.UserID)] = creator
+	}
 	store.events = append(store.events, events...)
 	return nil
 }

@@ -62,6 +62,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		return host.Service{}, err
 	}
 	store := postgres.New(platform.Database, scheduler)
+	store.WithPolicy(platform.WorkspaceSettings())
 	service := application.New(store, classifier, application.Config{
 		Rule:     rule,
 		Interval: config.SweepInterval, ClaimLease: config.ClaimLease, GroupsPerSweep: config.GroupsPerSweep,

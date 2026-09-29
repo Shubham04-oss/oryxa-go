@@ -71,8 +71,10 @@ func (store *Store) CreateTeam(ctx context.Context, organizationName string, tea
 		if err != nil {
 			return mapWriteError("insert team", err)
 		}
-		if err := insertMembership(ctx, tx, team.Path, creator); err != nil {
-			return err
+		if creator.UserID != "" {
+			if err := insertMembership(ctx, tx, team.Path, creator); err != nil {
+				return err
+			}
 		}
 		return insertEvents(ctx, tx, events)
 	})

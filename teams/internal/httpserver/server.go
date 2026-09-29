@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
+	"github.com/Shubham04-oss/oryxa-go/internal/cliscope"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/domain"
@@ -111,7 +112,7 @@ func (server *Server) directory(writer http.ResponseWriter, request *http.Reques
 // handle registers a route and remembers its pattern, so a host serving
 // several services knows which paths are this one's.
 func (server *Server) handle(pattern string, handler http.HandlerFunc) {
-	server.mux.HandleFunc(pattern, handler)
+	server.mux.Handle(pattern, cliscope.Wrap(pattern, handler))
 	server.patterns = append(server.patterns, pattern)
 }
 

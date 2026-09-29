@@ -32,6 +32,7 @@ type Output struct {
 	// config.AgentCallbackURL provisioned one. Its secret is never returned
 	// or logged.
 	AgentAppClientID string `json:"agent_app_client_id,omitempty"`
+	CLIAppClientID   string `json:"cli_app_client_id,omitempty"`
 }
 
 func Run(ctx context.Context, client *cognitoidentityprovider.Client, config Config) (Output, error) {
@@ -65,6 +66,17 @@ func Run(ctx context.Context, client *cognitoidentityprovider.Client, config Con
 	}
 	if !config.DemoPasswordOnly {
 		output.GoogleRedirectURI = domain + "/oauth2/idpresponse"
+	}
+	if config.CLICallbackURL != "" {
+		cliConfig := cliAppConfig(config)
+		cliID, err := ensureAppClient(ctx, client, poolID, cliConfig)
+		if err != nil {
+			return Output{}, fmt.Errorf("provision CLI app client: %w", err)
+		}
+		if err := ensureManagedLoginBranding(ctx, client, poolID, cliID); err != nil {
+			return Output{}, err
+		}
+		output.CLIAppClientID = cliID
 	}
 
 	if config.AgentCallbackURL == "" {

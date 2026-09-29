@@ -276,6 +276,12 @@ both primary and specialist agents. Its skill lives at
 - `directory_find_teams` searches caller-visible teams by name.
 - `directory_find_agents` searches active agents by name, purpose, or owner.
 
+When `WORKSPACE_URL` is set, the same toolbox also exposes
+`directory_find_owners` for reviewed ownership hints and
+`directory_is_above` for explicit org-chart authority. The workspace API
+filters context to joined members before either tool sees it. The all-in-one
+host supplies `WORKSPACE_URL` when the workspace service runs.
+
 Teams remains the authority for current organization membership and team
 visibility. The agents service first asks Teams as the acting member, then
 joins only safe agent handles (`id`, owner identity, kind, display name, description)

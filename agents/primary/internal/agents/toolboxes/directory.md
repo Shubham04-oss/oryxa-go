@@ -5,6 +5,11 @@ handoff. `directory_load` returns the complete organization roster and the
 team tree visible to the member. Prefer the narrower find tools when you have
 a name, email, role, team, agent name, or purpose.
 
+When available, `directory_find_owners` searches explicit ownership hints
+from the reviewed workspace file. `directory_is_above` checks the configured
+authority relationships. Ownership hints are routing context, not permission
+to access another member's data or contact them.
+
 - People are canonical by `user_id`; names and email are labels.
 - Agents are canonical by `id`; their display names may change.
 - Team and member `path` values locate them in the organization tree.

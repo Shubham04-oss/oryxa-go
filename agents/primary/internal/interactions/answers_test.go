@@ -18,6 +18,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 // fakeGuard answers every answer with its verdict, or finds nothing when it
@@ -25,6 +26,15 @@ import (
 type fakeGuard struct {
 	verdict *answerguard.Verdict
 	checked [][]string
+}
+
+type fakeWorkspacePolicy struct {
+	settings policy.Settings
+	err      error
+}
+
+func (provider fakeWorkspacePolicy) Get(context.Context, string) (policy.Settings, error) {
+	return provider.settings, provider.err
 }
 
 func (guard *fakeGuard) Check(_ context.Context, texts []string) answerguard.Verdict {
@@ -117,6 +127,63 @@ func TestAnAnswerNothingIsFoundInIsDeliveredAsGiven(t *testing.T) {
 	}
 	if encoded, _ := json.Marshal(answered.Guard); string(encoded) != `{"state":"clear"}` {
 		t.Fatalf("guard reads %s, want {\"state\":\"clear\"}", encoded)
+	}
+}
+
+func TestWorkspacePolicyHoldsEveryCrossMemberAnswerForOwner(t *testing.T) {
+	service, _, approved := guardedService(t, &fakeGuard{}, nil)
+	service.policy = fakeWorkspacePolicy{settings: policy.Settings{HoldForReview: true}}
+	answer, err := service.Respond(context.Background(), target, approved.ID, answerGiven)
+	if err != nil || answer.Status != StatusReview || answer.Result != nil {
+		t.Fatalf("answer = %+v, %v", answer, err)
+	}
+	ownerView := asTheOwner(t, service, approved.ID)
+	if ownerView.Held == nil || ownerView.Held.Result.Summary != answerGiven.Summary {
+		t.Fatalf("owner view = %+v", ownerView)
+	}
+}
+
+func TestWorkspacePolicyReadFailurePreservesAnswerForOwnerReview(t *testing.T) {
+	var logs bytes.Buffer
+	service, _, approved := guardedService(t, &fakeGuard{}, &logs)
+	service.policy = fakeWorkspacePolicy{err: errors.New("policy storage unavailable")}
+	answer, err := service.Respond(context.Background(), target, approved.ID, answerGiven)
+	if err != nil || answer.Status != StatusReview || answer.Result != nil {
+		t.Fatalf("policy outage lost or released answer: %+v, %v", answer, err)
+	}
+	ownerView := asTheOwner(t, service, approved.ID)
+	if ownerView.Held == nil || ownerView.Held.Result.Content != answerGiven.Content {
+		t.Fatalf("owner cannot review completed work: %+v", ownerView)
+	}
+	requesterView, err := service.Get(context.Background(), requester, approved.ID)
+	if err != nil || requesterView.Result != nil || requesterView.Held != nil {
+		t.Fatalf("requester read held work: %+v, %v", requesterView, err)
+	}
+	if !strings.Contains(logs.String(), "policy storage unavailable") || strings.Contains(logs.String(), answerGiven.Content) {
+		t.Fatalf("policy failure must be diagnosable without answer text: %s", logs.String())
+	}
+}
+
+func TestWorkspacePolicyBoundsRequestExpiry(t *testing.T) {
+	service, _, _ := guardedService(t, nil, nil)
+	service.policy = fakeWorkspacePolicy{settings: policy.Settings{ExpireAfter: 2 * time.Hour}}
+	request, err := service.Create(context.Background(), requester, "token", "policy-expiry", agents.InteractionCreateInput{
+		TargetAgentID: "agt_engineering", Purpose: "Contact", Task: "Ask about billing",
+	})
+	if err != nil || !request.ExpiresAt.Equal(testNow.Add(2*time.Hour)) {
+		t.Fatalf("request = %+v, %v", request, err)
+	}
+	_, err = service.Create(context.Background(), requester, "token", "policy-overrun", agents.InteractionCreateInput{
+		TargetAgentID: "agt_engineering", Purpose: "Contact", Task: "Ask about billing", ExpiresInSeconds: int((3 * time.Hour).Seconds()),
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("longer expiry = %v", err)
+	}
+	_, err = service.Create(context.Background(), requester, "token", "policy-overflow", agents.InteractionCreateInput{
+		TargetAgentID: "agt_engineering", Purpose: "Contact", Task: "Ask about billing", ExpiresInSeconds: int(1 << 40),
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("overflow expiry = %v", err)
 	}
 }
 

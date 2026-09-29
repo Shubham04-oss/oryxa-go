@@ -65,6 +65,17 @@ are deliberately deferred.
 | An agent replacing a key or changing an organization's OAuth app | The same: those are a member's and an admin's decisions |
 | Anything through an Oryxa connection on a Composio path | Composio holds no account of it; its tools arrive with phase 2 |
 
+When an organization applies `tools.offer` in `oryxa.yaml`, apps reads the
+last applied workspace version before connecting, running tools, reading an
+app, creating subscriptions, and publishing trigger deliveries. Missing
+`offer` allows the catalog; `offer: []` allows none. Existing connections stay
+visible so members can disconnect them, but a restricted app cannot act or
+deliver events. `GET /v1/organizations/{organizationID}/apps/offer` gives a
+member the current list and auto-subscribe default so the web catalog offers
+only allowed apps. The deployment's `APPS_AUTO_SUBSCRIBE=false` remains a
+global off switch; `tools.autoSubscribe` sets the default for new connections
+within it, and an explicit per-connection choice takes precedence.
+
 ## Connecting an app
 
 Composio's hosted flow does the work. Apps asks for a link, records the
@@ -347,9 +358,10 @@ shape, so `POST /v1/organizations/{org}/apps/read` proxies one request to the
 app's own API through the caller's connection, with Composio placing the
 credential.
 
-Only reads pass. A GET or HEAD always does; a POST only where the app's own
-read API is one (Notion's search and database queries, Slack's history), from a
-list apps keeps. Anything else is refused as `not_read_only`, because a change
+Only reads pass. Slack RPC methods use an explicit read list for GET, HEAD and
+POST: HTTP GET can mutate state there, including token revocation. Other apps
+allow GET and HEAD; POST is limited to known read APIs such as Notion search
+and database queries. Anything else is refused as `not_read_only`, because a change
 is a tool run: recorded, keyed, and confirmed by the member. An endpoint must
 be a path under the app's own API — another host, a relative path or one
 climbing out with dot segments is refused — and `Authorization`, `Cookie`,

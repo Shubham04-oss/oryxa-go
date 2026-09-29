@@ -203,7 +203,7 @@ func TestOrganizationNoticesSendTheirEmail(t *testing.T) {
 			send: func(service *Service) error {
 				return service.MemberInvitationRevoked(context.Background(), ref(autheventsv1.MemberInvitationRevokedDetailType), autheventsv1.MemberInvitationRevoked{
 					InvitationID: "inv_1", OrganizationID: "org_1", OrganizationName: "Acme", Email: "sam@example.com",
-					Role: "member", RevokedBy: "user-1", RevokedAt: testNow,
+					Role: "member", Quiet: new(false), RevokedBy: "user-1", RevokedAt: testNow,
 				})
 			},
 			template: "invitation-revoked", recipient: "sam@example.com", mentions: "no longer works",
@@ -315,7 +315,7 @@ func TestTeamCalledSkipsWhenTheMemberDoesNotWantEmail(t *testing.T) {
 func TestOrganizationNoticesRejectEventsWithoutRecipientOrOrganization(t *testing.T) {
 	tests := map[string]func(*Service) error{
 		"no email": func(service *Service) error {
-			return service.MemberInvitationRevoked(context.Background(), ref(autheventsv1.MemberInvitationRevokedDetailType), autheventsv1.MemberInvitationRevoked{OrganizationName: "Acme"})
+			return service.MemberInvitationRevoked(context.Background(), ref(autheventsv1.MemberInvitationRevokedDetailType), autheventsv1.MemberInvitationRevoked{OrganizationName: "Acme", Quiet: new(false)})
 		},
 		"no organization name": func(service *Service) error {
 			return service.MemberRemoved(context.Background(), ref(autheventsv1.MemberRemovedDetailType), autheventsv1.MemberRemoved{
@@ -523,6 +523,16 @@ func TestInvitationRequiresOrganizationAndRole(t *testing.T) {
 	}
 }
 
+func TestQuietInvitationSendsNoEmail(t *testing.T) {
+	service, deliveries := newTestService(t)
+	err := service.MemberInvited(context.Background(), ref(autheventsv1.MemberInvitedDetailType), autheventsv1.MemberInvited{
+		Email: "ravi@example.com", Quiet: true,
+	})
+	if err != nil || len(deliveries.requests) != 0 {
+		t.Fatalf("quiet invitation error = %v, deliveries = %d", err, len(deliveries.requests))
+	}
+}
+
 func TestExpiresIn(t *testing.T) {
 	tests := map[time.Duration]string{
 		-time.Minute:                    "1 minute",
@@ -551,5 +561,25 @@ func TestSESFeedbackIsRecorded(t *testing.T) {
 	}
 	if len(deliveries.feedback) != 1 || deliveries.feedback[0].DeliveryID != "delivery-1" {
 		t.Fatalf("recorded feedback = %+v", deliveries.feedback)
+	}
+}
+
+func TestQuietOrLegacyRevocationNeverSendsEmail(t *testing.T) {
+	for _, quiet := range []*bool{nil, new(true)} {
+		service, deliveries := newTestService(t)
+		err := service.MemberInvitationRevoked(context.Background(), ref(autheventsv1.MemberInvitationRevokedDetailType), autheventsv1.MemberInvitationRevoked{OrganizationName: "Acme", Email: "quiet@example.com", Quiet: quiet})
+		if err != nil || len(deliveries.requests) != 0 {
+			t.Fatalf("quiet=%v: err=%v deliveries=%d", quiet, err, len(deliveries.requests))
+		}
+	}
+}
+
+func TestInvitationWithoutAcceptanceLinkNeverSendsEmail(t *testing.T) {
+	for _, link := range []string{"", "  "} {
+		service, deliveries := newTestService(t)
+		err := service.MemberInvited(context.Background(), ref(autheventsv1.MemberInvitedDetailType), autheventsv1.MemberInvited{OrganizationName: "Acme", Role: "member", Email: "quiet@example.com", AcceptURL: link, ExpiresAt: testNow.Add(time.Hour)})
+		if err == nil || len(deliveries.requests) != 0 {
+			t.Fatalf("empty link: err=%v deliveries=%d", err, len(deliveries.requests))
+		}
 	}
 }

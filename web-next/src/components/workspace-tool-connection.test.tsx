@@ -100,6 +100,14 @@ function fakeFetch(...handlers: Handler[]) {
           typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
       }
       requests.push(request)
+      if (request.method === "GET" && request.path === `${org}/apps/offer`) {
+        return json({
+          offer: null,
+          employee_connections: true,
+          can_connect: true,
+          auto_subscribe_default: true,
+        })
+      }
       for (const handler of handlers) {
         const response = handler(request)
         if (response) return response

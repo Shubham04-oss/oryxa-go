@@ -81,7 +81,8 @@ func (s *Service) subscribeConnections(ctx context.Context) {
 		return
 	}
 	now := s.now().UTC()
-	owed, err := s.store.ConnectionsAwaitingSubscribe(ctx, autoSubscribeAttempts, autoSubscribeConnections, now, now.Add(autoSubscribeLease))
+	leaseUntil := now.Add(autoSubscribeLease)
+	owed, err := s.store.ConnectionsAwaitingSubscribe(ctx, autoSubscribeAttempts, autoSubscribeConnections, now, leaseUntil)
 	if err != nil {
 		if ctx.Err() == nil {
 			s.logger.ErrorContext(ctx, "claim connections to subscribe", "error", err)
@@ -95,6 +96,17 @@ func (s *Service) subscribeConnections(ctx context.Context) {
 		if connection.Oryxa() {
 			// The store claims only Composio's; subscribing is a Composio
 			// call, which an Oryxa connection has no account for.
+			continue
+		}
+		if err := s.allowToolkit(ctx, connection.OrganizationID, connection.Toolkit); err != nil {
+			s.logger.WarnContext(ctx, "skip automatic subscriptions under workspace app policy", "connection_id", connection.ID, "error", err)
+			// Keep the lease as a backoff, but do not spend the provider retry
+			// budget on a disabled app or an unavailable policy store.
+			refund, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			if refundErr := s.store.RefundAutoSubscribeAttempt(refund, connection.ID, connection.AutoSubscribeAttempts, leaseUntil); refundErr != nil {
+				s.logger.ErrorContext(ctx, "refund policy-blocked subscription attempt", "connection_id", connection.ID, "error", refundErr)
+			}
+			cancel()
 			continue
 		}
 		s.subscribeEverything(ctx, connection)

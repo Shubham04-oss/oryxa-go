@@ -33,6 +33,7 @@ type fakeService struct {
 	removed      string
 	listedScope  bool
 	listedKit    string
+	offer        application.OfferPolicy
 
 	connection domain.Connection
 	targets    []application.Target
@@ -71,6 +72,11 @@ func (fake *fakeService) CatalogTriggers(context.Context, string, string, int) (
 		return nil, "", fake.err
 	}
 	return []application.TriggerTypeView{{Trigger: "GITHUB_COMMIT_EVENT"}}, "", nil
+}
+
+func (fake *fakeService) OfferedTools(_ context.Context, credentials authclient.Credentials, organizationID string) (application.OfferPolicy, error) {
+	fake.credentials, fake.organization = credentials, organizationID
+	return fake.offer, fake.err
 }
 
 func (fake *fakeService) Connect(_ context.Context, credentials authclient.Credentials, organizationID string, input application.ConnectInput) (domain.Connection, string, error) {
@@ -222,6 +228,7 @@ func TestRoutesNeedACaller(t *testing.T) {
 	t.Parallel()
 	server := newServer(t, &fakeService{})
 	for _, route := range []struct{ method, target string }{
+		{http.MethodGet, "/v1/organizations/org_1/apps/offer"},
 		{http.MethodGet, "/v1/organizations/org_1/apps/connections"},
 		{http.MethodPost, "/v1/organizations/org_1/apps/connections"},
 		{http.MethodGet, "/v1/organizations/org_1/apps/connections/apc_1"},
@@ -236,6 +243,19 @@ func TestRoutesNeedACaller(t *testing.T) {
 		if recorder.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s = %d, want 401", route.method, route.target, recorder.Code)
 		}
+	}
+}
+
+func TestOfferedToolsReturnsOrgScopedPolicy(t *testing.T) {
+	offer := []string{"github"}
+	fake := &fakeService{offer: application.OfferPolicy{Offer: &offer, AutoSubscribeDefault: false}}
+	recorder := call(newServer(t, fake), http.MethodGet, "/v1/organizations/org_1/apps/offer", "", "Authorization", "Bearer token")
+	if recorder.Code != http.StatusOK || fake.organization != "org_1" || fake.credentials.Authorization != "Bearer token" {
+		t.Fatalf("offered tools: status=%d org=%q credentials=%+v", recorder.Code, fake.organization, fake.credentials)
+	}
+	var body application.OfferPolicy
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body.Offer == nil || len(*body.Offer) != 1 || (*body.Offer)[0] != "github" || body.AutoSubscribeDefault {
+		t.Fatalf("offer response = %+v, %v", body, err)
 	}
 }
 
@@ -748,5 +768,16 @@ func TestPatternsAreAllOfApps(t *testing.T) {
 		if !strings.HasPrefix(path, "/v1/apps/") && !strings.HasPrefix(path, "/v1/organizations/{organizationID}/apps") {
 			t.Errorf("pattern %q is not under apps' own paths", pattern)
 		}
+	}
+}
+
+func TestPolicyFailureCauseIsNotReturnedToClient(t *testing.T) {
+	cause := fmt.Errorf("invalid stored policy with sensitive diagnostics: %w", domain.ErrInvalid)
+	failure := fmt.Errorf("read workspace policy: %w: %w", domain.ErrUnavailable, cause)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/organizations/org_1/apps/offer", nil)
+	newServer(t, &fakeService{}).handleError(response, request, failure)
+	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), cause.Error()) || !strings.Contains(response.Body.String(), `"code":"unavailable"`) {
+		t.Fatalf("policy error response: %d %s", response.Code, response.Body)
 	}
 }

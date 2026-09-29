@@ -151,3 +151,32 @@ func TestFromEnvRejectsInvalidServiceCallersJSON(t *testing.T) {
 		t.Fatal("FromEnv() error = nil, want invalid callers JSON error")
 	}
 }
+
+func TestCLIClientMustBeADistinctTokenClass(t *testing.T) {
+	for _, clientID := range []string{"client-id", "agent-client-id"} {
+		values := requiredEnv()
+		values["COGNITO_AGENT_CLIENT_ID"] = "agent-client-id"
+		values["COGNITO_CLI_CLIENT_ID"] = clientID
+		values["COGNITO_CLI_CALLBACK_URL"] = "http://127.0.0.1:8765/callback"
+		if _, err := FromEnv(env(values)); err == nil {
+			t.Fatalf("accepted CLI client shared with %s", clientID)
+		}
+	}
+}
+
+func TestCLIRegisteredFallbackCallbacksAreValidated(t *testing.T) {
+	values := requiredEnv()
+	values["COGNITO_CLI_CLIENT_ID"] = "cli-client"
+	values["COGNITO_CLI_CALLBACK_URL"] = "http://127.0.0.1:8765/callback"
+	values["COGNITO_CLI_CALLBACK_URLS"] = "http://127.0.0.1:8765/callback,http://127.0.0.1:8766/callback"
+	config, err := FromEnv(func(key string) string { return values[key] })
+	if err != nil || len(config.CognitoCLICallbackURLs) != 2 {
+		t.Fatalf("fallback callbacks: %v %v", config.CognitoCLICallbackURLs, err)
+	}
+	for _, invalid := range []string{"http://user@127.0.0.1:8766/callback", "http://127.0.0.1:0/callback", "http://127.0.0.1:8766/callback?state=bad", "https://remote.example/callback"} {
+		values["COGNITO_CLI_CALLBACK_URLS"] = invalid
+		if _, err := FromEnv(func(key string) string { return values[key] }); err == nil {
+			t.Fatalf("unsafe callback accepted: %s", invalid)
+		}
+	}
+}

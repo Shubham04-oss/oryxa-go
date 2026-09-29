@@ -14,6 +14,8 @@ Cloudflare is the public edge. Route the public auth hostname to this service wi
 6. Verification and reset links are generated and consumed by auth. Their delivery-requested events are the email service's only responsibility: email renders and sends the message but never verifies an account or changes a password.
 7. Users create organizations, invite members, accept invitations, change roles, leave or remove members, and update or delete organizations through authenticated endpoints.
 
+The setup CLI opens a local browser start page. Existing creators sign in through the CLI Cognito app client; new creators open the web sign-up page, verify email, then return to the start page to sign in. `/v1/auth/config` publishes the CLI client ID, fixed loopback callback, Cognito domain, and web sign-up URL when the CLI client is configured. The CLI exchanges the authorization code with PKCE, registers the verified identity through `/v1/auth/cli/session`, and keeps only the short-lived access token in memory.
+
 Access JWTs are verified locally against Cognito's signed OIDC keys. The auth state tables store only SHA-256 token hashes. Delivery outbox records temporarily contain the action URL needed by email and are scrubbed immediately after successful EventBridge publication. Verification tokens expire after 24 hours; reset tokens expire after 30 minutes. Token redemption uses a PostgreSQL claim lease to prevent concurrent reuse and recover safely after a crashed worker. Cookie-backed and public credential mutations require an allowed browser `Origin`; bearer-token API calls remain supported for authenticated APIs.
 
 ## API
@@ -223,3 +225,18 @@ Every ended membership emits `auth.member.removed.v1`, whose `reason` is `left`,
 Billing consumes `auth.organization.created.v1`, `auth.organization.updated.v1` and `auth.organization.deleted.v1`: it announces each new organization's first entitlements and cancels a deleted organization's subscription. See `billing/README.md`. Teams consumes those three and `auth.member.removed.v1`, so team data stays in step with the organizations it belongs to and members who leave an organization leave its teams. See `teams/README.md`.
 
 Email consumes `auth.user.registered.v1` (welcome), the delivery requests `auth.user.email-verification.delivery-requested.v1`, `auth.user.password-reset.delivery-requested.v1` and `auth.member.invited.v1` (it sends the supplied action URL and never executes auth state transitions), and `auth.member.invitation-revoked.v1`, `auth.member.role-changed.v1` and `auth.member.removed.v1` (notices to the affected member). See `email/README.md`.
+
+### Quiet invitations and rolling upgrades
+
+A quiet invitation stores `quiet=true`; revocation carries the same preference
+and sends no withdrawal email. A normal invitation explicitly stores false and
+its revocation carries `quiet:false`. Email rejects invitations without an
+acceptance link. A legacy revocation lacking the quiet field is acknowledged
+without mail because its original notification preference is unknown.
+
+Upgrade and drain old **email consumers before auth writers**: old consumers do
+not understand the additive quiet field. Migration `009_quiet_invitations.sql`
+marks existing invitations, and invitations from an old writer during rollout,
+quiet by default. Their original invitation events have been redacted after
+publication, so that preference cannot be recovered reliably. This suppresses
+legacy withdrawal notices; new ordinary invitations retain those notices.

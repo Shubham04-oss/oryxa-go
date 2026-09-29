@@ -1,0 +1,231 @@
+package events
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
+
+	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
+)
+
+// component identifies this consumer in its metrics and logs, low-cardinality
+// and fixed regardless of which queue or detail type it is handling.
+const component = "workspace"
+
+// Subscriptions drives both dispatch authorization and the EventBridge rule.
+func Subscriptions() map[string][]string {
+	return map[string][]string{
+		autheventsv1.Source:  {autheventsv1.OrganizationDeletedDetailType, autheventsv1.MemberRemovedDetailType},
+		teamseventsv1.Source: {teamseventsv1.TeamDeletedDetailType},
+	}
+}
+
+type application interface {
+	Cleanup(context.Context, store.Departure) error
+}
+
+type Consumer struct {
+	application application
+	logger      *slog.Logger
+	metrics     observability.ConsumerMetrics
+	// verifier proves who published each event. Nil is a build error caught
+	// at mount: a consumer that cannot check signatures would run any
+	// message a queue handed it.
+	verifier *eventauth.Verifier
+	// queueName is set once, at the top of Poll, before Poll's single
+	// goroutine starts calling handle; it is not touched concurrently.
+	queueName string
+}
+
+func NewConsumer(app application, verifier *eventauth.Verifier, logger *slog.Logger) (*Consumer, error) {
+	if verifier == nil {
+		return nil, errors.New("workspace cannot consume unsigned events: a signature verifier is required")
+	}
+	metrics, err := observability.NewConsumerMetrics()
+	if err != nil {
+		logger.Warn("consumer metrics unavailable; handling continues without them", "error", err)
+	}
+	return &Consumer{
+		application: app,
+		logger:      logger,
+		metrics:     metrics,
+		verifier:    verifier,
+	}, nil
+}
+
+type eventBridgeEvent struct {
+	ID         string          `json:"id"`
+	Source     string          `json:"source"`
+	DetailType string          `json:"detail-type"`
+	Detail     json.RawMessage `json:"detail"`
+}
+
+type receivedEnvelope struct {
+	EventID    string          `json:"event_id"`
+	Version    int             `json:"version"`
+	OccurredAt string          `json:"occurred_at"`
+	Data       json.RawMessage `json:"data"`
+	// Signature is the publisher's proof over the envelope's content. It is
+	// checked before any handler runs; a missing or wrong signature means
+	// the message never came from the service it claims.
+	Signature string `json:"sig"`
+	// TraceCarrier decodes the envelope's optional traceparent/tracestate
+	// fields; a message published before this rollout, or one that never
+	// carried one, decodes to the zero TraceCarrier, and handling continues
+	// under a fresh span rather than failing.
+	observability.TraceCarrier
+}
+
+// Handle processes one signed lifecycle event from auth or teams. It
+// is exported on its own, receivedAt defaulting to now, for tests and any
+// other caller that does not go through Poll.
+func (consumer *Consumer) Handle(ctx context.Context, body string) error {
+	return consumer.handle(ctx, body, time.Now())
+}
+
+func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt time.Time) error {
+	var event eventBridgeEvent
+	if err := json.Unmarshal([]byte(body), &event); err != nil {
+		return fmt.Errorf("decode EventBridge event: %w", err)
+	}
+	allowed := false
+	for _, kind := range Subscriptions()[event.Source] {
+		if kind == event.DetailType {
+			allowed = true
+		}
+	}
+	if !allowed {
+		return fmt.Errorf("event %s: unsupported source/type", event.ID)
+	}
+
+	var detail receivedEnvelope
+	if err := json.Unmarshal(event.Detail, &detail); err != nil {
+		return fmt.Errorf("event %s: decode detail: %w", event.ID, err)
+	}
+	if detail.Version != 1 || detail.EventID == "" {
+		return fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, detail.Version, detail.EventID)
+	}
+	// The signature is checked before anything in the event is used, so a
+	// message that reached the queue without the named service having sent
+	// it is refused whatever its payload says.
+	if err := consumer.verifier.Verify(event.Source, event.DetailType, detail.EventID, detail.Version, detail.OccurredAt, detail.Data, detail.Signature); err != nil {
+		return fmt.Errorf("event %s: %w", detail.EventID, err)
+	}
+	occurredAt, err := time.Parse(time.RFC3339Nano, detail.OccurredAt)
+	if err != nil {
+		return fmt.Errorf("invalid event time: %w", err)
+	}
+
+	ctx, span := observability.StartConsumerSpan(ctx, detail.TraceCarrier, consumer.queueName, event.DetailType, detail.EventID)
+	started := time.Now()
+	err = consumer.cleanup(ctx, event.DetailType, detail, occurredAt)
+	observability.EndSpan(span, err)
+	consumer.metrics.Record(ctx, component, event.DetailType, occurredAt, receivedAt, started, err)
+	if err != nil {
+		return fmt.Errorf("event %s: %s: %w", detail.EventID, event.DetailType, err)
+	}
+	consumer.logger.InfoContext(ctx, "workspace lifecycle event handled", "event_id", detail.EventID, "detail_type", event.DetailType)
+	return nil
+}
+
+func (consumer *Consumer) cleanup(ctx context.Context, kind string, envelope receivedEnvelope, occurredAt time.Time) error {
+	departure := store.Departure{EventID: envelope.EventID, OccurredAt: occurredAt}
+	switch kind {
+	case autheventsv1.OrganizationDeletedDetailType:
+		var event autheventsv1.OrganizationDeleted
+		if err := json.Unmarshal(envelope.Data, &event); err != nil {
+			return err
+		}
+		departure.OrganizationID, departure.Kind = event.OrganizationID, "organization"
+	case autheventsv1.MemberRemovedDetailType:
+		var event autheventsv1.MemberRemoved
+		if err := json.Unmarshal(envelope.Data, &event); err != nil {
+			return err
+		}
+		departure.OrganizationID, departure.Kind, departure.ResourceID, departure.Reference = event.OrganizationID, "user", event.UserID, event.Email
+	case teamseventsv1.TeamDeletedDetailType:
+		var event teamseventsv1.TeamDeleted
+		if err := json.Unmarshal(envelope.Data, &event); err != nil {
+			return err
+		}
+		departure.OrganizationID, departure.Kind, departure.ResourceID, departure.Reference = event.OrganizationID, "team", event.TeamID, event.Name
+	}
+	return consumer.application.Cleanup(ctx, departure)
+}
+
+type queueAPI interface {
+	ReceiveMessage(context.Context, *sqs.ReceiveMessageInput, ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
+	DeleteMessageBatch(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
+}
+
+// Poll consumes the queue until ctx is cancelled. Handled messages are
+// deleted; failed ones return after their visibility timeout, and the redrive
+// policy moves a message that keeps failing aside.
+func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL string) {
+	// Poll runs as this consumer's only goroutine for its whole life, calling
+	// handle sequentially, so setting this once up front and never touching
+	// it again needs no lock.
+	consumer.queueName = observability.QueueName(queueURL)
+	for {
+		output, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+			QueueUrl:            aws.String(queueURL),
+			MaxNumberOfMessages: 10,
+			WaitTimeSeconds:     20,
+		})
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			consumer.logger.ErrorContext(ctx, "receive from workspace queue failed", "error", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
+		// One timestamp for the whole batch: ReceiveMessage already returned,
+		// so every message in it was equally "received" as of now, and the
+		// small skew from handling earlier messages in the loop first is
+		// negligible next to what the delivery-lag metric measures.
+		receivedAt := time.Now()
+
+		var handled []sqstypes.DeleteMessageBatchRequestEntry
+		for index, message := range output.Messages {
+			if err := consumer.handle(ctx, aws.ToString(message.Body), receivedAt); err != nil {
+				consumer.logger.ErrorContext(ctx, "workspace lifecycle event failed", "sqs_message_id", aws.ToString(message.MessageId), "error", err)
+				continue
+			}
+			handled = append(handled, sqstypes.DeleteMessageBatchRequestEntry{
+				Id:            aws.String(strconv.Itoa(index)),
+				ReceiptHandle: message.ReceiptHandle,
+			})
+		}
+		if len(handled) == 0 {
+			continue
+		}
+		deleted, err := client.DeleteMessageBatch(ctx, &sqs.DeleteMessageBatchInput{QueueUrl: aws.String(queueURL), Entries: handled})
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				consumer.logger.ErrorContext(ctx, "delete handled messages failed", "error", err)
+			}
+			continue
+		}
+		for _, failure := range deleted.Failed {
+			consumer.logger.ErrorContext(ctx, "delete handled message failed", "code", aws.ToString(failure.Code), "message", aws.ToString(failure.Message))
+		}
+	}
+}

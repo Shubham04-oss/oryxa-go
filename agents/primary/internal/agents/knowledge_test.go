@@ -19,6 +19,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/knowledgeclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/ragclient"
+	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 // fakeRag stands in for rag: a few corpora, each answering a search with
@@ -89,6 +90,15 @@ func TestKnowledgePassageCarriesIndexedProvenance(t *testing.T) {
 }
 
 type fakeTokens struct{ token string }
+
+type fakeSearchPolicy struct {
+	mode string
+	err  error
+}
+
+func (policy *fakeSearchPolicy) Get(context.Context, string) (workspacepolicy.Settings, error) {
+	return workspacepolicy.Settings{SearchMode: policy.mode}, policy.err
+}
 
 type fakeKnowledgeSources struct {
 	listed []knowledgeclient.Source
@@ -260,6 +270,33 @@ func TestKnowledgeSearchesAsTheMemberAndMergesTheBestPassages(t *testing.T) {
 	}
 	if !strings.Contains(answer, "https://notion.so/launch") || !strings.Contains(answer, "Plan › Dates") {
 		t.Fatalf("answer = %q, want the passage's source and section", answer)
+	}
+}
+
+func TestKnowledgeSearchFollowsAppliedWorkspaceMode(t *testing.T) {
+	rag := &fakeRag{corpora: []ragclient.Corpus{{ID: "c1", DocumentCount: 1}}, matches: map[string][]ragclient.Match{"c1": {match("Plan", "", "Approved", 0.8)}}}
+	policy := &fakeSearchPolicy{mode: "none"}
+	box, err := KnowledgeToolbox(KnowledgeConfig{Rag: rag, Policy: policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, searchesKnowledgeLLM("plan"), box)
+	ctx := memberauth.WithAccessToken(context.Background(), "member-token")
+	answer := h.turnWith(ctx, "user-1", map[string]any{OrganizationIDKey: "org-1"}, "Search.")
+	if !strings.Contains(answer, "knowledge tools are disabled") || len(rag.calls) != 0 {
+		t.Fatalf("disabled search = %q, rag calls = %v", answer, rag.calls)
+	}
+	policy.mode = "native"
+	h = newHarness(t, searchesKnowledgeLLM("plan"), box)
+	answer = h.turnWith(ctx, "user-1", map[string]any{OrganizationIDKey: "org-1"}, "Search.")
+	if !strings.Contains(answer, "Approved") || len(rag.searched()) != 1 {
+		t.Fatalf("enabled search = %q, rag calls = %v", answer, rag.calls)
+	}
+	policy.err = errors.New("database unavailable")
+	h = newHarness(t, searchesKnowledgeLLM("plan"), box)
+	answer = h.turnWith(ctx, "user-1", map[string]any{OrganizationIDKey: "org-1"}, "Search.")
+	if !strings.Contains(answer, "workspace search policy unavailable") || len(rag.searched()) != 1 {
+		t.Fatalf("unavailable policy = %q, rag calls = %v", answer, rag.calls)
 	}
 }
 

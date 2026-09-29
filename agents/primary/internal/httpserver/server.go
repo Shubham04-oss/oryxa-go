@@ -31,6 +31,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
+	"github.com/Shubham04-oss/oryxa-go/internal/cliscope"
 )
 
 const maxJSONBytes = 256 << 10
@@ -133,6 +134,7 @@ type AgentInteractions interface {
 // resolved from the live human-team directory on every call.
 type Teamspaces interface {
 	OrganizationAgent(context.Context, teamspaces.Actor) (teamspaces.OrganizationAgent, error)
+	PreviewOrganizationAgent(context.Context, teamspaces.Actor) (teamspaces.OrganizationAgent, error)
 	UpdateOrganizationAgent(context.Context, teamspaces.Actor, teamspaces.OrganizationAgentUpdate) (teamspaces.OrganizationAgent, error)
 	List(context.Context, teamspaces.Actor) ([]teamspaces.Space, error)
 	Get(context.Context, teamspaces.Actor, string) (teamspaces.Space, error)
@@ -913,7 +915,13 @@ func (server *Server) getOrganizationAgent(writer http.ResponseWriter, request *
 		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
 		return
 	}
-	agent, err := server.teamspaces.OrganizationAgent(request.Context(), teamspaceActorOf(member))
+	var agent teamspaces.OrganizationAgent
+	var err error
+	if request.URL.Query().Get("preview") == "1" {
+		agent, err = server.teamspaces.PreviewOrganizationAgent(request.Context(), teamspaceActorOf(member))
+	} else {
+		agent, err = server.teamspaces.OrganizationAgent(request.Context(), teamspaceActorOf(member))
+	}
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -1313,7 +1321,7 @@ func (server *Server) getAgentWorkflowExecution(writer http.ResponseWriter, requ
 // handle registers a route and remembers its pattern, so a host serving
 // several services knows which paths are this one's.
 func (server *Server) handle(pattern string, handler http.HandlerFunc) {
-	server.mux.HandleFunc(pattern, handler)
+	server.mux.Handle(pattern, cliscope.Wrap(pattern, handler))
 	server.patterns = append(server.patterns, pattern)
 }
 

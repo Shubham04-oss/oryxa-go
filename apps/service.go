@@ -47,6 +47,8 @@ type Dependencies struct {
 	Directory application.Directory
 	// Composio is the API every app is reached through. Required.
 	Composio application.Composio
+	// Policy is the applied workspace file, when workspace is mounted.
+	Policy application.PolicySource
 	// Sink is where published events go. Without one, apps still works and
 	// its outbox simply fills up, which a host should not choose to do.
 	Sink events.Sink
@@ -129,6 +131,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		Store:     dependencies.Store,
 		Directory: dependencies.Directory,
 		Composio:  dependencies.Composio,
+		Policy:    dependencies.Policy,
 		Oryxa:     oryxa,
 		Logger:    logger,
 	}, application.Config{

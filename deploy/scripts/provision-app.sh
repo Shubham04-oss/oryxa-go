@@ -30,7 +30,7 @@ provision() {
 # yet, and stopping on it part way through would leave the services after it
 # unprovisioned, without a word.
 missing=()
-for service in agents apps auth batching billing files knowledge rag realtime teams; do
+for service in agents apps auth batching billing files knowledge rag realtime teams workspace; do
   queue_name "$service" >/dev/null || missing+=("$service")
 done
 if ((${#missing[@]} > 0)); then
@@ -41,6 +41,7 @@ fi
 for service in apps auth batching billing knowledge realtime teams; do
   provision "$service/infra/events" "$(tr '[:lower:]' '[:upper:]' <<<"$service")_EVENTS_QUEUE_NAME=$(queue_name "$service")"
 done
+provision internal/workspace/infra/events "WORKSPACE_EVENTS_QUEUE_NAME=$(queue_name workspace)"
 provision agents/primary/infra/events "AGENTS_EVENTS_QUEUE_NAME=$(queue_name agents)"
 provision files/infra/storage "FILES_EVENTS_QUEUE_NAME=$(queue_name files)"
 provision rag/infra/vectors "RAG_EVENTS_QUEUE_NAME=$(queue_name rag)"
@@ -69,6 +70,8 @@ cognito=$(
     COGNITO_CALLBACK_URLS="$APP_URL/v1/auth/callback" \
     COGNITO_LOGOUT_URLS="$APP_URL" \
     COGNITO_AGENT_CALLBACK_URL="$APP_URL/v1/agent-grant/callback" \
+    COGNITO_CLI_CALLBACK_URL="http://127.0.0.1:8765/callback" \
+    COGNITO_CLI_CALLBACK_URLS="http://127.0.0.1:8765/callback,http://127.0.0.1:8766/callback,http://127.0.0.1:8767/callback,http://127.0.0.1:8768/callback" \
     go run ./auth/infra/cognito/cmd/provision
 )
 jq -c . <<<"$cognito"
@@ -76,7 +79,8 @@ jq '{cognito: {
   user_pool_id: .user_pool_id,
   client_id: .app_client_id,
   domain: .cognito_domain,
-  agent_client_id: (.agent_app_client_id // "")
+  agent_client_id: (.agent_app_client_id // ""),
+  cli_client_id: (.cli_app_client_id // "")
 }}' <<<"$cognito" >"$TF/app.auto.tfvars.json"
 
 # The agent client is confidential. Its secret goes from Cognito straight to

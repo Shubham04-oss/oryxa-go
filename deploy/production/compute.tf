@@ -73,6 +73,9 @@ locals {
       COGNITO_DOMAIN             = var.cognito.domain
       COGNITO_CALLBACK_URL       = "${local.app_url}/v1/auth/callback"
       COGNITO_AGENT_CLIENT_ID    = var.cognito.agent_client_id
+      COGNITO_CLI_CLIENT_ID      = var.cognito.cli_client_id
+      COGNITO_CLI_CALLBACK_URL   = "http://127.0.0.1:8765/callback"
+      COGNITO_CLI_CALLBACK_URLS  = "http://127.0.0.1:8765/callback,http://127.0.0.1:8766/callback,http://127.0.0.1:8767/callback,http://127.0.0.1:8768/callback"
       COGNITO_AGENT_CALLBACK_URL = "${local.app_url}/v1/agent-grant/callback"
       AUTH_RETURN_URLS           = local.app_url
       INVITATION_ACCEPT_URL      = "${local.app_url}/invitations/accept"

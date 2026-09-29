@@ -52,6 +52,14 @@ export type CatalogPage = {
   nextCursor?: string
 }
 
+/** The organization's applied Composio offer. Null means the whole catalog. */
+export type ToolOffer = {
+  offer: string[] | null
+  employee_connections: boolean
+  can_connect: boolean
+  auto_subscribe_default: boolean
+}
+
 export type TriggerTypePage = {
   triggers: TriggerType[]
   nextCursor?: string
@@ -450,6 +458,17 @@ export async function listConnectionTargets(
 /** The prefix of everything cached from apps about one organization. */
 export function appsQueryKey(organizationId: string) {
   return ["apps", organizationId] as const
+}
+
+export function toolOfferQueryOptions(organizationId: string) {
+  return queryOptions({
+    queryKey: [...appsQueryKey(organizationId), "offer"] as const,
+    queryFn: () =>
+      apiRequest<ToolOffer>(
+        `/v1/organizations/${encodeURIComponent(organizationId)}/apps/offer`
+      ),
+    staleTime: 60_000,
+  })
 }
 
 export function catalogQueryOptions(query: CatalogQuery = {}) {

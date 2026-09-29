@@ -50,11 +50,21 @@ func (s *Service) ConnectOryxa(ctx context.Context, credentials authclient.Crede
 	if caller.Agent {
 		return OryxaConnect{}, fmt.Errorf("an agent cannot connect an app: %w", domain.ErrForbidden)
 	}
-	if err := s.allowConnect(organizationID, caller.UserID); err != nil {
-		return OryxaConnect{}, err
-	}
 	toolkit, err := domain.CheckToolkit(input.Toolkit)
 	if err != nil {
+		return OryxaConnect{}, err
+	}
+	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
+		return OryxaConnect{}, err
+	}
+	if err := s.allowEmployeeConnect(ctx, organizationID, caller.Role.IsOrgAdmin()); err != nil {
+		return OryxaConnect{}, err
+	}
+	autoSubscribe, err := s.defaultAutoSubscribe(ctx, organizationID)
+	if err != nil {
+		return OryxaConnect{}, err
+	}
+	if err := s.allowConnect(organizationID, caller.UserID); err != nil {
 		return OryxaConnect{}, err
 	}
 	manifest, err := s.enabled(toolkit)
@@ -82,7 +92,7 @@ func (s *Service) ConnectOryxa(ctx context.Context, credentials authclient.Crede
 		return OryxaConnect{}, err
 	}
 
-	connection, err := s.createOryxaConnection(ctx, organizationID, caller.UserID, toolkit, returnTo, input.AutoSubscribe)
+	connection, err := s.createOryxaConnection(ctx, organizationID, caller.UserID, toolkit, returnTo, input.AutoSubscribe, autoSubscribe)
 	if err != nil {
 		return OryxaConnect{}, err
 	}
@@ -150,7 +160,7 @@ func (s *Service) oneCurrentConnection(ctx context.Context, organizationID, memb
 // createOryxaConnection records a pending Oryxa connection, announcing that
 // it began. It carries no state hash: an Oryxa sign-in's state lives in its
 // flow, which signin keeps.
-func (s *Service) createOryxaConnection(ctx context.Context, organizationID, memberID, toolkit, returnTo string, autoSubscribe *bool) (domain.Connection, error) {
+func (s *Service) createOryxaConnection(ctx context.Context, organizationID, memberID, toolkit, returnTo string, autoSubscribe *bool, defaultAutoSubscribe bool) (domain.Connection, error) {
 	id, err := newID("apc")
 	if err != nil {
 		return domain.Connection{}, err
@@ -158,7 +168,7 @@ func (s *Service) createOryxaConnection(ctx context.Context, organizationID, mem
 	now := s.now().UTC()
 	connection := domain.Connection{
 		ID: id, OrganizationID: organizationID, MemberID: memberID, Toolkit: toolkit, Broker: domain.BrokerOryxa,
-		Status: domain.ConnectionPending, ReturnTo: returnTo, AutoSubscribe: s.autoSubscribe,
+		Status: domain.ConnectionPending, ReturnTo: returnTo, AutoSubscribe: defaultAutoSubscribe,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if autoSubscribe != nil {
@@ -359,6 +369,14 @@ func (s *Service) ReplaceCredential(ctx context.Context, credentials authclient.
 	}
 	if connection.MemberID != caller.UserID {
 		return domain.Connection{}, domain.ErrNotFound
+	}
+	// Replacing a key establishes access to the provider just as connecting
+	// does. An existing connection must not bypass a changed workspace policy.
+	if err := s.allowToolkit(ctx, organizationID, connection.Toolkit); err != nil {
+		return domain.Connection{}, err
+	}
+	if err := s.allowEmployeeConnect(ctx, organizationID, caller.Role.IsOrgAdmin()); err != nil {
+		return domain.Connection{}, err
 	}
 	if !connection.Oryxa() {
 		return domain.Connection{}, fmt.Errorf("the %s connection's credential is Composio's, so it is replaced by connecting again: %w",

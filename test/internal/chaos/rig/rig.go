@@ -284,6 +284,7 @@ func (rig *Rig) provisioners() []provisionSpec {
 		}
 	}
 	return []provisionSpec{
+		{"workspace-events", "./internal/workspace/infra/events/cmd/provision", events("workspace", "WORKSPACE_EVENTS_QUEUE_NAME"), "WORKSPACE_EVENTS_QUEUE_URL", "workspace"},
 		{"teams-events", "./teams/infra/events/cmd/provision", events("teams", "TEAMS_EVENTS_QUEUE_NAME"), "TEAMS_EVENTS_QUEUE_URL", "teams"},
 		{"billing-events", "./billing/infra/events/cmd/provision", events("billing", "BILLING_EVENTS_QUEUE_NAME"), "BILLING_EVENTS_QUEUE_URL", "billing"},
 		{"knowledge-events", "./knowledge/infra/events/cmd/provision", events("knowledge", "KNOWLEDGE_EVENTS_QUEUE_NAME"), "KNOWLEDGE_EVENTS_QUEUE_URL", "knowledge"},
@@ -404,7 +405,8 @@ func (rig *Rig) oryxaEnv() []string {
 		"RAG_ALLOWED_ORIGINS": "http://localhost:3000", "APPS_ALLOWED_ORIGINS": "http://localhost:3000",
 		"AGENTS_ALLOWED_ORIGINS": "http://localhost:3000",
 
-		"TEAMS_EVENTS_QUEUE_URL": queues("teams"), "BILLING_EVENTS_QUEUE_URL": queues("billing"),
+		"WORKSPACE_EVENTS_QUEUE_URL": queues("workspace"),
+		"TEAMS_EVENTS_QUEUE_URL":     queues("teams"), "BILLING_EVENTS_QUEUE_URL": queues("billing"),
 		"KNOWLEDGE_EVENTS_QUEUE_URL": queues("knowledge"), "APPS_EVENTS_QUEUE_URL": queues("apps"),
 		"BATCHING_EVENTS_QUEUE_URL": queues("batching"), "AGENTS_EVENTS_QUEUE_URL": queues("agents"),
 		"RAG_EVENTS_QUEUE_URL": queues("rag"), "FILES_EVENTS_QUEUE_URL": queues("files"),

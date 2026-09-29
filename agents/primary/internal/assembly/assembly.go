@@ -37,6 +37,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
+	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -55,12 +56,15 @@ type Options struct {
 	// token of its own. When nil, Build uses auth's agent-token exchange if
 	// Settings names both AuthURL and ServiceKeyID, and otherwise none.
 	Tokens memberauth.TokenSource
+	// Policy controls live organization search behavior.
+	Policy workspacepolicy.Provider
 	// HTTP is the client the apps toolbox's MCP calls go out on. Defaults to
 	// a fresh http.Client.
 	HTTP *http.Client
 	// Directory is the caller-visible people, team and agent directory. When
 	// nil, the directory toolbox is absent.
 	Directory agents.Directory
+	Context   agents.ContextDirectory
 	// Interactions is the durable cross-user request ledger. When nil, agents
 	// can discover one another but cannot exchange requests.
 	Interactions agents.InteractionService
@@ -347,6 +351,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 		knowledgeToolbox, err := agents.KnowledgeToolbox(agents.KnowledgeConfig{
 			Rag:          ragclient.New(settings.RagURL, nil),
+			Policy:       options.Policy,
 			Sources:      sources,
 			Tokens:       tokens,
 			MinRelevance: settings.KnowledgeMinRelevance,
@@ -357,6 +362,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			toolboxes = append(toolboxes, knowledgeToolbox)
 			readOnlyKnowledge, err := agents.KnowledgeToolbox(agents.KnowledgeConfig{
 				Rag:          ragclient.New(settings.RagURL, nil),
+				Policy:       options.Policy,
 				Sources:      sources,
 				ReadOnly:     true,
 				Tokens:       tokens,
@@ -371,7 +377,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 	}
 	if options.Directory != nil {
-		directoryToolbox, err := agents.DirectoryToolbox(agents.DirectoryConfig{Directory: options.Directory, Tokens: tokens})
+		directoryToolbox, err := agents.DirectoryToolbox(agents.DirectoryConfig{Directory: options.Directory, Context: options.Context, Tokens: tokens})
 		if err != nil {
 			return fail("organization directory toolbox", err)
 		}

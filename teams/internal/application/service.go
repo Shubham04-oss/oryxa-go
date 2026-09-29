@@ -51,8 +51,9 @@ type Directory interface {
 }
 
 type CreateTeamInput struct {
-	Name     string `json:"name"`
-	ParentID string `json:"parent_id,omitempty"`
+	Name        string `json:"name"`
+	ParentID    string `json:"parent_id,omitempty"`
+	SkipCreator bool   `json:"skip_creator,omitempty"`
 }
 
 type UpdateTeamInput struct {
@@ -132,6 +133,9 @@ func (s *Service) CreateTeam(ctx context.Context, credentials authclient.Credent
 	if err != nil {
 		return domain.Team{}, err
 	}
+	if input.SkipCreator && !org.ActsAsAdmin() {
+		return domain.Team{}, domain.ErrForbidden
+	}
 	name, err := teamName(input.Name)
 	if err != nil {
 		return domain.Team{}, err
@@ -192,11 +196,17 @@ func (s *Service) CreateTeam(ctx context.Context, credentials authclient.Credent
 	if err != nil {
 		return domain.Team{}, err
 	}
-	added, err := s.memberAddedEvent(team, org.OrganizationName, creator, org.UserID, now)
-	if err != nil {
-		return domain.Team{}, err
+	events := []domain.Event{created}
+	if input.SkipCreator {
+		creator = domain.Membership{}
+	} else {
+		added, err := s.memberAddedEvent(team, org.OrganizationName, creator, org.UserID, now)
+		if err != nil {
+			return domain.Team{}, err
+		}
+		events = append(events, added)
 	}
-	if err := s.store.CreateTeam(ctx, org.OrganizationName, team, creator, []domain.Event{created, added}); err != nil {
+	if err := s.store.CreateTeam(ctx, org.OrganizationName, team, creator, events); err != nil {
 		return domain.Team{}, err
 	}
 	return team, nil

@@ -44,6 +44,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/workspaceclient"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
@@ -184,6 +185,8 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 
 	registryStore := managedagents.NewStore(platform.Database)
 	interactionStore := agentinteractions.NewStore(platform.Database)
+	workspacePolicy := platform.WorkspaceSettings()
+	wakeupStore := wakeups.NewStoreWithPolicy(platform.Database, workspacePolicy)
 	// What each member chose about how strictly the answer guard reads what
 	// their agent says, apart for an answer they started themselves and one
 	// another member reads. No organization's policy can be read yet, so every
@@ -196,6 +199,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	logger.Info("the answer guard's relevance check is held to a ceiling",
 		"ceiling", settings.GuardRelevanceCap, "organizations_exempt", len(settings.GuardHoldOrgs))
 	var organizationDirectory agents.Directory
+	var organizationContext agents.ContextDirectory
 	if settings.TeamsURL != "" {
 		organizationDirectory, err = directoryclient.New(settings.TeamsURL, &http.Client{Transport: observability.Transport(nil)}, registryStore)
 		if err != nil {
@@ -204,6 +208,13 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		}
 	} else {
 		logger.Warn("TEAMS_URL is not set: agents cannot discover people or teams")
+	}
+	if settings.WorkspaceURL != "" {
+		organizationContext, err = workspaceclient.New(settings.WorkspaceURL, &http.Client{Timeout: 15 * time.Second, Transport: observability.Transport(nil)})
+		if err != nil {
+			sessionStore.Close()
+			return host.Service{}, err
+		}
 	}
 	// One agent-token exchange serves Krude's tools and the request ledger,
 	// which reads a request's teamspace again as its addressed member.
@@ -259,6 +270,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			Repository: interactionStore, Directory: organizationDirectory, Teamspaces: teamspaceService, Tokens: memberTokens,
 			Logger: logger,
 		}
+		interactionConfig.Policy = workspacePolicy
 		if typeSafe != nil {
 			interactionConfig.Jev = typeSafe.Ask
 		}
@@ -274,8 +286,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	agentSystemBinding := agents.NewAgentSystemBinding()
 	assemblyOptions := assembly.Options{
 		Settings: settings, AWS: platform.AWS, Google: platform.Google, Logger: logger,
-		Directory: organizationDirectory, AgentSystem: agentSystemBinding, Tokens: memberTokens,
+		Directory: organizationDirectory, Context: organizationContext, AgentSystem: agentSystemBinding, Tokens: memberTokens,
 	}
+	assemblyOptions.Policy = workspacePolicy
 	// interactionService and teamspaceService are concrete *Service pointers,
 	// nil when TEAMS_URL is unset. Boxed directly into these interface fields
 	// they would leave Build seeing a configured-but-nil collaborator rather
@@ -514,7 +527,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		TeamRooms:           teamRoomService,
 		Workflows:           workflowService,
 		OrganizationContext: organizationStore,
-		Preferences:         wakeups.NewStore(platform.Database),
+		Preferences:         wakeupStore,
 		// Always built above, so never a nil *Service in the interface.
 		AnswerGuardPreferences: guardSettings,
 	}
@@ -584,7 +597,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			"state_machine", settings.WorkflowStateMachineARN, "scheduler", workflowScheduler != nil)
 	}
 	if settings.EventsQueueURL != "" {
-		store := wakeups.NewStore(platform.Database)
+		store := wakeupStore
 		deliveryStore := interactiondelivery.NewStore(platform.Database)
 		deliveryCleaner := interactiondelivery.NewCleaner(deliveryStore, agentRegistry)
 		consumer, err := inbound.NewConsumer(store, deliveryStore, []inbound.Forgetter{

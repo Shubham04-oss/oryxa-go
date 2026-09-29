@@ -57,7 +57,7 @@ jobs:
         # and skip otherwise; here they share one, as they do on a laptop,
         # with the extensions infra/postgres/init gives a fresh local volume.
         run: |
-          for service in AGENTS_PRIMARY APPS AUTH BATCHING BILLING POSTGRESKIT RAG TEAMS; do
+          for service in AGENTS_PRIMARY APPS AUTH BATCHING BILLING POSTGRESKIT RAG TEAMS WORKSPACE; do
             echo "${service}_TEST_DATABASE_URL=postgres://oryxa:oryxa@localhost:5432/oryxa?sslmode=disable" >> "$GITHUB_ENV"
           done
           docker exec -i "${{ job.services.postgres.id }}" psql -U oryxa -d oryxa -v ON_ERROR_STOP=1 < infra/postgres/init/001_extensions.sql

@@ -1,5 +1,18 @@
 # Onboarding: the setup CLI and the workspace file
 
+> Implementation update, 2026-09-29: The customer's coding agent prepares a
+> reviewable `oryxa.yaml` from source data. The CLI reconciles people, teams,
+> external user and group ID mappings, and organization tool preferences.
+> `tools.offer` enables toolkits for an organization; `tools.employeeConnections`
+> controls whether ordinary members can connect their own accounts. Existing
+> app credentials remain member scoped. Directory snapshots are reapplied by
+> the CLI; direct scheduled Google/Microsoft fetching is not implemented.
+> Slack installation remains manual. Native search is the default path;
+> Glean and generic MCP search are optional integrations. The examples and
+> roadmap below predate this decision and are design proposals, not a list of
+> currently shipped capabilities. See [onboarding-cli.md](../onboarding-cli.md)
+> for the implemented file fields and behavior.
+
 *Draft, 2026-09-28. The owner's priority: onboarding first, then agents. This
 document is the complete package the setup CLI implements: what it does, the
 one file it applies, every setting from the smallest preference to the
@@ -52,8 +65,9 @@ later change, from renaming an agent to restructuring teams.
    refers to them by name. The CLI refuses a secret passed as a flag and never
    prints one, `--json` included.
 6. **Short-lived and least-privileged.** The CLI holds one short-lived session
-   in memory, writes no token to disk, asks every provider for the least it
-   needs, and deletes itself when done unless told to stay.
+   in memory or encrypted OS credential storage, writes no plaintext token to
+   disk, asks every provider for the least it needs, and purges the session when
+   setup/apply/rollback finishes.
 7. **People only where providers insist.** Approving the Slack install and
    granting directory consent need an admin's click. The CLI opens the exact
    page, waits, and verifies the result.
@@ -186,6 +200,24 @@ is invalid, or input is missing under `--no-input` · `4` a provider refused ·
   content or audit history; those have their own controls in the web app.
 
 ### Signing in and the setup session
+
+**Current implementation:** the native CLI uses the separate Cognito public
+client with authorization-code + PKCE and a registered loopback port. Auth issues
+a twenty-minute state/nonce challenge, verifies the signed nonce and consumes
+that challenge once; the CLI independently verifies its retained nonce locally.
+The Cognito CLI access JWT is accepted only after server admission, for at most
+fifteen minutes, on setup routes, and binds to the first authorized organization
+(or the organization created by that session). The server stores its hash and
+binding, never the raw token. The CLI caches it in the OS credential store, falls
+back to memory only when secure storage is unavailable, and purges it after
+setup/apply/rollback/logout. No plaintext-token fallback exists. Ordinary data,
+agent request decisions and reviews, and organization deletion reject CLI tokens.
+
+The pairing page, opaque sixty-minute setup token, `--keep`, browser-only secret
+entry, and `--device` flow below are the target design, not current features.
+`--no-browser` currently prints a loopback URL and still needs a browser with
+access to that loopback listener. See [the implemented CLI](../onboarding-cli.md).
+
 
 - **The loopback only carries Oryxa's pairing code.**
   - The CLI listens on `127.0.0.1`, on a random port, for one request, and
@@ -437,9 +469,11 @@ this person above that one?*
 | --- | --- | --- | --- | --- |
 | `safety.screen.strictness` | How hard the request screen checks need and plausibility before anyone is pinged | `standard`, `strict` (`standard`) | New | agents |
 | `safety.guard.bannedTopics` | Topics never let out, whoever approves | list of short descriptions | New | agents (Bedrock Guardrails) |
-| `safety.guard.pii` | Personal data in answers | `mask` | Today (Guardrails) | agents |
+| `safety.guard.pii.minimum.owner` | Minimum PII masking for answers the member starts | `secrets`, `strict` (omitted: no workspace override) | Workspace field implemented; guard-policy adapter pending | agents |
+| `safety.guard.pii.minimum.peer` | Minimum PII masking for answers another member reads | `secrets`, `strict` (omitted: no workspace override) | Workspace field implemented; guard-policy adapter pending | agents |
+| `safety.guard.relevance` | How the relevance check treats an answer unrelated to the request | `hold`, `shadow`, `off` (omitted: no workspace override) | Workspace field implemented; guard-policy adapter pending | agents |
 | `safety.guard.grounding` | Answers must match their approved source | `hold` (for the owner's review), `block` (`hold`) | New | agents |
-| `safety.guard.holdForReview` | Hold every cross-member answer for the owner | `false` (`true` in `regulated`) | Today (for held answers) | agents |
+| `safety.guard.holdForReview` | Hold cross-member agent-request answers for the owner, with a fresh 24-hour review window; other answer surfaces retain their own guard behavior | `false` (`true` in `regulated`) | Today (agent-request ledger) | agents |
 
 ### J. Tools, through Composio as today
 
@@ -636,8 +670,10 @@ asks auth whether the approving admin is still an admin.
 
 - The install script: HTTPS only, a pinned version, a verified checksum and
   signature, no `sudo`, a temporary directory.
-- Sign-in: loopback OAuth with PKCE and state; the session lives in memory
-  only.
+- Current sign-in: loopback OAuth with PKCE, a server-issued one-use state/nonce
+  challenge, and verification by both CLI and server. The admitted CLI token
+  lasts at most fifteen minutes, binds one organization, and lives in memory or
+  encrypted OS credential storage on the client.
 - Secrets: never in flags, files, logs or JSON output; sealed in the vault;
   write-only through the API.
 - Least privilege: only the scopes each step needs; admin-only commands.

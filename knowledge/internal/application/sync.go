@@ -99,6 +99,9 @@ func (s *Service) Sync(ctx context.Context, source domain.Source, lease string) 
 	if err := s.store.StartRun(ctx, run); err != nil {
 		return err
 	}
+	if err := s.allowProvider(ctx, source.OrganizationID, source.Provider); err != nil {
+		return s.runFailed(ctx, source, run, outcome{}, lease, err)
+	}
 
 	// A member who changed what kinds the source indexes has what it already
 	// holds decided again first, from what the judge answered before.
@@ -152,6 +155,9 @@ func (s *Service) walk(ctx context.Context, extractor sources.Extractor, source 
 		}
 	}
 	for range pagesPerRun {
+		if err := s.allowProvider(ctx, source.OrganizationID, source.Provider); err != nil {
+			return result, err
+		}
 		request.Cursor = cursor
 		page, err := extractor.Fetch(ctx, request)
 		if err != nil {
@@ -511,6 +517,8 @@ func (s *Service) credential(ctx context.Context, source domain.Source) (domain.
 // running it again unchanged could do better.
 func syncError(err error) (string, bool) {
 	switch {
+	case errors.Is(err, domain.ErrProviderUnavailable):
+		return knowledgev1.SyncErrorProviderUnavailable, true
 	case errors.Is(err, domain.ErrNeedsReconnect):
 		return knowledgev1.SyncErrorNeedsReconnect, false
 	case errors.Is(err, domain.ErrScopeRequired):
@@ -523,8 +531,6 @@ func syncError(err error) (string, bool) {
 		return knowledgev1.SyncErrorNotFound, false
 	case errors.Is(err, domain.ErrRateLimited):
 		return knowledgev1.SyncErrorRateLimited, true
-	case errors.Is(err, domain.ErrProviderUnavailable):
-		return knowledgev1.SyncErrorProviderUnavailable, true
 	case errors.Is(err, domain.ErrLeaseLost):
 		return knowledgev1.SyncErrorLeaseLost, true
 	case errors.Is(err, domain.ErrGrantRequired):

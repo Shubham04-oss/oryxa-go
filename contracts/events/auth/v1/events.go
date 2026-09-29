@@ -108,17 +108,21 @@ type MemberInvited struct {
 	Role             string    `json:"role"`
 	InvitedBy        string    `json:"invited_by"`
 	AcceptURL        string    `json:"accept_url"`
+	Quiet            bool      `json:"quiet,omitempty"`
 	ExpiresAt        time.Time `json:"expires_at"`
 }
 
 type MemberInvitationRevoked struct {
-	InvitationID     string    `json:"invitation_id"`
-	OrganizationID   string    `json:"organization_id"`
-	OrganizationName string    `json:"organization_name"`
-	Email            string    `json:"email"`
-	Role             string    `json:"role"`
-	RevokedBy        string    `json:"revoked_by"`
-	RevokedAt        time.Time `json:"revoked_at"`
+	InvitationID     string `json:"invitation_id"`
+	OrganizationID   string `json:"organization_id"`
+	OrganizationName string `json:"organization_name"`
+	Email            string `json:"email"`
+	Role             string `json:"role"`
+	// Quiet is required for a new publisher. Nil identifies a legacy event
+	// whose notification preference is unknown; consumers suppress its email.
+	Quiet     *bool     `json:"quiet,omitempty"`
+	RevokedBy string    `json:"revoked_by"`
+	RevokedAt time.Time `json:"revoked_at"`
 }
 
 type MemberJoined struct {

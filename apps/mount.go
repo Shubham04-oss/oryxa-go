@@ -109,6 +109,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Verifier:  platform.EventAuth.Verifier(),
 		Logger:    logger,
 	}
+	dependencies.Policy = platform.WorkspaceSettings()
 	if oryxa != nil {
 		dependencies.Signin, dependencies.Hooks, dependencies.Integrations = oryxa.signin, oryxa.hooks, oryxa.registry
 	}

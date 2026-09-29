@@ -117,12 +117,14 @@ variable "cognito" {
     client_id       = string
     domain          = string
     agent_client_id = string
+    cli_client_id   = optional(string, "")
   })
   default = {
     user_pool_id    = ""
     client_id       = ""
     domain          = ""
     agent_client_id = ""
+    cli_client_id   = ""
   }
 }
 

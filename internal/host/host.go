@@ -29,6 +29,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 // Worker is background work a service needs running. It returns once its
@@ -88,6 +89,8 @@ type Definition struct {
 
 // Platform is what the host builds once and every service borrows.
 type Platform struct {
+	// WorkspacePolicy is shared by services so version memoization is shared.
+	WorkspacePolicy policy.Provider
 	// Logger names the service it was handed to.
 	Logger *slog.Logger
 	// Database is the pool the services share, or nil when DATABASE_URL is
@@ -114,6 +117,14 @@ type Platform struct {
 	// Getenv reads configuration. A URL variable naming a service that runs
 	// in this process defaults to this process.
 	Getenv func(string) string
+}
+
+// WorkspaceSettings also gives individually mounted services safe defaults.
+func (platform Platform) WorkspaceSettings() policy.Provider {
+	if platform.WorkspacePolicy == nil {
+		return policy.Noop{}
+	}
+	return platform.WorkspacePolicy
 }
 
 // ErrDatabaseRequired is what a service that keeps data in PostgreSQL answers
