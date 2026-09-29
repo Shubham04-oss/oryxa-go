@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react"
+import { ChevronLeft, ChevronRight } from "lucide-react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { ChevronLeft, ChevronRight } from "lucide-react"
-import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url"
 import type {
   PDFDocumentLoadingTask,
   PDFDocumentProxy,
@@ -10,6 +9,34 @@ import type {
 } from "pdfjs-dist"
 import type { PresentationData } from "@office-kit/pptx"
 import Papa from "papaparse"
+
+// PDF.js, the Word, Excel and PowerPoint readers and the PDF worker script are
+// megabytes that only a browser ever runs. `import.meta.env.SSR` is decided
+// when the app is built: in the Worker's build it is true, so each import
+// below sits in a branch that is never taken and is left out, with the
+// library behind it, instead of being uploaded with the Worker on every
+// deploy. Every import keeps its own conditional, in the same expression, so
+// the bundler can see that its branch is dead.
+function unavailableOnTheServer(): never {
+  throw new Error("The document preview runs in the browser.")
+}
+const loadPdfjs = () =>
+  import.meta.env.SSR ? unavailableOnTheServer() : import("pdfjs-dist")
+const loadPdfWorker = () =>
+  import.meta.env.SSR
+    ? unavailableOnTheServer()
+    : import("pdfjs-dist/build/pdf.worker.min.mjs?url")
+const loadDocxPreview = () =>
+  import.meta.env.SSR ? unavailableOnTheServer() : import("docx-preview")
+const loadPresentationLibraries = () =>
+  import.meta.env.SSR
+    ? unavailableOnTheServer()
+    : Promise.all([
+        import("@office-kit/pptx"),
+        import("@office-kit/pptx-preview"),
+      ])
+const loadExcel = () =>
+  import.meta.env.SSR ? unavailableOnTheServer() : import("exceljs")
 
 type PreviewKind =
   | "image"
@@ -112,9 +139,9 @@ function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
     setPdf(null)
     setIndex(0)
     setError("")
-    void import("pdfjs-dist")
-      .then(async (pdfjs) => {
-        pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+    void Promise.all([loadPdfjs(), loadPdfWorker()])
+      .then(async ([pdfjs, worker]) => {
+        pdfjs.GlobalWorkerOptions.workerSrc = worker.default
         loading = pdfjs.getDocument({ data: new Uint8Array(bytes) })
         const document = await loading.promise
         if (!cancelled) setPdf(document)
@@ -202,7 +229,7 @@ function DocxPreview({ bytes }: { bytes: ArrayBuffer }) {
     element.replaceChildren()
     setError("")
     setReady(false)
-    void import("docx-preview")
+    void loadDocxPreview()
       .then(({ renderAsync }) =>
         renderAsync(bytes, element, undefined, { renderAltChunks: false })
       )
@@ -238,10 +265,7 @@ function PptxPreview({ bytes }: { bytes: ArrayBuffer }) {
     setIndex(0)
     setError("")
     setReady(false)
-    void Promise.all([
-      import("@office-kit/pptx"),
-      import("@office-kit/pptx-preview"),
-    ])
+    void loadPresentationLibraries()
       .then(async ([pptx, preview]) => {
         const presentation: PresentationData =
           await pptx.loadPresentation(bytes)
@@ -345,7 +369,7 @@ function SpreadsheetPreview({ bytes }: { bytes: ArrayBuffer }) {
     setSheets([])
     setError("")
     setReady(false)
-    void import("exceljs")
+    void loadExcel()
       .then(async (module) => {
         const workbook = new module.default.Workbook()
         await workbook.xlsx.load(bytes)
