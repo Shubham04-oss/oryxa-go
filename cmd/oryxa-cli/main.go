@@ -141,8 +141,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if code := report(stdout, opts.json, plan); code != 0 || opts.dryRun {
 			return code
 		}
-		if hasRemoval(plan) && opts.noInput {
-			return reportError(fmt.Errorf("prune requires an interactive confirmation"), stderr)
+		if hasSensitiveChanges(plan) && opts.noInput {
+			return reportError(fmt.Errorf("sensitive changes require an interactive confirmation"), stderr)
 		}
 		if !opts.yes && len(plan.Changes) > 0 {
 			if opts.noInput {
@@ -192,12 +192,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if code := report(stdout, opts.json, plan); code != 0 || opts.dryRun {
 			return code
 		}
-		if hasRemoval(plan) {
+		if hasSensitiveChanges(plan) {
 			if opts.noInput {
-				return reportError(fmt.Errorf("prune requires an interactive confirmation"), stderr)
+				return reportError(fmt.Errorf("sensitive changes require an interactive confirmation"), stderr)
 			}
 			if !opts.yes {
-				fmt.Fprint(stderr, "Confirm these removals? [y/N] ")
+				fmt.Fprint(stderr, "Confirm these sensitive changes? [y/N] ")
 				answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 				if strings.TrimSpace(strings.ToLower(answer)) != "y" {
 					return reportError(fmt.Errorf("rollback was cancelled"), stderr)
@@ -234,15 +234,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			if err != nil {
 				return reportError(err, stderr)
 			}
-			if hasRemoval(approved) {
+			if hasSensitiveChanges(approved) {
 				if opts.noInput {
-					return reportError(fmt.Errorf("prune requires an interactive confirmation"), stderr)
+					return reportError(fmt.Errorf("sensitive changes require an interactive confirmation"), stderr)
 				}
 				if code := report(stdout, opts.json, approved); code != 0 {
 					return code
 				}
 				if !opts.yes {
-					fmt.Fprint(stderr, "Confirm these removals? [y/N] ")
+					fmt.Fprint(stderr, "Confirm these sensitive changes? [y/N] ")
 					answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 					if strings.TrimSpace(strings.ToLower(answer)) != "y" {
 						return reportError(fmt.Errorf("apply was cancelled"), stderr)
@@ -422,13 +422,8 @@ func setupDocument(opts options, stderr io.Writer) (spec.Document, error) {
 	return document, nil
 }
 
-func hasRemoval(plan runtime.Plan) bool {
-	for _, change := range plan.Changes {
-		if change.Op == "delete" {
-			return true
-		}
-	}
-	return false
+func hasSensitiveChanges(plan runtime.Plan) bool {
+	return len(runtime.SensitiveChanges(plan)) > 0
 }
 
 func signedInClient(ctx context.Context, opts options, stdout, stderr io.Writer, getenv func(string) string) (*runtime.Client, error) {

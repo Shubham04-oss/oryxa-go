@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/runtime"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 )
 
@@ -82,5 +83,13 @@ func TestCachedSignInKeepsWhoamiOutputJSON(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "saved sign-in") {
 		t.Fatalf("missing diagnostic: %s", stderr.String())
+	}
+}
+
+func TestSensitiveReviewIncludesRoleElevationAndPolicyChanges(t *testing.T) {
+	for _, change := range []runtime.Change{{Op: "update", Kind: "member_role", Name: "member@acme.com", Role: "admin"}, {Op: "update", Kind: "policy", Name: "holdForReview"}, {Op: "delete", Kind: "team", Name: "Old"}} {
+		if !hasSensitiveChanges(runtime.Plan{Changes: []runtime.Change{change}}) {
+			t.Fatalf("sensitive change escaped review: %+v", change)
+		}
 	}
 }
