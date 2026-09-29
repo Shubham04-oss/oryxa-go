@@ -43,6 +43,10 @@ const (
 const (
 	deliveredRequestKey = "delivered_interaction"
 	deliveryPurposeKey  = "delivery_purpose"
+	// deliverySourcesKey holds what the run may have read that is private, as
+	// Delivery.Sources says, joined by commas: a string, so that it survives
+	// storage as it went in.
+	deliverySourcesKey = "delivery_sources"
 )
 
 // What a run delivering one interaction is for, which decides what its
@@ -68,12 +72,26 @@ type Delivery struct {
 	// Purpose is DeliveryDecides, DeliveryWorks or DeliveryReports: only a
 	// run deciding decides, and only one working answers.
 	Purpose string
+	// Sources are the toolboxes the run reaches whose tools may read private
+	// material, by name: what the ledger tells the answer guard's relevance
+	// check the run may have read, when it answers. A name here stands for any
+	// tool of that toolbox, and is no tool the check knows to read nothing
+	// private, so it is judged. The waker sets them from the reach it gives the
+	// run, which is everything the run can call, so they never depend on what
+	// the run says it did. Nil records nothing: an answer from such a run is
+	// judged as one whose sources cannot be read (SourcesUnreadable), never let
+	// through unread; an empty list records that the run reaches nothing private.
+	Sources []string
 }
 
 // DeliveryState is what a run delivering one interaction adds to its
 // thread's state as it starts.
 func DeliveryState(delivery Delivery) map[string]any {
-	return map[string]any{deliveredRequestKey: delivery.RequestID, deliveryPurposeKey: delivery.Purpose}
+	state := map[string]any{deliveredRequestKey: delivery.RequestID, deliveryPurposeKey: delivery.Purpose}
+	if delivery.Sources != nil {
+		state[deliverySourcesKey] = strings.Join(delivery.Sources, ",")
+	}
+	return state
 }
 
 // RequestTool is value as the tool vocabulary spells it: AppsToolboxName or
@@ -137,19 +155,36 @@ type InteractionDecision struct {
 	// an older build recorded, which kept no decider: such a decision is
 	// never taken for the member's own.
 	DecidedBy *InteractionDecider `json:"decided_by,omitempty"`
+	// Consent is how far the approval let the answer go: "summary", an AI
+	// summary alone, or "access", excerpts of what the agent read. It follows
+	// from the permissions granted (consent:summary, consent:access), and is
+	// absent from a rejection and from an approval that granted neither.
+	Consent string `json:"consent,omitempty"`
 }
 
 // InteractionDecider is who recorded a decision.
 type InteractionDecider struct {
 	// Kind is "member" for the addressed agent's member deciding in their
-	// own signed-in session, "agent" for an agent deciding in a run, and
-	// "system" for Oryxa closing a request made in a teamspace that no
-	// longer stands there.
+	// own signed-in session (or in Slack, on the notice Oryxa sent them),
+	// "agent" for an agent deciding in a run, "system" for Oryxa closing a
+	// request, "lease" for Oryxa approving a follow-up under a lease its owner
+	// gave, and "bypass" for Oryxa approving a request that needs no owner's
+	// click.
 	Kind string `json:"kind"`
-	// UserID is the member who decided, or whose agent did; Oryxa has none.
+	// UserID is the member who decided, or whose agent did; for a lease, the
+	// owner who gave it. Oryxa's own decisions and a bypass have none.
 	UserID string `json:"user_id,omitempty"`
 	// AgentID is the agent that decided, when an agent did.
 	AgentID string `json:"agent_id,omitempty"`
+	// Surface is where the decision was made: "web" or "slack" for a member,
+	// "lease" and "bypass" for those. An agent's decision, one Oryxa made to
+	// close a request, and one an older build recorded name none.
+	Surface string `json:"surface,omitempty"`
+	// Reason is why Oryxa decided, in a short code and never in anyone's
+	// words: the lease's id for a lease, why a bypass applied, and
+	// "answered_elsewhere" for a request closed because another owner's
+	// answer settled its ask.
+	Reason string `json:"reason,omitempty"`
 }
 
 type InteractionResult struct {
@@ -238,11 +273,23 @@ type Interaction struct {
 	// side alone.
 	Held *InteractionHeld `json:"held,omitempty"`
 	// Review is the addressed member's review of a held answer.
-	Review    *InteractionReview `json:"review,omitempty"`
-	Revision  int64              `json:"revision"`
-	ExpiresAt time.Time          `json:"expires_at"`
-	CreatedAt time.Time          `json:"created_at"`
-	UpdatedAt time.Time          `json:"updated_at"`
+	Review *InteractionReview `json:"review,omitempty"`
+	// AskID is the ask the request belongs to: one Slack message put to
+	// several owners makes one request for each of them, and the first
+	// delivered answer settles them all. Absent from a request an agent made.
+	AskID string `json:"ask_id,omitempty"`
+	// Origin is where the request was made: "agent" for one an agent filed in
+	// the ordinary way, "slack" for one the Slack app made for the member who
+	// mentioned it.
+	Origin string `json:"origin,omitempty"`
+	// SecretViewedAt is when the member who asked opened the one-time secret
+	// their owner shared for this request, absent until they do. It is only
+	// ever when: what the secret held is not kept here.
+	SecretViewedAt *time.Time `json:"secret_viewed_at,omitempty"`
+	Revision       int64      `json:"revision"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type InteractionCreateInput struct {
@@ -601,12 +648,59 @@ func (tools interactionTools) respond(ctx agent.Context, args interactionRespons
 	if err != nil {
 		return Interaction{}, err
 	}
-	request, err := tools.service.Respond(ctx, actor, args.RequestID, args.InteractionResponseInput)
+	// The ledger reads the answer before another member does, and what it
+	// checks it for depends on what the run could read: so it is told, from the
+	// state the waker started the run with and the model never writes, and not
+	// from anything the agent says about what it used.
+	request, err := tools.service.Respond(WithRunSources(ctx, deliverySources(ctx)), actor, args.RequestID, args.InteractionResponseInput)
 	if err != nil {
 		return Interaction{}, interactionError(err)
 	}
 	tools.settled(ctx)
 	return request, nil
+}
+
+// runSourcesKey is the context key under which the respond tool hands the
+// ledger the names of the toolboxes and tools its run may have read.
+type runSourcesKey struct{}
+
+// SourcesUnreadable stands for a run whose sources were not recorded. It is no
+// tool the relevance check knows to read nothing private, so an answer from such
+// a run is judged as one from a run that read something private would be, and
+// never let through unchecked for want of a record.
+const SourcesUnreadable = "run_sources_unrecorded"
+
+// WithRunSources returns ctx carrying the names of the toolboxes and tools a
+// run may have read, which the ledger's Respond reads for the answer it is
+// given (RunSources). Only the respond tool sets it, from the run's own state;
+// it is not a field of the response, so neither the model nor an API caller can
+// say what the run read.
+func WithRunSources(ctx context.Context, sources []string) context.Context {
+	return context.WithValue(ctx, runSourcesKey{}, slices.Clone(sources))
+}
+
+// RunSources are the names of the toolboxes and tools the run behind ctx may
+// have read, from WithRunSources: none for an answer that does not come from a
+// run, such as the one a member gives in their own session.
+func RunSources(ctx context.Context) []string {
+	sources, _ := ctx.Value(runSourcesKey{}).([]string)
+	return slices.Clone(sources)
+}
+
+// deliverySources are the sources the waker recorded for the run answering:
+// what it reaches that may hold private material. A run that recorded none, such
+// as a member's own turn, or one started before they were kept, has
+// SourcesUnreadable instead of nothing.
+func deliverySources(ctx agent.ReadonlyContext) []string {
+	value, err := ctx.ReadonlyState().Get(deliverySourcesKey)
+	recorded, ok := value.(string)
+	if err != nil || !ok {
+		return []string{SourcesUnreadable}
+	}
+	if recorded == "" {
+		return []string{}
+	}
+	return strings.Split(recorded, ",")
 }
 
 func interactionError(err error) error {
