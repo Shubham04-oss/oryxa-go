@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -153,9 +154,9 @@ func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout
 	if result.err != nil {
 		return cliSession{}, result.err
 	}
-	token, err := oauth.Exchange(flowCtx, result.code, oauth2.VerifierOption(verifier))
+	token, err := exchangeLoginCode(flowCtx, &oauth, result.code, verifier)
 	if err != nil {
-		return cliSession{}, fmt.Errorf("exchange browser sign-in code: %w", err)
+		return cliSession{}, err
 	}
 	idToken, ok := token.Extra("id_token").(string)
 	if !ok || idToken == "" || token.AccessToken == "" {
@@ -202,7 +203,7 @@ func fetchAuthConfig(ctx context.Context, api string) (loginConfig, error) {
 	if err != nil {
 		return loginConfig{}, err
 	}
-	response, err := (&http.Client{Timeout: 20 * time.Second}).Do(request)
+	response, err := loginHTTPClient(ctx).Do(request)
 	if err != nil {
 		return loginConfig{}, err
 	}
@@ -228,7 +229,7 @@ func registerCLISession(ctx context.Context, api, accessToken, idToken, nonce st
 	}
 	request.Header.Set("Authorization", "Bearer "+accessToken)
 	request.Header.Set("Content-Type", "application/json")
-	response, err := (&http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(request)
+	response, err := loginHTTPClient(ctx).Do(request)
 	if err != nil {
 		return err
 	}
@@ -237,6 +238,38 @@ func registerCLISession(ctx context.Context, api, accessToken, idToken, nonce st
 		return fmt.Errorf("register CLI sign-in: API returned %d", response.StatusCode)
 	}
 	return nil
+}
+
+// OAuth exchanges carry the authorization code and PKCE verifier in their
+// request body. Even a cross-origin 307 preserves that body, so redirects must
+// be rejected rather than relying on net/http's Authorization header rules.
+func loginHTTPClient(ctx context.Context) *http.Client {
+	base := http.DefaultClient
+	if configured, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && configured != nil {
+		base = configured
+	}
+	client := *base
+	client.Timeout = 20 * time.Second
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &client
+}
+
+func exchangeLoginCode(ctx context.Context, config *oauth2.Config, code, verifier string) (*oauth2.Token, error) {
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, loginHTTPClient(ctx))
+	token, err := config.Exchange(ctx, code, oauth2.VerifierOption(verifier))
+	if err == nil {
+		return token, nil
+	}
+	// oauth2.RetrieveError includes the provider response body, which may echo
+	// credentials. Keep provider bodies and descriptions out of terminal logs.
+	var rejected *oauth2.RetrieveError
+	if errors.As(err, &rejected) && rejected.Response != nil {
+		return nil, fmt.Errorf("exchange browser sign-in code: identity provider returned %d", rejected.Response.StatusCode)
+	}
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("exchange browser sign-in code: %w", ctx.Err())
+	}
+	return nil, fmt.Errorf("exchange browser sign-in code: identity provider request failed")
 }
 
 func randomURLValue() (string, error) {

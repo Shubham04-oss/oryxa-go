@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -191,5 +192,67 @@ func TestNativeLoginRejectsUnsafeSignUpURL(t *testing.T) {
 	_, err := fetchLoginConfig(context.Background(), api.URL)
 	if err == nil || !strings.Contains(err.Error(), "account creation") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoginConfigRejectsRedirectToAnotherAuthority(t *testing.T) {
+	var followed atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		followed.Add(1)
+		fmt.Fprint(writer, `{}`)
+	}))
+	defer other.Close()
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, other.URL, http.StatusFound)
+	}))
+	defer api.Close()
+	if _, err := fetchAuthConfig(context.Background(), api.URL); err == nil || !strings.Contains(err.Error(), "302") {
+		t.Fatalf("redirect error = %v", err)
+	}
+	if followed.Load() != 0 {
+		t.Fatal("login configuration followed a redirect to a different authority")
+	}
+}
+
+func TestLoginExchangeDoesNotForwardCodeAndVerifierOnRedirect(t *testing.T) {
+	var received atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		received.Add(1)
+		fmt.Fprint(writer, `{}`)
+	}))
+	defer other.Close()
+	provider := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, other.URL, http.StatusTemporaryRedirect)
+	}))
+	defer provider.Close()
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, provider.Client())
+	config := oauth2.Config{ClientID: "cli", Endpoint: oauth2.Endpoint{TokenURL: provider.URL}}
+	if _, err := exchangeLoginCode(ctx, &config, "private-code", "private-verifier"); err == nil || !strings.Contains(err.Error(), "307") {
+		t.Fatalf("exchange error = %v", err)
+	}
+	if received.Load() != 0 {
+		t.Fatal("authorization code and verifier were sent to the redirect destination")
+	}
+}
+
+func TestLoginExchangeDoesNotExposeProviderErrorBodies(t *testing.T) {
+	for _, body := range []string{
+		`{"error":"invalid_grant","error_description":"private-access-token private-refresh-token"}`,
+		`private-access-token private-refresh-token`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			provider := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(writer, body)
+			}))
+			defer provider.Close()
+			ctx := context.WithValue(context.Background(), oauth2.HTTPClient, provider.Client())
+			config := oauth2.Config{ClientID: "cli", Endpoint: oauth2.Endpoint{TokenURL: provider.URL}}
+			_, err := exchangeLoginCode(ctx, &config, "private-code", "private-verifier")
+			if err == nil || !strings.Contains(err.Error(), "400") || strings.Contains(err.Error(), "private-") {
+				t.Fatalf("unsafe exchange error = %v", err)
+			}
+		})
 	}
 }
