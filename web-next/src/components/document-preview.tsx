@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react"
 import { ChevronLeft, ChevronRight } from "lucide-react"
-import Markdown from "react-markdown"
-import remarkGfm from "remark-gfm"
 import type {
   PDFDocumentLoadingTask,
   PDFDocumentProxy,
@@ -9,6 +7,7 @@ import type {
 } from "pdfjs-dist"
 import type { PresentationData } from "@office-kit/pptx"
 import Papa from "papaparse"
+import { AgentMarkdown } from "./agent-timeline"
 
 // PDF.js, the Word, Excel and PowerPoint readers and the PDF worker script are
 // megabytes that only a browser ever runs. `import.meta.env.SSR` is decided
@@ -456,7 +455,7 @@ export function DocumentPreview({
   if (kind === "markdown")
     return (
       <article className="workspace-document-scroll workspace-document-prose">
-        <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
+        <AgentMarkdown text={text} />
       </article>
     )
   if (kind === "csv") {

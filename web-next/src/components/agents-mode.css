@@ -151,11 +151,8 @@
 .workspace-document-grid > p { margin: 12px 0; color: #999; }
 .workspace-document-text, .workspace-document-prose { display: block; width: 100%; margin: 0; padding: 30px 42px; color: #dedede; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 .workspace-document-text { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* Markdown reads as it does in chat (AgentMarkdown carries the rest). */
 .workspace-document-prose { max-width: 780px; margin-inline: auto; }
-.workspace-document-prose h1, .workspace-document-prose h2, .workspace-document-prose h3 { color: #f1f1f1; }
-.workspace-document-prose pre { overflow-x: auto; padding: 12px; border-radius: 8px; background: #252525; }
-.workspace-document-prose table { display: block; overflow-x: auto; border-collapse: collapse; }
-.workspace-document-prose th, .workspace-document-prose td { padding: 6px 9px; border: 1px solid #444; }
 .workspace-office-editor { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .workspace-office-editor > p { margin: auto; padding: 20px; color: #aaa; font-size: 12px; text-align: center; }
 .workspace-office-editor-canvas { flex: 1; min-width: 0; min-height: 0; }
