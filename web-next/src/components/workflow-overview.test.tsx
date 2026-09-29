@@ -97,7 +97,9 @@ function backend({
       if (path.endsWith("/agent-teams")) return json({ teams })
       if (path.includes("/agent-workflow-executions/"))
         return json(
-          runs.find((entry) => path.endsWith(entry.id)) ?? runs[0] ?? execution
+          runs.find((entry) => path.endsWith(entry.id)) ??
+            runs.at(0) ??
+            execution
         )
       if (path.endsWith("/executions")) {
         if (method === "POST") {
@@ -220,11 +222,9 @@ describe("workflow overview", () => {
     expect(document.body.textContent).not.toContain("SECRET")
     fireEvent.click(screen.getByRole("button", { name: "Cancel editing" }))
     expect(
-      (
-        screen.getByRole("button", {
-          name: "Close Weekly review workflow",
-        }) as HTMLButtonElement
-      ).disabled
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Close Weekly review workflow",
+      }).disabled
     ).toBe(false)
   })
 
@@ -299,22 +299,18 @@ describe("workflow overview", () => {
         "Keep this unsaved draft"
       )
       expect(
-        (
-          screen.getByRole("button", {
-            name: "Save changes",
-          }) as HTMLButtonElement
-        ).disabled
+        screen.getByRole<HTMLButtonElement>("button", {
+          name: "Save changes",
+        }).disabled
       ).toBe(true)
       expect(document.body.textContent).not.toContain("SECRET")
       failRefresh = false
       fireEvent.click(screen.getByRole("button", { name: "Try again" }))
       await waitFor(() =>
         expect(
-          (
-            screen.getByRole("button", {
-              name: "Save changes",
-            }) as HTMLButtonElement
-          ).disabled
+          screen.getByRole<HTMLButtonElement>("button", {
+            name: "Save changes",
+          }).disabled
         ).toBe(false)
       )
       expect(screen.getByLabelText("Task for assignment 1")).toBe(task)
@@ -393,7 +389,7 @@ describe("workflow overview", () => {
       "Workflow scheduling isn't available on this server. Your changes haven't been saved."
     )
     expect(
-      (screen.getByLabelText("Schedule expression") as HTMLInputElement).value
+      screen.getByLabelText<HTMLInputElement>("Schedule expression").value
     ).toBe("rate(1 day)")
     expect(document.body.textContent).not.toContain("SECRET")
     expect(api.writes.length).toBe(1)
@@ -441,12 +437,9 @@ describe("workflow overview", () => {
     })
     fireEvent.click(screen.getByRole("button", { name: "Add assignment" }))
     expect(
-      (
-        within(screen.getByLabelText("Agent for assignment 2")).getByRole(
-          "option",
-          { name: "Scout" }
-        ) as HTMLOptionElement
-      ).disabled
+      within(
+        screen.getByLabelText("Agent for assignment 2")
+      ).getByRole<HTMLOptionElement>("option", { name: "Scout" }).disabled
     ).toBe(true)
     fireEvent.change(screen.getByLabelText("Agent for assignment 2"), {
       target: { value: quill.id },
@@ -627,11 +620,9 @@ describe("workflow overview", () => {
       overview()
       await screen.findByText("Workflows aren't set up on this server.")
       expect(
-        (
-          screen.getByRole("button", {
-            name: "New workflow",
-          }) as HTMLButtonElement
-        ).disabled
+        screen.getByRole<HTMLButtonElement>("button", {
+          name: "New workflow",
+        }).disabled
       ).toBe(true)
     }
   )
@@ -646,7 +637,7 @@ describe("workflow overview", () => {
       )
     ).toBeTruthy()
     expect(
-      (screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement)
+      screen.getByRole<HTMLButtonElement>("button", { name: "Run now" })
         .disabled
     ).toBe(true)
     fireEvent.click(screen.getByRole("button", { name: "Edit workflow" }))
@@ -656,11 +647,9 @@ describe("workflow overview", () => {
       )
     ).toBeTruthy()
     expect(
-      (
-        screen.getByRole("button", {
-          name: "Save changes",
-        }) as HTMLButtonElement
-      ).disabled
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Save changes",
+      }).disabled
     ).toBe(false)
   })
 
@@ -764,8 +753,7 @@ describe("workflow form", () => {
       target: { value: "atm_other" },
     })
     expect(
-      (screen.getByLabelText("Task for assignment 1") as HTMLTextAreaElement)
-        .value
+      screen.getByLabelText<HTMLTextAreaElement>("Task for assignment 1").value
     ).toBe("")
     fireEvent.click(screen.getByRole("button", { name: "Create workflow" }))
     expect(screen.getByText("Choose an agent on this team.")).toBeTruthy()

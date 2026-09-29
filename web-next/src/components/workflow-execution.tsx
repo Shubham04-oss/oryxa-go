@@ -218,7 +218,7 @@ export function WorkflowExecutionDetail({
                             : result.status
                         }
                       >
-                        {assignmentWords[result.status] ?? "Incomplete"}
+                        {assignmentWords[result.status]}
                       </span>
                     </div>
                     {result.output && (
