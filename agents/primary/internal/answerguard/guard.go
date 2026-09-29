@@ -95,6 +95,17 @@ type Verdict struct {
 	// text a held value could not be found in to replace is its kinds
 	// alone.
 	Masked []string
+	// Given are the texts exactly as Check was handed them, whatever was
+	// found in them: what may be shared where nothing at all is to be masked
+	// (IntensityOff).
+	Given []string
+	// SecretKinds are the kinds that are always masked (MaskedKinds) that
+	// were found, sorted, whatever the state: the ones the guardrail masked in
+	// Texts, and any it left there, which the answer is held for. A held
+	// verdict's Kinds name only what it is held for, so this is what says,
+	// beside an email address, that a password was found and masked too. Never
+	// a value; nil for an answer that could not be checked.
+	SecretKinds []string
 }
 
 // Shareable is the n texts a verdict on n texts allows to be shown to
@@ -198,7 +209,7 @@ func (guard *Guard) Check(ctx context.Context, texts []string) Verdict {
 				delivered[index] = readings[index].output
 			}
 		}
-		return Verdict{State: StateHeld, Kinds: []string{Unchecked}, Texts: delivered}
+		return Verdict{State: StateHeld, Kinds: []string{Unchecked}, Texts: delivered, Given: slices.Clone(texts)}
 	}
 
 	var masked []string
@@ -215,11 +226,13 @@ func (guard *Guard) Check(ctx context.Context, texts []string) Verdict {
 		for index, text := range delivered {
 			fully[index] = maskHeld(text, held, readings[index].held)
 		}
-		return Verdict{State: StateHeld, Kinds: kindsOf(held), Texts: delivered, Masked: fully}
+		return Verdict{State: StateHeld, Kinds: kindsOf(held), Texts: delivered, Masked: fully,
+			Given: slices.Clone(texts), SecretKinds: secretKinds(masked, held)}
 	case len(masked) > 0:
-		return Verdict{State: StateMasked, Kinds: sortedUnique(masked), Texts: delivered}
+		return Verdict{State: StateMasked, Kinds: sortedUnique(masked), Texts: delivered,
+			Given: slices.Clone(texts), SecretKinds: sortedUnique(masked)}
 	default:
-		return Verdict{State: StateClear, Texts: slices.Clone(texts)}
+		return Verdict{State: StateClear, Texts: slices.Clone(texts), Given: slices.Clone(texts)}
 	}
 }
 
@@ -444,6 +457,18 @@ func placeholders(matches []heldMatch) []string {
 		kinds[index] = "{" + kind + "}"
 	}
 	return kinds
+}
+
+// secretKinds are the kinds that are always masked among those the guardrail
+// anonymized and those it found and left in a text, which are held for.
+func secretKinds(anonymized []string, held []heldMatch) []string {
+	kinds := slices.Clone(anonymized)
+	for _, found := range held {
+		if slices.Contains(MaskedKinds(), found.kind) {
+			kinds = append(kinds, found.kind)
+		}
+	}
+	return sortedUnique(kinds)
 }
 
 func kindsOf(matches []heldMatch) []string {
