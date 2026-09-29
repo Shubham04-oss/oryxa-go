@@ -11,7 +11,8 @@ import (
 // contextual grounding check and denied topics.
 //
 // An error means it could not tell, and the answer is held. Its message is
-// logged: it must say why without quoting anything it was given.
+// logged: it must say why without quoting anything it was given. The Grounding
+// that comes with an error may still name the topics it found before it failed.
 type Grounder interface {
 	Ground(ctx context.Context, in GroundingInput) (Grounding, error)
 }

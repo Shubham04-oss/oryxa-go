@@ -288,7 +288,11 @@ func (guard *Guard) stand(ctx context.Context, in Input, texts []string, held bo
 		Sources: sources, Question: in.Question, Answer: strings.Join(nonBlank(texts), "\n\n"),
 	})
 	if err != nil {
-		return []Reason{{KindUnchecked, "the grounding check could not tell: " + err.Error()}}, nil
+		reasons := []Reason{{KindUnchecked, "the grounding check could not tell: " + err.Error()}}
+		if len(grounding.Topics) > 0 {
+			reasons = append(reasons, deniedTopic(grounding.Topics))
+		}
+		return reasons, nil
 	}
 	var reasons []Reason
 	if grounding.Grounded.below(guard.minGrounding) {
@@ -300,9 +304,13 @@ func (guard *Guard) stand(ctx context.Context, in Input, texts []string, held bo
 			"the answer answers the question to a degree of %.2f, and it needs %.2f", grounding.Relevant.Value, grounding.Relevant.needs(guard.minRelevance))})
 	}
 	if len(grounding.Topics) > 0 {
-		reasons = append(reasons, Reason{KindDeniedTopic, "the answer is about " + strings.Join(grounding.Topics, ", ")})
+		reasons = append(reasons, deniedTopic(grounding.Topics))
 	}
 	return reasons, &grounding
+}
+
+func deniedTopic(topics []string) Reason {
+	return Reason{KindDeniedTopic, "the answer is about " + strings.Join(topics, ", ")}
 }
 
 // log records one line for an answer that was read, by what was decided and

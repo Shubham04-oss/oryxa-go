@@ -213,6 +213,18 @@ func TestAGrounderThatCannotTellHoldsTheAnswerAsUnchecked(t *testing.T) {
 	}
 }
 
+// A grounder that could not tell may still have found a topic on the way, and the
+// answer is held for that too.
+func TestATopicFoundBeforeTheGrounderFailedStillHoldsTheAnswer(t *testing.T) {
+	grounder := GrounderFunc(func(context.Context, GroundingInput) (Grounding, error) {
+		return Grounding{Topics: []string{"Compensation and HR records"}}, errors.New("the guardrail did not score both grounding and relevance")
+	})
+	result := checked(t, grounder, Input{Texts: []string{"An answer."}, Sources: sourceOf("Something.")})
+	if got := reasonKinds(result); !slices.Equal(got, []string{KindUnchecked, KindDeniedTopic}) || !slices.Equal(result.Kinds(), []string{KindDeniedTopic, KindUnchecked}) {
+		t.Errorf("held for %v, kinds %v", got, result.Kinds())
+	}
+}
+
 func TestAnAnswerWithNoQuestionIsHeldAsUnchecked(t *testing.T) {
 	grounder := &scoring{grounding: good()}
 	result := New(grounder, Config{}).Check(context.Background(), Input{Question: "  ", Texts: []string{"An answer."}, Sources: sourceOf("Something.")})

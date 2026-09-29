@@ -151,6 +151,36 @@ func TestWhatTheGuardrailDetectedIsFailedAndItsTopicsAreNamed(t *testing.T) {
 	}
 }
 
+// A response that names a denied topic and scores nothing still says which topic:
+// the answer is held for both.
+func TestTheTopicsOfAResponseThatWasNotScoredAreKept(t *testing.T) {
+	blocked := &bedrockruntime.ApplyGuardrailOutput{Assessments: []types.GuardrailAssessment{{
+		TopicPolicy: &types.GuardrailTopicPolicyAssessment{Topics: []types.GuardrailTopic{{Name: aws.String("Credentials"), Detected: aws.Bool(true)}}},
+	}}}
+	grounding, err := grounderOf(t, &guardrail{reply: always(blocked, nil)}).Ground(context.Background(), GroundingInput{Sources: []string{"s"}, Question: "q", Answer: "a"})
+	if err == nil || !slices.Equal(grounding.Topics, []string{"Credentials"}) {
+		t.Fatalf("grounding = %+v, err = %v; want the error and the topic", grounding, err)
+	}
+	result := New(grounderOf(t, &guardrail{reply: always(blocked, nil)}), Config{}).Check(context.Background(), Input{
+		Level: LevelAccess, Question: theQuestion, Texts: []string{"The key is in the vault."}, Sources: sourceOf("The key is in the vault."),
+	})
+	if got := reasonKinds(result); !slices.Equal(got, []string{KindUnchecked, KindDeniedTopic}) {
+		t.Errorf("held for %v, want it unchecked and for the topic", got)
+	}
+	// One piece of a long answer that scores and one that names a topic and does not.
+	answer := strings.Repeat("Deployments run every Tuesday at nine. ", 250)
+	fake := &guardrail{reply: func(call int, _ string) (*bedrockruntime.ApplyGuardrailOutput, error) {
+		if call == 2 {
+			return blocked, nil
+		}
+		return scored(0.9, 0.9), nil
+	}}
+	if partial, err := grounderOf(t, fake).Ground(context.Background(), GroundingInput{Sources: []string{"s"}, Question: "q", Answer: answer}); err == nil ||
+		!slices.Equal(partial.Topics, []string{"Credentials"}) {
+		t.Errorf("a long answer: grounding = %+v, err = %v; want the error and the topic", partial, err)
+	}
+}
+
 func TestAResponseThatDoesNotScoreBothFiltersSaysNothing(t *testing.T) {
 	onlyGrounding := scored(0.9, 0.9)
 	onlyGrounding.Assessments[0].ContextualGroundingPolicy.Filters = onlyGrounding.Assessments[0].ContextualGroundingPolicy.Filters[:1]

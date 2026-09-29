@@ -92,7 +92,8 @@ func (grounder *BedrockGrounder) Ground(ctx context.Context, in GroundingInput) 
 	wait.Wait()
 	for _, failure := range failures {
 		if failure != nil {
-			return Grounding{}, failure
+			// What a piece said of its topics before it failed to score counts.
+			return Grounding{Topics: topicsOf(readings)}, failure
 		}
 	}
 	return combine(readings), nil
@@ -174,11 +175,13 @@ func readGrounding(output *bedrockruntime.ApplyGuardrailOutput) (Grounding, erro
 			}
 		}
 	}
-	if grounded == nil || relevant == nil {
-		return Grounding{}, errors.New("the guardrail did not score both grounding and relevance")
-	}
 	slices.Sort(topics)
-	return Grounding{Grounded: *grounded, Relevant: *relevant, Topics: slices.Compact(topics)}, nil
+	topics = slices.Compact(topics)
+	if grounded == nil || relevant == nil {
+		// The topics it found are still what it found.
+		return Grounding{Topics: topics}, errors.New("the guardrail did not score both grounding and relevance")
+	}
+	return Grounding{Grounded: *grounded, Relevant: *relevant, Topics: topics}, nil
 }
 
 // scoreOf is one filter's finding. A filter with no score or threshold, or one
@@ -211,11 +214,19 @@ func combine(readings []Grounding) Grounding {
 		if reading.Relevant.Value > combined.Relevant.Value {
 			combined.Relevant = reading.Relevant
 		}
-		combined.Topics = append(combined.Topics, reading.Topics...)
 	}
-	slices.Sort(combined.Topics)
-	combined.Topics = slices.Compact(combined.Topics)
+	combined.Topics = topicsOf(readings)
 	return combined
+}
+
+// topicsOf are the topics any of the readings found, sorted, each once.
+func topicsOf(readings []Grounding) []string {
+	var topics []string
+	for _, reading := range readings {
+		topics = append(topics, reading.Topics...)
+	}
+	slices.Sort(topics)
+	return slices.Compact(topics)
 }
 
 // fitSources is sources as one grounding source of at most limit characters:
