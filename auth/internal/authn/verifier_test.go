@@ -32,11 +32,11 @@ func newSigner(t *testing.T) signer {
 	return signer{t: t, key: key}
 }
 
-func (s signer) verifier(clientID, agentClientID string, cliClientID ...string) *Verifier {
+func (s signer) verifier(clientID, agentClientID, cliClientID string) *Verifier {
 	keys := &oidc.StaticKeySet{PublicKeys: []crypto.PublicKey{&s.key.PublicKey}}
 	return newVerifier(func(config *oidc.Config) *oidc.IDTokenVerifier {
 		return oidc.NewVerifier(testIssuer, keys, config)
-	}, clientID, agentClientID, cliClientID...)
+	}, clientID, agentClientID, cliClientID)
 }
 
 func TestVerifyCLIRequiresClientVerifiedEmailAndNonce(t *testing.T) {
@@ -94,7 +94,7 @@ func accessToken(s signer, clientID string) string {
 
 func TestVerifyAcceptsTheWebClientAndTheAgentClient(t *testing.T) {
 	s := newSigner(t)
-	verifier := s.verifier("web-client", "agent-client")
+	verifier := s.verifier("web-client", "agent-client", "")
 
 	for _, clientID := range []string{"web-client", "agent-client"} {
 		claims, err := verifier.Verify(context.Background(), accessToken(s, clientID))
@@ -109,7 +109,7 @@ func TestVerifyAcceptsTheWebClientAndTheAgentClient(t *testing.T) {
 
 func TestVerifyRefusesAgentTokensWithoutAnAgentClient(t *testing.T) {
 	s := newSigner(t)
-	verifier := s.verifier("web-client", "")
+	verifier := s.verifier("web-client", "", "")
 
 	if _, err := verifier.Verify(context.Background(), accessToken(s, "agent-client")); err == nil {
 		t.Fatal("Verify() accepted an agent token with no agent client configured")
@@ -121,7 +121,7 @@ func TestVerifyRefusesAgentTokensWithoutAnAgentClient(t *testing.T) {
 
 func TestVerifyAgentIdentityToken(t *testing.T) {
 	s := newSigner(t)
-	verifier := s.verifier("web-client", "agent-client")
+	verifier := s.verifier("web-client", "agent-client", "")
 	identity := func(audience, nonce string) string {
 		// No email: an agent grant's ID token needs nothing of the profile.
 		return s.token(map[string]any{"sub": "member-1", "aud": audience, "nonce": nonce, "token_use": "id"})
@@ -141,7 +141,7 @@ func TestVerifyAgentIdentityToken(t *testing.T) {
 			t.Fatalf("VerifyAgentIdentityToken() accepted %s", name)
 		}
 	}
-	if _, err := s.verifier("web-client", "").VerifyAgentIdentityToken(context.Background(), identity("agent-client", "nonce-1"), "nonce-1"); err == nil {
+	if _, err := s.verifier("web-client", "", "").VerifyAgentIdentityToken(context.Background(), identity("agent-client", "nonce-1"), "nonce-1"); err == nil {
 		t.Fatal("VerifyAgentIdentityToken() accepted a token with no agent client configured")
 	}
 	// The web client's own identity check still refuses the agent client's

@@ -65,11 +65,11 @@ type Verifier struct {
 // agentClientID is set, to the agent app client too: an agent's access token
 // is the member's own, issued to the agent client, and verifies here like
 // the member's; what it may do is for the caller to decide.
-func New(provider *oidc.Provider, clientID, agentClientID string, cliClientID ...string) *Verifier {
-	return newVerifier(provider.Verifier, clientID, agentClientID, cliClientID...)
+func New(provider *oidc.Provider, clientID, agentClientID, cliClientID string) *Verifier {
+	return newVerifier(provider.Verifier, clientID, agentClientID, cliClientID)
 }
 
-func newVerifier(verifierFor func(*oidc.Config) *oidc.IDTokenVerifier, clientID, agentClientID string, cliClientID ...string) *Verifier {
+func newVerifier(verifierFor func(*oidc.Config) *oidc.IDTokenVerifier, clientID, agentClientID, cliClientID string) *Verifier {
 	verifier := &Verifier{
 		clientID:      clientID,
 		agentClientID: agentClientID,
@@ -88,10 +88,10 @@ func newVerifier(verifierFor func(*oidc.Config) *oidc.IDTokenVerifier, clientID,
 			SupportedSigningAlgs: []string{oidc.RS256},
 		})
 	}
-	if len(cliClientID) > 0 && cliClientID[0] != "" {
-		verifier.cliClientID = cliClientID[0]
+	if cliClientID != "" {
+		verifier.cliClientID = cliClientID
 		verifier.cliIdentityVerifier = verifierFor(&oidc.Config{
-			ClientID:             cliClientID[0],
+			ClientID:             cliClientID,
 			SupportedSigningAlgs: []string{oidc.RS256},
 		})
 	}
