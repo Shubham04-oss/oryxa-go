@@ -156,9 +156,9 @@ func TestParseOperationalConsentAndSafetyPolicy(t *testing.T) {
 }
 
 func TestParseToolsPolicyDistinguishesOmittedAndEmptyOffer(t *testing.T) {
-	file := example + "tools: {provider: composio, offer: [], autoSubscribe: false}\n"
+	file := example + "tools: {provider: composio, offer: [], autoSubscribe: false, wakeUpWithin: 30m}\n"
 	document, err := Parse([]byte(file))
-	if err != nil || document.Tools == nil || document.Tools.Offer == nil || len(*document.Tools.Offer) != 0 || document.Tools.AutoSubscribe == nil || *document.Tools.AutoSubscribe {
+	if err != nil || document.Tools == nil || document.Tools.Offer == nil || len(*document.Tools.Offer) != 0 || document.Tools.AutoSubscribe == nil || *document.Tools.AutoSubscribe || document.Tools.WakeUpWithin == nil || *document.Tools.WakeUpWithin != "30m" {
 		t.Fatalf("tools policy = %+v, %v", document.Tools, err)
 	}
 	encoded, err := document.YAML()
@@ -174,6 +174,8 @@ func TestParseToolsPolicyDistinguishesOmittedAndEmptyOffer(t *testing.T) {
 		example + "tools: {offer: [github, github]}\n",
 		example + "tools: {offer: [GitHub]}\n",
 		example + "tools: {personal: {github: true}}\n",
+		example + "tools: {wakeUpWithin: 91m}\n",
+		example + "tools: {wakeUpWithin: 10s}\n",
 	} {
 		if _, err := Parse([]byte(invalid)); err == nil {
 			t.Fatalf("accepted tools policy %q", invalid)

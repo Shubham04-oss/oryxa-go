@@ -76,6 +76,7 @@ type Tools struct {
 	Provider      string    `yaml:"provider,omitempty" json:"provider,omitempty"`
 	Offer         *[]string `yaml:"offer,omitempty" json:"offer,omitempty"`
 	AutoSubscribe *bool     `yaml:"autoSubscribe,omitempty" json:"autoSubscribe,omitempty"`
+	WakeUpWithin  *string   `yaml:"wakeUpWithin,omitempty" json:"wakeUpWithin,omitempty"`
 }
 
 // Search selects the knowledge path available to organization agents.
@@ -343,6 +344,12 @@ func (document Document) Validate() error {
 					return fmt.Errorf("tools.offer must contain unique lowercase toolkit slugs")
 				}
 				seen[toolkit] = true
+			}
+		}
+		if document.Tools.WakeUpWithin != nil {
+			duration, err := ParseDuration(*document.Tools.WakeUpWithin)
+			if err != nil || duration < time.Minute || duration > 90*time.Minute {
+				return fmt.Errorf("tools.wakeUpWithin must be between 1m and 90m")
 			}
 		}
 	}

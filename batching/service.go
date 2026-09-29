@@ -21,6 +21,8 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
+	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
+	workspacestore "github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
 )
 
 const Name = "batching"
@@ -62,6 +64,9 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		return host.Service{}, err
 	}
 	store := postgres.New(platform.Database, scheduler)
+	if platform.Getenv("WORKSPACE_URL") != "" {
+		store.WithPolicy(workspacepolicy.New(workspacestore.New(platform.Database)))
+	}
 	service := application.New(store, classifier, application.Config{
 		Rule:     rule,
 		Interval: config.SweepInterval, ClaimLease: config.ClaimLease, GroupsPerSweep: config.GroupsPerSweep,

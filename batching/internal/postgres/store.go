@@ -17,6 +17,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
+	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 //go:embed migrations/*.sql
@@ -29,7 +30,10 @@ var ErrClaimLost = errors.New("batch claim is no longer owned")
 type Store struct {
 	database  *postgreskit.Database
 	scheduler domain.AdaptiveScheduler
-	now       func() time.Time
+	policy    interface {
+		Get(context.Context, string) (workspacepolicy.Settings, error)
+	}
+	now func() time.Time
 }
 
 func New(database *postgreskit.Database, schedulers ...domain.AdaptiveScheduler) *Store {
@@ -38,6 +42,27 @@ func New(database *postgreskit.Database, schedulers ...domain.AdaptiveScheduler)
 		store.scheduler = schedulers[0]
 	}
 	return store
+}
+
+func (store *Store) WithPolicy(policy interface {
+	Get(context.Context, string) (workspacepolicy.Settings, error)
+}) *Store {
+	store.policy = policy
+	return store
+}
+
+func (store *Store) schedulerFor(ctx context.Context, organizationID string) (domain.AdaptiveScheduler, error) {
+	if store.policy == nil {
+		return store.scheduler, nil
+	}
+	settings, err := store.policy.Get(ctx, organizationID)
+	if err != nil {
+		return domain.AdaptiveScheduler{}, fmt.Errorf("read the organization's batching policy: %w", err)
+	}
+	if settings.WakeUpWithin == 0 {
+		return store.scheduler, nil
+	}
+	return store.scheduler.WithMaxWait(settings.WakeUpWithin)
 }
 
 func (store *Store) Pool() *pgxpool.Pool { return store.database.Pool }
@@ -176,6 +201,10 @@ func (store *Store) recordImmediate(ctx context.Context, tx pgx.Tx, trigger doma
 }
 
 func (store *Store) recordDigest(ctx context.Context, tx pgx.Tx, trigger domain.Trigger) (domain.Admission, error) {
+	scheduler, err := store.schedulerFor(ctx, trigger.OrganizationID)
+	if err != nil {
+		return 0, err
+	}
 	at := store.now().UTC()
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO batching_traffic_profiles
@@ -203,7 +232,7 @@ func (store *Store) recordDigest(ctx context.Context, tx pgx.Tx, trigger domain.
 	if exists {
 		return domain.AlreadyRecorded, nil
 	}
-	profile, schedule, err := store.scheduler.Observe(profile, trigger.ReceivedAt, at,
+	profile, schedule, err := scheduler.Observe(profile, trigger.ReceivedAt, at,
 		trigger.OrganizationID+"/"+trigger.MemberID, trigger.Classification.Priority)
 	if err != nil {
 		return 0, fmt.Errorf("schedule digest trigger: %w", err)

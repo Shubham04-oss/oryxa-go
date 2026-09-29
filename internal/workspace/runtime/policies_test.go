@@ -12,11 +12,12 @@ func TestPolicyOmissionPreservesAndRollbackReplaces(t *testing.T) {
 	proactive := "off"
 	offer := []string{"github"}
 	autoSubscribe := false
+	wakeUpWithin := "30m"
 	previous := contextDocument()
 	previous.Rules = &spec.Rules{Consent: &spec.ConsentRules{ExpireAfter: &expiry}}
 	previous.Safety = &spec.Safety{Guard: &spec.GuardSafety{HoldForReview: &hold}}
 	previous.Agents = &spec.Agents{Personal: &spec.PersonalAgent{Proactive: &proactive}}
-	previous.Tools = &spec.Tools{Offer: &offer, AutoSubscribe: &autoSubscribe}
+	previous.Tools = &spec.Tools{Offer: &offer, AutoSubscribe: &autoSubscribe, WakeUpWithin: &wakeUpWithin}
 	previous.Search = &spec.Search{Mode: "native"}
 	submitted := contextDocument()
 	effective, plan, err := MergePolicies(previous, submitted, false)
@@ -24,7 +25,7 @@ func TestPolicyOmissionPreservesAndRollbackReplaces(t *testing.T) {
 		t.Fatalf("omitted policies: %+v %+v %v", effective, plan, err)
 	}
 	effective, plan, err = MergePolicies(previous, submitted, true)
-	if err != nil || len(plan.Changes) != 6 || effective.Rules != nil || effective.Safety != nil || effective.Agents != nil || effective.Tools != nil || effective.Search != nil {
+	if err != nil || len(plan.Changes) != 7 || effective.Rules != nil || effective.Safety != nil || effective.Agents != nil || effective.Tools != nil || effective.Search != nil {
 		t.Fatalf("rollback policies: %+v %+v %v", effective, plan, err)
 	}
 }
@@ -35,6 +36,16 @@ func TestSearchModeChangeAppearsInPlan(t *testing.T) {
 	effective, plan, err := MergePolicies(contextDocument(), submitted, false)
 	if err != nil || effective.Search == nil || effective.Search.Mode != "none" || len(plan.Changes) != 1 || plan.Changes[0].Name != "search.mode" {
 		t.Fatalf("search plan = %+v %+v %v", effective.Search, plan, err)
+	}
+}
+
+func TestWakeUpWithinChangeAppearsInPlan(t *testing.T) {
+	wake := "20m"
+	submitted := contextDocument()
+	submitted.Tools = &spec.Tools{WakeUpWithin: &wake}
+	effective, plan, err := MergePolicies(contextDocument(), submitted, false)
+	if err != nil || effective.Tools == nil || effective.Tools.WakeUpWithin == nil || *effective.Tools.WakeUpWithin != "20m" || len(plan.Changes) != 1 || plan.Changes[0].Name != "tools.wakeUpWithin" {
+		t.Fatalf("wake-up plan = %+v %+v %v", effective.Tools, plan, err)
 	}
 }
 

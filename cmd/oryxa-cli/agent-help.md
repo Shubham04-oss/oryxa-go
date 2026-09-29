@@ -36,6 +36,9 @@ review the plan before applying it. Slack installation remains a manual step.
    `oryxa connect-app TOOLKIT --org SLUG --json --no-browser`. Give the
    returned provider URL to that member to finish the browser step. Never
    ask them to send you a provider token or sign in as them.
+10. If the admin chooses a maximum app digest cadence, map it to
+    `tools.wakeUpWithin` between `1m` and `90m`. Do not infer it from a
+    team's working hours.
 
 Example:
 
@@ -65,6 +68,7 @@ tools:
   provider: composio
   offer: [github, jira]
   autoSubscribe: false
+  wakeUpWithin: 30m
 search:
   mode: native
 ```

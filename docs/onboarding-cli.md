@@ -102,6 +102,7 @@ The current file accepts these settings:
 | `tools.provider: composio` | Declares the existing Composio provider |
 | `tools.offer` | Allows only the listed toolkit slugs to connect or act in this organization; omitting it allows all, and `[]` allows none. Existing connections stay recorded but cannot run, read, subscribe, deliver events, or refresh knowledge sources while disallowed. Previously indexed documents remain until their normal removal lifecycle |
 | `tools.autoSubscribe` | Sets the default for new app connections; a member's per-connection choice takes precedence, and deployment-wide `APPS_AUTO_SUBSCRIBE=false` still disables automatic subscriptions |
+| `tools.wakeUpWithin` | Sets the maximum cadence used to schedule new digest triggers (`1m` through `90m`); omission uses `BATCHING_MAX_WAIT` (one hour by default). Already scheduled triggers keep their deadlines |
 | `search.mode: native\|none` | Enables the existing RAG knowledge toolbox or prevents organization agents from using its search and source tools; omission keeps existing behavior |
 
 The parser refuses unknown keys, duplicate members or teams, unrecognized
@@ -111,7 +112,8 @@ is still supported.
 Owner role transfers are not yet supported. `preset` is accepted in the file;
 its safety hold-for-review default takes effect for `regulated`, while its
 other consent, retention, and security defaults do not. Organization timezone
-is stored but the scheduler does not yet read it. The agent and apps services
+is stored but the scheduler does not yet read it. The agent, apps, knowledge,
+and batching services
 read applied workspace policies when `WORKSPACE_URL` is set; the all-in-one
 host supplies that URL automatically. Split deployments must share the
 workspace PostgreSQL schema for these reads. Directory sync, the remaining

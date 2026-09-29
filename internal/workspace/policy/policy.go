@@ -27,6 +27,8 @@ type Settings struct {
 	// explicitly disables every toolkit for this organization.
 	Offer         *[]string
 	AutoSubscribe *bool
+	// WakeUpWithin is zero when the workspace uses the deployment default.
+	WakeUpWithin time.Duration
 }
 
 type Loader struct{ repository Repository }
@@ -64,6 +66,12 @@ func (loader *Loader) Get(ctx context.Context, organizationID string) (Settings,
 	}
 	if document.Tools != nil {
 		settings.AutoSubscribe = document.Tools.AutoSubscribe
+		if document.Tools.WakeUpWithin != nil {
+			settings.WakeUpWithin, err = spec.ParseDuration(*document.Tools.WakeUpWithin)
+			if err != nil {
+				return Settings{}, err
+			}
+		}
 	}
 	if document.Search != nil {
 		settings.SearchMode = document.Search.Mode
