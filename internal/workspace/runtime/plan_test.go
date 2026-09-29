@@ -197,6 +197,34 @@ func TestTeamsPruneWaitsForReplacementLeadToJoin(t *testing.T) {
 	}
 }
 
+func TestNewTeamPruneConvergesWithoutImplicitCreatorSeat(t *testing.T) {
+	for _, lead := range []bool{false, true} {
+		t.Run(map[bool]string{false: "members only", true: "new lead"}[lead], func(t *testing.T) {
+			state := &fakeState{orgExists: true, members: []Member{{UserID: "u1", Email: "owner@acme.com", Role: "owner"}, {UserID: "u2", Email: "new@acme.com", Role: "member"}}}
+			server := httptest.NewServer(http.HandlerFunc(state.serve))
+			defer server.Close()
+			client, err := NewClient(server.URL, "test-token")
+			if err != nil {
+				t.Fatal(err)
+			}
+			team := spec.Team{Name: "Engineering", Members: []string{"new@acme.com"}}
+			if lead {
+				team.Leads = []string{"new@acme.com"}
+			}
+			document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"}, Teams: spec.Teams{Prune: true, Items: []spec.Team{team}}}
+			for i := 0; i < 2; i++ {
+				remaining, err := Apply(context.Background(), client, document)
+				if err != nil || len(remaining.Changes) != 0 {
+					t.Fatalf("apply %d = %+v %v", i, remaining, err)
+				}
+			}
+			if state.teamCreates != 1 || len(state.teamMembers) != 1 || state.teamMembers[0].UserID != "u2" {
+				t.Fatalf("unexpected roster: %+v", state.teamMembers)
+			}
+		})
+	}
+}
+
 func TestPeoplePruneNeedsExactApprovedRemovalPlan(t *testing.T) {
 	state := &fakeState{
 		orgExists: true,
@@ -645,8 +673,14 @@ func (state *fakeState) serve(writer http.ResponseWriter, request *http.Request)
 		}
 		write(map[string]any{"teams": teams})
 	case "POST /v1/organizations/org_1/teams":
+		var input struct {
+			SkipCreator bool `json:"skip_creator"`
+		}
+		_ = json.NewDecoder(request.Body).Decode(&input)
 		state.teamCreates++
-		state.teamMembers = append(state.teamMembers, TeamMember{UserID: "u1", Email: "owner@acme.com", Role: "admin"})
+		if !input.SkipCreator {
+			state.teamMembers = append(state.teamMembers, TeamMember{UserID: "u1", Email: "owner@acme.com", Role: "admin"})
+		}
 		write(map[string]string{"id": "team_1"})
 	case "GET /v1/organizations/org_1/teams/team_1/members":
 		write(map[string]any{"members": state.teamMembers})
@@ -662,14 +696,19 @@ func (state *fakeState) serve(writer http.ResponseWriter, request *http.Request)
 		writer.WriteHeader(http.StatusNoContent)
 	case "POST /v1/organizations/org_1/teams/team_1/members":
 		var input struct {
-			Role string `json:"role"`
+			Role   string `json:"role"`
+			UserID string `json:"user_id"`
 		}
 		_ = json.NewDecoder(request.Body).Decode(&input)
 		if input.Role == "" {
 			input.Role = "member"
 		}
 		state.adds++
-		state.teamMembers = append(state.teamMembers, TeamMember{UserID: "u2", Email: "new@acme.com", Role: input.Role})
+		for _, member := range state.members {
+			if member.UserID == input.UserID {
+				state.teamMembers = append(state.teamMembers, TeamMember{UserID: member.UserID, Email: member.Email, Role: input.Role})
+			}
+		}
 		write(map[string]string{"status": "created"})
 	case "PATCH /v1/organizations/org_1/teams/team_1/members/u2":
 		var input struct {

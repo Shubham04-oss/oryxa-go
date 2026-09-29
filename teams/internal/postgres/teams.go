@@ -71,8 +71,10 @@ func (store *Store) CreateTeam(ctx context.Context, organizationName string, tea
 		if err != nil {
 			return mapWriteError("insert team", err)
 		}
-		if err := insertMembership(ctx, tx, team.Path, creator); err != nil {
-			return err
+		if creator.UserID != "" {
+			if err := insertMembership(ctx, tx, team.Path, creator); err != nil {
+				return err
+			}
 		}
 		return insertEvents(ctx, tx, events)
 	})
@@ -533,24 +535,24 @@ type userTeamRow struct {
 
 func (row userTeamRow) asDomain() (domain.Team, domain.Membership) {
 	return domain.Team{
-		ID:             row.TeamID,
-		OrganizationID: row.OrganizationID,
-		Name:           row.Name,
-		Path:           row.Path,
-		CreatedBy:      row.CreatedBy,
-		CreatedAt:      row.CreatedAt.UTC(),
-		UpdatedAt:      row.UpdatedAt.UTC(),
-	}, domain.Membership{
-		TeamID:         row.TeamID,
-		OrganizationID: row.OrganizationID,
-		UserID:         row.UserID,
-		Email:          row.Email,
-		DisplayName:    row.DisplayName,
-		Role:           row.Role,
-		NotifyEmail:    row.NotifyEmail,
-		Path:           row.MemberPath,
-		JoinedAt:       row.JoinedAt.UTC(),
-	}
+			ID:             row.TeamID,
+			OrganizationID: row.OrganizationID,
+			Name:           row.Name,
+			Path:           row.Path,
+			CreatedBy:      row.CreatedBy,
+			CreatedAt:      row.CreatedAt.UTC(),
+			UpdatedAt:      row.UpdatedAt.UTC(),
+		}, domain.Membership{
+			TeamID:         row.TeamID,
+			OrganizationID: row.OrganizationID,
+			UserID:         row.UserID,
+			Email:          row.Email,
+			DisplayName:    row.DisplayName,
+			Role:           row.Role,
+			NotifyEmail:    row.NotifyEmail,
+			Path:           row.MemberPath,
+			JoinedAt:       row.JoinedAt.UTC(),
+		}
 }
 
 func nullableTime(value time.Time) *time.Time {

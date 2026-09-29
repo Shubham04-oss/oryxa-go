@@ -412,8 +412,8 @@ func (client *Client) RevokeInvitation(ctx context.Context, orgID, invitationID 
 	return client.request(ctx, http.MethodDelete, "/v1/organizations/"+url.PathEscape(orgID)+"/invitations/"+url.PathEscape(invitationID), nil, nil)
 }
 
-func (client *Client) CreateTeam(ctx context.Context, orgID, name string) error {
-	return client.request(ctx, http.MethodPost, "/v1/organizations/"+url.PathEscape(orgID)+"/teams", map[string]string{"name": name}, nil)
+func (client *Client) CreateTeam(ctx context.Context, orgID, name string, skipCreator bool) error {
+	return client.request(ctx, http.MethodPost, "/v1/organizations/"+url.PathEscape(orgID)+"/teams", map[string]any{"name": name, "skip_creator": skipCreator}, nil)
 }
 
 func (client *Client) AddTeamMember(ctx context.Context, orgID, teamID, memberID, role string) error {

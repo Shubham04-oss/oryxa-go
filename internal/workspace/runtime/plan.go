@@ -422,7 +422,7 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 	}
 	for _, team := range document.Teams.Items {
 		if _, exists := state.Teams[team.Name]; !exists {
-			if err := retryNotFound(ctx, func() error { return client.CreateTeam(ctx, state.Organization.ID, team.Name) }); err != nil {
+			if err := retryNotFound(ctx, func() error { return client.CreateTeam(ctx, state.Organization.ID, team.Name, document.Teams.Prune) }); err != nil {
 				return Plan{}, err
 			}
 		}

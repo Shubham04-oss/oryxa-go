@@ -41,6 +41,23 @@ func TestCreateTeamAddsCreatorAsAdminAndEmitsEvents(t *testing.T) {
 	}
 }
 
+func TestCreateTeamCanOmitCreatorForReviewedRoster(t *testing.T) {
+	service, store, _ := newService()
+	team, err := service.CreateTeam(context.Background(), creds("user-owner"), "org_1", CreateTeamInput{Name: "Engineering", SkipCreator: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Membership(context.Background(), team.ID, "user-owner"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("implicit creator remained: %v", err)
+	}
+	if slices.Contains(store.detailTypes(), teamseventsv1.MemberAddedDetailType) {
+		t.Fatal("emitted a membership event for omitted creator")
+	}
+	if _, err := service.CreateTeam(context.Background(), creds("user-member"), "org_1", CreateTeamInput{Name: "Unmanaged", SkipCreator: true}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("member used admin roster option: %v", err)
+	}
+}
+
 func TestTeamsVisibility(t *testing.T) {
 	service, _, _ := newService()
 	ctx := context.Background()
