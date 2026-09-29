@@ -790,52 +790,60 @@ func raceOnTheCard(t *testing.T, s *stack) {
 	_ = dm
 
 	t.Run("a click in Slack and a choice on the web at the same moment are one decision, and the loser sees the winner", func(t *testing.T) {
-		race := s.ask(ada, raya, "about the launch plan", "")
-		var wg sync.WaitGroup
-		var clickErr, webErr error
-		var webStatus int
-		var webBody map[string]any
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			clickErr = s.sendClick(raya, race.notice, "consent_access", race.tickets["consent_access"])
-		}()
-		go func() {
-			defer wg.Done()
-			webStatus, webBody, webErr = s.call(raya, http.MethodPost, consentPath(race.requestID), map[string]string{"choice": "summary"})
-		}()
-		wg.Wait()
-		if clickErr != nil || webErr != nil {
-			t.Fatalf("the click: %v; the web choice: %v", clickErr, webErr)
-		}
-		settled := s.noticeSettled(race.notice)
-		request := s.waitForStatus(raya, race.requestID, "completed")
+		// A click takes about a second to be routed, so the web's choice is sent
+		// after each of a few pauses, to land before it, beside it and after it. Any
+		// of them may win: what must hold is that one does, and that the other says so.
+		won := map[string]int{}
+		for _, pause := range []time.Duration{0, 600 * time.Millisecond, 1000 * time.Millisecond, 1400 * time.Millisecond} {
+			race := s.ask(ada, raya, fmt.Sprintf("about the launch plan, round %d", pause/time.Millisecond), "")
+			var wg sync.WaitGroup
+			var clickErr, webErr error
+			var webStatus int
+			var webBody map[string]any
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				clickErr = s.sendClick(raya, race.notice, "consent_access", race.tickets["consent_access"])
+			}()
+			go func() {
+				defer wg.Done()
+				time.Sleep(pause)
+				webStatus, webBody, webErr = s.call(raya, http.MethodPost, consentPath(race.requestID), map[string]string{"choice": "summary"})
+			}()
+			wg.Wait()
+			if clickErr != nil || webErr != nil {
+				t.Fatalf("the click: %v; the web choice: %v", clickErr, webErr)
+			}
+			settled := s.noticeSettled(race.notice)
+			request := s.waitForStatus(raya, race.requestID, "completed")
 
-		surface, _ := at(request, "decision", "decided_by", "surface").(string)
-		consent, _ := at(request, "decision", "consent").(string)
-		words := wording(settled)
-		switch surface {
-		case "web":
-			// The web card won with a summary: its call was answered, and the click
-			// in Slack, which came too late, decided nothing.
-			if webStatus != http.StatusOK || consent != "summary" || !strings.Contains(words, "AI summary only") {
-				t.Errorf("the web won, and its call was %d, the consent %q, the notice %s", webStatus, consent, words)
+			surface, _ := at(request, "decision", "decided_by", "surface").(string)
+			consent, _ := at(request, "decision", "consent").(string)
+			words := wording(settled)
+			switch surface {
+			case "web":
+				// The web card won with a summary: its call was answered, and the click
+				// in Slack, which came too late, decided nothing.
+				if webStatus != http.StatusOK || consent != "summary" || !strings.Contains(words, "AI summary only") {
+					t.Errorf("after %s the web won, and its call was %d, the consent %q, the notice %s", pause, webStatus, consent, words)
+				}
+			case "slack":
+				// The click won with access: the web call was refused, and its answer
+				// says who won, and what they chose.
+				if webStatus != http.StatusConflict || at(webBody, "error", "code") != "already_decided" ||
+					at(webBody, "winner", "decided_by", "surface") != "slack" || at(webBody, "winner", "consent") != "access" ||
+					consent != "access" || !strings.Contains(words, "access for 1 hour") {
+					t.Errorf("after %s Slack won, and the web call was %d %v, the consent %q, the notice %s", pause, webStatus, webBody, consent, words)
+				}
+			default:
+				t.Fatalf("after %s the request was decided on %q: %v", pause, surface, at(request, "decision"))
 			}
-		case "slack":
-			// The click won with access: the web call was refused, and its answer
-			// says who won, and what they chose.
-			if webStatus != http.StatusConflict || at(webBody, "error", "code") != "already_decided" ||
-				at(webBody, "winner", "decided_by", "surface") != "slack" || at(webBody, "winner", "consent") != "access" ||
-				consent != "access" || !strings.Contains(words, "access for 1 hour") {
-				t.Errorf("Slack won, and the web call was %d %v, the consent %q, the notice %s", webStatus, webBody, consent, words)
+			if got := s.decisions(race.requestID); got != 1 {
+				t.Errorf("after %s %d decisions were published for the request, want exactly one", pause, got)
 			}
-		default:
-			t.Fatalf("the request was decided on %q: %v", surface, at(request, "decision"))
+			won[surface]++
 		}
-		if got := s.decisions(race.requestID); got != 1 {
-			t.Errorf("%d decisions were published for the request, want exactly one", got)
-		}
-		t.Logf("the %s won the race", surface)
+		t.Logf("who won, of four races: %v", won)
 	})
 
 	t.Run("a choice on the web settles the notice, and a click on its buttons afterwards decides nothing", func(t *testing.T) {
