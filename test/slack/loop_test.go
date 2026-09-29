@@ -528,6 +528,43 @@ func TestSlackConsentLoop(t *testing.T) {
 			t.Errorf("no request was decided by a lease among %v", listed["requests"])
 		}
 		_ = followUp
+
+		// The owner ends the lease, in Oryxa, and the asker's next follow-up asks
+		// again: a notice with its buttons, and no answer until it is decided.
+		_, activity := s.api(raya, http.MethodGet, "/v1/organizations/"+organizationID+"/agent-requests/activity?limit=100", nil)
+		leaseID := ""
+		for _, entry := range asSlice(activity["activity"]) {
+			if at(entry, "kind") == "lease_given" && at(entry, "lease", "request_id") == access.requestID {
+				leaseID, _ = at(entry, "lease", "id").(string)
+			}
+		}
+		if leaseID == "" {
+			t.Fatalf("the owner's activity does not show the lease they gave: %v", activity)
+		}
+		if status, body := s.api(raya, http.MethodDelete, "/v1/organizations/"+organizationID+"/agent-leases/"+leaseID, nil); status != http.StatusOK || at(body, "lease", "revoked_at") == nil {
+			t.Fatalf("revoke the lease: %d %v", status, body)
+		}
+		before = s.count()
+		s.mention(ada, "and <@"+raya.SlackID+"> what about the Q1 plan?", access.thread)
+		var again slackfake.Message
+		s.eventually("a new notice, since the lease was revoked", 40*time.Second, func() bool {
+			for _, message := range s.fromIndex(before) {
+				if message.Channel == dm && len(buttons(message)) > 0 {
+					again = message
+					return true
+				}
+			}
+			return false
+		})
+		s.quiet()
+		for _, message := range s.fromIndex(before) {
+			if message.Channel == channelGeneral && !message.Ephemeral && strings.Contains(wording(message), "1-hour access") {
+				t.Errorf("a follow-up was answered under a lease its owner had revoked: %+v", message)
+			}
+		}
+		// Settle it, so that it is not left open.
+		s.clickOn(raya, again, "consent_deny", ticketsOf(again)["consent_deny"])
+		s.noticeSettled(again)
 	})
 
 	raceOnTheCard(t, s)
