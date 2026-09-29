@@ -148,6 +148,36 @@ type fakeSignin struct {
 	puts         []signin.ClientInput
 	putErr       error
 	removedCalls []string
+
+	// sessions records what a tool, reader or poll asked signin for, and
+	// answer builds the session it is answered. Without one, a session with
+	// no client is answered, so a test that only checks what was asked need
+	// not build one.
+	sessions   []string
+	sessionErr error
+	answer     func(ctx context.Context, connectionID string) (integration.Session, error)
+}
+
+func (fake *fakeSignin) Session(ctx context.Context, connectionID string, _ ...signin.SessionOption) (integration.Session, error) {
+	fake.mu.Lock()
+	fake.sessions = append(fake.sessions, connectionID)
+	answer, err := fake.answer, fake.sessionErr
+	fake.mu.Unlock()
+	switch {
+	case err != nil:
+		return integration.Session{}, err
+	case answer != nil:
+		return answer(ctx, connectionID)
+	default:
+		return integration.Session{BaseURL: "https://api.acme.test", Settings: map[string]string{}}, nil
+	}
+}
+
+// sessionCalls is the connection each Session call was for, in order.
+func (fake *fakeSignin) sessionCalls() []string {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return slices.Clone(fake.sessions)
 }
 
 func (fake *fakeSignin) StartOAuth(_ context.Context, request signin.StartRequest) (signin.Started, error) {
@@ -444,11 +474,21 @@ type oryxaHarness struct {
 // for toolkits, over the integrations this build ships.
 func newOryxaHarness(t *testing.T, toolkits ...string) oryxaHarness {
 	t.Helper()
-	store := newFakeOryxaStore()
 	registry, err := integrations.NewRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newOryxaHarnessWith(t, registry, toolkits...)
+}
+
+// newOryxaHarnessWith is newOryxaHarness over a registry a test built, so a
+// test can register an integration that carries tools, readers and triggers
+// of its own. The integrations this build ships declare how to sign in, and
+// no tools yet, so nothing about the Oryxa route can be exercised without
+// one.
+func newOryxaHarnessWith(t *testing.T, registry *integration.Registry, toolkits ...string) oryxaHarness {
+	t.Helper()
+	store := newFakeOryxaStore()
 	fakeSign := &fakeSignin{store: store, clients: map[string]signin.ClientView{}, account: signin.Account{Label: "octocat", Ref: "583231"}}
 	fakeHook := &fakeHooks{registry: registry, endpoints: map[string]hooks.Endpoint{}, token: "notion-verification-token-1234"}
 	directory := &sessionDirectory{members: map[string]domain.OrgMembership{

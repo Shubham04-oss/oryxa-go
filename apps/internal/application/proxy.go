@@ -133,6 +133,12 @@ func (s *Service) Proxy(ctx context.Context, credentials authclient.Credentials,
 	if err != nil {
 		return ProxyResult{}, err
 	}
+	// The read proxy is Composio's, and Composio holds no credential for an
+	// Oryxa connection. Knowledge reads one of those through the pages route
+	// and its integration's own reader, never through Composio's key.
+	if connection.Oryxa() {
+		return ProxyResult{}, errOryxaNotYet(connection.Toolkit)
+	}
 	// The connection's own app decides, in case the caller named another.
 	if err := checkRead(connection.Toolkit, method, parsed.Path); err != nil {
 		return ProxyResult{}, err

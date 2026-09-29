@@ -48,6 +48,11 @@ const maxToolSearch = 50
 
 // SearchTools finds a toolkit's tools for a member: its featured tools
 // without a query, the tools matching one with it.
+//
+// The member's own connection decides where the answer comes from. An Oryxa
+// connection is answered from the registry, in the same ToolView JSON, so
+// nothing downstream can tell the two brokers apart; a Composio one is
+// answered by Composio as it always was.
 func (s *Service) SearchTools(ctx context.Context, credentials authclient.Credentials, organizationID, toolkit, query string, limit int) ([]ToolView, error) {
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
@@ -60,11 +65,15 @@ func (s *Service) SearchTools(ctx context.Context, credentials authclient.Creden
 	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
 		return nil, err
 	}
-	if err := s.notThroughOryxa(ctx, organizationID, caller.UserID, toolkit); err != nil {
-		return nil, err
-	}
 	if limit <= 0 || limit > maxToolSearch {
 		limit = maxToolSearch
+	}
+	specs, own, err := s.ownSpecs(ctx, organizationID, caller.UserID, toolkit)
+	if err != nil {
+		return nil, err
+	}
+	if own {
+		return ownToolViews(toolkit, specs, query, limit), nil
 	}
 	search := composio.ToolQuery{Toolkit: toolkit, Search: strings.TrimSpace(query), Limit: limit}
 	if search.Search == "" {
@@ -122,6 +131,12 @@ type ToolRun struct {
 // RunTool runs a tool in the caller's app, as the caller. A tool that runs
 // and fails at the app is a ToolRun whose action failed, not an error: the
 // caller, often a model, needs the app's reason to try again.
+//
+// The registry is consulted first, so a tool an integration declares is run
+// by it; the member's connection for that toolkit then decides whether it is:
+// an Oryxa connection runs the integration's own function, and a Composio one
+// runs Composio's, which is never asked to act through a connection it holds
+// no credential for.
 func (s *Service) RunTool(ctx context.Context, credentials authclient.Credentials, organizationID string, input RunToolInput) (ToolRun, error) {
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
@@ -139,41 +154,65 @@ func (s *Service) RunTool(ctx context.Context, credentials authclient.Credential
 	if json.Unmarshal(arguments, &object) != nil {
 		return ToolRun{}, fmt.Errorf("a tool's arguments are a JSON object: %w", domain.ErrInvalid)
 	}
-	tool, err := s.tool(ctx, slug)
+	route, err := s.routeTool(ctx, slug)
 	if err != nil {
 		return ToolRun{}, err
 	}
-	if input.OnlyReads && !tool.ReadOnly() {
-		return ToolRun{}, fmt.Errorf("%s changes things, so it runs only once the member confirms: %w", slug, domain.ErrNotReadOnly)
+	if input.OnlyReads && !route.readOnly {
+		return ToolRun{}, fmt.Errorf("%s changes things, so it runs only once the member confirms: %w", route.slug, domain.ErrNotReadOnly)
 	}
 	key := ""
-	if !tool.ReadOnly() {
+	if !route.readOnly {
 		if key, err = domain.CheckIdempotencyKey(input.IdempotencyKey); err != nil {
 			return ToolRun{}, err
 		}
 	}
-	connection, err := s.connectionFor(ctx, organizationID, caller.UserID, tool.Toolkit, input.ConnectionID)
+	connection, err := s.connectionFor(ctx, organizationID, caller.UserID, route.toolkit, input.ConnectionID)
 	if err != nil {
 		return ToolRun{}, err
 	}
+	if connection.Oryxa() {
+		if !route.hasOwn {
+			return ToolRun{}, notOwnTool(route.slug)
+		}
+		return s.runOwnTool(ctx, caller, connection, route.own, key, arguments, input.OnlyReads)
+	}
+	return s.runComposioTool(ctx, caller, organizationID, connection, route.slug, key, arguments)
+}
 
+// runComposioTool runs a tool the way it ran before Oryxa's own integrations
+// carried it, and is reached only over a connection Composio holds the
+// credential for. Its own name, version and account answer for the call,
+// whatever the registry says the tool is.
+func (s *Service) runComposioTool(
+	ctx context.Context,
+	caller domain.OrgMembership,
+	organizationID string,
+	connection domain.Connection,
+	slug, key string,
+	arguments json.RawMessage,
+) (ToolRun, error) {
+	tool, err := s.composioTool(ctx, slug)
+	if err != nil {
+		return ToolRun{}, err
+	}
 	id, err := newID("apa")
 	if err != nil {
 		return ToolRun{}, err
 	}
 	started, created, err := s.store.StartAction(ctx, domain.Action{
 		ID: id, OrganizationID: organizationID, MemberID: caller.UserID, ConnectionID: connection.ID,
-		Toolkit: tool.Toolkit, Tool: slug, ReadOnly: tool.ReadOnly(), Agent: caller.Agent,
+		Toolkit: tool.Toolkit, Tool: tool.Slug, ReadOnly: tool.ReadOnly(), Agent: caller.Agent,
 		IdempotencyKey: key, Status: domain.ActionRunning, CreatedAt: s.now().UTC(),
 	})
 	if err != nil {
 		return ToolRun{}, err
 	}
 	if !created {
-		return replay(started, slug)
+		return replay(started, tool.Slug)
 	}
 
-	result, runErr := s.composio.ExecuteTool(ctx, slug, composio.ExecuteRequest{
+	result, runErr := s.composio.ExecuteTool(ctx, tool.Slug, composio.ExecuteRequest{
 		ConnectedAccountID: connection.ComposioAccountID, UserID: connection.ComposioUserID,
 		Arguments: arguments, Version: tool.Version,
 	})
@@ -183,7 +222,7 @@ func (s *Service) RunTool(ctx context.Context, credentials authclient.Credential
 	switch {
 	case runErr != nil:
 		finished.Status = domain.ActionFailed
-		runErr = composioError("run "+slug, runErr)
+		runErr = composioError("run "+tool.Slug, runErr)
 		finished.Error = actionReason(runErr)
 	case !result.Successful:
 		finished.Status = domain.ActionFailed
@@ -230,8 +269,8 @@ func replay(action domain.Action, slug string) (ToolRun, error) {
 	return ToolRun{Action: action, Data: action.Result, Replayed: true}, nil
 }
 
-// tool describes a tool, from a short-lived cache or from Composio.
-func (s *Service) tool(ctx context.Context, slug string) (composio.Tool, error) {
+// composioTool describes a tool, from a short-lived cache or from Composio.
+func (s *Service) composioTool(ctx context.Context, slug string) (composio.Tool, error) {
 	now := s.now()
 	s.toolsMu.Lock()
 	cached, ok := s.tools[slug]
@@ -256,7 +295,10 @@ func (s *Service) tool(ctx context.Context, slug string) (composio.Tool, error) 
 }
 
 // connectionFor is the member's own connection a tool runs with: the one
-// named, or their only active connection to the app.
+// named, or their only active connection to the app. Which broker holds it
+// is not decided here — the route is, and the run goes to that broker's own
+// path, so an Oryxa connection is answered by the run rather than refused
+// here.
 func (s *Service) connectionFor(ctx context.Context, organizationID, memberID, toolkit, connectionID string) (domain.Connection, error) {
 	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
 		return domain.Connection{}, err
@@ -276,9 +318,6 @@ func (s *Service) connectionFor(ctx context.Context, organizationID, memberID, t
 		}
 		switch connection.Status {
 		case domain.ConnectionActive:
-			if connection.Oryxa() {
-				return domain.Connection{}, errOryxaNotYet(connection.Toolkit)
-			}
 			return connection, nil
 		case domain.ConnectionExpired:
 			return domain.Connection{}, fmt.Errorf("the %s connection expired: %w", toolkit, domain.ErrNeedsReconnect)
@@ -304,11 +343,6 @@ func (s *Service) connectionFor(ctx context.Context, organizationID, memberID, t
 	}
 	switch {
 	case len(active) == 1:
-		if active[0].Oryxa() {
-			// Composio's key cannot act through a connection it does not
-			// hold, and its own integration's tools arrive with phase 2.
-			return domain.Connection{}, errOryxaNotYet(active[0].Toolkit)
-		}
 		return active[0], nil
 	case len(active) > 1:
 		// connection_id used to disambiguate this; it is gone from the tool
@@ -320,28 +354,6 @@ func (s *Service) connectionFor(ctx context.Context, organizationID, memberID, t
 	default:
 		return domain.Connection{}, fmt.Errorf("%s is not connected: %w", toolkit, domain.ErrNotConnected)
 	}
-}
-
-// notThroughOryxa refuses a search over an app the member connected through
-// Oryxa's own sign-in: Composio's tools cannot run through it, and its own
-// integration's tools arrive with phase 2.
-func (s *Service) notThroughOryxa(ctx context.Context, organizationID, memberID, toolkit string) error {
-	if s.oryxa == nil {
-		// No Oryxa connection can exist where there is no Oryxa sign-in.
-		return nil
-	}
-	connections, err := s.store.Connections(ctx, organizationID, domain.ConnectionQuery{
-		MemberID: memberID, Toolkit: toolkit, Statuses: []domain.ConnectionStatus{domain.ConnectionActive},
-	})
-	if err != nil {
-		return err
-	}
-	for _, connection := range connections {
-		if connection.Oryxa() {
-			return errOryxaNotYet(toolkit)
-		}
-	}
-	return nil
 }
 
 // actionEvent is what a finished run announces. A read announces nothing: an

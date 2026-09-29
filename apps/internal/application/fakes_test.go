@@ -512,6 +512,10 @@ type fakeComposio struct {
 	triggerPages   int
 	triggerTypeErr error
 	triggerLists   int
+	// searches counts Tools calls and toolReads counts Tool calls, so a test
+	// can say that Composio was never asked for a tool the registry has.
+	searches  int
+	toolReads int
 }
 
 func newFakeComposio() *fakeComposio {
@@ -617,6 +621,7 @@ func (fake *fakeComposio) DeleteConnectedAccount(_ context.Context, id string, r
 func (fake *fakeComposio) Tools(_ context.Context, query composio.ToolQuery) (composio.Page[composio.Tool], error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	fake.searches++
 	page := composio.Page[composio.Tool]{}
 	for _, tool := range fake.tools {
 		if tool.Toolkit != query.Toolkit ||
@@ -633,6 +638,7 @@ func (fake *fakeComposio) Tools(_ context.Context, query composio.ToolQuery) (co
 func (fake *fakeComposio) Tool(_ context.Context, slug string) (composio.Tool, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	fake.toolReads++
 	tool, ok := fake.tools[slug]
 	if !ok {
 		return composio.Tool{}, composio.ErrNotFound

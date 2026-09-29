@@ -41,6 +41,12 @@ type Signin interface {
 	PutClient(ctx context.Context, input signin.ClientInput) (signin.ClientView, bool, error)
 	GetClient(ctx context.Context, organizationID, client string) (signin.ClientView, error)
 	RemoveClient(ctx context.Context, organizationID, client string) (bool, error)
+	// Session is what an integration calls its app with, as one active
+	// connection: the credential placed in the innermost transport, the
+	// connection's own fields, and a Token for the SDKs with no client hook.
+	// A read tool's session refuses every method but GET, HEAD and that
+	// tool's own read_posts, before anything is sent.
+	Session(ctx context.Context, connectionID string, options ...signin.SessionOption) (integration.Session, error)
 }
 
 // Hooks is the webhook ingress's endpoints: *hooks.Service.
@@ -114,6 +120,9 @@ type DefaultClient struct {
 type oryxaBroker struct {
 	Oryxa
 	enabled map[string]bool
+	// tools is every tool the registered integrations declare, by slug, which
+	// is what a run consults before Composio is asked anything.
+	tools map[string]ownTool
 	// redirectHost is RedirectURI's hostname, lower case: where the state
 	// cookie lives. A cookie is scoped to a host, not a port.
 	redirectHost string
@@ -155,6 +164,9 @@ func newOryxaBroker(oryxa *Oryxa) (*oryxaBroker, error) {
 			return nil, fmt.Errorf("oryxa's default OAuth client %s needs its client id and secret", client.Client)
 		}
 	}
+	// The registry is fixed for the life of the process, so the tool index is
+	// built once: a run reads it before it asks Composio for a tool.
+	broker.tools = indexTools(oryxa.Integrations)
 	return broker, nil
 }
 
@@ -184,9 +196,9 @@ func errNotOnOryxa(toolkit string) error {
 	return fmt.Errorf("%s is not switched on for Oryxa's own sign-in: %w", toolkit, domain.ErrNotConnectable)
 }
 
-// errOryxaNotYet is what a Composio path answers for an Oryxa connection.
-// Its integration's tools, reads, targets and triggers arrive with phase 2;
-// until then nothing can act through it but its own sign-in.
+// errOryxaNotYet is what a path that has no Oryxa route of its own answers
+// for an Oryxa connection: nothing outside this package can act through one
+// yet, and the tool and reader paths answer from the registry instead.
 func errOryxaNotYet(toolkit string) error {
 	return fmt.Errorf("%s is connected through Oryxa's own sign-in, whose tools, reads, targets and triggers are not available yet: %w",
 		toolkit, domain.ErrNotConnectable)
