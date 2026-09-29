@@ -90,18 +90,14 @@ function KnowledgeBaseList({
       if (!organizationId) throw new Error("No workspace is selected.")
       return createCorpus(organizationId, input)
     },
+    // A request that is out cannot be recalled, so the base exists once it
+    // lands whether or not the form still waits for it, and the list has to
+    // know. What the form does with it (`createBase`) is another matter.
     onSuccess: (created) => {
       if (organizationId) {
         void afterCreateCorpus(queryClient, organizationId, created)
       }
-      setIsCreating(false)
-      setName("")
-      setDescription("")
-      setScope("member")
-      setQuery("")
-      onSelect({ id: created.id, name: created.name })
     },
-    onError: (error) => setFormError(createError(error)),
   })
 
   const bases = corpora.data ?? []
@@ -122,11 +118,28 @@ function KnowledgeBaseList({
       return
     }
     setFormError("")
-    create.mutate({
-      name: result.data.name,
-      description: result.data.description,
-      scope: canShare ? scope : "member",
-    })
+    // These two run only while the form still waits for this request. Cancel
+    // resets the mutation (`cancelCreate`) and leaving the page unmounts it,
+    // which drops them: a base made after that is not opened, and its
+    // failure is not shown over whatever the form holds by then.
+    create.mutate(
+      {
+        name: result.data.name,
+        description: result.data.description,
+        scope: canShare ? scope : "member",
+      },
+      {
+        onSuccess: (created) => {
+          setIsCreating(false)
+          setName("")
+          setDescription("")
+          setScope("member")
+          setQuery("")
+          onSelect({ id: created.id, name: created.name })
+        },
+        onError: (error) => setFormError(createError(error)),
+      }
+    )
   }
 
   function cancelCreate() {

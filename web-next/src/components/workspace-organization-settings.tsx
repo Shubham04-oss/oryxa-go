@@ -77,6 +77,13 @@ export function WorkspaceOrganizationSettings({
     mutationFn: () => deleteOrganization(organization!.id),
     onSuccess: () => window.location.assign("/"),
   })
+  // Once the request is sent there is nothing to take back: aborting the
+  // fetch would only stop the page from hearing what Go did, and the page
+  // navigates away on success. So the confirmation is locked until Go answers
+  // (or, on success, until the navigation lands), and Cancel is available
+  // again only after a failure.
+  const leaving =
+    leave.isPending || leave.isSuccess || remove.isPending || remove.isSuccess
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -218,6 +225,7 @@ export function WorkspaceOrganizationSettings({
               )}
               <button
                 type="button"
+                disabled={leaving}
                 onClick={() => {
                   setDangerAction(null)
                   setConfirmation("")
@@ -230,8 +238,7 @@ export function WorkspaceOrganizationSettings({
                 disabled={
                   (dangerAction === "delete" &&
                     confirmation !== organization?.name) ||
-                  leave.isPending ||
-                  remove.isPending
+                  leaving
                 }
                 onClick={() =>
                   dangerAction === "delete" ? remove.mutate() : leave.mutate()

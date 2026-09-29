@@ -25,12 +25,23 @@ export function apiUrl(path: string): string {
   return `${base.replace(/\/$/, "")}${path}`
 }
 
+/**
+ * How long a session refresh may take. Every request that meets a 401 waits
+ * on the one refresh in flight, so one that never answered would hold them
+ * all; past this it counts as failed, like a refresh that could not connect.
+ */
+const refreshTimeoutMs = 10_000
+
 let pendingRefresh: Promise<boolean> | undefined
 
 function refreshSession(): Promise<boolean> {
+  // The timeout aborts the fetch, which rejects and lands in the second
+  // handler below; `finally` then clears the shared promise, so the next 401
+  // starts a refresh of its own instead of waiting on this one.
   pendingRefresh ??= fetch(apiUrl("/v1/auth/refresh"), {
     credentials: "include",
     method: "POST",
+    signal: AbortSignal.timeout(refreshTimeoutMs),
   })
     .then(
       (response) => response.ok,

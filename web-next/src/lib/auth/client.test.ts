@@ -6,7 +6,14 @@ import {
   getReceivedInvitations,
   sendInvitation,
 } from "./invitations"
-import { safeRedirect, signUpSchema } from "./schemas"
+import {
+  emailSchema,
+  fieldErrors,
+  invitationSchema,
+  safeRedirect,
+  signInSchema,
+  signUpSchema,
+} from "./schemas"
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -208,5 +215,52 @@ describe("auth validation", () => {
         password: "Correct-Horse-7!",
       }).success
     ).toBe(true)
+  })
+
+  describe("an email address", () => {
+    // A paste or a phone's keyboard leaves a space or a newline at either end.
+    const padded = "  avery@example.com \t"
+
+    it("is trimmed before its format is checked, on every form that asks for one", () => {
+      expect(
+        signInSchema.parse({ email: padded, password: "hunter2" }).email
+      ).toBe("avery@example.com")
+      expect(
+        signUpSchema.parse({
+          displayName: "Avery Morgan",
+          email: padded,
+          password: "Correct-Horse-7!",
+        }).email
+      ).toBe("avery@example.com")
+      // Forgot password and resend verification.
+      expect(emailSchema.parse({ email: padded }).email).toBe(
+        "avery@example.com"
+      )
+      expect(
+        invitationSchema.parse({ email: padded, role: "member" }).email
+      ).toBe("avery@example.com")
+    })
+
+    it("is still refused when what is left is not an address, in the same words", () => {
+      for (const email of [
+        "",
+        "   ",
+        "no",
+        " avery@ ",
+        "avery @example.com",
+        "avery@example.com, bo@example.com",
+      ]) {
+        const result = emailSchema.safeParse({ email })
+        expect(result.success).toBe(false)
+        expect(fieldErrors(result.error?.issues ?? [])).toEqual({
+          email: "Enter a valid email",
+        })
+      }
+      // A form field that is missing altogether reads the same way.
+      const missing = emailSchema.safeParse({})
+      expect(fieldErrors(missing.error?.issues ?? [])).toEqual({
+        email: "Enter a valid email",
+      })
+    })
   })
 })
