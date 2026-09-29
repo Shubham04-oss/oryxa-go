@@ -12,7 +12,7 @@ import type {
   AgentRequestWinner,
 } from "@/lib/agents/agent-requests"
 import { clockTime, dayLabel, firstName } from "./direct-message-format"
-import { capitalized, guardNote, toolsLine } from "./side-conversation-format"
+import { capitalized, toolsLine } from "./side-conversation-format"
 
 /** Which side of a request the reader is: the member it is addressed to, or the one who asked. */
 export type RequestSide = "owner" | "asker" | "other"
@@ -297,10 +297,16 @@ export function winnerLine(
 }
 
 // ---------------------------------------------------------------------------
-// Why an answer was held
+// Why an answer was held, and what was hidden in one that was shared
 // ---------------------------------------------------------------------------
+//
+// The guard's findings are kinds, never values: Bedrock's entity types for
+// personal details and credentials, the relevance check's OFF_TOPIC with the
+// categories it found, and, for a Slack answer, the consent guard's own. Each
+// is said in plain words here, and a kind this page does not know is said as
+// "details Oryxa flagged": its code is never shown.
 
-/** What the answer guard holds an answer for, in plain words: personal details it holds for review. */
+/** Personal details the guard holds an answer for. */
 const heldKindWords = new Map<string, string>([
   ["EMAIL", "an email address"],
   ["PHONE", "a phone number"],
@@ -317,8 +323,51 @@ const offTopicWords = new Map<string, string>([
   ["credentials", "secret values"],
 ])
 
+/**
+ * What the consent guard holds a Slack answer for, as a clause that follows
+ * "answer": the grounding checks, relevance and the topics Oryxa does not
+ * share. (The summary rule's two kinds are `summaryRuleWords`.)
+ */
+const policyHoldWords = new Map<string, string>([
+  ["NO_SOURCES", "isn't based on anything it read"],
+  ["UNGROUNDED", "isn't supported by what it read"],
+  ["IRRELEVANT", "doesn't answer the question"],
+  [
+    "DENIED_TOPIC",
+    "touches a topic Oryxa doesn't share (credentials, HR or pay records, health or personal life)",
+  ],
+])
+
+const COPIED_FROM_SOURCE = "COPIED_FROM_SOURCE"
+const LINK = "LINK"
 const UNCHECKED = "UNCHECKED"
 const OFF_TOPIC = "OFF_TOPIC"
+
+/**
+ * Whether the answer was held for breaking the summary rule: at summary level
+ * it may copy no long passage of what the agent read and carry no link.
+ * Masking cannot mend that, so such an answer is sent as it was held or
+ * withheld, and has no masked version to offer.
+ */
+export function isSummaryRuleHold(
+  guard: AgentRequestGuard | undefined
+): boolean {
+  const kinds = guard?.kinds ?? []
+  return kinds.includes(COPIED_FROM_SOURCE) || kinds.includes(LINK)
+}
+
+function summaryRuleWords(kinds: readonly string[]): string | undefined {
+  const copied = kinds.includes(COPIED_FROM_SOURCE)
+  const linked = kinds.includes(LINK)
+  if (copied && linked) {
+    return "copies passages from what it read and includes a link, which a summary shouldn't"
+  }
+  if (copied) {
+    return "copies long passages from what it read, which a summary shouldn't"
+  }
+  if (linked) return "includes a link, which a summary shouldn't"
+  return undefined
+}
 
 function listWords(words: readonly string[]): string {
   if (words.length < 2) return words.join("")
@@ -328,28 +377,37 @@ function listWords(words: readonly string[]): string {
 /**
  * Why an answer waits for its owner, in plain words: "Krude's answer
  * includes an email address and may include something the question didn't
- * ask for (health details). Review it before it's shared." A kind this page
- * does not know reads as "details Oryxa flagged": its code is never shown.
+ * ask for (health details). Review it before it's shared."
  */
 export function heldReason(
   agentName: string,
   guard: AgentRequestGuard | undefined
 ): string {
   const kinds = guard?.kinds ?? []
-  const unchecked = kinds.includes(UNCHECKED)
   const found: string[] = []
   const categories: string[] = []
   let offTopic = false
   let other = false
   for (const kind of kinds) {
-    if (kind === UNCHECKED) continue
+    if (kind === UNCHECKED || kind === COPIED_FROM_SOURCE || kind === LINK) {
+      continue
+    }
+    const category = offTopicWords.get(kind)
+    const detail = heldKindWords.get(kind)
     if (kind === OFF_TOPIC) offTopic = true
-    else if (offTopicWords.has(kind)) categories.push(offTopicWords.get(kind)!)
-    else if (heldKindWords.has(kind)) found.push(heldKindWords.get(kind)!)
+    else if (policyHoldWords.has(kind)) continue
+    else if (category) categories.push(category)
+    else if (detail) found.push(detail)
     else other = true
   }
   const why: string[] = []
   if (found.length > 0) why.push(`includes ${listWords([...new Set(found)])}`)
+  const summary = summaryRuleWords(kinds)
+  if (summary) why.push(summary)
+  // Always in the same order, whatever order the guard listed them in.
+  for (const [kind, words] of policyHoldWords) {
+    if (kinds.includes(kind)) why.push(words)
+  }
   if (offTopic || categories.length > 0) {
     const named = [...new Set(categories)]
     why.push(
@@ -357,18 +415,73 @@ export function heldReason(
     )
   }
   if (other) why.push("includes details Oryxa flagged")
-  if (unchecked) why.push("couldn't be checked automatically")
+  if (kinds.includes(UNCHECKED)) why.push("couldn't be checked automatically")
   return why.length > 0
     ? `${capitalized(agentName)}'s answer ${listWords(why)}. Review it before it's shared.`
     : `Review ${agentName}'s answer before it's shared.`
 }
 
-/** What the guard hid from the asker in an answer that was shared, or nothing when it hid nothing. */
-export function hiddenNote(
-  guard: AgentRequestGuard | undefined
-): string | undefined {
-  if (!guard || guard.state === "clear") return undefined
-  return guardNote({ state: guard.state, kinds: guard.kinds ?? [] })
+/** What the guard always masks, in plain words: credentials, keys and financial and ID numbers. */
+const maskedKindWords = new Map<string, string>([
+  ["PASSWORD", "a password"],
+  ["AWS_ACCESS_KEY", "an access key"],
+  ["AWS_SECRET_KEY", "an access key"],
+  ["SLACK_TOKEN", "a Slack token"],
+  ["API_KEY", "an API key"],
+  ["ACCESS_TOKEN", "an access token"],
+  ["PRIVATE_KEY", "a private key"],
+  ["CREDIT_DEBIT_CARD_NUMBER", "card details"],
+  ["CREDIT_DEBIT_CARD_CVV", "card details"],
+  ["CREDIT_DEBIT_CARD_EXPIRY", "card details"],
+  ["PIN", "a PIN"],
+  ["INTERNATIONAL_BANK_ACCOUNT_NUMBER", "bank details"],
+  ["SWIFT_CODE", "bank details"],
+  ["US_BANK_ACCOUNT_NUMBER", "bank details"],
+  ["US_BANK_ROUTING_NUMBER", "bank details"],
+  ["US_SOCIAL_SECURITY_NUMBER", "an ID number"],
+  ["US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER", "an ID number"],
+  ["US_PASSPORT_NUMBER", "an ID number"],
+  ["DRIVER_ID", "an ID number"],
+  ["CA_HEALTH_NUMBER", "an ID number"],
+  ["CA_SOCIAL_INSURANCE_NUMBER", "an ID number"],
+  ["UK_NATIONAL_HEALTH_SERVICE_NUMBER", "an ID number"],
+  ["UK_NATIONAL_INSURANCE_NUMBER", "an ID number"],
+  ["UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER", "an ID number"],
+])
+
+/**
+ * What the guard hid from the asker in an answer that was shared, told to its
+ * owner: "Shared with a password hidden". Nothing when it hid nothing: an
+ * answer it found nothing in, and one the owner sent as it was held, which
+ * hid nothing (only "send masked" hides what it was held for).
+ */
+export function hiddenNote(request: AgentRequest): string | undefined {
+  const guard = request.guard
+  if (!guard) return undefined
+  const maskedByOwner = request.review?.action === "send_masked"
+  if (guard.state === "clear") return undefined
+  if (guard.state === "held" && !maskedByOwner) return undefined
+  const hidden = [
+    ...new Set(
+      (guard.kinds ?? [])
+        .filter((kind) => kind !== UNCHECKED)
+        .flatMap((kind) => {
+          const words =
+            maskedKindWords.get(kind) ??
+            (guard.state === "held" ? heldKindWords.get(kind) : undefined)
+          // A held kind that masking cannot touch (OFF_TOPIC, the summary
+          // rule, grounding) hides nothing.
+          return words
+            ? [words]
+            : guard.state === "masked"
+              ? ["other personal details"]
+              : []
+        })
+    ),
+  ]
+  return hidden.length > 0
+    ? `Shared with ${listWords(hidden)} hidden`
+    : undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -427,7 +540,7 @@ export function statusOf(
         ...(decided ? { detail: decided } : {}),
       }
     case "completed": {
-      const hidden = forOwner ? hiddenNote(request.guard) : undefined
+      const hidden = forOwner ? hiddenNote(request) : undefined
       const detail = [decided, hidden && `${hidden}.`].filter(Boolean).join(" ")
       return {
         tone: "done",

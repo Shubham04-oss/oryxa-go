@@ -6,6 +6,7 @@
 // sees any of it, only that it waits.
 import { useState } from "react"
 import { AgentMarkdown } from "./agent-timeline"
+import { isSummaryRuleHold } from "./request-card-format"
 import { capitalized } from "./side-conversation-format"
 import { resultText } from "@/lib/side/asking"
 import type {
@@ -45,9 +46,12 @@ export function HeldAnswerReview({
   const [expanded, setExpanded] = useState(false)
   const held = request.held
   const stored = held ? resultText({ result: held.result }) : undefined
-  const masked = held?.masked_result
-    ? resultText({ result: held.masked_result })
-    : undefined
+  // Masking cannot mend a summary that copies or links, so a hold for either
+  // is sent as it was held or withheld, whatever Go carries with it.
+  const masked =
+    held?.masked_result && !isSummaryRuleHold(request.guard)
+      ? resultText({ result: held.masked_result })
+      : undefined
   const failed = held?.result.status === "failed"
   const folded = stored !== undefined && isLong(stored) && !expanded
   const to = `${agentName}'s answer to ${askerName}`

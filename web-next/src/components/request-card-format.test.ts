@@ -9,6 +9,7 @@ import {
   heldReason,
   isExpired,
   isOpenToDecide,
+  isSummaryRuleHold,
   originLabel,
   readsLine,
   requestTitle,
@@ -306,12 +307,144 @@ describe("why an answer was held", () => {
     )
   })
 
-  it("tells the owner what the guard hid in an answer that was shared, and nothing when it hid nothing", () => {
-    expect(hiddenNote({ state: "masked", kinds: ["PASSWORD"] })).toBe(
-      "Shared with a password hidden"
+  it("says what the consent guard holds a Slack answer for, one kind at a time", () => {
+    const held = (...kinds: string[]) =>
+      heldReason("Krude", { state: "held", kinds })
+    const review = " Review it before it's shared."
+
+    expect(held("COPIED_FROM_SOURCE")).toBe(
+      "Krude's answer copies long passages from what it read, which a summary shouldn't." +
+        review
     )
-    expect(hiddenNote({ state: "clear" })).toBeUndefined()
-    expect(hiddenNote(undefined)).toBeUndefined()
+    expect(held("LINK")).toBe(
+      "Krude's answer includes a link, which a summary shouldn't." + review
+    )
+    expect(held("COPIED_FROM_SOURCE", "LINK")).toBe(
+      "Krude's answer copies passages from what it read and includes a link, which a summary shouldn't." +
+        review
+    )
+    expect(held("NO_SOURCES")).toBe(
+      "Krude's answer isn't based on anything it read." + review
+    )
+    expect(held("UNGROUNDED")).toBe(
+      "Krude's answer isn't supported by what it read." + review
+    )
+    expect(held("IRRELEVANT")).toBe(
+      "Krude's answer doesn't answer the question." + review
+    )
+    expect(held("DENIED_TOPIC")).toBe(
+      "Krude's answer touches a topic Oryxa doesn't share (credentials, HR or pay records, health or personal life)." +
+        review
+    )
+  })
+
+  it("says several findings at once, in a steady order, and never a code", () => {
+    const reason = heldReason("Krude", {
+      state: "held",
+      kinds: ["UNCHECKED", "UNGROUNDED", "LINK", "EMAIL", "IRRELEVANT"],
+    })
+
+    expect(reason).toBe(
+      "Krude's answer includes an email address, includes a link, which a summary shouldn't, isn't supported by what it read, doesn't answer the question and couldn't be checked automatically. Review it before it's shared."
+    )
+    for (const code of [
+      "UNCHECKED",
+      "UNGROUNDED",
+      "LINK",
+      "EMAIL",
+      "IRRELEVANT",
+    ]) {
+      expect(reason).not.toContain(code)
+    }
+  })
+
+  it("says the same findings the same way, whatever order the guard lists them in", () => {
+    const held = (...kinds: string[]) =>
+      heldReason("Krude", { state: "held", kinds })
+
+    expect(held("UNGROUNDED", "NO_SOURCES")).toBe(
+      held("NO_SOURCES", "UNGROUNDED")
+    )
+    expect(held("DENIED_TOPIC", "IRRELEVANT", "UNGROUNDED")).toBe(
+      held("UNGROUNDED", "IRRELEVANT", "DENIED_TOPIC")
+    )
+  })
+
+  it("knows a hold for the summary rule from any other, since masking cannot mend it", () => {
+    expect(
+      isSummaryRuleHold({ state: "held", kinds: ["COPIED_FROM_SOURCE"] })
+    ).toBe(true)
+    expect(isSummaryRuleHold({ state: "held", kinds: ["LINK", "EMAIL"] })).toBe(
+      true
+    )
+    expect(
+      isSummaryRuleHold({ state: "held", kinds: ["EMAIL", "UNGROUNDED"] })
+    ).toBe(false)
+    expect(isSummaryRuleHold(undefined)).toBe(false)
+  })
+})
+
+describe("what the guard hid in an answer that was shared", () => {
+  const completed = (
+    guard: AgentRequest["guard"],
+    review?: AgentRequest["review"]
+  ) =>
+    approvedRequest("summary", {
+      status: "completed",
+      result: answer("Done."),
+      guard,
+      review,
+    })
+
+  it("tells the owner what the guard always masks, in words", () => {
+    const note = (...kinds: string[]) =>
+      hiddenNote(completed({ state: "masked", kinds }))
+
+    expect(note("PASSWORD")).toBe("Shared with a password hidden")
+    expect(note("SLACK_TOKEN", "API_KEY", "ACCESS_TOKEN", "PRIVATE_KEY")).toBe(
+      "Shared with a Slack token, an API key, an access token and a private key hidden"
+    )
+    expect(note("AWS_ACCESS_KEY", "AWS_SECRET_KEY")).toBe(
+      "Shared with an access key hidden"
+    )
+    expect(note("US_BANK_ACCOUNT_NUMBER", "SWIFT_CODE")).toBe(
+      "Shared with bank details hidden"
+    )
+    expect(note("SOMETHING_NEW")).toBe(
+      "Shared with other personal details hidden"
+    )
+    expect(note("SOMETHING_NEW")).not.toContain("SOMETHING_NEW")
+  })
+
+  it("says nothing when it hid nothing", () => {
+    expect(hiddenNote(completed({ state: "clear" }))).toBeUndefined()
+    expect(hiddenNote(completed(undefined))).toBeUndefined()
+    expect(
+      hiddenNote(completed({ state: "masked", kinds: ["UNCHECKED"] }))
+    ).toBeUndefined()
+  })
+
+  it("says what sending it masked hid, and nothing of an answer the owner sent as it was", () => {
+    const held = { state: "held" as const, kinds: ["EMAIL", "PHONE"] }
+    const review = (action: "send" | "send_masked") => ({
+      action,
+      decided_by: { kind: "member", user_id: OWNER },
+      decided_at: "2026-09-29T12:20:00Z",
+    })
+
+    expect(hiddenNote(completed(held, review("send_masked")))).toBe(
+      "Shared with an email address and a phone number hidden"
+    )
+    expect(hiddenNote(completed(held, review("send")))).toBeUndefined()
+    // What masking cannot touch is not something it hid.
+    expect(
+      hiddenNote(
+        completed(
+          { state: "held", kinds: ["OFF_TOPIC", "health"] },
+          review("send_masked")
+        )
+      )
+    ).toBeUndefined()
   })
 })
 

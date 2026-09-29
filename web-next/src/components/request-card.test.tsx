@@ -607,6 +607,52 @@ describe("an answer held for review", () => {
     ).toBeTruthy()
   })
 
+  it("offers no masked version of an answer that broke the summary rule, whatever Go carries", async () => {
+    renderCard(
+      approvedRequest("summary", {
+        status: "review",
+        revision: 3,
+        guard: { state: "held", kinds: ["COPIED_FROM_SOURCE"] },
+        held: {
+          result: answer("A long passage, word for word."),
+          masked_result: answer("A long passage, word for word."),
+        },
+      })
+    )
+
+    await screen.findByText(
+      "Krude's answer copies long passages from what it read, which a summary shouldn't. Review it before it's shared."
+    )
+    expect(screen.getByText("A long passage, word for word.")).toBeTruthy()
+    expect(screen.queryByText("Send masked shares:")).toBeNull()
+    expect(screen.queryByRole("button", { name: /masked/ })).toBeNull()
+    // It is sent as it was held, or withheld.
+    expect(
+      screen.getByRole("button", { name: "Send Krude's answer to Raya" })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Don't send Krude's answer to Raya" })
+    ).toBeTruthy()
+  })
+
+  it("says an answer the reads do not support, in words", async () => {
+    renderCard(
+      approvedRequest("summary", {
+        status: "review",
+        revision: 3,
+        guard: { state: "held", kinds: ["UNGROUNDED", "NO_SOURCES"] },
+        held: { result: answer("A confident answer.") },
+      })
+    )
+
+    expect(
+      await screen.findByText(
+        "Krude's answer isn't based on anything it read and isn't supported by what it read. Review it before it's shared."
+      )
+    ).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/UNGROUNDED|NO_SOURCES/)
+  })
+
   it("withholds it, and says why when the review was refused", async () => {
     renderCard(held(), {
       routes: {
