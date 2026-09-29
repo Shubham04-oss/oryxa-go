@@ -283,3 +283,40 @@ import {
   to       = aws_cloudwatch_log_group.database[each.key]
   id       = "/aws/rds/instance/${local.name}/${each.key}"
 }
+
+# /v1/internal at the edge. The routes under it are for one service to call
+# another: auth's agent-token exchange, knowledge's document bodies, and
+# apps' operator routes for the deployment's webhooks. Each refuses a caller
+# without a signed service token, but nothing needs them reachable from the
+# internet, and the tunnel forwards every path on both hosts, so this stops
+# them at Cloudflare before they get there.
+#
+# Nothing legitimate is sent through Cloudflare to them (checked 2026-09-29):
+# every service calls its peers on this process's own address (internal/host
+# defaults each *_URL to it, and compute.tf sets none), web-next and web call
+# only member-facing routes, and Composio, Dodo and Cognito call their own
+# webhook and callback paths. The Worker's /internal/realtime/purge is a
+# different path, served by the Worker, and is not matched. Apps' operator
+# routes exist only where APPS_SERVICE_CALLERS is set, which production does
+# not; an operator who turns that on would call them from inside the task
+# (ECS Exec), not through here.
+#
+# Cloudflare's URL normalization, on by default, makes the rule see an
+# encoded path (/v1/%69nternal) as the plain one. A zone has one entry-point
+# ruleset for this phase, and OpenTofu takes it over whole: see deploy/README.md,
+# "Applying the hardening", for what to check first.
+resource "cloudflare_ruleset" "custom_rules" {
+  zone_id     = data.cloudflare_zone.main.zone_id
+  name        = "${local.name} custom rules"
+  description = "Managed by OpenTofu (deploy/production/hardening.tf)."
+  kind        = "zone"
+  phase       = "http_request_firewall_custom"
+
+  rules = [{
+    ref         = "block_v1_internal"
+    description = "Service-to-service routes are not for the internet"
+    action      = "block"
+    enabled     = true
+    expression  = "(http.host in {\"${local.app_host}\" \"${local.api_host}\"} and starts_with(http.request.uri.path, \"/v1/internal\"))"
+  }]
+}

@@ -28,7 +28,7 @@ Systems Manager (ECS Exec, Session Manager) is the administrative path.
 
 | Owner | What |
 | --- | --- |
-| `deploy/production` (OpenTofu) | VPC, database, KMS keys, ECR, ECS cluster, service and task definition, IAM, the event bus, log groups, dashboard, alarms, secrets' containers, the connector instance, the SES event forwarder, everything in Cloudflare (tunnels, DNS, Access, Hyperdrive, routes), and in Google Cloud the workload identity pool and service account |
+| `deploy/production` (OpenTofu) | VPC, database, KMS keys, ECR, ECS cluster, service and task definition, IAM, the event bus, log groups, dashboard, alarms, secrets' containers, the connector instance, the SES event forwarder, everything in Cloudflare (tunnels, DNS, Access, Hyperdrive, routes, and the zone's WAF and rate-limit rules), and in Google Cloud the workload identity pool and service account |
 | The services' provisioners (`deploy/scripts/provision-app.sh`) | Each service's event queue, dead-letter queue and EventBridge rules (generated from the code that consumes them), the files, artifacts and vector buckets, email's tables, queue and SES configuration set, auth's Cognito user pool |
 | `deploy/scripts/memory-bank.sh` | The Vertex AI agent engine that holds Memory Bank |
 | `deploy/scripts/composio-webhook.sh` | Composio's webhook subscription |
@@ -51,8 +51,9 @@ rule themselves.
   `AWS_PROFILE` pointing at them.
 - A Cloudflare API token for the account and the `oryxa.in` zone with: Zone
   DNS edit, Workers Routes edit, Cloudflare Tunnel edit, Access: Apps and
-  Policies edit, Access: Service Tokens edit, Hyperdrive edit. Export it as
-  `CLOUDFLARE_API_TOKEN`.
+  Policies edit, Access: Service Tokens edit, Hyperdrive edit, Zone WAF edit
+  (for the custom and rate-limiting rules in `production/hardening.tf`).
+  Export it as `CLOUDFLARE_API_TOKEN`.
 - Google Cloud Application Default Credentials for the project
   (`gcloud auth application-default login`), for OpenTofu and memory-bank.sh.
 - A Google OAuth web client for sign-in, in `~/.config/oryxa/google-oauth.env`
