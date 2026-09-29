@@ -95,6 +95,50 @@ type Verdict struct {
 	// text a held value could not be found in to replace is its kinds
 	// alone.
 	Masked []string
+	// Given are the texts exactly as Check was handed them, whatever was
+	// found in them: what may be shared where nothing at all is to be masked
+	// (IntensityOff). They hold the secrets Texts has masked, so a verdict is
+	// never logged, kept or sent anywhere: it lives for the request it was
+	// made for, and what is shared from it is read out with Shareable or At.
+	Given []string
+	// SecretKinds are the kinds that are always masked (MaskedKinds) that
+	// were found, sorted, whatever the state: the ones the guardrail masked in
+	// Texts, and any it left there, which the answer is held for. A held
+	// verdict's Kinds name only what it is held for, so this is what says,
+	// beside an email address, that a password was found and masked too. Never
+	// a value; nil for an answer that could not be checked.
+	SecretKinds []string
+}
+
+// Shareable is the n texts a verdict on n texts allows to be shown to
+// somebody who has nobody to review them first, or nil when it allows none.
+// It is the one rule every place that shares a checked text applies, so that
+// a room, the teamspace ledger and the check route cannot come to differ:
+//
+//   - nothing found, or only kinds that are always masked: the verdict's
+//     Texts, which are the texts as given or as the guardrail masked them;
+//   - a held kind, when the guard also made the fully masked version of every
+//     text: that Masked version, with each held value replaced by its kind;
+//   - anything else shares nothing: an answer that could not be checked
+//     (held as [Unchecked], and never given a masked version, since nothing
+//     in it was read), a verdict that does not carry a text for each of the n
+//     texts, and a state this code does not know.
+//
+// A non-nil result is always a copy, and holds exactly n texts; for n of zero
+// it is empty rather than nil, since there was nothing to withhold. Nil is
+// the only "share nothing", so a caller that treats it as one cannot be
+// handed a partial answer.
+func (verdict Verdict) Shareable(n int) []string {
+	if len(verdict.Texts) != n {
+		return nil
+	}
+	switch {
+	case verdict.State == StateClear, verdict.State == StateMasked:
+		return append([]string{}, verdict.Texts...)
+	case verdict.State == StateHeld && len(verdict.Masked) == n:
+		return append([]string{}, verdict.Masked...)
+	}
+	return nil
 }
 
 // Client is Bedrock's runtime; *bedrockruntime.Client is one.
@@ -167,7 +211,7 @@ func (guard *Guard) Check(ctx context.Context, texts []string) Verdict {
 				delivered[index] = readings[index].output
 			}
 		}
-		return Verdict{State: StateHeld, Kinds: []string{Unchecked}, Texts: delivered}
+		return Verdict{State: StateHeld, Kinds: []string{Unchecked}, Texts: delivered, Given: slices.Clone(texts)}
 	}
 
 	var masked []string
@@ -184,11 +228,13 @@ func (guard *Guard) Check(ctx context.Context, texts []string) Verdict {
 		for index, text := range delivered {
 			fully[index] = maskHeld(text, held, readings[index].held)
 		}
-		return Verdict{State: StateHeld, Kinds: kindsOf(held), Texts: delivered, Masked: fully}
+		return Verdict{State: StateHeld, Kinds: kindsOf(held), Texts: delivered, Masked: fully,
+			Given: slices.Clone(texts), SecretKinds: secretKinds(masked, held)}
 	case len(masked) > 0:
-		return Verdict{State: StateMasked, Kinds: sortedUnique(masked), Texts: delivered}
+		return Verdict{State: StateMasked, Kinds: sortedUnique(masked), Texts: delivered,
+			Given: slices.Clone(texts), SecretKinds: sortedUnique(masked)}
 	default:
-		return Verdict{State: StateClear, Texts: slices.Clone(texts)}
+		return Verdict{State: StateClear, Texts: slices.Clone(texts), Given: slices.Clone(texts)}
 	}
 }
 
@@ -413,6 +459,18 @@ func placeholders(matches []heldMatch) []string {
 		kinds[index] = "{" + kind + "}"
 	}
 	return kinds
+}
+
+// secretKinds are the kinds that are always masked among those the guardrail
+// anonymized and those it found and left in a text, which are held for.
+func secretKinds(anonymized []string, held []heldMatch) []string {
+	kinds := slices.Clone(anonymized)
+	for _, found := range held {
+		if slices.Contains(MaskedKinds(), found.kind) {
+			kinds = append(kinds, found.kind)
+		}
+	}
+	return sortedUnique(kinds)
 }
 
 func kindsOf(matches []heldMatch) []string {

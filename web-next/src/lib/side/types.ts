@@ -65,10 +65,18 @@ export type SideMessage = {
  * Attributed to the agent (`agentId`, `agentName`) and its owner
  * (`ownerId`).
  *
- * - `status`: `streaming` while its run answers (`body` grows live, for
- *   both people), `waiting` while the run waits for its owner to confirm a
- *   tool call, `done`, or `failed` with `error` (and `code`: Go's refusal
- *   code, or `session_expired`).
+ * - `status`: `streaming` while its run answers (`body` grows live on its
+ *   owner's view alone: the other person's is empty until the run ends and
+ *   the answer guard has checked it), `waiting` while the run waits for its
+ *   owner to confirm a tool call, `done`, or `failed` with `error` (and
+ *   `code`: Go's refusal code, `session_expired`, `timed_out` for a run that
+ *   took too long, or `unchecked` for an answer the guard could not check,
+ *   which is then not shared at all: its `body` is empty).
+ * - `body` is what was shared: what the answer guard let through, which is
+ *   what both people read once the run has ended.
+ * - `guard` is on the owner's view only: what the guard found in the answer
+ *   and hid from the other person, when it hid anything (`kinds`); a view
+ *   says so in a quiet line, "Shared with a password hidden".
  * - `confirmations` is what a `waiting` run waits on, on the owner's view
  *   only; the owner answers every one with `confirm`. The other person sees
  *   only that it waits.
@@ -94,6 +102,7 @@ export type SideAgentMessage = {
   replyTo?: number
   via?: SideVia
   confirmations?: SideConfirmation[]
+  guard?: SideGuard
 }
 
 /**

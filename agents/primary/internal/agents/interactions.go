@@ -473,7 +473,17 @@ func (tools interactionTools) actor(ctx agent.Context, needsToken bool) (Interac
 	return actor, token, nil
 }
 
+// create files a request. A run pinned to one teamspace (WithPinnedTeamspace)
+// files it there whatever the model named: a request that names no teamspace
+// is made in the pinned one, and one that names another is refused, before
+// anything is filed or a token is asked for. The ledger then checks the seat
+// and the team as it always does; the pin grants nothing of its own.
 func (tools interactionTools) create(ctx agent.Context, input InteractionCreateInput) (Interaction, error) {
+	teamspaceID, err := pinnedTeamspaceFor(ctx, input.TeamspaceID)
+	if err != nil {
+		return Interaction{}, err
+	}
+	input.TeamspaceID = teamspaceID
 	actor, token, err := tools.actor(ctx, true)
 	if err != nil {
 		return Interaction{}, err

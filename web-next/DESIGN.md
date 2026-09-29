@@ -169,7 +169,13 @@ not permission to copy every incidental value into a new component.
     a quiet "Asked Leo". An agent's message is its avatar and "Leo · your
     agent" or "Nia · Priya's agent", full-width Markdown, a pulsing working
     line until it has words, and for a request's result one quiet line, "on
-    behalf of Priya · approved by Priya" (or "ran without asking").
+    behalf of Priya · approved by Priya" (or "ran without asking"). The
+    member's own agent answers live on the member's screen alone: the other
+    person sees its working line until the answer has been checked, then
+    the words. What the answer guard hid from the other person in it is one
+    quiet line under the answer, on the member's view only ("Shared with a
+    password hidden"), and an answer it could not check reads "This answer
+    couldn't be checked, so it wasn't shared." for both.
   - A request is a small card: who asked which agent what, and one status
     line with an icon (sending; not filed, with Retry; waiting for Priya to
     approve; approved and working; waiting for Priya to review the answer;

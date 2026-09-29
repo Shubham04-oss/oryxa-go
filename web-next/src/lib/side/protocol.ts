@@ -90,9 +90,10 @@ export type SideOutcome = "rejected" | "failed" | "expired" | "withheld"
 export type SideReviewAction = "send" | "send_masked" | "withhold"
 
 /**
- * What the answer guard found in a request's answer (Go's `guard`): only
- * kinds it always masks (`masked`), a kind it held for review (`held`), or
- * nothing (`clear`). `kinds` are entity type names, never what matched;
+ * What the answer guard found in an answer (Go's `guard`, on a request; the
+ * answer of `POST …/answer-guard/check` for one of the member's own agent's):
+ * only kinds it always masks (`masked`), a kind it held for review (`held`),
+ * or nothing (`clear`). `kinds` are entity type names, never what matched;
  * `UNCHECKED` when the check could not run.
  */
 export type SideGuard = {
@@ -120,7 +121,11 @@ export type SideApproval = "owner" | "agent"
 
 /** How an agent's message stands. */
 export type SideAgentMessageStatus =
-  /** Its run is answering: `side-delta` frames add to it. */
+  /**
+   * Its run is answering: `side-delta` frames add to it, to its owner's
+   * sockets alone. Every other socket is sent it without what it has said
+   * until it settles, once the answer guard has checked it.
+   */
   | "streaming"
   /** Its run waits for its owner to confirm a tool call; only the owner is shown what. */
   | "waiting"
@@ -164,7 +169,12 @@ export type SideWireAgentMessage = {
   agentName: string
   /** Whose agent it is. */
   ownerId: string
-  /** What it said, so far while `streaming`. */
+  /**
+   * What it said: as it is shared, that is, as the answer guard let it
+   * through. While `streaming`, its owner's copy holds what it has said so
+   * far, live, and every other socket's is empty (or what an earlier stretch
+   * of the same message shared).
+   */
   body: string
   createdAt: string
   updatedAt: string
@@ -182,6 +192,15 @@ export type SideWireAgentMessage = {
   via?: SideVia
   /** While `waiting`, what the run waits on. Sent to its owner's sockets only. */
   confirmations?: SideConfirmation[]
+  /**
+   * What the answer guard found in an answer to its owner, when it found
+   * anything: `kinds` names what it hid from the other person, if it did
+   * (Go leaves an email address, a phone number or an address as it is in
+   * the member's own agent's answer, and hides passwords, keys and card,
+   * bank and ID numbers). Sent to its owner's sockets only: the other person
+   * is never told that anything was hidden.
+   */
+  guard?: SideGuard
 }
 
 /** Whom a request's result was for, and who approved and reviewed it. */
@@ -329,7 +348,7 @@ export type SideClientMessage =
   | { type: "side-visibility"; visible: boolean }
   /** A message from the socket's own person, whoever the page says; stored once per author and `clientId`. */
   | { type: "side-send"; clientId: string; body: string }
-  /** A message that asks the socket's person's own agent, which answers for both to see. */
+  /** A message that asks the socket's person's own agent, whose answer the other person reads once the answer guard has checked it. */
   | { type: "side-ask-mine"; clientId: string; body: string }
   /** Asks the teammate's agent `agentId` for something: an agent request, filed as the socket's person. */
   | {
@@ -387,9 +406,18 @@ export type SideServerMessage =
       typing: string[]
       roster: SideRoster
     }
-  /** A new item, or one that changed (same seq): to every socket, or a stored one to a socket that sent its `clientId` again. */
+  /**
+   * A new item, or one that changed (same seq): to every socket, or a stored
+   * one to a socket that sent its `clientId` again. What a streaming answer
+   * has said so far is sent to its owner's sockets alone, whole, as it is
+   * (never stored); the other person is sent the answer once it settles.
+   */
   | { type: "side-item"; item: SideWireItem }
-  /** More of a streaming agent message: `text` goes at `at` (its body's length before it); a page that holds another length waits for the next `side-item`. */
+  /**
+   * More of a streaming agent message, to its owner's sockets alone: `text`
+   * goes at `at` (its body's length before it); a page that holds another
+   * length waits for the next `side-item`.
+   */
   | { type: "side-delta"; seq: number; at: number; text: string }
   /** The object refused what a page sent or asked under `clientId`; only that socket hears. */
   | {
@@ -840,6 +868,7 @@ function wireItem(value: unknown): SideWireItem | undefined {
         replyTo,
         via,
         confirmations,
+        guard,
       } = value
       if (
         typeof agentId !== "string" ||
@@ -860,6 +889,9 @@ function wireItem(value: unknown): SideWireItem | undefined {
       const parsedConfirmations =
         confirmations === undefined ? undefined : confirmationsOf(confirmations)
       if (confirmations !== undefined && !parsedConfirmations) return undefined
+      // What the guard hid is only a note beside the answer: one that is not
+      // a guard's costs the note, never the answer.
+      const parsedGuard = guard === undefined ? undefined : guardOf(guard)
       return {
         kind,
         id,
@@ -876,6 +908,7 @@ function wireItem(value: unknown): SideWireItem | undefined {
         ...(typeof replyTo === "number" ? { replyTo } : {}),
         ...(parsedVia ? { via: parsedVia } : {}),
         ...(parsedConfirmations ? { confirmations: parsedConfirmations } : {}),
+        ...(parsedGuard ? { guard: parsedGuard } : {}),
       }
     }
     case "request-card": {

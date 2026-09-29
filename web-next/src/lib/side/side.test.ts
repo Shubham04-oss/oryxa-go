@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest"
 import {
+  GUARD_MAX_TEXT,
   HELD_ANSWER_FIELDS,
   PROMPT_TRANSCRIPT_LINES,
   REQUEST_CONTEXT_LINES,
   agentRequestBody,
   cardFields,
+  guardCheckBody,
+  guardedAnswer,
   heldAnswerOf,
   isOpen,
   oneParagraph,
@@ -15,6 +18,7 @@ import {
 import { sideConversationPath } from "./client"
 import { parseSideConversationName, sideConversationName } from "./names"
 import {
+  SIDE_MAX_AGENT_TEXT,
   decodeRoster,
   encodeRoster,
   parseSideClientMessage,
@@ -981,5 +985,174 @@ describe("the answer guard", () => {
     ).toBe(
       "Oryxa closed the request to Nia because the agent it asks no longer holds a seat in the teamspace."
     )
+  })
+})
+
+describe("checking an agent's own answer", () => {
+  const agentMessage = {
+    kind: "agent-message",
+    id: "sdi_2",
+    seq: 2,
+    agentId: "agt_a",
+    agentName: "Leo",
+    ownerId: "user-a",
+    body: "Your key is {PASSWORD}.",
+    createdAt: "t",
+    updatedAt: "t",
+    status: "done",
+    replyTo: 1,
+  }
+
+  function itemOf(item: Record<string, unknown>) {
+    const parsed = parseSideServerMessage(
+      JSON.stringify({ type: "side-item", item })
+    )
+    return parsed?.type === "side-item" ? parsed.item : undefined
+  }
+
+  it("keeps what the guard found on an agent's message, and only that, dropping one that is not a guard's without the answer", () => {
+    expect(
+      itemOf({
+        ...agentMessage,
+        guard: { state: "masked", kinds: ["PASSWORD"], extra: "x" },
+      })
+    ).toMatchObject({
+      kind: "agent-message",
+      body: "Your key is {PASSWORD}.",
+      guard: { state: "masked", kinds: ["PASSWORD"] },
+    })
+    expect(
+      (
+        itemOf({
+          ...agentMessage,
+          guard: { state: "masked", kinds: [], x: 1 },
+        }) as {
+          guard: Record<string, unknown>
+        }
+      ).guard
+    ).toEqual({ state: "masked", kinds: [] })
+    // A message without one has none.
+    expect(itemOf(agentMessage)).not.toHaveProperty("guard")
+    // The guard is a note beside the answer: a broken one costs the note.
+    for (const guard of [
+      "masked",
+      null,
+      { state: "blocked", kinds: [] },
+      { state: "masked" },
+      { state: "masked", kinds: [1] },
+    ]) {
+      const parsed = itemOf({ ...agentMessage, guard })
+      expect(parsed).toMatchObject({ kind: "agent-message", seq: 2 })
+      expect(parsed).not.toHaveProperty("guard")
+    }
+  })
+
+  it("asks Go for one answer with where it comes from and what was asked, each cut to what Go takes, and no other field", () => {
+    expect(guardCheckBody("Friday, 9am.", "What time?")).toEqual({
+      texts: ["Friday, 9am."],
+      origin: "owner",
+      request: "What time?",
+    })
+    const long = "é".repeat(GUARD_MAX_TEXT + 5)
+    const body = guardCheckBody(long, long)
+    expect(body.texts).toHaveLength(1)
+    for (const text of [body.texts[0], body.request]) {
+      expect(Array.from(text)).toHaveLength(GUARD_MAX_TEXT)
+      expect(text.endsWith("…")).toBe(true)
+    }
+    expect(Object.keys(body).sort()).toEqual(["origin", "request", "texts"])
+    // The longest answer an agent's message keeps fits one check as it is.
+    expect(SIDE_MAX_AGENT_TEXT).toBeLessThanOrEqual(GUARD_MAX_TEXT)
+  })
+
+  it("reads Go's answer as what may be shared, and nothing unless it is exactly what the contract says", () => {
+    const text = "Reach Ada at ada@sim.oryxa. Her key is hunter2."
+    const answer = (extra: Record<string, unknown> = {}) => ({
+      checked: true,
+      state: "masked",
+      kinds: ["PASSWORD"],
+      shareable: ["Reach Ada at ada@sim.oryxa. Her key is {PASSWORD}."],
+      ...extra,
+    })
+    // Masked: the text as Go returns it, and what it hid.
+    expect(guardedAnswer(answer(), text)).toEqual({
+      text: "Reach Ada at ada@sim.oryxa. Her key is {PASSWORD}.",
+      guard: { state: "masked", kinds: ["PASSWORD"] },
+    })
+    // Held, with a fully masked version to share.
+    expect(
+      guardedAnswer(
+        answer({
+          state: "held",
+          kinds: ["EMAIL", "EMAIL", "", 7],
+          shareable: ["Reach Ada at {EMAIL}."],
+        }),
+        text
+      )
+    ).toEqual({
+      text: "Reach Ada at {EMAIL}.",
+      guard: { state: "held", kinds: ["EMAIL"] },
+    })
+    // Clear, with nothing found: the text, and nothing to tell.
+    const clear = guardedAnswer(
+      answer({ state: "clear", kinds: [], shareable: [text] }),
+      text
+    )
+    expect(clear).toEqual({ text })
+    expect(clear).not.toHaveProperty("guard")
+    // Kinds only say what was hidden: one that is not a list is none.
+    for (const kinds of [undefined, null, "EMAIL", {}]) {
+      expect(
+        guardedAnswer(
+          answer({ state: "clear", kinds, shareable: [text] }),
+          text
+        )
+      ).toEqual({ text })
+    }
+    // No guardrail is set: the text goes as it is, whatever else Go says.
+    expect(guardedAnswer({ checked: false }, text)).toEqual({ text })
+    expect(
+      guardedAnswer(
+        { checked: false, state: "clear", kinds: [], shareable: [text] },
+        text
+      )
+    ).toEqual({ text })
+
+    // Nothing is shared of an answer Go did not say may be.
+    const refused: Array<[string, unknown]> = [
+      ["no answer", undefined],
+      ["null", null],
+      ["a text", "clear"],
+      ["a list", [text]],
+      ["no checked", { state: "clear", kinds: [], shareable: [text] }],
+      ["a checked that is not a boolean", answer({ checked: "yes" })],
+      ["no state", answer({ state: undefined })],
+      ["a state it does not know", answer({ state: "blocked" })],
+      [
+        "nothing to share (a hold with no version)",
+        answer({ shareable: null }),
+      ],
+      [
+        "nothing to share, even clear",
+        answer({ state: "clear", shareable: null }),
+      ],
+      ["no shareable", answer({ shareable: undefined })],
+      ["shareable that is not a list", answer({ shareable: text })],
+      ["no text to share", answer({ shareable: [] })],
+      ["a text too many", answer({ shareable: [text, text] })],
+      ["a shareable that is not a text", answer({ shareable: [7] })],
+      ["nothing left of an answer", answer({ shareable: ["  \n"] })],
+      [
+        "one it could not check",
+        answer({ state: "held", kinds: ["UNCHECKED"] }),
+      ],
+      [
+        "one it could not check, among others",
+        answer({ state: "held", kinds: ["EMAIL", "UNCHECKED"] }),
+      ],
+    ]
+    for (const [why, value] of refused) {
+      expect(guardedAnswer(value, text), why).toBeUndefined()
+    }
   })
 })

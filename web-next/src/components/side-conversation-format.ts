@@ -16,8 +16,9 @@ import type {
   SideRequestCard,
   SideStatusLine,
 } from "@/lib/side"
+import type { SideGuard } from "@/lib/side/types"
 import { AGENT_REQUEST_TOOLBOXES } from "@/lib/agents/agent-requests"
-import { EXPIRED_BEFORE_REVIEW } from "@/lib/side/asking"
+import { EXPIRED_BEFORE_REVIEW, UNCHECKED_KIND } from "@/lib/side/asking"
 import type { AgentRequestToolbox } from "@/lib/agents/agent-requests"
 import type { Teamspace } from "@/lib/teamspaces/client"
 
@@ -202,9 +203,6 @@ export function cardState(
   }
 }
 
-/** The kind the answer guard reports when it could not check an answer at all. */
-const uncheckedKind = "UNCHECKED"
-
 /**
  * The kinds the answer guard holds an answer for (Bedrock's entity types:
  * a held answer's kinds are these alone), in plain words, as its owner
@@ -226,11 +224,11 @@ export function reviewHeadline(
   agentName: string,
   kinds: readonly string[] = []
 ): string {
-  const unchecked = kinds.includes(uncheckedKind)
+  const unchecked = kinds.includes(UNCHECKED_KIND)
   const found = [
     ...new Set(
       kinds
-        .filter((kind) => kind !== uncheckedKind)
+        .filter((kind) => kind !== UNCHECKED_KIND)
         .map((kind) => kindWords.get(kind) ?? "other personal details")
     ),
   ]
@@ -243,6 +241,62 @@ export function reviewHeadline(
   return why
     ? `${capitalized(agentName)}'s answer ${why}. Review it before it's shared.`
     : `Review ${agentName}'s answer before it's shared.`
+}
+
+/**
+ * The kinds the answer guard always masks (Go's `answerguard.MaskedKinds`:
+ * Bedrock's entity types) in plain words, as the owner of an answer reads
+ * what was hidden from the other person in it. The kinds it holds an answer
+ * for are `kindWords`.
+ */
+const maskedKindWords = new Map<string, string>([
+  ["PASSWORD", "a password"],
+  ["AWS_ACCESS_KEY", "an access key"],
+  ["AWS_SECRET_KEY", "an access key"],
+  ["CREDIT_DEBIT_CARD_NUMBER", "card details"],
+  ["CREDIT_DEBIT_CARD_CVV", "card details"],
+  ["CREDIT_DEBIT_CARD_EXPIRY", "card details"],
+  ["PIN", "a PIN"],
+  ["INTERNATIONAL_BANK_ACCOUNT_NUMBER", "bank details"],
+  ["SWIFT_CODE", "bank details"],
+  ["US_BANK_ACCOUNT_NUMBER", "bank details"],
+  ["US_BANK_ROUTING_NUMBER", "bank details"],
+  ["US_SOCIAL_SECURITY_NUMBER", "an ID number"],
+  ["US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER", "an ID number"],
+  ["US_PASSPORT_NUMBER", "an ID number"],
+  ["DRIVER_ID", "an ID number"],
+  ["CA_HEALTH_NUMBER", "an ID number"],
+  ["CA_SOCIAL_INSURANCE_NUMBER", "an ID number"],
+  ["UK_NATIONAL_HEALTH_SERVICE_NUMBER", "an ID number"],
+  ["UK_NATIONAL_INSURANCE_NUMBER", "an ID number"],
+  ["UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER", "an ID number"],
+])
+
+/**
+ * What the answer guard hid from the other person in an answer, told to its
+ * owner in one quiet line: "Shared with a password hidden". Nothing when it
+ * named nothing (`kinds` is empty, or only says it could not check, which
+ * fails the answer instead), so an answer it found nothing to hide in has no
+ * line, and nor does one that only says what the owner would say themself,
+ * which Go leaves as it is. A kind this page does not know reads as "other
+ * personal details": its code is never shown.
+ */
+export function guardNote(guard: SideGuard): string | undefined {
+  const hidden = [
+    ...new Set(
+      guard.kinds
+        .filter((kind) => kind !== UNCHECKED_KIND)
+        .map(
+          (kind) =>
+            maskedKindWords.get(kind) ??
+            kindWords.get(kind) ??
+            "other personal details"
+        )
+    ),
+  ]
+  return hidden.length > 0
+    ? `Shared with ${listWords(hidden)} hidden`
+    : undefined
 }
 
 /** Words as a sentence lists them: "a", "a and b", "a, b and c". */

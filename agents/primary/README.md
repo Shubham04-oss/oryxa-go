@@ -361,6 +361,11 @@ must be a teammate's primary agent — their whisperer seat — or an active
 specialist a current teammate contributed there. Anything else is refused
 before anything is recorded (see [Agent request API](#agent-request-api)).
 
+A run pinned to one teamspace (see
+[Pinning a run to a teamspace](#pinning-a-run-to-a-teamspace)), which is how a
+side conversation runs, files its requests in that teamspace whatever the model
+names, and refuses to name another.
+
 Every request carries `approval`, set when it is made. The requester only
 chooses whether to ask inside a teamspace, and in which; who approves then
 follows the target's own standing there, and nothing the requester sends
@@ -618,8 +623,9 @@ from inside a run.
 | `POST /v1/organizations/{org}/threads` | Starts a thread; `201` with it. The body is optional: `{"origin": "side_conversation"}` starts one for a side conversation, while no body, `{}`, or `"origin": "chat"` (or `""`) starts a chat. Any other origin is a `400 invalid_request`. Its state is seeded from the member's auth record in this organization |
 | `GET /v1/organizations/{org}/threads/{thread}` | The thread with its history as items, and `pending_confirmations` |
 | `DELETE /v1/organizations/{org}/threads/{thread}` | Removes the thread, and the artifacts its runs kept that are not the member's own `user:` ones |
-| `POST /v1/organizations/{org}/threads/{thread}/runs` | Runs Krude on the thread and streams the run |
+| `POST /v1/organizations/{org}/threads/{thread}/runs` | Runs Krude on the thread and streams the run. The body may pin the run to one teamspace with `teamspace_id` (see [Pinning a run to a teamspace](#pinning-a-run-to-a-teamspace)) |
 | `GET /v1/organizations/{org}/threads/{thread}/artifacts/{name}` | A file the thread's runs kept, its latest version or `?version=` |
+| `POST /v1/organizations/{org}/answer-guard/check` | Reads the texts of an answer for personal data before the member is shown it, and says what may be shared of them (see [Checking an answer before it is shown](#checking-an-answer-before-it-is-shown)) |
 | `GET /v1/organizations/{org}/preferences` | What the member chose about Krude here: `{"app_updates": true}` until they turn [wake-ups](#wake-ups) off |
 | `PUT /v1/organizations/{org}/preferences` | Records the member's own choice, `{"app_updates": false}`; an agent's token is refused like everywhere else |
 
@@ -947,6 +953,176 @@ team reads it, so nothing there is held: an answer with a held kind is said
 with every such value replaced by its kind, as `{EMAIL}`, and one that could
 not be checked is not said at all, a fixed line saying so in its place.
 
+What an agent publishes to a teamspace's ledger is read the same way before
+the team reads it (`teamspaces.Service.CollaborationPublish`, which
+`teamspaces_publish` calls; the guard is given with `teamspaces.WithGuard`).
+It reads the publication as the ledger would store it, so one the ledger would
+refuse for what it is (no title, an unsafe artifact location) is refused
+before a check is spent on it: the title and the summary, and the artifacts'
+names, URIs and media types and the tools used, each list as one text with a
+line to an element. What may be shared is the rule a room applies
+(`answerguard.Verdict.Shareable`, one function for the room, the ledger and
+the check route below): nothing found, as it was; only kinds that are always
+masked, masked; a held kind, its value replaced by its kind as `{EMAIL}`, since
+a teamspace has nobody to review a publication before the team reads it. The
+entry stored is that one, and the tool's result carries what was found beside
+it as `guard`, `{"state":"masked","kinds":["PASSWORD"]}`, which is absent where
+no guard runs and on every entry read back from the ledger. A publication that
+could not be checked, or whose lists no longer hold the lines they were given,
+is not stored at all, and the tool fails saying it couldn't be checked, so it
+wasn't shared. What a member publishes is their own words and is not read:
+`POST .../entries`, and a room message lifted to the ledger, go through
+`PublishEntry`, which never asks the guard.
+
+### How strictly the guard reads an answer
+
+The guard reads an answer at one of two levels, and each member chooses their
+own (`internal/guardpolicy`). `secrets` masks only what is always masked
+(`answerguard.MaskedKinds`, the list above) and leaves an email address, phone
+number or address as written; `strict` also holds those
+(`answerguard.HeldKinds`). There is no level below `secrets`: what is always
+masked is masked whatever anybody chooses.
+
+A level is chosen for each origin. `owner` is an answer the member started
+themselves and reads themselves; `peer` is an answer another member reads,
+which their agent gave. A member who chose nothing gets `secrets` for `owner`
+and `strict` for `peer`. What applies is the stricter of the organization's
+minimum for that origin and the member's choice, or the default when they made
+none. A choice below the minimum is kept, and shown, and the minimum wins; the
+choice applies again if the minimum is lowered. An organization's minimum is
+meant to come from its workspace policy, read through `guardpolicy.OrgPolicies`
+and never kept here. No source of it is wired yet
+(`guardpolicy.NoOrgPolicies`), so every organization has none, which is
+`secrets`, the lowest level there is. A source that is missing or fails is never
+a failed check: the defaults apply, and the failure is logged once for as long
+as it lasts. A level this code does not know is read as `strict`.
+
+```text
+GET /v1/organizations/{org}/answer-guard/preferences
+PUT /v1/organizations/{org}/answer-guard/preferences
+{"owner": "secrets" | "strict" | null, "peer": "secrets" | "strict" | null}
+```
+
+Both answer with what the member is told about their settings:
+
+```json
+{"owner": {"chosen": "strict", "default": "secrets", "floor": "secrets", "effective": "strict"},
+ "peer":  {"chosen": null, "default": "strict", "floor": "strict", "effective": "strict"},
+ "relevance": "hold", "regulated": false}
+```
+
+`chosen` is what the member chose, `null` for nothing; `floor` is their
+organization's minimum; `effective` is what applies. A `chosen` below `floor` is
+accepted and `effective` is `floor`, so the three differ. On a `PUT` a key left
+out leaves that setting as it is, `null` clears it back to its default, and
+`{}` changes nothing. A key that is not exactly `owner` or `peer`, a value that
+is not exactly `"secrets"`, `"strict"` or `null`, and a body that is not one
+small JSON object (4 KiB at most) are `400 invalid_request`, and nothing is
+changed. They are the member's own, as a preference is: an agent's token is
+`403 forbidden`, no credentials are `401 unauthorized`, a cookie needs an
+allowed origin to change anything, and the caller has to be a member of the
+organization. Only that member's settings are ever read or changed; nothing in
+the path or body names whose they are. A server with no settings kept answers
+`503 answer_guard_unavailable`.
+
+`relevance` is how the relevance check will treat an answer that does not
+answer what was asked: `hold`, `shadow` (run and record, never hold) or `off`.
+It is the organization's own, `hold` when it has none, held to the deployment's
+ceiling: `AGENTS_PRIMARY_GUARD_RELEVANCE_CAP`, `shadow` unless set, so the
+check holds nobody's answers until a deployment says it may, except for the
+organizations `AGENTS_PRIMARY_GUARD_HOLD_ORGS` lists, a comma-separated list of
+organization ids. The check itself is still to come. `regulated` says the
+organization runs the regulated preset, and is only carried.
+
+A member's levels are kept in `agents_primary.guard_preferences`, no row
+meaning the defaults, and every change of a level is appended, in the
+transaction that made it, to `agents_primary.guard_preference_changes`: the
+field, what it was, what it became and when. Two changes to one member's levels
+take turns, so each logs what it really replaced. Both are forgotten with the
+member, or with the organization: `guardpolicy.Service.Forget` runs beside the
+threads' and wake-ups' cleanup. If a member's own levels cannot be read, the
+level that applies to their answers is `strict`, with the error.
+
+### Checking an answer before it is shown
+
+A side conversation shows a member what a teammate's agent answered. The web
+app has the agents service read the answer first, and shows what it may:
+
+```text
+POST /v1/organizations/{org}/answer-guard/check
+{"texts": ["..."], "origin": "peer", "request": "..."}
+```
+
+It is the member's own call, as every route that changes or spends something
+is: a cookie needs an allowed origin, an agent's token is `403 forbidden`, no
+credentials are `401 unauthorized`, and the caller has to be a member of the
+organization. `texts` is 1 to 8 texts of at most 25,000 characters each.
+`origin` is optional and exactly `"peer"`, the default, or `"owner"`; `request`
+is optional, at most 25,000 characters, and says what was asked. It is only
+measured: nothing reads it, keeps it or logs it, and it is reserved for a
+relevance check still to come. Anything else, an unknown field included, is
+`400 invalid_request`. The body may run to about a megabyte, since eight texts
+of 25,000 wide characters are more than the 256 KiB every other route reads.
+
+The answer is `{"checked": true, "state": "clear" | "masked" | "held",
+"kinds": [...], "shareable": [...] | null}`. `shareable` is one text for each
+text sent, or `null`, meaning share nothing. `kinds` are entity names, never
+values, and `["UNCHECKED"]` when the guard could not read the text, which
+shares nothing, as does a verdict that does not add up. With no guardrail
+configured nothing is checked, and it says so: `{"checked": false, "state":
+"clear", "kinds": [], "shareable": [the texts as given]}`.
+
+How much is taken out follows the caller's own settings for the `origin` (see
+[How strictly the guard reads an answer](#how-strictly-the-guard-reads-an-answer)):
+the level that applies to them, which is what they chose, or the default, and
+never below their organization's minimum. It is read as an intensity
+(`answerguard.Intensity`) in one place (`checkLevel`), so that the route does
+not change when a level does. Only the caller's own settings are read, in the
+organization in the path, and only for a check that reads an answer: one that
+is refused, over the limit, or made with no guardrail configured costs no read.
+What a member who chose nothing gets, which is also what every member gets
+where no settings are kept, is:
+
+| `origin` | Intensity | Masks | Leaves as written | `state` and `kinds` |
+| --- | --- | --- | --- | --- |
+| `"peer"`, or none | `strict`, what `Verdict.Shareable` does | Kinds that are always masked, and held kinds as `{EMAIL}` | Nothing | As the guard found: `held` with the held kinds when there are any, `masked` with the masked ones |
+| `"owner"` | `secrets` | Only kinds that are always masked (`answerguard.MaskedKinds`: passwords, AWS keys, card, bank and government numbers) | `EMAIL`, `PHONE` and `ADDRESS` | Only what was acted on: `masked` with the always-masked kinds, else `clear` with `kinds: []` and the texts as given |
+
+A member who chose `strict` for `owner` has their own answers read as another's
+are, an email address held and shared as `{EMAIL}`; one who chose `secrets` for
+`peer`, where their organization's minimum allows it, has what others read left
+with its email addresses, as the second row has. A minimum overrides a choice
+below it. No level reads nothing: the intensity `off` remains in
+`answerguard`, but no setting reaches it, and a level nobody knows is read as
+`strict`. If the member's levels cannot be read the check does not fail, and
+does not read looser: it reads at `strict`, and logs a warning naming the
+member, the origin and why, never a text. The information log of a check that
+found something names the intensity it was read at.
+
+By default `"owner"` is an answer the member started themselves and reads
+themselves, so their own personal data is not masked in it. An answer with only
+an email address in it comes back `clear`, and one with an email address and a
+password comes back with the password masked and the address intact. Even
+there an answer the guard could not read shares nothing, since what could not
+be read may hold a secret. The guard reads every text the same way; the
+verdict records the texts as they were given and every always-masked kind it
+found beside a held one (`Verdict.Given`, `Verdict.SecretKinds`), which is what
+`Verdict.At` needs to say what a level comes to. A guardrail that left an
+always-masked value in a text (it is no longer set up as it should be) is held
+for it, and at `secrets` the answer is then shared as its fully masked version,
+held values included, since the guard keeps no version with only the secrets
+masked.
+
+A member may make 30 checks a minute, each counted against them in this
+process, in the organization they are in. The thirty-first is `429
+rate_limited` with `Retry-After`, and never reaches the guard; a member held to
+the limit is let in again as their oldest check leaves the minute. A request
+that was refused before it was read, malformed or not the member's to make,
+counts for nothing, and the limit holds with no guardrail configured too, so
+what development lets through is what production will. What was found is
+logged by kind, never by value, and no text and nothing of `request` is ever
+logged.
+
 ### A teamspace is a room
 
 A teamspace is read and written as a conversation: the people on the team and
@@ -1050,9 +1226,12 @@ than merely descriptive. `teamspaces_list` shows only spaces where the current
 persistent agent is a whisperer or explicit specialist contribution,
 `teamspaces_entries` reads the recent attributed ledger, and
 `teamspaces_publish` writes as the current session agent without accepting an
-author id from the model. Specialists lose this view immediately when their
-contribution is withdrawn; primary participation follows live Teams
-membership.
+author id from the model, after the answer guard has read what it publishes
+(see [Answer guard](#answer-guard)). Specialists lose this view immediately
+when their contribution is withdrawn; primary participation follows live Teams
+membership. A run pinned to one teamspace (see
+[Pinning a run to a teamspace](#pinning-a-run-to-a-teamspace)) sees, reads and
+publishes in that teamspace alone.
 
 Contributing a specialist never transfers its identity, instructions, app
 connections, or tool permissions. The specialist still runs as its owner.
@@ -1141,7 +1320,7 @@ happens before the stream opens, so a refusal is an ordinary JSON error:
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_request` | 400 | The body is not one of the two shapes, or answers something that is not waiting |
+| `invalid_request` | 400 | The body is not one of the two shapes, or answers something that is not waiting, or its `teamspace_id` is blank, holds whitespace or is over 128 characters |
 | `unauthorized` / `forbidden` | 401 / 403 | Auth does not know the caller, or they are not in the organization; an agent's token; a cookie from another origin |
 | `not_found` | 404 | Not the member's thread in this organization |
 | `run_in_progress` | 409 | Another run is answering the thread |
@@ -1214,6 +1393,47 @@ redelivered through the callback queue. An individual model attempt remains
 bounded by its run timeout; a retry reclaims the execution only after its
 lease expires.
 
+### Pinning a run to a teamspace
+
+A side conversation runs the member's own agent on a prompt that names the
+teamspace it is about. The prompt alone does not tie the run to it: without a
+pin, `interactions_create` passes whatever `teamspace_id` the model names
+straight to the request ledger, and a model that named another teamspace, by
+mistake or because words a teammate wrote in the prompt told it to, would ask
+that teamspace's agents for work, and for an `automatic` specialist there
+without its owner's approval. So the run can be pinned.
+
+`POST .../threads/{thread}/runs` takes an optional `teamspace_id`: not blank
+after trimming, at most 128 characters, and no whitespace inside, or the run is
+`400 invalid_request` and never starts. A blank one is refused rather than
+read as none, since a run that was meant to be pinned and quietly is not would
+answer as though it were; left out, or `null`, the run is not pinned, and
+behaves exactly as it always did. It works with a message or with answers to
+confirmations, and it pins that run and no other: the thread's next run has
+none unless its caller sends one again. The agent-run route
+(`.../agents/{agent}/runs`) takes none.
+
+The pin travels on the run's context beside its origin
+(`agents.WithPinnedTeamspace`, `threads.RunInput.TeamspaceID`). It is never
+written to the thread's state, the run's record or any event, and the model can
+neither read nor write it. In a pinned run:
+
+- `interactions_create` files its request in the pinned teamspace when the model
+  names none, or names that one (however padded); one that names another is a
+  tool error, and nothing is filed, before a token is even asked for;
+- `teamspaces_publish` and `teamspaces_entries` do the same with their
+  `teamspace_id`, and `teamspaces_context` looks only among the pinned teamspace,
+  so a query that names another finds nothing, and one that names none finds the
+  pinned one though the agent may work in several;
+- `teamspaces_list` shows the pinned teamspace alone, an empty list when the
+  agent has no seat in it.
+
+The refusal says the conversation is about one teamspace and never which, so
+the pin is not something the model can learn by asking. The pin grants nothing:
+it only narrows what the model may name, and the request ledger and the
+teamspace service still check the live seat and team membership of the member
+the run acts for, exactly as they do without one.
+
 ## Events agents consumes
 
 The agents service reads its own queue, `AGENTS_EVENTS_QUEUE_URL`, which `go
@@ -1226,7 +1446,7 @@ fills it (`internal/inbound`):
 | `agents.interaction.requested.v1` | Persists a delivery job for the addressed target agent; one held for its owner completes without waking it |
 | `agents.interaction.decided.v1` | Wakes the target to finish approved work, or the requester to observe a rejection |
 | `agents.interaction.completed.v1` | Wakes the requester to observe a completed, failed or withheld result; an answer held for review (`review`) wakes nobody |
-| `auth.member.removed.v1` | Removes the member's threads, waiting wake-ups, agent definitions, and cross-user request content in that organization |
+| `auth.member.removed.v1` | Removes the member's threads, waiting wake-ups, agent definitions, answer guard settings, and cross-user request content in that organization |
 | `auth.organization.deleted.v1` | The same for everyone in the organization |
 | `teams.member.removed.v1` | Withdraws the person's contributions to the team's teamspace, and records `agents.teamspace.member.removed.v1` when the team has one |
 | `teams.team.deleted.v1` | Removes the team's teamspace, recording `agents.teamspace.deleted.v1` |
@@ -1897,6 +2117,8 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` | `false` | Block, rather than pass, what a failed screen could not check |
 | `AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID` | unset | Bedrock guardrail the answer guard reads every answer another member will read with (see [Answer guard](#answer-guard)); unset, no answer is checked. Set with its version or not at all |
 | `AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION` | unset | That guardrail's version, set with its ID |
+| `AGENTS_PRIMARY_GUARD_RELEVANCE_CAP` | `shadow` | The most the answer guard's relevance check may do here, whatever an organization's workspace policy asks: `hold`, `shadow` (run and record, never hold) or `off`, in any case. Anything else refuses to start (see [How strictly the guard reads an answer](#how-strictly-the-guard-reads-an-answer)) |
+| `AGENTS_PRIMARY_GUARD_HOLD_ORGS` | unset | Organization ids, comma-separated, the ceiling above does not apply to: they may hold. An id is letters, digits, `_` and `-`; anything else, a space-separated list included, refuses to start |
 | `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` | unset | Bedrock runtime endpoint override, for a development stand-in of the answer guard's guardrail |
 | `AGENTS_PRIMARY_DATABASE_MAX_CONNS` | `8` | Size of the pool the service keeps for ADK's tables, apart from the shared one |
 | `AGENTS_EVENTS_QUEUE_URL` | unset | Queue carrying batching's app batches and interaction lifecycle events; without it neither app nor cross-agent events wake persistent agents (see [Wake-ups](#wake-ups)) |

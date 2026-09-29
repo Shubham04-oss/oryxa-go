@@ -359,10 +359,25 @@ resource "aws_iam_role_policy" "task" {
         }
       },
       {
-        Sid      = "Cognito"
-        Effect   = "Allow"
-        Action   = "cognito-idp:*"
-        Resource = "arn:aws:cognito-idp:${var.aws_region}:${local.account_id}:userpool/*"
+        # The eight admin calls that password sign-up, email verification and
+        # password reset sign with the task role (auth/internal/passwordflow),
+        # and nothing else auth asks Cognito. Sign-in (InitiateAuth) and
+        # session refresh (GetTokensFromRefreshToken) are its other two calls;
+        # Cognito authorizes those by app client and never reads IAM for them,
+        # so they need no statement. DescribeUserPoolClient, which answers
+        # with a client's secret, is left out on purpose: only
+        # deploy/scripts/provision-app.sh reads it, as the operator.
+        Sid    = "Cognito"
+        Effect = "Allow"
+        Action = [
+          "cognito-idp:AdminCreateUser", "cognito-idp:AdminDeleteUser", "cognito-idp:AdminSetUserPassword",
+          "cognito-idp:AdminDisableUser", "cognito-idp:AdminEnableUser", "cognito-idp:AdminGetUser",
+          "cognito-idp:AdminUpdateUserAttributes", "cognito-idp:AdminUserGlobalSignOut",
+        ]
+        # The one pool auth's provisioner made, which app.auto.tfvars.json
+        # names. Until the provisioner has run there is no pool to name, and
+        # any pool matches.
+        Resource = "arn:aws:cognito-idp:${var.aws_region}:${local.account_id}:userpool/${var.cognito.user_pool_id == "" ? "*" : var.cognito.user_pool_id}"
       },
       {
         Sid      = "SendMail"
@@ -438,8 +453,15 @@ resource "aws_ecs_task_definition" "oryxa" {
       logConfiguration = { logDriver = "awslogs", options = local.log_options["cloudflared"] }
     },
     {
+      # A release and its digest, not "latest", so that a task that starts
+      # tomorrow runs what this one does. The digest is the multi-architecture
+      # index, which has linux/arm64 for Fargate; `latest` was v0.50.0 on
+      # 2026-09-29. To move to another release, read the digest of its tag:
+      #   token=$(curl -s https://public.ecr.aws/token/ | jq -r .token)
+      #   curl -sI -H "Authorization: Bearer $token" -H "Accept: application/vnd.oci.image.index.v1+json" \
+      #     https://public.ecr.aws/v2/aws-observability/aws-otel-collector/manifests/<tag> | grep -i docker-content-digest
       name             = "otel"
-      image            = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
+      image            = "public.ecr.aws/aws-observability/aws-otel-collector:v0.50.0@sha256:7968fb60db6a2390a47ba6a2df029745638486e285c9b2487da1b722d0855a3e"
       essential        = false
       secrets          = [{ name = "AOT_CONFIG_CONTENT", valueFrom = aws_ssm_parameter.otel_config.arn }]
       logConfiguration = { logDriver = "awslogs", options = local.log_options["otel"] }

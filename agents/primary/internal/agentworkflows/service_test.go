@@ -225,6 +225,39 @@ func TestWorkflowCreateScheduleAndManualStart(t *testing.T) {
 	}
 }
 
+func TestAnAssignmentThatDidNotCompleteFailsTheExecution(t *testing.T) {
+	for _, test := range []struct {
+		statuses []string
+		want     ExecutionStatus
+	}{
+		{[]string{"completed"}, ExecutionSucceeded},
+		{[]string{"completed", "blocked"}, ExecutionFailed},
+		{[]string{"needs_input"}, ExecutionFailed},
+		{[]string{"failed"}, ExecutionFailed},
+		{[]string{"something_new"}, ExecutionFailed},
+		{[]string{"blocked", "needs_confirmation"}, ExecutionNeedsConfirmation},
+	} {
+		service, _, _, _, delegator := workflowHarness(t)
+		var results []primaryagents.SystemDelegationResult
+		for _, status := range test.statuses {
+			results = append(results, primaryagents.SystemDelegationResult{AgentID: "agt_sales", Status: status, Output: `{}`})
+		}
+		delegator.result = primaryagents.SystemDelegation{TeamID: "atm_1", Results: results}
+		scope := Scope{OrganizationID: "org_1", UserID: "user_1"}
+		workflow, err := service.Create(context.Background(), scope, CreateInput{Name: "Pipeline", TeamID: "atm_1", Assignments: []Assignment{{AgentID: "agt_sales", Task: "Review pipeline"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		execution, err := service.Execute(context.Background(), Dispatch{WorkflowID: workflow.ID, OrganizationID: "org_1", OwnerUserID: "user_1", StartedBy: StartedBySchedule, ExternalID: "arn:execution:1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if execution.Status != test.want {
+			t.Errorf("statuses %v: execution status %q, want %q", test.statuses, execution.Status, test.want)
+		}
+	}
+}
+
 func TestScheduledExecutionDelegatesWithoutMemberAuthority(t *testing.T) {
 	service, _, _, _, delegator := workflowHarness(t)
 	scope := Scope{OrganizationID: "org_1", UserID: "user_1"}
