@@ -44,10 +44,10 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 
 // Mount assembles knowledge on what the host shares. GitHub, Notion, Slack,
 // Google Drive and Gmail are mounted once COMPOSIO_API_KEY says app sources
-// are on; files, which reads as the member who registered it, once FILES_URL
-// and KNOWLEDGE_SERVICE_KEY_ID give it a way to act as one; and a PDF or an
-// Office file is kept rather than skipped once KNOWLEDGE_ORIGINALS_BUCKET
-// names somewhere to keep it.
+// are on; the organization's own files, and what a member signed in to Oryxa
+// themselves, once FILES_URL and KNOWLEDGE_SERVICE_KEY_ID give knowledge a way
+// to act as one; and a PDF or an Office file is kept rather than skipped once
+// KNOWLEDGE_ORIGINALS_BUCKET names somewhere to keep it.
 func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if platform.Database == nil {
 		return host.Service{}, host.ErrDatabaseRequired
@@ -61,24 +61,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("KNOWLEDGE_ALLOWED_ORIGINS is not set: members can manage sources only with bearer tokens")
 	}
 
-	var apps application.Apps
-	extractors := sources.Registry{}
-	if config.ComposioAPIKey != "" {
-		composioClient, err := composio.New(composio.Config{APIKey: config.ComposioAPIKey, BaseURL: config.ComposioBaseURL})
-		if err != nil {
-			return host.Service{}, err
-		}
-		apps = appsclient.New(config.AppsURL)
-		for provider, extractor := range Builtin(composioClient) {
-			extractors[provider] = extractor
-		}
-	} else {
-		logger.Warn("COMPOSIO_API_KEY is not set: app sources (GitHub, Notion, Slack, Google Drive, Gmail) are off")
-	}
-
-	// Acting as a member while they are away is what the files source reads
-	// with, and what registering a newly connected app's contents for them
-	// needs. Auth's standing grant fills that, redeemed with knowledge's own
+	// Acting as a member while they are away is what the files source is read
+	// with, what registering a newly connected app's contents for them needs,
+	// and what every source read through an Oryxa connection is read with.
+	// Auth's standing grant fills that gap, redeemed with knowledge's own
 	// signed identity.
 	var grants application.Grants
 	if config.ServiceKeyID != "" {
@@ -90,8 +76,48 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		})}
 	} else {
 		logger.Warn("KNOWLEDGE_SERVICE_KEY_ID is not set: knowledge cannot act as a member while they are away, " +
-			"so neither the organization's own files nor what a newly connected app holds are indexed for them")
+			"so neither the organization's own files nor what a member signed in to Oryxa themselves is indexed for them")
 	}
+
+	// Apps is where a connection is read, whichever broker holds it. It is
+	// needed as soon as a member signs in to Oryxa themselves, which is why
+	// it no longer waits for Composio: an Oryxa connection has no Composio
+	// account behind it and is read entirely through apps.
+	var apps application.Apps
+	var appsClient *appsclient.Client
+	if config.AppsURL == "" {
+		logger.Warn("APPS_URL is not set: no connection can be read, so nothing a member signs in to can be indexed")
+	} else {
+		appsClient = appsclient.New(config.AppsURL)
+		apps = appsClient
+	}
+
+	extractors := sources.Registry{}
+	if config.ComposioAPIKey != "" {
+		composioClient, err := composio.New(composio.Config{APIKey: config.ComposioAPIKey, BaseURL: config.ComposioBaseURL})
+		if err != nil {
+			return host.Service{}, err
+		}
+		for provider, extractor := range Builtin(composioClient) {
+			extractors[provider] = extractor
+		}
+	} else {
+		logger.Warn("COMPOSIO_API_KEY is not set: app sources (GitHub, Notion, Slack, Google Drive, Gmail) are off")
+	}
+
+	// One apps reader is mounted beside every toolkit above, so a member's own
+	// Oryxa sign-in is read through apps while a Composio connection keeps
+	// being read through Composio's proxy. It reads as the member who made
+	// it, so without a way to act as one there is nothing to mount.
+	switch {
+	case appsClient == nil:
+		// Already said above: there is no apps to read through.
+	case grants == nil:
+		// Already said above: there is no way to act as the member.
+	default:
+		extractors = sources.RegisterApps(extractors, appsClient)
+	}
+
 	// A document knowledge does not read itself — a PDF, an Office file —
 	// keeps its bytes here instead of being skipped outright, once there is
 	// somewhere configured to put them.
