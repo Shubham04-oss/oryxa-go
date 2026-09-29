@@ -2,6 +2,8 @@ package policy
 
 import (
 	"context"
+	"encoding/json"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/projection"
 	"testing"
 	"time"
 
@@ -13,11 +15,44 @@ type fakeRepository struct {
 	err      error
 }
 
-func (repo fakeRepository) Latest(context.Context, string) (store.Version, error) {
-	if repo.err != nil {
-		return store.Version{}, repo.err
+type projectedRepository struct {
+	version int64
+	data    []byte
+}
+
+func (repo *projectedRepository) Policy(context.Context, string) (int64, []byte, error) {
+	return repo.version, repo.data, nil
+}
+
+func TestProjectionReadsFutureKeysAndTracksVersionsWithoutLeakingMutableState(t *testing.T) {
+	repo := &projectedRepository{version: 1, data: []byte(`{"Offer":["github"],"HoldForReview":true,"NewSetting":{"mode":"future"}}`)}
+	loader := New(repo)
+	first, err := loader.Get(context.Background(), "org_1")
+	if err != nil || !first.HoldForReview || first.Offer == nil {
+		t.Fatalf("future projection failed: %+v %v", first, err)
 	}
-	return store.Version{Document: repo.document}, nil
+	(*first.Offer)[0] = "slack"
+	again, err := loader.Get(context.Background(), "org_1")
+	if err != nil || (*again.Offer)[0] != "github" {
+		t.Fatalf("caller mutated cached policy: %+v %v", again, err)
+	}
+	repo.version, repo.data = 2, []byte(`{"Offer":[],"HoldForReview":false}`)
+	latest, err := loader.Get(context.Background(), "org_1")
+	if err != nil || latest.HoldForReview || latest.Offer == nil || len(*latest.Offer) != 0 {
+		t.Fatalf("stale cached policy: %+v %v", latest, err)
+	}
+}
+
+func (repo fakeRepository) Policy(context.Context, string) (int64, []byte, error) {
+	if repo.err != nil {
+		return 0, nil, repo.err
+	}
+	settings, err := projection.FromYAML(repo.document)
+	if err != nil {
+		return 0, nil, err
+	}
+	encoded, err := json.Marshal(settings)
+	return 1, encoded, err
 }
 
 func TestLoaderReadsOnlyAppliedPolicies(t *testing.T) {

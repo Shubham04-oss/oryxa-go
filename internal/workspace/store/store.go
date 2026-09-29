@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/projection"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 )
 
@@ -141,6 +143,14 @@ func (store *Store) Save(ctx context.Context, organizationID, actorID string, do
 	if err != nil {
 		return Version{}, fmt.Errorf("save invalid workspace file: %w", err)
 	}
+	projected, err := projection.FromDocument(parsed)
+	if err != nil {
+		return Version{}, fmt.Errorf("project workspace policy: %w", err)
+	}
+	settings, err := json.Marshal(projected)
+	if err != nil {
+		return Version{}, err
+	}
 	var result Version
 	err = pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 		var latest Version
@@ -149,6 +159,9 @@ func (store *Store) Save(ctx context.Context, organizationID, actorID string, do
 			Scan(&latest.Number, &latest.Document, &latest.AppliedBy, &latest.AppliedAt)
 		if err == nil && bytes.Equal(latest.Document, document) {
 			result = latest
+			if _, err := tx.Exec(ctx, `UPDATE workspace.configs SET policy_settings=$2 WHERE organization_id=$1 AND policy_settings IS NULL`, organizationID, settings); err != nil {
+				return err
+			}
 			return store.syncMappings(ctx, tx, organizationID, parsed.Directory)
 		}
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -156,18 +169,18 @@ func (store *Store) Save(ctx context.Context, organizationID, actorID string, do
 		}
 		result = Version{Number: latest.Number + 1, AppliedBy: actorID, AppliedAt: time.Now().UTC(), Document: document}
 		if _, err := tx.Exec(ctx, `INSERT INTO workspace.configs
-			(organization_id, version, document, applied_by, applied_at)
-			VALUES ($1,$2,$3,$4,$5)
+			(organization_id, version, document, applied_by, applied_at, policy_settings)
+			VALUES ($1,$2,$3,$4,$5,$6)
 			ON CONFLICT (organization_id) DO UPDATE SET
 			version=EXCLUDED.version, document=EXCLUDED.document,
-			applied_by=EXCLUDED.applied_by, applied_at=EXCLUDED.applied_at`,
-			organizationID, result.Number, result.Document, result.AppliedBy, result.AppliedAt); err != nil {
+			applied_by=EXCLUDED.applied_by, applied_at=EXCLUDED.applied_at, policy_settings=EXCLUDED.policy_settings`,
+			organizationID, result.Number, result.Document, result.AppliedBy, result.AppliedAt, settings); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO workspace.versions
-			(organization_id, version, document, applied_by, applied_at)
-			VALUES ($1,$2,$3,$4,$5)`,
-			organizationID, result.Number, result.Document, result.AppliedBy, result.AppliedAt)
+			(organization_id, version, document, applied_by, applied_at, policy_settings)
+			VALUES ($1,$2,$3,$4,$5,$6)`,
+			organizationID, result.Number, result.Document, result.AppliedBy, result.AppliedAt, settings)
 		if err != nil {
 			return err
 		}

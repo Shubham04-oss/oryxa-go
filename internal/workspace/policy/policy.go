@@ -1,110 +1,71 @@
-// Package policy reads operational organization policies from the last
-// applied workspace version. It never reads a proposed or partial file.
+// Package policy reads the small operational projection of an applied version.
 package policy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
-
-	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/projection"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
+	"sync"
 )
 
 type Repository interface {
-	Latest(context.Context, string) (store.Version, error)
+	Policy(context.Context, string) (int64, []byte, error)
+}
+type Settings = projection.Settings
+
+type cached struct {
+	version  int64
+	settings Settings
+}
+type Loader struct {
+	repository Repository
+	mu         sync.Mutex
+	cache      map[string]cached
 }
 
-type Settings struct {
-	// ExpireAfter is zero when the workspace has no override.
-	ExpireAfter   time.Duration
-	HoldForReview bool
-	Proactive     string
-	// SearchMode is empty when the workspace has no override.
-	SearchMode string
-	// Offer is nil when all Composio toolkits are allowed. An empty list
-	// explicitly disables every toolkit for this organization.
-	Offer               *[]string
-	EmployeeConnections *bool
-	AutoSubscribe       *bool
-	// WakeUpWithin is zero when the workspace uses the deployment default.
-	WakeUpWithin time.Duration
-	// PIIMinimumOwner and PIIMinimumPeer are the least strict levels, "secrets"
-	// or "strict", the answer guard lets a member choose for an answer they
-	// started themselves and for one another member reads. Empty when the
-	// workspace has no override.
-	PIIMinimumOwner string
-	PIIMinimumPeer  string
-	// GuardRelevance is how the answer guard treats an answer that does not
-	// answer what was asked: "hold", "shadow" or "off". Empty when the
-	// workspace has no override.
-	GuardRelevance string
-	// Regulated is true when the workspace was applied with the regulated
-	// preset.
-	Regulated bool
+func New(repository Repository) *Loader {
+	return &Loader{repository: repository, cache: make(map[string]cached)}
 }
-
-type Loader struct{ repository Repository }
-
-func New(repository Repository) *Loader { return &Loader{repository: repository} }
-
 func (loader *Loader) Get(ctx context.Context, organizationID string) (Settings, error) {
-	version, err := loader.repository.Latest(ctx, organizationID)
+	version, data, err := loader.repository.Policy(ctx, organizationID)
 	if errors.Is(err, store.ErrVersionNotFound) {
 		return Settings{}, nil
 	}
 	if err != nil {
 		return Settings{}, err
 	}
-	document, err := spec.Parse(version.Document)
-	if err != nil {
+	loader.mu.Lock()
+	defer loader.mu.Unlock()
+	if entry, ok := loader.cache[organizationID]; ok && entry.version == version {
+		return clone(entry.settings), nil
+	}
+	var settings Settings
+	// Unknown projection fields belong to newer releases and remain harmless
+	// when the running binary has been rolled back.
+	if err := json.Unmarshal(data, &settings); err != nil {
 		return Settings{}, fmt.Errorf("applied workspace policy is invalid: %w", err)
 	}
-	settings := Settings{}
-	if document.Rules != nil && document.Rules.Consent != nil && document.Rules.Consent.ExpireAfter != nil {
-		settings.ExpireAfter, err = spec.ParseDuration(*document.Rules.Consent.ExpireAfter)
-		if err != nil {
-			return Settings{}, err
-		}
+	if len(loader.cache) >= 1024 {
+		clear(loader.cache)
 	}
-	if document.Safety != nil && document.Safety.Guard != nil && document.Safety.Guard.HoldForReview != nil {
-		settings.HoldForReview = *document.Safety.Guard.HoldForReview
+	loader.cache[organizationID] = cached{version: version, settings: settings}
+	return clone(settings), nil
+}
+func clone(settings Settings) Settings {
+	if settings.Offer != nil {
+		items := append([]string{}, (*settings.Offer)...)
+		settings.Offer = &items
 	}
-	if document.Safety != nil && document.Safety.Guard != nil {
-		guard := document.Safety.Guard
-		if guard.PII != nil && guard.PII.Minimum != nil {
-			if guard.PII.Minimum.Owner != nil {
-				settings.PIIMinimumOwner = *guard.PII.Minimum.Owner
-			}
-			if guard.PII.Minimum.Peer != nil {
-				settings.PIIMinimumPeer = *guard.PII.Minimum.Peer
-			}
-		}
-		if guard.Relevance != nil {
-			settings.GuardRelevance = *guard.Relevance
-		}
+	if settings.EmployeeConnections != nil {
+		value := *settings.EmployeeConnections
+		settings.EmployeeConnections = &value
 	}
-	settings.Regulated = document.Preset == "regulated"
-	if document.Agents != nil && document.Agents.Personal != nil && document.Agents.Personal.Proactive != nil {
-		settings.Proactive = *document.Agents.Personal.Proactive
+	if settings.AutoSubscribe != nil {
+		value := *settings.AutoSubscribe
+		settings.AutoSubscribe = &value
 	}
-	if document.Tools != nil && document.Tools.Offer != nil {
-		copyOfOffer := append([]string{}, (*document.Tools.Offer)...)
-		settings.Offer = &copyOfOffer
-	}
-	if document.Tools != nil {
-		settings.EmployeeConnections = document.Tools.EmployeeConnections
-		settings.AutoSubscribe = document.Tools.AutoSubscribe
-		if document.Tools.WakeUpWithin != nil {
-			settings.WakeUpWithin, err = spec.ParseDuration(*document.Tools.WakeUpWithin)
-			if err != nil {
-				return Settings{}, err
-			}
-		}
-	}
-	if document.Search != nil {
-		settings.SearchMode = document.Search.Mode
-	}
-	return settings, nil
+	return settings
 }
