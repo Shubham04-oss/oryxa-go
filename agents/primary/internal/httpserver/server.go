@@ -200,6 +200,12 @@ type Config struct {
 	// OrganizationContext exposes the durable shared synthesis and proposed
 	// follow-ups produced by the singleton organization agent.
 	OrganizationContext OrganizationAgentContext
+	// AnswerGuard reads the texts of an answer a member's side conversation is
+	// about to show them, for the answer-guard check route. Nil means no
+	// guardrail is configured: the route then checks nothing, and says so. It
+	// is set only when there is one; a nil *answerguard.Guard in the interface
+	// would not read as none.
+	AnswerGuard AnswerChecker
 }
 
 // Server serves the API.
@@ -214,6 +220,8 @@ type Server struct {
 	teamspaces          Teamspaces
 	rooms               Rooms
 	organizationContext OrganizationAgentContext
+	answerGuard         AnswerChecker
+	checks              *checkLimiter
 	allowedOrigins      map[string]struct{}
 	runTimeout          time.Duration
 	unavailable         string
@@ -240,6 +248,8 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		teamspaces:          config.Teamspaces,
 		rooms:               config.Rooms,
 		organizationContext: config.OrganizationContext,
+		answerGuard:         config.AnswerGuard,
+		checks:              newCheckLimiter(checksPerWindow, checkWindow),
 		allowedOrigins:      map[string]struct{}{},
 		runTimeout:          config.RunTimeout,
 		unavailable:         config.Unavailable,
@@ -313,6 +323,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/catchup", server.catchUpOnRoom)
 	server.handle("GET /v1/organizations/{organizationID}/preferences", server.getPreferences)
 	server.handle("PUT /v1/organizations/{organizationID}/preferences", server.setPreferences)
+	server.handle("POST /v1/organizations/{organizationID}/answer-guard/check", server.checkAnswer)
 	return server
 }
 
@@ -1715,7 +1726,14 @@ func (server *Server) limit(writer http.ResponseWriter, request *http.Request) (
 // decode reads a JSON body with no unknown fields, answering 400 itself when
 // it cannot.
 func (server *Server) decode(writer http.ResponseWriter, request *http.Request, target any) bool {
-	decoder := json.NewDecoder(io.LimitReader(request.Body, maxJSONBytes))
+	return server.decodeUpTo(writer, request, target, maxJSONBytes)
+}
+
+// decodeUpTo is decode for a route whose body may be larger than the 256 KiB
+// the rest read. A body past limit is cut off there, and answered 400 as the
+// malformed JSON it has become.
+func (server *Server) decodeUpTo(writer http.ResponseWriter, request *http.Request, target any, limit int64) bool {
+	decoder := json.NewDecoder(io.LimitReader(request.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil || decoder.More() {
 		writeError(writer, http.StatusBadRequest, "invalid_request", "request body must be one JSON object with known fields")

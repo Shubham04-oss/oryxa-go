@@ -514,6 +514,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if roomService != nil {
 		httpConfig.Rooms = roomService
 	}
+	// The check route reads with the same guard, when there is one; without
+	// it the route answers that nothing was checked.
+	if answerGuard != nil {
+		httpConfig.AnswerGuard = answerGuard
+	}
 	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpConfig, logger)
 
 	table, err := outbox.NewTable(platform.Database.Pool, schema+".agents_outbox")
