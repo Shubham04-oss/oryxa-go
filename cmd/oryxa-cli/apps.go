@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,6 +32,13 @@ func connectApp(ctx context.Context, toolkit string, opts options, stdout, stder
 	organization, err := client.OrganizationBySlug(ctx, opts.org)
 	if err != nil {
 		return reportError(err, stderr)
+	}
+	offer, err := client.AppOffer(ctx, organization.ID)
+	if err != nil {
+		return reportError(err, stderr)
+	}
+	if offer != nil && !slices.Contains(*offer, toolkit) {
+		return reportError(fmt.Errorf("%s is not offered by this organization", toolkit), stderr)
 	}
 	connections, err := client.AppConnections(ctx, organization.ID, toolkit)
 	if err != nil {

@@ -121,6 +121,17 @@ type AppConnection struct {
 	AutoSubscribe bool   `json:"auto_subscribe"`
 }
 
+func (client *Client) AppOffer(ctx context.Context, organizationID string) (*[]string, error) {
+	var policy struct {
+		Offer *[]string `json:"offer"`
+	}
+	path := "/v1/organizations/" + url.PathEscape(organizationID) + "/apps/offer"
+	if err := client.request(ctx, http.MethodGet, path, nil, &policy); err != nil {
+		return nil, err
+	}
+	return policy.Offer, nil
+}
+
 func (client *Client) AppConnections(ctx context.Context, organizationID, toolkit string) ([]AppConnection, error) {
 	var listed struct {
 		Connections []AppConnection `json:"connections"`

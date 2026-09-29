@@ -20,6 +20,8 @@ func TestConnectAppReturnsReviewableBrowserStep(t *testing.T) {
 		switch request.Method + " " + request.URL.Path {
 		case "GET /v1/organizations":
 			fmt.Fprint(writer, `{"organizations":[{"id":"org_1","slug":"acme"}]}`)
+		case "GET /v1/organizations/org_1/apps/offer":
+			fmt.Fprint(writer, `{"offer":["github"]}`)
 		case "GET /v1/organizations/org_1/apps/connections":
 			if request.URL.Query().Get("toolkit") != "github" {
 				t.Errorf("toolkit query = %q", request.URL.Query().Get("toolkit"))
@@ -76,6 +78,8 @@ func TestConnectAppReusesActiveConnection(t *testing.T) {
 		switch request.Method + " " + request.URL.Path {
 		case "GET /v1/organizations":
 			fmt.Fprint(writer, `{"organizations":[{"id":"org_1","slug":"acme"}]}`)
+		case "GET /v1/organizations/org_1/apps/offer":
+			fmt.Fprint(writer, `{"offer":["github"]}`)
 		case "GET /v1/organizations/org_1/apps/connections":
 			fmt.Fprint(writer, `{"connections":[{"id":"apc_existing","toolkit":"github","status":"active"}]}`)
 		default:
@@ -107,5 +111,31 @@ func TestConnectAppRejectsUnsafeRedirectAndBadToolkit(t *testing.T) {
 	code := run(context.Background(), []string{"connect-app", "GitHub", "--org", "acme", "--no-input"}, &stdout, &stderr, func(string) string { return "" })
 	if code != 3 || !strings.Contains(stderr.String(), "lowercase toolkit slug") {
 		t.Fatalf("invalid slug exit %d, stderr %q", code, stderr.String())
+	}
+}
+
+func TestConnectAppRefusesRestrictedExistingConnection(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/organizations":
+			fmt.Fprint(writer, `{"organizations":[{"id":"org_1","slug":"acme"}]}`)
+		case "/v1/organizations/org_1/apps/offer":
+			fmt.Fprint(writer, `{"offer":[]}`)
+		default:
+			t.Errorf("restricted app reached %s", request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer api.Close()
+	var stdout, stderr bytes.Buffer
+	getenv := func(key string) string {
+		if key == "ORYXA_ACCESS_TOKEN" {
+			return "short-lived"
+		}
+		return ""
+	}
+	code := run(context.Background(), []string{"connect-app", "github", "--org", "acme", "--api", api.URL, "--no-input"}, &stdout, &stderr, getenv)
+	if code != 3 || !strings.Contains(stderr.String(), "not offered") {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 }
