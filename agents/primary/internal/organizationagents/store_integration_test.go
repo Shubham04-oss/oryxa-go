@@ -192,3 +192,76 @@ func TestStoreLifecycle(t *testing.T) {
 		t.Fatalf("organization cleanup follow-ups=%+v error=%v", followUps, err)
 	}
 }
+
+// TestAnInterruptedDeliveryIsReleasedWithoutUsingAnAttempt is what a deploy
+// depends on: the processor releases a synthesis it was cut short in without
+// counting the attempt, however many deploys it is cut short by, while one
+// that failed is dropped once it has used its attempts. It needs the same
+// PostgreSQL as TestStoreLifecycle.
+func TestAnInterruptedDeliveryIsReleasedWithoutUsingAnAttempt(t *testing.T) {
+	databaseURL := os.Getenv("AGENTS_PRIMARY_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("AGENTS_PRIMARY_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	database, err := postgreskit.Open(ctx, postgreskit.Config{URL: databaseURL, ApplicationName: "oryxa-organization-agent-test", Schema: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := runstore.New(database).Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := managedagents.NewStore(database).Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := teamspaces.NewStore(database).Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(database)
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	suffix := time.Now().UnixNano()
+	organizationID := fmt.Sprintf("org_release_test_%d", suffix)
+	defer func() {
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.organization_agent_deliveries WHERE organization_id=$1`, organizationID)
+	}()
+	delivery := Delivery{
+		EventID: fmt.Sprintf("evt_release_%d", suffix), EntryID: fmt.Sprintf("tse_release_%d", suffix),
+		TeamspaceID: "tsp_release", OrganizationID: organizationID, AuthorUserID: "user_release", AuthorAgentID: "agt_release",
+		Kind: "decision", PublishedAt: time.Now().UTC(),
+	}
+	if created, err := store.Record(ctx, delivery); err != nil || !created {
+		t.Fatalf("record created=%v error=%v", created, err)
+	}
+	state := func() (attempts int, handled, dropped bool, reason string) {
+		t.Helper()
+		if err := database.Pool.QueryRow(ctx, `SELECT attempts, handled_at IS NOT NULL, dropped, last_error
+			FROM agents_primary.organization_agent_deliveries WHERE event_id=$1`, delivery.EventID).Scan(&attempts, &handled, &dropped, &reason); err != nil {
+			t.Fatal(err)
+		}
+		return attempts, handled, dropped, reason
+	}
+
+	const maxAttempts = 3
+	for range 2 * maxAttempts {
+		if dropped, err := store.Release(ctx, delivery.EventID, false, maxAttempts, 0, "interrupted: The run was cancelled."); err != nil || dropped {
+			t.Fatalf("release without a failure dropped=%v error=%v", dropped, err)
+		}
+	}
+	if attempts, handled, dropped, reason := state(); attempts != 0 || handled || dropped || reason != "interrupted: The run was cancelled." {
+		t.Fatalf("after %d interruptions attempts=%d handled=%v dropped=%v reason=%q, want none used and the reason kept", 2*maxAttempts, attempts, handled, dropped, reason)
+	}
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		dropped, err := store.Release(ctx, delivery.EventID, true, maxAttempts, 0, "model unavailable")
+		if err != nil || dropped != (attempt == maxAttempts) {
+			t.Fatalf("failed release %d dropped=%v error=%v, want it dropped only at attempt %d", attempt, dropped, err, maxAttempts)
+		}
+	}
+	if attempts, handled, dropped, _ := state(); attempts != maxAttempts || !handled || !dropped {
+		t.Fatalf("after %d failures attempts=%d handled=%v dropped=%v, want it dropped", maxAttempts, attempts, handled, dropped)
+	}
+}
