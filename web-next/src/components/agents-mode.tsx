@@ -9,14 +9,14 @@ import {
   AgentsNotice,
   SpecialistEntry,
   StatusPill,
-  WorkflowRow,
 } from "./agents-parts"
-import { agentsErrorMessage, plural } from "./agents-format"
+import { agentsErrorMessage } from "./agents-format"
 import { SpecialistFocus } from "./specialist-focus"
 import { SpecialistsSection } from "./specialists-section"
 import { AgentTeamFocus } from "./multi-agent-team-focus"
 import { AgentTeamsSection } from "./multi-agent-teams-section"
 import { PrimaryAgentFiles } from "./primary-agent-files"
+import { WorkflowOverview } from "./workflow-overview"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
 import type { ScreenContext } from "@/lib/agents/screen-context"
@@ -51,8 +51,6 @@ export function isAgentsSection(section: string): section is AgentsSection {
 
 /** Work items the overview shows before pointing to the sections. */
 const OVERVIEW_WORK = 6
-/** Workflows the overview lists. */
-const OVERVIEW_WORKFLOWS = 5
 
 export function AgentsCanvas({
   section,
@@ -268,7 +266,6 @@ function AgentsOverview({
       />
     )),
   ]
-  const teamNames = new Map(teamList.map((team) => [team.id, team.name]))
 
   return (
     <div className="workspace-agents-page">
@@ -398,50 +395,7 @@ function AgentsOverview({
         )}
       </section>
 
-      <section aria-labelledby="agents-overview-workflows">
-        <p className="workspace-eyebrow" id="agents-overview-workflows">
-          Workflows
-        </p>
-        {workflows.isPending ? (
-          <p className="workspace-agents-muted" role="status">
-            Loading your workflows…
-          </p>
-        ) : workflows.isError ? (
-          <p className="workspace-agents-note">
-            {isUnavailableHere(workflows.error)
-              ? "Workflows aren't set up on this server."
-              : "Your workflows could not be loaded."}
-          </p>
-        ) : workflows.data.length ? (
-          <>
-            <ul className="workspace-agents-workflows">
-              {workflows.data.slice(0, OVERVIEW_WORKFLOWS).map((workflow) => (
-                <WorkflowRow
-                  organizationId={organizationId}
-                  workflow={workflow}
-                  teamName={teamNames.get(workflow.team_id)}
-                  key={workflow.id}
-                />
-              ))}
-            </ul>
-            {workflows.data.length > OVERVIEW_WORKFLOWS && (
-              <p className="workspace-agents-more">
-                And{" "}
-                {plural(
-                  workflows.data.length - OVERVIEW_WORKFLOWS,
-                  "more workflow"
-                )}
-                .
-              </p>
-            )}
-          </>
-        ) : (
-          <p className="workspace-agents-muted">
-            No workflows yet. A workflow hands fixed tasks to one of your teams,
-            when started or on a schedule; creating one isn't in this app yet.
-          </p>
-        )}
-      </section>
+      <WorkflowOverview organizationId={organizationId} />
     </div>
   )
 }
