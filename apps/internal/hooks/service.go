@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base32"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +33,9 @@ type Config struct {
 	// Values are the configuration a manifest names as {config:name}, such as
 	// pubsub_push_account, the account Gmail's Pub/Sub pushes are signed for.
 	Values map[string]string
+	// SurfaceDeadline is how long a surface's delivery may use the database
+	// before the ingress answers 5xx; DefaultSurfaceDeadline without one.
+	SurfaceDeadline time.Duration
 }
 
 // Dependencies are what hooks borrows from apps.
@@ -44,6 +46,9 @@ type Dependencies struct {
 	// Integrations is the registry of Oryxa's own integrations.
 	Integrations  Integrations
 	Subscriptions Subscriptions
+	// Surfaces are the toolkits that are no integration and take their own
+	// deliveries; see Surface. Without any, every toolkit is an integration's.
+	Surfaces Surfaces
 	// Tokens verifies jwt_push tokens. Without one, an OIDCVerifier fetches
 	// issuers' keys through internal/safehttp.
 	Tokens TokenVerifier
@@ -60,6 +65,7 @@ type Service struct {
 	sealer        Sealer
 	integrations  Integrations
 	subscriptions Subscriptions
+	surfaces      Surfaces
 	tokens        TokenVerifier
 	logger        *slog.Logger
 	now           func() time.Time
@@ -68,6 +74,7 @@ type Service struct {
 	baseURL           string
 	deploymentSecrets map[string][][]byte
 	values            map[string]string
+	surfaceDeadline   time.Duration
 
 	limiter *limiter
 	opened  openedCache
@@ -96,6 +103,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		sealer:            dependencies.Sealer,
 		integrations:      dependencies.Integrations,
 		subscriptions:     dependencies.Subscriptions,
+		surfaces:          dependencies.Surfaces,
 		tokens:            dependencies.Tokens,
 		logger:            dependencies.Logger,
 		now:               dependencies.Clock,
@@ -103,6 +111,10 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		baseURL:           base,
 		deploymentSecrets: map[string][][]byte{},
 		values:            maps.Clone(config.Values),
+		surfaceDeadline:   config.SurfaceDeadline,
+	}
+	if service.surfaceDeadline <= 0 {
+		service.surfaceDeadline = DefaultSurfaceDeadline
 	}
 	if service.logger == nil {
 		service.logger = slog.New(slog.DiscardHandler)
@@ -468,6 +480,11 @@ func (s *Service) RevealVerificationToken(ctx context.Context, id string) (secre
 // scheme is a toolkit's webhook section as its manifest declares it now,
 // copied, so an endpoint's frozen scheme shares nothing with the registry.
 func (s *Service) scheme(toolkit string) (integration.Webhook, error) {
+	// A surface is no integration and has no manifest; what it verifies with
+	// is its own, and its owner tests that it is a scheme the core reads.
+	if surface, ok := s.surface(toolkit); ok {
+		return copyScheme(toolkit, surface.Webhook())
+	}
 	registered, ok := s.integrations.Lookup(toolkit)
 	if !ok {
 		return integration.Webhook{}, fmt.Errorf("%s is not one of Oryxa's own integrations: %w", toolkit, domain.ErrNotFound)
@@ -479,15 +496,7 @@ func (s *Service) scheme(toolkit string) (integration.Webhook, error) {
 	if err := manifest.Validate(); err != nil {
 		return integration.Webhook{}, fmt.Errorf("%s: %v: %w", toolkit, err, domain.ErrInvalid)
 	}
-	encoded, err := json.Marshal(manifest.Webhook)
-	if err != nil {
-		return integration.Webhook{}, fmt.Errorf("copy %s's webhook: %w", toolkit, err)
-	}
-	var scheme integration.Webhook
-	if err := json.Unmarshal(encoded, &scheme); err != nil {
-		return integration.Webhook{}, fmt.Errorf("copy %s's webhook: %w", toolkit, err)
-	}
-	return scheme, nil
+	return copyScheme(toolkit, *manifest.Webhook)
 }
 
 // checkScope checks an endpoint's scope against its manifest's, and that it

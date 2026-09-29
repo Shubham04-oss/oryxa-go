@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/signin"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/slackbot"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
@@ -89,7 +91,8 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	}
 
 	store := postgres.New(platform.Database)
-	oryxa, err := mountOryxa(platform, config, store, logger)
+	directory := authclient.New(config.AuthURL)
+	oryxa, err := mountOryxa(platform, config, store, directory, logger)
 	if err != nil {
 		return host.Service{}, err
 	}
@@ -103,7 +106,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	}
 	dependencies := Dependencies{
 		Store:     store,
-		Directory: authclient.New(config.AuthURL),
+		Directory: directory,
 		Composio:  client,
 		Sink:      publisher,
 		Verifier:  platform.EventAuth.Verifier(),
@@ -112,6 +115,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	dependencies.Policy = platform.WorkspaceSettings()
 	if oryxa != nil {
 		dependencies.Signin, dependencies.Hooks, dependencies.Integrations = oryxa.signin, oryxa.hooks, oryxa.registry
+		dependencies.Slack = oryxa.slack
 	}
 	if services != nil {
 		dependencies.Services = services
@@ -162,11 +166,14 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	}, nil
 }
 
-// oryxaParts are Oryxa's own sign-in as Mount builds it.
+// oryxaParts are Oryxa's own sign-in as Mount builds it, and the Slack
+// surface that rides on its webhook ingress and its vault key.
 type oryxaParts struct {
 	registry *integration.Registry
 	signin   *signin.Service
 	hooks    *hooks.Service
+	// slack is nil unless APPS_SLACK_SURFACE is on.
+	slack *slackbot.Service
 }
 
 // mountOryxa builds Oryxa's own sign-in and its webhook ingress on apps'
@@ -175,7 +182,7 @@ type oryxaParts struct {
 // nothing, and Oryxa's own sign-in is not configured. With it, sign-in is
 // switched on only for the toolkits APPS_ORYXA_TOOLKITS names, each of which
 // this build must ship.
-func mountOryxa(platform host.Platform, config serviceconfig.Config, store *postgres.Store, logger *slog.Logger) (*oryxaParts, error) {
+func mountOryxa(platform host.Platform, config serviceconfig.Config, store *postgres.Store, directory slackbot.Directory, logger *slog.Logger) (*oryxaParts, error) {
 	if config.SigninKMSKeyID == "" {
 		logger.Info("Oryxa's own sign-in is not configured (APPS_SIGNIN_KMS_KEY_ID is not set): every app connects through Composio")
 		if len(config.HookSecrets) > 0 || len(config.HookValues) > 0 {
@@ -220,11 +227,40 @@ func mountOryxa(platform host.Platform, config serviceconfig.Config, store *post
 	if err != nil {
 		return nil, err
 	}
-	hooksService, err := hooks.New(hooks.Dependencies{
+	// The Slack surface is a toolkit of the webhook ingress that is no
+	// integration: its deliveries are verified with the app's signing secret,
+	// from APPS_SLACK_APP, and go to the surface, and its bot tokens are
+	// sealed with the same vault key as everything else here.
+	dependencies := hooks.Dependencies{
 		Store: store, Sealer: envelope, Integrations: registry, Subscriptions: application.HookSubscriptions{},
 		Logger: logger.With("component", "hooks"),
-	}, hooks.Config{
-		PublicBaseURL: config.PublicBaseURL, DeploymentSecrets: config.HookSecrets, Values: config.HookValues,
+	}
+	deploymentSecrets := config.HookSecrets
+	var slack *slackbot.Service
+	if config.SlackSurface {
+		if slack, err = slackbot.New(slackbot.Dependencies{
+			Store: store, Sealer: envelope, Directory: directory, Logger: logger.With("component", "slackbot"),
+		}, slackbot.Config{
+			PublicBaseURL: config.PublicBaseURL, APIBaseURL: config.SlackAPIBaseURL, ReturnAllowed: returnAllowed,
+			WebOrigins: config.AllowedOrigins,
+			App: slackbot.App{
+				ClientID: config.SlackApp.ClientID, ClientSecret: config.SlackApp.ClientSecret, SigningSecret: config.SlackApp.SigningSecret,
+			},
+		}); err != nil {
+			return nil, err
+		}
+		dependencies.Surfaces = slack
+		deploymentSecrets = maps.Clone(config.HookSecrets)
+		if deploymentSecrets == nil {
+			deploymentSecrets = map[string][]secrets.Secret{}
+		}
+		deploymentSecrets[slackbot.Toolkit] = []secrets.Secret{config.SlackApp.SigningSecret}
+		logger.Info("the Slack surface is on",
+			"events_url", config.PublicBaseURL+slackbot.EventsPath, "interactivity_url", config.PublicBaseURL+slackbot.InteractivityPath,
+			"install_redirect_url", config.PublicBaseURL+slackbot.InstallCallbackPath)
+	}
+	hooksService, err := hooks.New(dependencies, hooks.Config{
+		PublicBaseURL: config.PublicBaseURL, DeploymentSecrets: deploymentSecrets, Values: config.HookValues,
 	})
 	if err != nil {
 		return nil, err
@@ -235,5 +271,5 @@ func mountOryxa(platform host.Platform, config serviceconfig.Config, store *post
 		logger.Info("Oryxa's own sign-in is on", "toolkits", strings.Join(config.OryxaToolkits, ","),
 			"redirect_uri", config.SigninRedirectURI, "webhook_base", config.PublicBaseURL+hooks.PathPrefix)
 	}
-	return &oryxaParts{registry: registry, signin: signinService, hooks: hooksService}, nil
+	return &oryxaParts{registry: registry, signin: signinService, hooks: hooksService, slack: slack}, nil
 }

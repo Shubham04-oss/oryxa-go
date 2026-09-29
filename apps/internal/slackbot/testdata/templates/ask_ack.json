@@ -1,0 +1,12 @@
+{
+  "text": "Asked <@U0RAYA> and Maya · <https://app.oryxa.test/agents/requests/req_1|Open in Oryxa>",
+  "blocks": [
+    {
+      "text": {
+        "text": "Asked <@U0RAYA> and *Maya* · <https://app.oryxa.test/agents/requests/req_1|Open in Oryxa>",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

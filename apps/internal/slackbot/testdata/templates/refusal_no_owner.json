@@ -1,0 +1,12 @@
+{
+  "text": "Tell me who to ask: mention the person who would know, like `@Oryxa ask @raya about the launch date`.",
+  "blocks": [
+    {
+      "text": {
+        "text": "Tell me who to ask: mention the person who would know, like `@Oryxa ask @raya about the launch date`.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

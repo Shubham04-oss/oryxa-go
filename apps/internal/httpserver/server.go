@@ -69,11 +69,16 @@ type Config struct {
 	// Services verifies the service tokens apps' internal routes take.
 	// Without it there are no internal routes.
 	Services ServiceVerifier
+	// Slack serves the Slack surface: the ingress at Slack's URLs, an admin's
+	// install and channels, and the internal routes services post through.
+	// Without it none of them is served.
+	Slack *Slack
 }
 
 type Server struct {
 	service        appsService
 	oryxa          OryxaService
+	slack          SlackService
 	services       ServiceVerifier
 	allowedOrigins map[string]struct{}
 	logger         *slog.Logger
@@ -116,6 +121,7 @@ func New(service appsService, config Config, logger *slog.Logger) *Server {
 	server.handle("POST /v1/organizations/{organizationID}/apps/triggers", server.createTrigger)
 	server.handle("DELETE /v1/organizations/{organizationID}/apps/triggers/{triggerID}", server.removeTrigger)
 	server.routeOryxa(config.Hooks)
+	server.routeSlack(config.Slack)
 	if config.MCP != nil {
 		server.handleHandler("POST /v1/mcp/apps", config.MCP)
 		server.handleHandler("POST /v1/organizations/{organizationID}/apps/mcp", config.MCP)

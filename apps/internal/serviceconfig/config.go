@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/slackbot"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
@@ -84,6 +85,26 @@ type Config struct {
 	// APPS_DEFAULT_OAUTH_CLIENTS, JSON {"github": {"client_id": "…",
 	// "client_secret": "…"}}. apps saves them, sealed, once it starts.
 	DefaultOAuthClients []DefaultOAuthClient
+
+	// SlackSurface switches the Slack surface on: APPS_SLACK_SURFACE, a
+	// boolean, off unless it says otherwise. Off, none of its routes is
+	// served and nothing below is read.
+	SlackSurface bool
+	// SlackApp is Oryxa's one Slack app: APPS_SLACK_APP, JSON {"client_id",
+	// "client_secret", "signing_secret"}, from Secrets Manager. Read only with
+	// the surface on.
+	SlackApp SlackApp
+	// SlackAPIBaseURL is where the Slack client calls: APPS_SLACK_API_BASE_URL.
+	// Empty is Slack itself. It may otherwise only be a loopback address, for
+	// a fake Slack, so a bot token cannot be sent anywhere else.
+	SlackAPIBaseURL string
+}
+
+// SlackApp is Oryxa's Slack app, as its settings page gives it.
+type SlackApp struct {
+	ClientID      string
+	ClientSecret  secrets.Secret
+	SigningSecret secrets.Secret
 }
 
 // DefaultOAuthClient is one of Oryxa's own OAuth apps.
@@ -138,7 +159,92 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err := readOryxa(getenv, &config); err != nil {
 		return Config{}, err
 	}
+	if err := readSlack(getenv, &config); err != nil {
+		return Config{}, err
+	}
 	return config, nil
+}
+
+// minSlackSecret is the shortest signing or client secret taken: Slack's are
+// 32 characters, and a shorter one is a mistake.
+const minSlackSecret = 16
+
+// readSlack reads the Slack surface's configuration, and only when it is
+// switched on: with it off nothing else is looked at, so a deployment that has
+// not adopted the surface cannot be stopped by it. Its messages never quote a
+// secret.
+func readSlack(getenv func(string) string, config *Config) error {
+	surface, err := boolValue(getenv, "APPS_SLACK_SURFACE", false)
+	if err != nil {
+		return err
+	}
+	if !surface {
+		return nil
+	}
+	config.SlackSurface = true
+	if config.SlackApp, err = slackApp(getenv("APPS_SLACK_APP")); err != nil {
+		return err
+	}
+	if config.SlackAPIBaseURL = endpoint(getenv, "APPS_SLACK_API_BASE_URL"); config.SlackAPIBaseURL != "" {
+		if err := slackbot.CheckAPIBaseURL(config.SlackAPIBaseURL); err != nil {
+			return fmt.Errorf("APPS_SLACK_API_BASE_URL: %w", err)
+		}
+	}
+	switch {
+	case config.SigninKMSKeyID == "":
+		return errors.New("APPS_SIGNIN_KMS_KEY_ID is required with APPS_SLACK_SURFACE: bot tokens are sealed with the apps vault key")
+	case !slices.ContainsFunc(config.ServiceCallers, func(caller serviceauth.Caller) bool { return slices.Contains(caller.Purposes, slackbot.Purpose) }):
+		return fmt.Errorf("APPS_SERVICE_CALLERS must name a service allowed the purpose %s with APPS_SLACK_SURFACE: "+
+			"agents reads what Slack sends, and posts back, through apps' internal routes", slackbot.Purpose)
+	}
+	base, err := url.Parse(config.PublicBaseURL)
+	if err != nil || (base.Scheme != "https" && !(base.Scheme == "http" && loopbackHost(base.Hostname()))) {
+		return errors.New("APPS_PUBLIC_BASE_URL must be https, or http on a loopback host, with APPS_SLACK_SURFACE: Slack delivers to it")
+	}
+	return nil
+}
+
+// slackApp reads APPS_SLACK_APP.
+func slackApp(raw string) (SlackApp, error) {
+	if strings.TrimSpace(raw) == "" {
+		return SlackApp{}, errors.New("APPS_SLACK_APP is required with APPS_SLACK_SURFACE")
+	}
+	var decoded struct {
+		ClientID      string `json:"client_id"`
+		ClientSecret  string `json:"client_secret"`
+		SigningSecret string `json:"signing_secret"`
+	}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return SlackApp{}, errors.New(`APPS_SLACK_APP must be a JSON object, {"client_id": "…", "client_secret": "…", "signing_secret": "…"}`)
+	}
+	app := SlackApp{
+		ClientID:      strings.TrimSpace(decoded.ClientID),
+		ClientSecret:  secrets.Secret(strings.TrimSpace(decoded.ClientSecret)),
+		SigningSecret: secrets.Secret(strings.TrimSpace(decoded.SigningSecret)),
+	}
+	if app.ClientID == "" || strings.ContainsFunc(app.ClientID, func(r rune) bool { return r <= ' ' || r > '~' }) {
+		return SlackApp{}, errors.New("APPS_SLACK_APP gives no client_id, or one with spaces or control characters in it")
+	}
+	for _, check := range []struct {
+		name   string
+		secret secrets.Secret
+	}{{"client_secret", app.ClientSecret}, {"signing_secret", app.SigningSecret}} {
+		value := check.secret.Reveal()
+		if len(value) < minSlackSecret || strings.ContainsFunc(value, func(r rune) bool { return r <= ' ' || r > '~' }) {
+			return SlackApp{}, fmt.Errorf("APPS_SLACK_APP gives no %s of at least %d printable characters", check.name, minSlackSecret)
+		}
+	}
+	return app, nil
+}
+
+// loopbackHost says a host is this machine's, as a development deployment's
+// address is.
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // readOryxa reads Oryxa's own sign-in's configuration. None of its messages
