@@ -1023,15 +1023,16 @@ side conversations' style (`workspace-side-status`):
   Go's read alone, `expired`. All of it is `src/lib/dms/request-notes.ts`; the
   other person's name is the page's own directory's. No word of anyone's is in
   a note, so none is shown.
-- **The state is Go's word to the member** while the request can still move
-  (`waiting`, `approved`, `held`): the line reads the request (`GET
-  …/agent-requests/{id}`, `useRequestStanding`, as the member's own session),
-  again for each revision, and once more when it is due to expire, which no
+- **The state is Go's word to the member.** Each line reads its request
+  (`GET …/agent-requests/{id}`, `useRequestStanding`, as the member's own
+  session), once for each revision, and, while the request can still move
+  (`waiting`, `approved`, `held`), once more when it is due to expire, which no
   event says. Go's status replaces the note's; until it answers, or when it
   cannot, the note's word stands. Go refusing the member the request (404 or
-  403) hides the line: it is not theirs to show. A request that can no longer
-  move is final, so opening a conversation with many finished requests reads
-  none of them.
+  403) hides the line: it is not theirs to show, whatever the note says. A read
+  of a request that can no longer move is kept for ten minutes, and the two
+  views of one DM a page may hold (the canvas and the panel) share it, so a
+  conversation is read once for each request, not once for each view.
 - **It moves in place.** Its place is where the request was first noted, its
   state changes with the note, and a request that is new or moves on while the
   conversation is open is said aloud through the log's announcer, as an

@@ -2,13 +2,14 @@
 // (REALTIME.md, "Request notes") is only Go's word to the Worker that a
 // request moved, carrying identities and a state: it is a hint, and what a
 // line shows is what Go says to the member's own session when the line is
-// on the page. So while a request can still move, its line reads it
-// (`GET …/agent-requests/{id}`, as the member), again as its revision
-// changes, and again when it is due to expire, which no event says. Go
+// on the page. So each line reads its request (`GET …/agent-requests/{id}`,
+// as the member), again as its revision changes, and, while the request can
+// still move, again when it is due to expire, which no event says. Go
 // refusing the member the request (404, or 403) hides the line: it is not
-// theirs to show. A request that can no longer move is final, and the note's
-// word for it is taken as it is, so opening a conversation with many finished
-// requests reads none of them.
+// theirs to show. Until Go has answered, or when it cannot, the note's word
+// stands. A request that can no longer move cannot change, so its read is
+// kept for a good while (`settledStaleMs`), and the two views of one DM a
+// page may hold (the canvas and the panel) share it.
 import { useQuery } from "@tanstack/react-query"
 import { getAgentRequest } from "@/lib/agents/agent-requests"
 import type {
@@ -33,6 +34,9 @@ const stateOfStatus: Record<AgentRequestStatus, RequestLineState> = {
 
 /** The least, and the most, a request that can still move waits to be read again for its expiry. */
 const recheckBounds = { minMs: 5_000, maxMs: 60 * 60_000 }
+
+/** How long a read of a request that can no longer move is kept before a view asks again. */
+export const settledStaleMs = 10 * 60_000
 
 /** How long until an open request expires, plus a moment: when to read it again, or never for one that is settled. */
 export function recheckIn(
@@ -77,7 +81,9 @@ export function useRequestStanding(
     ],
     queryFn: ({ signal }) =>
       getAgentRequest(organizationId ?? "", note.requestId, { signal }),
-    enabled: organizationId !== undefined && isOpenRequestState(note.state),
+    enabled: organizationId !== undefined,
+    // What cannot change is not asked again for a while.
+    ...(isOpenRequestState(note.state) ? {} : { staleTime: settledStaleMs }),
     // A refusal is an answer, and any other failure leaves the note's word.
     retry: false,
     refetchInterval: (current) => recheckIn(current.state.data),

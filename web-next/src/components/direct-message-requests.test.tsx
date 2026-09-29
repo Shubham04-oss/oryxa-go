@@ -301,7 +301,8 @@ describe("a request's line in a DM", () => {
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
 
-    // Answered is final: the note's word is taken, and Go is not asked again.
+    // Answered is final, and Go is read for it too, as for every line.
+    go.status.irq_1 = "completed"
     socket.says({
       type: "dm-request",
       request: request({
@@ -314,7 +315,7 @@ describe("a request's line in a DM", () => {
     await waitFor(() =>
       expect(said(lines()[0])).toBe("You asked Priya's agent · answered")
     )
-    expect(go.reads).toEqual(["irq_1", "irq_1"])
+    await waitFor(() => expect(go.reads).toEqual(["irq_1", "irq_1", "irq_1"]))
   })
 
   it("takes Go's word over the note's while the request can move: answered elsewhere, or expired, which no event says", async () => {
@@ -350,8 +351,13 @@ describe("a request's line in a DM", () => {
     expect(said(lines()[0])).toBe("You asked Priya's agent · held")
   })
 
-  it("reads Go for none that can no longer move, whatever the note says", async () => {
-    const go = goSays({})
+  it("reads Go for every line, a finished request too, but takes what it says for one that cannot move: no timer for its expiry", async () => {
+    const go = goSays({
+      irq_0: "completed",
+      irq_1: "rejected",
+      irq_2: "failed",
+      irq_3: "withheld",
+    })
     renderConversation()
     opened(
       [],
@@ -370,7 +376,45 @@ describe("a request's line in a DM", () => {
       "You asked Priya's agent · failed",
       "You asked Priya's agent · not shared",
     ])
-    expect(go.reads).toEqual([])
+    await waitFor(() =>
+      expect([...go.reads].sort()).toEqual(["irq_0", "irq_1", "irq_2", "irq_3"])
+    )
+  })
+
+  it("does not show a finished request's line either when Go does not show the member the request", async () => {
+    goSays({ irq_1: "completed" })
+    renderConversation()
+    opened(
+      [wire(1, priya, "Morning", ago(60))],
+      [
+        request({ requestId: "irq_1", state: "answered", at: ago(30) }),
+        // Go knows nothing of this one: a note that names a request that is not there.
+        request({ requestId: "irq_ghost", state: "answered", at: ago(20) }),
+      ]
+    )
+    await waitFor(() =>
+      expect(lines().map((line) => line.dataset.requestId)).toEqual(["irq_1"])
+    )
+    expect(screen.getByText("Morning")).toBeTruthy()
+  })
+
+  it("is shared by the two views of one DM a page may hold: Go is read once for a request", async () => {
+    const go = goSays({ irq_1: "pending" })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <Conversation layout="canvas" />
+        <Conversation layout="panel" />
+      </QueryClientProvider>
+    )
+    for (const socket of roomSockets.named(priyaDm)) {
+      socket.open()
+      socket.says(snapshot([], [request()]))
+    }
+    await waitFor(() => expect(lines()).toHaveLength(2))
+    expect(go.reads).toEqual(["irq_1"])
   })
 
   it("is not shown when Go does not show the member the request", async () => {

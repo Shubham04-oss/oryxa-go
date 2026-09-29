@@ -387,7 +387,7 @@ const none: DmRequestNote[] = []
  * stands, and when its line was first noted, with Open for the Requests view
  * when the shell wired one. Nothing in it is anybody's words: the sentence is
  * fixed, the other person's name is the directory's, and where the request
- * stands is Go's own word to the member while it can still move (the note's
+ * stands is Go's own word to the member, read as their session (the note's
  * until Go has answered). Go refusing the member the request hides the line.
  */
 export function RequestLine({
