@@ -40,12 +40,16 @@ type TriggerInput struct {
 // event its app delivers. Asking again for the same subscription answers the
 // one that exists.
 //
-// Every subscription is checked against the trigger's own definition in
-// Composio's catalog first, because the ways a subscription can be accepted
-// and then never deliver anything are all invisible afterwards: an event
-// belonging to another app, a config missing a field the trigger needs, an
-// app whose webhook a member still has to register by hand. A member finds
-// out here rather than by waiting for something that never arrives.
+// Every subscription is checked against the event's own definition first,
+// because the ways a subscription can be accepted and then never deliver
+// anything are all invisible afterwards: an event belonging to another app, a
+// config missing a field the event needs, an app whose webhook a member still
+// has to register by hand. A member finds out here rather than by waiting for
+// something that never arrives.
+//
+// Where the definition comes from depends on the connection's broker:
+// Composio's catalog for Composio's, and the connection's own integration's
+// manifest for Oryxa's, which is checked by exactly the same rules.
 func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Credentials, organizationID string, input TriggerInput) (domain.Trigger, error) {
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
@@ -84,9 +88,13 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 		return domain.Trigger{}, fmt.Errorf("the connection is %s: %w", connection.Status, domain.ErrNotConnected)
 	}
 	if connection.Oryxa() {
-		// A Composio trigger watches a Composio account; an Oryxa
-		// connection's triggers come from its own integration.
-		return domain.Trigger{}, errOryxaNotYet(connection.Toolkit)
+		// The connection's own integration says which events it delivers, and
+		// it is the one that registers a pushed subscription with the app.
+		spec, err := s.ownSpec(connection.Toolkit, slug)
+		if err != nil {
+			return domain.Trigger{}, err
+		}
+		return s.subscribeOwn(ctx, connection, spec, config)
 	}
 
 	// The connection's own app decides which events it can deliver, so a
@@ -156,13 +164,15 @@ func TriggerSetup(trigger domain.Trigger) string {
 	case trigger.ManualSetup:
 		return "this trigger delivers nothing until the webhook Composio issues is registered in the app itself; the catalog carries the app's own instructions"
 	case trigger.Kind == domain.TriggerKindPoll:
-		return "this app does not push events, so Composio polls for them and one arrives on its polling interval rather than at once"
+		return "the app does not push this event, so it is polled for and one arrives on the polling interval rather than at once"
 	default:
 		return ""
 	}
 }
 
 // Triggers lists the caller's live triggers, optionally on one connection.
+// Both brokers are one list to a member: they choose between events, not
+// between who watches for them.
 func (s *Service) Triggers(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]domain.Trigger, error) {
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
@@ -190,6 +200,15 @@ func (s *Service) RemoveTrigger(ctx context.Context, credentials authclient.Cred
 	}
 	if trigger.Status == domain.TriggerRemoved {
 		return nil
+	}
+	// A subscription through an integration has no Composio instance to
+	// delete: the app stops sending it through the connection's own endpoint.
+	own, err := s.ownSubscription(ctx, organizationID, id)
+	if err != nil {
+		return err
+	}
+	if own {
+		return s.unsubscribeOwn(ctx, trigger)
 	}
 	if err := s.composio.DeleteTrigger(ctx, trigger.ComposioTriggerID); err != nil && !errors.Is(err, composio.ErrNotFound) {
 		return composioError("unsubscribe the trigger", err)

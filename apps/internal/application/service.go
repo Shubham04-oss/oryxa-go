@@ -127,6 +127,12 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	if service.oryxa, err = newOryxaBroker(dependencies.Oryxa); err != nil {
 		return nil, err
 	}
+	if service.oryxa != nil {
+		// The webhook ingress is handed a zero HookSubscriptions before this
+		// runs, so this is what lets a verified delivery find the member who
+		// subscribed it.
+		installPushRouting(service.oryxa.Store)
+	}
 	return service, nil
 }
 

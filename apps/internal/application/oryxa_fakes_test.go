@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +25,9 @@ import (
 type fakeOryxaStore struct {
 	*fakeStore
 	clients map[string]signin.OAuthClient // organization/client → live client
+	// subscriptions are the triggers of integrations' own events, which are
+	// the same rows as triggers read the other way round.
+	subscriptions *ownSubs
 }
 
 func newFakeOryxaStore() *fakeOryxaStore {
@@ -340,8 +344,18 @@ func (fake *fakeHooks) Create(_ context.Context, input hooks.CreateInput) (hooks
 	if input.Secret != "" {
 		endpoint.Secret = hooks.Sealed{Current: &secrets.SealedData{Version: 1}, Version: 1}
 	}
+	// A connection endpoint's secret is generated here and handed to the
+	// caller exactly once, for the app to be registered with, as hooks does.
+	endpoint.RemoteID = "remote-" + endpoint.ID
+	if input.Scope == integration.HookScopeConnection {
+		endpoint.Secret = hooks.Sealed{Current: &secrets.SealedData{Version: 1}, Version: 1}
+	}
 	fake.endpoints[endpoint.ID] = endpoint
-	return hooks.Created{Endpoint: endpoint, URL: fake.url(endpoint.ID)}, nil
+	hook := integration.Hook{URL: fake.url(endpoint.ID)}
+	if input.Scope == integration.HookScopeConnection {
+		hook.Secret = "generated-" + endpoint.ID
+	}
+	return hooks.Created{Endpoint: endpoint, URL: hook.URL, Hook: hook}, nil
 }
 
 func (fake *fakeHooks) Rotate(_ context.Context, id string, _ secrets.Secret) (hooks.Created, error) {
@@ -392,6 +406,35 @@ func (fake *fakeHooks) Delete(_ context.Context, id string) error {
 	}
 	delete(fake.endpoints, id)
 	fake.deletedEndpoints = append(fake.deletedEndpoints, id)
+	return nil
+}
+
+// EndpointsForConnection answers a connection's endpoints, oldest first, as
+// the service does, so a subscription can be removed at the app before its
+// endpoints go.
+func (fake *fakeHooks) EndpointsForConnection(_ context.Context, connectionID string) ([]hooks.Endpoint, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	var found []hooks.Endpoint
+	for _, endpoint := range fake.endpoints {
+		if endpoint.ConnectionID == connectionID {
+			found = append(found, endpoint)
+		}
+	}
+	sort.Slice(found, func(a, b int) bool { return found[a].ID < found[b].ID })
+	return found, nil
+}
+
+// SetRemote records the app's id for a subscription delivering to an endpoint.
+func (fake *fakeHooks) SetRemote(_ context.Context, id, remoteID string, _ *time.Time) error {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	endpoint, ok := fake.endpoints[id]
+	if !ok {
+		return fmt.Errorf("webhook endpoint: %w", domain.ErrNotFound)
+	}
+	endpoint.RemoteID = remoteID
+	fake.endpoints[id] = endpoint
 	return nil
 }
 
@@ -577,4 +620,174 @@ func containsAll(haystack []string, needles ...string) bool {
 		}
 	}
 	return true
+}
+
+// ownSubs is the fake store's own subscriptions, kept beside the triggers
+// because they are the same rows read the other way round: domain.Trigger is
+// Composio's shape and has no broker, cursor or due time in it.
+type ownSubs struct {
+	mu    sync.Mutex
+	byID  map[string]OwnSubscription
+	byKey map[string]string // own key → id
+	// claimed records the cursor each claim of a subscription asked for, in
+	// order, so a test can say a poll was made once and with what.
+	claimed map[string][]string
+	// accountRefs is each connection's own account ref, which is what a
+	// delivery delivered to a shared endpoint is routed by.
+	accountRefs map[string]string
+}
+
+// CreateOwnTrigger records a subscription, unless the same connection, event
+// and config is already live: the same conditional the store's index gives.
+func (store *fakeOryxaStore) CreateOwnTrigger(_ context.Context, subscription OwnSubscription, event domain.Event) (OwnSubscription, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if connection, ok := store.connections[subscription.ConnectionID]; !ok || connection.Status != domain.ConnectionActive {
+		return OwnSubscription{}, false, fmt.Errorf("create trigger: the connection is not active: %w", domain.ErrNotConnected)
+	}
+	key := OwnKey(subscription.ConnectionID, subscription.Slug, subscription.Config)
+	if id, taken := store.own().byKey[key]; taken {
+		if existing, live := store.own().byID[id]; live && existing.Status != domain.TriggerRemoved {
+			return existing, false, nil
+		}
+	}
+	store.own().byID[subscription.ID] = subscription
+	store.own().byKey[key] = subscription.ID
+	store.triggers[subscription.ID] = subscription.AsTrigger()
+	store.events = append(store.events, event)
+	return subscription, true, nil
+}
+
+func (store *fakeOryxaStore) OwnSubscription(_ context.Context, organizationID, id string) (OwnSubscription, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	subscription, ok := store.own().byID[id]
+	if !ok || subscription.OrganizationID != organizationID {
+		return OwnSubscription{}, false, nil
+	}
+	return subscription, true, nil
+}
+
+// ClaimPolls answers the due subscriptions, moving each one's due time on as
+// the store's claim does, so a second pass in the same tick finds nothing.
+func (store *fakeOryxaStore) ClaimPolls(_ context.Context, now, claimUntil time.Time, limit int) ([]OwnSubscription, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var due []OwnSubscription
+	for id, subscription := range store.own().byID {
+		if subscription.Status != domain.TriggerActive || subscription.Kind != integration.TriggerPoll {
+			continue
+		}
+		if subscription.NextPollAt == nil || subscription.NextPollAt.After(now) {
+			continue
+		}
+		connection, live := store.connections[subscription.ConnectionID]
+		if !live || connection.Status != domain.ConnectionActive {
+			continue
+		}
+		due = append(due, subscription)
+		store.own().claimed[id] = append(store.own().claimed[id], string(subscription.Cursor))
+	}
+	sort.Slice(due, func(a, b int) bool {
+		if due[a].NextPollAt.Equal(*due[b].NextPollAt) {
+			return due[a].ID < due[b].ID
+		}
+		return due[a].NextPollAt.Before(*due[b].NextPollAt)
+	})
+	if len(due) > limit {
+		due = due[:limit]
+	}
+	for i := range due {
+		moved := due[i]
+		moved.NextPollAt = &claimUntil
+		store.own().byID[moved.ID] = moved
+	}
+	return due, nil
+}
+
+func (store *fakeOryxaStore) SavePoll(_ context.Context, id, cursor string, next time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	subscription, ok := store.own().byID[id]
+	if !ok || subscription.Status == domain.TriggerRemoved {
+		return nil
+	}
+	subscription.Cursor, subscription.NextPollAt = cursor, &next
+	store.own().byID[id] = subscription
+	store.triggers[id] = subscription.AsTrigger()
+	return nil
+}
+
+func (store *fakeOryxaStore) own() *ownSubs {
+	if store.subscriptions == nil {
+		store.subscriptions = &ownSubs{
+			byID: map[string]OwnSubscription{}, byKey: map[string]string{},
+			claimed: map[string][]string{}, accountRefs: map[string]string{},
+		}
+	}
+	return store.subscriptions
+}
+
+// subscription is one of the fake store's own subscriptions, as the store kept
+// it, and how many polls it has been claimed for with which cursor.
+func (store *fakeOryxaStore) subscription(id string) (OwnSubscription, []string) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.own().byID[id], store.own().claimed[id]
+}
+
+// OwnSubscriptionsForEndpoint is what a connection endpoint's deliveries can
+// reach: the live subscriptions on its own connection.
+func (store *fakeOryxaStore) OwnSubscriptionsForEndpoint(_ context.Context, connectionID, organizationID, trigger string) ([]hooks.Subscription, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.subscriptionsFor(func(subscription OwnSubscription) bool {
+		return subscription.ConnectionID == connectionID && subscription.Slug == trigger &&
+			subscription.Status == domain.TriggerActive &&
+			(organizationID == "" || subscription.OrganizationID == organizationID)
+	}, ""), nil
+}
+
+// OwnSubscriptionsForAccount is what an endpoint shared by many accounts can
+// reach: the live subscriptions whose connection's own account ref is the one
+// the event named.
+func (store *fakeOryxaStore) OwnSubscriptionsForAccount(_ context.Context, toolkit, organizationID, accountRef, trigger string) ([]hooks.Subscription, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.subscriptionsFor(func(subscription OwnSubscription) bool {
+		return subscription.Toolkit == toolkit && subscription.Slug == trigger &&
+			subscription.Status == domain.TriggerActive &&
+			(organizationID == "" || subscription.OrganizationID == organizationID) &&
+			store.own().accountRefs[subscription.ConnectionID] == accountRef
+	}, accountRef), nil
+}
+
+func (store *fakeOryxaStore) subscriptionsFor(matches func(OwnSubscription) bool, accountRef string) []hooks.Subscription {
+	var found []hooks.Subscription
+	for _, subscription := range store.own().byID {
+		if !matches(subscription) {
+			continue
+		}
+		found = append(found, hooks.Subscription{
+			TriggerID: subscription.ID, ConnectionID: subscription.ConnectionID,
+			OrganizationID: subscription.OrganizationID, MemberID: subscription.MemberID,
+			Toolkit: subscription.Toolkit, Trigger: subscription.Slug, AccountRef: accountRef,
+		})
+	}
+	sort.Slice(found, func(a, b int) bool { return found[a].TriggerID < found[b].TriggerID })
+	return found
+}
+
+// due brings a polled subscription forward to when it is next asked, as the
+// end of its interval would, and leaves it carrying the cursor its last poll
+// reached.
+func (h oryxaHarness) due(id, cursor string, at time.Time) {
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	subscription, ok := h.store.own().byID[id]
+	if !ok {
+		return
+	}
+	subscription.Cursor, subscription.NextPollAt = cursor, &at
+	h.store.own().byID[id] = subscription
 }

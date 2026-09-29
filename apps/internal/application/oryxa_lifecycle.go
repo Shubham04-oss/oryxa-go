@@ -36,16 +36,21 @@ func (s *Service) removeOryxa(ctx context.Context, connection domain.Connection,
 			s.logger.WarnContext(ctx, "the app did not answer a revocation; it is tried again once the connection is removed",
 				"connection_id", connection.ID, "toolkit", connection.Toolkit)
 		}
-		endpoints, err := s.oryxa.Hooks.DeleteForConnection(ctx, connection.ID)
+		endpoints, err := s.oryxa.Hooks.EndpointsForConnection(ctx, connection.ID)
 		if err != nil {
 			return err
 		}
-		if len(endpoints) > 0 {
-			// Their subscriptions at the app are its integration's to remove,
-			// once integrations subscribe (phase 2). An app still delivering
-			// to one is answered as for an endpoint that never was.
+		// Their subscriptions at the app are the integration's to remove, and
+		// only it can: the endpoint is an id, not something the app knows
+		// about.
+		s.unsubscribeEndpoints(ctx, connection.ID, connection.Toolkit, endpoints, "the connection was removed")
+		deleted, err := s.oryxa.Hooks.DeleteForConnection(ctx, connection.ID)
+		if err != nil {
+			return err
+		}
+		if len(deleted) > 0 {
 			s.logger.InfoContext(ctx, "an Oryxa connection's webhook endpoints were deleted with it",
-				"connection_id", connection.ID, "count", len(endpoints))
+				"connection_id", connection.ID, "count", len(deleted))
 		}
 	}
 	now := s.now().UTC()
@@ -89,9 +94,10 @@ const (
 // RunOryxa keeps Oryxa's connections in order until ctx is cancelled: it
 // fails sign-ins their members never finished, runs the daily health checks
 // that are due and expires the connections an app refused, tries again the
-// revocations an app did not answer, and deletes webhook endpoints whose
-// subscriptions have lapsed. Every replica may run it: signin claims each
-// check and revocation first.
+// revocations an app did not answer, deletes webhook endpoints whose
+// subscriptions have lapsed, and asks the apps that push nothing for the
+// events they owe. Every replica may run it: signin claims each check and
+// revocation first, and the store claims each poll.
 func (s *Service) RunOryxa(ctx context.Context) {
 	if s.oryxa == nil {
 		return
@@ -120,6 +126,7 @@ func (s *Service) maintainOryxa(ctx context.Context) {
 	if _, err := s.oryxa.Hooks.SweepExpired(ctx); err != nil && ctx.Err() == nil {
 		s.logger.ErrorContext(ctx, "sweep lapsed webhook endpoints", "error", err)
 	}
+	s.pollTriggers(ctx)
 }
 
 // saveDefaultClients saves Oryxa's own OAuth apps as configured, until every

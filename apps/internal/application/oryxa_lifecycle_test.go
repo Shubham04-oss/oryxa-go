@@ -255,12 +255,17 @@ func TestComposioPathsRefuseAnOryxaConnection(t *testing.T) {
 	_, checks["running it on the named connection"] = h.service.RunTool(ctx, memberToken, "org_1",
 		RunToolInput{Tool: "GITHUB_LIST_ISSUES", ConnectionID: connection.ID})
 	_, checks["reading the app's API"] = h.service.Proxy(ctx, memberToken, "org_1", ProxyInput{Toolkit: "github", Endpoint: "/user/repos"})
-	_, checks["subscribing a trigger"] = h.service.CreateTrigger(ctx, memberToken, "org_1",
-		TriggerInput{ConnectionID: connection.ID, Trigger: "GITHUB_STAR_ADDED_EVENT"})
 	for name, err := range checks {
 		if !errors.Is(err, domain.ErrNotConnectable) {
 			t.Errorf("%s = %v, want not connectable", name, err)
 		}
+	}
+	// A subscription is asked of the connection's own integration, which
+	// declares no events yet, so the answer is that this connection has no
+	// such event rather than that it is Composio's business.
+	if _, err := h.service.CreateTrigger(ctx, memberToken, "org_1",
+		TriggerInput{ConnectionID: connection.ID, Trigger: "GITHUB_STAR_ADDED_EVENT"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("subscribing a trigger = %v, want not found", err)
 	}
 	h.service.subscribeConnections(ctx)
 

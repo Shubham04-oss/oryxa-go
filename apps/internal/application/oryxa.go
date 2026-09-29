@@ -55,11 +55,32 @@ type Hooks interface {
 	Rotate(ctx context.Context, id string, secret secrets.Secret) (hooks.Created, error)
 	OrganizationEndpoint(ctx context.Context, organizationID, toolkit string) (hooks.Endpoint, error)
 	DeploymentEndpoint(ctx context.Context, toolkit string) (hooks.Endpoint, string, error)
+	// EndpointsForConnection answers a connection's endpoints, oldest first,
+	// each with the app's own id for the subscription delivering to it, so a
+	// subscription can be removed at the app and its endpoint deleted.
+	EndpointsForConnection(ctx context.Context, connectionID string) ([]hooks.Endpoint, error)
+	// SetRemote records the app's id for the subscription delivering to an
+	// endpoint, once Subscribe answered it.
+	SetRemote(ctx context.Context, id, remoteID string, expiresAt *time.Time) error
 	Delete(ctx context.Context, id string) error
 	DeleteForConnection(ctx context.Context, connectionID string) ([]hooks.Endpoint, error)
 	RevealVerificationToken(ctx context.Context, id string) (secrets.Secret, error)
 	SweepExpired(ctx context.Context) (int64, error)
 	URL(endpointID string) string
+}
+
+// PushRouting finds the live subscriptions of an integration's triggers that a
+// verified webhook delivery is for. *postgres.Store is one.
+type PushRouting interface {
+	// OwnSubscriptionsForEndpoint is every live subscription to trigger on one
+	// connection, with the organization the connection belongs to. It is a
+	// connection endpoint's whole reach, since the endpoint belongs to that
+	// connection.
+	OwnSubscriptionsForEndpoint(ctx context.Context, connectionID, organizationID, trigger string) ([]hooks.Subscription, error)
+	// OwnSubscriptionsForAccount is every live subscription to trigger on a
+	// toolkit's connections whose own account ref is accountRef, narrowed to
+	// one organization when organizationID is not "".
+	OwnSubscriptionsForAccount(ctx context.Context, toolkit, organizationID, accountRef, trigger string) ([]hooks.Subscription, error)
 }
 
 // Integrations are Oryxa's own integrations, by toolkit:
@@ -85,6 +106,32 @@ type OryxaStore interface {
 	// registration, or Oryxa's default with organizationID "", without
 	// opening anything sealed. signin.ErrNoClient when there is none.
 	LiveOAuthClient(ctx context.Context, organizationID, client string) (signin.OAuthClient, error)
+	// PushRouting is how the webhook ingress finds the subscription a
+	// verified delivery is for. It is the same store, and is asked for
+	// separately because it answers about integrations' triggers rather than
+	// about a connection or a member.
+	PushRouting
+	// CreateOwnTrigger records a subscription made through an integration and
+	// writes event. It is CreateTrigger without a Composio instance: asking
+	// again for the same connection, event and config answers the one that
+	// exists, with false, and writes nothing. It refuses with
+	// domain.ErrNotConnected unless the connection is still active, as
+	// CreateTrigger does.
+	CreateOwnTrigger(ctx context.Context, subscription OwnSubscription, event domain.Event) (OwnSubscription, bool, error)
+	// OwnSubscription reads one of an organization's subscriptions to an
+	// integration's event, and answers false rather than ErrNotFound when the
+	// trigger is Composio's, which is how a caller tells the two apart.
+	OwnSubscription(ctx context.Context, organizationID, id string) (OwnSubscription, bool, error)
+	// ClaimPolls claims up to limit active polled subscriptions of an
+	// integration's triggers whose next poll is due at now, oldest first, by
+	// moving their next poll to claimUntil, so no other replica takes them
+	// meanwhile. It is the lease the refresh lease and the auto-subscribe
+	// claim are both: FOR UPDATE SKIP LOCKED keeps two claiming statements
+	// apart, and the moved time keeps them apart once one has committed.
+	ClaimPolls(ctx context.Context, now, claimUntil time.Time, limit int) ([]OwnSubscription, error)
+	// SavePoll records where a polled subscription's last poll got to and when
+	// it is next due, which is what releases the claim.
+	SavePoll(ctx context.Context, id, cursor string, next time.Time) error
 }
 
 // Oryxa is Oryxa's own sign-in, as apps is given it.
@@ -325,20 +372,4 @@ func expiredProse(reason string) string {
 		return "the app no longer accepts the credential"
 	}
 	return "the app no longer accepts the connection"
-}
-
-// HookSubscriptions answers which of apps' trigger subscriptions a verified
-// delivery is for. Oryxa's own integrations have no triggers until phase 2,
-// so it answers none: every verified delivery is acknowledged, deduplicated
-// and recorded, and nothing is published.
-type HookSubscriptions struct{}
-
-var _ hooks.Subscriptions = HookSubscriptions{}
-
-func (HookSubscriptions) ForEndpoint(context.Context, hooks.Endpoint, string) ([]hooks.Subscription, error) {
-	return nil, nil
-}
-
-func (HookSubscriptions) ForAccount(context.Context, string, string, string, string) ([]hooks.Subscription, error) {
-	return nil, nil
 }

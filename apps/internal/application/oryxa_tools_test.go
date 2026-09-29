@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -38,6 +39,23 @@ type testIntegration struct {
 	readErr error
 	// poll is what a poll answers, by cursor.
 	poll map[string]integration.Batch
+	// pollErr is what a poll fails with, when it is to fail at all.
+	pollErr error
+	// polls records the trigger, config and cursor each poll was asked for, so
+	// a test can say the worker started from where the last one stopped.
+	polls []testPoll
+	// subscribed records what Subscribe registered with the app, and what
+	// Unsubscribe was told to remove.
+	subscribed     []integration.Hook
+	unsubscribed   []string
+	subscribeErr   error
+	unsubscribeErr error
+}
+
+type testPoll struct {
+	Trigger string
+	Config  string
+	Cursor  string
 }
 
 type testCall struct {
@@ -127,12 +145,20 @@ func (i *testIntegration) Manifest() integration.Manifest {
 			TargetSchema: json.RawMessage(`{"type":"object","required":["repo"]}`),
 			ReadPOSTs:    []string{"/search"},
 		}},
-		Triggers: []integration.TriggerSpec{{
-			Slug: "ACME_ISSUE_EVENT", Name: "An issue changed", Kind: integration.TriggerPoll,
-			ConfigSchema:  json.RawMessage(`{"type":"object","properties":{"repo":{"type":"string"}}}`),
-			PayloadSchema: json.RawMessage(`{"type":"object","required":["number"]}`),
-			Sample:        json.RawMessage(`{"number":7}`),
-		}},
+		Triggers: []integration.TriggerSpec{
+			{
+				Slug: "ACME_ISSUE_EVENT", Name: "An issue changed", Kind: integration.TriggerPoll,
+				ConfigSchema:  json.RawMessage(`{"type":"object","properties":{"repo":{"type":"string"}}}`),
+				PayloadSchema: json.RawMessage(`{"type":"object","required":["number"]}`),
+				Sample:        json.RawMessage(`{"number":7}`),
+			},
+			{
+				Slug: "ACME_COMMENT_EVENT", Name: "An issue was commented on", Kind: integration.TriggerPush,
+				ConfigSchema:  json.RawMessage(`{"type":"object","required":["repo"]}`),
+				PayloadSchema: json.RawMessage(`{"type":"object","required":["body"]}`),
+				Sample:        json.RawMessage(`{"body":"looks flaky"}`),
+			},
+		},
 	}
 }
 
@@ -179,14 +205,67 @@ func (i *testIntegration) Read(_ context.Context, _ integration.Session, request
 	return page, nil
 }
 
-func (i *testIntegration) Poll(_ context.Context, _ integration.Session, _ string, _ json.RawMessage, cursor string) (integration.Batch, error) {
+func (i *testIntegration) Poll(_ context.Context, _ integration.Session, trigger string, config json.RawMessage, cursor string) (integration.Batch, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	i.polls = append(i.polls, testPoll{Trigger: trigger, Config: string(config), Cursor: cursor})
+	if i.pollErr != nil {
+		return integration.Batch{}, i.pollErr
+	}
 	batch, ok := i.poll[cursor]
 	if !ok {
 		return integration.Batch{}, integration.ErrNotFound
 	}
 	return batch, nil
+}
+
+func (i *testIntegration) pollCalls() []testPoll {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return slices.Clone(i.polls)
+}
+
+// Subscribe and Unsubscribe are the Pusher half: Subscribe registers the URL
+// and secret the core made, and answers the app's own id for it.
+func (i *testIntegration) Subscribe(_ context.Context, _ integration.Session, _ string, _ json.RawMessage, hook integration.Hook) (string, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.subscribeErr != nil {
+		return "", i.subscribeErr
+	}
+	i.subscribed = append(i.subscribed, hook)
+	return "remote-" + hook.URL, nil
+}
+
+func (i *testIntegration) Unsubscribe(_ context.Context, _ integration.Session, remoteID string) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.unsubscribed = append(i.unsubscribed, remoteID)
+	return i.unsubscribeErr
+}
+
+// Parse reads a delivery the core has already verified. The application never
+// calls it: hooks' ingress does, and only for a delivery whose signature it
+// checked. It is here so the test integration satisfies integration.Pusher,
+// which Subscribe and Unsubscribe are part of.
+func (i *testIntegration) Parse(_ context.Context, _ http.Header, body []byte) ([]integration.Event, error) {
+	var delivery struct {
+		Events []integration.Event `json:"events"`
+	}
+	if err := json.Unmarshal(body, &delivery); err != nil {
+		return nil, err
+	}
+	return delivery.Events, nil
+}
+
+func (i *testIntegration) hooks() (integration.Hook, []string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	var first integration.Hook
+	if len(i.subscribed) > 0 {
+		first = i.subscribed[0]
+	}
+	return first, slices.Clone(i.unsubscribed)
 }
 
 // newToolHarness is the application with Oryxa's own sign-in on for acme,
