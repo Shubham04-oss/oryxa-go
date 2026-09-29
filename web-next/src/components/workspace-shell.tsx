@@ -24,7 +24,7 @@ import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { KnowledgeBases } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
 import { RequestsCanvas } from "./requests-view"
-import { useRequestsEntry } from "./requests-view-open"
+import { openRequest, useRequestsEntry } from "./requests-view-open"
 import { TeamspacesManagement } from "./teamspaces-management"
 import type { WorkspaceRole } from "./teamspaces-management"
 import { TeamspaceFocus } from "./teamspace-focus"
@@ -54,6 +54,7 @@ import { signOut } from "@/lib/auth/client"
 import type { Organization, Role, Session } from "@/lib/auth/client"
 import { useInbox } from "@/lib/dms"
 import { isNameId } from "@/lib/dms/names"
+import { OpenRequestProvider } from "@/lib/dms/request-navigation"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { cn } from "@/lib/utils"
 
@@ -124,7 +125,22 @@ const headings: Record<Section, string> = {
 
 const savedViews = ["Launch plan", "At-risk accounts", "Q4 pipeline"]
 
-export function WorkspaceShell({
+/**
+ * The workspace. A request named in a DM opens in Agents → Requests: what
+ * shows a DM reads `useOpenRequest` from the provider here, and its function
+ * is `openRequest` (requests-view-open.ts), which the shell below listens for.
+ */
+export function WorkspaceShell(
+  props: NonNullable<Parameters<typeof WorkspaceShellContent>[0]> = {}
+) {
+  return (
+    <OpenRequestProvider value={openRequest}>
+      <WorkspaceShellContent {...props} />
+    </OpenRequestProvider>
+  )
+}
+
+function WorkspaceShellContent({
   session,
   role = session ? "member" : "admin",
   organizationRole,
