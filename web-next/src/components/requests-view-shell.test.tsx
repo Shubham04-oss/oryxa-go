@@ -231,6 +231,70 @@ describe("Requests in the workspace shell", () => {
     expect(screen.queryByRole("region", { name: "Opened request" })).toBeNull()
   })
 
+  it.each([
+    { viewport: "desktop", mobile: false, linked: false },
+    { viewport: "desktop", mobile: false, linked: true },
+    { viewport: "mobile", mobile: true, linked: false },
+    { viewport: "mobile", mobile: true, linked: true },
+  ])(
+    "leaves focused primary work when Requests opens on $viewport (linked: $linked)",
+    async ({ mobile, linked }) => {
+      vi.stubGlobal("matchMedia", () => ({
+        matches: mobile,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }))
+      renderShell()
+      fireEvent.click(
+        screen.getByRole("button", { name: "Expand agent panel" })
+      )
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Open Agent overview" })
+      )
+      await screen.findByRole("region", { name: "Agent overview work panel" })
+      expect(
+        screen.queryByRole("complementary", { name: "Workspace navigation" })
+      ).toBeNull()
+
+      act(() => (linked ? openRequest("irq_link") : openRequests()))
+
+      expect(
+        await screen.findByRole("heading", { name: "Requests", level: 1 })
+      ).toBeTruthy()
+      expect(
+        screen.queryByRole("region", { name: "Agent overview work panel" })
+      ).toBeNull()
+      expect(
+        screen.queryByRole("button", { name: "Back to Agent overview" })
+      ).toBeNull()
+      if (mobile) {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Expand left sidebar" })
+        )
+      }
+      const navigation = screen.getByRole("navigation", {
+        name: "Agents navigation",
+      })
+      expect(
+        within(navigation)
+          .getByRole("button", { name: "Requests" })
+          .getAttribute("aria-current")
+      ).toBe("page")
+      if (linked) {
+        const opened = await screen.findByRole("region", {
+          name: "Opened request",
+        })
+        await within(opened).findByText("A linked ask.")
+      } else {
+        await screen.findByRole("tab", { name: /Inbox/ })
+        expect(
+          screen.queryByRole("region", { name: "Opened request" })
+        ).toBeNull()
+        await screen.findByText("Share the pipeline total.")
+      }
+    }
+  )
+
   it("says a signed-out preview has no requests", async () => {
     renderShell({ signedIn: false, section: "requests" })
 
