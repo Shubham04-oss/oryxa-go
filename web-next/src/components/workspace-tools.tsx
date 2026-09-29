@@ -202,8 +202,8 @@ export function WorkspaceTools({
     offerQuery.data?.can_connect !== false
   const isOffered = (toolkit: string) =>
     !organizationId ||
-    (Boolean(offerQuery.data) &&
-      (!offerQuery.data?.offer || offerQuery.data.offer.includes(toolkit)))
+    !offerQuery.data?.offer ||
+    offerQuery.data.offer.includes(toolkit)
 
   const connections = useMemo(
     () =>
@@ -343,9 +343,7 @@ export function WorkspaceTools({
         )
       : null
   const visibleToolkits = (results ?? localMatches ?? shownToolkits).filter(
-    (toolkit) =>
-      !rowToolkits.has(toolkit.toolkit) &&
-      (!organizationId || (offerQuery.data && isOffered(toolkit.toolkit)))
+    (toolkit) => !rowToolkits.has(toolkit.toolkit) && isOffered(toolkit.toolkit)
   )
   const groups = groupToolkits(
     visibleToolkits,
@@ -654,7 +652,7 @@ export function WorkspaceTools({
                 )
               }}
             />
-            {(!organizationId || offerQuery.data) &&
+            {(isPreview || !organizationId || offerQuery.data) &&
               hasConnectionDetails(selected.status) &&
               isOffered(selected.toolkit) && (
                 <ConnectionWorkspace
@@ -697,7 +695,7 @@ export function WorkspaceTools({
             admin to enable them if you need to connect an app.
           </p>
         )}
-        {exploreProblem ? (
+        {exploreProblem && (
           <p
             className="workspace-tools-no-results workspace-tools-problem"
             role="alert"
@@ -714,122 +712,126 @@ export function WorkspaceTools({
               Retry
             </button>
           </p>
-        ) : groups.length ? (
-          <div className="workspace-tools-groups">
-            {groups.map((group) => (
-              <div className="workspace-tools-group" key={group.name}>
-                <div className="workspace-tools-group-heading">
-                  <div>
-                    <h4>{group.name}</h4>
-                    {group.description && <p>{group.description}</p>}
-                  </div>
-                  <span>{String(group.toolkits.length).padStart(2, "0")}</span>
-                </div>
-                <div className="workspace-tools-grid">
-                  {group.toolkits.map((toolkit) => {
-                    const expanded = expandedToolkit === toolkit.toolkit
-                    const connectable = canConnect && toolkit.connectable
-                    const unavailable = canConnect
-                      ? nonConnectableReason(toolkit)
-                      : undefined
-                    const connectError = connectErrorFor(toolkit.toolkit)
-                    return (
-                      <article
-                        className={
-                          expanded
-                            ? "workspace-tool-card is-expanded"
-                            : "workspace-tool-card"
-                        }
-                        key={toolkit.toolkit}
-                      >
-                        <div className="workspace-tool-card-main">
-                          <ToolkitLogo toolkit={toolkit} />
-                          <h5>{toolkit.name}</h5>
-                          <ChevronDown
-                            className="workspace-tool-card-chevron"
-                            size={15}
-                            aria-hidden="true"
-                          />
-                          <button
-                            type="button"
-                            className="workspace-tool-card-toggle"
-                            aria-label={`${toolkit.name} details`}
-                            aria-expanded={expanded}
-                            onClick={() =>
-                              setExpandedToolkit((openToolkit) =>
-                                openToolkit === toolkit.toolkit
-                                  ? null
-                                  : toolkit.toolkit
-                              )
-                            }
-                          />
-                        </div>
-                        {expanded && (
-                          <div className="workspace-tool-card-details">
-                            {toolkit.description && (
-                              <p>{toolkit.description}</p>
-                            )}
-                            {connectable && (
-                              <button
-                                type="button"
-                                className="workspace-tool-card-connect"
-                                disabled={Boolean(connectingToolkit)}
-                                onClick={() =>
-                                  connectApp.mutate(toolkit.toolkit)
-                                }
-                                aria-label={`Connect ${toolkit.name}`}
-                              >
-                                {connectingToolkit === toolkit.toolkit ? (
-                                  <>
-                                    <LoaderCircle
-                                      className="workspace-tools-spinner"
-                                      size={14}
-                                    />
-                                    Opening…
-                                  </>
-                                ) : (
-                                  <>
-                                    Connect <ArrowUpRight size={14} />
-                                  </>
-                                )}
-                              </button>
-                            )}
-                            {unavailable && (
-                              <small className="workspace-tool-card-note">
-                                {unavailable}
-                              </small>
-                            )}
-                            {connectError && (
-                              <p
-                                className="workspace-tool-inline-error"
-                                role="alert"
-                              >
-                                {connectError}
-                              </p>
-                            )}
-                          </div>
-                        )}
-                      </article>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="workspace-tools-no-results">
-            {viewState === "loading" ||
-            searchBusy ||
-            (live && Boolean(organizationId) && offerQuery.isPending) ||
-            (live && results === null && !featuredSettled)
-              ? "Loading tools…"
-              : live && offerQuery.data?.offer?.length === 0
-                ? "Your workspace does not offer any apps yet."
-                : live && trimmed && !searchable
-                  ? "Keep typing to search every app."
-                  : "No tools found. Try a different search."}
-          </p>
         )}
+        {(!exploreProblem || offerQuery.isError) &&
+          (groups.length ? (
+            <div className="workspace-tools-groups">
+              {groups.map((group) => (
+                <div className="workspace-tools-group" key={group.name}>
+                  <div className="workspace-tools-group-heading">
+                    <div>
+                      <h4>{group.name}</h4>
+                      {group.description && <p>{group.description}</p>}
+                    </div>
+                    <span>
+                      {String(group.toolkits.length).padStart(2, "0")}
+                    </span>
+                  </div>
+                  <div className="workspace-tools-grid">
+                    {group.toolkits.map((toolkit) => {
+                      const expanded = expandedToolkit === toolkit.toolkit
+                      const connectable = canConnect && toolkit.connectable
+                      const unavailable = canConnect
+                        ? nonConnectableReason(toolkit)
+                        : undefined
+                      const connectError = connectErrorFor(toolkit.toolkit)
+                      return (
+                        <article
+                          className={
+                            expanded
+                              ? "workspace-tool-card is-expanded"
+                              : "workspace-tool-card"
+                          }
+                          key={toolkit.toolkit}
+                        >
+                          <div className="workspace-tool-card-main">
+                            <ToolkitLogo toolkit={toolkit} />
+                            <h5>{toolkit.name}</h5>
+                            <ChevronDown
+                              className="workspace-tool-card-chevron"
+                              size={15}
+                              aria-hidden="true"
+                            />
+                            <button
+                              type="button"
+                              className="workspace-tool-card-toggle"
+                              aria-label={`${toolkit.name} details`}
+                              aria-expanded={expanded}
+                              onClick={() =>
+                                setExpandedToolkit((openToolkit) =>
+                                  openToolkit === toolkit.toolkit
+                                    ? null
+                                    : toolkit.toolkit
+                                )
+                              }
+                            />
+                          </div>
+                          {expanded && (
+                            <div className="workspace-tool-card-details">
+                              {toolkit.description && (
+                                <p>{toolkit.description}</p>
+                              )}
+                              {connectable && (
+                                <button
+                                  type="button"
+                                  className="workspace-tool-card-connect"
+                                  disabled={Boolean(connectingToolkit)}
+                                  onClick={() =>
+                                    connectApp.mutate(toolkit.toolkit)
+                                  }
+                                  aria-label={`Connect ${toolkit.name}`}
+                                >
+                                  {connectingToolkit === toolkit.toolkit ? (
+                                    <>
+                                      <LoaderCircle
+                                        className="workspace-tools-spinner"
+                                        size={14}
+                                      />
+                                      Opening…
+                                    </>
+                                  ) : (
+                                    <>
+                                      Connect <ArrowUpRight size={14} />
+                                    </>
+                                  )}
+                                </button>
+                              )}
+                              {unavailable && (
+                                <small className="workspace-tool-card-note">
+                                  {unavailable}
+                                </small>
+                              )}
+                              {connectError && (
+                                <p
+                                  className="workspace-tool-inline-error"
+                                  role="alert"
+                                >
+                                  {connectError}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </article>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="workspace-tools-no-results">
+              {viewState === "loading" ||
+              searchBusy ||
+              (live && Boolean(organizationId) && offerQuery.isPending) ||
+              (live && results === null && !featuredSettled)
+                ? "Loading tools…"
+                : live && offerQuery.data?.offer?.length === 0
+                  ? "Your workspace does not offer any apps yet."
+                  : live && trimmed && !searchable
+                    ? "Keep typing to search every app."
+                    : "No tools found. Try a different search."}
+            </p>
+          ))}
         {live &&
           searchable &&
           !search.isPlaceholderData &&

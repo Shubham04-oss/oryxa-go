@@ -263,6 +263,39 @@ describe("WorkspaceTools", () => {
     expect(screen.queryByRole("heading", { name: "Gmail" })).toBeNull()
   })
 
+  it("keeps offline preview tools visible with an organization selected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => json({ error: { message: "offline" } }, 502))
+    )
+    render(<WorkspaceTools organizationId="org-1" />)
+    expect(await screen.findByText(/Layout preview/)).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Gmail details" })).toBeTruthy()
+    expect(
+      screen.queryByText("No tools found. Try a different search.")
+    ).toBeNull()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand GitHub connection" })
+    )
+    expect(screen.getByRole("tab", { name: "Events" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Connect Gmail" })).toBeNull()
+  })
+
+  it("shows the catalog with an unknown offer while withholding connection actions", async () => {
+    fakeFetch(
+      ({ path }) =>
+        path === `${org}/apps/offer`
+          ? apiError("not_found", "not available", 404)
+          : undefined,
+      catalog(),
+      connections({ connections: [] })
+    )
+    render(<WorkspaceTools organizationId="org-1" />)
+    expect(await screen.findByRole("heading", { name: "Zoom" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Zoom details" }))
+    expect(screen.queryByRole("button", { name: "Connect Zoom" })).toBeNull()
+  })
+
   it("filters the apps on screen for a query too short for Composio's search, and searches the catalog from three characters", async () => {
     const state = { connections: [connection()] }
     const { requests } = fakeFetch(
