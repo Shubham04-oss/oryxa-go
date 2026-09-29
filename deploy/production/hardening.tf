@@ -1,6 +1,7 @@
 # What the 2026-09-28 launch review found missing (docs/REMAINING-WORK.md,
 # section 7), kept in one file so it can be read, reviewed and applied as one
-# change. Nothing here changes the running service's behavior.
+# change. It adds recovery, alarms and rules at the edge around the service,
+# and touches neither its code nor its configuration.
 
 variable "first_deploy" {
   description = "True only for the first apply into an empty account (deploy/README.md, First deploy). deploy/scripts/provision-app.sh makes the files and artifacts buckets after that apply, so their versioning and lifecycle rules wait for the next one, and RDS has not yet made the database's log groups, so they are created here rather than adopted."

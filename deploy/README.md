@@ -38,12 +38,12 @@ OpenTofu names everything the scripts create, so the task's configuration and
 IAM can refer to it before it exists. Its state is in S3
 (`oryxa-tofu-state-<account>`), locked with a lock file.
 
-Both set the lifecycle rules of the files and artifacts buckets. S3 keeps one
-lifecycle configuration per bucket, and every run of `provision-app.sh` puts
-each provisioner's own rule back alone, which drops the rule OpenTofu adds to
-remove the versions a delete leaves behind (`production/hardening.tf`). Run
-`tofu apply` after `provision-app.sh`, until the two provisioners write that
-rule themselves.
+OpenTofu and the provisioners both set the lifecycle rules of the files and
+artifacts buckets. S3 keeps one lifecycle configuration per bucket, and every
+run of `provision-app.sh` puts each provisioner's own rule back alone, which
+drops the rule OpenTofu adds to remove the versions a delete leaves behind
+(`production/hardening.tf`). Run `tofu apply` after `provision-app.sh`, until
+the two provisioners write that rule themselves.
 
 ## Before the first deploy
 
@@ -503,6 +503,58 @@ so every other checkout's apply keeps naming them.
 path — as the redirect URI on that toolkit's own OAuth app at GitHub, Slack
 or Notion; a mismatched URI sends the member's browser somewhere the
 provider refuses or apps does not recognize.
+
+### Applying the launch-review hardening
+
+`production/hardening.tf`, with small edits in `compute.tf`, `database.tf`,
+`keys.tf`, `knowledge_base.tf`, `observability.tf` and `variables.tf`, answers
+the findings of the 2026-09-28 launch review (`docs/REMAINING-WORK.md`,
+section 7): recoverable files, more alarms, a 30-day expiry on the database's
+log groups, keys that cannot be destroyed, a narrower Cognito grant, a pinned
+collector image, and two Cloudflare rules. It was written without applying
+anything. It is a plain `tofu apply`, and removes nothing but the task
+definition's old revision; the rulesets and the lifecycle configurations are
+worth checking first:
+
+1. **The API token has Zone WAF edit** (see "Before the first deploy"), or the
+   two rulesets fail.
+2. **The zone has no rules of its own at Cloudflare yet.** A zone has one
+   entry-point ruleset for each phase, and OpenTofu takes each over whole. If
+   the dashboard's Security, WAF, Custom rules or Rate limiting rules already
+   hold anything, creating these fails, or replaces it. Import that ruleset
+   instead, and add its rules to `hardening.tf` so that the apply keeps them.
+   Its id is in the answer to
+   `GET /zones/<zone id>/rulesets/phases/<phase>/entrypoint`:
+
+   ```sh
+   tofu import cloudflare_ruleset.custom_rules zones/<zone id>/<ruleset id>
+   tofu import cloudflare_ruleset.rate_limits zones/<zone id>/<ruleset id>
+   ```
+
+3. **The files and artifacts buckets' lifecycle rules are the provisioners'.**
+   The apply puts each bucket's lifecycle configuration again with the
+   provisioner's own rule as written in the code (files: `expire-objects`
+   under `org/`, 90 days; artifacts: `expire-artifacts`, 30 days; both drop an
+   unfinished upload after a day) and the new one. Read what is live first
+   with `aws s3api get-bucket-lifecycle-configuration --bucket <bucket>`, and
+   if it differs, change `hardening.tf` to match before applying.
+
+The apply rolls the service once, because the collector's image is pinned to a
+release and its digest, in a new task definition. Once it is done:
+
+- Set one of the SES alarms to ALARM to see that the mail arrives. They are in
+  ap-south-1 and notify the topic in us-west-2:
+
+  ```sh
+  aws cloudwatch set-alarm-state --region ap-south-1 \
+    --alarm-name oryxa-production-ses-complaints \
+    --state-value ALARM --state-reason test
+  ```
+
+- Run `tofu apply` again after any run of `provision-app.sh`, which puts its
+  buckets' own lifecycle rules back alone.
+- Deletes from the files, artifacts and knowledge-base documents buckets are
+  now soft for 30 days (see "Recovering a deleted file").
 
 ## Looking at it
 
