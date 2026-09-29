@@ -192,6 +192,7 @@ function WorkflowDetail({
             workflowQuery.isError ||
             refreshBlocked ||
             Boolean(blocked) ||
+            executions.isError ||
             !executions.data ||
             hasExecutionInFlight(executions.data)
           }
@@ -203,6 +204,7 @@ function WorkflowDetail({
               runLock.current ||
               workflowQuery.isError ||
               refreshBlocked ||
+              executions.isError ||
               !executions.data ||
               hasExecutionInFlight(executions.data)
             )

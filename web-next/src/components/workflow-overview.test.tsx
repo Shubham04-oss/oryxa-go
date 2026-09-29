@@ -171,6 +171,34 @@ afterEach(() => {
 })
 
 describe("workflow overview", () => {
+  it("blocks running after a cached empty history fails to refresh, until it recovers", async () => {
+    let failHistory = false
+    const api = backend({
+      fail: (method, path) =>
+        failHistory && method === "GET" && path.endsWith("/executions")
+          ? refusal(500, "internal", "history database SECRET")
+          : undefined,
+    })
+    const { client } = overview()
+    const run = await open()
+    expect((run as HTMLButtonElement).disabled).toBe(false)
+    failHistory = true
+    await client.invalidateQueries({
+      queryKey: agentKeys.workflowExecutions(ORG, weekly.id, 20),
+      exact: true,
+    })
+    await screen.findByText("Could not load executions.")
+    expect((run as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(run)
+    expect(api.writes).toEqual([])
+    expect(document.body.textContent).not.toContain("SECRET")
+    failHistory = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    await waitFor(() => expect((run as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(run)
+    await screen.findByText("Queued. The assignments haven't finished yet.")
+    expect(api.writes.length).toBe(1)
+  })
   it("shows an explicit access refusal and an exit when an edited workflow is no longer owned", async () => {
     let revoked = false
     backend({
