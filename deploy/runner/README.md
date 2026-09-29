@@ -17,7 +17,7 @@ gh variable delete CI_RUNNER                                        # GitHub's m
 deploy/runner/start.sh
 ```
 
-- It builds `oryxa-runner:latest`: GitHub's runner image plus gh and the AWS CLI, which the deploy uses.
+- It builds `oryxa-runner:latest`: GitHub's runner image plus gh and the AWS CLI, which the deploy uses, and `libatomic1` for Node 26.
 - It registers the runner on the first start. That needs `gh` signed in as a repository admin.
 - It runs it with `--restart unless-stopped`, so it comes back whenever Docker Desktop does.
 - Its registration, work directory and tool cache live in the Docker volume `oryxa-mac-1`.
