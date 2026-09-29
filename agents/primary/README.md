@@ -1043,6 +1043,22 @@ not be checked is not said at all, a fixed line saying so in its place.
 What an agent publishes to a teamspace's ledger is read the same way before
 the team reads it (`teamspaces.Service.CollaborationPublish`, which
 `teamspaces_publish` calls; the guard is given with `teamspaces.WithGuard`).
+It uses `CheckWith`, under the member's peer level and the same effective
+workspace relevance/regulated settings and deployment ceiling as the check
+route (`WithGuardPolicy`). Actual attempted tool names are recorded before
+execution on the run's context, never from `tools_used` in the model's
+publication; the request is the run's actual user message (the original
+textual request when resuming confirmations), with at most six earlier
+member messages as context. Agent replies and tool results are never context
+sent to this judge. Prior thread content adds `thread_history`; missing or
+overflowed provenance adds `run_sources_unrecorded`, so it cannot bypass the
+private-source gate. This record is bounded, held only for the run and never
+stored in thread state. Provider-tool reads behind an agent transfer are
+conservatively marked unrecorded. `interactions_get`, whose harmless
+classification assumes a pinned delivery, is conservatively marked too:
+general owner runs may read other requests. A relevance hold or failed judge stores no
+entry. Rooms still use their existing masking check without relevance, and
+direct member/room-lifted publications still bypass this agent-only path.
 It reads the publication as the ledger would store it, so one the ledger would
 refuse for what it is (no title, an unsafe artifact location) is refused
 before a check is spent on it: the title and the summary, and the artifacts'

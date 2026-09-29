@@ -199,6 +199,8 @@ export type GuardCheck = {
   texts: string[]
   origin: string
   request: string
+  sources: string[]
+  context: string[]
   /** Whose cookie asked. */
   caller: Person
 }
@@ -782,9 +784,21 @@ export class FakeGo {
   private async checkAnswer(caller: Person, body: unknown): Promise<Response> {
     const invalid = (why: string) =>
       goError(400, "invalid_request", `invalid request: ${why}`)
-    const refused = unknownFields(body, ["texts", "origin", "request"])
+    const refused = unknownFields(body, [
+      "texts",
+      "origin",
+      "request",
+      "sources",
+      "context",
+    ])
     if (refused) return refused
-    const { texts, origin, request } = body as Record<string, unknown>
+    const {
+      texts,
+      origin,
+      request,
+      sources = [],
+      context = [],
+    } = body as Record<string, unknown>
     const runes = (text: string) => Array.from(text).length
     if (
       !Array.isArray(texts) ||
@@ -801,10 +815,30 @@ export class FakeGo {
     if (typeof request !== "string" || runes(request) > 25_000) {
       return invalid("request must be a text of at most 25,000 characters")
     }
+    if (
+      !Array.isArray(sources) ||
+      sources.length > 64 ||
+      sources.some(
+        (source) => typeof source !== "string" || runes(source) > 128
+      )
+    ) {
+      return invalid("sources must be up to 64 names of at most 128 characters")
+    }
+    if (
+      !Array.isArray(context) ||
+      context.length > 6 ||
+      context.some((line) => typeof line !== "string" || runes(line) > 1_000)
+    ) {
+      return invalid(
+        "context must be up to six lines of at most 1,000 characters"
+      )
+    }
     const check: GuardCheck = {
       texts: texts as string[],
       origin,
       request,
+      sources: sources as string[],
+      context: context as string[],
       caller,
     }
     this.checks.push(check)

@@ -30,6 +30,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/relevance"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 )
@@ -90,6 +91,7 @@ type Run struct {
 	startedBy  string
 	content    *genai.Content
 	stateDelta map[string]any
+	guardInput agents.RunGuardInput
 	started    time.Time
 	// teamspaceID is the teamspace the run is pinned to, or "". It lives on
 	// the run's context and nowhere else: not in stateDelta, not in the run's
@@ -199,7 +201,9 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 		}
 		maps.Copy(run.stateDelta, agents.DeliveryState(input.Delivery))
 	}
-	pending := pendingConfirmations(sessionEvents(stored), service.agent.Name())
+	history := sessionEvents(stored)
+	run.guardInput = publicationGuardInput(history, message)
+	pending := pendingConfirmations(history, service.agent.Name())
 	if message != "" {
 		if len(pending) > 0 {
 			return ErrConfirmationPending
@@ -294,6 +298,7 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	runContext = memberauth.WithRunOrigin(runContext, run.startedBy)
 	// The pin rides on this run's context alone, beside the run's origin.
 	runContext = agents.WithPinnedTeamspace(runContext, run.teamspaceID)
+	runContext = agents.WithRunGuard(runContext, run.guardInput)
 	if run.member.AccessToken != "" {
 		runContext = memberauth.WithAccessToken(runContext, run.member.AccessToken)
 	}
@@ -330,6 +335,58 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	if run.remembering != nil {
 		run.remember(ctx, run.remembering)
 	}
+}
+
+// publicationGuardInput uses the actual thread, not a model's report. A
+// confirmation resumes the latest textual user request. Earlier member text
+// gives the request context; agent replies and tool results never go to the
+// judge as context. Any prior thread content is conservatively private.
+func publicationGuardInput(history []*session.Event, message string) agents.RunGuardInput {
+	input := agents.RunGuardInput{Request: message}
+	if len(history) > 0 {
+		input.Sources = []string{relevance.ThreadHistory}
+	}
+	var messages []string
+	requestFound := message != ""
+	// Read backwards and stop once the bounded context is full; a long
+	// thread must not allocate a second copy of every earlier user message.
+	for index := len(history) - 1; index >= 0; index-- {
+		event := history[index]
+		if event == nil || event.Author != adkUserAuthor || event.Content == nil {
+			continue
+		}
+		limit := relevance.MaxContextLineRunes
+		if !requestFound {
+			limit = 32_000
+		}
+		var text strings.Builder
+		for _, part := range event.Content.Parts {
+			if part != nil && !part.Thought {
+				piece := part.Text
+				left := limit - utf8.RuneCountInString(text.String())
+				if utf8.RuneCountInString(piece) > left {
+					piece = string([]rune(piece)[:left])
+				}
+				text.WriteString(piece)
+				if utf8.RuneCountInString(text.String()) >= limit {
+					break
+				}
+			}
+		}
+		if text.Len() > 0 {
+			if !requestFound {
+				input.Request, requestFound = text.String(), true
+				continue
+			}
+			messages = append(messages, text.String())
+			if len(messages) >= relevance.MaxContextLines {
+				break
+			}
+		}
+	}
+	slices.Reverse(messages)
+	input.Context = messages
+	return input
 }
 
 // unwatched reports whether nobody is there to see what a run does. An app

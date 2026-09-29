@@ -107,8 +107,10 @@ var readsNothingPrivate = map[string]string{
 	// interaction these tools are pinned to that request, which holds what
 	// the member who asked wrote and nothing of the addressed member's; they
 	// refuse any other request. Outside a delivery, get can read any request
-	// its agent is a party to, but no answer another member reads comes from
-	// such a run. Listing the inbox or the requests sent is not here: that
+	// its agent is a party to. General-run sharing surfaces must add an
+	// unknown/private source for that read, rather than assume this delivery
+	// restriction from the name (the publication/side run recorders do).
+	// Listing the inbox or the requests sent is not here: that
 	// reads other people's requests, which is private.
 	"interactions_get":     "the one request a delivery is for, as its asker wrote it",
 	"interactions_create":  "files a request; returns it as the agent wrote it",

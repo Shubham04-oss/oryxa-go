@@ -19,10 +19,14 @@ import { inboxName } from "./lib/dms/names"
 import { MAX_UNREAD } from "./lib/dms/protocol"
 import {
   PROMPT_TRANSCRIPT_LINES,
+  GUARD_SOURCES_UNRECORDED,
+  GUARD_THREAD_HISTORY,
   agentRequestBody,
   cardFields,
   clip,
   guardCheckBody,
+  guardContext,
+  guardSources,
   guardedAnswer,
   heldAnswerOf,
   isOpen,
@@ -34,6 +38,7 @@ import {
 import type {
   CardFields,
   GuardedAnswer,
+  GuardRunInput,
   TranscriptLine,
 } from "./lib/side/asking"
 import { parseSideConversationName, peerIn } from "./lib/side/names"
@@ -190,6 +195,8 @@ type AgentData = {
   confirmations?: SideConfirmation[]
   /** What the answer guard found in the answer, when it found anything: the owner's alone to see. */
   guard?: SideGuard
+  /** Only while waiting: bounded run metadata for a confirmation continuation, never on the wire. */
+  guardInput?: GuardRunInput
 }
 
 /**
@@ -246,6 +253,9 @@ type Draft = {
   failure?: RunFailure
   /** Its body reached `SIDE_MAX_AGENT_TEXT`: what else arrives is not kept. */
   full: boolean
+  guardInput: GuardRunInput
+  /** Shared prompt snapshot, captured before the run (not its private Go thread). */
+  transcript: TranscriptLine[]
 }
 
 /** Somebody typing: until `timer` fires, and when the other person was last told. In memory only. */
@@ -1383,15 +1393,32 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     }, sideTiming.runTimeoutMs)
     this.runs.set(owner, { seq, controller })
     const request = this.askedOf(row, input)
+    const data = parseData<AgentData>(row)
+    const self = this.roster().people.find((person) => person.userId === owner)
+    const transcript = this.transcript(
+      data.replyTo ?? seq,
+      PROMPT_TRANSCRIPT_LINES,
+      self?.agentId
+    )
+    const previous = "confirmations" in input ? data.guardInput : undefined
     const draft: Draft = {
       owner,
       finished: "confirmations" in input && row.body ? [row.body] : [],
       draft: "",
       confirmations: [],
       full: false,
+      transcript,
+      guardInput: {
+        request: previous?.request ?? request,
+        context: previous?.context ?? guardContext(transcript),
+        // Old stored confirmations have no provenance; never treat them as
+        // a run that read nothing. Go's reused thread is private history too.
+        sources:
+          previous?.sources ??
+          ("confirmations" in input ? [GUARD_SOURCES_UNRECORDED] : []),
+      },
     }
     this.drafts.set(seq, draft)
-    const data = parseData<AgentData>(row)
     this.announce(
       this.rewrite(row, {
         state: "streaming",
@@ -1402,6 +1429,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
           code: undefined,
           confirmations: [],
           guard: undefined,
+          guardInput: undefined,
         },
       })
     )
@@ -1412,7 +1440,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         if (run.timedOut) draft.failure ??= timedOutFailure
         // Purged meanwhile: nothing it said is kept or sent.
         if (this.epoch !== epoch || !this.item(seq)) return
-        await this.settleRun(seq, draft, state, request, epoch)
+        await this.settleRun(seq, draft, state, epoch)
       })
     } finally {
       clearTimeout(timeout)
@@ -1447,6 +1475,15 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     const owner = state.userId
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (
+          this.sql`SELECT thread_id FROM side_threads WHERE user_id = ${owner}`
+            .length > 0
+        ) {
+          draft.guardInput.sources = guardSources([
+            ...draft.guardInput.sources,
+            GUARD_THREAD_HISTORY,
+          ])
+        }
         const threadId = await this.threadFor(state)
         if (this.epoch !== epoch) return
         // Set from the stream: Go no longer has the thread.
@@ -1466,7 +1503,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
               ),
               this.env.ORYXA_API_ORIGIN
             ),
-            body: this.runBody(owner, seq, input),
+            body: this.runBody(owner, input, draft.transcript),
             input,
           }),
           write: (item) => {
@@ -1515,21 +1552,18 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
    * teamspace, which Go pins the run to and enforces on its tools: the
    * prompt names it too, but a model may drop it or name another.
    */
-  private runBody(owner: string, seq: number, input: RunInput): SideRunBody {
+  private runBody(
+    owner: string,
+    input: RunInput,
+    transcript: TranscriptLine[]
+  ): SideRunBody {
     const ids = this.ids
     if ("confirmations" in input) {
       return { ...input, teamspace_id: ids.teamspaceId }
     }
     const roster = this.roster()
     const peer = peerIn(ids, owner) ?? ""
-    const answer = this.item(seq)
-    const replyTo = answer ? parseData<AgentData>(answer).replyTo : undefined
     const self = roster.people.find((person) => person.userId === owner)
-    const transcript = this.transcript(
-      replyTo ?? seq,
-      PROMPT_TRANSCRIPT_LINES,
-      self?.agentId
-    )
     return {
       message: ownAgentPrompt({
         teamspaceId: ids.teamspaceId,
@@ -1549,6 +1583,21 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
   private fold(seq: number, draft: Draft, item: Item): void {
     const fromAgent = item.author !== "member"
     switch (item.type) {
+      case "tool_call":
+      case "tool_result":
+        draft.guardInput.sources = guardSources([
+          ...draft.guardInput.sources,
+          item.tool ?? GUARD_SOURCES_UNRECORDED,
+          // Transfers can read through provider tools without another event;
+          // interactions_get is private outside a pinned delivery, as here.
+          ...(item.tool === "transfer_to_agent" ||
+          item.tool === "interactions_get"
+            ? [GUARD_SOURCES_UNRECORDED]
+            : []),
+        ])
+        // Arguments/results/files stay in the owner's Go thread. Only actual
+        // source names reach the guard, never the peer, inbox or transcript.
+        return
       case "delta": {
         if (!fromAgent || !item.text || draft.full) return
         const at = bodyOf(draft).length
@@ -1632,7 +1681,6 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     seq: number,
     draft: Draft,
     state: SideConnectionState,
-    request: string,
     epoch: number
   ): Promise<void> {
     let failure = draft.failure
@@ -1644,7 +1692,12 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     let body = clip(bodyOf(draft), SIDE_MAX_AGENT_TEXT)
     let guard: SideGuard | undefined
     if (body !== "") {
-      const checked = await this.checkAnswer(state, body, request)
+      if (failure)
+        draft.guardInput.sources = guardSources([
+          ...draft.guardInput.sources,
+          GUARD_SOURCES_UNRECORDED,
+        ])
+      const checked = await this.checkAnswer(state, body, draft.guardInput)
       if (this.epoch !== epoch) return
       if ("failure" in checked) {
         failure = checked.failure
@@ -1674,6 +1727,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
           code: failure?.code,
           confirmations: status === "waiting" ? draft.confirmations : [],
           guard,
+          guardInput: status === "waiting" ? draft.guardInput : undefined,
         },
       })
       // The agent's final answer is a message Go is told of, as it ends:
@@ -1707,7 +1761,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
   private async checkAnswer(
     state: SideConnectionState,
     text: string,
-    request: string
+    run: GuardRunInput
   ): Promise<GuardedAnswer | { failure: RunFailure }> {
     let reply: unknown
     try {
@@ -1716,7 +1770,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         organizationPath(this.ids.organizationId, "answer-guard", "check"),
         {
           method: "POST",
-          body: guardCheckBody(text, request),
+          body: guardCheckBody(text, run.request, run),
           timeoutMs: sideTiming.guardTimeoutMs,
           // Go answers a check with 200 and nothing else.
           status: 200,

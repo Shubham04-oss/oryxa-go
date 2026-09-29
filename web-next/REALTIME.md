@@ -397,9 +397,27 @@ message, from what was shared of it.
 `waiting`, or `failed` with what it said before), the object asks Go's
 answer guard once, as the owner, with their cookie and page's origin, in
 the same keep-alive as the run: `POST …/answer-guard/check`, body `{"texts":
-[the answer], "origin": "owner", "request": what the owner asked}` (the
+[the answer], "origin": "owner", "request": what the owner asked,
+"sources": actual run tools, "context": shared conversation lines}` (the
 run's message, or for answers to confirmations the question of the message
 they continue; each at most 25,000 code points), within ten seconds.
+The Worker records only names from Go's actual `tool_call`/`tool_result`
+items, never from a browser or an agent's prose; arguments, results and files
+remain in the owner's thread. Sources are at most 64 names of 128 code points;
+an incomplete/overflowed record adds `run_sources_unrecorded`.
+Provider reads behind `transfer_to_agent`, and `interactions_get` (which
+reads other requests outside a pinned delivery), conservatively add the same
+marker. Reusing the owner's Go thread adds `thread_history`, including a
+confirmation continuation.
+Context is the last six lines of the shared transcript snapshot the run saw,
+each at most 1,000 code points, never the owner's private Go transcript. Go's
+existing workspace/member settings and deployment ceiling decide relevance.
+Only while waiting for confirmation, the existing agent-message `data` JSON
+keeps an optional bounded `guardInput` (original request, source names and
+shared context). It is never sent on the wire, put in an inbox or read into an
+agent's transcript, and is cleared when the run resumes/finishes. It survives
+a restart without a schema migration. A waiting row from an older build has
+no such metadata and conservatively adds `run_sources_unrecorded` on resume.
 `origin: "owner"` says the member started their own agent, so Go leaves the
 personal data they would say themselves (emails, phone numbers, addresses)
 as it is and still masks passwords, keys and card, bank and ID numbers. Go
