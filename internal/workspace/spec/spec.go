@@ -318,7 +318,7 @@ func Parse(data []byte) (Document, error) {
 	if err := rejectUnsupportedSections(&root); err != nil {
 		return Document{}, err
 	}
-	if name := yamlMappingValue(yamlMappingValue(root.Content[0], "organization"), "name"); name != nil && strings.TrimSpace(name.Value) == "" {
+	if name := yamlMappingValue(yamlMappingValue(root.Content[0], "organization"), "name"); name != nil && (name.Tag == "!!null" || strings.TrimSpace(name.Value) == "") {
 		return Document{}, fmt.Errorf("organization.name must be between 1 and 120 characters")
 	}
 	if offer := yamlMappingValue(yamlMappingValue(root.Content[0], "tools"), "offer"); offer != nil && offer.Tag == "!!null" {

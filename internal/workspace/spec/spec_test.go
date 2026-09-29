@@ -267,7 +267,7 @@ func TestNormalizeServiceTextBeforePlanning(t *testing.T) {
 			t.Fatalf("normalization did not mirror services: %+v %+v", document.Organization, agent)
 		}
 	}
-	for _, name := range []string{"''", "'  '", "'" + strings.Repeat("a", 121) + "'"} {
+	for _, name := range []string{"null", "''", "'  '", "'" + strings.Repeat("a", 121) + "'"} {
 		if _, err := Parse([]byte(strings.Replace(example, "name: Acme", "name: "+name, 1))); err == nil {
 			t.Fatalf("invalid org name accepted: %s", name)
 		}
