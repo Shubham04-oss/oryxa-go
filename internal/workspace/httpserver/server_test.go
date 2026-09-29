@@ -252,8 +252,8 @@ func TestWorkspaceApplyIsVersionedAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	response.Body.Close()
-	if len(plan.Changes) != 0 {
-		t.Fatalf("plan had changes: %+v", plan)
+	if len(plan.Changes) != 1 || plan.Changes[0].Name != "preset" || !plan.Changes[0].Sensitive {
+		t.Fatalf("plan must record its initial preset: %+v", plan)
 	}
 	for i := 0; i < 2; i++ {
 		plan = reviewedPlan(t, workspace, path, document)

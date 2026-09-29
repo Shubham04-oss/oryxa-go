@@ -15,6 +15,12 @@ func MergePolicies(previous, submitted spec.Document, replace bool) (spec.Docume
 	effective := submitted.Clone()
 	effective.Unset = nil
 	plan := Plan{Changes: []Change{}, NeedsHuman: []HumanStep{}}
+	if !replace && effective.Preset == "" {
+		effective.Preset = previous.Preset
+	}
+	if effective.Preset != previous.Preset {
+		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "policy", Name: "preset", Sensitive: true})
+	}
 	for _, setting := range spec.SettingsCatalog() {
 		old, oldPresent := setting.Get(previous)
 		next, nextPresent := setting.Get(submitted)
@@ -24,7 +30,7 @@ func MergePolicies(previous, submitted spec.Document, replace bool) (spec.Docume
 		} else if !replace && !nextPresent {
 			next, nextPresent = old, oldPresent
 		}
-		if setting.Path == "safety.guard.holdForReview" && !replace && !reset && !nextPresent && submitted.Preset == "regulated" {
+		if setting.Path == "safety.guard.holdForReview" && !replace && !reset && !nextPresent && effective.Preset == "regulated" {
 			next, nextPresent = true, true
 		}
 		if nextPresent {

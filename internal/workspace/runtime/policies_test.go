@@ -54,7 +54,7 @@ func TestRegulatedPresetHoldsCrossMemberAnswersByDefault(t *testing.T) {
 	document := contextDocument()
 	document.Preset = "regulated"
 	effective, plan, err := MergePolicies(contextDocument(), document, false)
-	if err != nil || effective.Safety == nil || effective.Safety.Guard == nil || effective.Safety.Guard.HoldForReview == nil || !*effective.Safety.Guard.HoldForReview || len(plan.Changes) != 1 {
+	if err != nil || effective.Safety == nil || effective.Safety.Guard == nil || effective.Safety.Guard.HoldForReview == nil || !*effective.Safety.Guard.HoldForReview || len(plan.Changes) != 2 {
 		t.Fatalf("regulated policy = %+v %+v %v", effective.Safety, plan, err)
 	}
 }
@@ -126,5 +126,26 @@ func TestExplicitUnsetResetsOnlyNamedPoliciesAndPreservesGuardFields(t *testing.
 	again, noop, err := MergePolicies(pulled, submitted, false)
 	if err != nil || len(noop.Changes) != 0 || again.Tools != nil {
 		t.Fatalf("unset did not converge: %+v %v", noop, err)
+	}
+}
+
+func TestRegulatedPresetOmissionPreservesAndWeakeningIsSensitive(t *testing.T) {
+	previous := contextDocument()
+	previous.Preset = "regulated"
+	hold := true
+	previous.Safety = &spec.Safety{Guard: &spec.GuardSafety{HoldForReview: &hold}}
+	effective, plan, err := MergePolicies(previous, contextDocument(), false)
+	if err != nil || effective.Preset != "regulated" || len(plan.Changes) != 0 {
+		t.Fatalf("omission weakened preset: %+v %+v %v", effective, plan, err)
+	}
+	submitted := contextDocument()
+	submitted.Preset = "team"
+	effective, plan, err = MergePolicies(previous, submitted, false)
+	if err != nil || effective.Preset != "team" || len(SensitiveChanges(plan)) != 1 || SensitiveChanges(plan)[0].Name != "preset" {
+		t.Fatalf("preset weakening lacked approval: %+v %v", plan, err)
+	}
+	effective, plan, err = MergePolicies(previous, contextDocument(), true)
+	if err != nil || effective.Preset != "" || len(SensitiveChanges(plan)) != 2 {
+		t.Fatalf("rollback must reset preset and review policy: %+v %v", plan, err)
 	}
 }
