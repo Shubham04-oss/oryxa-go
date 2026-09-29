@@ -253,6 +253,229 @@ func TestDocumentEditorUsesSignedScopedSourceAndCallback(t *testing.T) {
 	}
 }
 
+// A ticket opens the one file version it was signed for, until it expires, and
+// for nobody who lacks Oryxa's own secret.
+func TestASourceTicketOpensOnlyWhatItWasSignedFor(t *testing.T) {
+	docs := documentsAt("https://docs.oryxa.test", "https://docs.oryxa.test")
+	server := New(member(), &fakeThreads{}, Config{Documents: docs}, nil)
+	secret := []byte(ticketSecret)
+	valid := func(mutate func(*documentTicket)) string {
+		return signedTicket(t, "source", fromNow(time.Hour), jwt.SigningMethodHS256, secret, mutate)
+	}
+	rekeyed := func(mutate func(*documentTicket)) func(*documentTicket) {
+		return func(ticket *documentTicket) {
+			mutate(ticket)
+			ticket.Key = documentKey(ticket.Organization, ticket.User, ticket.Thread, ticket.Name, ticket.Version)
+		}
+	}
+	otherArtifact := "/v1/organizations/org_1/threads/thread_1/artifacts/screenshot.png/editor-source"
+	otherThread := "/v1/organizations/org_1/threads/thread_2/artifacts/draft.docx/editor-source"
+	otherOrganization := "/v1/organizations/org_2/threads/thread_1/artifacts/draft.docx/editor-source"
+
+	for name, test := range map[string]struct {
+		path   string
+		ticket string
+		want   int
+	}{
+		"a ticket for this file":                   {draftPath + "/editor-source", valid(nil), http.StatusOK},
+		"an expired ticket":                        {draftPath + "/editor-source", signedTicket(t, "source", fromNow(-time.Minute), jwt.SigningMethodHS256, secret, nil), http.StatusUnauthorized},
+		"a ticket that never expires":              {draftPath + "/editor-source", signedTicket(t, "source", nil, jwt.SigningMethodHS256, secret, nil), http.StatusUnauthorized},
+		"HS512":                                    {draftPath + "/editor-source", signedTicket(t, "source", fromNow(time.Hour), jwt.SigningMethodHS512, secret, nil), http.StatusUnauthorized},
+		"HS384":                                    {draftPath + "/editor-source", signedTicket(t, "source", fromNow(time.Hour), jwt.SigningMethodHS384, secret, nil), http.StatusUnauthorized},
+		"no signature at all (alg none)":           {draftPath + "/editor-source", signedTicket(t, "source", fromNow(time.Hour), jwt.SigningMethodNone, jwt.UnsafeAllowNoneSignatureType, nil), http.StatusUnauthorized},
+		"a callback ticket, for its own purpose":   {draftPath + "/editor-source", signedTicket(t, "callback", fromNow(time.Hour), jwt.SigningMethodHS256, secret, nil), http.StatusUnauthorized},
+		"signed with the document server's secret": {draftPath + "/editor-source", signedTicket(t, "source", fromNow(time.Hour), jwt.SigningMethodHS256, []byte(docsSecret), nil), http.StatusUnauthorized},
+		"signed with some other secret":            {draftPath + "/editor-source", signedTicket(t, "source", fromNow(time.Hour), jwt.SigningMethodHS256, []byte("another-secret-of-more-than-32-characters!"), nil), http.StatusUnauthorized},
+		"another artifact":                         {otherArtifact, valid(nil), http.StatusUnauthorized},
+		"another thread":                           {otherThread, valid(nil), http.StatusUnauthorized},
+		"another organization":                     {otherOrganization, valid(nil), http.StatusUnauthorized},
+		"a key that is not the claims'":            {draftPath + "/editor-source", valid(func(ticket *documentTicket) { ticket.Key = "oryxa-not-the-claims" }), http.StatusUnauthorized},
+		"no member":                                {draftPath + "/editor-source", valid(rekeyed(func(ticket *documentTicket) { ticket.User = "" })), http.StatusUnauthorized},
+		"version 0":                                {draftPath + "/editor-source", valid(rekeyed(func(ticket *documentTicket) { ticket.Version = 0 })), http.StatusUnauthorized},
+		"no ticket":                                {draftPath + "/editor-source", "", http.StatusUnauthorized},
+		"something that is not a token":            {draftPath + "/editor-source", "not.a.jwt", http.StatusUnauthorized},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := serve(server, http.MethodGet, test.path+"?ticket="+url.QueryEscape(test.ticket), "", nil)
+			if response.Code != test.want {
+				t.Fatalf("status = %d, want %d: %s", response.Code, test.want, response.Body.String())
+			}
+			if test.want == http.StatusUnauthorized && strings.Contains(response.Body.String(), "docx-original") {
+				t.Fatal("a refused ticket was given the file")
+			}
+		})
+	}
+}
+
+// A save needs both what Oryxa signed for the file and what Docs signed for
+// the save, and Docs signs with an expiry.
+func TestACallbackNeedsItsTicketAndDocsSignature(t *testing.T) {
+	rig := newDocumentRig(t)
+	callback := documentCallbackBody{Key: editedKey(), Status: 2, FileType: "docx", URL: rig.internalURL + "/changed.docx"}
+	body, _ := json.Marshal(callback)
+	path := draftPath + "/editor-callback?ticket=" + url.QueryEscape(goodTicket(t, "callback"))
+	docs := []byte(docsSecret)
+
+	for name, test := range map[string]struct {
+		path          string
+		authorization string
+		want          int
+	}{
+		"both, as Docs sends them":                          {path, "Bearer " + docsSignature(t, jwt.SigningMethodHS256, docs, signedBy(callback)), http.StatusOK},
+		"no Bearer":                                         {path, "", http.StatusUnauthorized},
+		"HS512":                                             {path, "Bearer " + docsSignature(t, jwt.SigningMethodHS512, docs, signedBy(callback)), http.StatusUnauthorized},
+		"no signature at all (alg none)":                    {path, "Bearer " + docsSignature(t, jwt.SigningMethodNone, jwt.UnsafeAllowNoneSignatureType, signedBy(callback)), http.StatusUnauthorized},
+		"expired":                                           {path, "Bearer " + docsSignature(t, jwt.SigningMethodHS256, docs, jwt.MapClaims{"payload": callback, "exp": time.Now().Add(-time.Hour).Unix()}), http.StatusUnauthorized},
+		"no expiry, which Docs never leaves out":            {path, "Bearer " + docsSignature(t, jwt.SigningMethodHS256, docs, jwt.MapClaims{"payload": callback}), http.StatusUnauthorized},
+		"signed with the ticket secret":                     {path, "Bearer " + docsSignature(t, jwt.SigningMethodHS256, []byte(ticketSecret), signedBy(callback)), http.StatusUnauthorized},
+		"no payload":                                        {path, "Bearer " + docsSignature(t, jwt.SigningMethodHS256, docs, jwt.MapClaims{"key": editedKey(), "exp": time.Now().Add(time.Minute).Unix()}), http.StatusUnauthorized},
+		"another file's key":                                {path, "Bearer " + docsSignature(t, jwt.SigningMethodHS256, docs, signedBy(documentCallbackBody{Key: "oryxa-another", Status: 2})), http.StatusUnauthorized},
+		"a ticket used as the Bearer":                       {path, "Bearer " + goodTicket(t, "callback"), http.StatusUnauthorized},
+		"a source ticket at the callback":                   {draftPath + "/editor-callback?ticket=" + url.QueryEscape(goodTicket(t, "source")), "Bearer " + docsSignature(t, jwt.SigningMethodHS256, docs, signedBy(callback)), http.StatusUnauthorized},
+		"a callback ticket that never expires":              {draftPath + "/editor-callback?ticket=" + url.QueryEscape(signedTicket(t, "callback", nil, jwt.SigningMethodHS256, []byte(ticketSecret), nil)), "Bearer " + docsSignature(t, jwt.SigningMethodHS256, docs, signedBy(callback)), http.StatusUnauthorized},
+		"a callback ticket signed with the document secret": {draftPath + "/editor-callback?ticket=" + url.QueryEscape(signedTicket(t, "callback", fromNow(time.Hour), jwt.SigningMethodHS256, docs, nil)), "Bearer " + docsSignature(t, jwt.SigningMethodHS256, docs, signedBy(callback)), http.StatusUnauthorized},
+		"no ticket":                                         {draftPath + "/editor-callback", "Bearer " + docsSignature(t, jwt.SigningMethodHS256, docs, signedBy(callback)), http.StatusUnauthorized},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig.reset()
+			headers := map[string]string{}
+			if test.authorization != "" {
+				headers["Authorization"] = test.authorization
+			}
+			response := serve(rig.server, http.MethodPost, test.path, string(body), headers)
+			if response.Code != test.want {
+				t.Fatalf("status = %d, want %d: %s", response.Code, test.want, response.Body.String())
+			}
+			if saved := len(rig.files.edited) > 0; saved != (test.want == http.StatusOK) {
+				t.Fatalf("saved = %v after a %d", saved, response.Code)
+			}
+			if test.want != http.StatusOK && rig.internalHits.Load() != 0 {
+				t.Fatal("a refused callback made the server fetch a file")
+			}
+		})
+	}
+
+	t.Run("GET is not a callback", func(t *testing.T) {
+		if response := serve(rig.server, http.MethodGet, path, "", nil); response.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("GET callback = %d", response.Code)
+		}
+	})
+	t.Run("a status that carries no file fetches none", func(t *testing.T) {
+		rig.reset()
+		for _, status := range []int{0, 1, 3, 4, 6, 7} {
+			other := callback
+			other.Status = status
+			if code, answer := rig.post(other); code != http.StatusOK || !strings.Contains(answer, `"error":0`) {
+				t.Fatalf("status %d = %d %s, want acknowledged", status, code, answer)
+			}
+		}
+		if rig.internalHits.Load() != 0 || len(rig.files.edited) != 0 {
+			t.Fatal("a status without a final file fetched or saved one")
+		}
+	})
+	t.Run("a body Docs did not sign is refused", func(t *testing.T) {
+		rig.reset()
+		signature := docsSignature(t, jwt.SigningMethodHS256, docs, signedBy(callback))
+		big := `{"key":"` + editedKey() + `","status":2,"url":"` + strings.Repeat("a", 70<<10) + `"}`
+		response := serve(rig.server, http.MethodPost, path, big, map[string]string{"Authorization": "Bearer " + signature})
+		if response.Code != http.StatusBadRequest || len(rig.files.edited) != 0 {
+			t.Fatalf("an oversized body = %d %s", response.Code, response.Body.String())
+		}
+	})
+}
+
+// Docs' word for the edited file is only ever a place to fetch it from, and
+// Oryxa fetches only from the document server it was set up with.
+func TestAnEditedFileIsFetchedOnlyFromTheConfiguredDocumentServer(t *testing.T) {
+	t.Run("an address on the public host is fetched from the internal one", func(t *testing.T) {
+		rig := newDocumentRig(t)
+		code, answer := rig.post(documentCallbackBody{
+			Key: editedKey(), Status: 2, FileType: "docx",
+			URL: rig.publicURL + "/cache/files/data/k/output.docx/output.docx?md5=x&expires=1",
+		})
+		if code != http.StatusOK || !strings.Contains(answer, `"error":0`) || string(rig.files.edited) != "from-internal" {
+			t.Fatalf("callback = %d %s; saved %q", code, answer, rig.files.edited)
+		}
+		if rig.publicHits.Load() != 0 || rig.internalHits.Load() != 1 || rig.lastInternal.Load() != "/cache/files/data/k/output.docx/output.docx?md5=x&expires=1" {
+			t.Fatalf("public host hit %d times, internal %d (last %v); want only the internal server, with the path and query", rig.publicHits.Load(), rig.internalHits.Load(), rig.lastInternal.Load())
+		}
+	})
+
+	t.Run("a host that is neither is never contacted", func(t *testing.T) {
+		rig := newDocumentRig(t)
+		code, answer := rig.post(documentCallbackBody{Key: editedKey(), Status: 2, FileType: "docx", URL: rig.foreignURL + "/x"})
+		if code != http.StatusOK || !strings.Contains(answer, `"error":1`) || len(rig.files.edited) != 0 {
+			t.Fatalf("callback = %d %s; saved %q", code, answer, rig.files.edited)
+		}
+		if rig.foreignHits.Load() != 0 || rig.internalHits.Load() != 0 {
+			t.Fatalf("foreign host hit %d times, internal %d; want none", rig.foreignHits.Load(), rig.internalHits.Load())
+		}
+	})
+
+	// Addresses that read as one host and mean another, or that are not an
+	// address to fetch a file from. None reaches the foreign server, and the
+	// refused ones fetch nothing at all.
+	for name, test := range map[string]struct {
+		url     func(rig *documentRig) string
+		refused bool
+	}{
+		"user information":              {func(rig *documentRig) string { return "http://user:pw@" + rig.internalHost + "/x" }, true},
+		"the foreign host as the host":  {func(rig *documentRig) string { return "http://" + rig.internalHost + "@" + rig.foreignHost + "/x" }, true},
+		"a fragment":                    {func(rig *documentRig) string { return "http://" + rig.internalHost + "/x#frag" }, true},
+		"another scheme":                {func(rig *documentRig) string { return "ftp://" + rig.internalHost + "/x" }, true},
+		"no scheme":                     {func(rig *documentRig) string { return "//" + rig.internalHost + "/x" }, true},
+		"no host":                       {func(rig *documentRig) string { return "/x" }, true},
+		"nothing":                       {func(rig *documentRig) string { return "" }, true},
+		"a backslash before an at sign": {func(rig *documentRig) string { return "http://" + rig.internalHost + "\\@" + rig.foreignHost + "/x" }, true},
+		"an encoded at sign":            {func(rig *documentRig) string { return "http://" + rig.internalHost + "%40" + rig.foreignHost + "/x" }, true},
+		"an opaque address":             {func(rig *documentRig) string { return "http:" + rig.internalHost + "/x" }, true},
+		"the foreign host in the path":  {func(rig *documentRig) string { return "http://" + rig.internalHost + "//" + rig.foreignHost + "/x" }, false},
+		"the foreign host, encoded, in the path": {func(rig *documentRig) string {
+			return "http://" + rig.internalHost + "/%2F%2F" + rig.foreignHost + "/x"
+		}, false},
+		"dot segments": {func(rig *documentRig) string { return "http://" + rig.internalHost + "/../../etc/passwd?a=b" }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newDocumentRig(t)
+			code, answer := rig.post(documentCallbackBody{Key: editedKey(), Status: 2, FileType: "docx", URL: test.url(rig)})
+			if code != http.StatusOK {
+				t.Fatalf("callback = %d %s", code, answer)
+			}
+			if rig.foreignHits.Load() != 0 {
+				t.Fatalf("the foreign server was contacted for %q", test.url(rig))
+			}
+			if test.refused && (!strings.Contains(answer, `"error":1`) || rig.internalHits.Load() != 0 || len(rig.files.edited) != 0) {
+				t.Fatalf("%q was not refused: %s, internal hits %d, saved %q", test.url(rig), answer, rig.internalHits.Load(), rig.files.edited)
+			}
+			// Whatever is fetched comes from the internal server.
+			if !test.refused && rig.internalHits.Load() != 1 {
+				t.Fatalf("%q reached the internal server %d times, want once", test.url(rig), rig.internalHits.Load())
+			}
+		})
+	}
+}
+
+func TestAnEditedFileOverTheLimitIsNotSaved(t *testing.T) {
+	chunk := make([]byte, 1<<20)
+	over := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		for range maxEditedDocumentBytes/len(chunk) + 1 {
+			if _, err := writer.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer over.Close()
+	files := &fakeThreads{}
+	server := New(member(), files, Config{Documents: documentsAt(over.URL, over.URL)}, nil)
+	callback := documentCallbackBody{Key: editedKey(), Status: 2, FileType: "docx", URL: over.URL + "/big.docx"}
+	body, _ := json.Marshal(callback)
+	response := serve(server, http.MethodPost, draftPath+"/editor-callback?ticket="+url.QueryEscape(goodTicket(t, "callback")), string(body),
+		map[string]string{"Authorization": "Bearer " + docsSignature(t, jwt.SigningMethodHS256, []byte(docsSecret), signedBy(callback))})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"error":1`) || len(files.edited) != 0 {
+		t.Fatalf("an edited file over the limit = %d %s; saved %d bytes", response.Code, response.Body.String(), len(files.edited))
+	}
+}
+
 // Nothing is opened, or read, for a deployment that has no working editor, and
 // no ticket is honoured by one.
 func TestAnUnconfiguredDocumentServerOpensNothing(t *testing.T) {
