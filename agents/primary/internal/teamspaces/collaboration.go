@@ -2,9 +2,12 @@ package teamspaces
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
 )
 
 // CollaborationSpaces exposes only spaces in which the persistent agent may
@@ -47,6 +50,18 @@ func (service *Service) CollaborationEntries(ctx context.Context, actor primarya
 	return result, nil
 }
 
+// CollaborationPublish is an agent publishing to a teamspace. Everybody on
+// the team reads what it publishes, and it is words a model wrote, so when
+// there is a guard (WithGuard) it reads them first: what it finds that is
+// always masked is masked, what it holds elsewhere for review (an email
+// address, a phone number, an address) is replaced by its kind, since a
+// teamspace has nobody to review a publication before the team reads it, and a
+// publication that could not be checked is not stored at all (ErrUnchecked).
+// The entry stored is the masked one; the result says what was found.
+//
+// Only this path is read: PublishEntry, which a member's own publication and
+// a room message lifted to the ledger go through, carries the member's own
+// words and never asks the guard.
 func (service *Service) CollaborationPublish(ctx context.Context, actor primaryagents.TeamspaceActor, token, id string, input primaryagents.SharedEntryInput) (primaryagents.SharedEntry, error) {
 	member := collaborationActor(actor, token)
 	space, err := service.Get(ctx, member, id)
@@ -60,14 +75,107 @@ func (service *Service) CollaborationPublish(ctx context.Context, actor primarya
 	for _, artifact := range input.Artifacts {
 		artifacts = append(artifacts, EntryArtifact{Name: artifact.Name, URI: artifact.URI, MediaType: artifact.MediaType})
 	}
-	entry, err := service.PublishEntry(ctx, member, id, PublishEntryInput{
+	publication := PublishEntryInput{
 		AuthorAgentID: actor.AgentID, Kind: EntryKind(input.Kind), Title: input.Title,
 		Summary: input.Summary, ToolsUsed: input.ToolsUsed, Artifacts: artifacts,
-	})
+	}
+	var found *primaryagents.SharedEntryGuard
+	if service.guard != nil {
+		publication, found, err = service.guarded(ctx, space.ID, publication)
+		if err != nil {
+			return primaryagents.SharedEntry{}, err
+		}
+	}
+	entry, err := service.PublishEntry(ctx, member, id, publication)
 	if err != nil {
 		return primaryagents.SharedEntry{}, err
 	}
-	return collaborationEntry(entry), nil
+	shared := collaborationEntry(entry)
+	shared.Guard = found
+	return shared, nil
+}
+
+// ErrUnchecked is what an agent's publication is refused with when the answer
+// guard could not check it: nothing was stored, and the team reads none of it.
+// It is the agent's to be told, in these words, and not a caller's error to
+// map to a status: no route publishes an agent's words.
+var ErrUnchecked = errors.New("the publication couldn't be checked, so it wasn't shared with the teamspace: nothing was stored")
+
+// The texts of a publication the guard reads, in the order it is handed them:
+// the title and the summary as they are, and the artifacts' names, URIs and
+// media types and the tools used, each list as one text, one to a line. A
+// publication so costs six checks whatever it lists, and each of those lines
+// is one line: names, media types and tool names are cleaned to one, and a URI
+// that holds a line break is not a URI.
+const (
+	titleText = iota
+	summaryText
+	artifactNamesText
+	artifactURIsText
+	artifactMediaTypesText
+	toolsUsedText
+	publicationTexts
+)
+
+// guarded is publication as the team may read it, and what the guard found in
+// it. It is read as the ledger would store it, cleaned and valid: what the
+// ledger would refuse is refused before the guard is asked. The guard reads
+// every text, and what it allows to be shared (answerguard.Verdict.Shareable,
+// the rule a room applies too) replaces the text, so nothing but that ever
+// reaches the ledger. A publication the guard could not check, or whose lists
+// no longer hold the lines they were given, is refused with ErrUnchecked.
+func (service *Service) guarded(ctx context.Context, teamspaceID string, publication PublishEntryInput) (PublishEntryInput, *primaryagents.SharedEntryGuard, error) {
+	publication = cleanPublishEntry(publication)
+	if err := validatePublishEntry(publication); err != nil {
+		return PublishEntryInput{}, nil, err
+	}
+	names, uris, mediaTypes := make([]string, len(publication.Artifacts)), make([]string, len(publication.Artifacts)), make([]string, len(publication.Artifacts))
+	for index, artifact := range publication.Artifacts {
+		names[index], uris[index], mediaTypes[index] = artifact.Name, artifact.URI, artifact.MediaType
+	}
+	texts := make([]string, publicationTexts)
+	texts[titleText], texts[summaryText] = publication.Title, publication.Summary
+	texts[artifactNamesText], texts[artifactURIsText] = strings.Join(names, "\n"), strings.Join(uris, "\n")
+	texts[artifactMediaTypesText], texts[toolsUsedText] = strings.Join(mediaTypes, "\n"), strings.Join(publication.ToolsUsed, "\n")
+
+	outcome := service.guard.Check(ctx, texts).At(len(texts), answerguard.IntensityStrict)
+	if outcome.State != answerguard.StateClear || outcome.Shareable == nil {
+		// What was found is logged by kind, never by value.
+		service.logger.InfoContext(ctx, "the answer guard read what an agent published to a teamspace",
+			"teamspace_id", teamspaceID, "agent_id", publication.AuthorAgentID,
+			"state", outcome.State, "kinds", outcome.Kinds, "published", outcome.Shareable != nil)
+	}
+	shareable := outcome.Shareable
+	if shareable == nil {
+		return PublishEntryInput{}, nil, ErrUnchecked
+	}
+	names, namesKept := splitLines(shareable[artifactNamesText], len(publication.Artifacts))
+	uris, urisKept := splitLines(shareable[artifactURIsText], len(publication.Artifacts))
+	mediaTypes, mediaTypesKept := splitLines(shareable[artifactMediaTypesText], len(publication.Artifacts))
+	tools, toolsKept := splitLines(shareable[toolsUsedText], len(publication.ToolsUsed))
+	if !namesKept || !urisKept || !mediaTypesKept || !toolsKept {
+		return PublishEntryInput{}, nil, ErrUnchecked
+	}
+
+	checked := publication
+	checked.Title, checked.Summary, checked.ToolsUsed = shareable[titleText], shareable[summaryText], tools
+	checked.Artifacts = make([]EntryArtifact, len(publication.Artifacts))
+	for index := range publication.Artifacts {
+		checked.Artifacts[index] = EntryArtifact{Name: names[index], URI: uris[index], MediaType: mediaTypes[index]}
+	}
+	return checked, &primaryagents.SharedEntryGuard{State: outcome.State, Kinds: outcome.Kinds}, nil
+}
+
+// splitLines is a list the guard read as one text, one element to a line, back
+// into its n elements, and false when what it shares no longer holds n lines
+// (or, for none, holds anything): a list that came back another length cannot
+// be put back element by element.
+func splitLines(text string, n int) ([]string, bool) {
+	if n == 0 {
+		return nil, strings.TrimSpace(text) == ""
+	}
+	lines := strings.Split(text, "\n")
+	return lines, len(lines) == n
 }
 
 func collaborationActor(actor primaryagents.TeamspaceActor, token string) Actor {

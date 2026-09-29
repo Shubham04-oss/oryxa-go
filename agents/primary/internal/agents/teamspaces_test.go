@@ -2,6 +2,8 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -286,5 +288,75 @@ func TestAPinnedRunReadsTheContextOfItsTeamspaceAlone(t *testing.T) {
 	answer = usingTeamspaceTool(t, context.Background(), service, "teamspaces_context", map[string]any{"query": ""})
 	if len(service.read) != 0 || !strings.Contains(answer, "name the teamspace or human team") {
 		t.Errorf("an unpinned run with two teamspaces and no query read %v and answered %q, want it told to name one", service.read, answer)
+	}
+}
+
+// guardedPublishing is a collaboration service whose publications the answer
+// guard has read, as internal/teamspaces makes them: it answers with the entry
+// as stored and what the guard found, or, for one it could not check, with the
+// refusal.
+type guardedPublishing struct {
+	fakeTeamspaceCollaboration
+	refuse error
+	found  *SharedEntryGuard
+}
+
+func (service *guardedPublishing) CollaborationPublish(_ context.Context, actor TeamspaceActor, _, id string, input SharedEntryInput) (SharedEntry, error) {
+	if service.refuse != nil {
+		return SharedEntry{}, service.refuse
+	}
+	return SharedEntry{
+		ID: "tse_1", TeamspaceID: id, AuthorAgentID: actor.AgentID, Kind: input.Kind, Title: input.Title,
+		Summary: strings.ReplaceAll(input.Summary, "hunter2", "{PASSWORD}"), Guard: service.found,
+	}, nil
+}
+
+// TestThePublishToolTellsTheAgentWhatTheGuardDidWithItsPublication: the agent
+// is told, in the tool's own description, that what it publishes is checked
+// and what happens to it; the result of a publication carries what the guard
+// found beside the entry as stored, and one that could not be checked comes
+// back as an error saying it was not shared, with no entry.
+func TestThePublishToolTellsTheAgentWhatTheGuardDidWithItsPublication(t *testing.T) {
+	publication := map[string]any{"teamspace_id": "tsp_1", "kind": "update", "title": "Staging", "summary": "The password is hunter2."}
+
+	box, err := TeamspaceToolbox(TeamspaceConfig{Service: &guardedPublishing{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := box.Toolset.Tools(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	described := false
+	for _, one := range tools {
+		if one.Name() == "teamspaces_publish" {
+			description := one.Description()
+			described = strings.Contains(description, "personal data") && strings.Contains(description, "{EMAIL}") &&
+				strings.Contains(description, "cannot be checked is not published")
+		}
+	}
+	if !described {
+		t.Fatal("teamspaces_publish does not tell the agent that its publication is checked, masked, and withheld when it cannot be checked")
+	}
+
+	answer := usingTeamspaceTool(t, context.Background(),
+		&guardedPublishing{found: &SharedEntryGuard{State: "masked", Kinds: []string{"PASSWORD"}}}, "teamspaces_publish", publication)
+	for _, said := range []string{"tse_1", "The password is {PASSWORD}.", "guard:map[kinds:[PASSWORD] state:masked]"} {
+		if !strings.Contains(answer, said) {
+			t.Errorf("the tool answered %q, want %q in it", answer, said)
+		}
+	}
+
+	answer = usingTeamspaceTool(t, context.Background(),
+		&guardedPublishing{refuse: errors.New("the publication couldn't be checked, so it wasn't shared with the teamspace: nothing was stored")},
+		"teamspaces_publish", publication)
+	if !strings.Contains(answer, "error") || !strings.Contains(answer, "couldn't be checked, so it wasn't shared") || strings.Contains(answer, "tse_1") {
+		t.Errorf("a publication that could not be checked was answered %q, want an error saying it was not shared", answer)
+	}
+
+	// Read back from the ledger, an entry carries no finding.
+	encoded, err := json.Marshal(SharedEntry{ID: "tse_1"})
+	if err != nil || strings.Contains(string(encoded), "guard") {
+		t.Errorf("an entry with no finding encodes as %s, %v", encoded, err)
 	}
 }

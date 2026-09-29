@@ -98,6 +98,19 @@ type SharedArtifact struct {
 	MediaType string `json:"media_type,omitempty"`
 }
 
+// SharedEntryGuard is what the answer guard found in a publication an agent
+// made, which every member of the team reads: "clear", nothing; "masked", only
+// kinds that are always masked, which were published masked; "held", a kind
+// that a member would review elsewhere (an email address, a phone number, an
+// address). A teamspace has nobody to review a publication before the team
+// reads it, so such a kind was published replaced by its kind, as {EMAIL}. A
+// publication that could not be checked is not published, and has no entry to
+// carry this. Kinds are Bedrock's entity types, never a value.
+type SharedEntryGuard struct {
+	State string   `json:"state"`
+	Kinds []string `json:"kinds,omitempty"`
+}
+
 type SharedEntry struct {
 	ID              string           `json:"id"`
 	TeamspaceID     string           `json:"teamspace_id"`
@@ -110,6 +123,10 @@ type SharedEntry struct {
 	ToolsUsed       []string         `json:"tools_used"`
 	Artifacts       []SharedArtifact `json:"artifacts"`
 	CreatedAt       time.Time        `json:"created_at"`
+	// Guard is what the answer guard found in the publication as its agent
+	// made it, present only on the result of publishing: absent where no guard
+	// read it, and on every entry read back from the ledger.
+	Guard *SharedEntryGuard `json:"guard,omitempty"`
 }
 
 type SharedEntryInput struct {
@@ -158,7 +175,7 @@ func TeamspaceToolbox(config TeamspaceConfig) (Toolbox, error) {
 		return Toolbox{}, err
 	}
 	publish, err := functiontool.New(functiontool.Config{
-		Name: "teamspaces_publish", Description: "Publishes a concise, attributed result to shared teamspace. The runtime fixes authorship to this agent; private reasoning, credentials, and unrequested private context must not be included.",
+		Name: "teamspaces_publish", Description: "Publishes a concise, attributed result to shared teamspace. The runtime fixes authorship to this agent; private reasoning, credentials, and unrequested private context must not be included. Oryxa checks what you publish for personal data before the team reads it: secrets, and card, bank and government numbers, are masked, and email addresses, phone numbers and addresses are replaced by their kind, such as {EMAIL}; the result says what was found (guard). A publication that cannot be checked is not published, and the call fails: nothing was shared.",
 	}, handlers.publish)
 	if err != nil {
 		return Toolbox{}, err
