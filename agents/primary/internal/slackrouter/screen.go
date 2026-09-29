@@ -75,7 +75,10 @@ var ErrScreenUnavailable = errors.New("slackrouter: no Jev is configured to scre
 var ErrScreenUnusable = errors.New("slackrouter: Jev's answer to the screen of an ask cannot be used")
 
 // The question ids are for this file's code alone and are never shown to the
-// model, which is why each question below says all of what it means.
+// model, which is why each question below says all of what it means. They are
+// the keys of the request on the wire, though, and a stand-in for TypeSafe
+// answers each as a yes or no by them: work, injection, plausible, credential,
+// and fit_N for the owner in position N of the state's owners.
 const (
 	qWork       = "work"
 	qInjection  = "injection"
@@ -186,9 +189,9 @@ func yesOf(result jev.Result, id string) (float64, error) {
 // verdictOf is the policy on what the probabilities add up to for whether the
 // ask goes ahead. What is most dangerous, and least worth explaining to the
 // asker, is named first: the injection; then what is only out of place. A
-// request for a credential is not among them: whether it goes ahead is decided
-// by the same three, so a secret is asked of nobody whom the asker would not
-// plausibly ask, and never by an injection.
+// request for a credential is not among them, since it is asked; but it goes
+// ahead on the same three, so a secret is asked for only by someone who would
+// plausibly ask for it, and never in an injection.
 func verdictOf(scores ScreenScores) consentpolicy.Screen {
 	switch {
 	case scores.Injection >= InjectionThreshold:

@@ -102,6 +102,17 @@ func cleanScore(id string, _ screenState) float64 {
 	panic("a question this fake does not know: " + id)
 }
 
+// scoreWith is Jev's read of a clean ask, except for the questions it is given
+// a probability of yes for.
+func scoreWith(overrides map[string]float64) func(string, screenState) float64 {
+	return func(id string, state screenState) float64 {
+		if yes, ok := overrides[id]; ok {
+			return yes
+		}
+		return cleanScore(id, state)
+	}
+}
+
 // keywordScore reads the state as a crude judge would, by what it says, so that
 // a table of asks can be told apart by what they contain. It stands in for
 // Jev's judgment; what the tests check is what the router does with it.

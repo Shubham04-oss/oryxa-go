@@ -651,3 +651,35 @@ func TestTheRefusalsAreLoggedAsCodes(t *testing.T) {
 		t.Fatalf("the log = %s", logs.String())
 	}
 }
+
+// TestARefusedAskIsAnAnsweredJobNotARetriedOne: through the worker, a mention
+// the screen could not judge is refused once and finished, not tried again,
+// and one the screen found to be an injection is the same.
+func TestARefusedAskIsAnAnsweredJobNotARetriedOne(t *testing.T) {
+	for name, fake := range map[string]*fakeJev{
+		"Jev failing":            {err: errors.New("jev: TypeSafe answered HTTP 500")},
+		"Jev too slow":           {hang: true},
+		"an injection found":     {score: scoreWith(map[string]float64{qInjection: 0.99})},
+		"words that are no work": {score: scoreWith(map[string]float64{qWork: 0})},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.member("URAYA", "Raya")
+			h.useJev(fake, 25*time.Millisecond)
+			job := h.mention(toBot("ask <@URAYA> for the Q3 numbers"))
+			queue := newFakeQueue()
+			worker := NewWorker(queue, h.router, WorkerConfig{}, nil)
+			if err := worker.HandleEvent(context.Background(), MessageReceivedDetailType, "evt_1", eventData(job.InboundID)); err != nil {
+				t.Fatal(err)
+			}
+			wake(t, worker)
+			if state := queue.state(job.InboundID); !state.handled || state.dropped || state.Attempts != 0 {
+				t.Fatalf("state = %+v, want a job that was answered on its first attempt", state)
+			}
+			h.noAsk()
+			if len(h.slack.sent()) != 1 || h.slack.sent()[0].Template != TemplateRefusal {
+				t.Fatalf("posts = %+v, want one refusal", h.slack.sent())
+			}
+		})
+	}
+}
