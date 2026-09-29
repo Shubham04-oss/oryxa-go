@@ -355,6 +355,11 @@ must be a teammate's primary agent — their whisperer seat — or an active
 specialist a current teammate contributed there. Anything else is refused
 before anything is recorded (see [Agent request API](#agent-request-api)).
 
+A run pinned to one teamspace (see
+[Pinning a run to a teamspace](#pinning-a-run-to-a-teamspace)), which is how a
+side conversation runs, files its requests in that teamspace whatever the model
+names, and refuses to name another.
+
 Every request carries `approval`, set when it is made. The requester only
 chooses whether to ask inside a teamspace, and in which; who approves then
 follows the target's own standing there, and nothing the requester sends
@@ -612,8 +617,9 @@ from inside a run.
 | `POST /v1/organizations/{org}/threads` | Starts a thread; `201` with it. The body is optional: `{"origin": "side_conversation"}` starts one for a side conversation, while no body, `{}`, or `"origin": "chat"` (or `""`) starts a chat. Any other origin is a `400 invalid_request`. Its state is seeded from the member's auth record in this organization |
 | `GET /v1/organizations/{org}/threads/{thread}` | The thread with its history as items, and `pending_confirmations` |
 | `DELETE /v1/organizations/{org}/threads/{thread}` | Removes the thread, and the artifacts its runs kept that are not the member's own `user:` ones |
-| `POST /v1/organizations/{org}/threads/{thread}/runs` | Runs Krude on the thread and streams the run |
+| `POST /v1/organizations/{org}/threads/{thread}/runs` | Runs Krude on the thread and streams the run. The body may pin the run to one teamspace with `teamspace_id` (see [Pinning a run to a teamspace](#pinning-a-run-to-a-teamspace)) |
 | `GET /v1/organizations/{org}/threads/{thread}/artifacts/{name}` | A file the thread's runs kept, its latest version or `?version=` |
+| `POST /v1/organizations/{org}/answer-guard/check` | Reads the texts of an answer for personal data before the member is shown it, and says what may be shared of them (see [Checking an answer before it is shown](#checking-an-answer-before-it-is-shown)) |
 | `GET /v1/organizations/{org}/preferences` | What the member chose about Krude here: `{"app_updates": true}` until they turn [wake-ups](#wake-ups) off |
 | `PUT /v1/organizations/{org}/preferences` | Records the member's own choice, `{"app_updates": false}`; an agent's token is refused like everywhere else |
 
@@ -941,6 +947,91 @@ team reads it, so nothing there is held: an answer with a held kind is said
 with every such value replaced by its kind, as `{EMAIL}`, and one that could
 not be checked is not said at all, a fixed line saying so in its place.
 
+What an agent publishes to a teamspace's ledger is read the same way before
+the team reads it (`teamspaces.Service.CollaborationPublish`, which
+`teamspaces_publish` calls; the guard is given with `teamspaces.WithGuard`).
+It reads the publication as the ledger would store it, so one the ledger would
+refuse for what it is (no title, an unsafe artifact location) is refused
+before a check is spent on it: the title and the summary, and the artifacts'
+names, URIs and media types and the tools used, each list as one text with a
+line to an element. What may be shared is the rule a room applies
+(`answerguard.Verdict.Shareable`, one function for the room, the ledger and
+the check route below): nothing found, as it was; only kinds that are always
+masked, masked; a held kind, its value replaced by its kind as `{EMAIL}`, since
+a teamspace has nobody to review a publication before the team reads it. The
+entry stored is that one, and the tool's result carries what was found beside
+it as `guard`, `{"state":"masked","kinds":["PASSWORD"]}`, which is absent where
+no guard runs and on every entry read back from the ledger. A publication that
+could not be checked, or whose lists no longer hold the lines they were given,
+is not stored at all, and the tool fails saying it couldn't be checked, so it
+wasn't shared. What a member publishes is their own words and is not read:
+`POST .../entries`, and a room message lifted to the ledger, go through
+`PublishEntry`, which never asks the guard.
+
+### Checking an answer before it is shown
+
+A side conversation shows a member what a teammate's agent answered. The web
+app has the agents service read the answer first, and shows what it may:
+
+```text
+POST /v1/organizations/{org}/answer-guard/check
+{"texts": ["..."], "origin": "peer", "request": "..."}
+```
+
+It is the member's own call, as every route that changes or spends something
+is: a cookie needs an allowed origin, an agent's token is `403 forbidden`, no
+credentials are `401 unauthorized`, and the caller has to be a member of the
+organization. `texts` is 1 to 8 texts of at most 25,000 characters each.
+`origin` is optional and exactly `"peer"`, the default, or `"owner"`; `request`
+is optional, at most 25,000 characters, and says what was asked. It is only
+measured: nothing reads it, keeps it or logs it, and it is reserved for a
+relevance check still to come. Anything else, an unknown field included, is
+`400 invalid_request`. The body may run to about a megabyte, since eight texts
+of 25,000 wide characters are more than the 256 KiB every other route reads.
+
+The answer is `{"checked": true, "state": "clear" | "masked" | "held",
+"kinds": [...], "shareable": [...] | null}`. `shareable` is one text for each
+text sent, or `null`, meaning share nothing. `kinds` are entity names, never
+values, and `["UNCHECKED"]` when the guard could not read the text, which
+shares nothing, as does a verdict that does not add up. With no guardrail
+configured nothing is checked, and it says so: `{"checked": false, "state":
+"clear", "kinds": [], "shareable": [the texts as given]}`.
+
+How much is taken out follows whose answer it is, as an intensity
+(`answerguard.Intensity`) chosen by `origin` in one place (`checkLevel`), so
+that when the owner gets a setting for it the level changes and the route does
+not:
+
+| `origin` | Intensity | Masks | Leaves as written | `state` and `kinds` |
+| --- | --- | --- | --- | --- |
+| `"peer"`, or none | `strict`, what `Verdict.Shareable` does | Kinds that are always masked, and held kinds as `{EMAIL}` | Nothing | As the guard found: `held` with the held kinds when there are any, `masked` with the masked ones |
+| `"owner"` | `secrets` | Only kinds that are always masked (`answerguard.MaskedKinds`: passwords, AWS keys, card, bank and government numbers) | `EMAIL`, `PHONE` and `ADDRESS` | Only what was acted on: `masked` with the always-masked kinds, else `clear` with `kinds: []` and the texts as given |
+| none yet | `off` | Nothing | Everything, an answer that could not be checked included | Always `clear` |
+
+`"owner"` is an answer the member started themselves and reads themselves: they
+decided that their own personal data is not masked in it. An answer with only
+an email address in it comes back `clear`, and one with an email address and a
+password comes back with the password masked and the address intact. Even
+there an answer the guard could not read shares nothing, since what could not
+be read may hold a secret. The guard reads every text the same way; the
+verdict records the texts as they were given and every always-masked kind it
+found beside a held one (`Verdict.Given`, `Verdict.SecretKinds`), which is what
+`Verdict.At` needs to say what a level comes to. A guardrail that left an
+always-masked value in a text (it is no longer set up as it should be) is held
+for it, and at `secrets` the answer is then shared as its fully masked version,
+held values included, since the guard keeps no version with only the secrets
+masked.
+
+A member may make 30 checks a minute, each counted against them in this
+process, in the organization they are in. The thirty-first is `429
+rate_limited` with `Retry-After`, and never reaches the guard; a member held to
+the limit is let in again as their oldest check leaves the minute. A request
+that was refused before it was read, malformed or not the member's to make,
+counts for nothing, and the limit holds with no guardrail configured too, so
+what development lets through is what production will. What was found is
+logged by kind, never by value, and no text and nothing of `request` is ever
+logged.
+
 ### A teamspace is a room
 
 A teamspace is read and written as a conversation: the people on the team and
@@ -1044,9 +1135,12 @@ than merely descriptive. `teamspaces_list` shows only spaces where the current
 persistent agent is a whisperer or explicit specialist contribution,
 `teamspaces_entries` reads the recent attributed ledger, and
 `teamspaces_publish` writes as the current session agent without accepting an
-author id from the model. Specialists lose this view immediately when their
-contribution is withdrawn; primary participation follows live Teams
-membership.
+author id from the model, after the answer guard has read what it publishes
+(see [Answer guard](#answer-guard)). Specialists lose this view immediately
+when their contribution is withdrawn; primary participation follows live Teams
+membership. A run pinned to one teamspace (see
+[Pinning a run to a teamspace](#pinning-a-run-to-a-teamspace)) sees, reads and
+publishes in that teamspace alone.
 
 Contributing a specialist never transfers its identity, instructions, app
 connections, or tool permissions. The specialist still runs as its owner.
@@ -1135,7 +1229,7 @@ happens before the stream opens, so a refusal is an ordinary JSON error:
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_request` | 400 | The body is not one of the two shapes, or answers something that is not waiting |
+| `invalid_request` | 400 | The body is not one of the two shapes, or answers something that is not waiting, or its `teamspace_id` is blank, holds whitespace or is over 128 characters |
 | `unauthorized` / `forbidden` | 401 / 403 | Auth does not know the caller, or they are not in the organization; an agent's token; a cookie from another origin |
 | `not_found` | 404 | Not the member's thread in this organization |
 | `run_in_progress` | 409 | Another run is answering the thread |
@@ -1207,6 +1301,47 @@ executions are durable at the orchestration and ledger boundary and can be
 redelivered through the callback queue. An individual model attempt remains
 bounded by its run timeout; a retry reclaims the execution only after its
 lease expires.
+
+### Pinning a run to a teamspace
+
+A side conversation runs the member's own agent on a prompt that names the
+teamspace it is about. The prompt alone does not tie the run to it: without a
+pin, `interactions_create` passes whatever `teamspace_id` the model names
+straight to the request ledger, and a model that named another teamspace, by
+mistake or because words a teammate wrote in the prompt told it to, would ask
+that teamspace's agents for work, and for an `automatic` specialist there
+without its owner's approval. So the run can be pinned.
+
+`POST .../threads/{thread}/runs` takes an optional `teamspace_id`: not blank
+after trimming, at most 128 characters, and no whitespace inside, or the run is
+`400 invalid_request` and never starts. A blank one is refused rather than
+read as none, since a run that was meant to be pinned and quietly is not would
+answer as though it were; left out, or `null`, the run is not pinned, and
+behaves exactly as it always did. It works with a message or with answers to
+confirmations, and it pins that run and no other: the thread's next run has
+none unless its caller sends one again. The agent-run route
+(`.../agents/{agent}/runs`) takes none.
+
+The pin travels on the run's context beside its origin
+(`agents.WithPinnedTeamspace`, `threads.RunInput.TeamspaceID`). It is never
+written to the thread's state, the run's record or any event, and the model can
+neither read nor write it. In a pinned run:
+
+- `interactions_create` files its request in the pinned teamspace when the model
+  names none, or names that one (however padded); one that names another is a
+  tool error, and nothing is filed, before a token is even asked for;
+- `teamspaces_publish` and `teamspaces_entries` do the same with their
+  `teamspace_id`, and `teamspaces_context` looks only among the pinned teamspace,
+  so a query that names another finds nothing, and one that names none finds the
+  pinned one though the agent may work in several;
+- `teamspaces_list` shows the pinned teamspace alone, an empty list when the
+  agent has no seat in it.
+
+The refusal says the conversation is about one teamspace and never which, so
+the pin is not something the model can learn by asking. The pin grants nothing:
+it only narrows what the model may name, and the request ledger and the
+teamspace service still check the live seat and team membership of the member
+the run acts for, exactly as they do without one.
 
 ## Events agents consumes
 
