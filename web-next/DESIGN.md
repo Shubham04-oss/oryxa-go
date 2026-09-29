@@ -94,6 +94,29 @@ not permission to copy every incidental value into a new component.
   and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
   sit **above** the work panel. The panel's top area belongs to the selected
   view's heading and state, not the tab strip.
+- Expanding the primary agent's chat uses Agent overview as focused work:
+  the same mounted conversation sits on the left, and the overview occupies
+  the work panel. The right rail offers only DMs and Teams in this state.
+  Files from the current conversation appear in the overview, loading the
+  latest conversation until the chat selects another. Selecting a file or
+  receiving a newly saved file turns the work panel into a clean, compact
+  viewer while the mounted chat remains on the left, even if the agent panel
+  was never opened. Markdown uses the same rendering as chat, and PDF, DOCX,
+  PPTX, XLSX, CSV, text and images use small in-app rendering libraries, with
+  only page or sheet navigation when needed. A Word document is drawn in a
+  sandboxed frame of its own, so nothing it carries (styles, links, scripts)
+  can reach the app around it. A file over 25 MB is not read: the viewer says
+  it is too large to preview and leaves it to the download. The viewer has no
+  annotation or office-editor chrome. A compact Edit button, offered for DOCX,
+  XLSX and PPTX only (the formats the editor saves back as they were), opens
+  the full ONLYOFFICE editor, and View returns to the simple viewer.
+  Edits save as new conversation-file versions. A missing editor preserves
+  native PDF, image and text previews where available. Back returns to the
+  overview within that panel. On a phone, the chat and
+  work panel stack, and the chat takes the available height while composing.
+  The agent receives only the current Oryxa view, selection and explicitly
+  marked visible item handles when a message is sent; it never implies a live
+  view of other windows or grants access to those items.
 - Header-row controls — work tabs, panel tabs, panel toggles — sit on the
   header's own centre row (y=28 in its 56px band), vertically level with the
   back button and title, even when (like the work tabs) they are positioned
@@ -101,14 +124,16 @@ not permission to copy every incidental value into a new component.
 - An agent conversation reads as a quiet log on the base surface: the
   member's messages in raised bubbles on the right; the agent's answers as
   full-width Markdown, labelled only when a sub-agent wrote them; each run of
-  tool calls folded into one muted status row; confirmations as small cards
-  with Decline and Approve pills (several waiting are answered together);
+  tool calls folded into one muted status row with a Thinking Orb for the
+  activity state and small app marks when a call identifies an app; the row
+  never expands into a list. Confirmations are small cards with Decline and
+  Approve pills (several waiting are answered together);
   files as a thumbnail or a file chip; a failed run as one muted error line,
   and an answer cut short marked "Interrupted". A specialist's answer is its
   work result's summary, with one muted line under it for the rest (needs
   your input or blocked, the tools it used, the files it saved, the hand-offs
-  it suggests); while it works, one muted pulsing line says so. In the agent
-  panel one muted row above it names the conversation, with a quiet icon
+  it suggests); while it works, one muted line with a Thinking Orb says so. In
+  the agent panel one muted row above it names the conversation, with a quiet icon
   button that starts a new one; a specialist's focused view carries the same
   in its presence row. No history list until one is designed.
 - People is a DM area, not teammate administration or a combined “People &
@@ -167,7 +192,7 @@ not permission to copy every incidental value into a new component.
     teammate and the teamspace, with both people's agents as small voxel
     avatars. People's messages read as a DM's; a question to an agent carries
     a quiet "Asked Leo". An agent's message is its avatar and "Leo · your
-    agent" or "Nia · Priya's agent", full-width Markdown, a pulsing working
+    agent" or "Nia · Priya's agent", full-width Markdown, a Thinking Orb working
     line until it has words, and for a request's result one quiet line, "on
     behalf of Priya · approved by Priya" (or "ran without asking"). The
     member's own agent answers live on the member's screen alone: the other

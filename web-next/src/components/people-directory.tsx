@@ -91,6 +91,9 @@ function PersonRow({
     <button
       type="button"
       data-person-id={person.id}
+      data-screen-context-kind="person"
+      data-screen-context-id={person.id}
+      data-screen-context-name={person.name}
       aria-label={`Message ${person.name}`}
       aria-describedby={contextId}
       onClick={() => onMessage(person.id)}

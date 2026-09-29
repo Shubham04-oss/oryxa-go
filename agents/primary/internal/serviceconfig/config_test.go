@@ -422,3 +422,27 @@ func TestFromEnvRefusesAListOfOrganizationsSeparatedByAnythingButCommas(t *testi
 		t.Errorf("an id as auth makes it: %v, %v, want it taken", config.GuardHoldOrgs, err)
 	}
 }
+
+func TestFromEnvReadsTheDocumentEditorSettings(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{
+		"AGENTS_PRIMARY_DOCUMENT_SERVER_URL":          " https://docs.oryxa.test ",
+		"AGENTS_PRIMARY_DOCUMENT_SERVER_INTERNAL_URL": "http://documents:80",
+		"AGENTS_PRIMARY_DOCUMENT_API_URL":             "https://api.oryxa.test",
+		"AGENTS_PRIMARY_DOCUMENT_JWT_SECRET":          " the-document-servers-own-secret ",
+		"AGENTS_PRIMARY_DOCUMENT_TICKET_SECRET":       " a-different-secret-for-oryxas-tickets ",
+	}))
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.DocumentServerURL != "https://docs.oryxa.test" || config.DocumentServerInternalURL != "http://documents:80" || config.DocumentAPIURL != "https://api.oryxa.test" {
+		t.Fatalf("document server URLs = %q, %q, %q", config.DocumentServerURL, config.DocumentServerInternalURL, config.DocumentAPIURL)
+	}
+	// Two secrets, read from two variables: the ticket secret never comes from
+	// the one the document server holds.
+	if config.DocumentJWTSecret != "the-document-servers-own-secret" || config.DocumentTicketSecret != "a-different-secret-for-oryxas-tickets" {
+		t.Fatalf("document secrets = %q, %q", config.DocumentJWTSecret, config.DocumentTicketSecret)
+	}
+	if config, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_DOCUMENT_JWT_SECRET": "only-the-jwt-secret"})); err != nil || config.DocumentTicketSecret != "" {
+		t.Fatalf("a ticket secret was made up from the JWT secret: %q, %v", config.DocumentTicketSecret, err)
+	}
+}

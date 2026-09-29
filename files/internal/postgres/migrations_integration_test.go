@@ -50,7 +50,8 @@ func openMigratedSchema(t *testing.T, pattern string) (*Store, context.Context) 
 		t.Fatal(err)
 	}
 	query := scoped.Query()
-	query.Set("search_path", schemaName)
+	// Keep public's extension types visible while tables stay in the test schema.
+	query.Set("search_path", schemaName+",public")
 	scoped.RawQuery = query.Encode()
 	store, err := Open(ctx, scoped.String())
 	if err != nil {

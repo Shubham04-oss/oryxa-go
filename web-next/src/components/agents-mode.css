@@ -111,6 +111,55 @@
 .workspace-focus-header .workspace-agents-focus-avatar .workspace-avatar { width: 31px; height: 31px; }
 
 /* Agent overview */
+.workspace-primary-files-section { max-width: 960px; }
+.workspace-primary-files-section > .workspace-eyebrow { margin-bottom: 12px; }
+.workspace-primary-file-list { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.workspace-primary-file { display: flex; align-items: center; gap: 9px; max-width: 100%; min-height: 38px; padding: 8px 12px; border: 1px solid #393939; border-radius: 9px; background: #252525; color: #ddd; font-size: 12px; text-align: left; }
+.workspace-primary-file:hover { border-color: #626262; background: #303030; color: #f0f0f0; }
+.workspace-primary-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-primary-file-viewer { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.workspace-primary-file-viewer-bar { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 14px; border-bottom: 1px solid #363636; color: #bcbcbc; }
+.workspace-primary-file-viewer-bar strong { flex: 1; min-width: 0; overflow: hidden; color: #ededed; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-primary-file-edit-button { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 6px; min-width: 54px; min-height: 30px; padding: 5px 9px; border: 1px solid #454545; border-radius: 8px; background: #292929; color: #e4e4e4; font-size: 11px; font-weight: 600; }
+.workspace-primary-file-edit-button:hover { border-color: #686868; background: #333; color: #fff; }
+.workspace-primary-file-edit-button:focus-visible { outline: 2px solid #aaa; outline-offset: 2px; }
+.workspace-primary-file-viewer-bar a { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px; color: #aaa; }
+.workspace-primary-file-viewer-bar a:hover { background: #303030; color: #f2f2f2; }
+.workspace-primary-file-viewer-content { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: auto; background: #171717; }
+.workspace-document-stage { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
+.workspace-document-stage > p { margin: auto; padding: 20px; color: #999; font-size: 12px; text-align: center; }
+.workspace-document-preview { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.workspace-document-scroll { display: flex; flex: 1; flex-direction: column; align-items: center; min-width: 0; min-height: 0; overflow: auto; padding: 20px; }
+.workspace-document-scroll > p { margin: auto; color: #999; font-size: 12px; }
+.workspace-document-image { justify-content: center; }
+.workspace-document-image img, .workspace-document-slides img { display: block; max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; }
+.workspace-document-slides { justify-content: center; }
+.workspace-document-scroll canvas { display: block; flex: none; margin: 0 auto; background: #fff; }
+.workspace-document-pages, .workspace-document-sheets { display: flex; flex: none; align-items: center; justify-content: center; gap: 12px; min-height: 40px; padding: 5px 12px; border-top: 1px solid #303030; color: #bbb; font-size: 11px; }
+.workspace-document-pages button, .workspace-document-sheets button { display: inline-grid; min-width: 28px; min-height: 28px; place-items: center; padding: 4px 7px; border: 0; border-radius: 7px; background: transparent; color: #ddd; }
+.workspace-document-pages button:hover:not(:disabled), .workspace-document-sheets button:hover { background: #303030; }
+.workspace-document-pages button:disabled { color: #666; cursor: default; }
+.workspace-document-sheets { justify-content: flex-start; overflow-x: auto; }
+.workspace-document-sheets button[aria-selected="true"] { background: #333; color: #fff; }
+/* A Word document is drawn in a sandboxed frame of its own (document-preview.tsx), which supplies its surround; the frame fills the panel and scrolls the pages itself. */
+.workspace-document-word { position: relative; display: block; padding: 0; overflow: hidden; background: #252525; }
+.workspace-document-word > p { padding: 20px; }
+.workspace-document-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #252525; }
+.workspace-document-frame[data-ready="false"] { visibility: hidden; }
+.workspace-document-grid { display: block; }
+.workspace-document-grid table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; background: #fdfdfd; color: #242424; font-size: 12px; }
+.workspace-document-grid td { min-width: 90px; max-width: 320px; padding: 8px 10px; overflow-wrap: anywhere; border-right: 1px solid #ddd; border-bottom: 1px solid #ddd; vertical-align: top; }
+.workspace-document-grid tr:first-child td { font-weight: 600; }
+.workspace-document-grid > p { margin: 12px 0; color: #999; }
+.workspace-document-text, .workspace-document-prose { display: block; width: 100%; margin: 0; padding: 30px 42px; color: #dedede; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.workspace-document-text { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* Markdown reads as it does in chat (AgentMarkdown carries the rest). */
+.workspace-document-prose { max-width: 780px; margin-inline: auto; }
+.workspace-office-editor { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.workspace-office-editor > p { margin: auto; padding: 20px; color: #aaa; font-size: 12px; text-align: center; }
+.workspace-office-editor-canvas { flex: 1; min-width: 0; min-height: 0; }
+.workspace-office-editor-mount, .workspace-office-editor-canvas > iframe { width: 100%; height: 100%; border: 0; }
+@media (max-width: 800px) { .workspace-document-text, .workspace-document-prose { padding: 20px; } }
 .workspace-agents-primary {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

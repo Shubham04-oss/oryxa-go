@@ -7,11 +7,22 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react"
 import { AgentTimeline, groupToolActivity } from "./agent-timeline"
 import type { ConfirmationAnswer, Item } from "@/lib/threads/client"
 import { buildTimeline } from "@/lib/threads/timeline"
+
+vi.mock("thinking-orbs", () => ({
+  ThinkingOrb: ({ state, paused }: { state: string; paused?: boolean }) => (
+    <canvas
+      data-orb-state={state}
+      data-orb-paused={paused ? "true" : "false"}
+      aria-hidden="true"
+    />
+  ),
+}))
 
 afterEach(cleanup)
 
@@ -138,7 +149,7 @@ describe("AgentTimeline", () => {
     expect(within(failed.log).getByText("The run was cancelled.")).toBeTruthy()
   })
 
-  it("folds consecutive tool calls into one quiet row", () => {
+  it("shows a turn's calls in one inline row across agent messages", () => {
     const items: Item[] = [
       { type: "tool_call", id: "ev_1", call_id: "c1", tool: "web_search" },
       { type: "tool_result", id: "ev_2", call_id: "c1", tool: "web_search" },
@@ -156,16 +167,145 @@ describe("AgentTimeline", () => {
     ]
     expect(
       groupToolActivity(buildTimeline(items)).map((entry) => entry.kind)
-    ).toEqual(["tools", "message", "tools"])
+    ).toEqual(["tools", "message"])
     const { container } = timeline(items, { running: true })
     const rows = container.querySelectorAll(".workspace-agent-tools")
-    expect(rows).toHaveLength(2)
-    expect(rows[0].textContent).toContain("Web search · Read file")
-    expect(rows[0].textContent).toContain("2 calls · Running")
+    expect(rows).toHaveLength(1)
+    expect(rows[0].textContent).toContain("3 tool calls")
+    expect(rows[0].textContent).toContain("Running")
     expect(rows[0].getAttribute("data-state")).toBe("running")
-    expect(rows[1].textContent).toContain("Send email")
-    expect(rows[1].getAttribute("data-state")).toBe("failed")
-    expect(rows[1].getAttribute("title")).toBe("mailbox full")
+    expect(
+      rows[0].querySelector("canvas")?.getAttribute("data-orb-state")
+    ).toBe("searching")
+    expect(rows[0].querySelector("summary, ol, button, svg")).toBeNull()
+    expect(
+      rows[0]
+        .querySelector(".workspace-agent-tools-status")
+        ?.getAttribute("title")
+    ).toBe("mailbox full")
+  })
+
+  it("uses compact app marks in the same row and starts a new row next turn", () => {
+    const { container } = timeline([
+      { type: "message", id: "ev_1", author: "member", text: "Check my apps" },
+      {
+        type: "tool_call",
+        id: "ev_2",
+        call_id: "c1",
+        tool: "apps_search_tools",
+        arguments: { toolkit: "gmail" },
+      },
+      {
+        type: "tool_result",
+        id: "ev_3",
+        call_id: "c1",
+        tool: "apps_search_tools",
+      },
+      {
+        type: "tool_call",
+        id: "ev_4",
+        call_id: "c2",
+        tool: "apps_run_read_tool",
+        arguments: { tool: "GOOGLE_DRIVE_LIST_FILES", arguments: {} },
+      },
+      {
+        type: "tool_result",
+        id: "ev_5",
+        call_id: "c2",
+        tool: "apps_run_read_tool",
+      },
+      { type: "message", id: "ev_6", author: "member", text: "Now send it" },
+      {
+        type: "tool_call",
+        id: "ev_7",
+        call_id: "c3",
+        tool: "apps_run_write_tool",
+        arguments: { tool: "SLACK_POST_MESSAGE", arguments: {} },
+      },
+      {
+        type: "tool_result",
+        id: "ev_8",
+        call_id: "c3",
+        tool: "apps_run_write_tool",
+        failed: true,
+        error: "no access",
+      },
+    ])
+    const rows = container.querySelectorAll(".workspace-agent-tools")
+    expect(rows).toHaveLength(2)
+    expect(rows[0].textContent).toContain("2 tool calls")
+    expect(
+      within(rows[0] as HTMLElement).getByRole("img", { name: "Gmail" })
+    ).toBeTruthy()
+    expect(
+      within(rows[0] as HTMLElement).getByRole("img", { name: "Google Drive" })
+    ).toBeTruthy()
+    expect(
+      rows[0].querySelector("canvas")?.getAttribute("data-orb-paused")
+    ).toBe("true")
+    expect(rows[1].textContent).toContain("Slack · Make change")
+    expect(
+      within(rows[1] as HTMLElement).getByRole("img", { name: "Slack" })
+        .textContent
+    ).toBe("S")
+    expect(rows[1].textContent).toContain("Failed")
+    expect(
+      rows[1]
+        .querySelector(".workspace-agent-tools-status")
+        ?.getAttribute("title")
+    ).toBe("no access")
+  })
+
+  it("does not invent an app icon when a generic apps call has no app", () => {
+    const { container } = timeline([
+      {
+        type: "tool_call",
+        id: "ev_1",
+        call_id: "c1",
+        tool: "apps_connections",
+      },
+    ])
+    expect(container.querySelector(".workspace-agent-tool-app")).toBeNull()
+  })
+
+  it("offers a copy action for fenced code without flattening the answer", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    })
+    const { log } = timeline([
+      {
+        type: "message",
+        id: "ev_1",
+        author: agent,
+        text: "## Example\n\n```ts\nconst answer = 42\n```",
+      },
+    ])
+    expect(within(log).getByRole("heading", { name: "Example" }).tagName).toBe(
+      "H2"
+    )
+    fireEvent.click(within(log).getByRole("button", { name: "Copy code" }))
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("const answer = 42\n")
+    )
+  })
+
+  it("wraps prose in text fences while preserving code formatting", () => {
+    const { log } = timeline([
+      {
+        type: "message",
+        id: "ev_1",
+        author: agent,
+        text: "```text\nA long operating instruction for the specialist.\n```\n\n```ts\nconst ok = true\n```",
+      },
+    ])
+    const blocks = log.querySelectorAll(".workspace-agent-code-block pre")
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0].classList.contains("workspace-agent-code-wrap")).toBe(true)
+    expect(blocks[1].classList.contains("workspace-agent-code-wrap")).toBe(
+      false
+    )
   })
 
   it("shows the files runs kept: images as thumbnails, other files as links", () => {

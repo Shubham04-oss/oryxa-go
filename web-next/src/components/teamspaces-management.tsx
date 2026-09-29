@@ -323,6 +323,9 @@ export function TeamspacesManagement({
               className="workspace-teamspace-row"
               type="button"
               key={space.id}
+              data-screen-context-kind="teamspace"
+              data-screen-context-id={space.id}
+              data-screen-context-name={space.name}
               aria-label={`Manage ${space.name}`}
               onClick={() => onSelect(space.id)}
             >

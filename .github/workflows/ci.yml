@@ -119,7 +119,7 @@ jobs:
         # and skip otherwise; here they share one, as they do on a laptop,
         # with the extensions infra/postgres/init gives a fresh local volume.
         run: |
-          for service in AGENTS_PRIMARY APPS AUTH BATCHING BILLING POSTGRESKIT RAG TEAMS WORKSPACE; do
+          for service in AGENTS_PRIMARY APPS AUTH BATCHING BILLING FILES KNOWLEDGE OUTBOX POSTGRESKIT RAG REALTIME SLACK TEAMS WORKSPACE; do
             echo "${service}_TEST_DATABASE_URL=postgres://oryxa:oryxa@localhost:5432/oryxa?sslmode=disable" >> "$GITHUB_ENV"
           done
           docker exec -i "${{ job.services.postgres.id }}" psql -U oryxa -d oryxa -v ON_ERROR_STOP=1 < infra/postgres/init/001_extensions.sql
@@ -190,8 +190,40 @@ jobs:
         run: pnpm typecheck
       - name: Tests
         run: pnpm test
-      - name: Build
+      - name: Build the production Worker
+        # The build deploy.yml ships, so the size below is the one that is
+        # uploaded.
         run: pnpm build
+        env:
+          CLOUDFLARE_ENV: production
+      - name: Worker size
+        # What `wrangler deploy` would upload, without uploading anything. A
+        # Worker has a size limit and starts slower the more code it holds,
+        # and a library only the browser needs can ride along in it unnoticed
+        # (the document viewer's PDF, Word, Excel and PowerPoint renderers
+        # did), so the size is printed on every run, with the biggest files
+        # behind it.
+        run: |
+          set -o pipefail
+          pnpm exec wrangler deploy --dry-run --outdir "$RUNNER_TEMP/worker" 2>&1 | tee "$RUNNER_TEMP/worker-dry-run.txt"
+          size=$(grep -m1 'Total Upload' "$RUNNER_TEMP/worker-dry-run.txt" || true)
+          if [ -z "$size" ]; then
+            echo "::warning::wrangler printed no 'Total Upload' line"
+            size="(no size reported)"
+          fi
+          {
+            echo "### web-next Worker"
+            echo
+            echo "\`$size\`"
+            echo
+            echo "Biggest files in the upload (bytes):"
+            echo
+            echo '```'
+            find "$RUNNER_TEMP/worker" -type f ! -name '*.map' -exec wc -c {} + | sort -rn | sed -n '1,12p'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          WRANGLER_SEND_METRICS: "false"
 
   image:
     name: Image

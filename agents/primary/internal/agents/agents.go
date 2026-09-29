@@ -172,7 +172,7 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agen
 	helpers := newHelpers(work, subAgents)
 	// Dynamic sub-agents: Krude creates, calls and drops them in a session.
 	subagents := newSubagents(work, catalog)
-	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, subagents.createTool, subagents.listTool, subagents.removeTool, helpers.listTool, helpers.spawnTool, loadArtifactsTool, saveArtifactTool}
+	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, currentScreenTool, subagents.createTool, subagents.listTool, subagents.removeTool, helpers.listTool, helpers.spawnTool, loadArtifactsTool, saveArtifactTool}
 	if remembers {
 		builders = append(builders, loadMemoryTool)
 	}

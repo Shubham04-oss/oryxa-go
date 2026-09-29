@@ -4,9 +4,9 @@ import type { QueryClient } from "@tanstack/react-query"
 import { useHydrated } from "@tanstack/react-router"
 import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { useAgent } from "agents/react"
-import { SquarePen } from "lucide-react"
+import { Expand, SquarePen } from "lucide-react"
 import { AgentComposer } from "./agent-composer"
-import { AgentTimeline } from "./agent-timeline"
+import { AgentActivity, AgentTimeline } from "./agent-timeline"
 import { AgentConversation } from "./agent-conversation"
 import { ApiError } from "@/lib/api/client"
 import { getSession } from "@/lib/auth/client"
@@ -27,7 +27,9 @@ import {
 } from "@/lib/threads/client"
 import type { ConfirmationAnswer, Thread } from "@/lib/threads/client"
 import { buildTimeline, pendingConfirmationIds } from "@/lib/threads/timeline"
+import type { ArtifactEntry } from "@/lib/threads/timeline"
 import { socketProtocol } from "@/lib/socket-protocol"
+import type { ScreenContext } from "@/lib/agents/screen-context"
 
 type ComposerHandlers = {
   /** The composer's text, kept here so it survives the conversation loading. */
@@ -78,10 +80,24 @@ export function AgentChat({
   organizationId,
   agentName,
   onComposingChange,
+  onOpenOverview,
+  inOverview = false,
+  onThreadChange,
+  onFileCreated,
+  getScreenContext,
 }: {
   organizationId: string
   agentName?: string
   onComposingChange: (composing: boolean) => void
+  onOpenOverview?: () => void
+  inOverview?: boolean
+  onThreadChange?: (threadId: string | null) => void
+  onFileCreated?: (file: {
+    threadId: string
+    name: string
+    version?: number
+  }) => void
+  getScreenContext?: () => ScreenContext
 }) {
   const queryClient = useQueryClient()
   const hydrated = useHydrated()
@@ -96,6 +112,7 @@ export function AgentChat({
   // The first message of a new conversation, until its thread's socket
   // takes it.
   const [pending, setPending] = useState<string | null>(null)
+  const [pendingScreen, setPendingScreen] = useState<ScreenContext>()
   const [starting, setStarting] = useState(false)
   const [notice, setNotice] = useState("")
 
@@ -104,6 +121,10 @@ export function AgentChat({
       setThreadId(threads.data[0]?.id ?? null)
     }
   }, [threadId, threads.data])
+
+  useEffect(() => {
+    if (threadId !== undefined) onThreadChange?.(threadId)
+  }, [threadId, onThreadChange])
 
   const composer: ComposerHandlers = {
     draft,
@@ -119,6 +140,7 @@ export function AgentChat({
     setStarting(true)
     setNotice("")
     setPending(message)
+    setPendingScreen(getScreenContext?.())
     setDraft("")
     try {
       const thread = await createThread(organizationId)
@@ -167,6 +189,8 @@ export function AgentChat({
           agentName={agentName}
           pending={pending}
           onPendingTaken={() => setPending(null)}
+          pendingScreen={pendingScreen}
+          getScreenContext={getScreenContext}
           onMissing={() => {
             setThreadId(null)
             setNotice("That conversation no longer exists.")
@@ -174,6 +198,7 @@ export function AgentChat({
               queryKey: threadKeys.list(organizationId),
             })
           }}
+          onFileCreated={onFileCreated}
           {...composer}
         />
       </Suspense>
@@ -227,6 +252,17 @@ export function AgentChat({
         <p className="workspace-agent-thread-title" title={title}>
           {title}
         </p>
+        {onOpenOverview && !inOverview && (
+          <button
+            className="workspace-agent-new"
+            type="button"
+            aria-label="Open Agent overview"
+            title="Open Agent overview"
+            onClick={onOpenOverview}
+          >
+            <Expand size={15} strokeWidth={1.7} />
+          </button>
+        )}
         <button
           className="workspace-agent-new"
           type="button"
@@ -307,18 +343,28 @@ function ThreadChat({
   threadId,
   agentName,
   pending,
+  pendingScreen,
+  getScreenContext,
   onPendingTaken,
   onMissing,
   draft,
   onDraftChange,
   onComposingChange,
+  onFileCreated,
 }: ComposerHandlers & {
   organizationId: string
   threadId: string
   agentName?: string
   pending: string | null
+  pendingScreen?: ScreenContext
+  getScreenContext?: () => ScreenContext
   onPendingTaken: () => void
   onMissing: () => void
+  onFileCreated?: (file: {
+    threadId: string
+    name: string
+    version?: number
+  }) => void
 }) {
   const queryClient = useQueryClient()
   const detail = useQuery(threadDetailQueryOptions(organizationId, threadId))
@@ -405,11 +451,12 @@ function ThreadChat({
     }
   }
 
-  function send(text: string) {
+  function send(text: string, screen = getScreenContext?.()) {
     setRunError("")
-    lastSend.current = { expired: false, retried: false }
+    const body = screen ? { screen_context: screen } : undefined
+    lastSend.current = { body, expired: false, retried: false }
     void chat
-      .sendMessage({ text })
+      .sendMessage({ text }, ...(body ? [{ body }] : []))
       .catch((error: unknown) =>
         setRunError(
           failureText(error, "Your agent couldn't answer. Try again.")
@@ -424,7 +471,10 @@ function ThreadChat({
       for (const item of answers) next[item.id] = item.confirmed
       return next
     })
-    const body = { confirmations: answers }
+    const body = {
+      confirmations: answers,
+      screen_context: getScreenContext?.(),
+    }
     lastSend.current = { body, expired: false, retried: false }
     void chat
       .sendMessage(
@@ -451,7 +501,7 @@ function ThreadChat({
     if (!pending || pendingTaken.current || connection !== "open") return
     pendingTaken.current = true
     onPendingTaken()
-    send(pending)
+    send(pending, pendingScreen)
   })
 
   // Go can add to the thread outside this socket (updates from the member's
@@ -483,6 +533,39 @@ function ThreadChat({
     [chat.messages]
   )
   const entries = useMemo(() => buildTimeline(items), [items])
+  const files = entries.filter(
+    (entry): entry is ArtifactEntry => entry.kind === "artifact"
+  )
+  const fileState = useRef<{ seen: Set<string>; ran: boolean }>({
+    seen: new Set(),
+    ran: false,
+  })
+  useEffect(() => {
+    const state = fileState.current
+    if (running) state.ran = true
+    const newFile = [...files]
+      .reverse()
+      .find((file) => !state.seen.has(file.key))
+    files.forEach((file) => state.seen.add(file.key))
+    if (state.ran && newFile) {
+      void queryClient.invalidateQueries({
+        queryKey: threadKeys.detail(organizationId, threadId),
+      })
+      onFileCreated?.({
+        threadId,
+        name: newFile.name,
+        version: newFile.version,
+      })
+    }
+    if (!running) state.ran = false
+  }, [
+    files.map((file) => file.key).join("|"),
+    running,
+    onFileCreated,
+    organizationId,
+    queryClient,
+    threadId,
+  ])
   const actionable = useMemo(() => {
     const waiting = pendingConfirmationIds(detail.data, items)
     return new Set(waiting.filter((id) => !(id in submitted)))
@@ -528,11 +611,7 @@ function ThreadChat({
             {pending}
           </p>
         )}
-        {running && !drafting && (
-          <p className="workspace-agent-working" role="status">
-            Working…
-          </p>
-        )}
+        {running && !drafting && <AgentActivity />}
       </AgentConversation>
       <AgentComposer
         label={label}
