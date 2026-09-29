@@ -313,6 +313,14 @@ func TestDirectoryRejectsDuplicateReferencesBeforeResourcesExist(t *testing.T) {
 	}
 }
 
+func TestNullToolOfferNeverFailsOpen(t *testing.T) {
+	for _, offer := range []string{"", "~", "null", "\n    # - gmail"} {
+		if _, err := Parse([]byte(example + "tools:\n  offer: " + offer + "\n")); err == nil || !strings.Contains(err.Error(), "use [] for none") {
+			t.Fatalf("null offer accepted: %q, %v", offer, err)
+		}
+	}
+}
+
 func TestAnswerGuardPoliciesValidateAndRoundTrip(t *testing.T) {
 	input := example + "safety: {guard: {pii: {minimum: {owner: secrets, peer: strict}}, relevance: off}}\n"
 	document, err := Parse([]byte(input))

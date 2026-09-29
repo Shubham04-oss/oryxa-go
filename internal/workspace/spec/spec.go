@@ -316,6 +316,9 @@ func Parse(data []byte) (Document, error) {
 	if name := yamlMappingValue(yamlMappingValue(root.Content[0], "organization"), "name"); name != nil && strings.TrimSpace(name.Value) == "" {
 		return Document{}, fmt.Errorf("organization.name must be between 1 and 120 characters")
 	}
+	if offer := yamlMappingValue(yamlMappingValue(root.Content[0], "tools"), "offer"); offer != nil && offer.Tag == "!!null" {
+		return Document{}, fmt.Errorf("tools.offer cannot be null; use [] for none or omit the key for all")
+	}
 	var document Document
 	strict := yaml.NewDecoder(bytes.NewReader(data))
 	strict.KnownFields(true)
