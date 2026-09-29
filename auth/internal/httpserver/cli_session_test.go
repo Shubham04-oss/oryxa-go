@@ -83,3 +83,38 @@ func TestAuthConfigPublishesOnlyNativeClientMetadata(t *testing.T) {
 		t.Fatalf("config response = %d %s", response.Code, response.Body)
 	}
 }
+
+func TestCLITokenIsSetupOnlyAndIntrospectionMarksItsClass(t *testing.T) {
+	service := &fakeAuthService{user: domain.User{ID: "user-1"}, organization: domain.Organization{ID: "org_1"}, membership: domain.Membership{UserID: "user-1", Role: domain.RoleOwner}}
+	server := New(fakeVerifier{claims: authn.Claims{Subject: "user-1", ClientID: "cli-client"}}, &fakeAuthFlow{}, &fakePasswordAuth{}, service, Config{CLIClientID: "cli-client"})
+	for _, route := range []struct{ method, path string }{
+		{http.MethodDelete, "/v1/organizations/org_1"},
+		{http.MethodPost, "/v1/invitations/accept"},
+		{http.MethodPost, "/v1/invitations/inv_1/accept"},
+		{http.MethodPost, "/v1/agent-grant/authorize"},
+		{http.MethodDelete, "/v1/agent-grant"},
+	} {
+		request := httptest.NewRequest(route.method, route.path, strings.NewReader(`{}`))
+		request.Header.Set("Authorization", "Bearer setup-token")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Errorf("%s %s = %d, want 403", route.method, route.path, response.Code)
+		}
+	}
+	for _, path := range []string{"/v1/auth/me", "/v1/organizations/org_1"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer setup-token")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"cli":true`) {
+			t.Errorf("introspection %s = %d %s", path, response.Code, response.Body)
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
+	request.Header.Set("Authorization", "Bearer setup-token")
+	server.ServeHTTP(httptest.NewRecorder(), request)
+	if service.signedOutUser != "" {
+		t.Fatal("CLI logout signed the member out")
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/oauthflow"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/passwordflow"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
+	"github.com/Shubham04-oss/oryxa-go/internal/cliscope"
 )
 
 const (
@@ -79,6 +80,7 @@ type Config struct {
 	CookieSecure       bool
 	GoogleEnabled      bool
 	CLIClientID        string
+	CLIIssuer          string
 	CLICallbackURL     string
 	CLISignUpURL       string
 	CLIVerifier        cliIdentityVerifier
@@ -237,6 +239,7 @@ func (server *Server) authConfig(writer http.ResponseWriter, _ *http.Request) {
 	config["identity_providers"] = identityProviders
 	if server.config.CLIClientID != "" {
 		config["cli_client_id"] = server.config.CLIClientID
+		config["cli_issuer"] = server.config.CLIIssuer
 		config["cli_callback_url"] = server.config.CLICallbackURL
 		config["cognito_domain"] = server.config.CognitoDomain
 		config["cli_signup_url"] = server.config.CLISignUpURL
@@ -246,7 +249,8 @@ func (server *Server) authConfig(writer http.ResponseWriter, _ *http.Request) {
 
 // cliSession admits a native sign-in after Cognito's PKCE exchange. Both the
 // access and ID tokens must belong to the separate public CLI client and the
-// same person; the CLI must have checked its own random state first.
+// same person. The CLI verifies its locally retained state and nonce. The nonce
+// sent here is a consistency check only, not a challenge issued by this server.
 func (server *Server) cliSession(writer http.ResponseWriter, request *http.Request) {
 	if server.config.CLIClientID == "" || server.config.CLIVerifier == nil || server.config.CLICompleteLogin == nil {
 		writeError(writer, http.StatusNotFound, "CLI sign-in is not configured")
@@ -493,7 +497,7 @@ func (server *Server) logout(writer http.ResponseWriter, request *http.Request) 
 	if rawToken, _, ok := server.requestToken(request); ok {
 		// An agent's token is the member's identity, but signing the member
 		// out is theirs alone to do.
-		if claims, err := server.verifier.Verify(request.Context(), rawToken); err == nil && !server.isAgentToken(claims) {
+		if claims, err := server.verifier.Verify(request.Context(), rawToken); err == nil && !server.isAgentToken(claims) && !server.isCLIToken(claims) {
 			if err := server.service.SignOut(request.Context(), claims.Subject); err != nil {
 				slog.ErrorContext(request.Context(), "enqueue sign-out event", "error", err)
 			}
@@ -510,7 +514,7 @@ func (server *Server) me(writer http.ResponseWriter, request *http.Request) {
 		server.handleError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"user": user, "organizations": organizations})
+	writeJSON(writer, http.StatusOK, map[string]any{"user": user, "organizations": organizations, "cli": server.isCLIToken(authenticated.Claims)})
 }
 
 func (server *Server) organizations(writer http.ResponseWriter, request *http.Request) {
@@ -550,6 +554,9 @@ func (server *Server) organization(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	response := map[string]any{"organization": organization, "membership": membership}
+	if server.isCLIToken(authenticated.Claims) {
+		response["cli"] = true
+	}
 	if server.isAgentToken(authenticated.Claims) {
 		response["agent"] = true
 	}
@@ -761,6 +768,10 @@ func (server *Server) authenticated(next http.Handler) http.Handler {
 			writeError(writer, http.StatusUnauthorized, "access token is invalid")
 			return
 		}
+		if server.isCLIToken(claims) && !cliscope.Allowed(request.Pattern) {
+			writeError(writer, http.StatusForbidden, "CLI sessions can only configure workspace setup")
+			return
+		}
 		if server.isAgentToken(claims) && !agentAllowedPatterns[request.Pattern] {
 			writeError(writer, http.StatusForbidden, "agents cannot do this")
 			return
@@ -777,6 +788,10 @@ func (server *Server) authenticated(next http.Handler) http.Handler {
 // Cognito can issue such a token as soon as the agent app client exists.
 func (server *Server) isAgentToken(claims authn.Claims) bool {
 	return server.config.AgentClientID != "" && claims.ClientID == server.config.AgentClientID
+}
+
+func (server *Server) isCLIToken(claims authn.Claims) bool {
+	return server.config.CLIClientID != "" && claims.ClientID == server.config.CLIClientID
 }
 
 func (server *Server) requestToken(request *http.Request) (string, bool, bool) {

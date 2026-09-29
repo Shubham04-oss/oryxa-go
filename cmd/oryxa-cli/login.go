@@ -26,6 +26,7 @@ type loginConfig struct {
 	CallbackURL string `json:"cli_callback_url"`
 	Domain      string `json:"cognito_domain"`
 	SignUpURL   string `json:"cli_signup_url"`
+	Issuer      string `json:"cli_issuer"`
 }
 
 type callbackResult struct {
@@ -164,6 +165,9 @@ func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout
 	}
 	if token.Expiry.IsZero() || !token.Valid() {
 		return cliSession{}, fmt.Errorf("identity provider did not issue an unexpired access token with a TTL")
+	}
+	if err := verifyLoginIDToken(flowCtx, config, idToken, nonce); err != nil {
+		return cliSession{}, err
 	}
 	if err := registerCLISession(flowCtx, api, token.AccessToken, idToken, nonce); err != nil {
 		return cliSession{}, err

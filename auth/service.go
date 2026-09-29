@@ -190,6 +190,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		CookieSecure:       config.CookieSecure,
 		GoogleEnabled:      config.GoogleEnabled,
 		CLIClientID:        config.CognitoCLIClientID,
+		CLIIssuer:          config.CognitoIssuer,
 		CLICallbackURL:     config.CognitoCLICallbackURL,
 		CLISignUpURL:       cliSignUpURL,
 		CLIVerifier:        verifier,

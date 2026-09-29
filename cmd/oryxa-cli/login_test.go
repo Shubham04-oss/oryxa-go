@@ -25,7 +25,14 @@ func TestNativeLoginReturnsExpiringSession(t *testing.T) {
 	}
 	callback := "http://" + reserved.Addr().String() + "/callback"
 	reserved.Close()
-	cognito := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	key := loginTestKey(t)
+	var loginNonce atomic.Value
+	var cognito *httptest.Server
+	cognito = httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/.well-known/jwks.json" {
+			writeTestJWKS(writer, key)
+			return
+		}
 		if request.URL.Path != "/oauth2/token" || request.Method != http.MethodPost {
 			writer.WriteHeader(http.StatusNotFound)
 			return
@@ -37,18 +44,18 @@ func TestNativeLoginReturnsExpiringSession(t *testing.T) {
 			t.Errorf("invalid code exchange: %v", request.Form)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(writer, `{"access_token":"access","id_token":"identity","token_type":"Bearer","expires_in":900}`)
+		json.NewEncoder(writer).Encode(map[string]any{"access_token": "access", "id_token": signedLoginToken(t, key, cognito.URL, loginNonce.Load().(string)), "token_type": "Bearer", "expires_in": 900})
 	}))
 	defer cognito.Close()
 	registered := make(chan bool, 1)
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/v1/auth/config":
-			_ = json.NewEncoder(writer).Encode(loginConfig{ClientID: "cli", CallbackURL: callback, Domain: cognito.URL, SignUpURL: "https://app.example.com/auth/sign-up"})
+			_ = json.NewEncoder(writer).Encode(loginConfig{ClientID: "cli", CallbackURL: callback, Domain: cognito.URL, Issuer: cognito.URL, SignUpURL: "https://app.example.com/auth/sign-up"})
 		case "/v1/auth/cli/session":
 			var body map[string]string
 			_ = json.NewDecoder(request.Body).Decode(&body)
-			registered <- request.Header.Get("Authorization") == "Bearer access" && body["id_token"] == "identity" && body["nonce"] != ""
+			registered <- request.Header.Get("Authorization") == "Bearer access" && body["id_token"] != "" && body["nonce"] != ""
 			fmt.Fprint(writer, `{"user":{"id":"u1"}}`)
 		default:
 			writer.WriteHeader(http.StatusNotFound)
@@ -125,6 +132,7 @@ func TestNativeLoginReturnsExpiringSession(t *testing.T) {
 	if err != nil || authorize.StatusCode != http.StatusFound || authURL.Query().Get("code_challenge") == "" || authURL.Query().Get("nonce") == "" || authURL.Query().Get("identity_provider") != "" {
 		t.Fatalf("invalid authorization URL: %s, %v", authorize.Header.Get("Location"), err)
 	}
+	loginNonce.Store(authURL.Query().Get("nonce"))
 	wrongState, err := http.Get(callback + "?code=code&state=wrong")
 	if err != nil {
 		t.Fatal(err)

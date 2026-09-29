@@ -41,6 +41,7 @@ func New(baseURL string) *Client {
 }
 
 type organizationResponse struct {
+	CLI          bool `json:"cli"`
 	Organization struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -63,6 +64,9 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 	var decoded organizationResponse
 	if err := client.get(ctx, "/v1/organizations/"+url.PathEscape(organizationID), credentials, &decoded); err != nil {
 		return domain.OrgMembership{}, err
+	}
+	if decoded.CLI {
+		return domain.OrgMembership{}, domain.ErrForbidden
 	}
 	if decoded.Organization.ID != organizationID || decoded.Membership.OrganizationID != organizationID || decoded.Membership.UserID == "" {
 		return domain.OrgMembership{}, fmt.Errorf("auth answered for a different organization or no member")

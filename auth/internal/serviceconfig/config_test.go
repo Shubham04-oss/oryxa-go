@@ -151,3 +151,15 @@ func TestFromEnvRejectsInvalidServiceCallersJSON(t *testing.T) {
 		t.Fatal("FromEnv() error = nil, want invalid callers JSON error")
 	}
 }
+
+func TestCLIClientMustBeADistinctTokenClass(t *testing.T) {
+	for _, clientID := range []string{"client-id", "agent-client-id"} {
+		values := requiredEnv()
+		values["COGNITO_AGENT_CLIENT_ID"] = "agent-client-id"
+		values["COGNITO_CLI_CLIENT_ID"] = clientID
+		values["COGNITO_CLI_CALLBACK_URL"] = "http://127.0.0.1:8765/callback"
+		if _, err := FromEnv(env(values)); err == nil {
+			t.Fatalf("accepted CLI client shared with %s", clientID)
+		}
+	}
+}

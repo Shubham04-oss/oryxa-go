@@ -25,6 +25,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
+	"github.com/Shubham04-oss/oryxa-go/internal/cliscope"
 )
 
 const (
@@ -129,7 +130,7 @@ func (server *Server) handle(pattern string, handler http.HandlerFunc) {
 }
 
 func (server *Server) handleHandler(pattern string, handler http.Handler) {
-	server.mux.Handle(pattern, handler)
+	server.mux.Handle(pattern, cliscope.Wrap(pattern, handler))
 	server.patterns = append(server.patterns, pattern)
 }
 

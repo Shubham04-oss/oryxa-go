@@ -91,6 +91,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("COGNITO_ISSUER, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, COGNITO_DOMAIN, and COGNITO_CALLBACK_URL are required")
 	}
 	if config.CognitoCLIClientID != "" {
+		if config.CognitoCLIClientID == config.CognitoClientID || config.CognitoCLIClientID == config.CognitoAgentClientID {
+			return Config{}, errors.New("COGNITO_CLI_CLIENT_ID must be distinct from the web and agent app clients")
+		}
 		parsed, err := url.Parse(config.CognitoCLICallbackURL)
 		if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || parsed.Path != "/callback" || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return Config{}, errors.New("COGNITO_CLI_CALLBACK_URL must be http://127.0.0.1:<port>/callback when COGNITO_CLI_CLIENT_ID is set")

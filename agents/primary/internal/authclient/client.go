@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/cliscope"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
@@ -85,6 +86,7 @@ func New(baseURL string) *Client {
 }
 
 type organizationResponse struct {
+	CLI        bool `json:"cli"`
 	Membership struct {
 		UserID string `json:"user_id"`
 		Role   string `json:"role"`
@@ -126,6 +128,9 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 	var decoded organizationResponse
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		return Membership{}, errors.New("decode auth response")
+	}
+	if decoded.CLI && !cliscope.AllowedContext(ctx) {
+		return Membership{}, ErrForbidden
 	}
 	if decoded.Membership.UserID == "" {
 		return Membership{}, ErrForbidden

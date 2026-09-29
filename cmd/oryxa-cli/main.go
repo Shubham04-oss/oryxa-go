@@ -75,6 +75,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		fmt.Fprintln(stderr, "unexpected argument:", flags.Arg(0))
 		return 3
 	}
+	if (command == "setup" || command == "apply" || command == "rollback") && !opts.dryRun && !opts.agentHelp {
+		defer func() {
+			if err := clearSession(opts.api, getenv); err != nil {
+				fmt.Fprintln(stderr, "Could not clear CLI session:", err)
+			}
+		}()
+	}
 	if command == "connect-app" {
 		return connectApp(ctx, connectToolkit, opts, stdout, stderr, getenv)
 	}
