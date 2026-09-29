@@ -217,7 +217,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.tofu == 'true'
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    # The providers are several hundred megabytes. From a cold cache on the
+    # Mac's runners they have taken over ten minutes to download.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f # v1.0.8
@@ -227,6 +229,10 @@ jobs:
           tofu_wrapper: false
       - name: Validate deploy/production
         # Without the S3 backend: this checks the configuration, not the state.
+        # A self-hosted runner's tool cache outlives the job, so the providers
+        # download once per runner; on GitHub's machines it starts empty.
         run: |
+          export TF_PLUGIN_CACHE_DIR="$RUNNER_TOOL_CACHE/opentofu-plugins"
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
           tofu -chdir=deploy/production init -backend=false -input=false
           tofu -chdir=deploy/production validate
