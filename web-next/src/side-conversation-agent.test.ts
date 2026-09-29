@@ -810,6 +810,11 @@ describe("SideConversationAgent: checking an own agent's answer", () => {
     const adaOther = await join(side, ada)
     const boTab = await join(side, bo)
     const { run, asking } = await askOpen(side, adaTab)
+    const copies = (tab: FakeSocket) =>
+      tab
+        .of("side-item")
+        .filter((sent) => (sent.item as { seq: number }).seq === 2).length
+    const [adaBefore, boBefore] = [copies(adaTab), copies(boTab)]
     run.send(...saying(raw))
     await vi.waitFor(() =>
       expect(lastItem(adaTab, "agent-message")?.body).toBe(raw)
@@ -840,6 +845,10 @@ describe("SideConversationAgent: checking an own agent's answer", () => {
       body: "",
     })
     expect(JSON.stringify(boTab.sent)).not.toContain("hunter2")
+    // The answer's copies as it goes are Ada's: it changed for her, whole,
+    // and Bo was sent no copy of it.
+    expect(copies(adaTab)).toBeGreaterThan(adaBefore)
+    expect(copies(boTab)).toBe(boBefore)
 
     // A page that opens meanwhile is sent what its person may read, and so
     // is one that asks for older items.
@@ -878,6 +887,7 @@ describe("SideConversationAgent: checking an own agent's answer", () => {
       })
     }
     expect(boTab.of("side-delta")).toEqual([])
+    expect(copies(boTab)).toBe(boBefore + 1)
     expect(stored(side)).toEqual([{ state: "done", body: raw }])
   })
 
@@ -1023,6 +1033,16 @@ describe("SideConversationAgent: checking an own agent's answer", () => {
     {
       name: "a state it does not know",
       check: () => json({ ...masksTheKey, state: "blocked" }),
+      ends: unchecked,
+    },
+    {
+      name: "a success that is not Go's 200, whatever it says",
+      check: () => json(masksTheKey, 201),
+      ends: unchecked,
+    },
+    {
+      name: "a success with nothing in it",
+      check: () => new Response(null, { status: 204 }),
       ends: unchecked,
     },
     ...[400, 403, 404, 429, 500].map((status) => ({
@@ -1449,6 +1469,44 @@ describe("SideConversationAgent: checking an own agent's answer", () => {
     go.runAnswers.push(answer("Leo", "Fine."))
     await askMine(side, again, question)
     expect(lastItem(again, "agent-message")).toMatchObject({
+      status: "done",
+      body: "Fine.",
+    })
+  })
+
+  it("drops an answer whose guard was still reading it when a purge began the conversation's history anew, and shares none of it", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    let release!: (verdict: GuardVerdict) => void
+    go.check = () =>
+      new Promise<GuardVerdict>((resolve) => {
+        release = resolve
+      })
+    go.runAnswers.push(answer("Leo", raw))
+    const asking = askMine(side, adaTab, question)
+    await vi.waitFor(() => expect(go.checks).toHaveLength(1))
+    // Bo left before any of it: what is newer stays, as a new run of the
+    // conversation, and Ada's run goes on into it.
+    await side.purge({
+      userId: bo.userId,
+      removedAt: "2026-09-24T08:00:00.000Z",
+    })
+    expect(stored(side)).toEqual([{ state: "streaming", body: "" }])
+    const sent = adaTab.sent.length
+    release(masksTheKey)
+    await asking
+    // It began before the purge: none of what it said is kept or sent.
+    expect(stored(side)).toEqual([{ state: "streaming", body: "" }])
+    expect(adaTab.sent.slice(sent)).toEqual([])
+    expect(JSON.stringify(side.sql`SELECT * FROM side_items`)).not.toContain(
+      "Reach Ada"
+    )
+    expect(recorded(side)).toEqual([])
+    // Its run is over: the next ask goes.
+    go.check = passThrough
+    go.runAnswers.push(answer("Leo", "Fine."))
+    await askMine(side, adaTab, "Again?")
+    expect(lastItem(adaTab, "agent-message")).toMatchObject({
       status: "done",
       body: "Fine.",
     })

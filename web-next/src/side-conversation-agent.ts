@@ -1721,6 +1721,8 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
           method: "POST",
           body: guardCheckBody(text, request),
           timeoutMs: sideTiming.guardTimeoutMs,
+          // Go answers a check with 200 and nothing else.
+          status: 200,
         }
       )
     } catch (error) {
@@ -2495,7 +2497,8 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
    * origin, since Go takes a cookie-authenticated change only from an
    * allowed one. Given up on after `timeoutMs` (`sideTiming.requestTimeoutMs`
    * unless a call says), its answer's body included. Throws Go's refusal as
-   * an `ApiError`.
+   * an `ApiError`, and, for a call that names the one status it is answered
+   * with (`status`), any other, a success that is not it included.
    */
   private async goAs<T>(
     state: SideConnectionState,
@@ -2505,6 +2508,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       body?: unknown
       headers?: Record<string, string>
       timeoutMs?: number
+      status?: number
     } = {}
   ): Promise<T> {
     if (state.expired) throw new ApiError("Your session has ended.", 401)
@@ -2528,6 +2532,15 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
           signal,
         })
         if (!response.ok) throw await requestError(response)
+        if (
+          options.status !== undefined &&
+          response.status !== options.status
+        ) {
+          throw new ApiError(
+            `Go answered ${response.status}, not ${options.status}`,
+            response.status
+          )
+        }
         const answer: T = await response.json()
         return answer
       }
