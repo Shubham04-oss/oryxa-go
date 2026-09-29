@@ -538,3 +538,76 @@ func TestAuthMembers(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkerOverTheStore runs the worker on the real queue: an event becomes a
+// job once, a failure is released with its delay and counted, and a success is
+// kept as done so the same inbound row is never recorded as new.
+func TestWorkerOverTheStore(t *testing.T) {
+	store, database, org := openTestStore(t)
+	ctx := context.Background()
+	var mu sync.Mutex
+	var seen []string
+	fail := true
+	worker := NewWorker(store, handlerFunc(func(_ context.Context, job Job) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if job.OrganizationID != org {
+			return nil // another test's leftover, none of this test's business
+		}
+		seen = append(seen, fmt.Sprintf("%s:%d", job.InboundID, job.Attempts))
+		if fail {
+			return errors.New("apps timed out")
+		}
+		return nil
+	}), WorkerConfig{}, nil)
+
+	inbound := org + "_in_1"
+	data := fmt.Sprintf(`{"inbound_id":%q,"organization_id":%q,"team_id":"T1","received_at":"2026-09-29T10:00:00Z"}`, inbound, org)
+	for _, eventID := range []string{"evt_a", "evt_b"} {
+		if err := worker.HandleEvent(ctx, MessageReceivedDetailType, eventID, []byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := worker.WakeDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var attempts int
+	var handled bool
+	var availableIn float64
+	query := `SELECT attempts, handled_at IS NOT NULL, extract(epoch FROM available_at - now()) FROM agents_primary.slack_jobs WHERE inbound_id=$1`
+	if err := database.Pool.QueryRow(ctx, query, inbound).Scan(&attempts, &handled, &availableIn); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || handled || availableIn < 10 || availableIn > 20 {
+		t.Fatalf("after a failure: attempts=%d handled=%v available in %.1fs, want one attempt counted and a retry in about %v", attempts, handled, availableIn, firstRetry)
+	}
+
+	// The retry is due; it succeeds.
+	if _, err := database.Pool.Exec(ctx, `UPDATE agents_primary.slack_jobs SET available_at=now() WHERE inbound_id=$1`, inbound); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	fail = false
+	mu.Unlock()
+	if err := worker.WakeDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Pool.QueryRow(ctx, query, inbound).Scan(&attempts, &handled, &availableIn); err != nil {
+		t.Fatal(err)
+	}
+	if !handled {
+		t.Fatal("the job was not finished")
+	}
+	// Once done, the same inbound row is not new again, and nothing runs.
+	if err := worker.HandleEvent(ctx, MessageReceivedDetailType, "evt_c", []byte(data)); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.WakeDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{inbound + ":0", inbound + ":1"}; strings.Join(seen, ",") != strings.Join(want, ",") {
+		t.Fatalf("the handler saw %v, want %v", seen, want)
+	}
+}

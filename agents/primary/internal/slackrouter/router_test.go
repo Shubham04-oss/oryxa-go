@@ -2,6 +2,7 @@ package slackrouter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -761,5 +762,82 @@ func TestRefusalOnTheWire(t *testing.T) {
 	}
 	if got := wire(t, Target{ChannelID: "C1", ThreadTS: "1700000000.000100", UserID: "U1"}); got != `{"channel_id":"C1","thread_ts":"1700000000.000100","user_id":"U1"}` {
 		t.Fatalf("target on the wire: %s", got)
+	}
+}
+
+// appsRefusal and appsAskAck are the fields apps' templates decode, copied from
+// apps' own renderers (apps/internal/slackbot/templates.go), which decode with
+// DisallowUnknownFields: a field they do not name is refused, and the message
+// is never sent. This package cannot import them, so this is the contract as
+// the router last read it; a change in apps' templates is a change here.
+type appsRefusal struct {
+	Reason           string `json:"reason"`
+	OrganizationName string `json:"organization_name"`
+	UserID           string `json:"user_id"`
+	Name             string `json:"name"`
+}
+
+type appsAskAck struct {
+	Owners []struct {
+		UserID string `json:"user_id"`
+		Name   string `json:"name"`
+	} `json:"owners"`
+	OpenURL string `json:"open_url"`
+}
+
+func strictDecode(t *testing.T, encoded string, into any) {
+	t.Helper()
+	decoder := json.NewDecoder(strings.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(into); err != nil {
+		t.Fatalf("apps would refuse %s: %v", encoded, err)
+	}
+}
+
+// TestWhatTheRouterPostsIsWhatAppsTemplatesTake sends every kind of message the
+// router posts through a strict decoder of apps' parameters.
+func TestWhatTheRouterPostsIsWhatAppsTemplatesTake(t *testing.T) {
+	h := newHarness(t)
+	h.member("URAYA", "Raya")
+	h.router.deps.OpenURL = func(askID string) string { return "https://app.oryxa.test/agents/requests?ask_id=" + askID }
+	h.slack.profiles["UMAYA"] = Profile{UserID: "UMAYA", TeamID: testTeam, Email: "maya@acme.com", EmailConfirmed: true, Name: "Maya"}
+	h.mustRun(h.mention(toBot("ask <@URAYA> or <@UMAYA>"))) // an ack, and Maya left out
+	h.mustRun(h.mention(toBot("nobody named")))             // no_owner
+	h.profile(testAsker, func(p *Profile) { p.Guest = true })
+	h.mustRun(h.mention(toBot("ask <@URAYA>"))) // not_member, with the organization
+
+	seen := map[string]int{}
+	for _, post := range h.slack.sent() {
+		encoded := wire(t, post.Params)
+		switch post.Template {
+		case TemplateRefusal:
+			var decoded appsRefusal
+			strictDecode(t, encoded, &decoded)
+			if decoded.Reason == "" {
+				t.Fatalf("a refusal without a reason: %s", encoded)
+			}
+		case TemplateAskAck:
+			var decoded appsAskAck
+			strictDecode(t, encoded, &decoded)
+			if len(decoded.Owners) == 0 || len(decoded.Owners) > 5 {
+				t.Fatalf("an ack of %d owners: apps takes one to five", len(decoded.Owners))
+			}
+			for _, owner := range decoded.Owners {
+				if owner.UserID == "" {
+					t.Fatalf("an owner with no user id: %s", encoded)
+				}
+			}
+		default:
+			t.Fatalf("posted a %q, which apps takes no such params of here", post.Template)
+		}
+		// A message to one person in a thread: channel, thread and user, which is
+		// how apps tells an ephemeral message from a reply and from a DM.
+		if post.Target.ChannelID == "" || post.Target.ThreadTS == "" || post.Target.UserID == "" {
+			t.Fatalf("target %+v is not a person in a thread", post.Target)
+		}
+		seen[post.Template]++
+	}
+	if seen[TemplateRefusal] != 3 || seen[TemplateAskAck] != 1 {
+		t.Fatalf("posted %v, want 1 ack and 3 refusals", seen)
 	}
 }
