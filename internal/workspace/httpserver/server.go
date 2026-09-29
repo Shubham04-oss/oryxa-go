@@ -647,8 +647,21 @@ func (server *Server) status(writer http.ResponseWriter, request *http.Request) 
 	}
 	servicePlan, err := runtime.BuildPlan(document, state)
 	if err != nil {
-		writeError(writer, http.StatusBadGateway, err.Error())
-		return
+		problem := err.Error()
+		// Status is a read. An admin can inspect a stored owner-only prune
+		// configuration without receiving executable removal instructions.
+		if access.Role != "owner" {
+			readable := document.Normalize()
+			readable.Teams.Prune = false
+			if readable.People != nil {
+				readable.People.Prune = false
+			}
+			servicePlan, err = runtime.BuildPlan(readable, state)
+		}
+		if err != nil {
+			servicePlan = runtime.Plan{}
+		}
+		servicePlan.NeedsHuman = append(servicePlan.NeedsHuman, runtime.HumanStep{Step: "workspace.review", Why: problem})
 	}
 	_, contextPlan, err := runtime.MergeContext(document, document, state, false)
 	if err != nil {
