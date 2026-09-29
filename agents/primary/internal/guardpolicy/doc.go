@@ -20,9 +20,11 @@
 // The organization's minimums come from its workspace policy, which this
 // package reads through OrgPolicies and never keeps. The same policy says how
 // the relevance check treats an answer (hold, shadow or off); a deployment's
-// Cap holds that to a ceiling, except for the organizations it names. A
-// workspace service that is missing, or fails, is no reason to fail a check:
-// the defaults apply and the failure is logged, once for as long as it lasts.
+// Cap holds that to a ceiling, except for the organizations it names. An
+// intentionally absent workspace service, or a successfully read empty policy,
+// supplies defaults. A policy that cannot be read instead applies strict floors
+// and regulated handling, with relevance still capped. The failure is logged
+// once for as long as it lasts, and saved choices resume after recovery.
 //
 // A member's choices, and every change to them, are kept in PostgreSQL (see
 // migrations) and forgotten when the member or their organization is.
