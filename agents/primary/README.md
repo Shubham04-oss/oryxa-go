@@ -1066,19 +1066,35 @@ shares nothing, as does a verdict that does not add up. With no guardrail
 configured nothing is checked, and it says so: `{"checked": false, "state":
 "clear", "kinds": [], "shareable": [the texts as given]}`.
 
-How much is taken out follows whose answer it is, as an intensity
-(`answerguard.Intensity`) chosen by `origin` in one place (`checkLevel`), so
-that when the owner gets a setting for it the level changes and the route does
-not:
+How much is taken out follows the caller's own settings for the `origin` (see
+[How strictly the guard reads an answer](#how-strictly-the-guard-reads-an-answer)):
+the level that applies to them, which is what they chose, or the default, and
+never below their organization's minimum. It is read as an intensity
+(`answerguard.Intensity`) in one place (`checkLevel`), so that the route does
+not change when a level does. Only the caller's own settings are read, in the
+organization in the path, and only for a check that reads an answer: one that
+is refused, over the limit, or made with no guardrail configured costs no read.
+What a member who chose nothing gets, which is also what every member gets
+where no settings are kept, is:
 
 | `origin` | Intensity | Masks | Leaves as written | `state` and `kinds` |
 | --- | --- | --- | --- | --- |
 | `"peer"`, or none | `strict`, what `Verdict.Shareable` does | Kinds that are always masked, and held kinds as `{EMAIL}` | Nothing | As the guard found: `held` with the held kinds when there are any, `masked` with the masked ones |
 | `"owner"` | `secrets` | Only kinds that are always masked (`answerguard.MaskedKinds`: passwords, AWS keys, card, bank and government numbers) | `EMAIL`, `PHONE` and `ADDRESS` | Only what was acted on: `masked` with the always-masked kinds, else `clear` with `kinds: []` and the texts as given |
-| none yet | `off` | Nothing | Everything, an answer that could not be checked included | Always `clear` |
 
-`"owner"` is an answer the member started themselves and reads themselves: they
-decided that their own personal data is not masked in it. An answer with only
+A member who chose `strict` for `owner` has their own answers read as another's
+are, an email address held and shared as `{EMAIL}`; one who chose `secrets` for
+`peer`, where their organization's minimum allows it, has what others read left
+with its email addresses, as the second row has. A minimum overrides a choice
+below it. No level reads nothing: the intensity `off` remains in
+`answerguard`, but no setting reaches it, and a level nobody knows is read as
+`strict`. If the member's levels cannot be read the check does not fail, and
+does not read looser: it reads at `strict`, and logs a warning naming the
+member, the origin and why, never a text. The information log of a check that
+found something names the intensity it was read at.
+
+By default `"owner"` is an answer the member started themselves and reads
+themselves, so their own personal data is not masked in it. An answer with only
 an email address in it comes back `clear`, and one with an email address and a
 password comes back with the password masked and the address intact. Even
 there an answer the guard could not read shares nothing, since what could not

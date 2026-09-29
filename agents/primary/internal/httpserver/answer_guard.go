@@ -17,12 +17,19 @@ import (
 
 // AnswerGuardPreferences keeps what each member chose about how strictly the
 // answer guard reads what their agent says, and tells what applies once their
-// organization's minimum is counted in. *guardpolicy.Service implements it.
+// organization's minimum is counted in: to the member, in their settings, and
+// to the check route, before it reads an answer. *guardpolicy.Service
+// implements it.
 type AnswerGuardPreferences interface {
 	Preferences(ctx context.Context, organizationID, userID string) (guardpolicy.View, error)
 	// SetPreferences changes what a member chose: a nil level leaves that
 	// origin as it is, and a level that is "" clears it.
 	SetPreferences(ctx context.Context, organizationID, userID string, owner, peer *guardpolicy.Level) (guardpolicy.View, error)
+	// Effective is the level that applies to a member's answers, for each
+	// origin. It fails only when the member's own levels cannot be read, and
+	// then it is still the strictest reading, so a caller that has to go on
+	// goes on strictly.
+	Effective(ctx context.Context, organizationID, userID string) (guardpolicy.Effective, error)
 }
 
 // keptGuardPreferences is settings, or nil when it is a nil pointer, map, slice

@@ -25,14 +25,26 @@ const (
 	guardPath       = "/v1/organizations/org_1/answer-guard/preferences"
 )
 
+// fakeOrgPolicies is an OrgPolicies that says what it is told of each
+// organization, by id, and nothing of any other.
+type fakeOrgPolicies map[string]guardpolicy.OrgPolicy
+
+func (orgs fakeOrgPolicies) Get(_ context.Context, organizationID string) (guardpolicy.OrgPolicy, error) {
+	return orgs[organizationID], nil
+}
+
 // fakeAnswerGuardPreferences keeps a member's choices in a map, and works out
-// what they are told with guardpolicy's own rule, so that what is asserted
-// here is what a member would be shown.
+// what they are told, and what applies to them, from what its organizations'
+// policies say with guardpolicy's own rule, so that what is asserted here is
+// what a member would be shown, and read at.
 type fakeAnswerGuardPreferences struct {
-	org     guardpolicy.OrgPolicy
+	// orgs says what each organization's policy asks; nil says nothing of any.
+	orgs    guardpolicy.OrgPolicies
 	ceiling guardpolicy.Cap
 	chosen  map[[2]string]guardpolicy.Choices
-	err     error
+	// err is what every method fails with. Effective then answers the
+	// strictest reading beside it, as the service does.
+	err error
 	// calls records, in call order, the (organizationID, userID) pair every
 	// method was invoked with, so an authorization test can assert the
 	// handler always read or wrote the authenticated caller's own settings,
@@ -46,8 +58,30 @@ type guardChangeAsked struct {
 	owner, peer *guardpolicy.Level
 }
 
+// policy is what the organization's policy asks: nothing when there is no
+// source for it, or it fails, as the service reads one.
+func (fake *fakeAnswerGuardPreferences) policy(organizationID string) guardpolicy.OrgPolicy {
+	if fake.orgs == nil {
+		return guardpolicy.OrgPolicy{}
+	}
+	policy, err := fake.orgs.Get(context.Background(), organizationID)
+	if err != nil {
+		return guardpolicy.OrgPolicy{}
+	}
+	return policy
+}
+
 func (fake *fakeAnswerGuardPreferences) view(organizationID, userID string) guardpolicy.View {
-	return guardpolicy.Resolve(organizationID, fake.org, fake.chosen[[2]string{organizationID, userID}], fake.ceiling)
+	return guardpolicy.Resolve(organizationID, fake.policy(organizationID), fake.chosen[[2]string{organizationID, userID}], fake.ceiling)
+}
+
+func (fake *fakeAnswerGuardPreferences) Effective(_ context.Context, organizationID, userID string) (guardpolicy.Effective, error) {
+	fake.calls = append(fake.calls, [2]string{organizationID, userID})
+	if fake.err != nil {
+		strictest := guardpolicy.Choices{Owner: guardpolicy.LevelStrict, Peer: guardpolicy.LevelStrict}
+		return guardpolicy.Resolve(organizationID, fake.policy(organizationID), strictest, fake.ceiling).Effective(), fake.err
+	}
+	return fake.view(organizationID, userID).Effective(), nil
 }
 
 func (fake *fakeAnswerGuardPreferences) Preferences(_ context.Context, organizationID, userID string) (guardpolicy.View, error) {
@@ -124,7 +158,7 @@ func TestAMemberReadsTheirOwnAnswerGuardSettings(t *testing.T) {
 	}
 
 	// What the organization asks, and what the member chose, are both shown.
-	settings.org = guardpolicy.OrgPolicy{MinimumPeer: guardpolicy.LevelStrict, Relevance: guardpolicy.RelevanceShadow, Regulated: true}
+	settings.orgs = fakeOrgPolicies{"org_1": {MinimumPeer: guardpolicy.LevelStrict, Relevance: guardpolicy.RelevanceShadow, Regulated: true}}
 	settings.chosen = map[[2]string]guardpolicy.Choices{{"org_1", "user_1"}: {Owner: guardpolicy.LevelStrict}}
 	const chosen = `{"owner":{"chosen":"strict","default":"secrets","floor":"secrets","effective":"strict"},` +
 		`"peer":{"chosen":null,"default":"strict","floor":"strict","effective":"strict"},"relevance":"shadow","regulated":true}`
@@ -207,7 +241,7 @@ func TestAMemberChangesTheirOwnAnswerGuardSettings(t *testing.T) {
 }
 
 func TestAChoiceBelowTheMinimumIsAcceptedAndReported(t *testing.T) {
-	settings := &fakeAnswerGuardPreferences{org: guardpolicy.OrgPolicy{MinimumOwner: guardpolicy.LevelStrict, MinimumPeer: guardpolicy.LevelStrict}}
+	settings := &fakeAnswerGuardPreferences{orgs: fakeOrgPolicies{"org_1": {MinimumOwner: guardpolicy.LevelStrict, MinimumPeer: guardpolicy.LevelStrict}}}
 	handler, _ := guardServer(settings, nil)
 
 	response := serveGuard(handler, http.MethodPut, guardPath, `{"owner":"secrets","peer":"secrets"}`, bearer)
