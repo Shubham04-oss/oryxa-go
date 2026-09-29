@@ -90,7 +90,8 @@ export type WorkflowDelegationResult = {
   /** The agent's thread for this assignment: open it to answer a confirmation. */
   thread_id?: string
   run_id?: string
-  status: "completed" | "needs_confirmation" | "failed"
+  status:
+    "completed" | "needs_input" | "blocked" | "needs_confirmation" | "failed"
   output?: string
   error?: string
   pending_confirmations?: string[]

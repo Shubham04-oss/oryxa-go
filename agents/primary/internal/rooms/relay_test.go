@@ -405,11 +405,14 @@ func TestRelayPost_SpeakerErrorDoesNotStopOthers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Post: %v", err)
 	}
-	if len(results) != 2 {
-		t.Fatalf("got %d messages, want 2 (post + a2's reply; a1 failed): %+v", len(results), results)
+	if len(results) != 3 {
+		t.Fatalf("got %d messages, want 3 (post, a1's line saying it could not answer, a2's reply): %+v", len(results), results)
 	}
-	if results[1].AuthorHandle != "a2" {
-		t.Errorf("reply author = %q, want a2", results[1].AuthorHandle)
+	if results[1].AuthorHandle != "a1" || results[1].Body != "@a1 couldn't answer right now." {
+		t.Errorf("first line = %+v, want a1 saying it could not answer", results[1])
+	}
+	if results[2].AuthorHandle != "a2" || results[2].Body != "all good here" {
+		t.Errorf("reply = %+v, want a2's answer", results[2])
 	}
 	if got := speaker.callCount(); got != 2 {
 		t.Errorf("Speak called %d times, want 2 — both a1 and a2 were tried", got)

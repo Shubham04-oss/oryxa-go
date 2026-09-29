@@ -4,10 +4,15 @@ package agentsystem
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
@@ -23,6 +28,32 @@ const (
 	maxConfirmations = 32
 	maxTaskRunes     = 10_000
 	maxContextRunes  = 10_000
+)
+
+// The statuses a delegated assignment ends in, and only completed is success.
+// completed, needs_input and blocked are the specialist's own word about its
+// work, from the result envelope it returns; needs_confirmation is a tool of
+// its own waiting for the member's approval; failed is a run that did not
+// finish, or a specialist that said it failed.
+const (
+	statusCompleted         = "completed"
+	statusNeedsInput        = "needs_input"
+	statusBlocked           = "blocked"
+	statusNeedsConfirmation = "needs_confirmation"
+	statusFailed            = "failed"
+)
+
+// What a result says of a specialist's work is bounded, and one line each:
+// it is read by Krude and by the member, and is data, never instructions.
+const (
+	// maxReasonRunes bounds what a specialist said of why it could not finish.
+	maxReasonRunes = 300
+	// maxActionRunes bounds the description of one action waiting for the
+	// member, maxArgumentRunes one argument's value in it, and maxArguments
+	// how many arguments it shows the value of, the rest by name alone.
+	maxActionRunes   = 400
+	maxArgumentRunes = 80
+	maxArguments     = 6
 )
 
 type Service struct {
@@ -179,8 +210,10 @@ func (service *Service) Delegate(ctx context.Context, actor primaryagents.AgentS
 	for _, member := range team.Members {
 		members[member.AgentID] = member
 	}
-	results := make([]primaryagents.SystemDelegationResult, len(input.Assignments))
-	var running sync.WaitGroup
+	// Every assignment is checked before any is started: a specialist that
+	// has begun cannot be taken back when a later assignment turns out to
+	// name somebody who is not on the team.
+	assigned := make([]agentteams.Member, len(input.Assignments))
 	for index, assignment := range input.Assignments {
 		member, ok := members[strings.TrimSpace(assignment.AgentID)]
 		if !ok {
@@ -189,9 +222,13 @@ func (service *Service) Delegate(ctx context.Context, actor primaryagents.AgentS
 		if member.Status != managedagents.StatusActive {
 			return primaryagents.SystemDelegation{}, fmt.Errorf("%w: agent %q is disabled", agentteams.ErrInvalid, assignment.AgentID)
 		}
-		index, assignment, member := index, assignment, member
+		assigned[index] = member
+	}
+	results := make([]primaryagents.SystemDelegationResult, len(input.Assignments))
+	var running sync.WaitGroup
+	for index, assignment := range input.Assignments {
 		running.Go(func() {
-			results[index] = service.delegateOne(ctx, actor, team, member, assignment)
+			results[index] = service.delegateOne(ctx, actor, team, assigned[index], assignment)
 		})
 	}
 	running.Wait()
@@ -261,24 +298,32 @@ func (service *Service) delegateOne(ctx context.Context, actor primaryagents.Age
 		AccessToken: memberauth.AccessToken(ctx),
 	}, member.AgentID, "", threads.RunInput{Message: message, StartedBy: startedBy})
 	if err != nil {
-		return primaryagents.SystemDelegationResult{AgentID: member.AgentID, AgentName: member.Name, Status: "failed", Error: err.Error()}
+		return primaryagents.SystemDelegationResult{AgentID: member.AgentID, AgentName: member.Name, Status: statusFailed, Error: err.Error()}
 	}
 	return collectRun(ctx, member, started)
 }
 
+// collectRun runs a specialist to the end and says how it went. A run that
+// stopped for the member's approval says which actions wait, not only which
+// calls. One that ran to the end says what the specialist itself made of its
+// work, not merely that it ended: a specialist that reports it is blocked, or
+// whose model stopped before it had answered, has not done the work, whatever
+// state its run finished in.
 func collectRun(ctx context.Context, member agentteams.Member, started managedagents.StartedRun) primaryagents.SystemDelegationResult {
 	result := primaryagents.SystemDelegationResult{AgentID: member.AgentID, AgentName: member.Name}
 	result.ThreadID, result.RunID = started.ThreadID, started.Run.ID()
-	var ended string
+	var ended, stopped string
+	var pending []threads.Item
 	started.Run.Execute(ctx, func(item threads.Item) error {
 		switch item.Type {
 		case threads.ItemMessage:
 			if item.Author != threads.AuthorMember && item.Author != threads.AuthorApps {
-				result.Output = item.Text
+				result.Output, stopped = item.Text, item.Error
 			}
 		case threads.ItemConfirmation:
 			if item.Status == threads.ConfirmationPending {
 				result.Confirmations = append(result.Confirmations, item.CallID)
+				pending = append(pending, item)
 			}
 		case threads.ItemRunFailed:
 			ended, result.Error = item.Type, item.Error
@@ -289,16 +334,179 @@ func collectRun(ctx context.Context, member agentteams.Member, started managedag
 	})
 	switch {
 	case len(result.Confirmations) > 0:
-		result.Status = "needs_confirmation"
+		result.Status = statusNeedsConfirmation
+		result.Output = withPendingActions(result.Output, pending)
+	case ended == threads.ItemRunCompleted && stopped != "":
+		// The model blocked or cut short what the specialist was saying; its
+		// last message is not the deliverable, whatever it holds.
+		result.Status = statusFailed
+		result.Error = withReason("the specialist's model stopped before it had answered", oneLine(stopped, maxReasonRunes))
 	case ended == threads.ItemRunCompleted:
-		result.Status = "completed"
+		result.Status, result.Error = specialistOutcome(result.Output)
 	default:
-		result.Status = "failed"
+		result.Status = statusFailed
 		if result.Error == "" {
 			result.Error = "specialist run did not complete"
 		}
 	}
 	return result
+}
+
+// specialistOutcome is how a specialist whose run ended says its work went,
+// in the result envelope it returns: its status and, when the work is not
+// done, what it said about why. Output that is no envelope, or an envelope
+// with no status, says nothing against the work having been done. A status
+// an envelope may not carry is not taken for success.
+func specialistOutcome(output string) (status, reason string) {
+	var envelope struct {
+		Status  string `json:"status"`
+		Summary string `json:"summary"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(output)), &envelope) != nil {
+		return statusCompleted, ""
+	}
+	summary := oneLine(envelope.Summary, maxReasonRunes)
+	switch reported := strings.ToLower(strings.TrimSpace(envelope.Status)); reported {
+	case "", statusCompleted:
+		return statusCompleted, ""
+	case statusNeedsInput:
+		return statusNeedsInput, withReason("the specialist needs an answer from the member before it can go on", summary)
+	case statusBlocked:
+		return statusBlocked, withReason("the specialist reports that it is blocked", summary)
+	case statusFailed:
+		return statusFailed, withReason("the specialist reports that it failed", summary)
+	default:
+		return statusFailed, fmt.Sprintf("the specialist reported a status of %q, which is not one it may report", oneLine(reported, 40))
+	}
+}
+
+func withReason(text, reason string) string {
+	if reason == "" {
+		return text
+	}
+	return text + ": " + reason
+}
+
+// withPendingActions is output followed by what each confirmation waiting for
+// the member would do. The member decides on what Krude tells them, and a
+// call ID says nothing of what is being approved, so every waiting action is
+// listed under its ID with the tool it calls, the tool's own reason for
+// asking and a short summary of its arguments.
+func withPendingActions(output string, pending []threads.Item) string {
+	var text strings.Builder
+	if output = strings.TrimSpace(output); output != "" {
+		text.WriteString(output)
+		text.WriteString("\n\n")
+	}
+	text.WriteString("Waiting for the member to approve or decline:\n")
+	for _, item := range pending {
+		text.WriteString("- ")
+		text.WriteString(describeAction(item))
+		text.WriteByte('\n')
+	}
+	return strings.TrimSpace(text.String())
+}
+
+// describeAction is one line saying what a waiting confirmation is: its ID
+// as the member's answer will name it, then the tool and, in brackets, what
+// it would be called with, then the tool's reason for asking. What the model
+// wrote into the arguments is data that goes into Krude's context and the
+// member's, so it is cut to a few short values on one line, and a value under
+// a name that holds a secret is not shown at all.
+func describeAction(item threads.Item) string {
+	tool := oneLine(item.Tool, 80)
+	if tool == "" {
+		tool = "a tool"
+	}
+	var action strings.Builder
+	action.WriteString(oneLine(item.CallID, 128))
+	action.WriteString(": ")
+	action.WriteString(tool)
+	if arguments := summarizeArguments(item.Arguments); arguments != "" {
+		action.WriteString("(" + arguments + ")")
+	}
+	if hint := oneLine(item.Hint, 160); hint != "" {
+		action.WriteString(" — " + hint)
+	}
+	return oneLine(action.String(), maxActionRunes)
+}
+
+// summarizeArguments shows the value of the first few arguments, by name,
+// and only the names of the rest: what is approved is never described as less
+// than it is.
+func summarizeArguments(arguments map[string]any) string {
+	names := slices.Sorted(maps.Keys(arguments))
+	var shown, more []string
+	for index, name := range names {
+		if index >= maxArguments {
+			more = append(more, oneLine(name, 40))
+			continue
+		}
+		shown = append(shown, oneLine(name, 40)+"="+summarizeValue(name, arguments[name]))
+	}
+	if len(more) > 0 {
+		shown = append(shown, "and also "+strings.Join(more, ", "))
+	}
+	return strings.Join(shown, ", ")
+}
+
+func summarizeValue(name string, value any) string {
+	if holdsSecret(name) {
+		return "[hidden]"
+	}
+	if text, ok := value.(string); ok {
+		return strconv.Quote(oneLine(text, maxArgumentRunes))
+	}
+	encoded, err := json.Marshal(withoutSecrets(value))
+	if err != nil {
+		return "[unreadable]"
+	}
+	return oneLine(string(encoded), maxArgumentRunes)
+}
+
+// withoutSecrets is value with whatever sits under a name that holds a
+// secret, however deep, replaced.
+func withoutSecrets(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		clean := make(map[string]any, len(typed))
+		for name, inner := range typed {
+			if holdsSecret(name) {
+				clean[name] = "[hidden]"
+			} else {
+				clean[name] = withoutSecrets(inner)
+			}
+		}
+		return clean
+	case []any:
+		clean := make([]any, len(typed))
+		for index, inner := range typed {
+			clean[index] = withoutSecrets(inner)
+		}
+		return clean
+	}
+	return value
+}
+
+// secretNames are the parts of an argument's name that say its value is a
+// secret. A name that only looks like one is hidden too: the member loses a
+// value they can ask for, not one they cannot take back.
+var secretNames = []string{"password", "passwd", "secret", "token", "authorization", "bearer", "api_key", "api-key", "apikey", "access_key", "private_key", "credential", "cookie"}
+
+func holdsSecret(name string) bool {
+	lower := strings.ToLower(name)
+	return slices.ContainsFunc(secretNames, func(part string) bool { return strings.Contains(lower, part) })
+}
+
+// oneLine is text on one line, at most limit characters long: whitespace and
+// control characters, which could pass for the structure of what surrounds
+// it, become single spaces.
+func oneLine(text string, limit int) string {
+	flat := strings.Join(strings.FieldsFunc(text, func(symbol rune) bool { return unicode.IsSpace(symbol) || unicode.IsControl(symbol) }), " ")
+	if runes := []rune(flat); len(runes) > limit {
+		return strings.TrimSpace(string(runes[:limit-1])) + "…"
+	}
+	return flat
 }
 
 func confirmationAnswers(inputs []primaryagents.SystemConfirmationAnswer) ([]threads.Answer, error) {
