@@ -76,7 +76,10 @@ deploy/scripts/web.sh               # the web app at app.oryxa.in
 `first_deploy=true` belongs to that first apply alone. The files and artifacts
 buckets are made by `provision-app.sh`, after it, so their versioning and
 lifecycle rules cannot be put on yet; the apply that follows the script, run
-without the flag, does.
+without the flag, does. The flag also has OpenTofu create the database's two
+log groups itself, before the instance. Without it, OpenTofu adopts the ones
+RDS made (`import` blocks in `production/hardening.tf`), and an empty account
+has none to adopt.
 
 Then add the `google_redirect_uri` provision-app.sh printed to the Google
 OAuth client's authorized redirect URIs, and confirm the alarm subscription
@@ -506,6 +509,7 @@ provider refuses or apps does not recognize.
   `/oryxa-production/cloudflared`, `/oryxa-production/otel`.
 - **Database**: Performance Insights and Enhanced Monitoring in RDS; queries
   slower than 500 ms are logged to `/aws/rds/instance/oryxa-production/postgresql`.
+  That log group and `/upgrade` beside it keep 30 days, as the task's do.
 - **Alarms** mail `alarm_email`: no running task, CPU or memory high, database
   CPU, storage, memory or connections, a queue backing up, anything in a
   dead-letter queue, the connector instance failing its checks, three or more

@@ -3,7 +3,7 @@
 # change. Nothing here changes the running service's behavior.
 
 variable "first_deploy" {
-  description = "True only for the first apply into an empty account (deploy/README.md, First deploy). deploy/scripts/provision-app.sh makes the files and artifacts buckets after that apply, so their versioning and lifecycle rules wait for the next one."
+  description = "True only for the first apply into an empty account (deploy/README.md, First deploy). deploy/scripts/provision-app.sh makes the files and artifacts buckets after that apply, so their versioning and lifecycle rules wait for the next one, and RDS has not yet made the database's log groups, so they are created here rather than adopted."
   type        = bool
   default     = false
 }
@@ -262,4 +262,24 @@ resource "aws_cloudwatch_metric_alarm" "bedrock_throttles" {
     period      = 300
     return_data = true
   }
+}
+
+# The database's log groups. RDS makes one for each log it exports to
+# CloudWatch (database_log_exports, in database.tf), named for the instance,
+# and leaves it without an expiry. Declaring them here gives each 30 days, and
+# in a first deploy makes them before the instance, so RDS finds them. In an
+# account that has them already, which production has, the import blocks
+# adopt them instead of failing on the name: an import is refused for an
+# object that does not exist, so a first deploy leaves them out, and one that
+# is already in state is left alone, so they can stay after the first apply.
+resource "aws_cloudwatch_log_group" "database" {
+  for_each          = toset(local.database_log_exports)
+  name              = "/aws/rds/instance/${local.name}/${each.key}"
+  retention_in_days = 30
+}
+
+import {
+  for_each = var.first_deploy ? toset([]) : toset(local.database_log_exports)
+  to       = aws_cloudwatch_log_group.database[each.key]
+  id       = "/aws/rds/instance/${local.name}/${each.key}"
 }
