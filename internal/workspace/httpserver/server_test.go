@@ -20,6 +20,23 @@ type memoryRepository struct {
 	mu       sync.Mutex
 	versions []store.Version
 	mappings []store.ExternalMapping
+	plans    map[string]store.ReviewedPlan
+}
+
+func (repo *memoryRepository) SavePlan(_ context.Context, plan store.ReviewedPlan) error {
+	if repo.plans == nil {
+		repo.plans = map[string]store.ReviewedPlan{}
+	}
+	repo.plans[plan.ID] = plan
+	return nil
+}
+
+func (repo *memoryRepository) ReviewedPlan(_ context.Context, organizationID, actorID, id string) (store.ReviewedPlan, error) {
+	plan, exists := repo.plans[id]
+	if !exists || plan.OrganizationID != organizationID || plan.ActorID != actorID || !plan.ExpiresAt.After(time.Now()) {
+		return store.ReviewedPlan{}, store.ErrPlanNotFound
+	}
+	return plan, nil
 }
 
 func (repo *memoryRepository) WithApplyLock(_ context.Context, _ string, operation func() error) error {
@@ -228,6 +245,7 @@ func TestWorkspaceApplyIsVersionedAndIdempotent(t *testing.T) {
 		t.Fatalf("plan had changes: %+v", plan)
 	}
 	for i := 0; i < 2; i++ {
+		plan = reviewedPlan(t, workspace, path, document)
 		response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": document, "approved_plan": plan})
 		if response.StatusCode != http.StatusOK {
 			data, _ := io.ReadAll(response.Body)
@@ -300,7 +318,7 @@ func TestWorkspaceRollbackRestoresEarlierFileAsNewVersion(t *testing.T) {
 		"apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme, domains: [acme.com]}\npreset: startup\n",
 	}
 	for _, document := range files {
-		response := workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": document, "approved_plan": runtime.Plan{}})
+		response := workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": document, "approved_plan": reviewedPlan(t, workspace, path, document)})
 		if response.StatusCode != http.StatusOK {
 			data, _ := io.ReadAll(response.Body)
 			t.Fatalf("apply status %d: %s", response.StatusCode, data)
@@ -313,7 +331,13 @@ func TestWorkspaceRollbackRestoresEarlierFileAsNewVersion(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte("acme.com")) {
 		t.Fatalf("read version 1 status %d: %s", response.StatusCode, data)
 	}
-	response = workspaceRequest(t, workspace, http.MethodPost, path+":rollback", "owner-token", map[string]any{"to": 1, "approved_plan": runtime.Plan{}})
+	response = workspaceRequest(t, workspace, http.MethodPost, path+":rollback-plan", "owner-token", map[string]any{"to": 1})
+	var rollbackPlan runtime.Plan
+	if err := json.NewDecoder(response.Body).Decode(&rollbackPlan); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	response = workspaceRequest(t, workspace, http.MethodPost, path+":rollback", "owner-token", map[string]any{"to": 1, "approved_plan": rollbackPlan})
 	if response.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(response.Body)
 		t.Fatalf("rollback status %d: %s", response.StatusCode, data)
@@ -368,7 +392,7 @@ func TestWorkspaceContextPlanApplyReadAndRollback(t *testing.T) {
 		t.Fatalf("context status=%d context=%+v", response.StatusCode, context)
 	}
 	second := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\n"
-	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": second, "approved_plan": runtime.Plan{}})
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": second, "approved_plan": reviewedPlan(t, workspace, path, second)})
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK || len(repo.versions) != 1 {
 		t.Fatalf("omission changed context: status=%d versions=%d", response.StatusCode, len(repo.versions))
@@ -478,13 +502,13 @@ func TestWorkspacePoliciesApplyAndRollbackAsVersions(t *testing.T) {
 		t.Fatalf("pull omitted tools policy: status=%d document=%s", response.StatusCode, pulled)
 	}
 	omitted := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\n"
-	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": omitted, "approved_plan": runtime.Plan{}})
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": omitted, "approved_plan": reviewedPlan(t, workspace, path, omitted)})
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK || len(repo.versions) != 1 {
 		t.Fatalf("policy omission status=%d versions=%d", response.StatusCode, len(repo.versions))
 	}
 	second := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\nrules: {consent: {expireAfter: 2h}}\nsafety: {guard: {holdForReview: false}}\ntools: {offer: [], autoSubscribe: true}\n"
-	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": second, "approved_plan": runtime.Plan{}})
+	response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": second, "approved_plan": reviewedPlan(t, workspace, path, second)})
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK || len(repo.versions) != 2 {
 		t.Fatalf("policy update status=%d versions=%d", response.StatusCode, len(repo.versions))

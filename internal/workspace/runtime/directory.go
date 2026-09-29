@@ -144,7 +144,16 @@ func MergeDirectory(previous, submitted spec.Document, state Snapshot, mapped []
 	}
 	for key, record := range old {
 		if _, keep := next[key]; !keep {
-			plan.Changes = append(plan.Changes, Change{Op: "delete", Kind: "external_" + record.kind, Name: record.source + "/" + record.externalID})
+			change := Change{Op: "delete", Kind: "external_" + record.kind, Name: record.source + "/" + record.externalID, ResourceID: bindings[key].ResourceID}
+			if state.Organization != nil {
+				change.OrganizationID = state.Organization.ID
+			}
+			if record.kind == "user" {
+				change.Email = record.reference
+			} else {
+				change.Team = record.reference
+			}
+			plan.Changes = append(plan.Changes, change)
 		}
 	}
 	if len(next) > 0 || submitted.Directory != nil || (previous.Directory != nil && !replace) {

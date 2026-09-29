@@ -252,6 +252,100 @@ func TestPeoplePruneCannotRemoveSignedInMember(t *testing.T) {
 	}
 }
 
+func TestRemovalApprovalIsBoundToStableResourcesAndRoles(t *testing.T) {
+	for _, scenario := range []string{"member replacement", "member promotion", "invitation replacement", "team replacement", "team member replacement", "team admin replacement", "organization replacement"} {
+		t.Run(scenario, func(t *testing.T) {
+			state := Snapshot{
+				Organization: &Organization{ID: "org_1", Slug: "acme"}, ActorID: "u1", ActorRole: "owner",
+				Members: map[string]Member{
+					"owner@acme.com": {UserID: "u1", Email: "owner@acme.com", Role: "owner"},
+					"old@acme.com":   {UserID: "u2", Email: "old@acme.com", Role: "member"},
+				},
+				Invitations: map[string]Invitation{"pending@acme.com": {ID: "inv_1", Email: "pending@acme.com", Role: "member", Status: "pending"}},
+				Teams:       map[string]Team{"Engineering": {ID: "team_1", Name: "Engineering", Path: "engineering"}},
+				TeamMembers: map[string]map[string]TeamMember{"Engineering": {
+					"owner@acme.com": {UserID: "u1", Email: "owner@acme.com", Role: "admin"},
+					"old@acme.com":   {UserID: "u2", Email: "old@acme.com", Role: "admin"},
+				}},
+			}
+			document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"},
+				People: &spec.People{Prune: true, Members: []spec.Member{{Email: "owner@acme.com", Role: "owner"}}},
+				Teams:  spec.Teams{Prune: true},
+			}
+			if strings.HasPrefix(scenario, "team member") || strings.HasPrefix(scenario, "team admin") {
+				document.Teams.Items = []spec.Team{{Name: "Engineering", Members: []string{"owner@acme.com"}, Leads: []string{"owner@acme.com"}}}
+				if scenario == "team admin replacement" {
+					document.Teams.Items[0].Members = append(document.Teams.Items[0].Members, "old@acme.com")
+					document.People = nil
+				}
+			}
+			approved, err := BuildPlan(document, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyApprovedRemovals(approved, &approved); err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "member replacement":
+				member := state.Members["old@acme.com"]
+				member.UserID = "replacement"
+				state.Members["old@acme.com"] = member
+			case "member promotion":
+				member := state.Members["old@acme.com"]
+				member.Role = "owner"
+				state.Members["old@acme.com"] = member
+			case "invitation replacement":
+				invite := state.Invitations["pending@acme.com"]
+				invite.ID = "replacement"
+				state.Invitations["pending@acme.com"] = invite
+			case "team replacement":
+				team := state.Teams["Engineering"]
+				team.ID = "replacement"
+				state.Teams["Engineering"] = team
+			case "team member replacement", "team admin replacement":
+				member := state.TeamMembers["Engineering"]["old@acme.com"]
+				member.UserID = "replacement"
+				state.TeamMembers["Engineering"]["old@acme.com"] = member
+			case "organization replacement":
+				state.Organization.ID = "replacement"
+			}
+			current, err := BuildPlan(document, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !RemovalsDiffer(current, approved) || verifyApprovedRemovals(current, &approved) == nil {
+				t.Fatalf("accepted stale approval after %s: %+v", scenario, current)
+			}
+		})
+	}
+}
+
+func TestApplyRejectsRecreatedInvitationBeforeMutating(t *testing.T) {
+	state := &fakeState{orgExists: true, members: []Member{{UserID: "u1", Email: "owner@acme.com", Role: "owner"}},
+		otherInvitations: []Invitation{{ID: "inv_original", Email: "pending@acme.com", Role: "member", Status: "pending"}}}
+	server := httptest.NewServer(http.HandlerFunc(state.serve))
+	defer server.Close()
+	client, err := NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"},
+		People: &spec.People{Prune: true, Members: []spec.Member{{Email: "owner@acme.com", Role: "owner"}}}}
+	snapshot, err := client.Snapshot(context.Background(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := BuildPlan(document, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.otherInvitations[0].ID = "inv_old"
+	if _, err := ApplyApproved(context.Background(), client, document, approved); err == nil || state.revokedInvitations != 0 {
+		t.Fatalf("replacement invitation used stale approval: error=%v revocations=%d", err, state.revokedInvitations)
+	}
+}
+
 func TestTeamsPruneListsAndAppliesNestedRemovals(t *testing.T) {
 	state := &fakeState{
 		orgExists: true, teamCreates: 1,

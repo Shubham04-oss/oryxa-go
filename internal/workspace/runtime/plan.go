@@ -12,12 +12,16 @@ import (
 )
 
 type Change struct {
-	Op    string `json:"op"`
-	Kind  string `json:"kind"`
-	Name  string `json:"name"`
-	Role  string `json:"role,omitempty"`
-	Team  string `json:"team,omitempty"`
-	Email string `json:"email,omitempty"`
+	Op             string `json:"op"`
+	Kind           string `json:"kind"`
+	Name           string `json:"name"`
+	Role           string `json:"role,omitempty"`
+	Team           string `json:"team,omitempty"`
+	Email          string `json:"email,omitempty"`
+	OrganizationID string `json:"organization_id,omitempty"`
+	ResourceID     string `json:"resource_id,omitempty"`
+	TeamID         string `json:"team_id,omitempty"`
+	Sensitive      bool   `json:"sensitive,omitempty"`
 }
 
 type HumanStep struct {
@@ -26,8 +30,28 @@ type HumanStep struct {
 }
 
 type Plan struct {
-	Changes    []Change    `json:"changes"`
-	NeedsHuman []HumanStep `json:"needs_human"`
+	PlanID      string      `json:"plan_id,omitempty"`
+	PlanHash    string      `json:"plan_hash,omitempty"`
+	BaseVersion int64       `json:"base_version"`
+	Changes     []Change    `json:"changes"`
+	NeedsHuman  []HumanStep `json:"needs_human"`
+}
+
+// SensitiveChanges is the exact set that needs a bound, reviewed server plan.
+func SensitiveChanges(plan Plan) []Change {
+	invites := 0
+	for _, change := range plan.Changes {
+		if change.Op == "create" && change.Kind == "invitation" {
+			invites++
+		}
+	}
+	changes := []Change{}
+	for _, change := range plan.Changes {
+		if change.Op == "delete" || change.Sensitive || change.Kind == "policy" || change.Kind == "member_role" || change.Kind == "team_member_role" || change.Role == "admin" || (invites > 25 && change.Kind == "invitation") {
+			changes = append(changes, change)
+		}
+	}
+	return changes
 }
 
 func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
@@ -184,6 +208,35 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 	for _, field := range []string{"name", "description", "instructions", "status"} {
 		if _, changed := input[field]; changed {
 			plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "organization_agent", Name: field})
+		}
+	}
+	// Approval must identify the resource reviewed, not just a reusable name or
+	// email. Replacements and role changes require a fresh removal review.
+	for i := range plan.Changes {
+		change := &plan.Changes[i]
+		if change.Op != "delete" {
+			continue
+		}
+		change.OrganizationID = state.Organization.ID
+		switch change.Kind {
+		case "member":
+			member := state.Members[change.Name]
+			change.ResourceID, change.Role = member.UserID, member.Role
+		case "invitation":
+			invitation := state.Invitations[change.Name]
+			change.ResourceID, change.Role = invitation.ID, invitation.Role
+		case "team":
+			change.ResourceID = state.Teams[change.Name].ID
+		case "team_member", "team_admin":
+			member := state.TeamMembers[change.Team][change.Email]
+			change.ResourceID, change.Role = member.UserID, member.Role
+			change.TeamID = state.Teams[change.Team].ID
+			if change.TeamID == "" {
+				return Plan{}, fmt.Errorf("removing a team member requires a stable team ID")
+			}
+		}
+		if change.OrganizationID == "" || change.ResourceID == "" {
+			return Plan{}, fmt.Errorf("removing %s requires stable organization and resource IDs", change.Kind)
 		}
 	}
 	slices.SortFunc(plan.Changes, func(a, b Change) int {

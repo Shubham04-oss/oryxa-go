@@ -25,6 +25,8 @@ type Repository interface {
 	Versions(context.Context, string) ([]store.Version, error)
 	Save(context.Context, string, string, []byte) (store.Version, error)
 	Mappings(context.Context, string) ([]store.ExternalMapping, error)
+	SavePlan(context.Context, store.ReviewedPlan) error
+	ReviewedPlan(context.Context, string, string, string) (store.ReviewedPlan, error)
 }
 
 type Server struct {
@@ -196,9 +198,19 @@ func (server *Server) plan(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadGateway, err.Error())
 		return
 	}
+	baseVersion, err := server.currentVersion(request.Context(), request.PathValue("organizationID"))
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "workspace version could not be read")
+		return
+	}
 	plan, _, err := server.documentPlan(request.Context(), request.PathValue("organizationID"), document, state, false)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err = server.issuePlan(request.Context(), request.PathValue("organizationID"), access, document, plan, false, baseVersion)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "workspace plan could not be saved")
 		return
 	}
 	writeJSON(writer, http.StatusOK, plan)
@@ -275,10 +287,11 @@ func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Re
 		if err != nil {
 			return err
 		}
-		if runtime.RemovalsDiffer(plan, approved) {
-			return errApprovalChanged
+		issued, err := server.verifyPlan(request.Context(), state.Organization.ID, access, document, plan, approved, replaceContext)
+		if err != nil {
+			return err
 		}
-		remaining, err = runtime.ApplyApproved(request.Context(), client, document, runtime.RuntimeRemovals(approved))
+		remaining, err = runtime.ApplyApproved(request.Context(), client, document, runtime.RuntimeRemovals(issued))
 		if err != nil {
 			return err
 		}
@@ -299,8 +312,12 @@ func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Re
 	})
 	if err != nil {
 		status := http.StatusBadGateway
-		if errors.Is(err, store.ErrApplyBusy) || errors.Is(err, errApprovalChanged) {
+		if errors.Is(err, store.ErrApplyBusy) || errors.Is(err, errApprovalChanged) || errors.Is(err, errStalePlan) {
 			status = http.StatusConflict
+		}
+		if errors.Is(err, errStalePlan) {
+			writeJSON(writer, status, map[string]string{"code": "stale_plan", "error": err.Error()})
+			return
 		}
 		writeError(writer, status, err.Error())
 		return
@@ -509,9 +526,19 @@ func (server *Server) rollbackPlan(writer http.ResponseWriter, request *http.Req
 		writeError(writer, http.StatusBadGateway, err.Error())
 		return
 	}
+	baseVersion, err := server.currentVersion(request.Context(), request.PathValue("organizationID"))
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "workspace version could not be read")
+		return
+	}
 	plan, _, err := server.documentPlan(request.Context(), request.PathValue("organizationID"), document, state, true)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err = server.issuePlan(request.Context(), request.PathValue("organizationID"), access, document, plan, true, baseVersion)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "workspace plan could not be saved")
 		return
 	}
 	writeJSON(writer, http.StatusOK, plan)
