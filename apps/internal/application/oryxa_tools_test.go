@@ -34,6 +34,8 @@ type testIntegration struct {
 	// the cursor a request carries; "" is the first page.
 	targets []integration.Target
 	pages   map[string]integration.Page
+	// readErr is what the reader fails with, when it is to fail at all.
+	readErr error
 	// poll is what a poll answers, by cursor.
 	poll map[string]integration.Batch
 }
@@ -123,6 +125,7 @@ func (i *testIntegration) Manifest() integration.Manifest {
 		Readers: []integration.ReaderSpec{{
 			Name: "issues", Kinds: []string{"issue"},
 			TargetSchema: json.RawMessage(`{"type":"object","required":["repo"]}`),
+			ReadPOSTs:    []string{"/search"},
 		}},
 		Triggers: []integration.TriggerSpec{{
 			Slug: "ACME_ISSUE_EVENT", Name: "An issue changed", Kind: integration.TriggerPoll,
@@ -166,6 +169,9 @@ func (i *testIntegration) Targets(context.Context, integration.Session) ([]integ
 func (i *testIntegration) Read(_ context.Context, _ integration.Session, request integration.PageRequest) (integration.Page, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.readErr != nil {
+		return integration.Page{}, i.readErr
+	}
 	page, ok := i.pages[request.Cursor]
 	if !ok {
 		return integration.Page{}, integration.ErrNotFound

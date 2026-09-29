@@ -15,6 +15,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/integration"
 )
 
 var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
@@ -37,10 +38,13 @@ type fakeService struct {
 
 	connection domain.Connection
 	targets    []application.Target
-	redirect   string
-	completion application.Completion
-	trigger    domain.Trigger
-	run        application.ToolRun
+	page       integration.Page
+	// pageRequest is the last PageRequest the pages route was asked for.
+	pageRequest integration.PageRequest
+	redirect    string
+	completion  application.Completion
+	trigger     domain.Trigger
+	run         application.ToolRun
 
 	webhookHeader http.Header
 	webhookBody   []byte
@@ -149,6 +153,14 @@ func (fake *fakeService) ConnectionTargets(_ context.Context, credentials authcl
 		return nil, fake.err
 	}
 	return fake.targets, nil
+}
+
+func (fake *fakeService) Pages(_ context.Context, credentials authclient.Credentials, organizationID, connectionID string, request integration.PageRequest) (integration.Page, error) {
+	fake.credentials, fake.organization, fake.pageRequest = credentials, organizationID, request
+	if fake.err != nil {
+		return integration.Page{}, fake.err
+	}
+	return fake.page, nil
 }
 
 func (fake *fakeService) Triggers(_ context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]domain.Trigger, error) {

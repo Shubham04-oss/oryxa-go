@@ -24,6 +24,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/integration"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 	"github.com/Shubham04-oss/oryxa-go/internal/cliscope"
 )
@@ -49,6 +50,7 @@ type appsService interface {
 	RunTool(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.RunToolInput) (application.ToolRun, error)
 	Proxy(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ProxyInput) (application.ProxyResult, error)
 	ConnectionTargets(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]application.Target, error)
+	Pages(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string, request integration.PageRequest) (integration.Page, error)
 	CreateTrigger(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.TriggerInput) (domain.Trigger, error)
 	Triggers(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]domain.Trigger, error)
 	RemoveTrigger(ctx context.Context, credentials authclient.Credentials, organizationID, id string) error
@@ -117,6 +119,7 @@ func New(service appsService, config Config, logger *slog.Logger) *Server {
 	server.handle("POST /v1/organizations/{organizationID}/apps/tools/{tool}/run", server.runTool)
 	server.handle("POST /v1/organizations/{organizationID}/apps/read", server.proxy)
 	server.handle("GET /v1/organizations/{organizationID}/apps/connections/{connectionID}/targets", server.connectionTargets)
+	server.handle("POST /v1/organizations/{organizationID}/apps/connections/{connectionID}/pages", server.pages)
 	server.handle("GET /v1/organizations/{organizationID}/apps/triggers", server.listTriggers)
 	server.handle("POST /v1/organizations/{organizationID}/apps/triggers", server.createTrigger)
 	server.handle("DELETE /v1/organizations/{organizationID}/apps/triggers/{triggerID}", server.removeTrigger)
