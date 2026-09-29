@@ -31,6 +31,11 @@ func scanManifestSecrets(node *yaml.Node, path string) error {
 	case yaml.MappingNode:
 		for index := 0; index+1 < len(node.Content); index += 2 {
 			field := node.Content[index].Value
+			// Unknown-key decoder errors quote field names. Inspect the key before
+			// it can become part of either a diagnostic or a child field path.
+			if credentialPattern.MatchString(field) {
+				return &SecretError{Field: path + "[field-name]"}
+			}
 			if path != "" {
 				field = path + "." + field
 			}

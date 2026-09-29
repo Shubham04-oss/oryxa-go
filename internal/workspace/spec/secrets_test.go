@@ -20,3 +20,11 @@ func TestSecretScannerAcceptsOpaqueDirectoryIDsAndOrdinaryText(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSecretInUnknownFieldNameIsNotEchoedByDecoder(t *testing.T) {
+	secret := "ghp_0123456789abcdefghijklmnop"
+	_, err := Parse([]byte(example + secret + ": enabled\n"))
+	if err == nil || !strings.Contains(err.Error(), "secret_in_manifest") || strings.Contains(err.Error(), secret) {
+		t.Fatalf("field name leaked credential: %v", err)
+	}
+}
