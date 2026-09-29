@@ -135,6 +135,7 @@ func managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, sp
 		Name: machineName(spec.ID), Description: spec.Description,
 		Model: router.For(modelrouter.RoleWork), InstructionProvider: instruction,
 		OutputSchema: managedResultSchema, Tools: tools, GenerateContentConfig: delivering.config(),
+		AfterToolCallbacks: delivering.afterTools(),
 		// A persistent specialist is the root of its own durable thread. ADK
 		// reserves task mode for a child delegated by a chat coordinator and
 		// rejects it as a runner root, so standalone and team-dispatched turns
