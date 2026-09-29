@@ -99,7 +99,7 @@ func Gemini(ctx context.Context, name, project, location string, credentials *au
 	if err != nil {
 		return nil, err
 	}
-	return foldedSignatures{llm}, nil
+	return repairedHistory{llm}, nil
 }
 
 // GeminiClient returns a Gen AI client on the same Vertex AI project and
