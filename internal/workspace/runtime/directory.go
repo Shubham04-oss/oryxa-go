@@ -34,7 +34,11 @@ func ResolveDirectory(document spec.Document, state Snapshot, mapped []store.Ext
 		} else if team, ok := state.Teams[record.reference]; ok {
 			resourceID = team.ID
 		}
-		result = append(result, store.ExternalMapping{Source: record.source, Kind: record.kind, ExternalID: record.externalID, Reference: record.reference, ResourceID: resourceID})
+		mapping := store.ExternalMapping{Source: record.source, Kind: record.kind, ExternalID: record.externalID, Reference: record.reference, ResourceID: resourceID}
+		if record.kind == "team" && bindings[key].ResourceID != "" && bindings[key].ResourceID != resourceID {
+			mapping.PreviousResourceID = bindings[key].ResourceID
+		}
+		result = append(result, mapping)
 	}
 	slices.SortFunc(result, func(a, b store.ExternalMapping) int {
 		return strings.Compare(a.Source+"\x00"+a.Kind+"\x00"+a.ExternalID, b.Source+"\x00"+b.Kind+"\x00"+b.ExternalID)
@@ -102,6 +106,8 @@ func MergeDirectory(previous, submitted spec.Document, state Snapshot, mapped []
 	boundResources := map[string]string{}
 	for key, record := range next {
 		oldBinding := bindings[key]
+		rebind := false
+		previousResourceID := oldBinding.ResourceID
 		if record.kind == "team" && oldBinding.ResourceID != "" {
 			live := false
 			for _, team := range state.Teams {
@@ -111,7 +117,8 @@ func MergeDirectory(previous, submitted spec.Document, state Snapshot, mapped []
 				}
 			}
 			if !live {
-				return spec.Document{}, Plan{}, fmt.Errorf("directory group %q still references a deleted team; wait for deletion cleanup or review pruning this mapping before recreating %s", record.externalID, record.reference)
+				rebind = true
+				oldBinding.ResourceID = ""
 			}
 		}
 		resourceID := ""
@@ -193,6 +200,13 @@ func MergeDirectory(previous, submitted spec.Document, state Snapshot, mapped []
 			boundResources[resourceKey] = key
 		}
 		label := record.source + "/" + record.externalID
+		if rebind {
+			change := Change{Op: "update", Kind: "external_team_binding", Name: label, Team: record.reference, ResourceID: previousResourceID, TeamID: resourceID, Sensitive: true}
+			if state.Organization != nil {
+				change.OrganizationID = state.Organization.ID
+			}
+			plan.Changes = append(plan.Changes, change)
+		}
 		if prior, ok := old[key]; !ok {
 			plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "external_" + record.kind, Name: label})
 		} else if prior.reference != record.reference || oldBinding.Source == "" || (oldBinding.ResourceID == "" && resourceID != "") {

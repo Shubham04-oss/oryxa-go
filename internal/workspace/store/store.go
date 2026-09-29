@@ -41,6 +41,9 @@ type ExternalMapping struct {
 	ExternalID string `json:"external_id"`
 	Reference  string `json:"reference"`
 	ResourceID string `json:"resource_id,omitempty"`
+	// PreviousResourceID is supplied only by the reviewed runtime when a team
+	// was deleted. It is an optimistic condition, never a persisted identity.
+	PreviousResourceID string `json:"previous_resource_id,omitempty"`
 }
 
 func (store *Store) Mappings(ctx context.Context, organizationID string) ([]ExternalMapping, error) {
@@ -207,10 +210,11 @@ func (store *Store) syncMappings(ctx context.Context, tx pgx.Tx, organizationID 
 	}
 	var source, kind, externalID string
 	err = tx.QueryRow(ctx, `WITH wanted AS (
-        SELECT * FROM jsonb_to_recordset($2::jsonb) AS x(source text,kind text,external_id text,reference text,resource_id text)
+        SELECT * FROM jsonb_to_recordset($2::jsonb) AS x(source text,kind text,external_id text,reference text,resource_id text,previous_resource_id text)
     ) SELECT old.source,old.kind,old.external_id FROM workspace.external_mappings old JOIN wanted w
       USING (source,kind,external_id) WHERE old.organization_id=$1 AND old.resource_id IS NOT NULL
-      AND nullif(w.resource_id,'') IS NOT NULL AND old.resource_id<>w.resource_id LIMIT 1`, organizationID, encoded).Scan(&source, &kind, &externalID)
+      AND nullif(w.resource_id,'') IS NOT NULL AND old.resource_id<>w.resource_id
+      AND NOT (w.kind='team' AND coalesce(w.previous_resource_id,'')=old.resource_id) LIMIT 1`, organizationID, encoded).Scan(&source, &kind, &externalID)
 	if err == nil {
 		return fmt.Errorf("external %s ID %q from %s would change its Oryxa binding", kind, externalID, source)
 	}
@@ -249,6 +253,9 @@ func validateResolvedMappings(directory *spec.Directory, mappings []ExternalMapp
 		}
 	}
 	for _, mapping := range mappings {
+		if mapping.PreviousResourceID != "" && mapping.Kind != "team" {
+			return fmt.Errorf("only reviewed deleted team bindings may be replaced")
+		}
 		key := mappingKey(mapping)
 		if reference, ok := wanted[key]; !ok || reference != mapping.Reference {
 			return fmt.Errorf("resolved external mappings must exactly match the workspace directory")
