@@ -1,11 +1,14 @@
 package runtime
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStatusErrorShowsOnlyWorkspaceValidationDetails(t *testing.T) {
@@ -41,5 +44,35 @@ func TestStatusErrorPreservesStructuredCode(t *testing.T) {
 	response := &http.Response{StatusCode: 409, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"code":"stale_plan","error":"review changes again"}`))}
 	if got := statusError(response, http.MethodPut, "/v1/organizations/org1/workspace"); got.Code != "stale_plan" {
 		t.Fatalf("structured code lost: %+v", got)
+	}
+}
+
+type responseTransport func(*http.Request) (*http.Response, error)
+
+func (transport responseTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport(request)
+}
+func TestApplyUsesLongBudgetAndRejectsExpiringSession(t *testing.T) {
+	client, err := NewClient("https://api.example.com", "access")
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	client.HTTP.Timeout = time.Millisecond
+	client.HTTP.Transport = responseTransport(func(request *http.Request) (*http.Response, error) {
+		called = true
+		deadline, ok := request.Context().Deadline()
+		if !ok || time.Until(deadline) < 2*time.Minute {
+			t.Errorf("short apply deadline: %v", deadline)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{}`)), Header: http.Header{}}, nil
+	})
+	if err := client.request(context.Background(), http.MethodPut, "/v1/organizations/org/workspace", map[string]string{}, nil); err != nil || !called {
+		t.Fatalf("long apply: %v", err)
+	}
+	called = false
+	client.TokenExpiresAt = time.Now().Add(time.Minute)
+	if err := client.request(context.Background(), http.MethodPut, "/v1/organizations/org/workspace", nil, nil); !errors.Is(err, ErrSessionExpiring) || called {
+		t.Fatalf("expiring token reached apply: %v called=%v", err, called)
 	}
 }

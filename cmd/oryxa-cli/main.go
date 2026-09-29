@@ -30,6 +30,7 @@ type options struct {
 	forceLogin                              bool
 	agentHelp                               bool
 	to                                      int64
+	minimumSessionTTL                       time.Duration
 }
 
 //go:embed agent-help.md
@@ -75,6 +76,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return reportInputError(fmt.Errorf("unexpected argument: %s", flags.Arg(0)), stderr)
 	}
 	if (command == "setup" || command == "apply" || command == "rollback") && !opts.dryRun && !opts.agentHelp {
+		opts.minimumSessionTTL = runtime.ApplyTimeout + 30*time.Second
 		defer func() {
 			if err := clearSession(opts.api, getenv); err != nil {
 				fmt.Fprintln(stderr, "Could not clear CLI session:", err)
@@ -450,13 +452,17 @@ func signedInClient(ctx context.Context, opts options, stdout, stderr io.Writer,
 			session, ok, err := loadSession(opts.api, getenv)
 			if err != nil {
 				fmt.Fprintln(stderr, "Could not read cached CLI session:", err)
-			} else if ok {
+			} else if ok && session.ExpiresAt.After(time.Now().Add(opts.minimumSessionTTL)) {
 				if opts.json {
 					_ = json.NewEncoder(stderr).Encode(map[string]string{"step": "login", "status": "done", "source": "cache", "expires_at": session.ExpiresAt.UTC().Format(time.RFC3339)})
 				} else {
 					fmt.Fprintf(stderr, "Using saved sign-in. Access expires at %s.\n", session.ExpiresAt.Local().Format(time.RFC3339))
 				}
-				return runtime.NewClient(opts.api, session.AccessToken)
+				client, err := runtime.NewClient(opts.api, session.AccessToken)
+				if err == nil {
+					client.TokenExpiresAt = session.ExpiresAt
+				}
+				return client, err
 			}
 		}
 		if opts.noInput {
@@ -473,7 +479,13 @@ func signedInClient(ctx context.Context, opts options, stdout, stderr io.Writer,
 			fmt.Fprintln(stderr, "Could not save short-lived CLI session:", err)
 		}
 	}
-	return runtime.NewClient(opts.api, token)
+	client, err := runtime.NewClient(opts.api, token)
+	if err == nil && getenv("ORYXA_ACCESS_TOKEN") == "" {
+		if session, ok, _ := loadSession(opts.api, getenv); ok {
+			client.TokenExpiresAt = session.ExpiresAt
+		}
+	}
+	return client, err
 }
 
 func initCommand(ctx context.Context, opts options, stdout, stderr io.Writer, getenv func(string) string) int {
@@ -593,6 +605,8 @@ func reportError(err error, stderr io.Writer) int {
 	var human *humanError
 	var remote *runtime.StatusError
 	switch {
+	case errors.Is(err, runtime.ErrSessionExpiring):
+		exitCode, code = 2, "needs_human"
 	case errors.As(err, &human):
 		exitCode, code = 2, "needs_human"
 	case errors.As(err, &input):

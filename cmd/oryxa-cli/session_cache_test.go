@@ -149,3 +149,18 @@ func TestSecureStoreUnavailableUsesOnlyMemory(t *testing.T) {
 		t.Fatal("unavailable store persisted credential")
 	}
 }
+
+func TestLongApplyDoesNotReuseAlmostExpiredSession(t *testing.T) {
+	testSessionStore(t)
+	getenv := func(string) string { return "" }
+	api := "https://api.example.com"
+	if err := saveSession(api, cliSession{AccessToken: "short-lived", ExpiresAt: time.Now().Add(time.Minute)}, getenv); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	_, err := signedInClient(context.Background(), options{api: api, noInput: true, minimumSessionTTL: 4 * time.Minute}, &stdout, &stderr, getenv)
+	var human *humanError
+	if !errors.As(err, &human) {
+		t.Fatalf("almost expired token reused for long apply: %v", err)
+	}
+}

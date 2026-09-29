@@ -21,10 +21,15 @@ import (
 // short-lived access token. It never persists that token or includes it in
 // errors.
 type Client struct {
-	BaseURL string
-	Token   string
-	HTTP    *http.Client
+	BaseURL        string
+	Token          string
+	HTTP           *http.Client
+	TokenExpiresAt time.Time
 }
+
+const ApplyTimeout = 3 * time.Minute
+
+var ErrSessionExpiring = errors.New("CLI session expires before the apply budget; sign in again before applying")
 
 type StatusError struct {
 	Method string
@@ -78,7 +83,16 @@ func (client *Client) request(ctx context.Context, method, path string, input, o
 	if input != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	response, err := client.HTTP.Do(request)
+	httpClient := client.HTTP
+	if method == http.MethodPut && strings.HasSuffix(path, "/workspace") || method == http.MethodPost && strings.HasSuffix(path, "/workspace:rollback") {
+		if !client.TokenExpiresAt.IsZero() && client.TokenExpiresAt.Before(time.Now().Add(ApplyTimeout+30*time.Second)) {
+			return ErrSessionExpiring
+		}
+		copy := *client.HTTP
+		copy.Timeout = ApplyTimeout
+		httpClient = &copy
+	}
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
