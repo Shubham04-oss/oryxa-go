@@ -90,9 +90,9 @@ func (r *requestRecorder) GenerateContent(_ context.Context, req *model.LLMReque
 	return func(yield func(*model.LLMResponse, error) bool) {}
 }
 
-func TestFoldedSignaturesSendsNoSignatureOnlyPart(t *testing.T) {
+func TestRepairedHistorySendsNoSignatureOnlyPart(t *testing.T) {
 	recorder := &requestRecorder{}
-	llm := foldedSignatures{recorder}
+	llm := repairedHistory{recorder}
 	req := &model.LLMRequest{Contents: []*genai.Content{
 		genai.NewContentFromText("hi", genai.RoleUser),
 		streamedAnswer("Hi.", "sig"),

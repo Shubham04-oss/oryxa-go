@@ -11,8 +11,21 @@ import (
 	"google.golang.org/adk/v2/model"
 )
 
-// foldedSignatures sends every request with its history's thought signatures
-// on parts Vertex accepts.
+// repairedHistory sends every request with a history Vertex accepts. ADK hands
+// the model a thread's events as they were stored, and Vertex refuses two
+// things in them: thought signatures on parts of their own (see foldSignatures)
+// and function calls nobody answered (see answerDanglingCalls).
+type repairedHistory struct {
+	model.LLM
+}
+
+func (m repairedHistory) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	req.Contents = answerDanglingCalls(foldSignatures(req.Contents))
+	return m.LLM.GenerateContent(ctx, req, stream)
+}
+
+// foldSignatures returns contents with every signature-only part folded into
+// the part before it.
 //
 // Streamed, Gemini 3 ends an answer with a chunk whose only part is an empty
 // text carrying the answer's thought signature. ADK's stream aggregator keeps
@@ -22,18 +35,9 @@ import (
 // INVALID_ARGUMENT, "Request contains an invalid argument.", and passes the
 // same request other times. A signature on the part before it — the shape an
 // unstreamed answer has — is always accepted.
-type foldedSignatures struct {
-	model.LLM
-}
-
-func (m foldedSignatures) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
-	req.Contents = foldSignatures(req.Contents)
-	return m.LLM.GenerateContent(ctx, req, stream)
-}
-
-// foldSignatures returns contents with every signature-only part folded into
-// the part before it. What it changes it copies, since a request's contents
-// can be the session's own events.
+//
+// What it changes it copies, since a request's contents can be the session's
+// own events.
 func foldSignatures(contents []*genai.Content) []*genai.Content {
 	var folded []*genai.Content
 	for index, content := range contents {

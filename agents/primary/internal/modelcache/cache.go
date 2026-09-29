@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/v2/model"
@@ -34,7 +35,8 @@ type Prefix struct {
 // Store keeps explicit cached contents, keyed by model and prefix.
 type Store interface {
 	// Ensure returns the name of a live cache for the prefix, creating one
-	// when needed.
+	// when needed. Many runs call it at once, and a run that needs one
+	// prefix must not wait for a run that needs another.
 	Ensure(ctx context.Context, modelName string, prefix Prefix) (string, error)
 }
 
@@ -132,12 +134,25 @@ func EstimateTokens(prefix Prefix) int {
 // races the expiry while a turn is in flight.
 const refreshMargin = 2 * time.Minute
 
+// createTimeout bounds one create of a cached content. A create runs apart
+// from the runs waiting for it (see Ensure), so it needs a bound of its own.
+const createTimeout = 30 * time.Second
+
 // GenaiStore creates explicit cached contents with the Gen AI client.
 type GenaiStore struct {
 	caches cachesAPI
 	ttl    time.Duration
 	now    func() time.Time
 
+	// creates lets the runs that need one prefix share one create of its
+	// cache, while a run that needs another prefix goes on beside it.
+	creates singleflight.Group
+	// closing is held shared by a create and alone by Close. Close waits for
+	// a create in flight, so the cache that create makes is deleted with the
+	// rest.
+	closing sync.RWMutex
+
+	// mu guards entries. It is never held across a call to Vertex.
 	mu      sync.Mutex
 	entries map[string]cacheEntry
 }
@@ -166,15 +181,57 @@ func newStore(caches cachesAPI, ttl time.Duration, now func() time.Time) *GenaiS
 }
 
 // Ensure returns a live cache for the prefix, creating one when there is none
-// or the one there is would expire during the next turn.
+// or the one there is would expire during the next turn. Runs that need the
+// same prefix share one create, and each waits for it until its own context
+// ends; a run that needs another prefix does not wait for it at all.
 func (s *GenaiStore) Ensure(ctx context.Context, modelName string, prefix Prefix) (string, error) {
 	key := cacheKey(modelName, prefix)
+	if name, live := s.live(key); live {
+		return name, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	// The create runs apart from the runs waiting for it. A cache made for a
+	// run that has given up is still billed, so it is kept for the next run,
+	// and one run being cancelled must not fail the others waiting beside it.
+	detached := context.WithoutCancel(ctx)
+	results := s.creates.DoChan(key, func() (any, error) {
+		ctx, cancel := context.WithTimeout(detached, createTimeout)
+		defer cancel()
+		return s.create(ctx, key, modelName, prefix)
+	})
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case result := <-results:
+		if result.Err != nil {
+			return "", result.Err
+		}
+		return result.Val.(string), nil
+	}
+}
 
+// live returns the name of the prefix's cache when it is there and would not
+// expire during the next turn.
+func (s *GenaiStore) live(key string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	entry, ok := s.entries[key]
+	if !ok || !s.now().Add(refreshMargin).Before(entry.expiresAt) {
+		return "", false
+	}
+	return entry.name, true
+}
 
-	if entry, live := s.entries[key]; live && s.now().Add(refreshMargin).Before(entry.expiresAt) {
-		return entry.name, nil
+// create makes a new cache for the prefix, unless one made since the caller
+// looked is there.
+func (s *GenaiStore) create(ctx context.Context, key, modelName string, prefix Prefix) (string, error) {
+	s.closing.RLock()
+	defer s.closing.RUnlock()
+
+	if name, live := s.live(key); live {
+		return name, nil
 	}
 	cached, err := s.caches.Create(ctx, modelName, &genai.CreateCachedContentConfig{
 		TTL:               s.ttl,
@@ -188,30 +245,36 @@ func (s *GenaiStore) Ensure(ctx context.Context, modelName string, prefix Prefix
 	if cached == nil || cached.Name == "" {
 		return "", errors.New("create cached content returned no name")
 	}
-	if previous, existed := s.entries[key]; existed {
-		// The previous entry is not expired yet; drop it so the new one is
-		// the only cache billing for this prefix.
-		_, _ = s.caches.Delete(ctx, previous.name, nil)
-	}
 	expiresAt := s.now().Add(s.ttl)
 	if !cached.ExpireTime.IsZero() {
 		expiresAt = cached.ExpireTime
 	}
+	s.mu.Lock()
+	previous, existed := s.entries[key]
 	s.entries[key] = cacheEntry{name: cached.Name, expiresAt: expiresAt}
+	s.mu.Unlock()
+	if existed {
+		// The previous entry is not expired yet; drop it so the new one is
+		// the only cache billing for this prefix.
+		_, _ = s.caches.Delete(ctx, previous.name, nil)
+	}
 	s.pruneExpired(ctx)
 	return cached.Name, nil
 }
 
-// Close deletes every cache this store created that has not expired yet.
-// Vertex deletes an expired cache itself and answers 404 for it, which is
-// taken as deleted too.
+// Close deletes every cache this store created that has not expired yet,
+// after any create in flight has finished. Vertex deletes an expired cache
+// itself and answers 404 for it, which is taken as deleted too.
 func (s *GenaiStore) Close(ctx context.Context) error {
+	s.closing.Lock()
+	defer s.closing.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	entries := s.entries
+	s.entries = map[string]cacheEntry{}
+	s.mu.Unlock()
 	now := s.now()
 	var failures []error
-	for key, entry := range s.entries {
-		delete(s.entries, key)
+	for _, entry := range entries {
 		if !now.Before(entry.expiresAt) {
 			continue
 		}
@@ -232,12 +295,18 @@ func gone(err error) bool {
 // pruneExpired best-effort deletes entries that are already gone server-side.
 func (s *GenaiStore) pruneExpired(ctx context.Context) {
 	now := s.now()
+	var expired []string
+	s.mu.Lock()
 	for key, entry := range s.entries {
 		if now.Before(entry.expiresAt) {
 			continue
 		}
-		_, _ = s.caches.Delete(ctx, entry.name, nil)
+		expired = append(expired, entry.name)
 		delete(s.entries, key)
+	}
+	s.mu.Unlock()
+	for _, name := range expired {
+		_, _ = s.caches.Delete(ctx, name, nil)
 	}
 }
 

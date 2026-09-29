@@ -86,25 +86,38 @@ var roomInstruction = template.Must(template.New("krude-room").Parse(roomInstruc
 // Application Default Credentials: locally the login from `gcloud auth
 // application-default login`, elsewhere the file GOOGLE_APPLICATION_CREDENTIALS
 // names. An API key in the environment is never used.
-func Gemini(ctx context.Context, name, project, location string, credentials *auth.Credentials) (model.LLM, error) {
+//
+// A call Vertex answers with 429, 500, 502, 503 or 504 is tried again, up to
+// four attempts in all unless WithAttempts says otherwise, after waits that
+// double from about two seconds. Only the request is repeated. Once Vertex has
+// started a streamed answer, an error ends the stream as it always did, so a
+// retry never yields what was already yielded.
+func Gemini(ctx context.Context, name, project, location string, credentials *auth.Credentials, options ...GeminiOption) (model.LLM, error) {
 	if project == "" {
 		return nil, errors.New("a Google Cloud project is required: the agents reach Gemini through Vertex AI")
+	}
+	config := geminiConfig{retries: defaultRetries}
+	for _, option := range options {
+		option(&config)
 	}
 	llm, err := gemini.NewModel(ctx, name, &genai.ClientConfig{
 		Backend:     genai.BackendVertexAI,
 		Project:     project,
 		Location:    location,
 		Credentials: credentials,
+		HTTPOptions: genai.HTTPOptions{RetryOptions: config.retries.options()},
 	})
 	if err != nil {
 		return nil, err
 	}
-	return foldedSignatures{llm}, nil
+	return repairedHistory{llm}, nil
 }
 
 // GeminiClient returns a Gen AI client on the same Vertex AI project and
 // location as the agents, for services that share their configuration such as
-// explicit prompt caching. It authenticates as Gemini does.
+// explicit prompt caching. It authenticates as Gemini does. It does not retry:
+// a cache that cannot be made is skipped and the request goes out uncached at
+// once, and the next request tries again.
 func GeminiClient(ctx context.Context, project, location string, credentials *auth.Credentials) (*genai.Client, error) {
 	if project == "" {
 		return nil, errors.New("a Google Cloud project is required: Vertex AI serves the models")
