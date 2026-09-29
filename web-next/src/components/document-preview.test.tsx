@@ -332,6 +332,14 @@ describe("a Word document", () => {
     // Something that is not a link opens nothing.
     expect(fireEvent.click(inside.body)).toBe(true)
     expect(open).not.toHaveBeenCalled()
+
+    // Nor is an address that got past the checks by another way opened from
+    // the app, where a javascript: address would run as the app.
+    const late = inside.createElement("a")
+    late.setAttribute("href", "javascript:alert(1)")
+    inside.body.appendChild(late)
+    expect(fireEvent.click(late)).toBe(false)
+    expect(open).not.toHaveBeenCalled()
   })
 
   it("says so when it cannot be drawn", async () => {

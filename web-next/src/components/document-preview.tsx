@@ -324,6 +324,9 @@ function DocxPreview({ bytes, name }: { bytes: ArrayBuffer; name: string }) {
       const href = link?.getAttribute("href") ?? ""
       if (!link || href.startsWith("#")) return
       event.preventDefault()
+      // Every address was checked when the document was drawn; one that
+      // reached this far another way is not opened from the app.
+      if (!linkTarget.test(href)) return
       if (/^mailto:/i.test(href)) window.location.href = href
       else window.open(href, "_blank", "noopener,noreferrer")
     }
