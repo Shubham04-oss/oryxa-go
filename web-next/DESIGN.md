@@ -75,7 +75,7 @@ not permission to copy every incidental value into a new component.
   | --- | --- |
   | Home | Overview, Knowledge bases, Tools, then saved views |
   | Team | Teamspaces, People, then up to three visible recent conversations |
-  | Agents | Agent overview, Multi-agent teams, Specialists |
+  | Agents | Agent overview, Requests, Multi-agent teams, Specialists |
 
 - The shared workspace header is compact (56px at normal desktop/mobile
   widths), with its title centered. It contains the **current context**:
@@ -215,6 +215,44 @@ not permission to copy every incidental value into a new component.
     open this conversation" once either person is off the team; session
     ended, with Sign in; a paused teamspace, readable with the composer off
     and why; and "Can't reach this conversation" with Try again.
+- **Requests** (Agents → Requests) is where a member sees what waits on them
+  and what they asked, whether an agent filed it or someone asked in Slack. It
+  has three tabs: Inbox, with the requests waiting on the member first and the
+  count in its tab; Sent; and Activity, what happened to their Slack asks (asks,
+  decisions and where they were made, access given and ended, secrets opened),
+  which names people and states and never a question or an answer. A filter
+  (All, Slack, Oryxa) narrows the first two. The lists are re-read as the page
+  is focused and every few seconds, so a request decided in Slack settles here
+  without a reload. A request a link or a DM's line names opens first, above
+  the lists (`/?org=…&view=requests&request=…`).
+  - **The request card** says who asked, the question, where it came from (in
+    Slack, or in Oryxa), where it stands and, for the person it is theirs to
+    answer, what to do. A request from Slack is answered with one of three
+    choices, "Summary only", "Allow for 1 hour" or "Deny", and the card says in
+    a line what each lets the agent do. Any other request is approved or
+    declined, as in a side conversation. Whichever surface decided first, the
+    card settles, and says who won ("Approved in Slack by Raya at 14:02.") when
+    the member's own choice lost. An answer the guards held shows its owner why
+    in plain words, the answer, and Don't send, Send and Send masked; the one
+    who asked sees only that it waits. Access the owner gave says until when
+    the asker's follow-ups are answered without asking, with an End access
+    action while it lasts and "You ended Ada's access." after.
+  - **A secret** is never shown in Slack or in a log. When an ask is for a
+    credential, its owner pastes the value into the card, which keeps it in one
+    uncontrolled field, sends it once and clears it, and picks how long it waits
+    (up to an hour); they can take it back. The member who asked sees "Open
+    the secret", which says it is shown once before it is pressed; the value is
+    shown once, then gone for good.
+- **A request in a DM.** A request between the two people of a DM is one quiet
+  centered line in its log, where it happened in time: who asked whose agent,
+  and where ("You asked Priya's agent in Slack", "Priya asked your agent"), with
+  one word for where it stands (waiting, approved, declined, answered, held,
+  failed, not shared, expired). The line's state moves in place, its place in
+  the log does not, and a move while the DM is open is announced. It holds no
+  question or answer: its "Open" opens the request's card in Requests, and the
+  card is read from Go as the member, so the line is never more than a pointer.
+  A request made in a teamspace has no line here: the side conversation in that
+  teamspace shows it.
 - Teamspace management is role-aware. Put account, teammate, organization,
   access, email, and billing administration inside Settings, opened from the
   user menu. Keep the simple Organization tab in that single Settings surface;
