@@ -32,6 +32,10 @@ review the plan before applying it. Slack installation remains a manual step.
 8. If the admin chooses Oryxa's own knowledge search, set `search.mode:
    native`; if they explicitly turn agent knowledge tools off, use
    `search.mode: none`. Leave it out when no search decision was made.
+9. After setup, members who want connected apps can run
+   `oryxa connect-app TOOLKIT --org SLUG --json --no-browser`. Give the
+   returned provider URL to that member to finish the browser step. Never
+   ask them to send you a provider token or sign in as them.
 
 Example:
 

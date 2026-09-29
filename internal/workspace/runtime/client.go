@@ -96,6 +96,63 @@ type Organization struct {
 	GuestsAllowed bool     `json:"guests_allowed"`
 }
 
+// OrganizationBySlug resolves a member's organization without fetching the
+// full workspace snapshot needed for planning.
+func (client *Client) OrganizationBySlug(ctx context.Context, slug string) (Organization, error) {
+	var listed struct {
+		Organizations []Organization `json:"organizations"`
+	}
+	if err := client.request(ctx, http.MethodGet, "/v1/organizations", nil, &listed); err != nil {
+		return Organization{}, err
+	}
+	for _, organization := range listed.Organizations {
+		if organization.Slug == slug {
+			return organization, nil
+		}
+	}
+	return Organization{}, fmt.Errorf("organization %q was not found", slug)
+}
+
+type AppConnection struct {
+	ID            string `json:"id"`
+	Toolkit       string `json:"toolkit"`
+	Status        string `json:"status"`
+	StatusReason  string `json:"status_reason,omitempty"`
+	AutoSubscribe bool   `json:"auto_subscribe"`
+}
+
+func (client *Client) AppConnections(ctx context.Context, organizationID, toolkit string) ([]AppConnection, error) {
+	var listed struct {
+		Connections []AppConnection `json:"connections"`
+	}
+	path := "/v1/organizations/" + url.PathEscape(organizationID) + "/apps/connections?toolkit=" + url.QueryEscape(toolkit)
+	if err := client.request(ctx, http.MethodGet, path, nil, &listed); err != nil {
+		return nil, err
+	}
+	return listed.Connections, nil
+}
+
+func (client *Client) StartAppConnection(ctx context.Context, organizationID, toolkit string) (AppConnection, string, error) {
+	var started struct {
+		Connection  AppConnection `json:"connection"`
+		RedirectURL string        `json:"redirect_url"`
+	}
+	path := "/v1/organizations/" + url.PathEscape(organizationID) + "/apps/connections"
+	if err := client.request(ctx, http.MethodPost, path, map[string]string{"toolkit": toolkit}, &started); err != nil {
+		return AppConnection{}, "", err
+	}
+	return started.Connection, started.RedirectURL, nil
+}
+
+func (client *Client) AppConnection(ctx context.Context, organizationID, connectionID string) (AppConnection, error) {
+	var connection AppConnection
+	path := "/v1/organizations/" + url.PathEscape(organizationID) + "/apps/connections/" + url.PathEscape(connectionID)
+	if err := client.request(ctx, http.MethodGet, path, nil, &connection); err != nil {
+		return AppConnection{}, err
+	}
+	return connection, nil
+}
+
 type Member struct {
 	UserID string `json:"user_id"`
 	Email  string `json:"email"`

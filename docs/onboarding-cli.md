@@ -51,6 +51,7 @@ daemon or a different security design.
 ./bin/oryxa doctor --org acme --json
 ./bin/oryxa pull --org acme -o current-oryxa.yaml
 ./bin/oryxa rollback --org acme --to 1
+./bin/oryxa connect-app github --org acme --json
 ```
 
 `--api` defaults to `https://api.oryxa.in`; local development may point it
@@ -66,6 +67,15 @@ per-organization apply lock; a concurrent apply returns exit code `5`.
 plan. The all-in-one host serves the workspace API. Split deployments must set
 `WORKSPACE_API_URL` to the gateway carrying auth, teams, agents, and workspace
 routes.
+
+`connect-app TOOLKIT --org SLUG` starts the signed-in member's own Composio
+connection. It opens the provider's authorization page and waits up to two
+minutes for the callback to make the connection active. `--no-browser` or
+`--no-input` returns a JSON `needs_human` step with the page URL and connection
+ID (exit `2`), so a coding agent can hand that step to the member. Running it
+again after the connection is active returns `done` without starting another.
+An unfinished pending connection must be completed or removed in app settings
+before starting over. This command does not connect another member's account.
 
 The current file accepts these settings:
 

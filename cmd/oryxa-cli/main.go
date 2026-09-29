@@ -40,6 +40,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return 0
 	}
 	command := args[0]
+	flagArgs := args[1:]
+	connectToolkit := ""
+	if command == "connect-app" && len(flagArgs) > 0 && !strings.HasPrefix(flagArgs[0], "-") {
+		connectToolkit, flagArgs = flagArgs[0], flagArgs[1:]
+	}
 	var opts options
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -58,12 +63,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	flags.BoolVar(&opts.agentHelp, "agent-help", false, "print the coding-agent workspace mapping guide")
 	flags.BoolVar(&opts.yes, "yes", false, "confirm setup plan or overwrite an output file")
 	flags.Int64Var(&opts.to, "to", 0, "workspace version to restore (rollback)")
-	if err := flags.Parse(args[1:]); err != nil {
+	if err := flags.Parse(flagArgs); err != nil {
 		return 3
 	}
-	if flags.NArg() != 0 {
+	if command == "connect-app" && connectToolkit == "" && flags.NArg() == 1 {
+		connectToolkit = flags.Arg(0)
+	} else if flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "unexpected argument:", flags.Arg(0))
 		return 3
+	}
+	if command == "connect-app" {
+		return connectApp(ctx, connectToolkit, opts, stdout, stderr, getenv)
 	}
 	if command == "agent-help" || (command == "setup" && opts.agentHelp) {
 		if opts.json {
@@ -525,6 +535,7 @@ Commands:
   doctor     show status and the next corrective command
   rollback  restore a saved workspace version with --to VERSION
   whoami     show the authenticated user and organizations
+  connect-app TOOLKIT  connect your own Composio app through its browser page
 
 Remote commands sign in through the browser when ORYXA_ACCESS_TOKEN is absent.
 Each command keeps its session in memory and never saves the token. Use -f for

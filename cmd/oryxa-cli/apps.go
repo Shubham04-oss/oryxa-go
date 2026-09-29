@@ -1,0 +1,124 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/url"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/runtime"
+)
+
+var appToolkitPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+// connectApp starts a member's own connection. The provider still needs the
+// member's browser consent; the CLI follows the saved connection until the
+// callback has made it active, and returns a resumable connection ID.
+func connectApp(ctx context.Context, toolkit string, opts options, stdout, stderr io.Writer, getenv func(string) string) int {
+	if !appToolkitPattern.MatchString(toolkit) {
+		return reportError(fmt.Errorf("connect-app requires a lowercase toolkit slug"), stderr)
+	}
+	if opts.org == "" {
+		return reportError(fmt.Errorf("connect-app requires --org or ORYXA_ORG"), stderr)
+	}
+	client, err := signedInClient(ctx, opts, stdout, getenv)
+	if err != nil {
+		return reportError(err, stderr)
+	}
+	organization, err := client.OrganizationBySlug(ctx, opts.org)
+	if err != nil {
+		return reportError(err, stderr)
+	}
+	connections, err := client.AppConnections(ctx, organization.ID, toolkit)
+	if err != nil {
+		return reportError(err, stderr)
+	}
+	for _, connection := range connections {
+		if connection.Toolkit != toolkit {
+			continue
+		}
+		if connection.Status == "active" {
+			return report(stdout, opts.json, appConnectionResult("done", toolkit, connection, "", "already connected"))
+		}
+		if connection.Status == "pending" {
+			return reportError(fmt.Errorf("%s already has a pending connection %s; complete its browser page or remove it in app settings before retrying", toolkit, connection.ID), stderr)
+		}
+	}
+	connection, redirectURL, err := client.StartAppConnection(ctx, organization.ID, toolkit)
+	if err != nil {
+		return reportError(err, stderr)
+	}
+	if connection.ID == "" || connection.Toolkit != toolkit || !validAppRedirect(redirectURL) {
+		return reportError(fmt.Errorf("app connection API returned an invalid browser step"), stderr)
+	}
+	if opts.noBrowser || opts.noInput {
+		return appNeedsBrowser(stdout, opts.json, toolkit, connection, redirectURL)
+	}
+	if err := openBrowser(redirectURL); err != nil {
+		fmt.Fprintln(stderr, "could not open the provider page:", err)
+		return appNeedsBrowser(stdout, opts.json, toolkit, connection, redirectURL)
+	}
+	if code := report(stdout, opts.json, appConnectionResult("needs_human", toolkit, connection, redirectURL, "finish connecting in the browser")); code != 0 {
+		return code
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-waitCtx.Done():
+			if ctx.Err() != nil {
+				return reportError(ctx.Err(), stderr)
+			}
+			return 2
+		case <-ticker.C:
+			updated, err := client.AppConnection(waitCtx, organization.ID, connection.ID)
+			if err != nil {
+				return reportError(err, stderr)
+			}
+			switch updated.Status {
+			case "active":
+				return report(stdout, opts.json, appConnectionResult("done", toolkit, updated, "", "connected"))
+			case "failed", "expired", "removed":
+				if code := report(stdout, opts.json, appConnectionResult("failed", toolkit, updated, "", updated.StatusReason)); code != 0 {
+					return code
+				}
+				return 4
+			}
+		}
+	}
+}
+
+func appNeedsBrowser(stdout io.Writer, asJSON bool, toolkit string, connection runtime.AppConnection, redirectURL string) int {
+	if code := report(stdout, asJSON, appConnectionResult("needs_human", toolkit, connection, redirectURL, "open the provider page and finish connecting")); code != 0 {
+		return code
+	}
+	return 2
+}
+
+func appConnectionResult(status, toolkit string, connection runtime.AppConnection, redirectURL, detail string) map[string]any {
+	result := map[string]any{
+		"step": "apps.connect", "status": status, "toolkit": toolkit,
+		"connection_id": connection.ID, "connection_status": connection.Status,
+	}
+	if detail != "" {
+		result["detail"] = detail
+	}
+	if redirectURL != "" {
+		result["next"] = map[string]string{"action": "open_url", "url": redirectURL}
+	}
+	return result
+}
+
+func validAppRedirect(target string) bool {
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+		return false
+	}
+	return parsed.Scheme == "https" || parsed.Scheme == "http" &&
+		(strings.EqualFold(parsed.Hostname(), "localhost") || parsed.Hostname() == "127.0.0.1")
+}
