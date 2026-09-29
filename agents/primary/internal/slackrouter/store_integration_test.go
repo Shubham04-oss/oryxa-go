@@ -201,19 +201,22 @@ func TestStoreDoneAndDropKeepTheRow(t *testing.T) {
 }
 
 func TestStoreLeasesExpire(t *testing.T) {
-	store, _, org := openTestStore(t)
+	store, database, org := openTestStore(t)
 	ctx := context.Background()
-	if _, err := store.Enqueue(ctx, testJob(org, org+"_in")); err != nil {
+	job := testJob(org, org+"_in")
+	if _, err := store.Enqueue(ctx, job); err != nil {
 		t.Fatal(err)
 	}
-	if got := claimOwn(t, store, org, 200*time.Millisecond); len(got) != 1 {
+	if got := claimOwn(t, store, org, time.Minute); len(got) != 1 {
 		t.Fatalf("claimed %+v", got)
 	}
 	if got := claimOwn(t, store, org, time.Minute); len(got) != 0 {
 		t.Fatalf("claimed a leased job: %+v", got)
 	}
-	time.Sleep(300 * time.Millisecond)
-	// Its holder is gone: it is due again.
+	// Its holder is gone, and the lease runs out: it is due again.
+	if _, err := database.Pool.Exec(ctx, `UPDATE agents_primary.slack_jobs SET claimed_until=now()-interval '1 second' WHERE inbound_id=$1`, job.InboundID); err != nil {
+		t.Fatal(err)
+	}
 	if got := claimOwn(t, store, org, time.Minute); len(got) != 1 {
 		t.Fatalf("a job whose lease ran out was not claimable: %+v", got)
 	}
