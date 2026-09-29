@@ -120,8 +120,9 @@ locals {
       # (keys.tf), so the surface and the caller come with the secret and no
       # sooner. Agents reads its switch as its own: on, it asks an owner for
       # consent in Slack and needs AGENTS_PRIMARY_SLACK_TICKET_KEY, which
-      # secrets.tf names to the task under the same gate. Off is named as such
-      # rather than left out, so the task definition says which it is.
+      # secrets.tf names to the task under the same gate. The surface and the
+      # switch say off in words, so the task definition says which it is; the
+      # callers are simply not set, since an empty value is dropped below.
       APPS_SLACK_SURFACE           = var.slack_app_ready ? "true" : "false"
       APPS_SERVICE_CALLERS         = var.slack_app_ready ? local.apps_service_callers : ""
       AGENTS_PRIMARY_SLACK_CONSENT = var.slack_app_ready ? "on" : "off"
