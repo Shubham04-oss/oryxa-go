@@ -89,7 +89,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return initCommand(ctx, opts, stdout, stderr, getenv)
 	}
 	if command == "login" {
-		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
+		client, err := signedInClient(ctx, opts, stdout, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -103,7 +103,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return 0
 	}
 	if command == "setup" {
-		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
+		client, err := signedInClient(ctx, opts, stdout, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -158,7 +158,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if opts.org == "" || opts.to <= 0 {
 			return reportError(fmt.Errorf("rollback requires --org and a positive --to version"), stderr)
 		}
-		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
+		client, err := signedInClient(ctx, opts, stdout, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -205,7 +205,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if opts.org != "" && opts.org != document.Metadata.Organization {
 			return reportError(fmt.Errorf("--org does not match metadata.organization"), stderr)
 		}
-		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
+		client, err := signedInClient(ctx, opts, stdout, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -253,7 +253,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return report(stdout, opts.json, plan)
 	}
 	if command == "pull" || command == "status" || command == "doctor" || command == "mappings" || command == "whoami" {
-		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
+		client, err := signedInClient(ctx, opts, stdout, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -415,14 +415,14 @@ func hasRemoval(plan runtime.Plan) bool {
 	return false
 }
 
-func signedInClient(ctx context.Context, opts options, stdout, stderr io.Writer, getenv func(string) string) (*runtime.Client, error) {
+func signedInClient(ctx context.Context, opts options, stdout io.Writer, getenv func(string) string) (*runtime.Client, error) {
 	token := getenv("ORYXA_ACCESS_TOKEN")
 	if token == "" {
 		if opts.noInput {
-			return nil, fmt.Errorf("interactive sign-in is required under --no-input; run without --no-input or provide a short-lived ORYXA_ACCESS_TOKEN")
+			return nil, fmt.Errorf("browser sign-in is required under --no-input; run without --no-input or provide a short-lived ORYXA_ACCESS_TOKEN")
 		}
 		var err error
-		token, err = interactiveLogin(ctx, opts, os.Stdin, stdout, stderr)
+		token, err = nativeLogin(ctx, opts.api, opts.noBrowser, opts.json, stdout)
 		if err != nil {
 			return nil, err
 		}
@@ -520,9 +520,6 @@ func report(writer io.Writer, asJSON bool, value any) int {
 
 func reportError(err error, stderr io.Writer) int {
 	fmt.Fprintln(stderr, err)
-	if errors.Is(err, errVerificationPending) {
-		return 2
-	}
 	if runtime.IsStatus(err, http.StatusConflict) {
 		return 5
 	}

@@ -75,10 +75,11 @@ func TestAuthConfigPublishesOnlyNativeClientMetadata(t *testing.T) {
 	server := New(fakeVerifier{}, &fakeAuthFlow{}, &fakePasswordAuth{}, &fakeAuthService{}, Config{
 		CognitoDomain: "https://cognito.example.com", CLIClientID: "cli-client",
 		CLICallbackURL: "http://127.0.0.1:8765/callback",
+		CLISignUpURL:   "https://app.example.com/auth/sign-up",
 	})
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/auth/config", nil))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"cli_client_id":"cli-client"`) || !strings.Contains(response.Body.String(), `"cli_callback_url":"http://127.0.0.1:8765/callback"`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"cli_client_id":"cli-client"`) || !strings.Contains(response.Body.String(), `"cli_callback_url":"http://127.0.0.1:8765/callback"`) || !strings.Contains(response.Body.String(), `"cli_signup_url":"https://app.example.com/auth/sign-up"`) {
 		t.Fatalf("config response = %d %s", response.Code, response.Body)
 	}
 }

@@ -21,10 +21,10 @@ import (
 )
 
 type loginConfig struct {
-	ClientID          string   `json:"cli_client_id"`
-	CallbackURL       string   `json:"cli_callback_url"`
-	Domain            string   `json:"cognito_domain"`
-	IdentityProviders []string `json:"identity_providers"`
+	ClientID    string `json:"cli_client_id"`
+	CallbackURL string `json:"cli_callback_url"`
+	Domain      string `json:"cognito_domain"`
+	SignUpURL   string `json:"cli_signup_url"`
 }
 
 type callbackResult struct {
@@ -32,7 +32,7 @@ type callbackResult struct {
 	err  error
 }
 
-func nativeOAuthLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout io.Writer, provider string) (string, error) {
+func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout io.Writer) (string, error) {
 	config, err := fetchLoginConfig(ctx, api)
 	if err != nil {
 		return "", err
@@ -46,9 +46,13 @@ func nativeOAuthLogin(ctx context.Context, api string, noBrowser, asJSON bool, s
 		return "", fmt.Errorf("listen for browser sign-in at %s: %w", callback.Host, err)
 	}
 	defer listener.Close()
-	flowCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	flowCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	state, err := randomURLValue()
+	if err != nil {
+		return "", err
+	}
+	launchKey, err := randomURLValue()
 	if err != nil {
 		return "", err
 	}
@@ -66,9 +70,44 @@ func nativeOAuthLogin(ctx context.Context, api string, noBrowser, asJSON bool, s
 	}
 	results := make(chan callbackResult, 1)
 	mux := http.NewServeMux()
+	authURL := oauth.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("nonce", nonce))
+	validLaunch := func(writer http.ResponseWriter, request *http.Request) bool {
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("Referrer-Policy", "no-referrer")
+		if request.Host != callback.Host || subtle.ConstantTimeCompare([]byte(request.URL.Query().Get("session")), []byte(launchKey)) != 1 {
+			http.Error(writer, "Invalid sign-in session", http.StatusBadRequest)
+			return false
+		}
+		return true
+	}
+	mux.HandleFunc("GET /start", func(writer http.ResponseWriter, request *http.Request) {
+		if !validLaunch(writer, request) {
+			return
+		}
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		writer.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
+		_, _ = io.WriteString(writer, strings.ReplaceAll(browserStartPage, "{session}", url.QueryEscape(launchKey)))
+	})
+	mux.HandleFunc("GET /authorize", func(writer http.ResponseWriter, request *http.Request) {
+		if !validLaunch(writer, request) {
+			return
+		}
+		http.Redirect(writer, request, authURL, http.StatusFound)
+	})
+	mux.HandleFunc("GET /signup", func(writer http.ResponseWriter, request *http.Request) {
+		if !validLaunch(writer, request) {
+			return
+		}
+		http.Redirect(writer, request, config.SignUpURL, http.StatusFound)
+	})
 	mux.HandleFunc("GET /callback", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Host != callback.Host {
+			http.Error(writer, "Invalid host", http.StatusBadRequest)
+			return
+		}
 		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("Referrer-Policy", "no-referrer")
 		if subtle.ConstantTimeCompare([]byte(request.URL.Query().Get("state")), []byte(state)) != 1 {
 			http.Error(writer, "Sign-in state did not match. Return to the CLI and retry.", http.StatusBadRequest)
 			return
@@ -91,18 +130,14 @@ func nativeOAuthLogin(ctx context.Context, api string, noBrowser, asJSON bool, s
 		defer stop()
 		_ = server.Shutdown(shutdownCtx)
 	}()
-	options := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("nonce", nonce)}
-	if provider != "" {
-		options = append(options, oauth2.SetAuthURLParam("identity_provider", provider))
-	}
-	authURL := oauth.AuthCodeURL(state, options...)
+	startURL := "http://" + callback.Host + "/start?session=" + url.QueryEscape(launchKey)
 	if asJSON {
-		_ = json.NewEncoder(stdout).Encode(map[string]any{"step": "login", "status": "needs_human", "next": map[string]string{"action": "open_url", "url": authURL}})
+		_ = json.NewEncoder(stdout).Encode(map[string]any{"step": "login", "status": "needs_human", "next": map[string]string{"action": "open_url", "url": startURL}})
 	} else {
-		fmt.Fprintln(stdout, "Open this URL to sign in:", authURL)
+		fmt.Fprintln(stdout, "Open this URL to sign in or create an account:", startURL)
 	}
 	if !noBrowser {
-		_ = openBrowser(authURL)
+		_ = openBrowser(startURL)
 	}
 	var result callbackResult
 	select {
@@ -121,13 +156,16 @@ func nativeOAuthLogin(ctx context.Context, api string, noBrowser, asJSON bool, s
 	if !ok || idToken == "" || token.AccessToken == "" {
 		return "", fmt.Errorf("identity provider did not issue both required tokens")
 	}
+	if token.Expiry.IsZero() || !token.Valid() {
+		return "", fmt.Errorf("identity provider did not issue an unexpired access token with a TTL")
+	}
 	if err := registerCLISession(flowCtx, api, token.AccessToken, idToken, nonce); err != nil {
 		return "", err
 	}
 	if asJSON {
-		_ = json.NewEncoder(stdout).Encode(map[string]string{"step": "login", "status": "done"})
+		_ = json.NewEncoder(stdout).Encode(map[string]string{"step": "login", "status": "done", "expires_at": token.Expiry.UTC().Format(time.RFC3339)})
 	} else {
-		fmt.Fprintln(stdout, "Signed in.")
+		fmt.Fprintf(stdout, "Signed in. Access expires at %s.\n", token.Expiry.Local().Format(time.RFC3339))
 	}
 	return token.AccessToken, nil
 }
@@ -141,8 +179,14 @@ func fetchLoginConfig(ctx context.Context, api string) (loginConfig, error) {
 	if config.ClientID == "" || err != nil || domain.Scheme != "https" || domain.Host == "" || domain.User != nil || domain.Path != "" || domain.RawQuery != "" || domain.Fragment != "" {
 		return loginConfig{}, fmt.Errorf("CLI browser sign-in is not configured on this server")
 	}
+	signUp, err := url.Parse(config.SignUpURL)
+	if err != nil || signUp.User != nil || signUp.Host == "" || signUp.Path != "/auth/sign-up" || signUp.RawQuery != "" || signUp.Fragment != "" || !(signUp.Scheme == "https" || signUp.Scheme == "http" && (signUp.Hostname() == "localhost" || signUp.Hostname() == "127.0.0.1")) {
+		return loginConfig{}, fmt.Errorf("CLI browser account creation is not configured on this server")
+	}
 	return config, nil
 }
+
+const browserStartPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Oryxa CLI sign-in</title><style>body{font:16px system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.5rem;color:#222}a{display:inline-block;padding:.75rem 1rem;border-radius:.5rem;background:#222;color:#fff;text-decoration:none;margin:.5rem .75rem .5rem 0}a.secondary{background:#eee;color:#222}p{line-height:1.5}</style><h1>Continue to Oryxa CLI</h1><p>Sign in in your browser. Oryxa will return a short-lived session to the CLI.</p><a href="/authorize?session={session}">Sign in</a><a class="secondary" href="/signup?session={session}" target="_blank" rel="noopener noreferrer">Create account</a><p>Creating an account? Verify your email, then return to this tab and choose Sign in.</p></html>`
 
 func fetchAuthConfig(ctx context.Context, api string) (loginConfig, error) {
 	parsed, err := url.Parse(strings.TrimRight(api, "/"))

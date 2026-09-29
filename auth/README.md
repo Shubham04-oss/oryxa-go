@@ -2,7 +2,7 @@
 
 Auth owns Google sign-in, email/password credentials, verification and password-reset state, browser sessions, users, organizations, memberships, and invitations. Cognito stores and validates passwords; PostgreSQL is the system of record for auth-owned action tokens and application state. Every PostgreSQL state change and its domain event are written in the same transaction, then an outbox worker publishes the event to EventBridge with at-least-once delivery.
 
-Cloudflare is the public edge. Route the public auth hostname to this service without exposing port 8080 directly. Keep Cloudflare rate limiting and bot protection enabled on `/v1/auth/login`, `/v1/auth/callback`, `/v1/auth/refresh`, and `/v1/auth/cli/password/*`.
+Cloudflare is the public edge. Route the public auth hostname to this service without exposing port 8080 directly. Keep Cloudflare rate limiting and bot protection enabled on `/v1/auth/login`, `/v1/auth/callback`, and `/v1/auth/refresh`.
 
 ## Lifecycle
 
@@ -14,6 +14,8 @@ Cloudflare is the public edge. Route the public auth hostname to this service wi
 6. Verification and reset links are generated and consumed by auth. Their delivery-requested events are the email service's only responsibility: email renders and sends the message but never verifies an account or changes a password.
 7. Users create organizations, invite members, accept invitations, change roles, leave or remove members, and update or delete organizations through authenticated endpoints.
 
+The setup CLI opens a local browser start page. Existing creators sign in through the CLI Cognito app client; new creators open the web sign-up page, verify email, then return to the start page to sign in. `/v1/auth/config` publishes the CLI client ID, fixed loopback callback, Cognito domain, and web sign-up URL when the CLI client is configured. The CLI exchanges the authorization code with PKCE, registers the verified identity through `/v1/auth/cli/session`, and keeps only the short-lived access token in memory.
+
 Access JWTs are verified locally against Cognito's signed OIDC keys. The auth state tables store only SHA-256 token hashes. Delivery outbox records temporarily contain the action URL needed by email and are scrubbed immediately after successful EventBridge publication. Verification tokens expire after 24 hours; reset tokens expire after 30 minutes. Token redemption uses a PostgreSQL claim lease to prevent concurrent reuse and recover safely after a crashed worker. Cookie-backed and public credential mutations require an allowed browser `Origin`; bearer-token API calls remain supported for authenticated APIs.
 
 ## API
@@ -22,9 +24,6 @@ Access JWTs are verified locally against Cognito's signed OIDC keys. The auth st
 | --- | --- | --- |
 | `GET` | `/healthz` | Liveness |
 | `GET` | `/v1/auth/config` | Public client configuration |
-| `POST` | `/v1/auth/cli/password/signup` | Native CLI email sign-up without browser cookies |
-| `POST` | `/v1/auth/cli/password/verify` | Native CLI email verification |
-| `POST` | `/v1/auth/cli/password/login` | Native CLI password sign-in; returns only a short-lived access token |
 | `GET` | `/v1/auth/login?return_to=...` | Start Google sign-in |
 | `GET` | `/v1/auth/callback` | Complete Cognito authorization-code flow |
 | `POST` | `/v1/auth/refresh` | Refresh browser session |

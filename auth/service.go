@@ -6,6 +6,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -175,6 +176,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("AUTH_SERVICE_CALLERS is not set: the internal API refuses every call, so no service can mint agent tokens")
 	}
 
+	verificationURL, err := url.Parse(config.EmailVerificationURL)
+	if err != nil {
+		return host.Service{}, fmt.Errorf("parse email verification URL: %w", err)
+	}
+	cliSignUpURL := verificationURL.Scheme + "://" + verificationURL.Host + "/auth/sign-up"
 	server := httpserver.New(verifier, oauth, passwords, service, httpserver.Config{
 		CognitoDomain:      config.CognitoDomain,
 		CognitoClientID:    config.CognitoClientID,
@@ -185,6 +191,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		GoogleEnabled:      config.GoogleEnabled,
 		CLIClientID:        config.CognitoCLIClientID,
 		CLICallbackURL:     config.CognitoCLICallbackURL,
+		CLISignUpURL:       cliSignUpURL,
 		CLIVerifier:        verifier,
 		CLICompleteLogin:   service.CompleteLogin,
 		AgentClientID:      config.CognitoAgentClientID,

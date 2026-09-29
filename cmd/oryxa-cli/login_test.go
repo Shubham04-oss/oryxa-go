@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +43,7 @@ func TestNativeLoginKeepsTokenInMemory(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/v1/auth/config":
-			_ = json.NewEncoder(writer).Encode(loginConfig{ClientID: "cli", CallbackURL: callback, Domain: cognito.URL})
+			_ = json.NewEncoder(writer).Encode(loginConfig{ClientID: "cli", CallbackURL: callback, Domain: cognito.URL, SignUpURL: "https://app.example.com/auth/sign-up"})
 		case "/v1/auth/cli/session":
 			var body map[string]string
 			_ = json.NewDecoder(request.Body).Decode(&body)
@@ -64,7 +65,7 @@ func TestNativeLoginKeepsTokenInMemory(t *testing.T) {
 		err   error
 	}, 1)
 	go func() {
-		token, err := nativeOAuthLogin(ctx, api.URL, true, true, writer, "Google")
+		token, err := nativeLogin(ctx, api.URL, true, true, writer)
 		result <- struct {
 			token string
 			err   error
@@ -83,9 +84,53 @@ func TestNativeLoginKeepsTokenInMemory(t *testing.T) {
 	if err := json.Unmarshal([]byte(line), &step); err != nil {
 		t.Fatal(err)
 	}
-	authURL, err := url.Parse(step.Next.URL)
-	if err != nil || authURL.Query().Get("code_challenge") == "" || authURL.Query().Get("nonce") == "" || authURL.Query().Get("identity_provider") != "Google" {
-		t.Fatalf("invalid authorization URL: %s, %v", step.Next.URL, err)
+	startURL, err := url.Parse(step.Next.URL)
+	if err != nil || startURL.Host != reserved.Addr().String() || startURL.Path != "/start" || startURL.Query().Get("session") == "" {
+		t.Fatalf("start URL = %q", step.Next.URL)
+	}
+	session := url.QueryEscape(startURL.Query().Get("session"))
+	start, err := http.Get(step.Next.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startBody, err := io.ReadAll(start.Body)
+	start.Body.Close()
+	if err != nil || start.StatusCode != http.StatusOK || start.Header.Get("Cache-Control") != "no-store" || start.Header.Get("Referrer-Policy") != "no-referrer" || start.Header.Get("Content-Security-Policy") == "" || !strings.Contains(string(startBody), `href="/authorize?session=`+session+`"`) || !strings.Contains(string(startBody), `href="/signup?session=`+session+`"`) {
+		t.Fatalf("start response = %d %v", start.StatusCode, start.Header)
+	}
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	unguarded, err := noRedirect.Get("http://" + reserved.Addr().String() + "/authorize")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unguarded.Body.Close()
+	if unguarded.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unguarded authorization status = %d", unguarded.StatusCode)
+	}
+	signUp, err := noRedirect.Get("http://" + reserved.Addr().String() + "/signup?session=" + session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signUp.Body.Close()
+	if signUp.StatusCode != http.StatusFound || signUp.Header.Get("Location") != "https://app.example.com/auth/sign-up" {
+		t.Fatalf("sign-up redirect = %d %q", signUp.StatusCode, signUp.Header.Get("Location"))
+	}
+	authorize, err := noRedirect.Get("http://" + reserved.Addr().String() + "/authorize?session=" + session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorize.Body.Close()
+	authURL, err := url.Parse(authorize.Header.Get("Location"))
+	if err != nil || authorize.StatusCode != http.StatusFound || authURL.Query().Get("code_challenge") == "" || authURL.Query().Get("nonce") == "" || authURL.Query().Get("identity_provider") != "" {
+		t.Fatalf("invalid authorization URL: %s, %v", authorize.Header.Get("Location"), err)
+	}
+	wrongState, err := http.Get(callback + "?code=code&state=wrong")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongState.Body.Close()
+	if wrongState.StatusCode != http.StatusBadRequest {
+		t.Fatalf("wrong-state callback status = %d", wrongState.StatusCode)
 	}
 	// The browser would follow Cognito's redirect to this loopback URL.
 	response, err := http.Get(callback + "?code=code&state=" + url.QueryEscape(authURL.Query().Get("state")))
@@ -96,8 +141,15 @@ func TestNativeLoginKeepsTokenInMemory(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("callback status = %d", response.StatusCode)
 	}
-	if _, err := lines.ReadString('\n'); err != nil {
+	completion, err := lines.ReadString('\n')
+	if err != nil {
 		t.Fatalf("login completion output: %v", err)
+	}
+	var completed struct {
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	if err := json.Unmarshal([]byte(completion), &completed); err != nil || completed.ExpiresAt.Before(time.Now().Add(14*time.Minute)) || completed.ExpiresAt.After(time.Now().Add(16*time.Minute)) {
+		t.Fatalf("login expiry = %q, %v", completion, err)
 	}
 	select {
 	case done := <-result:
@@ -124,6 +176,20 @@ func TestNativeLoginRejectsMissingClient(t *testing.T) {
 	defer api.Close()
 	_, err := fetchLoginConfig(context.Background(), api.URL)
 	if err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNativeLoginRejectsUnsafeSignUpURL(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(writer).Encode(loginConfig{
+			ClientID: "cli", CallbackURL: "http://127.0.0.1:8765/callback",
+			Domain: "https://cognito.example.com", SignUpURL: "http://remote.example.com/auth/sign-up",
+		})
+	}))
+	defer api.Close()
+	_, err := fetchLoginConfig(context.Background(), api.URL)
+	if err == nil || !strings.Contains(err.Error(), "account creation") {
 		t.Fatalf("error = %v", err)
 	}
 }

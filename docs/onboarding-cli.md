@@ -21,18 +21,20 @@ Create a starting file and inspect it:
 ./bin/oryxa setup --agent-help        # mapping instructions for your coding agent
 ```
 
-After filling in members and teams, run the one-process setup flow. It first
-asks the creator to continue with Google, sign in with email, or create an
-email account. Google uses an authorization code with PKCE and a callback on
-`127.0.0.1`; the server must have `COGNITO_CLI_CLIENT_ID` and its fixed
-callback URL from the Cognito provisioner. Email sign-up prompts for a
-password without echoing it, asks for the verification link or token sent by
-Oryxa, verifies the account, and signs in. The access token stays in that
-process's memory. Setup creates a missing starter file only after sign-in,
-then shows the plan and asks before applying. `--no-browser` prints the Google
-URL for a coding agent to open; `--json` prints machine-readable progress.
-If email verification is deferred, setup exits `2` with a `verify_email`
-human step; rerun setup and choose email sign-in after verifying the link.
+After filling in members and teams, run the one-process setup flow. It opens a
+local browser page with **Sign in** and **Create account**. Sign in uses the
+Cognito hosted page for email/password or Google, then returns an authorization
+code to the CLI on `127.0.0.1`. Create account opens the Oryxa web sign-up page
+in a new tab; after verifying email, return to the original tab and sign in.
+No password is entered in the CLI. The authorization code exchange uses PKCE,
+state, and nonce. The CLI keeps the resulting access token in memory, reports
+its expiry, and never saves the refresh token. The provisioned CLI app client
+issues a 15-minute access token. The browser sign-in window closes after 20
+minutes. Setup creates a missing starter file only after sign-in, then shows
+the plan and asks before applying. The auth server must expose
+`COGNITO_CLI_CLIENT_ID`, its fixed callback URL, and the web sign-up URL in
+`/v1/auth/config`. `--no-browser` prints the local start URL for a coding agent
+to open; `--json` prints machine-readable progress.
 
 ```sh
 ./bin/oryxa setup -f oryxa.yaml
@@ -45,9 +47,8 @@ and before planning. Without `--org`, it asks for the slug. It also accepts
 Separate remote commands open browser sign-in when they need a session. They
 can also read a short-lived member access token from `ORYXA_ACCESS_TOKEN`.
 No token is accepted in the file or as a flag, and the CLI does not save it.
-`oryxa login` offers the same sign-in or account-creation choices and shows the
-current account; its in-memory
-session ends with that command. For one sign-in and several setup steps, use
+`oryxa login` opens the same browser page and shows the current account; its
+in-memory session ends with that command. For one sign-in and several setup steps, use
 `oryxa setup`. A reusable cross-command session needs a future in-memory
 daemon or a different security design.
 
