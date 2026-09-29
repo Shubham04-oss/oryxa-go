@@ -987,3 +987,41 @@ func TestEventHandledAndDeleteHandledEventsBefore(t *testing.T) {
 		t.Fatalf("EventHandled(after forgetting) = %v, %v, want false", handled, err)
 	}
 }
+
+func TestPolicyRefundPreservesLeaseAndCannotRefundLaterClaims(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	connection := activateForAutoSubscribe(t, store, "org_1", "member_1")
+	now := testClock.Add(time.Minute)
+	lease := now.Add(10 * time.Minute)
+	first, err := store.ConnectionsAwaitingSubscribe(ctx, 3, 10, now, lease)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("claim = %+v %v", first, err)
+	}
+	for range 2 {
+		if err := store.RefundAutoSubscribeAttempt(ctx, connection.ID, first[0].AutoSubscribeAttempts, lease); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current, err := store.Connection(ctx, "org_1", connection.ID)
+	if err != nil || current.AutoSubscribeAttempts != 0 {
+		t.Fatalf("refunded claim=%+v %v", current, err)
+	}
+	held, err := store.ConnectionsAwaitingSubscribe(ctx, 3, 10, now, lease)
+	if err != nil || len(held) != 0 {
+		t.Fatalf("policy backoff lost lease: %+v %v", held, err)
+	}
+	later := lease.Add(time.Second)
+	nextLease := later.Add(10 * time.Minute)
+	next, err := store.ConnectionsAwaitingSubscribe(ctx, 3, 10, later, nextLease)
+	if err != nil || len(next) != 1 || next[0].AutoSubscribeAttempts != 1 {
+		t.Fatalf("next claim=%+v %v", next, err)
+	}
+	if err := store.RefundAutoSubscribeAttempt(ctx, connection.ID, 1, lease); err != nil {
+		t.Fatal(err)
+	}
+	current, err = store.Connection(ctx, "org_1", connection.ID)
+	if err != nil || current.AutoSubscribeAttempts != 1 {
+		t.Fatalf("stale refund changed next claim: %+v %v", current, err)
+	}
+}

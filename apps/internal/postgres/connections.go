@@ -148,6 +148,20 @@ func (store *Store) ConnectionsAwaitingSubscribe(ctx context.Context, maxAttempt
 		RETURNING `+connectionColumns, maxAttempts, limit, now, leaseUntil)
 }
 
+// RefundAutoSubscribeAttempt retains the lease as policy backoff. Matching both
+// the lease and attempt makes retries idempotent and prevents an old worker from
+// refunding a different worker's provider attempt.
+func (store *Store) RefundAutoSubscribeAttempt(ctx context.Context, id string, attempt int, leaseUntil time.Time) error {
+	_, err := store.pool.Exec(ctx, `UPDATE apps_connections
+ SET auto_subscribe_attempts = auto_subscribe_attempts - 1
+ WHERE id = $1 AND auto_subscribe_attempts = $2 AND auto_subscribe_attempts > 0
+ AND auto_subscribe_claimed_until = $3 AND auto_subscribed_at IS NULL`, id, attempt, leaseUntil)
+	if err != nil {
+		return mapWriteError("refund automatic subscription attempt", err)
+	}
+	return nil
+}
+
 // MarkSubscribed records that a connection has been subscribed to what its
 // app delivers, so it is not claimed again.
 func (store *Store) MarkSubscribed(ctx context.Context, id string, now time.Time) error {

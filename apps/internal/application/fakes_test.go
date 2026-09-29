@@ -265,6 +265,18 @@ func (store *fakeStore) ConnectionsAwaitingSubscribe(_ context.Context, maxAttem
 	return owed, nil
 }
 
+func (store *fakeStore) RefundAutoSubscribeAttempt(_ context.Context, id string, attempt int, _ time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.subscribeAttempts[id] == attempt && attempt > 0 {
+		store.subscribeAttempts[id]--
+		connection := store.connections[id]
+		connection.AutoSubscribeAttempts = store.subscribeAttempts[id]
+		store.connections[id] = connection
+	}
+	return nil
+}
+
 func (store *fakeStore) MarkSubscribed(_ context.Context, id string, now time.Time) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
