@@ -113,6 +113,24 @@ locals {
       APPS_SIGNIN_REDIRECT_URI = "${local.app_url}/v1/apps/oauth/callback"
       APPS_ORYXA_TOOLKITS      = ""
 
+      # The Slack consent loop (docs/design/slack-implementation.md;
+      # deploy/README.md, "The Slack bot"), all of it waiting for
+      # slack_app_ready. Apps refuses to start with the surface on and no valid
+      # APPS_SLACK_APP, and needs a caller allowed the purpose slack
+      # (keys.tf), so the surface and the caller come with the secret and no
+      # sooner. Agents reads its switch as its own: on, it asks an owner for
+      # consent in Slack and needs AGENTS_PRIMARY_SLACK_TICKET_KEY, which
+      # secrets.tf names to the task under the same gate. The surface and the
+      # switch say off in words, so the task definition says which it is; the
+      # callers are simply not set, since an empty value is dropped below.
+      APPS_SLACK_SURFACE           = var.slack_app_ready ? "true" : "false"
+      APPS_SERVICE_CALLERS         = var.slack_app_ready ? local.apps_service_callers : ""
+      AGENTS_PRIMARY_SLACK_CONSENT = var.slack_app_ready ? "on" : "off"
+      # The key one-time secrets are sealed under (keys.tf), whatever the
+      # switch says: a secret is only ever shared for a request approved with
+      # access, which nothing makes until consent is on.
+      AGENTS_PRIMARY_SECRETS_KMS_KEY_ID = aws_kms_alias.agents_secrets.name
+
       FILES_BUCKET_NAME = local.files_bucket
 
       KNOWLEDGE_SERVICE_KEY_ID  = aws_kms_alias.service["knowledge"].name
@@ -357,6 +375,20 @@ resource "aws_iam_role_policy" "task" {
         Resource = aws_kms_key.apps_signin.arn
         Condition = {
           StringEquals = { "kms:EncryptionContext:service" = "oryxa-apps" }
+        }
+      },
+      {
+        # One-time secrets shared between members. As for the key above, the
+        # encryption context confines what this grant seals to agents' own
+        # rows: a ciphertext bound to another service, resource type or
+        # request fails to open even under this same grant
+        # (agents/primary/internal/secretshares.SealService, keys.tf).
+        Sid      = "SealSecretShares"
+        Effect   = "Allow"
+        Action   = ["kms:GenerateDataKey", "kms:Decrypt"]
+        Resource = aws_kms_key.agents_secrets.arn
+        Condition = {
+          StringEquals = { "kms:EncryptionContext:service" = "oryxa-agents" }
         }
       },
       {
