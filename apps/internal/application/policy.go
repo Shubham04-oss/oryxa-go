@@ -5,8 +5,32 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 )
+
+// OfferPolicy is the member-visible part of the applied tools policy.
+type OfferPolicy struct {
+	Offer                *[]string `json:"offer"`
+	AutoSubscribeDefault bool      `json:"auto_subscribe_default"`
+}
+
+// OfferedTools tells a signed-in member what this organization currently
+// offers. Nil Offer means the full catalog; [] means no toolkit is offered.
+func (s *Service) OfferedTools(ctx context.Context, credentials authclient.Credentials, organizationID string) (OfferPolicy, error) {
+	if _, err := s.caller(ctx, credentials, organizationID); err != nil {
+		return OfferPolicy{}, err
+	}
+	if s.policy == nil {
+		return OfferPolicy{AutoSubscribeDefault: s.autoSubscribe}, nil
+	}
+	settings, err := s.policy.Get(ctx, organizationID)
+	if err != nil {
+		return OfferPolicy{}, fmt.Errorf("read the organization's app policy: %w", domain.ErrUnavailable)
+	}
+	autoSubscribe := s.autoSubscribe && (settings.AutoSubscribe == nil || *settings.AutoSubscribe)
+	return OfferPolicy{Offer: settings.Offer, AutoSubscribeDefault: autoSubscribe}, nil
+}
 
 // allowToolkit applies the organization's offer list at the point of use.
 // Reading it for every action means a newly restricted app cannot continue

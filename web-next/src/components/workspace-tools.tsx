@@ -37,6 +37,7 @@ import {
   nonConnectableReason,
   parseConnectReturn,
   replacedConnections,
+  toolOfferQueryOptions,
 } from "@/lib/apps/client"
 import type {
   ConnectNotice,
@@ -176,6 +177,10 @@ export function WorkspaceTools({
     ...connectionsQueryOptions(organizationId ?? ""),
     enabled: live && Boolean(organizationId),
   })
+  const offerQuery = useQuery({
+    ...toolOfferQueryOptions(organizationId ?? ""),
+    enabled: live && Boolean(organizationId),
+  })
   // Without a workspace there is nothing to list; the session says whether
   // that is because the member is signed out. The route has already read it.
   const session = useQuery({
@@ -189,7 +194,12 @@ export function WorkspaceTools({
     ? isUnauthorized(connectionsQuery.error)
     : isUnauthorized(session.error)
   const signedIn = organizationId ? !signedOut : Boolean(session.data)
-  const canConnect = live && Boolean(organizationId) && signedIn
+  const canConnect =
+    live && Boolean(organizationId) && signedIn && Boolean(offerQuery.data)
+  const isOffered = (toolkit: string) =>
+    !organizationId ||
+    (Boolean(offerQuery.data) &&
+      (!offerQuery.data?.offer || offerQuery.data.offer.includes(toolkit)))
 
   const connections = useMemo(
     () =>
@@ -329,7 +339,9 @@ export function WorkspaceTools({
         )
       : null
   const visibleToolkits = (results ?? localMatches ?? shownToolkits).filter(
-    (toolkit) => !rowToolkits.has(toolkit.toolkit)
+    (toolkit) =>
+      !rowToolkits.has(toolkit.toolkit) &&
+      (!organizationId || (offerQuery.data && isOffered(toolkit.toolkit)))
   )
   const groups = groupToolkits(
     visibleToolkits,
@@ -436,11 +448,16 @@ export function WorkspaceTools({
         )
       : ""
   const exploreProblem =
-    live && !catalogUp
-      ? appsErrorMessage(probe.error, "The app catalog could not be loaded.")
-      : live && searchable && search.isError && !search.data
-        ? appsErrorMessage(search.error, "Search could not be loaded.")
-        : ""
+    live && organizationId && offerQuery.isError && !signedOut
+      ? appsErrorMessage(
+          offerQuery.error,
+          "The workspace app policy could not be loaded."
+        )
+      : live && !catalogUp
+        ? appsErrorMessage(probe.error, "The app catalog could not be loaded.")
+        : live && searchable && search.isError && !search.data
+          ? appsErrorMessage(search.error, "Search could not be loaded.")
+          : ""
 
   function signIn() {
     const params = new URLSearchParams(window.location.search)
@@ -555,11 +572,17 @@ export function WorkspaceTools({
             {rowConnections.map((connection) => {
               const toolkit = toolkitFor(connection.toolkit)
               const isSelected = selectedId === connection.id
+              const restricted =
+                !isPreview &&
+                Boolean(offerQuery.data) &&
+                !isOffered(connection.toolkit)
               const settling = !isPreview && connection.status !== "active"
               const superseded = replacedExpiredIds.has(connection.id)
-              const state = superseded
-                ? "Replaced"
-                : connectionStatusLabel(connection.status)
+              const state = restricted
+                ? "Not offered"
+                : superseded
+                  ? "Replaced"
+                  : connectionStatusLabel(connection.status)
               return (
                 <button
                   className={
@@ -582,10 +605,10 @@ export function WorkspaceTools({
                   <ToolkitLogo toolkit={toolkit} />
                   <span className="workspace-tools-connected-copy">
                     <span>{toolkit.name}</span>
-                    {settling && (
+                    {(settling || restricted) && (
                       <small
                         data-tone={
-                          superseded
+                          restricted || superseded
                             ? "muted"
                             : connectionStatusTone(connection.status)
                         }
@@ -613,6 +636,7 @@ export function WorkspaceTools({
               toolkit={selectedToolkit}
               organizationId={organizationId ?? ""}
               preview={isPreview}
+              offered={!offerQuery.data || isOffered(selected.toolkit)}
               replaced={replacedExpiredIds.has(selected.id)}
               reconnecting={connectingToolkit === selected.toolkit}
               connectBusy={Boolean(connectingToolkit)}
@@ -625,14 +649,16 @@ export function WorkspaceTools({
                 )
               }}
             />
-            {hasConnectionDetails(selected.status) && (
-              <ConnectionWorkspace
-                connection={selected}
-                toolkit={selectedToolkit}
-                organizationId={organizationId ?? ""}
-                preview={isPreview}
-              />
-            )}
+            {(!organizationId || offerQuery.data) &&
+              hasConnectionDetails(selected.status) &&
+              isOffered(selected.toolkit) && (
+                <ConnectionWorkspace
+                  connection={selected}
+                  toolkit={selectedToolkit}
+                  organizationId={organizationId ?? ""}
+                  preview={isPreview}
+                />
+              )}
           </div>
         )}
       </section>
@@ -669,9 +695,10 @@ export function WorkspaceTools({
             <button
               type="button"
               className="workspace-tools-retry"
-              onClick={() =>
-                void (catalogUp ? search.refetch() : probe.refetch())
-              }
+              onClick={() => {
+                if (offerQuery.isError) void offerQuery.refetch()
+                else void (catalogUp ? search.refetch() : probe.refetch())
+              }}
             >
               Retry
             </button>
@@ -782,11 +809,14 @@ export function WorkspaceTools({
           <p className="workspace-tools-no-results">
             {viewState === "loading" ||
             searchBusy ||
+            (live && Boolean(organizationId) && offerQuery.isPending) ||
             (live && results === null && !featuredSettled)
               ? "Loading tools…"
-              : live && trimmed && !searchable
-                ? "Keep typing to search every app."
-                : "No tools found. Try a different search."}
+              : live && offerQuery.data?.offer?.length === 0
+                ? "Your workspace does not offer any apps yet."
+                : live && trimmed && !searchable
+                  ? "Keep typing to search every app."
+                  : "No tools found. Try a different search."}
           </p>
         )}
         {live &&

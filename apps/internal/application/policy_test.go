@@ -84,3 +84,17 @@ func TestWorkspaceAutoSubscribeDefaultAndPolicyFailure(t *testing.T) {
 		t.Fatalf("policy read failure on connect = %v", err)
 	}
 }
+
+func TestOfferedToolsRequiresMembershipAndKeepsEmptyDistinct(t *testing.T) {
+	h := newHarness(t)
+	offer := []string{}
+	off := false
+	h.service.policy = &fakePolicySource{settings: policy.Settings{Offer: &offer, AutoSubscribe: &off}}
+	if _, err := h.service.OfferedTools(context.Background(), memberToken, "org_2"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("other organization = %v", err)
+	}
+	result, err := h.service.OfferedTools(context.Background(), memberToken, "org_1")
+	if err != nil || result.Offer == nil || len(*result.Offer) != 0 || result.AutoSubscribeDefault {
+		t.Fatalf("empty offer = %+v, %v", result, err)
+	}
+}

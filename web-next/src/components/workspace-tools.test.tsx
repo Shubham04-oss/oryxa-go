@@ -98,6 +98,8 @@ function fakeFetch(...handlers: Handler[]) {
         const response = handler(request)
         if (response) return response
       }
+      if (request.path === `${org}/apps/offer`)
+        return json({ offer: null, auto_subscribe_default: true })
       return apiError("not_found", "resource not found", 404)
     }
   )
@@ -109,6 +111,8 @@ function fakeFetch(...handlers: Handler[]) {
 function catalog(): Handler {
   return ({ method, path, params }) => {
     if (method !== "GET") return undefined
+    if (path === `${org}/apps/offer`)
+      return json({ offer: null, auto_subscribe_default: true })
     if (path === "/v1/apps/catalog") {
       if (params.get("search") === "slack")
         return json({
@@ -291,6 +295,28 @@ describe("WorkspaceTools", () => {
       await screen.findByRole("heading", { name: "Messaging" })
     ).toBeTruthy()
     expect(searched("slack")).toBe(true)
+  })
+
+  it("shows only offered apps and keeps restricted connections removable", async () => {
+    const state = { connections: [connection()] }
+    fakeFetch(
+      ({ path }) =>
+        path === `${org}/apps/offer`
+          ? json({ offer: ["zoom"], auto_subscribe_default: false })
+          : undefined,
+      catalog(),
+      connections(state),
+      quietDetails()
+    )
+    render(<WorkspaceTools organizationId="org-1" />)
+    expect(await screen.findByRole("heading", { name: "Zoom" })).toBeTruthy()
+    expect(screen.queryByRole("heading", { name: "Gmail" })).toBeNull()
+    fireEvent.click(
+      screen.getByRole("button", { name: /Expand GitHub connection/ })
+    )
+    expect(screen.getByText(/not offered by your workspace/)).toBeTruthy()
+    expect(screen.queryByRole("tab", { name: "Events" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy()
   })
 
   it("stays live and says so when apps answers but the catalog is down", async () => {

@@ -94,6 +94,7 @@ export function ConnectionSummary({
   toolkit,
   organizationId,
   preview,
+  offered = true,
   replaced,
   reconnecting,
   connectBusy,
@@ -105,6 +106,7 @@ export function ConnectionSummary({
   toolkit: Toolkit
   organizationId: string
   preview: boolean
+  offered?: boolean
   /** An expired connection a newer active connection to the app replaced. */
   replaced: boolean
   /** The page is starting a new connection to this app. */
@@ -205,9 +207,15 @@ export function ConnectionSummary({
         {note && (
           <small className="workspace-tools-expanded-note">{note}</small>
         )}
+        {!preview && !offered && (
+          <small className="workspace-tools-expanded-note">
+            This app is not offered by your workspace. You can disconnect it, or
+            ask an admin to allow it again.
+          </small>
+        )}
         {!preview && !confirming && (
           <div className="workspace-tools-lifecycle">
-            {canReconnect(status) && !replaced && (
+            {offered && canReconnect(status) && !replaced && (
               <button
                 type="button"
                 className="workspace-tools-pill"

@@ -39,6 +39,7 @@ type appsService interface {
 	CatalogToolkit(ctx context.Context, toolkit string) (application.ToolkitView, error)
 	CatalogTools(ctx context.Context, toolkit, search, cursor string, limit int) ([]application.ToolView, string, error)
 	CatalogTriggers(ctx context.Context, toolkit, cursor string, limit int) ([]application.TriggerTypeView, string, error)
+	OfferedTools(ctx context.Context, credentials authclient.Credentials, organizationID string) (application.OfferPolicy, error)
 	Connect(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ConnectInput) (domain.Connection, string, error)
 	CompleteConnection(ctx context.Context, state, status, accountID string) (application.Completion, error)
 	Connections(ctx context.Context, credentials authclient.Credentials, organizationID, toolkit string, organization bool) ([]domain.Connection, error)
@@ -102,6 +103,7 @@ func New(service appsService, config Config, logger *slog.Logger) *Server {
 	server.handle("GET /v1/apps/catalog/{toolkit}/triggers", server.catalogTriggers)
 	server.handle("GET /v1/apps/connect/callback", server.completeConnection)
 	server.handle("POST /v1/apps/webhooks/composio", server.receiveWebhook)
+	server.handle("GET /v1/organizations/{organizationID}/apps/offer", server.offeredTools)
 	server.handle("GET /v1/organizations/{organizationID}/apps/connections", server.listConnections)
 	server.handle("POST /v1/organizations/{organizationID}/apps/connections", server.connect)
 	server.handle("GET /v1/organizations/{organizationID}/apps/connections/{connectionID}", server.getConnection)
@@ -183,6 +185,19 @@ func (server *Server) catalogTriggers(writer http.ResponseWriter, request *http.
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"triggers": triggers, "next_cursor": optional(next)})
+}
+
+func (server *Server) offeredTools(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	offer, err := server.service.OfferedTools(request.Context(), credentials, request.PathValue("organizationID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, offer)
 }
 
 // connectionView is what a connection looks like over the wire. The state
