@@ -511,3 +511,65 @@ func TestANewServiceNeedsWhatItReads(t *testing.T) {
 		t.Error("a worker without a store was built")
 	}
 }
+
+func TestTwoOwnersAskedAtOnceTheFirstAnswerWinsAndTheOtherIsToldWhoAnswered(t *testing.T) {
+	h := newHarness(t)
+	ask := baseAsk()
+	h.ledger.putAsk(ask)
+	rayas := pendingRequest()
+	mayas := pendingRequest()
+	mayas.ID = "irq_2"
+	mayas.Target = agents.InteractionParty{UserID: "user_maya", AgentID: "agt_maya", AgentName: "Krude", UserDisplayName: "Maya"}
+	h.ledger.put(rayas)
+	h.ledger.put(mayas)
+	h.mustPass("irq_1")
+	h.mustPass("irq_2")
+
+	// Each owner has a notice of their own, in their own direct message.
+	notices := h.api.sentWith("owner_notice")
+	if len(notices) != 2 || notices[0].Target.UserID != slackRaya || notices[1].Target.UserID != slackMaya ||
+		notices[0].Key != "surfaces:irq_1:notice" || notices[1].Key != "surfaces:irq_2:notice" {
+		t.Fatalf("notices = %+v", notices)
+	}
+	ticket := func(n *message) string { return n.Params["tickets"].(map[string]any)["summary"].(string) }
+	if ticket(notices[0]) == ticket(notices[1]) {
+		t.Fatal("the two owners' buttons carry the same ticket")
+	}
+
+	// Maya approves; before her agent answers, Raya approves and hers does, and
+	// wins the ask. Maya's request is closed, approved as it was, as Oryxa.
+	h.ledger.put(memberDecided(mayas, interactions.DecisionApproved, interactions.ConsentSummary, interactions.SurfaceSlack))
+	h.mustPass("irq_2")
+	ask.WinnerRequestID = "irq_1"
+	h.ledger.putAsk(ask)
+	h.ledger.put(completedWith(memberDecided(rayas, interactions.DecisionApproved, interactions.ConsentAccess, interactions.SurfaceWeb), "It is the 14th."))
+	closed := memberDecided(mayas, interactions.DecisionApproved, interactions.ConsentSummary, interactions.SurfaceSlack)
+	closed.Status = interactions.StatusFailed
+	closed.Result = &agents.InteractionResult{Status: interactions.StatusFailed, Summary: "Answered by Raya"}
+	h.ledger.put(closed)
+	h.mustPass("irq_1")
+	h.mustPass("irq_2")
+
+	// The asker has one answer, Raya's, and nothing about Maya's request.
+	answers := h.api.sentWith("answer")
+	if len(answers) != 1 || answers[0].param("owner_name") != "Raya" || answers[0].Target != h.threadTarget() {
+		t.Fatalf("answers = %+v", answers)
+	}
+	if got := h.api.sentWith("status"); len(got) != 0 {
+		t.Fatalf("the asker was told %+v of the request another owner answered", got)
+	}
+	// Raya's notice says how she decided; Maya's, which said she had approved,
+	// now says who answered.
+	if len(notices[0].Updates) != 1 || notices[0].Updates[0].Params["decision"] != "approved_access" || notices[0].Updates[0].Params["decided_by_user_id"] != slackRaya {
+		t.Fatalf("Raya's notice updates = %+v", notices[0].Updates)
+	}
+	if len(notices[1].Updates) != 2 || notices[1].Updates[0].Params["decision"] != "approved_summary" ||
+		notices[1].Updates[1].Params["decision"] != "answered_by_other" || notices[1].Updates[1].Params["decided_by_user_id"] != slackRaya {
+		t.Fatalf("Maya's notice updates = %+v, want approved, then answered by Raya", notices[1].Updates)
+	}
+	// The asker's agent chat has a line for each request; only the winner's ends.
+	got := h.notes.texts()
+	if len(got) != 3 {
+		t.Fatalf("notes = %q, want both askings and the one answer", got)
+	}
+}
