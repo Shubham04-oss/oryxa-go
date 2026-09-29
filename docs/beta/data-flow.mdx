@@ -1,0 +1,77 @@
+---
+title: "Core data flow"
+description: "A compact, source-based map of Oryxa's browser, Go service, and provider boundaries."
+---
+
+# Core data flow
+
+```mermaid
+flowchart LR
+  member["Member's browser"]
+
+  subgraph cloudflare["Cloudflare"]
+    worker["Web app Worker"]
+    objects["Realtime Durable Objects"]
+    tunnel["Tunnel routes<br/>app /v1 and api host"]
+    worker <--> objects
+  end
+
+  member -->|"app and conversation requests"| worker
+  member -->|"same-origin /v1 requests"| tunnel
+
+  subgraph ecs["AWS ECS Fargate · oryxa Go services"]
+    api["Go listener · HTTP and background work"]
+    auth["Auth"]
+    agents["Agents / primary"]
+    apps["Apps"]
+    files["Files"]
+    email["Email consumer"]
+    realtime["Realtime bridge<br/>when configured"]
+    api --> auth
+    api --> agents
+    api --> apps
+    api --> files
+  end
+
+  tunnel --> api
+  objects -->|"agent run requests"| agents
+  objects -.->|"conversation events, when configured"| realtime
+  realtime -.->|"conversation purge"| objects
+  agents -->|"member-scoped app tools"| apps
+
+  subgraph aws["AWS services"]
+    cognito["Cognito"]
+    postgres[("RDS PostgreSQL")]
+    events["EventBridge rule + email queue"]
+    s3[("S3")]
+    ses["SES"]
+  end
+
+  auth <-->|"sign-in and identity"| cognito
+  api -->|"shared service state"| postgres
+  files -->|"file objects"| s3
+  auth -->|"auth delivery events"| events
+  events --> email
+  email -->|"system email"| ses
+
+  subgraph providers["Provider paths · configuration-dependent"]
+    google["Google identity provider"]
+    vertex["Vertex AI / Gemini"]
+    composio["Composio"]
+  end
+
+  cognito -.->|"when Google sign-in is enabled"| google
+  agents -.->|"configured model calls"| vertex
+  apps -.->|"connected app flow and tool calls"| composio
+```
+
+This is a source-based map of the core browser, agent, app, file, auth, and email paths, not a live traffic trace. Cloudflare routes, provider calls, and the Realtime bridge depend on deployment configuration. Dodo billing is omitted from the beta scope; Slack bot and native phase-2 integration paths are not shown as active routes.
+
+## Source legend
+
+- [Production ingress routes](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/deploy/production/cloudflare.tf#L1-L74) and [ECS service boundary](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/deploy/production/compute.tf#L1-L4).
+- [Web Worker and agent-chat path](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/README.md#L35-L61), plus the [optional Realtime bridge](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/realtime/README.md#L3-L20).
+- [Auth and Cognito](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/auth/README.md#L3-L19), [agent model](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/agents/primary/README.md#L1-L18), [agent-to-app tools](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/agents/primary/README.md#L172-L185), and the [Composio app boundary](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/apps/README.md#L12-L32).
+- [Shared service database](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/README.md#L35-L40) and [RDS PostgreSQL resource](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/deploy/production/database.tf#L1-L4); [Files and S3](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/files/README.md#L3-L20), [email events and SES](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/email/README.md#L1-L24), and [production model configuration](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/deploy/production/compute.tf#L121-L146).
+
+All links target source at release `611233f541a3`; this page was reviewed against source only.
