@@ -712,7 +712,7 @@ func (server *Server) status(writer http.ResponseWriter, request *http.Request) 
 		// Status is a read. An admin can inspect a stored owner-only prune
 		// configuration without receiving executable removal instructions.
 		if access.Role != "owner" {
-			readable := document.Normalize()
+			readable := document.Clone().Normalize()
 			readable.Teams.Prune = false
 			if readable.People != nil {
 				readable.People.Prune = false
