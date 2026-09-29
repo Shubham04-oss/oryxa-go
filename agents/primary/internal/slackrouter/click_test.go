@@ -180,7 +180,7 @@ func TestWhatPeopleWroteIsNeverLogged(t *testing.T) {
 	h := newHarness(t)
 	h.member("URAYA", "Raya")
 	router, err := NewRouter(Deps{
-		Slack: h.slack, Members: h.members, Identities: h.identities, Asks: h.asks,
+		Slack: h.slack, Members: h.members, Identities: h.identities, Asks: h.asks, Screen: h.screen,
 		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {

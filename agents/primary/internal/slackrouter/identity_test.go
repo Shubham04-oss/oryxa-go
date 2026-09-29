@@ -235,3 +235,23 @@ func TestAnOwnerWhoIsAGuestIsNotAsked(t *testing.T) {
 		})
 	}
 }
+
+// TestAMemberCarriesTheirRoleAndTheirTitleForTheScreen: the role is auth's,
+// the title is Slack's, cleaned, and neither is set for someone who is not a
+// member.
+func TestAMemberCarriesTheirRoleAndTheirTitleForTheScreen(t *testing.T) {
+	fixture := newIdentityFixture()
+	fixture.members.add(testOrg, Member{UserID: "usr_raya", Email: "raya@acme.com", DisplayName: "Raya Member", Role: " admin "})
+	fixture.change("URAYA", func(p *Profile) { p.Title = "  Staff\tEngineer <Platform>\u202e " })
+	got, err := fixture.resolve("URAYA")
+	if err != nil || !got.Member {
+		t.Fatalf("resolved = %+v, err = %v", got, err)
+	}
+	if got.Role != "admin" || got.Title != "Staff Engineer Platform" {
+		t.Fatalf("role %q, title %q", got.Role, got.Title)
+	}
+	fixture.change("URAYA", func(p *Profile) { p.Guest = true })
+	if got, _ := fixture.resolve("URAYA"); got.Member || got.Role != "" || got.Title != "" {
+		t.Fatalf("someone who is not a member carries %+v", got)
+	}
+}

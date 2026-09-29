@@ -12,6 +12,9 @@
 //
 // Every doubt resolves toward asking. The zero Decision is a refusal, and a
 // bypass needs every one of its conditions to hold at the moment of the ask.
+// The one doubt that does not is the screen of the asker's words, which fails
+// closed: an ask nobody screened, or whose screen could not finish, is refused
+// (the zero Screen is Unscreened), and so is a bypass.
 package consentpolicy
 
 const (
@@ -49,7 +52,46 @@ const (
 	// TooManyAsks is an asker who already has MaxOpenAsks asks open, or a
 	// mention that names more than MaxOwners people.
 	TooManyAsks Reason = "too_many_asks"
+
+	// The refusals below come from the screen of the asker's words, and from
+	// what the screen needs. None of them quotes the words, and none says which
+	// question of the screen was tripped more than its own name does: apps'
+	// copy for injection and screen_failed should stay a plain no. A request
+	// for a credential is not among them: it is asked, as a request for a
+	// secret (see Screen).
+
+	// ScreenFailed is an ask whose words could not be screened: no Jev is
+	// configured, Jev did not answer in time, failed, or answered something
+	// that makes no sense. Nobody is asked. The asker is told it was not their
+	// doing and to try again in a moment.
+	ScreenFailed Reason = "screen_failed"
+	// NotWork is an ask the screen found plainly not to be work: chat, a joke,
+	// a personal errand. The asker is told Oryxa passes on work questions.
+	NotWork Reason = "not_work"
+	// Injection is an ask the screen found to be aimed at the agents (an
+	// instruction to ignore rules, to reveal, to skip approval) and not at a
+	// colleague. The asker is told no more than that it cannot be passed on.
+	Injection Reason = "injection"
+	// Implausible is an ask the screen found plainly out of place for the asker,
+	// given their role, teams and Slack title.
+	Implausible Reason = "implausible"
+	// NoGrant is an asker who has not given Oryxa's agent standing access, so
+	// the directory cannot be read as them to see whom the question fits. The
+	// asker is told to give the agent access in Settings and ask again.
+	NoGrant Reason = "no_grant"
+	// OwnerDepartment is a named person whose department plainly does not fit
+	// the question. Like OwnerNotMember it leaves that one person out and does
+	// not refuse the rest; the asker is told who was not asked, and that the
+	// question looks like one for another team.
+	OwnerDepartment Reason = "owner_department"
 )
+
+// AboutOneOwner reports whether the refusal is about one named person: it
+// leaves that person out of the ask, and the rest are still asked. Every other
+// refusal is of the ask as a whole.
+func (reason Reason) AboutOneOwner() bool {
+	return reason == OwnerNotMember || reason == OwnerDepartment
+}
 
 // BypassReason is why an ask went ahead without the owner's consent. It is
 // recorded with the decision (decided_by {bypass, reason}), shown to the owner
@@ -152,6 +194,65 @@ func (channel Channel) bypasses() bool {
 	return channel.Private && channel.HighPriority && !channel.Shared && !channel.GroupDM
 }
 
+// Screen is what the screen found in the words of an ask, for Decide to read
+// like any other fact. The screen is one Jev read of the words against who
+// asked: is it work, is it aimed at the agents, is it plausible for this
+// asker, does it ask for a credential. Reading Jev's probabilities into one of
+// these values is the screen's own business; the policy only knows that an ask
+// goes ahead when, and only when, the screen cleared it.
+//
+// Asking for a credential is not a finding that refuses: an ask for a secret
+// goes to its owners like any other, filed as an ask for a secret, whose answer
+// its owner shares as a one-time view in Oryxa and never in Slack. It is the
+// router's to file it so, from the screen's result, and it changes nothing
+// here: the same policy decides who may be asked for a secret and how.
+type Screen int
+
+const (
+	// Unscreened is the zero Screen, and refuses: the words were never
+	// screened, or the screen could not finish (no Jev, an error, a timeout, an
+	// answer that made no sense). A screen that did not say an ask is clear has
+	// not cleared it, and the same goes for a value this package has not heard
+	// of.
+	Unscreened Screen = iota
+	// Cleared is the only Screen an ask goes ahead on.
+	Cleared
+	// FoundNotWork, FoundInjection and FoundImplausible are what the screen
+	// found, and each refuses with the reason of the same name.
+	FoundNotWork
+	FoundInjection
+	FoundImplausible
+)
+
+func (screen Screen) String() string {
+	switch screen {
+	case Cleared:
+		return "cleared"
+	case FoundNotWork:
+		return string(NotWork)
+	case FoundInjection:
+		return string(Injection)
+	case FoundImplausible:
+		return string(Implausible)
+	default:
+		return "unscreened"
+	}
+}
+
+// refusal is the reason an ask this Screen did not clear is refused for.
+func (screen Screen) refusal() Reason {
+	switch screen {
+	case FoundNotWork:
+		return NotWork
+	case FoundInjection:
+		return Injection
+	case FoundImplausible:
+		return Implausible
+	default:
+		return ScreenFailed
+	}
+}
+
 // Facts is everything Decide reads: one ask to one owner.
 type Facts struct {
 	// AskerMember is whether the asker is a full member of the workspace
@@ -165,6 +266,14 @@ type Facts struct {
 	Channel     Channel
 	// OpenAsks is how many asks the asker has open now.
 	OpenAsks int
+	// Screen is what the screen found in the asker's words. It is the same for
+	// every owner of one ask, and the zero value refuses.
+	Screen Screen
+	// OwnerMisfit is whether the screen judged this owner's department plainly
+	// the wrong one for the question. It is false whenever the owner's
+	// department is not known, or the screen was not sure: a doubt about
+	// whether to ask a person resolves toward asking them.
+	OwnerMisfit bool
 	// Outranks is whether the asker is above this owner in the organization
 	// chart. It is false whenever the chart cannot say, and in particular
 	// for an asker who has given agents no standing grant to read it.
@@ -180,13 +289,21 @@ type Facts struct {
 //  4. a mention that names nobody, or too many;
 //  5. an asker with too many asks open;
 //  6. an owner who is not a member;
+//  7. words the screen did not clear, which includes words nobody screened;
+//  8. an owner whose department plainly does not fit the question;
 //
 // and then the two ways to go ahead without consent: the channel, then
-// authority. Anything else needs the owner's consent.
+// authority. Anything else needs the owner's consent. A bypass is no way
+// round any of the eight: an ask the screen refuses is refused whoever asks,
+// in whatever channel, and an owner whose department does not fit is not asked
+// on the authority of the asker either.
 //
 // The refusals through step 5 depend on nothing about the owner, so they
-// are the same for every owner of one ask. Step 6 is the only one that
-// refuses one owner and not the rest.
+// are the same for every owner of one ask, and so does step 7. Steps 6 and 8
+// are the ones that refuse one owner and not the rest. Step 6 comes before the
+// screen because the router does not screen the words of an ask that names
+// nobody who can be asked: an ask to people who are not in Oryxa is answered
+// by saying so, whatever it says.
 func Decide(facts Facts) Decision {
 	switch {
 	case !facts.AskerMember:
@@ -201,6 +318,10 @@ func Decide(facts Facts) Decision {
 		return deny(TooManyAsks)
 	case !facts.OwnerMember:
 		return deny(OwnerNotMember)
+	case facts.Screen != Cleared:
+		return deny(facts.Screen.refusal())
+	case facts.OwnerMisfit:
+		return deny(OwnerDepartment)
 	case facts.Channel.bypasses():
 		return Decision{Outcome: Allow, Bypass: Bypass{Reason: PriorityChannel, AnswerTo: AnswerFor(PriorityChannel)}}
 	case facts.Outranks:

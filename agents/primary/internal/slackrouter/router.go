@@ -6,11 +6,16 @@
 // reads each delivery back from apps with a service token, and routes it:
 //
 //   - A message that mentions the bot is an ask. The router says who is asking
-//     and who is being asked, from Slack profiles and auth's members, asks the
-//     policy (consentpolicy) whether the ask is refused, needs the owner's
-//     consent or bypasses it, and files the ask with the consent core. It posts
-//     only what it must, each shown to the asker alone: a refusal, who was
-//     left out, and who was asked.
+//     and who is being asked, from Slack profiles and auth's members, has the
+//     words screened (one Jev read: is it work, is it aimed at the agents, is
+//     it plausible for this asker, does it ask for a credential, and does it
+//     fit each owner's department), asks the policy (consentpolicy) whether
+//     the ask is refused, needs the owner's consent or bypasses it, and files
+//     the ask with the consent core, as an ask for a secret when the words ask
+//     for a credential. It posts only what it must, each shown to the asker
+//     alone: a refusal, who was left out, and who was asked. The screen fails
+//     closed: with no Jev, or a Jev that fails or is slow, the ask is refused
+//     and nobody is asked.
 //   - A click on a button is handed, unchanged, to the consent core, with the
 //     member who clicked. The router never decides it.
 //   - Everything else is dropped.
@@ -40,6 +45,18 @@ type Deps struct {
 	Members    Members
 	Identities Identities
 	Asks       Asks
+	// Screen judges the words of an ask before anyone is asked or pinged.
+	// Without one every mention is refused, and nobody is asked: an ask nobody
+	// screened may not go ahead. NewJevScreen is the production one, and its
+	// Jev is the one interactions and rooms use.
+	Screen Screen
+	// Directory reads the teams of the asker and of the people they name, as the
+	// asker sees them, so the screen can judge whether a question fits each
+	// owner's department, and refuses an asker who has given agents no standing
+	// access (no_grant). Without one no department is known, no owner is left
+	// out for theirs, and no grant is asked for. NewAskerDirectory is the
+	// production one.
+	Directory Directory
 	// Authority answers whether an asker outranks an owner. Without one, nobody
 	// does, and no ask bypasses on authority.
 	Authority Authority
@@ -80,6 +97,9 @@ func NewRouter(deps Deps) (*Router, error) {
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
+	}
+	if deps.Screen == nil {
+		logger.Warn("slackrouter: no screen is configured, so every mention will be refused and nobody asked")
 	}
 	return &Router{
 		deps:     deps,

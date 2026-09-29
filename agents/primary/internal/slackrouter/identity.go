@@ -18,6 +18,11 @@ type resolved struct {
 	Person Person
 	// Name is what to call them, whether or not they are a member.
 	Name string
+	// Role is a member's role in the organization (owner, admin or member) as
+	// auth keeps it, and Title their Slack title, cleaned. They are for the
+	// screen to weigh what a member asks, or is asked, and are set only for one.
+	Role  string
+	Title string
 	// Why says, for a log and never a person, why a user is not a member.
 	Why string
 	// Bot is a user that is a bot: never answered, so no reply is sent.
@@ -81,7 +86,10 @@ func (resolver *resolver) resolve(ctx context.Context, organizationID, teamID, s
 	}); err != nil {
 		return resolved{}, fmt.Errorf("keep a Slack user's match to a member: %w", err)
 	}
-	return resolved{SlackUserID: slackUserID, Member: true, Person: person, Name: name}, nil
+	return resolved{
+		SlackUserID: slackUserID, Member: true, Person: person, Name: name,
+		Role: strings.TrimSpace(member.Role), Title: cleanTitle(profile.Title),
+	}, nil
 }
 
 // forget drops a match that no longer holds. It is housekeeping, and nothing

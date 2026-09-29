@@ -123,3 +123,30 @@ func TestNameOf(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanTitleAndTeam(t *testing.T) {
+	for _, test := range []struct{ name, in, wantTitle, wantTeam string }{
+		{"plain", "Staff Engineer", "Staff Engineer", "Staff Engineer"},
+		{"markup and a link", "<https://x.example|Boss> & co", "https://x.exampleBoss co", "https://x.exampleBoss co"},
+		{"a newline and a tab", "Head of\n\tPeople", "Head of People", "Head of People"},
+		{"a direction override", "CEO\u202e", "CEO", "CEO"},
+		{"nothing", "", "", ""},
+		{"only markup", "<>&|", "", ""},
+		{"invalid UTF-8", "Ops\xff", "Ops", "Ops"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := cleanTitle(test.in); got != test.wantTitle {
+				t.Errorf("cleanTitle(%q) = %q, want %q", test.in, got, test.wantTitle)
+			}
+			if got := cleanTeam(test.in); got != test.wantTeam {
+				t.Errorf("cleanTeam(%q) = %q, want %q", test.in, got, test.wantTeam)
+			}
+		})
+	}
+	if got := utf8.RuneCountInString(cleanTitle(strings.Repeat("x", 500))); got != maxTitleRunes {
+		t.Fatalf("a long title is %d runes, want %d", got, maxTitleRunes)
+	}
+	if got := utf8.RuneCountInString(cleanTeam(strings.Repeat("x", 500))); got != maxTeamRunes {
+		t.Fatalf("a long team name is %d runes, want %d", got, maxTeamRunes)
+	}
+}
