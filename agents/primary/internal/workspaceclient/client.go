@@ -9,10 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/runtime"
 )
 
 type Client struct {
@@ -21,16 +22,17 @@ type Client struct {
 }
 
 func New(baseURL string, httpClient *http.Client) (*Client, error) {
-	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
-	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return nil, fmt.Errorf("workspace client requires an absolute workspace URL")
+	baseURL, err := runtime.ValidateAPIURL(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("workspace client URL: %w", err)
 	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
 	copyClient := *httpClient
+	copyClient.Transport = observability.Transport(copyClient.Transport)
 	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Client{baseURL: strings.TrimRight(parsed.String(), "/"), http: &copyClient}, nil
+	return &Client{baseURL: baseURL, http: &copyClient}, nil
 }
 
 func (client *Client) Load(ctx context.Context, organizationID, token string) (agents.DirectoryContext, error) {
