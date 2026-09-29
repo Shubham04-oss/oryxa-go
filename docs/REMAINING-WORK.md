@@ -525,8 +525,15 @@ account:
 - **CI runs every database suite.** `ci.yml` names a test database for eight
   services; knowledge, files, realtime and the outbox skip their integration
   tests in CI, while every merge now deploys.
-- **Files that can be recovered.** The files, artifacts and knowledge-base
-  documents buckets have no versioning, and the task may delete from them.
+- **Files that can be recovered.** Written and not applied: the files,
+  artifacts and knowledge-base documents buckets are versioned, and a
+  lifecycle rule removes older versions after 30 days, so a deleted object
+  stays recoverable for 30 days (`hardening.tf`, `knowledge_base.tf`). Still
+  open: the files and artifacts provisioners
+  (`files/infra/storage/internal/provision`,
+  `agents/primary/infra/artifacts`) put their own lifecycle rule alone back on
+  every run of `provision-app.sh`, which drops that one until the next
+  `tofu apply`. They need to write it too.
 - **The auth key kept safe.** `aws_kms_key.auth` envelope-encrypts every agent
   grant with the minimum deletion window of 7 days and no `prevent_destroy`;
   the services' signing keys likewise.

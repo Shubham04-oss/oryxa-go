@@ -38,6 +38,13 @@ OpenTofu names everything the scripts create, so the task's configuration and
 IAM can refer to it before it exists. Its state is in S3
 (`oryxa-tofu-state-<account>`), locked with a lock file.
 
+Both set the lifecycle rules of the files and artifacts buckets. S3 keeps one
+lifecycle configuration per bucket, and every run of `provision-app.sh` puts
+each provisioner's own rule back alone, which drops the rule OpenTofu adds to
+remove the versions a delete leaves behind (`production/hardening.tf`). Run
+`tofu apply` after `provision-app.sh`, until the two provisioners write that
+rule themselves.
+
 ## Before the first deploy
 
 - AWS credentials for the account (`aws login`, or any profile), and
@@ -56,7 +63,7 @@ IAM can refer to it before it exists. Its state is in S3
 ## First deploy
 
 ```sh
-cd deploy/production && tofu init && tofu apply && cd -  # the platform
+cd deploy/production && tofu init && tofu apply -var first_deploy=true && cd -  # the platform
 deploy/scripts/provision-app.sh     # queues, buckets, email, Cognito
 deploy/scripts/put-secrets.sh       # Composio's API key
 deploy/scripts/memory-bank.sh       # Memory Bank
@@ -65,6 +72,11 @@ deploy/scripts/release.sh           # build, push, run one task
 deploy/scripts/composio-webhook.sh  # triggers to api.oryxa.in
 deploy/scripts/web.sh               # the web app at app.oryxa.in
 ```
+
+`first_deploy=true` belongs to that first apply alone. The files and artifacts
+buckets are made by `provision-app.sh`, after it, so their versioning and
+lifecycle rules cannot be put on yet; the apply that follows the script, run
+without the flag, does.
 
 Then add the `google_redirect_uri` provision-app.sh printed to the Google
 OAuth client's authorized redirect URIs, and confirm the alarm subscription
@@ -508,6 +520,34 @@ aws ssm start-session --target <instance id> \
   --document-name AWS-StartPortForwardingSessionToRemoteHost \
   --parameters host=<database address>,portNumber=5432,localPortNumber=15432
 ```
+
+## Recovering a deleted file
+
+**A deleted object in the files, artifacts or knowledge-base documents bucket
+stays recoverable for 30 days.** The three buckets are versioned
+(`production/hardening.tf`): what the task deletes only gets a delete marker
+laid over its newest version, an overwrite keeps the version it replaced, and
+S3 removes those older versions 30 days after they stopped being the newest.
+The task role cannot delete a version itself. An object a lifecycle rule
+expires (a file after 90 days, an artifact after 30) is kept for 30 more days
+after that, the same way.
+
+To bring a deleted object back, find its delete marker and remove it, which
+makes the newest real version current again; to bring an overwritten one back,
+copy the older version over it:
+
+```sh
+aws s3api list-object-versions --bucket oryxa-production-files-<account> --prefix <key>
+aws s3api delete-object --bucket oryxa-production-files-<account> --key <key> \
+  --version-id <the delete marker's VersionId>
+aws s3api copy-object --bucket oryxa-production-files-<account> --key <key> \
+  --copy-source "oryxa-production-files-<account>/<key>?versionId=<an older VersionId>"
+```
+
+That restores the bytes only. What names the object in PostgreSQL, such as the
+row files keeps for each file, is not brought back with it. Once the 30 days
+have passed the older versions are gone. The S3 Vectors buckets are not
+versioned.
 
 ## At launch
 
