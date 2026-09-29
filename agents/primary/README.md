@@ -1230,8 +1230,9 @@ not the organization, so one saved while working in one organization reads
 through their threads in another and outlives their place in both. And
 finding an organization's threads means listing every thread ADK holds and
 filtering by organization, since ADK keeps no index by it: fine at today's
-size, slow for a large deployment, where a deletion could outlast the queue's
-visibility timeout and run twice (harmlessly, since forgetting is repeatable).
+size, slow for a large deployment, where a deletion could outlast the five
+minutes the consumer holds a message for and run twice (harmlessly, since
+forgetting is repeatable).
 
 ## Wake-ups
 

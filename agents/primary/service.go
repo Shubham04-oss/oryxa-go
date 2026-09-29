@@ -554,11 +554,6 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		deliveryStore := interactiondelivery.NewStore(platform.Database)
 		deliveryCleaner := interactiondelivery.NewCleaner(deliveryStore, agentRegistry)
 		consumer, err := inbound.NewConsumer(store, deliveryStore, []inbound.Forgetter{
-			func(ctx context.Context, organizationID, memberID string) error {
-				_, err := service.Forget(ctx, organizationID, memberID)
-				return err
-			},
-			store.Forget,
 			deliveryCleaner.Forget,
 			interactionStore.Forget,
 			organizationStore.Forget,
@@ -572,7 +567,18 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			closeAll()
 			return host.Service{}, err
 		}
-		consumer.WithTeamForgetter(teamspaceStore.ForgetTeam).
+		// A member's threads and memory, and their wake-ups, need no other
+		// cleanup done first and none needs them, so they run apart from the
+		// list above: Memory Bank being down cannot hold up the rest, nor the
+		// rest failing keep a member's memory from being forgotten.
+		consumer.WithIndependentForgetters(
+			func(ctx context.Context, organizationID, memberID string) error {
+				_, err := service.Forget(ctx, organizationID, memberID)
+				return err
+			},
+			store.Forget,
+		).
+			WithTeamForgetter(teamspaceStore.ForgetTeam).
 			WithTeamMemberForgetter(teamspaceStore.ForgetTeamMember).
 			WithOrganizationSynthesisRecorder(organizationStore)
 		queue := sqs.NewFromConfig(platform.AWS, func(options *sqs.Options) {
