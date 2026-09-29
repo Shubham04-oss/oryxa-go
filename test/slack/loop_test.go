@@ -23,6 +23,7 @@
 package slack
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -752,6 +753,49 @@ func TestSlackConsentLoop(t *testing.T) {
 		}
 		s.nothingSaid(0, value, "a shared secret")
 		s.nothingSaid(0, key, "a credential")
+	})
+
+	t.Run("uninstalling the app ends the install, and agents forgets the workspace", func(t *testing.T) {
+		s.quiet()
+		held := func(table string) int {
+			var count int
+			query := "SELECT count(*) FROM agents_primary." + table + " WHERE organization_id = $1"
+			if err := s.database.QueryRow(context.Background(), query, organizationID).Scan(&count); err != nil {
+				t.Fatalf("count %s: %v", table, err)
+			}
+			return count
+		}
+		// What the loop has kept about the workspace by now: who is who in it, and
+		// where each message it posted is.
+		if held("slack_identities") == 0 || held("surface_links") == 0 {
+			t.Fatalf("the loop kept %d identities and %d links, so there is nothing to forget", held("slack_identities"), held("surface_links"))
+		}
+		response, err := slackfake.Send(nil, s.slack.AppUninstalled(s.baseURL, slackfake.DefaultTeamID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("the uninstall was answered %d, not 200", response.StatusCode)
+		}
+		var view map[string]any
+		s.eventually("the install to end", 40*time.Second, func() bool {
+			_, view = s.api(root, http.MethodGet, "/v1/organizations/"+organizationID+"/apps/slack/install", nil)
+			return view["status"] == "ended"
+		})
+		if view["end_reason"] != "app_uninstalled" {
+			t.Errorf("the install ended for %v, want app_uninstalled", view["end_reason"])
+		}
+		s.eventually("agents to forget the workspace", 40*time.Second, func() bool {
+			return held("slack_identities") == 0 && held("surface_links") == 0
+		})
+		var ended bool
+		for _, event := range s.aws.published("apps.slack.install.changed.v1") {
+			ended = ended || strings.Contains(string(event.Detail), `"state":"ended"`)
+		}
+		if !ended {
+			t.Error("apps never published that the install ended")
+		}
 	})
 
 	t.Run("the process logged no question, answer, ticket, token or secret", func(t *testing.T) {

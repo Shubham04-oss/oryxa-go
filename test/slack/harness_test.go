@@ -104,6 +104,9 @@ type stack struct {
 	logs   *syncBuffer
 	// sensitive is what the process must never log, as a test notes it.
 	sensitive []string
+	// database is the run's own, read by the test where the process's tables are
+	// the only place a fact can be seen.
+	database *pgxpool.Pool
 }
 
 // repoRoot is the repository's root, found from this file.
@@ -235,6 +238,12 @@ func bootStack(t *testing.T, databaseServerURL string) *stack {
 	seedAuth(t, databaseURL)
 
 	s := &stack{t: t, logs: &syncBuffer{}}
+	pool, err := pgxpool.New(context.Background(), databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	s.database = pool
 	s.aws = newFakeAWS(t)
 	s.jev = newFakeJev(t)
 	s.vertex = newFakeVertex(t)
