@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -487,3 +488,5 @@ func bypassOf(owner AskOwner) consentpolicy.Bypass {
 
 // toBot is a message addressed to the bot, as Slack writes it.
 func toBot(text string) string { return "<@" + testBot + "> " + text }
+
+func nopLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }

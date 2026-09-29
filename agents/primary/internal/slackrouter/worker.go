@@ -87,6 +87,8 @@ type Worker struct {
 	config  WorkerConfig
 	logger  *slog.Logger
 	now     func() time.Time
+	// timeout bounds one attempt.
+	timeout time.Duration
 	// slots holds one place for each job running, Concurrency at most.
 	slots chan struct{}
 	// nudges says a job may be due now. It holds one, so nudges that arrive
@@ -101,7 +103,7 @@ func NewWorker(queue jobQueue, handler jobHandler, config WorkerConfig, logger *
 	}
 	config = config.withDefaults()
 	return &Worker{
-		queue: queue, handler: handler, config: config, logger: logger, now: time.Now,
+		queue: queue, handler: handler, config: config, logger: logger, now: time.Now, timeout: jobTimeout,
 		slots: make(chan struct{}, config.Concurrency), nudges: make(chan struct{}, 1),
 	}
 }
@@ -204,7 +206,7 @@ func (worker *Worker) claimDue(ctx context.Context) error {
 // be routed, or released to be tried again.
 func (worker *Worker) process(ctx context.Context, job Job) {
 	logger := worker.logger.With("inbound_id", job.InboundID, "organization_id", job.OrganizationID, "kind", job.Kind)
-	attempt, cancel := context.WithTimeout(ctx, jobTimeout)
+	attempt, cancel := context.WithTimeout(ctx, worker.timeout)
 	err := worker.handler.Handle(attempt, job)
 	cancel()
 	// Settling must survive a shutdown that interrupted the attempt.

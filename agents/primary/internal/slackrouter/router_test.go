@@ -590,7 +590,7 @@ func TestNamesInMessagesAreCleaned(t *testing.T) {
 	h := newHarness(t)
 	h.slack.profiles["UEVIL"] = Profile{
 		UserID: "UEVIL", TeamID: testTeam, Email: "evil@acme.com", EmailConfirmed: true,
-		DisplayName: "<https://phish.example|Click>\n<!channel> & co‮" + strings.Repeat("x", 100),
+		DisplayName: "<https://phish.example|Click>\n<!channel> & co\u202e" + strings.Repeat("x", 100),
 	}
 	job := h.mention(toBot("ask <@UEVIL>"))
 	h.mustRun(job)
@@ -599,7 +599,7 @@ func TestNamesInMessagesAreCleaned(t *testing.T) {
 		t.Fatalf("names = %v", params.Names)
 	}
 	name := params.Names[0]
-	if strings.ContainsAny(name, "<>&|\n‮") || len([]rune(name)) > maxNameRunes {
+	if strings.ContainsAny(name, "<>&|\n\u202e") || len([]rune(name)) > maxNameRunes {
 		t.Fatalf("name %q carries markup, or is too long", name)
 	}
 	if strings.ContainsAny(params.Hint, "<>&|") {
