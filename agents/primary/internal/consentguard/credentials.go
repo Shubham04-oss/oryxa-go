@@ -81,9 +81,12 @@ var credentials = []credential{
 // Bedrock has masked it. Masking it again would only claim to have found it.
 var placeholder = regexp.MustCompile(`^\{[A-Z_]+\}$`)
 
-// stripCredentials is texts with every credential masked, and the kinds that
-// were found, sorted and never a value. With none found, the texts are as given.
-func stripCredentials(texts []string) ([]string, []string) {
+// Strip is texts with every credential masked, and the kinds that were found,
+// sorted and never a value. With none found, the texts are as given. It is what
+// Check begins with, and what every other version of an answer bound for Slack
+// goes through, such as the fully masked one an answer held for review has beside
+// the one Check read, so that none is sent with a credential in it.
+func Strip(texts []string) ([]string, []string) {
 	stripped := slices.Clone(texts)
 	var kinds []string
 	for index, text := range stripped {

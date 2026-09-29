@@ -127,7 +127,7 @@ func TestAMaskedCredentialIsNotMaskedAgain(t *testing.T) {
 func TestEveryTextIsStrippedAndTheKindsAreSortedOnceEach(t *testing.T) {
 	token := join("xo", "xb-", "123456789012-", "1234567890123-", "abcdefghijklmnopqrstuvwx")
 	given := []string{"the token " + token, "fine", "a password = hunter2hunter2 and another " + token}
-	stripped, kinds := stripCredentials(given)
+	stripped, kinds := Strip(given)
 	if !slices.Equal(kinds, []string{KindPassword, KindSlackToken}) {
 		t.Errorf("kinds = %v, want PASSWORD and SLACK_TOKEN once each, sorted", kinds)
 	}
@@ -137,7 +137,7 @@ func TestEveryTextIsStrippedAndTheKindsAreSortedOnceEach(t *testing.T) {
 	if !strings.Contains(given[0], token) {
 		t.Errorf("the texts given were changed: %q", given)
 	}
-	if untouched, none := stripCredentials([]string{"a", "b"}); len(none) != 0 || !slices.Equal(untouched, []string{"a", "b"}) {
-		t.Errorf("stripCredentials of clean texts = %q, %v", untouched, none)
+	if untouched, none := Strip([]string{"a", "b"}); len(none) != 0 || !slices.Equal(untouched, []string{"a", "b"}) {
+		t.Errorf("Strip of clean texts = %q, %v", untouched, none)
 	}
 }

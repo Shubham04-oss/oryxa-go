@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/consentguard"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardpolicy"
 )
 
@@ -23,6 +25,12 @@ import (
 // member, who sends it as it was held, sends its fully masked version (which
 // an answer held for relevance has none of), or withholds it. A request that
 // expires in review is withheld by Oryxa.
+//
+// The answer to a request made from Slack is read a second time, by the consent
+// guard, when there is one: it is going into a channel, and it must keep to what
+// its owner allowed (a summary, or excerpts), stand on what its run read, and
+// carry no credential. What it holds waits in the same review; what it finds
+// only to mask is delivered masked.
 
 const (
 	// ReviewWindow starts when completed work is held. Consent expiry bounds
@@ -53,6 +61,29 @@ const (
 // implements it; it never fails, holding what it cannot check.
 type Guard interface {
 	CheckWith(ctx context.Context, texts []string, relevance *answerguard.RelevanceInput) answerguard.Verdict
+}
+
+// ConsentGuard reads the answer to a request made from Slack, once the answer
+// guard has, before the member who asked reads it there: whether it keeps to
+// how far its owner let it go, stands on what its run read, is about no topic
+// that is never let out, and has no credential in it. *consentguard.Guard
+// implements it; it never fails, holding what it cannot check.
+type ConsentGuard interface {
+	Check(ctx context.Context, input consentguard.Input) consentguard.Result
+}
+
+// isNoConsentGuard reports whether guard is nil, or a nil pointer, map, slice or
+// func in the interface, which would read as a guard and panic when asked: the
+// way a guard that was never built gets past a nil check.
+func isNoConsentGuard(guard ConsentGuard) bool {
+	if guard == nil {
+		return true
+	}
+	switch value := reflect.ValueOf(guard); value.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return value.IsNil()
+	}
+	return false
 }
 
 // GuardPolicy says how the answer guard treats the answers a member gives:
@@ -106,8 +137,20 @@ func resultOf(input agents.InteractionResponseInput) agents.InteractionResult {
 	}
 }
 
-// answer is what the ledger records for a response to request. Without a
-// guard it is the response as given. Otherwise the guard reads every text of
+// answer is what the ledger records for a response to request: what the answer
+// guard makes of it (guardedAnswer) and, for a request made from Slack, what the
+// consent guard makes of that (consentRead). actor is who is answering: the
+// member themself in their own session, or an agent in a run.
+func (service *Service) answer(ctx context.Context, actor agents.InteractionActor, request agents.Interaction, input agents.InteractionResponseInput) Answer {
+	answer := service.guardedAnswer(ctx, request, input)
+	if service.consentGuard == nil || request.Origin != OriginSlack || request.Requester.UserID == request.Target.UserID {
+		return answer
+	}
+	return service.consentRead(ctx, actor, request, answer)
+}
+
+// guardedAnswer is what the answer guard makes of a response to request. Without
+// a guard it is the response as given. Otherwise the guard reads every text of
 // it the member who asked would: the summary, the content and the artifact
 // references (tools_used is left out: it can only name tools the approval
 // allowed, from the requester's own vocabulary). The guard never fails: an
@@ -123,7 +166,7 @@ func resultOf(input agents.InteractionResponseInput) agents.InteractionResult {
 // asker's words, and the tools the run called, from the run's own record
 // (agents.RunSources); an answer that does not come from a run has none, and is
 // not judged.
-func (service *Service) answer(ctx context.Context, request agents.Interaction, input agents.InteractionResponseInput) Answer {
+func (service *Service) guardedAnswer(ctx context.Context, request agents.Interaction, input agents.InteractionResponseInput) Answer {
 	result := resultOf(input)
 	if service.guard == nil || request.Requester.UserID == request.Target.UserID {
 		return Answer{Result: &result}
@@ -161,6 +204,109 @@ func (service *Service) answer(ctx context.Context, request agents.Interaction, 
 		held.MaskedResult = &fully
 	}
 	return Answer{Held: held, Guard: guard}
+}
+
+// consentRead is answer as the consent guard leaves it. It reads the texts the
+// answer guard left to be shown, or, for an answer held already, to be reviewed,
+// with what the run's tools returned (agents.RunResults, from the run's own
+// record and not from anything the answer says), the request in its asker's
+// words, and how far the owner let the answer go:
+//
+//   - clear, it is as it was;
+//   - with only credentials found, it is delivered with them masked;
+//   - held, it waits for its owner's review with the credentials masked, whatever
+//     the answer guard made of it, and with the kinds it was held for beside its
+//     own.
+//
+// The fully masked version an answer guard's hold has is stripped of credentials
+// as well, since Slack is where the owner's sending it ends. A guard that does
+// not give back a text for each text it was given cannot be read, and holds the
+// answer as unchecked.
+func (service *Service) consentRead(ctx context.Context, actor agents.InteractionActor, request agents.Interaction, answer Answer) Answer {
+	var shown agents.InteractionResult
+	switch {
+	case answer.Result != nil:
+		shown = *answer.Result
+	case answer.Held != nil:
+		shown = answer.Held.Result
+	default:
+		return answer
+	}
+	texts := answerTexts(shown)
+	checked := service.consentGuard.Check(ctx, consentguard.Input{
+		Level:          consentLevel(request),
+		Question:       request.Task,
+		Texts:          texts,
+		Sources:        consentSources(agents.RunResults(ctx)),
+		Failed:         shown.Status == StatusFailed,
+		WrittenByOwner: actor.Session == agents.SessionMember,
+		RequestID:      request.ID,
+		OrganizationID: request.OrganizationID,
+	})
+	if len(checked.Texts) != len(texts) {
+		stripped, masked := consentguard.Strip(texts)
+		checked = consentguard.Result{
+			Action: consentguard.ActionHold, Texts: stripped, Masked: masked,
+			Reasons: []consentguard.Reason{{Kind: consentguard.KindUnchecked, Detail: "the consent guard did not give back every text"}},
+		}
+	}
+	guard := consentGuardRecord(answer.Guard, checked)
+	if checked.Action == consentguard.ActionHold || answer.Held != nil {
+		held := &agents.InteractionHeld{Result: withTexts(shown, checked.Texts)}
+		if answer.Held != nil && answer.Held.MaskedResult != nil {
+			stripped, _ := consentguard.Strip(answerTexts(*answer.Held.MaskedResult))
+			fully := withTexts(*answer.Held.MaskedResult, stripped)
+			held.MaskedResult = &fully
+		}
+		return Answer{Held: held, Guard: guard}
+	}
+	delivered := *answer.Result
+	if !slices.Equal(checked.Texts, texts) {
+		delivered = withTexts(delivered, checked.Texts)
+	}
+	return Answer{Result: &delivered, Guard: guard}
+}
+
+// consentLevel is how far an owner let the answer to request go: as far as
+// excerpts only when they said so, and a summary in every other case, so that no
+// consent at all is the stricter one.
+func consentLevel(request agents.Interaction) consentguard.Level {
+	if consentOf(request) == ConsentAccess {
+		return consentguard.LevelAccess
+	}
+	return consentguard.LevelSummary
+}
+
+// consentSources are what a run's tools returned, as the consent guard reads it.
+func consentSources(results []agents.ToolResult) []consentguard.Source {
+	sources := make([]consentguard.Source, len(results))
+	for index, result := range results {
+		sources[index] = consentguard.Source{Tool: result.Tool, Parts: result.Parts}
+	}
+	return sources
+}
+
+// consentGuardRecord is what the ledger records the answer guard found in an
+// answer, and the consent guard beside it: held when either held it, masked when
+// either masked something and neither held it, and the kinds of both. It is
+// what the answer guard recorded, and none, when the consent guard found nothing.
+func consentGuardRecord(previous *agents.InteractionGuard, checked consentguard.Result) *agents.InteractionGuard {
+	kinds := checked.Kinds()
+	if len(kinds) == 0 {
+		return previous
+	}
+	state := answerguard.StateMasked
+	if checked.Action == consentguard.ActionHold {
+		state = answerguard.StateHeld
+	}
+	if previous != nil {
+		kinds = append(kinds, previous.Kinds...)
+		if previous.State == answerguard.StateHeld {
+			state = answerguard.StateHeld
+		}
+	}
+	slices.Sort(kinds)
+	return &agents.InteractionGuard{State: state, Kinds: slices.Compact(kinds)}
 }
 
 // answerSettings are how the guard reads one answer: the level its owner reads

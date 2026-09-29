@@ -228,7 +228,7 @@ func isNothing(grounder Grounder) bool {
 // The Grounder is not asked about an answer that is held already, nor one with
 // nothing to stand on: it could add nothing.
 func (guard *Guard) Check(ctx context.Context, in Input) Result {
-	texts, masked := stripCredentials(in.Texts)
+	texts, masked := Strip(in.Texts)
 	result := Result{Action: ActionPass, Texts: texts, Masked: masked}
 	if len(masked) > 0 {
 		result.Action = ActionMask

@@ -196,6 +196,12 @@ type Config struct {
 	// not run, since nothing says how the organization wants an off-topic
 	// answer treated.
 	GuardPolicy GuardPolicy
+	// ConsentGuard reads the answer to a request made from Slack once Guard
+	// has: *consentguard.Guard. It holds what goes further than its owner
+	// allowed, does not stand on what the run read, is about a denied topic, or
+	// has a credential in it. Without it such an answer is read by Guard alone,
+	// as every other answer is.
+	ConsentGuard ConsentGuard
 	// Consents is the Slack consent loop's side of the ledger: asks, leases and
 	// the owner's choices. Store implements it, and is used when Repository is
 	// one and this is nil. Without either, the ask, consent and lease methods
@@ -227,10 +233,11 @@ type Service struct {
 	now        func() time.Time
 	policy     policy.Provider
 
-	guardPolicy GuardPolicy
-	consents    Consents
-	primaries   PrimaryAgents
-	tickets     *Tickets
+	guardPolicy  GuardPolicy
+	consentGuard ConsentGuard
+	consents     Consents
+	primaries    PrimaryAgents
+	tickets      *Tickets
 }
 
 func New(config Config) (*Service, error) {
@@ -252,6 +259,10 @@ func New(config Config) (*Service, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	consentGuard := config.ConsentGuard
+	if isNoConsentGuard(consentGuard) {
+		consentGuard = nil
+	}
 	consents := config.Consents
 	if consents == nil {
 		if store, ok := config.Repository.(Consents); ok {
@@ -268,7 +279,7 @@ func New(config Config) (*Service, error) {
 	return &Service{
 		repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens, policy: config.Policy,
 		jev: config.Jev, jevTimeout: jevTimeout, guard: config.Guard, logger: logger, now: now,
-		guardPolicy: config.GuardPolicy, consents: consents, primaries: config.Agents, tickets: tickets,
+		guardPolicy: config.GuardPolicy, consentGuard: consentGuard, consents: consents, primaries: config.Agents, tickets: tickets,
 	}, nil
 }
 
@@ -621,7 +632,7 @@ func (service *Service) Respond(ctx context.Context, actor agents.InteractionAct
 	}
 	// Another member reads what is recorded here, so the guard reads it
 	// first, outside the ledger's transaction.
-	answer := service.answer(ctx, request, input)
+	answer := service.answer(ctx, actor, request, input)
 	if settings.HoldForReview && request.Requester.UserID != request.Target.UserID && answer.Result != nil {
 		answer.Held = &agents.InteractionHeld{Result: *answer.Result}
 		answer.Result = nil
