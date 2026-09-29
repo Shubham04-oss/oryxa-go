@@ -3,15 +3,13 @@ title: "Core data flow"
 description: "A compact, source-based map of Oryxa's browser, Go service, and provider boundaries."
 ---
 
-# Core data flow
-
 ```mermaid
 flowchart LR
   member["Member's browser"]
 
   subgraph cloudflare["Cloudflare"]
     worker["Web app Worker"]
-    objects["Realtime Durable Objects"]
+    objects["Conversation Durable Objects"]
     tunnel["Tunnel routes<br/>app /v1 and api host"]
     worker <--> objects
   end
