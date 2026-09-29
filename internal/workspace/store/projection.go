@@ -10,6 +10,15 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func (store *Store) Available(ctx context.Context) (bool, error) {
+	var available bool
+	err := store.database.Pool.QueryRow(ctx, `SELECT to_regclass('workspace.configs') IS NOT NULL`).Scan(&available)
+	if err != nil {
+		return false, fmt.Errorf("check workspace schema: %w", err)
+	}
+	return available, nil
+}
+
 // Policy reads only a small projection in steady state. Legacy versions are
 // decoded tolerantly once; the version guard prevents a racing apply from
 // receiving old settings during backfill.

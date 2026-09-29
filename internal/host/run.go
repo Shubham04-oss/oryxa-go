@@ -289,8 +289,12 @@ func Assemble(ctx context.Context, platform Platform, definitions []Definition) 
 func mount(ctx context.Context, platform Platform, selected []Definition) ([]mounted, error) {
 	if platform.WorkspacePolicy == nil {
 		platform.WorkspacePolicy = policy.Noop{}
-		if platform.Database != nil && platform.Getenv != nil && platform.Getenv("WORKSPACE_URL") != "" {
-			platform.WorkspacePolicy = policy.New(workspacestore.New(platform.Database))
+		if platform.Database != nil {
+			provider, err := workspacePolicyProvider(ctx, workspacestore.New(platform.Database), platform.Logger)
+			if err != nil {
+				return nil, err
+			}
+			platform.WorkspacePolicy = provider
 		}
 	}
 	services := make([]mounted, 0, len(selected))
