@@ -236,9 +236,14 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	// development at a stand-in.
 	var answerGuard *answerguard.Guard
 	if settings.AnswerGuardrailIdentifier != "" {
+		guardOptions, err := relevanceOptions(ctx, settings, platform, logger)
+		if err != nil {
+			sessionStore.Close()
+			return host.Service{}, err
+		}
 		guard, err := answerguard.New(bedrockruntime.NewFromConfig(platform.AWS), answerguard.Config{
 			Identifier: settings.AnswerGuardrailIdentifier, Version: settings.AnswerGuardrailVersion, Logger: logger,
-		})
+		}, guardOptions...)
 		if err != nil {
 			sessionStore.Close()
 			return host.Service{}, err
@@ -247,7 +252,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		logger.Info("the answer guard checks every answer another member reads before they read it",
 			"guardrail", settings.AnswerGuardrailIdentifier, "version", settings.AnswerGuardrailVersion)
 	} else {
-		logger.Warn("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID is not set: answers reach the member who asked unchecked")
+		logger.Warn("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID is not set: answers reach the member who asked unchecked, and the relevance check, which runs in the answer guard, does not run")
 	}
 	teamspaceStore := teamspaces.NewStore(platform.Database)
 	roomStore := rooms.NewStore(platform.Database)
