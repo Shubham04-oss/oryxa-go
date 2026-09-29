@@ -81,10 +81,21 @@ func (store *Store) Record(ctx context.Context, trigger domain.Trigger) (domain.
 	if trigger.Classification.Lane == domain.LaneDigest && !store.scheduler.Valid() {
 		return 0, errors.New("record digest trigger: adaptive scheduler is not configured")
 	}
+	// Read through the pool before holding a transaction connection. A policy
+	// lookup can need a connection of its own; doing it under the lock can
+	// deadlock when concurrent records consume the whole pool.
+	scheduler := store.scheduler
+	if trigger.Classification.Lane == domain.LaneDigest {
+		var err error
+		scheduler, err = store.schedulerFor(ctx, trigger.OrganizationID)
+		if err != nil {
+			return 0, err
+		}
+	}
 	var admission domain.Admission
 	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 		var err error
-		admission, err = store.record(ctx, tx, trigger)
+		admission, err = store.record(ctx, tx, trigger, scheduler)
 		return err
 	})
 	if err != nil {
@@ -110,7 +121,7 @@ func (store *Store) Screen(ctx context.Context, trigger domain.Trigger) (domain.
 // exclusively, waits for those under way and they for it: a trigger is
 // either committed before a removal, which then deletes it, or screened
 // against the removal's tombstone after it.
-func (store *Store) record(ctx context.Context, tx pgx.Tx, trigger domain.Trigger) (domain.Admission, error) {
+func (store *Store) record(ctx context.Context, tx pgx.Tx, trigger domain.Trigger, scheduler domain.AdaptiveScheduler) (domain.Admission, error) {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared($1)`, organizationLock(trigger.OrganizationID)); err != nil {
 		return 0, fmt.Errorf("lock organization: %w", err)
 	}
@@ -121,7 +132,7 @@ func (store *Store) record(ctx context.Context, tx pgx.Tx, trigger domain.Trigge
 	if trigger.Classification.Lane == domain.LaneImmediate {
 		return store.recordImmediate(ctx, tx, trigger)
 	}
-	return store.recordDigest(ctx, tx, trigger)
+	return store.recordDigest(ctx, tx, trigger, scheduler)
 }
 
 // organizationLock is the advisory lock key that serialises recording an
@@ -196,11 +207,7 @@ func (store *Store) recordImmediate(ctx context.Context, tx pgx.Tx, trigger doma
 	return domain.Admitted, nil
 }
 
-func (store *Store) recordDigest(ctx context.Context, tx pgx.Tx, trigger domain.Trigger) (domain.Admission, error) {
-	scheduler, err := store.schedulerFor(ctx, trigger.OrganizationID)
-	if err != nil {
-		return 0, err
-	}
+func (store *Store) recordDigest(ctx context.Context, tx pgx.Tx, trigger domain.Trigger, scheduler domain.AdaptiveScheduler) (domain.Admission, error) {
 	at := store.now().UTC()
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO batching_traffic_profiles

@@ -395,7 +395,7 @@ func TestForgetWaitsForATriggerStillBeingRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if admission, err := store.record(ctx, tx, testTrigger(organizationID, "user_1", "in_flight", domain.LaneDigest)); err != nil || admission != domain.Admitted {
+	if admission, err := store.record(ctx, tx, testTrigger(organizationID, "user_1", "in_flight", domain.LaneDigest), store.scheduler); err != nil || admission != domain.Admitted {
 		t.Fatalf("record() = %d, %v", admission, err)
 	}
 
