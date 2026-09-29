@@ -355,6 +355,14 @@ func TestAPassForARequestThatIsNotOursIsGivenUp(t *testing.T) {
 	crossed := pendingRequest()
 	crossed.ID, crossed.AskID = "irq_crossed", "iak_foreign"
 	h.ledger.put(crossed)
+	// A request whose ask agrees with it, in an organization the job's event did
+	// not name: the ask cannot tell it apart, only the organization can.
+	elsewhere := pendingRequest()
+	elsewhere.ID, elsewhere.OrganizationID, elsewhere.AskID = "irq_org2", "org_2", "iak_org2"
+	h.ledger.put(elsewhere)
+	elsewhereAsk := baseAsk()
+	elsewhereAsk.ID, elsewhereAsk.OrganizationID = "iak_org2", "org_2"
+	h.ledger.putAsk(elsewhereAsk)
 
 	for name, request := range map[string]string{
 		"an agent's request":     "irq_agent",
@@ -362,6 +370,7 @@ func TestAPassForARequestThatIsNotOursIsGivenUp(t *testing.T) {
 		"one whose ask is gone":  "irq_noask",
 		"a request that is gone": "irq_gone",
 		"an ask of another org":  "irq_crossed",
+		"a whole other org":      "irq_org2",
 	} {
 		if err := h.pass(request); !slackrouter.IsPermanent(err) {
 			t.Errorf("%s: pass = %v, want Permanent", name, err)

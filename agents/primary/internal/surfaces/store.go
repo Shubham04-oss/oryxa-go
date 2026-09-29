@@ -64,7 +64,12 @@ func (wake Wake) validate() error {
 // request is one row however many events name it, and an event that names it
 // again while its pass runs, or after, makes it due once more: passes are
 // idempotent, so the same event delivered twice costs a look at the ledger and
-// nothing said twice. A row that was given up on starts over.
+// nothing said twice.
+//
+// An event does not end a wait. A pass that failed is tried again when its delay
+// is over, and reads the ledger then, so it covers what came in meanwhile; to
+// run it sooner would only meet the same rate limit or outage again. A row that
+// was given up on starts over: it has no retry coming.
 func (store *Store) Wake(ctx context.Context, wake Wake) error {
 	if err := wake.validate(); err != nil {
 		return err
@@ -78,8 +83,9 @@ func (store *Store) Wake(ctx context.Context, wake Wake) error {
 			last_event_id = EXCLUDED.last_event_id,
 			asker_user_id = CASE WHEN EXCLUDED.asker_user_id <> '' THEN EXCLUDED.asker_user_id ELSE agents_primary.surface_jobs.asker_user_id END,
 			owner_user_id = CASE WHEN EXCLUDED.owner_user_id <> '' THEN EXCLUDED.owner_user_id ELSE agents_primary.surface_jobs.owner_user_id END,
-			available_at = LEAST(agents_primary.surface_jobs.available_at, now()),
-			attempts = 0, gave_up = false, updated_at = now()`,
+			available_at = CASE WHEN agents_primary.surface_jobs.gave_up THEN now() ELSE agents_primary.surface_jobs.available_at END,
+			attempts = CASE WHEN agents_primary.surface_jobs.gave_up THEN 0 ELSE agents_primary.surface_jobs.attempts END,
+			gave_up = false, updated_at = now()`,
 		wake.RequestID, wake.OrganizationID, wake.AskerUserID, wake.OwnerUserID, wake.EventID)
 	if err != nil {
 		return fmt.Errorf("record a request's surfaces work: %w", err)
@@ -222,8 +228,9 @@ func (store *Store) WakeExpired(ctx context.Context, now time.Time, limit int) (
 		SELECT request_id, organization_id, asker_user_id, owner_user_id, 'expiry' FROM due
 		ON CONFLICT (request_id) DO UPDATE SET
 			wanted = agents_primary.surface_jobs.wanted + 1,
-			available_at = LEAST(agents_primary.surface_jobs.available_at, now()),
-			attempts = 0, gave_up = false, updated_at = now()`, now.UTC(), limit)
+			available_at = CASE WHEN agents_primary.surface_jobs.gave_up THEN now() ELSE agents_primary.surface_jobs.available_at END,
+			attempts = CASE WHEN agents_primary.surface_jobs.gave_up THEN 0 ELSE agents_primary.surface_jobs.attempts END,
+			gave_up = false, updated_at = now()`, now.UTC(), limit)
 	if err != nil {
 		return 0, fmt.Errorf("wake the notices of expired requests: %w", err)
 	}

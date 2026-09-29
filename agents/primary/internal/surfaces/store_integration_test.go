@@ -144,10 +144,18 @@ func TestAFailedPassIsTriedAgainAfterItsDelayAndGivenUpOnAtTheLimit(t *testing.T
 	if early := claimOwn(t, store, org, time.Minute); len(early) != 0 {
 		t.Fatalf("claimed %+v before the retry delay", early)
 	}
+	// A new event does not end the wait: the retry that is coming reads the
+	// ledger, and covers it.
+	if err := store.Wake(ctx, wakeFor(org, request)); err != nil {
+		t.Fatal(err)
+	}
+	if early := claimOwn(t, store, org, time.Minute); len(early) != 0 {
+		t.Fatalf("an event ended the wait: claimed %+v", early)
+	}
 	time.Sleep(400 * time.Millisecond)
 	retry := claimOwn(t, store, org, time.Minute)
-	if len(retry) != 1 || retry[0].Attempts != 1 {
-		t.Fatalf("retry = %+v, want the job with one failure counted", retry)
+	if len(retry) != 1 || retry[0].Attempts != 1 || retry[0].Wanted != 2 {
+		t.Fatalf("retry = %+v, want the job with its failure still counted and both events covered", retry)
 	}
 
 	// A release that is not a failure, such as a shutdown, counts for nothing.
@@ -488,5 +496,38 @@ func TestPurgeForgetsFinishedJobsAndOldLinksButNotWorkStillToDo(t *testing.T) {
 	_ = database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.surface_links WHERE organization_id = $1`, org).Scan(&links)
 	if jobs != 1 || links != 1 {
 		t.Fatalf("%d jobs and %d links left, want the waiting job and the new link", jobs, links)
+	}
+}
+
+func TestARequestWokenAfterItsWorkspaceWasUninstalledStartsOverEvenFromInsideABackoff(t *testing.T) {
+	store, _, org := openTestStore(t)
+	ctx := context.Background()
+	request := org + "_irq_1"
+	if err := store.Wake(ctx, wakeFor(org, request)); err != nil {
+		t.Fatal(err)
+	}
+	job := claimOwn(t, store, org, time.Minute)[0]
+	// A failure puts it back for a minute, with the failure counted.
+	if gaveUp, err := store.Release(ctx, job, true, 6, time.Minute, "slack was down"); err != nil || gaveUp {
+		t.Fatalf("Release() = %v, %v", gaveUp, err)
+	}
+	if err := store.Wake(ctx, wakeFor(org, request)); err != nil {
+		t.Fatal(err)
+	}
+	if waiting := claimOwn(t, store, org, time.Minute); len(waiting) != 0 {
+		t.Fatalf("an event ended the wait: %+v", waiting)
+	}
+	// The workspace is uninstalled, which gives up what had not run, and later
+	// installs the app again. The next event for the request has no retry coming
+	// from before, and neither the wait nor the count that was left.
+	if err := store.ForgetTeam(ctx, org, "T0ACME001"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Wake(ctx, wakeFor(org, request)); err != nil {
+		t.Fatal(err)
+	}
+	revived := claimOwn(t, store, org, time.Minute)
+	if len(revived) != 1 || revived[0].Attempts != 0 {
+		t.Fatalf("revived = %+v, want it due at once with no failures counted", revived)
 	}
 }
