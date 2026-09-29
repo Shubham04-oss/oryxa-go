@@ -151,6 +151,28 @@ func TestTheTicketIsNeverLogged(t *testing.T) {
 	}
 }
 
+// TestATicketAConsentLayerEchoesIsNotCarriedOn: the ticket does not reach the
+// job's row or the log through an error message, whichever layer wrote it, and
+// what the error means is unchanged.
+func TestATicketAConsentLayerEchoesIsNotCarriedOn(t *testing.T) {
+	h := newHarness(t)
+	h.member("URAYA", "Raya")
+	h.asks.consentErr = Permanent(errors.New("ticket " + ticket + " is not valid (again: " + ticket + ")"))
+	err := h.run(h.click("URAYA", ticket))
+	if !IsPermanent(err) {
+		t.Fatalf("err = %v, want it to stay permanent", err)
+	}
+	if strings.Contains(err.Error(), ticket) || !strings.Contains(err.Error(), "[ticket] is not valid") {
+		t.Fatalf("err = %q carries the ticket, or lost what it said", err)
+	}
+	if got := scrub(errors.New("no secret here"), ticket, "x"); got.Error() != "no secret here" {
+		t.Fatalf("scrub changed an error that did not say it: %v", got)
+	}
+	if scrub(nil, ticket, "x") != nil || scrub(errors.New("a"), "", "x").Error() != "a" {
+		t.Fatal("scrub mishandles nothing")
+	}
+}
+
 // TestWhatPeopleWroteIsNeverLogged: a message is content, kept by apps and
 // purged there.
 func TestWhatPeopleWroteIsNeverLogged(t *testing.T) {

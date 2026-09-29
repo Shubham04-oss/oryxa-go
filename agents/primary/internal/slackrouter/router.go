@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // Deps is what a Router is built from.
@@ -148,7 +149,9 @@ func (router *Router) click(ctx context.Context, job Job, inbound Inbound) error
 	// The ticket is opaque to the router, and never logged: it is a credential
 	// for the one decision it names.
 	if err := router.deps.Asks.Consent(ctx, click.Value, clicker.Person.UserID, SurfaceSlack); err != nil {
-		return fmt.Errorf("hand the click to the consent core: %w", err)
+		// What consent says goes into logs and onto the job's row. It should not
+		// quote the ticket, and if some layer of it ever does, it is not carried on.
+		return fmt.Errorf("hand the click to the consent core: %w", scrub(err, click.Value, "[ticket]"))
 	}
 	router.logger.InfoContext(ctx, "a click was handed to the consent core",
 		"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "action_id", click.ActionID)
@@ -166,4 +169,23 @@ func (router *Router) profiles(ctx context.Context, job Job, userIDs []string) (
 		profiles[profile.UserID] = profile
 	}
 	return profiles, nil
+}
+
+// scrubbedError is an error with a secret taken out of its message. The error
+// it wraps is still what errors.Is and errors.As see.
+type scrubbedError struct {
+	err     error
+	message string
+}
+
+func (e *scrubbedError) Error() string { return e.message }
+func (e *scrubbedError) Unwrap() error { return e.err }
+
+// scrub returns err with every occurrence of secret in its message replaced by
+// mask, or err itself when it never says it.
+func scrub(err error, secret, mask string) error {
+	if err == nil || secret == "" || !strings.Contains(err.Error(), secret) {
+		return err
+	}
+	return &scrubbedError{err: err, message: strings.ReplaceAll(err.Error(), secret, mask)}
 }
