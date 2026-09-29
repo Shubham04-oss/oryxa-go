@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it } from "vitest"
 import {
   FRESH_CONVERSATION_MS,
   chooseThread,
+  publishPrimaryChatActivity,
   rememberChoice,
   rememberedChoice,
   requestPrimaryChat,
+  usePrimaryChatActivity,
   usePrimaryChatRequest,
 } from "./chat-choice"
 
@@ -85,5 +87,66 @@ describe("requestPrimaryChat", () => {
     act(() => requestPrimaryChat(scope, { kind: "new", message: "Hello" }))
     expect(result.current).toMatchObject({ kind: "new", message: "Hello" })
     expect(result.current!.id).toBeGreaterThan(first!.id)
+  })
+})
+
+describe("primary chat activity", () => {
+  afterEach(() => act(() => publishPrimaryChatActivity(null)))
+
+  it("reads null until the chat publishes, follows it, and reads null again once it is gone", () => {
+    const { result } = renderHook(() => usePrimaryChatActivity())
+    expect(result.current).toBeNull()
+
+    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "running" }))
+    expect(result.current).toEqual({ threadId: "t1", state: "running" })
+    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "waiting" }))
+    expect(result.current).toEqual({ threadId: "t1", state: "waiting" })
+    // A new, empty chat has no thread.
+    act(() => publishPrimaryChatActivity({ threadId: null, state: "idle" }))
+    expect(result.current).toEqual({ threadId: null, state: "idle" })
+
+    act(() => publishPrimaryChatActivity(null))
+    expect(result.current).toBeNull()
+  })
+
+  it("wakes no one when the chat says what it already said", () => {
+    let renders = 0
+    const { result } = renderHook(() => {
+      renders += 1
+      return usePrimaryChatActivity()
+    })
+    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "idle" }))
+    const published = result.current
+    const seen = renders
+
+    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "idle" }))
+    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "idle" }))
+    expect(renders).toBe(seen)
+    // Nothing changed, so it is the very object it was.
+    expect(result.current).toBe(published)
+
+    act(() => publishPrimaryChatActivity({ threadId: "t2", state: "idle" }))
+    expect(renders).toBe(seen + 1)
+    act(() => publishPrimaryChatActivity({ threadId: "t2", state: "running" }))
+    expect(renders).toBe(seen + 2)
+
+    // Being gone is said once too.
+    act(() => publishPrimaryChatActivity(null))
+    act(() => publishPrimaryChatActivity(null))
+    expect(renders).toBe(seen + 3)
+  })
+
+  it("keeps its own copy of what was published", () => {
+    const { result } = renderHook(() => usePrimaryChatActivity())
+    const activity = { threadId: "t1", state: "idle" as const }
+    act(() => publishPrimaryChatActivity(activity))
+    activity.threadId = "t9"
+    expect(result.current).toEqual({ threadId: "t1", state: "idle" })
+  })
+
+  it("tells a listener that arrives late what the chat last said", () => {
+    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "running" }))
+    const { result } = renderHook(() => usePrimaryChatActivity())
+    expect(result.current).toEqual({ threadId: "t1", state: "running" })
   })
 })

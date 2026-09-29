@@ -10,14 +10,16 @@ import type { Thread } from "./client"
 // conversation stopped yesterday stays in the past. A conversation still
 // waiting on the member's confirmation reopens too, but the chat checks that
 // itself, since the thread list doesn't say.
+//
+// The chat also says what it is doing (`publishPrimaryChatActivity`), so a
+// page outside the panel can show that the agent is working or waiting.
 
 /** Whose chat a choice or a request belongs to. */
 export type ChatScope = { organizationId: string; userId: string }
 
 /** What to open: one conversation, or a new one, sending `message` first. */
 export type PrimaryChatTarget =
-  | { kind: "thread"; threadId: string }
-  | { kind: "new"; message?: string }
+  { kind: "thread"; threadId: string } | { kind: "new"; message?: string }
 
 /** A request to open a conversation. `id` grows with every request. */
 export type PrimaryChatRequest = PrimaryChatTarget & {
@@ -57,7 +59,10 @@ export function rememberChoice(
   threadId: string | null
 ) {
   try {
-    window.sessionStorage.setItem(choiceKey(scope, agentId), threadId ?? NEW_CHAT)
+    window.sessionStorage.setItem(
+      choiceKey(scope, agentId),
+      threadId ?? NEW_CHAT
+    )
   } catch {
     // Storage can be off or full. The chat still opens by the rules below.
   }
@@ -113,6 +118,61 @@ export function usePrimaryChatRequest(): PrimaryChatRequest | null {
   return useSyncExternalStore(
     subscribe,
     () => latestRequest,
+    () => null
+  )
+}
+
+/** What the rest of the app may see of the primary chat: which conversation it has open, and whether it works or waits. */
+export type PrimaryChatActivity = {
+  /** The conversation the primary chat has open; null for a new, empty chat. */
+  threadId: string | null
+  /** "running" while a run streams or is being submitted; "waiting" while a confirmation waits on the member; else "idle". */
+  state: "idle" | "running" | "waiting"
+}
+
+let latestActivity: PrimaryChatActivity | null = null
+const activityListeners = new Set<() => void>()
+
+function sameActivity(
+  a: PrimaryChatActivity | null,
+  b: PrimaryChatActivity | null
+) {
+  if (a === null || b === null) return a === b
+  return a.threadId === b.threadId && a.state === b.state
+}
+
+/**
+ * The primary chat says what it is doing: the conversation it has open and
+ * whether it works, waits on the member, or is idle. `null` says it is gone
+ * (it unmounted). Only a change is passed on, so a chat may publish on every
+ * render without waking whoever listens.
+ */
+export function publishPrimaryChatActivity(
+  activity: PrimaryChatActivity | null
+) {
+  if (sameActivity(activity, latestActivity)) return
+  latestActivity = activity && {
+    threadId: activity.threadId,
+    state: activity.state,
+  }
+  for (const listener of activityListeners) listener()
+}
+
+function subscribeToActivity(listener: () => void) {
+  activityListeners.add(listener)
+  return () => {
+    activityListeners.delete(listener)
+  }
+}
+
+/**
+ * What the primary chat last published: null until it has mounted in this
+ * page, and again once it is gone.
+ */
+export function usePrimaryChatActivity(): PrimaryChatActivity | null {
+  return useSyncExternalStore(
+    subscribeToActivity,
+    () => latestActivity,
     () => null
   )
 }

@@ -6,6 +6,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
@@ -14,6 +15,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
 import { AgentChat } from "./agent-chat"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
+import { usePrimaryChatActivity } from "@/lib/threads/chat-choice"
 import { itemsToChatMessages } from "@/lib/threads/chat-messages"
 import type { Item, Thread } from "@/lib/threads/client"
 
@@ -462,6 +464,113 @@ describe("AgentChat", () => {
       "user",
       "assistant",
     ])
+  })
+})
+
+describe("the primary chat's activity", () => {
+  // What the rest of the app would read: the chat's thread, and whether it
+  // works, waits on the member or is idle.
+  function watchActivity() {
+    const { result } = renderHook(() => usePrimaryChatActivity())
+    return () => result.current
+  }
+
+  it("says nothing before a conversation is chosen, then which one and what it does", async () => {
+    stubApi({ threads: [thread("th_1", "Hello")] })
+    const activity = watchActivity()
+    expect(activity()).toBeNull()
+    renderChat()
+    expect(activity()).toBeNull()
+    await waitFor(() =>
+      expect(activity()).toEqual({ threadId: "th_1", state: "idle" })
+    )
+    open("org_1~th_1")
+
+    // A run being submitted, and then streamed, is running.
+    updateChat({ status: "submitted" })
+    expect(activity()).toEqual({ threadId: "th_1", state: "running" })
+    updateChat({ status: "streaming" })
+    expect(activity()).toEqual({ threadId: "th_1", state: "running" })
+    updateChat({ status: "ready" })
+    expect(activity()).toEqual({ threadId: "th_1", state: "idle" })
+  })
+
+  it("says it waits while a confirmation waits on the member, and runs once they answer", async () => {
+    const items: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Email Sam" },
+      {
+        type: "confirmation",
+        id: "ev_2",
+        call_id: "call_1",
+        tool_call_id: "tool_1",
+        tool: "send_email",
+        arguments: { to: "sam@example.com" },
+        status: "pending",
+      },
+    ]
+    stubApi({
+      threads: [thread("th_1", "Email Sam")],
+      items,
+      pending: ["call_1"],
+    })
+    hooks.chat.messages = itemsToChatMessages(items)
+    const activity = watchActivity()
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    await waitFor(() =>
+      expect(activity()).toEqual({ threadId: "th_1", state: "waiting" })
+    )
+
+    const card = screen.getByRole("group", { name: "Confirm Send email" })
+    fireEvent.click(within(card).getByRole("button", { name: "Approve" }))
+    updateChat({ status: "streaming" })
+    expect(activity()).toEqual({ threadId: "th_1", state: "running" })
+  })
+
+  it("follows the member to a new conversation, and runs from its first message", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    const activity = watchActivity()
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(activity()).toEqual({ threadId: null, state: "idle" })
+
+    type("Something new")
+    await waitFor(() =>
+      expect(activity()).toEqual({ threadId: "th_new", state: "running" })
+    )
+    // The first message goes once the new thread's socket opens.
+    open("org_1~th_new")
+    updateChat({ status: "streaming" })
+    expect(activity()).toEqual({ threadId: "th_new", state: "running" })
+    updateChat({ status: "ready" })
+    expect(activity()).toEqual({ threadId: "th_new", state: "idle" })
+  })
+
+  it("goes idle when the member leaves a running conversation for a new one", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    const activity = watchActivity()
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    updateChat({ status: "streaming" })
+    expect(activity()).toEqual({ threadId: "th_1", state: "running" })
+
+    // The member leaves for a new conversation while it still runs.
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(activity()).toEqual({ threadId: null, state: "idle" })
+  })
+
+  it("says it is gone once the chat unmounts", async () => {
+    stubApi({ threads: [thread("th_1", "Hello")] })
+    const activity = watchActivity()
+    const view = renderChat()
+    await waitFor(() => expect(activity()).not.toBeNull())
+    view.unmount()
+    expect(activity()).toBeNull()
   })
 })
 

@@ -11,6 +11,8 @@ import { AgentConversation } from "./agent-conversation"
 import { ApiError } from "@/lib/api/client"
 import { getSession } from "@/lib/auth/client"
 import { reopenSocket } from "@/lib/threads/agent-socket"
+import { publishPrimaryChatActivity } from "@/lib/threads/chat-choice"
+import type { PrimaryChatActivity } from "@/lib/threads/chat-choice"
 import {
   chatMessagesToItems,
   reconcileChatMessages,
@@ -37,6 +39,8 @@ type ComposerHandlers = {
   onDraftChange: (value: string) => void
   onComposingChange: (composing: boolean) => void
 }
+
+type ChatState = PrimaryChatActivity["state"]
 
 function composerLabel(agentName?: string): string {
   return agentName ? `Message ${agentName}` : "Message your agent"
@@ -115,6 +119,25 @@ export function AgentChat({
   const [pendingScreen, setPendingScreen] = useState<ScreenContext>()
   const [starting, setStarting] = useState(false)
   const [notice, setNotice] = useState("")
+  // What the open thread's chat says it is doing, and of which thread.
+  const [reported, setReported] = useState<{
+    threadId: string
+    state: ChatState
+  }>()
+
+  // The rest of the app (Home) hears what this chat is doing: the thread it
+  // has open and whether it works, waits on the member or is idle. A first
+  // message counts as running until its thread's socket takes it.
+  const state: ChatState =
+    starting || pending !== null
+      ? "running"
+      : threadId && reported?.threadId === threadId
+        ? reported.state
+        : "idle"
+  useEffect(() => {
+    if (threadId !== undefined) publishPrimaryChatActivity({ threadId, state })
+  }, [threadId, state])
+  useEffect(() => () => publishPrimaryChatActivity(null), [])
 
   useEffect(() => {
     if (threadId === undefined && threads.data) {
@@ -199,6 +222,9 @@ export function AgentChat({
             })
           }}
           onFileCreated={onFileCreated}
+          onStateChange={(id, next) =>
+            setReported({ threadId: id, state: next })
+          }
           {...composer}
         />
       </Suspense>
@@ -351,6 +377,7 @@ function ThreadChat({
   onDraftChange,
   onComposingChange,
   onFileCreated,
+  onStateChange,
 }: ComposerHandlers & {
   organizationId: string
   threadId: string
@@ -360,6 +387,8 @@ function ThreadChat({
   getScreenContext?: () => ScreenContext
   onPendingTaken: () => void
   onMissing: () => void
+  /** What this thread is doing: a run streams, a confirmation waits on the member, or neither. */
+  onStateChange: (threadId: string, state: ChatState) => void
   onFileCreated?: (file: {
     threadId: string
     name: string
@@ -570,6 +599,18 @@ function ThreadChat({
     const waiting = pendingConfirmationIds(detail.data, items)
     return new Set(waiting.filter((id) => !(id in submitted)))
   }, [detail.data, items, submitted])
+
+  const state: ChatState = running
+    ? "running"
+    : actionable.size > 0
+      ? "waiting"
+      : "idle"
+  // Said as it changes, and taken back when this thread's chat goes, so a
+  // later visit doesn't start from what it last said.
+  useEffect(() => {
+    onStateChange(threadId, state)
+    return () => onStateChange(threadId, "idle")
+  }, [threadId, state])
 
   const lastEntry = entries.at(-1)
   const drafting =
