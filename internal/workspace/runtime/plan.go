@@ -56,7 +56,7 @@ func SensitiveChanges(plan Plan) []Change {
 }
 
 func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
-	document = document.Normalize()
+	document = resolveTeamNames(document, state)
 	if err := document.Validate(); err != nil {
 		return Plan{}, err
 	}
@@ -275,6 +275,30 @@ func teamMemberRoles(team spec.Team) ([]string, map[string]string) {
 	return emails, roles
 }
 
+// PostgreSQL identifies team names by lower(name). Keep the service's existing
+// display spelling while resolving manifests and directory group references.
+func resolveTeamNames(document spec.Document, state Snapshot) spec.Document {
+	document = document.Normalize()
+	names := map[string]string{}
+	for _, team := range document.Teams.Items {
+		names[spec.TeamKey(team.Name)] = team.Name
+	}
+	for name := range state.Teams {
+		names[spec.TeamKey(name)] = name
+	}
+	for i := range document.Teams.Items {
+		document.Teams.Items[i].Name = names[spec.TeamKey(document.Teams.Items[i].Name)]
+	}
+	if document.Directory != nil {
+		for i := range document.Directory.Groups {
+			if name, exists := names[spec.TeamKey(document.Directory.Groups[i].Team)]; exists {
+				document.Directory.Groups[i].Team = name
+			}
+		}
+	}
+	return document
+}
+
 func desiredMemberRole(member spec.Member, state Snapshot) string {
 	if member.Role != "" {
 		return member.Role
@@ -377,6 +401,7 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 	if err != nil {
 		return Plan{}, err
 	}
+	document = resolveTeamNames(document, state)
 	initial, err := BuildPlan(document, state)
 	if err != nil {
 		return Plan{}, err

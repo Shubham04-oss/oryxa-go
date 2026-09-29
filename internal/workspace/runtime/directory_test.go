@@ -47,6 +47,15 @@ func TestDirectoryExternalIDCannotMoveToAnotherUser(t *testing.T) {
 	}
 }
 
+func TestDirectoryTeamReferenceMatchesDatabaseNameSemantics(t *testing.T) {
+	submitted := contextDocument()
+	submitted.Directory = &spec.Directory{Groups: []spec.ExternalGroup{{Source: "google_workspace:acme.com", ExternalID: "group1", Team: " engineering "}}}
+	effective, _, err := MergeDirectory(contextDocument(), submitted, directoryState(), nil, false)
+	if err != nil || effective.Directory.Groups[0].Team != "Engineering" {
+		t.Fatalf("group reference failed to resolve: %+v %v", effective.Directory, err)
+	}
+}
+
 func TestDirectoryPendingInviteBindsAfterJoin(t *testing.T) {
 	submitted := contextDocument()
 	submitted.People = &spec.People{Members: []spec.Member{{Email: "new@acme.com"}}}

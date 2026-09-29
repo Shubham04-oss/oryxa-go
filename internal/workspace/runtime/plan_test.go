@@ -225,6 +225,22 @@ func TestNewTeamPruneConvergesWithoutImplicitCreatorSeat(t *testing.T) {
 	}
 }
 
+func TestExistingTeamNameMatchesCaseAndWhitespace(t *testing.T) {
+	state := &fakeState{orgExists: true, members: []Member{{UserID: "u1", Email: "owner@acme.com", Role: "owner"}},
+		existingTeams: []Team{{ID: "team_1", Name: "Engineering", Path: "engineering"}}, teamMembers: []TeamMember{{UserID: "u1", Email: "owner@acme.com", Role: "admin"}}}
+	server := httptest.NewServer(http.HandlerFunc(state.serve))
+	defer server.Close()
+	client, err := NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"}, Teams: spec.Teams{Prune: true, Items: []spec.Team{{Name: " engineering ", Members: []string{"owner@acme.com"}}}}}
+	remaining, err := Apply(context.Background(), client, document)
+	if err != nil || len(remaining.Changes) != 0 || state.teamCreates != 0 || state.teamDeletes != 0 {
+		t.Fatalf("case-insensitive reconciliation: %+v %v creates=%d deletes=%d", remaining, err, state.teamCreates, state.teamDeletes)
+	}
+}
+
 func TestPeoplePruneNeedsExactApprovedRemovalPlan(t *testing.T) {
 	state := &fakeState{
 		orgExists: true,

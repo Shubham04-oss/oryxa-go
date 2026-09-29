@@ -37,6 +37,8 @@ func records(directory *spec.Directory) map[string]directoryRecord {
 // The normalized table holds the durable binding; a changed email or team
 // name may update its label only when it still resolves to the same resource.
 func MergeDirectory(previous, submitted spec.Document, state Snapshot, mapped []store.ExternalMapping, replace bool) (spec.Document, Plan, error) {
+	previous = resolveTeamNames(previous, state)
+	submitted = resolveTeamNames(submitted, state)
 	effective := submitted
 	plan := Plan{Changes: []Change{}, NeedsHuman: []HumanStep{}}
 	old := records(previous.Directory)
