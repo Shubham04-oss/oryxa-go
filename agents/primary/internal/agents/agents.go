@@ -295,6 +295,7 @@ func unattendedRoot(router *modelrouter.Router, toolboxes []Toolbox, delivering 
 		Description:           "Krude, reporting to a member who is away.",
 		Model:                 router.For(modelrouter.RoleChat),
 		GenerateContentConfig: delivering.config(),
+		AfterToolCallbacks:    delivering.afterTools(),
 		InstructionProvider:   instructionFrom(unattendedInstruction, catalog, delivering != nil),
 		Tools:                 tools,
 		Toolsets:              []tool.Toolset{catalog.loaded()},

@@ -33,6 +33,7 @@ Systems Manager (ECS Exec, Session Manager) is the administrative path.
 | `deploy/scripts/memory-bank.sh` | The Vertex AI agent engine that holds Memory Bank |
 | `deploy/scripts/composio-webhook.sh` | Composio's webhook subscription |
 | `deploy/scripts/web.sh` (wrangler), or the Deploy workflow | The web app's Worker: web-next's `env.production`, `oryxa-production-web-next` |
+| The Slack app, by hand at api.slack.com/apps | Created by the owner from `apps/internal/slackbot/manifest.yaml`; its credentials go to Secrets Manager with `deploy/scripts/put-secrets.sh` (see "The Slack bot") |
 
 OpenTofu names everything the scripts create, so the task's configuration and
 IAM can refer to it before it exists. Its state is in S3
@@ -473,7 +474,8 @@ nothing else pending in this configuration, in this order:
 ```sh
 (cd deploy/production && tofu apply \
   -target=aws_kms_key.apps_signin -target=aws_kms_alias.apps_signin \
-  -target=aws_iam_role_policy.task -target=aws_secretsmanager_secret.external \
+  -target=aws_iam_role_policy.task -target=aws_iam_role_policy.execution_secrets \
+  -target=aws_secretsmanager_secret.external \
   -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
 deploy/scripts/put-secrets.sh   # APPS_DEFAULT_OAUTH_CLIENTS, APPS_HOOK_SECRETS
 echo '{"apps_signin_secrets_ready": true}' | jq . > deploy/production/apps_signin.auto.tfvars.json
@@ -496,6 +498,15 @@ the task definition does not reference `APPS_DEFAULT_OAUTH_CLIENTS` or
 has filled them in; commit `apps_signin.auto.tfvars.json` once it is `true`,
 so every other checkout's apply keeps naming them.
 
+The first apply names `aws_iam_role_policy.execution_secrets` because the task
+definition does not depend on it: it is the policy that lets ECS read each
+secret the definition names as a task starts, and it lists the secrets'
+containers, so a targeted apply that leaves it out makes a task that names a
+secret it may not read. That task fails to start and the deployment is rolled
+back. If you applied this section before that target was in it, run
+`(cd deploy/production && tofu apply -target=aws_iam_role_policy.execution_secrets)`
+before turning `apps_signin_secrets_ready` on.
+
 **Switching a toolkit on** is the plan's gate G4: change
 `APPS_ORYXA_TOOLKITS = ""` in `compute.tf` to a comma list naming it
 (`"github"`, `"github,slack"`, ...) and apply. First, register
@@ -503,6 +514,182 @@ so every other checkout's apply keeps naming them.
 path — as the redirect URI on that toolkit's own OAuth app at GitHub, Slack
 or Notion; a mismatched URI sends the member's browser somewhere the
 provider refuses or apps does not recognize.
+
+### The Slack bot
+
+The Slack consent loop (`docs/design/slack-implementation.md`) lets a member
+@-mention Oryxa in a channel to ask a question. Oryxa asks the person who would
+know, in a direct message with three buttons (share an AI summary only, give
+access for an hour, or deny), and their agent answers in the asker's thread only
+if they approve. When the answer is a credential, its owner types it into Oryxa
+and the member who asked opens it there, once; it never goes through Slack.
+
+It ships off, behind one switch: `slack_app_ready`, declared in
+`production/secrets.tf`, `false` unless `production/slack.auto.tfvars.json` says
+otherwise. Off, no Slack route is served and nobody is asked for anything in
+Slack. On, four things change together, because none works without the others:
+
+| | `slack_app_ready` false | true |
+| --- | --- | --- |
+| `APPS_SLACK_SURFACE`, apps serves the Slack routes | `false` | `true` |
+| `APPS_SERVICE_CALLERS`, who may call apps' internal routes | not set | agents, for the purpose `slack` and no other |
+| `AGENTS_PRIMARY_SLACK_CONSENT`, agents asks owners for consent in Slack | `off` | `on` |
+| Secrets the task names | neither | `APPS_SLACK_APP` and `AGENTS_PRIMARY_SLACK_TICKET_KEY` |
+
+`AGENTS_PRIMARY_SECRETS_KMS_KEY_ID`, the key one-time secrets are sealed under,
+is set either way: a secret can only be shared for a request approved with
+access, which nothing makes until consent is on.
+
+What `production` adds for it:
+
+- **`alias/oryxa-production-agents-secrets`** (`keys.tf`), the KMS key one-time
+  secrets are sealed under, with a 30-day deletion window and `prevent_destroy`
+  like its siblings. The task role may `kms:GenerateDataKey` and `kms:Decrypt`
+  on it only with the encryption context `service = oryxa-agents`. A secret waits
+  in `agents_primary.secret_shares` for an hour at most, as ciphertext only,
+  sealed with a data key of its own that is bound to its request. The member who
+  asked opening it, its owner revoking it, or the hour ending deletes it, and a
+  sweeper deletes what expired unopened. Losing the key would cost only the
+  secrets waiting at that moment, which their owners share again.
+- **Two secrets' containers** (`secrets.tf`), which exist whatever the switch
+  says: `oryxa-production/slack-app`, the Slack app's Client ID, Client Secret
+  and Signing Secret as JSON, `{"client_id","client_secret","signing_secret"}`;
+  and `oryxa-production/slack-ticket-key`, 64 hex characters, the HMAC key that
+  signs the buttons on owners' notices, so that a forged click made with a leaked
+  signing secret decides nothing.
+- Nothing else: no queue, no bucket, no Cloudflare rule. Apps seals the bot's
+  token with the key it already has for "Oryxa's own sign-in"
+  (`APPS_SIGNIN_KMS_KEY_ID`), and the rule that blocks `/v1/internal` at the
+  edge stays, because agents calls apps' internal routes from inside the task
+  (`APPS_URL` is the process itself).
+
+**First, with the switch off, before the release that carries the bot merges.**
+Merging to main releases, so a release's infrastructure goes in before it, never
+after. This makes the key, the task role's permission on it and the two empty
+containers, and rolls the task once, as any change to its definition does; the
+task does nothing new. Run it from a checkout that has main's
+`release.auto.tfvars.json` (main's head, or this branch after main is merged
+into it), which names the release that is running: an older copy would roll the
+service back to an older image. Read the plan first. It should show the key, its
+alias, the two containers, the task role's and the execution role's policies and
+a new task definition, and nothing else, and the definition's image should not
+change. The execution role's is the one that lets ECS read a secret the
+definition names as a task starts, and the task definition does not depend on it,
+so the targets name it: without it the switch below makes a task that names two
+secrets it may not read, which fails to start and is rolled back.
+
+```sh
+git pull
+(cd deploy/production && tofu apply \
+  -target=aws_kms_key.agents_secrets -target=aws_kms_alias.agents_secrets \
+  -target=aws_secretsmanager_secret.external \
+  -target=aws_iam_role_policy.task -target=aws_iam_role_policy.execution_secrets \
+  -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
+```
+
+**The owner's steps, in order,** once the release is out. The app is made and
+checked in Slack's own site, by its owner (steps 1, 5 and 6), and the rest are
+commands:
+
+1. **Create the app from the manifest.** At https://api.slack.com/apps choose
+   Create New App, then From a manifest, pick the workspace to develop it in,
+   and paste `apps/internal/slackbot/manifest.yaml`. The manifest is the only
+   way the app's scopes, events and URLs change: edit the file (and
+   `manifest_test.go`, which pins it), never Slack's settings. From Basic
+   Information keep the Client ID, Client Secret and Signing Secret in a
+   password manager, not in chat.
+2. **Store them.**
+
+   ```sh
+   deploy/scripts/put-secrets.sh
+   ```
+
+   It asks for the Client ID, the Client Secret and the Signing Secret at
+   hidden prompts that never echo what you type (or reads `APPS_SLACK_APP` from
+   `.env` as the JSON above, or the environment), checks them the way apps will
+   when it starts, and stores them as the one JSON value. It also makes the
+   ticket key with `openssl rand -hex 32` when none is stored, and leaves the one
+   that is: a new key makes every button already posted refuse its click. Nothing
+   is printed or put on a command line. It needs the containers from the apply
+   above, and says so if they are missing. To see that a secret has a value
+   without reading it, `aws secretsmanager describe-secret --secret-id
+   oryxa-production/slack-app --query VersionIdsToStages` shows a version staged
+   `AWSCURRENT`.
+3. **Turn it on and apply.**
+
+   ```sh
+   echo '{"slack_app_ready": true}' | jq . > deploy/production/slack.auto.tfvars.json
+   (cd deploy/production && tofu apply \
+     -target=aws_iam_role_policy.execution_secrets \
+     -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
+   ```
+
+   Commit `slack.auto.tfvars.json`, so that every other checkout's apply keeps
+   the switch on. The service rolls a new task. Apps refuses to start with the
+   Slack surface on and an `APPS_SLACK_APP` it cannot read, and ECS then rolls
+   the deployment back and the apply fails, rather than leaving a task that does
+   not serve; `put-secrets.sh` has checked the value already, so that should not
+   happen. `/oryxa-production/app` logs `the Slack surface is on` with the three
+   URLs it serves.
+4. **Provision the events.** `deploy/scripts/provision-app.sh` makes each
+   service's EventBridge rules from what it subscribes to, so run it after the
+   release that adds subscriptions: agents' queue starts receiving apps'
+   `apps.slack.message.received.v1` and `apps.slack.action.received.v1`, and
+   realtime's queue starts receiving agents' `agents.interaction.*` request
+   events. Without it those events are not delivered, and nothing fails to
+   start.
+5. **Verify both request URLs in Slack's settings.** Slack does not check them
+   when it creates an app from a manifest.
+   - Event Subscriptions: the Request URL,
+     `https://api.oryxa.in/v1/apps/slack/events`, must show Verified. Press
+     Retry: Slack sends a `url_verification` challenge, and apps answers it once
+     the delivery's signature checks out, which is also the first proof that the
+     Signing Secret is right.
+   - Interactivity & Shortcuts: Interactivity is on and its Request URL is
+     `https://api.oryxa.in/v1/apps/slack/interactivity`. Slack does not test it;
+     the first click on a button does.
+   - OAuth & Permissions: the Redirect URL is
+     `https://api.oryxa.in/v1/apps/slack/install/callback`.
+6. **Install through Oryxa's Add to Slack, never Slack's own Install button.**
+   As an owner or admin of the organization, choose Add to Slack in Oryxa's
+   Slack settings, approve in Slack, and Oryxa brings you back. Do not press
+   Install to Workspace in the app's Install App page. Only Oryxa's own callback
+   receives the bot's token, seals it and ties the workspace to the
+   organization; Slack's button gives Oryxa nothing, and a workspace with no
+   install in Oryxa has every mention of the bot acknowledged and dropped.
+
+After that, the live-run checklist is `docs/design/slack-implementation.md`,
+section 5.
+
+**Other workspaces.** An app installs only where it was made until it is
+distributed. To install in another workspace, open Manage Distribution and
+Activate Public Distribution, which gives a beta install link; a Marketplace
+listing comes later. An organization serves one workspace, a workspace one
+organization, and Enterprise Grid installs are refused for now.
+
+**Turning it off, and changing what was stored.**
+
+- Off: put `{"slack_app_ready": false}` in `slack.auto.tfvars.json` and apply as
+  in step 3. The task stops naming the secrets and serving the routes; Slack's
+  deliveries then get 404s, and Slack retries and, if they keep failing,
+  disables the app. Ending an install is `DELETE
+  /v1/organizations/{org}/apps/slack/install`, or removing the app in Slack.
+- The Signing Secret or Client Secret changes in Slack: put the new JSON in
+  `.env` as `APPS_SLACK_APP`, run `put-secrets.sh`, and start a new task
+  (`aws ecs update-service --region us-west-2 --cluster oryxa-production
+  --service oryxa --force-new-deployment`), which reads secrets only as it
+  starts. Apps holds one Signing Secret at a time, so a delivery in flight at
+  the switch fails its signature and Slack retries it.
+- The ticket key: the same with `AGENTS_PRIMARY_SLACK_TICKET_KEY=<64 hex>`. Every
+  button already posted stops working, and its owner decides from the request in
+  Oryxa instead.
+- Token rotation stays off in the manifest. Slack turns it on for good, and
+  nothing here refreshes a token yet; the install refuses one that rotates.
+- Slack expects an answer to each delivery within three seconds and retries one
+  that gets none (at once, then after one minute and after five), and it
+  disables an app whose deliveries mostly fail for an hour. Apps answers from
+  the database alone, so what would do that is the database being away: the
+  application-error alarm is the sign.
 
 ### Applying the launch-review hardening
 

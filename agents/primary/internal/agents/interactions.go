@@ -651,8 +651,9 @@ func (tools interactionTools) respond(ctx agent.Context, args interactionRespons
 	// The ledger reads the answer before another member does, and what it
 	// checks it for depends on what the run could read: so it is told, from the
 	// state the waker started the run with and the model never writes, and not
-	// from anything the agent says about what it used.
-	request, err := tools.service.Respond(WithRunSources(ctx, deliverySources(ctx)), actor, args.RequestID, args.InteractionResponseInput)
+	// from anything the agent says about what it used. What the run's tools
+	// returned goes the same way (run_results.go), for the answer to stand on.
+	request, err := tools.service.Respond(WithRunResults(WithRunSources(ctx, deliverySources(ctx)), runResultsOf(ctx)), actor, args.RequestID, args.InteractionResponseInput)
 	if err != nil {
 		return Interaction{}, interactionError(err)
 	}

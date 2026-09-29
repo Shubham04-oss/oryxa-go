@@ -3,6 +3,8 @@
 // (useDirectMessages, useInbox), and the limits both sides keep. Every
 // message is a JSON object with a `type`; each side parses what it is sent
 // and drops anything else, the Agents SDK's own frames included.
+import { isNoteInstant, readRequestNote } from "./request-notes"
+import type { DmRequestNote } from "./request-notes"
 import type { Conversation } from "./types"
 
 /** The longest message, in Unicode code points after trimming. */
@@ -101,9 +103,22 @@ export type DmServerMessage =
       reads: DmRead[]
       online: string[]
       typing: string[]
+      /**
+       * The requests between the two people that Go has told the object of
+       * (`DM_REQUEST_LIMIT` at most, oldest first), each once, at its latest
+       * revision. Absent when there are none.
+       */
+      requests?: DmRequestNote[]
     }
   /** A new message, to every socket, or a stored one to a socket that sent its `clientId` again. */
   | { type: "dm-message"; message: DmWireMessage }
+  /**
+   * A request between the two people moved (`RequestNote`): its line is new,
+   * or its state changed in place. Identities and a state, never what was
+   * asked; the page reads the request from Go, as the member. To every
+   * socket.
+   */
+  | { type: "dm-request"; request: DmRequestNote }
   /** The object did not store a message; only the socket that sent it hears. */
   | {
       type: "dm-send-failed"
@@ -212,6 +227,7 @@ export function parseDmServerMessage(
       ) {
         return undefined
       }
+      const requests = requestNotes(value.requests)
       return {
         type: "dm-snapshot",
         conversation: value.conversation,
@@ -220,12 +236,17 @@ export function parseDmServerMessage(
         reads: reads.map(({ userId, seq }) => ({ userId, seq })),
         online: value.online,
         typing: value.typing,
+        ...(requests.length === 0 ? {} : { requests }),
       }
     }
     case "dm-message":
       return isWireMessage(value.message)
         ? { type: "dm-message", message: wireMessage(value.message) }
         : undefined
+    case "dm-request": {
+      const request = requestNote(value.request)
+      return request ? { type: "dm-request", request } : undefined
+    }
     case "dm-send-failed":
       return isClientId(value.clientId) &&
         typeof value.code === "string" &&
@@ -346,6 +367,22 @@ const sendFailures = new Set<string>([
   "rate_limited",
   "unavailable",
 ])
+
+/** A request's note on a DM's socket: the note, and when the conversation first noted it. */
+function requestNote(value: unknown): DmRequestNote | undefined {
+  const note = readRequestNote(value)
+  const at = (value as { at?: unknown } | null)?.at
+  return note && isNoteInstant(at) ? { ...note, at } : undefined
+}
+
+/** The notes in a snapshot, or none for anything that is not a list of them. */
+function requestNotes(value: unknown): DmRequestNote[] {
+  if (!Array.isArray(value)) return []
+  return (value as unknown[]).flatMap((item) => {
+    const note = requestNote(item)
+    return note ? [note] : []
+  })
+}
 
 function isSeq(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0

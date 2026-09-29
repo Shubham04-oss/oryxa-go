@@ -5,6 +5,13 @@ import type { ConversationEnv } from "./conversation-env"
 import type { NotedMessage, RestatedConversation } from "./inbox-agent"
 import { inboxName, parseDirectMessageName, peerIn } from "./lib/dms/names"
 import type { DirectMessageIds } from "./lib/dms/names"
+import { DM_REQUEST_LIMIT, readRequestNote } from "./lib/dms/request-notes"
+import type {
+  DmRequestNote,
+  RequestNote,
+  RequestNoteOutcome,
+  RequestNoteState,
+} from "./lib/dms/request-notes"
 import {
   DM_HISTORY_LIMIT,
   DM_MAX_BODY_LENGTH,
@@ -74,6 +81,36 @@ type MessageRow = {
   client_id: string
   body: string
   created_at: string
+}
+
+/** A request between the two people, as the object keeps it: one row for each, at its latest revision. */
+type RequestRow = {
+  request_id: string
+  revision: number
+  asker_id: string
+  owner_id: string
+  origin: string
+  state: string
+  first_at: string
+  changed_at: string
+}
+
+/** A request's row as an inbox is told of it: its note. */
+function noteOf(row: RequestRow): RequestNote {
+  return {
+    requestId: row.request_id,
+    revision: row.revision,
+    askerId: row.asker_id,
+    ownerId: row.owner_id,
+    origin: row.origin,
+    state: row.state as RequestNoteState,
+    changedAt: row.changed_at,
+  }
+}
+
+/** A request's row as a page is sent it: its note, and where its line stands. */
+function requestOf(row: RequestRow): DmRequestNote {
+  return { ...noteOf(row), at: row.first_at }
 }
 
 /** Somebody typing: until `timer` fires, and when the other person was last told. In memory only. */
@@ -171,6 +208,13 @@ function randomId(): string {
  *   sent on the `drainEvents` schedule; never what anybody wrote. A
  *   message's author reads through it with no event of its own: the
  *   message's says so.
+ * - **Requests.** When an agent request between its two people moves, the
+ *   Worker tells it (`noteRequest`, from Go's word, src/realtime-requests.ts):
+ *   who asked whose agent, where, and the state, never what was asked. It
+ *   keeps one note for each request, at the highest revision it was told of
+ *   (`DM_REQUEST_LIMIT` at most, the oldest dropped), and sends every socket
+ *   the line as it is new or changes. It is no message: no seq, no unread,
+ *   no event for Go. A page reads the request from Go itself.
  *
  * Only its two people reach it: the Worker routes a socket only once Go has
  * said who the member is and that the other person is in the organization.
@@ -365,13 +409,19 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     this.keepSeqFloor()
     this.sql`DELETE FROM dm_messages WHERE created_at <= ${removedAt}
       OR (author_id = ${userId} AND session_at IS NOT NULL AND session_at <= ${removedAt})`
+    // The requests whose lines stand at or before then go with the messages.
+    this.sql`DELETE FROM dm_requests WHERE first_at <= ${removedAt}`
     const openedBefore = (state: DmConnectionState) =>
       (state.connectedAt ?? "") <= removedAt
     const staying = [...this.getConnections()].flatMap((connection) => {
       const state = stateOf(connection)
       return state && !openedBefore(state) ? [{ connection, state }] : []
     })
-    if (this.latestSeq() === 0 && staying.length === 0) {
+    if (
+      this.latestSeq() === 0 &&
+      this.requests().length === 0 &&
+      staying.length === 0
+    ) {
       await this.reset()
       this.endSockets(() => true)
       await eventsGone
@@ -405,6 +455,57 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     await this.syncInboxes()
   }
 
+  /**
+   * A move of a request between this conversation's two people, told by the
+   * Worker (src/realtime-requests.ts) from Go's word: a line in the log,
+   * new, or with its state changed in place. It keeps one note for each
+   * request, at the highest revision it was told of, so a note told twice, or
+   * after a later one, does nothing: it resolves `repeated`, and tells no
+   * socket. Otherwise it resolves `noted`, and every socket is sent the line.
+   * Nothing of what was asked is in a note, so none is kept or sent; the page
+   * reads the request from Go, as the member.
+   *
+   * A note that is not this conversation's (its two people the note's two
+   * people, and the request's shape) is refused with a `TypeError`, since
+   * only the Worker names the pair.
+   */
+  async noteRequest(note: RequestNote): Promise<RequestNoteOutcome> {
+    const checked = this.checkedRequest(note)
+    this.schema()
+    const held = this
+      .sql<RequestRow>`SELECT request_id, revision, asker_id, owner_id, origin, state, first_at, changed_at
+      FROM dm_requests WHERE request_id = ${checked.requestId}`.at(0)
+    if (held && held.revision >= checked.revision) return "repeated"
+    const firstAt = held?.first_at ?? checked.changedAt
+    const row: RequestRow = {
+      request_id: checked.requestId,
+      revision: checked.revision,
+      asker_id: checked.askerId,
+      owner_id: checked.ownerId,
+      origin: checked.origin,
+      state: checked.state,
+      first_at: firstAt,
+      changed_at: checked.changedAt,
+    }
+    this.transaction(() => {
+      this
+        .sql`INSERT INTO dm_requests (request_id, revision, asker_id, owner_id, origin, state, first_at, changed_at)
+        VALUES (${row.request_id}, ${row.revision}, ${row.asker_id}, ${row.owner_id}, ${row.origin}, ${row.state}, ${row.first_at}, ${row.changed_at})
+        ON CONFLICT (request_id) DO UPDATE SET
+          revision = excluded.revision, origin = excluded.origin,
+          state = excluded.state, changed_at = excluded.changed_at`
+      // The latest stay: a conversation that goes on for years is not sent them all.
+      this.sql`DELETE FROM dm_requests WHERE request_id NOT IN (
+        SELECT request_id FROM dm_requests ORDER BY first_at DESC, request_id DESC LIMIT ${DM_REQUEST_LIMIT}
+      )`
+    })
+    // A request that fell past the limit as it arrived is kept by no one.
+    if (this.requests().some((each) => each.requestId === row.request_id)) {
+      this.tell({ type: "dm-request", request: requestOf(row) })
+    }
+    return "noted"
+  }
+
   /** The events' schedule: sends Go what waits (`EventOutbox.drain`). */
   async drainEvents(
     _payload?: unknown,
@@ -435,6 +536,24 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
   }
 
   /**
+   * A request's note checked against this conversation: well formed, and
+   * between its two people, whichever asked. Throws a `TypeError` for
+   * anything else, read as whatever arrived over RPC.
+   */
+  private checkedRequest(note: RequestNote): RequestNote {
+    const checked = readRequestNote(note)
+    const ids = this.ids
+    if (
+      !checked ||
+      peerIn(ids, checked.askerId) !== checked.ownerId ||
+      peerIn(ids, checked.ownerId) !== checked.askerId
+    ) {
+      throw new TypeError("not a request of this conversation")
+    }
+    return checked
+  }
+
+  /**
    * Empties the conversation, and lets its retry go: all it keeps but how
    * far each person read and the highest seq used, so a later run never
    * uses a seq again nor moves a read back.
@@ -443,6 +562,7 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     const retry = this.meta("retry")
     this.keepSeqFloor()
     this.sql`DELETE FROM dm_messages`
+    this.sql`DELETE FROM dm_requests`
     this.sql`DELETE FROM dm_inbox_sync`
     this.sql`DELETE FROM dm_meta WHERE key != 'seq_floor'`
     if (retry) await this.cancelSchedule(retry).catch(() => false)
@@ -499,12 +619,28 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )`
+    // The requests between the two people that Go told the Worker of: one
+    // row each, at its latest revision. `first_at` is where its line stands
+    // in the log, `changed_at` when it reached this state.
+    this.sql`CREATE TABLE IF NOT EXISTS dm_requests (
+      request_id TEXT PRIMARY KEY,
+      revision INTEGER NOT NULL,
+      asker_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      state TEXT NOT NULL,
+      first_at TEXT NOT NULL,
+      changed_at TEXT NOT NULL
+    )`
+    this
+      .sql`CREATE INDEX IF NOT EXISTS dm_requests_by_first ON dm_requests (first_at)`
     this.schemaReady = true
   }
 
   /** The conversation as a socket opens. */
   private snapshot(viewer: string): DmServerMessage {
     const page = this.page(0, DM_PAGE_SIZE)
+    const requests = this.requests()
     return {
       type: "dm-snapshot",
       conversation: this.meta("conversation") ?? "",
@@ -513,7 +649,15 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
       reads: this.reads(),
       online: this.online(),
       typing: [...this.typing.keys()].filter((user) => user !== viewer),
+      ...(requests.length === 0 ? {} : { requests }),
     }
+  }
+
+  /** The requests it keeps, oldest first by where their lines stand. */
+  private requests(): DmRequestNote[] {
+    return this
+      .sql<RequestRow>`SELECT request_id, revision, asker_id, owner_id, origin, state, first_at, changed_at
+      FROM dm_requests ORDER BY first_at ASC, request_id ASC`.map(requestOf)
   }
 
   /**
@@ -881,7 +1025,16 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
       ORDER BY seq DESC LIMIT ${MAX_UNREAD}`
       .map((row) => row.seq)
       .reverse()
-    return { ...(last ? { last: noted(last) } : {}), readSeq, unread }
+    // The latest request that stays, as the inbox shows it beside the latest message.
+    const request = this
+      .sql<RequestRow>`SELECT request_id, revision, asker_id, owner_id, origin, state, first_at, changed_at
+      FROM dm_requests ORDER BY changed_at DESC, request_id DESC LIMIT 1`.at(0)
+    return {
+      ...(last ? { last: noted(last) } : {}),
+      ...(request ? { request: noteOf(request) } : {}),
+      readSeq,
+      unread,
+    }
   }
 
   /**
