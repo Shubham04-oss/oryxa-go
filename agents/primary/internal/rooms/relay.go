@@ -223,20 +223,17 @@ func (relay *Relay) Post(ctx context.Context, room Situation, message Message, v
 // phone number, an address), the answer with every such value replaced by
 // its kind, as {EMAIL}, since a room has nobody to review it before the team
 // reads it; and an answer that could not be checked, or a verdict that does
-// not add up, unchecked in its place. What was found is logged by kind,
-// never by value.
+// not add up, unchecked in its place. Which of those a verdict allows is
+// answerguard.Verdict.Shareable's rule, the one the teamspace ledger and the
+// check route apply too. What was found is logged by kind, never by value.
 func (relay *Relay) guarded(ctx context.Context, roomID string, seat Seat, reply string) string {
 	if relay.Guard == nil {
 		return reply
 	}
 	verdict := relay.Guard.Check(ctx, []string{reply})
 	said := unchecked
-	switch {
-	case len(verdict.Texts) != 1:
-	case verdict.State == answerguard.StateClear, verdict.State == answerguard.StateMasked:
-		said = verdict.Texts[0]
-	case verdict.State == answerguard.StateHeld && len(verdict.Masked) == 1:
-		said = verdict.Masked[0]
+	if shareable := verdict.Shareable(1); shareable != nil {
+		said = shareable[0]
 	}
 	if verdict.State != answerguard.StateClear || said == unchecked {
 		relay.logger().InfoContext(ctx, "rooms: relay: the answer guard found something in a seat's answer",
