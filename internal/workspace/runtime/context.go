@@ -308,7 +308,15 @@ func validateAuthorityGraph(chart spec.OrgChart) error {
 // above the to person only through explicitly authoritative relationships or
 // through the executive list; a person is never above themself.
 func Above(chart spec.OrgChart, from, to string) bool {
-	if from == to {
+	known := map[string]bool{}
+	for _, email := range chart.Executives {
+		known[email] = true
+	}
+	for _, relationship := range chart.Relationships {
+		known[relationship.From] = true
+		known[relationship.To] = true
+	}
+	if from == "" || to == "" || !known[from] || !known[to] || from == to {
 		return false
 	}
 	if slices.Contains(chart.Executives, from) {

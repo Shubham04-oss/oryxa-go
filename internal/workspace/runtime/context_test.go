@@ -61,6 +61,18 @@ func TestContextAuthorityUsesExplicitEdgesAndRejectsContradictions(t *testing.T)
 	}
 }
 
+func TestExecutiveIsNotAboveUnknownOrEmptyAddresses(t *testing.T) {
+	chart := spec.OrgChart{Executives: []string{"chief@acme.com"}, Relationships: []spec.Relationship{{From: "lead@acme.com", Relation: "manages", To: "dev@acme.com"}}, Authority: []string{"manages"}}
+	for _, target := range []string{"", "typo@acme.com", "outside@example.com", "chief@acme.com"} {
+		if Above(chart, "chief@acme.com", target) {
+			t.Fatalf("executive considered above unknown target %q", target)
+		}
+	}
+	if !Above(chart, "chief@acme.com", "dev@acme.com") {
+		t.Fatal("known chart member not recognized")
+	}
+}
+
 func TestContextRejectsPruningItsOwnerMember(t *testing.T) {
 	old := contextDocument()
 	old.Ownership.Items = []spec.OwnerHint{{Owner: "dev@acme.com", System: "billing"}}
