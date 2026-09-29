@@ -218,3 +218,19 @@ func TestGuestOutsideDomainRequiresExplicitMemberMarker(t *testing.T) {
 		t.Fatalf("guest with policy = %v", err)
 	}
 }
+
+func TestTimezoneUsesPortableIANAIdentifiers(t *testing.T) {
+	t.Setenv("ZONEINFO", t.TempDir())
+	for _, zone := range []string{"UTC", "Asia/Kolkata", "America/New_York"} {
+		input := strings.Replace(example, "name: Acme", "name: Acme, timezone: "+zone, 1)
+		if _, err := Parse([]byte(input)); err != nil {
+			t.Fatalf("portable time zone %s rejected: %v", zone, err)
+		}
+	}
+	for _, zone := range []string{"Local", "Not/AZone"} {
+		input := strings.Replace(example, "name: Acme", "name: Acme, timezone: "+zone, 1)
+		if _, err := Parse([]byte(input)); err == nil {
+			t.Fatalf("host-specific or invalid time zone %s accepted", zone)
+		}
+	}
+}

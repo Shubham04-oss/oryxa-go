@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata" // CLI validation must also work on hosts without an IANA database.
 	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
@@ -386,7 +387,7 @@ func (document Document) Validate() error {
 		}
 	}
 	if document.Organization != nil && document.Organization.Timezone != nil {
-		if *document.Organization.Timezone == "" {
+		if *document.Organization.Timezone == "" || *document.Organization.Timezone == "Local" {
 			return fmt.Errorf("organization.timezone must be an IANA time zone")
 		}
 		if _, err := time.LoadLocation(*document.Organization.Timezone); err != nil {
