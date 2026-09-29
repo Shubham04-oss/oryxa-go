@@ -274,6 +274,31 @@ func TestNormalizeServiceTextBeforePlanning(t *testing.T) {
 	}
 }
 
+func TestTeamNamesMirrorServiceNormalization(t *testing.T) {
+	for _, name := range []string{"  Engineering  ", strings.Repeat("界", 41)} {
+		input := strings.Replace(example, "name: Engineering", "name: '"+name+"'", 1) + "directory: {groups: [{source: 'hr:acme', externalId: team1, team: '" + name + "'}]}\n"
+		document, err := Parse([]byte(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if document.Teams.Items[0].Name != strings.TrimSpace(name) || document.Directory.Groups[0].Team != strings.TrimSpace(name) {
+			t.Fatal("team names not normalized")
+		}
+		encoded, err := document.YAML()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Parse(encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, names := range []string{"[{name: Sales}, {name: sales}]", "[{name: \"Bad\\nName\"}]", "[{name: \"Bad\\u202eName\"}]"} {
+		if _, err := Parse([]byte("apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\nteams: " + names)); err == nil {
+			t.Fatalf("unsafe or duplicate names accepted: %s", names)
+		}
+	}
+}
+
 func TestAnswerGuardPoliciesValidateAndRoundTrip(t *testing.T) {
 	input := example + "safety: {guard: {pii: {minimum: {owner: secrets, peer: strict}}, relevance: off}}\n"
 	document, err := Parse([]byte(input))

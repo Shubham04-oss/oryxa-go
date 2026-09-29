@@ -9,10 +9,12 @@ import (
 	"io"
 	"net/mail"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata" // CLI validation must also work on hosts without an IANA database.
+	"unicode"
 	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
@@ -531,7 +533,7 @@ func (document Document) Validate() error {
 			if err := validateExternalMapping(group.Source, group.ExternalID); err != nil {
 				return fmt.Errorf("directory.groups: %w", err)
 			}
-			if strings.TrimSpace(group.Team) == "" || len(group.Team) > 120 || strings.TrimSpace(group.Team) != group.Team {
+			if !validTeamName(group.Team) {
 				return fmt.Errorf("directory.groups[].team must name a team")
 			}
 			key := "team/" + group.Source + "/" + group.ExternalID
@@ -543,10 +545,10 @@ func (document Document) Validate() error {
 	}
 	seenTeams := map[string]bool{}
 	for _, team := range document.Teams.Items {
-		if strings.TrimSpace(team.Name) == "" || len(team.Name) > 120 || seenTeams[team.Name] {
+		if !validTeamName(team.Name) || seenTeams[TeamKey(team.Name)] {
 			return fmt.Errorf("teams[].name must be unique and between 1 and 120 characters")
 		}
-		seenTeams[team.Name] = true
+		seenTeams[TeamKey(team.Name)] = true
 		teamMembers := map[string]bool{}
 		for _, email := range team.Members {
 			if err := validateEmail(email, nil); err != nil {
@@ -699,6 +701,18 @@ func (document Document) YAML() ([]byte, error) {
 // Normalize mirrors the public services before comparison or persistence.
 // It copies edited values so callers keep their original review document.
 func (document Document) Normalize() Document {
+	document.Teams.Items = slices.Clone(document.Teams.Items)
+	for index := range document.Teams.Items {
+		document.Teams.Items[index].Name = strings.TrimSpace(document.Teams.Items[index].Name)
+	}
+	if document.Directory != nil {
+		directory := *document.Directory
+		directory.Groups = slices.Clone(directory.Groups)
+		for index := range directory.Groups {
+			directory.Groups[index].Team = strings.TrimSpace(directory.Groups[index].Team)
+		}
+		document.Directory = &directory
+	}
 	if document.Organization != nil {
 		organization := *document.Organization
 		if name := strings.TrimSpace(organization.Name); name != "" {
@@ -725,4 +739,20 @@ func (document Document) Normalize() Document {
 		document.Agents = &agents
 	}
 	return document
+}
+
+// TeamKey matches the teams store's case-insensitive unique name key.
+func TeamKey(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
+
+func validTeamName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > 120 {
+		return false
+	}
+	for _, character := range name {
+		if character < 0x20 || character == 0x7f || unicode.Is(unicode.Cf, character) {
+			return false
+		}
+	}
+	return true
 }
