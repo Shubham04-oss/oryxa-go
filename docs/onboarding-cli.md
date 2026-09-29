@@ -39,9 +39,16 @@ reviews, and organization deletion refuse CLI tokens.
 The browser sign-in window closes after 20
 minutes. Setup creates a missing starter file only after sign-in, then shows
 the plan and asks before applying. The auth server must expose
-`COGNITO_CLI_CLIENT_ID`, its fixed callback URL, and the web sign-up URL in
+`COGNITO_CLI_CLIENT_ID`, its registered callback URLs, and the web sign-up URL in
 `/v1/auth/config`. `--no-browser` prints the local start URL for a coding agent
 to open; `--json` prints machine-readable progress.
+
+For concurrent sign-ins, configure `COGNITO_CLI_CALLBACK_URLS` with the same
+loopback URLs in the Cognito provisioner and auth service. Production configuration
+registers ports 8765–8768; the CLI chooses an available registered port and releases
+it when sign-in ends. Existing app clients need the provisioner update before
+the fallback URLs are advertised. A device-code grant is not implemented;
+`--no-browser` still needs a browser that can reach this machine's loopback URL.
 
 ```sh
 ./bin/oryxa setup -f oryxa.yaml

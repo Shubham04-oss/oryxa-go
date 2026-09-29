@@ -68,10 +68,7 @@ func Run(ctx context.Context, client *cognitoidentityprovider.Client, config Con
 		output.GoogleRedirectURI = domain + "/oauth2/idpresponse"
 	}
 	if config.CLICallbackURL != "" {
-		cliConfig := config
-		cliConfig.AppClientName = config.PoolName + "-cli"
-		cliConfig.CallbackURLs = []string{config.CLICallbackURL}
-		cliConfig.LogoutURLs = nil
+		cliConfig := cliAppConfig(config)
 		cliID, err := ensureAppClient(ctx, client, poolID, cliConfig)
 		if err != nil {
 			return Output{}, fmt.Errorf("provision CLI app client: %w", err)

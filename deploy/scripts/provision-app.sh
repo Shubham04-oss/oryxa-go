@@ -71,6 +71,7 @@ cognito=$(
     COGNITO_LOGOUT_URLS="$APP_URL" \
     COGNITO_AGENT_CALLBACK_URL="$APP_URL/v1/agent-grant/callback" \
     COGNITO_CLI_CALLBACK_URL="http://127.0.0.1:8765/callback" \
+    COGNITO_CLI_CALLBACK_URLS="http://127.0.0.1:8765/callback,http://127.0.0.1:8766/callback,http://127.0.0.1:8767/callback,http://127.0.0.1:8768/callback" \
     go run ./auth/infra/cognito/cmd/provision
 )
 jq -c . <<<"$cognito"
