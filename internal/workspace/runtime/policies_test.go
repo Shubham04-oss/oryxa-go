@@ -1,10 +1,27 @@
 package runtime
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 )
+
+func TestLegacyPolicyCanBeExplicitlyRepairedAfterValidationTightens(t *testing.T) {
+	previous, err := spec.ParseStored([]byte("apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: obsolete_slug}\norganization: {name: ''}\nrules: {consent: {expireAfter: 99999h}}\nchat: {future: true}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := MergePolicies(previous, contextDocument(), false); err == nil || !strings.Contains(err.Error(), "expireAfter") {
+		t.Fatalf("invalid retained policy escaped effective validation: %v", err)
+	}
+	submitted := contextDocument()
+	submitted.Unset = []string{"rules.consent.expireAfter"}
+	effective, plan, err := MergePolicies(previous, submitted, false)
+	if err != nil || effective.Rules != nil || effective.Chat != nil || len(plan.Changes) != 1 || plan.Changes[0].Name != "rules.consent.expireAfter" {
+		t.Fatalf("legacy repair = %+v %+v, %v", effective, plan, err)
+	}
+}
 
 func TestPolicyOmissionPreservesAndRollbackReplaces(t *testing.T) {
 	expiry := "6h"

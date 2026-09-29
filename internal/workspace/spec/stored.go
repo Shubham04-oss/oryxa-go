@@ -7,11 +7,14 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 	"go.yaml.in/yaml/v3"
 )
 
-// ParseStored reads a version written by a newer server while keeping current
-// values subject to current validation. Submitted documents must use Parse.
+// ParseStored decodes persisted versions without applying today's write
+// constraints. A historical value must remain readable so a submitted change
+// can repair or unset it. The merged effective document is still validated
+// before mutation. Submitted documents must use Parse.
 func ParseStored(data []byte) (Document, error) {
 	if len(data) > 1<<20 {
 		return Document{}, fmt.Errorf("workspace file exceeds 1 MiB")
@@ -27,15 +30,18 @@ func ParseStored(data []byte) (Document, error) {
 	if err := rejectAliases(&root); err != nil {
 		return Document{}, err
 	}
-	if len(root.Content) != 1 {
+	if len(root.Content) != 1 || root.Content[0].Kind != yaml.MappingNode {
 		return Document{}, fmt.Errorf("stored workspace must be a mapping")
 	}
-	filterStoredNode(root.Content[0], reflect.TypeOf(Document{}))
-	encoded, err := yaml.Marshal(&root)
-	if err != nil {
-		return Document{}, err
+	if err := cleantext.Check(&root); err != nil {
+		return Document{}, fmt.Errorf("stored workspace text is invalid: %w", err)
 	}
-	return Parse(encoded)
+	filterStoredNode(root.Content[0], reflect.TypeOf(Document{}))
+	var document Document
+	if err := root.Decode(&document); err != nil {
+		return Document{}, fmt.Errorf("stored workspace contains an invalid field type")
+	}
+	return document.Normalize(), nil
 }
 
 func filterStoredNode(node *yaml.Node, kind reflect.Type) {
@@ -63,7 +69,7 @@ func filterStoredNode(node *yaml.Node, kind reflect.Type) {
 	for index := 0; index < kind.NumField(); index++ {
 		field := kind.Field(index)
 		name := strings.Split(field.Tag.Get("yaml"), ",")[0]
-		if name != "" && name != "-" {
+		if name != "" && name != "-" && field.Type != reflect.TypeOf((*yaml.Node)(nil)) {
 			fields[name] = field.Type
 		}
 	}

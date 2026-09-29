@@ -76,7 +76,9 @@ func (client *Client) workspaceYAML(ctx context.Context, path string) (spec.Docu
 	if err != nil {
 		return spec.Document{}, err
 	}
-	return spec.Parse(data)
+	// Both endpoints return persisted server documents, which may contain
+	// additive fields written by a newer server. Submission remains strict.
+	return spec.ParseStored(data)
 }
 
 func (client *Client) WorkspaceRollback(ctx context.Context, organizationID string, number int64, approved Plan) (WorkspaceApplyResult, error) {
