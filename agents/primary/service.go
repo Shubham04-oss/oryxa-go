@@ -529,6 +529,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Documents: httpserver.DocumentsConfig{
 			PublicURL: settings.DocumentServerURL, InternalURL: settings.DocumentServerInternalURL,
 			APIURL: settings.DocumentAPIURL, JWTSecret: settings.DocumentJWTSecret,
+			TicketSecret: settings.DocumentTicketSecret,
 		},
 		RunTimeout:          settings.RunTimeout,
 		Agents:              agentRegistry,
@@ -539,6 +540,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Preferences:         wakeupStore,
 		// Always built above, so never a nil *Service in the interface.
 		AnswerGuardPreferences: guardSettings,
+	}
+	// A document server that was set up but cannot be used says why once, here,
+	// and not as a 503 to the first member who opens a file.
+	if problem := httpConfig.Documents.Problem(); problem != "" {
+		logger.Warn("document editing is off", "reason", problem)
 	}
 	// Same reasoning as assemblyOptions above: a nil *Service must leave the
 	// interface field unset, or server.interactions/.teamspaces/.rooms would

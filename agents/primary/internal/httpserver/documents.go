@@ -29,21 +29,69 @@ type DocumentsConfig struct {
 	PublicURL   string
 	InternalURL string
 	APIURL      string
-	JWTSecret   string
-}
-
-func (config DocumentsConfig) ready() bool {
-	return config.PublicURL != "" && config.InternalURL != "" && config.APIURL != "" && len(config.JWTSecret) >= 32
+	// JWTSecret is Docs' own JWT_SECRET. It signs the editor's configuration,
+	// which Docs reads, and verifies the save callback Docs sends. Docs holds
+	// it, so it vouches only for what Docs may already do.
+	JWTSecret string
+	// TicketSecret signs the tickets in the URLs Docs is handed for a file and
+	// for its save callback. A ticket reads or replaces a member's file, so
+	// the secret stays Oryxa's: Docs, or anything that has Docs' JWT_SECRET,
+	// must not be able to mint one.
+	TicketSecret string
 }
 
 const (
+	minDocumentSecretBytes = 32
+
+	// publishedDocumentSecret is the sample this repository's example
+	// configuration once printed. Anyone who copied it holds the same secret
+	// as everyone else who did, so it is refused wherever a secret is.
+	publishedDocumentSecret = "oryxa-local-documents-secret-change-before-sharing"
+
 	// Docs fetches the file once, when it opens a version; the tickets in an
 	// editing session's URLs outlive that only as long as the session may.
 	sourceTicketLifetime = time.Hour
 	// The longest an editing session can go on saving, and so the longest the
 	// callback ticket, and the editor configuration that carries it, live.
 	editingSessionLifetime = 24 * time.Hour
+
+	// The most an edited file Docs hands back may be.
+	maxEditedDocumentBytes = 50 << 20
 )
+
+// usableDocumentSecret reports whether a secret is long enough and is not one
+// that was published.
+func usableDocumentSecret(secret string) bool {
+	return len(secret) >= minDocumentSecretBytes && secret != publishedDocumentSecret
+}
+
+// problem says what keeps the editor from working, or "" when nothing does.
+// It names variables and never their values.
+func (config DocumentsConfig) problem() string {
+	switch {
+	case config.PublicURL == "" || config.InternalURL == "" || config.APIURL == "":
+		return "AGENTS_PRIMARY_DOCUMENT_SERVER_URL, AGENTS_PRIMARY_DOCUMENT_SERVER_INTERNAL_URL and AGENTS_PRIMARY_DOCUMENT_API_URL must all be set"
+	case !usableDocumentSecret(config.JWTSecret):
+		return "AGENTS_PRIMARY_DOCUMENT_JWT_SECRET must be at least 32 bytes and not the published example"
+	case !usableDocumentSecret(config.TicketSecret):
+		return "AGENTS_PRIMARY_DOCUMENT_TICKET_SECRET must be at least 32 bytes and not the published example"
+	case config.TicketSecret == config.JWTSecret:
+		return "AGENTS_PRIMARY_DOCUMENT_TICKET_SECRET must differ from AGENTS_PRIMARY_DOCUMENT_JWT_SECRET, which the document server also holds"
+	}
+	return ""
+}
+
+func (config DocumentsConfig) ready() bool { return config.problem() == "" }
+
+// Problem is what keeps the editor from working, for a server to log at
+// start-up, or "" when it works or was never set up: a deployment with no
+// document server has nothing to report.
+func (config DocumentsConfig) Problem() string {
+	if config == (DocumentsConfig{}) {
+		return ""
+	}
+	return config.problem()
+}
 
 type documentTicket struct {
 	Purpose      string `json:"purpose"`
@@ -56,6 +104,8 @@ type documentTicket struct {
 	jwt.RegisteredClaims
 }
 
+// documentTypes are the files the viewer and Docs open, and the kind of editor
+// Docs opens each in.
 var documentTypes = map[string]string{
 	"doc": "word", "docx": "word", "odt": "word", "rtf": "word", "txt": "word", "md": "word",
 	"xls": "cell", "xlsx": "cell", "xlsm": "cell", "ods": "cell", "csv": "cell",
@@ -75,7 +125,7 @@ func documentKey(organization, user, thread, name string, version int64) string 
 }
 
 func (server *Server) signDocumentTicket(ticket documentTicket) (string, error) {
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, ticket).SignedString([]byte(server.documents.JWTSecret))
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, ticket).SignedString([]byte(server.documents.TicketSecret))
 }
 
 func (server *Server) readDocumentTicket(request *http.Request, purpose string) (*documentTicket, bool) {
@@ -85,7 +135,7 @@ func (server *Server) readDocumentTicket(request *http.Request, purpose string) 
 	}
 	claims := &documentTicket{}
 	parsed, err := jwt.ParseWithClaims(raw, claims, func(token *jwt.Token) (any, error) {
-		return []byte(server.documents.JWTSecret), nil
+		return []byte(server.documents.TicketSecret), nil
 	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 	if err != nil || !parsed.Valid || claims.Purpose != purpose || claims.Organization != request.PathValue("organizationID") ||
 		claims.Thread != request.PathValue("threadID") || claims.Name != request.PathValue("name") || claims.User == "" || claims.Version < 1 ||
@@ -325,12 +375,11 @@ func (server *Server) downloadDocumentEdit(ctx context.Context, raw string) ([]b
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("document server returned %d", response.StatusCode)
 	}
-	const maxDocumentBytes = 50 << 20
-	content, err := io.ReadAll(io.LimitReader(response.Body, maxDocumentBytes+1))
+	content, err := io.ReadAll(io.LimitReader(response.Body, maxEditedDocumentBytes+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(content) == 0 || len(content) > maxDocumentBytes || bytes.Equal(content, []byte("null")) {
+	if len(content) == 0 || len(content) > maxEditedDocumentBytes || bytes.Equal(content, []byte("null")) {
 		return nil, errors.New("edited file is empty or too large")
 	}
 	return content, nil

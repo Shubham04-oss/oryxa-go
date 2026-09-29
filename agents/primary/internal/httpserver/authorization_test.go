@@ -93,6 +93,7 @@ func newAuthHarness() *authHarness {
 		Documents: DocumentsConfig{
 			PublicURL: "https://documents.oryxa.test", InternalURL: "https://documents.oryxa.test",
 			APIURL: "https://api.oryxa.test", JWTSecret: "example-auth-test-secret-with-32-chars",
+			TicketSecret: "example-ticket-test-secret-with-32-chars",
 		},
 		RunTimeout:          time.Minute,
 		Agents:              h.agents,

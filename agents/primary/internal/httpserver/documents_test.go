@@ -12,13 +12,73 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// The document server's own secret, which it holds, and Oryxa's, which it never
+// does: each 32 bytes or more, and different.
 const (
-	docsSecret = "an-example-secret-with-more-than-32-characters"
-	draftPath  = "/v1/organizations/org_1/threads/thread_1/artifacts/draft.docx"
+	docsSecret   = "the-document-servers-own-secret-of-32-bytes-plus"
+	ticketSecret = "oryxas-ticket-secret-that-docs-never-holds-32-bytes-plus"
 )
 
+const draftPath = "/v1/organizations/org_1/threads/thread_1/artifacts/draft.docx"
+
 func documentsAt(publicURL, internalURL string) DocumentsConfig {
-	return DocumentsConfig{PublicURL: publicURL, InternalURL: internalURL, APIURL: "https://api.oryxa.test", JWTSecret: docsSecret}
+	return DocumentsConfig{
+		PublicURL: publicURL, InternalURL: internalURL, APIURL: "https://api.oryxa.test",
+		JWTSecret: docsSecret, TicketSecret: ticketSecret,
+	}
+}
+
+func fromNow(d time.Duration) *time.Time {
+	at := time.Now().Add(d)
+	return &at
+}
+
+// signedTicket is a ticket for org_1's thread_1 draft.docx, version 1, as the
+// member user_1, signed as given: a nil expiry leaves it out, and mutate can
+// change the claims before it is signed. The key is derived from the claims
+// last, so a ticket changed with mutate still carries a key that matches unless
+// the test breaks it on purpose.
+func signedTicket(t *testing.T, purpose string, expires *time.Time, method jwt.SigningMethod, key any, mutate func(*documentTicket)) string {
+	t.Helper()
+	ticket := documentTicket{Purpose: purpose, Organization: "org_1", User: "user_1", Thread: "thread_1", Name: "draft.docx", Version: 1}
+	if expires != nil {
+		ticket.ExpiresAt = jwt.NewNumericDate(*expires)
+	}
+	if mutate != nil {
+		mutate(&ticket)
+	}
+	if ticket.Key == "" {
+		ticket.Key = documentKey(ticket.Organization, ticket.User, ticket.Thread, ticket.Name, ticket.Version)
+	}
+	signed, err := jwt.NewWithClaims(method, ticket).SignedString(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signed
+}
+
+// docsSignature is what Docs sends as the Bearer of a save callback.
+func docsSignature(t *testing.T, method jwt.SigningMethod, key any, claims jwt.MapClaims) string {
+	t.Helper()
+	signed, err := jwt.NewWithClaims(method, claims).SignedString(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signed
+}
+
+// signedBy is a callback's claims as Docs makes them: the payload, and the
+// five minutes it is good for.
+func signedBy(payload any) jwt.MapClaims {
+	return jwt.MapClaims{"payload": payload, "exp": time.Now().Add(5 * time.Minute).Unix()}
+}
+
+func editedKey() string { return documentKey("org_1", "user_1", "thread_1", "draft.docx", 1) }
+
+func tokenValidUnder(raw, secret string, claims jwt.Claims) bool {
+	parsed, err := jwt.ParseWithClaims(raw, claims, func(*jwt.Token) (any, error) { return []byte(secret), nil },
+		jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
+	return err == nil && parsed.Valid
 }
 
 func TestDocumentKindsCoverMajorOfficeFormats(t *testing.T) {
@@ -53,6 +113,7 @@ func TestDocumentEditorUsesSignedScopedSourceAndCallback(t *testing.T) {
 	if response := serve(server, http.MethodGet, base+"/editor", "", nil); response.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous editor = %d", response.Code)
 	}
+	before := time.Now()
 	response := serve(server, http.MethodGet, base+"/editor", "", bearer)
 	if response.Code != http.StatusOK {
 		t.Fatalf("editor = %d %s", response.Code, response.Body.String())
@@ -109,16 +170,20 @@ func TestDocumentEditorUsesSignedScopedSourceAndCallback(t *testing.T) {
 	if editSession.Config.EditorConfig.Mode != "edit" || !editSession.Config.Document.Permissions.Edit {
 		t.Fatalf("edit button should permit editing: %+v", editSession.Config)
 	}
-	// The editor's configuration is Docs' to read, and expires with the session
-	// it opens.
+
+	// The editor's configuration is Docs' to read, so Docs' secret signs it,
+	// and it expires with the session it opens.
 	configClaims := jwt.MapClaims{}
-	if _, err := jwt.ParseWithClaims(session.Config.Token, configClaims, func(*jwt.Token) (any, error) { return []byte(docsSecret), nil },
-		jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()); err != nil {
-		t.Fatalf("the editor configuration is not signed with an expiry: %v", err)
+	if !tokenValidUnder(session.Config.Token, docsSecret, configClaims) {
+		t.Fatal("the editor configuration is not signed with the document server's secret, with an expiry")
 	}
-	if expiry, err := configClaims.GetExpirationTime(); err != nil || expiry.Before(time.Now().Add(time.Hour)) || expiry.After(time.Now().Add(25*time.Hour)) {
+	if tokenValidUnder(session.Config.Token, ticketSecret, jwt.MapClaims{}) {
+		t.Fatal("the editor configuration is signed with the ticket secret")
+	}
+	if expiry, err := configClaims.GetExpirationTime(); err != nil || expiry.Before(before.Add(time.Hour)) || expiry.After(time.Now().Add(25*time.Hour)) {
 		t.Fatalf("the editor configuration expires at %v (%v), want about a day from now", expiry, err)
 	}
+
 	sourceURL, err := url.Parse(session.Config.Document.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -126,6 +191,31 @@ func TestDocumentEditorUsesSignedScopedSourceAndCallback(t *testing.T) {
 	if sourceURL.Host != "api.oryxa.test" {
 		t.Fatalf("source URL host = %s", sourceURL.Host)
 	}
+	callbackURL, err := url.Parse(session.Config.EditorConfig.CallbackURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What Docs may read and write a member's file with is signed by Oryxa
+	// alone, never with a secret Docs holds, and each ticket has its own life.
+	for name, test := range map[string]struct {
+		raw      string
+		lifetime time.Duration
+	}{
+		"source":   {sourceURL.Query().Get("ticket"), time.Hour},
+		"callback": {callbackURL.Query().Get("ticket"), 24 * time.Hour},
+	} {
+		claims := &documentTicket{}
+		if !tokenValidUnder(test.raw, ticketSecret, claims) || claims.Purpose != name {
+			t.Fatalf("the %s ticket is not a %s ticket signed with the ticket secret with an expiry: %+v", name, name, claims)
+		}
+		if tokenValidUnder(test.raw, docsSecret, &documentTicket{}) {
+			t.Fatalf("the %s ticket is signed with the document server's secret", name)
+		}
+		if lived := claims.ExpiresAt.Sub(before); lived < test.lifetime-time.Minute || lived > test.lifetime+time.Minute {
+			t.Fatalf("the %s ticket lives %v, want about %v", name, lived, test.lifetime)
+		}
+	}
+
 	source := serve(server, http.MethodGet, sourceURL.RequestURI(), "", nil)
 	if source.Code != http.StatusOK || source.Body.String() != "docx-original" {
 		t.Fatalf("signed source = %d %s", source.Code, source.Body.String())
@@ -133,27 +223,12 @@ func TestDocumentEditorUsesSignedScopedSourceAndCallback(t *testing.T) {
 	if unsigned := serve(server, http.MethodGet, base+"/editor-source", "", nil); unsigned.Code != http.StatusUnauthorized {
 		t.Fatalf("unsigned source = %d", unsigned.Code)
 	}
-	callbackURL, err := url.Parse(session.Config.EditorConfig.CallbackURL)
-	if err != nil {
-		t.Fatal(err)
-	}
 	callback := documentCallbackBody{Key: session.Config.Document.Key, Status: 2, URL: editedServer.URL + "/changed.docx", FileType: "docx"}
 	body, _ := json.Marshal(callback)
 	if unsigned := serve(server, http.MethodPost, callbackURL.RequestURI(), string(body), nil); unsigned.Code != http.StatusUnauthorized {
 		t.Fatalf("unsigned callback = %d", unsigned.Code)
 	}
-	// Docs signs each callback with the five minutes it is good for.
-	signature, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"payload": callback, "exp": time.Now().Add(5 * time.Minute).Unix()}).SignedString([]byte(docsSecret))
-	if err != nil {
-		t.Fatal(err)
-	}
-	unexpiring, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"payload": callback}).SignedString([]byte(docsSecret))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if refused := serve(server, http.MethodPost, callbackURL.RequestURI(), string(body), map[string]string{"Authorization": "Bearer " + unexpiring}); refused.Code != http.StatusUnauthorized || len(files.edited) != 0 {
-		t.Fatalf("a callback signed with no expiry = %d, saved %q; want it refused", refused.Code, files.edited)
-	}
+	signature := docsSignature(t, jwt.SigningMethodHS256, []byte(docsSecret), signedBy(callback))
 	saved := serve(server, http.MethodPost, callbackURL.RequestURI(), string(body), map[string]string{"Authorization": "Bearer " + signature})
 	if saved.Code != http.StatusOK || !strings.Contains(saved.Body.String(), `"error":0`) || string(files.edited) != "docx-edited" {
 		t.Fatalf("save callback = %d %s; file = %q", saved.Code, saved.Body.String(), files.edited)
@@ -165,43 +240,100 @@ func TestDocumentEditorUsesSignedScopedSourceAndCallback(t *testing.T) {
 	converted := callback
 	converted.FileType = "odt"
 	convertedBody, _ := json.Marshal(converted)
-	convertedSignature, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"payload": converted, "exp": time.Now().Add(5 * time.Minute).Unix()}).SignedString([]byte(docsSecret))
-	if err != nil {
-		t.Fatal(err)
-	}
+	convertedSignature := docsSignature(t, jwt.SigningMethodHS256, []byte(docsSecret), signedBy(converted))
 	refused := serve(server, http.MethodPost, callbackURL.RequestURI(), string(convertedBody), map[string]string{"Authorization": "Bearer " + convertedSignature})
 	if refused.Code != http.StatusOK || !strings.Contains(refused.Body.String(), `"error":1`) {
 		t.Fatalf("converted callback = %d %s", refused.Code, refused.Body.String())
 	}
 }
 
-// What Docs is given is opaque bytes: a file named like an Office file and
-// typed like a page must not be one if a browser is ever handed its URL.
-func TestTheSourceIsServedAsBytesThatCannotRunAsAPage(t *testing.T) {
-	server := New(member(), &fakeThreads{}, Config{Documents: documentsAt("https://docs.oryxa.test", "https://docs.oryxa.test")}, nil)
-	for name, want := range map[string]string{"draft.docx": "docx-original", "trap.docx": "<script>alert(1)</script>"} {
-		ticket, err := server.signDocumentTicket(documentTicket{
-			Purpose: "source", Organization: "org_1", User: "user_1", Thread: "thread_1", Name: name, Version: 1,
-			Key:              documentKey("org_1", "user_1", "thread_1", name, 1),
-			RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))},
+// Nothing is opened, or read, for a deployment that has no working editor, and
+// no ticket is honoured by one.
+func TestAnUnconfiguredDocumentServerOpensNothing(t *testing.T) {
+	ready := documentsAt("https://docs.oryxa.test", "https://docs.oryxa.test")
+	broken := func(change func(*DocumentsConfig)) DocumentsConfig {
+		config := ready
+		change(&config)
+		return config
+	}
+	for name, config := range map[string]DocumentsConfig{
+		"nothing set":                        {},
+		"secrets only":                       {JWTSecret: docsSecret, TicketSecret: ticketSecret},
+		"no ticket secret":                   broken(func(c *DocumentsConfig) { c.TicketSecret = "" }),
+		"no document server secret":          broken(func(c *DocumentsConfig) { c.JWTSecret = "" }),
+		"a ticket secret of 31 bytes":        broken(func(c *DocumentsConfig) { c.TicketSecret = strings.Repeat("t", 31) }),
+		"a document server secret of 31":     broken(func(c *DocumentsConfig) { c.JWTSecret = strings.Repeat("j", 31) }),
+		"one secret for both":                broken(func(c *DocumentsConfig) { c.TicketSecret = c.JWTSecret }),
+		"the published sample as the ticket": broken(func(c *DocumentsConfig) { c.TicketSecret = publishedDocumentSecret }),
+		"the published sample as Docs'":      broken(func(c *DocumentsConfig) { c.JWTSecret = publishedDocumentSecret }),
+		"no public address":                  broken(func(c *DocumentsConfig) { c.PublicURL = "" }),
+		"no internal address":                broken(func(c *DocumentsConfig) { c.InternalURL = "" }),
+		"no API address":                     broken(func(c *DocumentsConfig) { c.APIURL = "" }),
+	} {
+		t.Run(name, func(t *testing.T) {
+			files := &fakeThreads{}
+			server := New(member(), files, Config{Documents: config}, nil)
+			for _, mode := range []string{"view", "edit"} {
+				response := serve(server, http.MethodGet, draftPath+"/editor?mode="+mode, "", bearer)
+				if response.Code != http.StatusServiceUnavailable || errorCode(t, response) != "document_editor_unavailable" {
+					t.Fatalf("%s editor = %d %s, want 503", mode, response.Code, response.Body.String())
+				}
+			}
+			if files.fileReads != 0 || files.versionReads != 0 {
+				t.Fatalf("an editor that is not set up read %d files and %d versions, want nothing read", files.fileReads, files.versionReads)
+			}
+			// Tickets signed with any secret a deployment might hold, or none.
+			for _, secret := range []string{"", docsSecret, ticketSecret, publishedDocumentSecret, strings.Repeat("a", 31)} {
+				source := signedTicket(t, "source", fromNow(time.Hour), jwt.SigningMethodHS256, []byte(secret), nil)
+				if response := serve(server, http.MethodGet, draftPath+"/editor-source?ticket="+url.QueryEscape(source), "", nil); response.Code != http.StatusUnauthorized {
+					t.Fatalf("a source ticket signed with a %d-byte secret = %d, want 401", len(secret), response.Code)
+				}
+				callback := documentCallbackBody{Key: editedKey(), Status: 2, FileType: "docx", URL: "http://docs.invalid/x"}
+				body, _ := json.Marshal(callback)
+				ticket := signedTicket(t, "callback", fromNow(time.Hour), jwt.SigningMethodHS256, []byte(secret), nil)
+				headers := map[string]string{"Authorization": "Bearer " + docsSignature(t, jwt.SigningMethodHS256, []byte(secret), signedBy(callback))}
+				if response := serve(server, http.MethodPost, draftPath+"/editor-callback?ticket="+url.QueryEscape(ticket), string(body), headers); response.Code != http.StatusUnauthorized {
+					t.Fatalf("a callback signed with a %d-byte secret = %d, want 401", len(secret), response.Code)
+				}
+			}
+			if files.fileReads != 0 || len(files.edited) != 0 {
+				t.Fatal("an editor that is not set up served or saved a file")
+			}
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		response := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/"+name+"/editor-source?ticket="+url.QueryEscape(ticket), "", nil)
-		if response.Code != http.StatusOK || response.Body.String() != want {
-			t.Fatalf("%s = %d %q", name, response.Code, response.Body.String())
-		}
-		header := response.Header()
-		if header.Get("Content-Type") != "application/octet-stream" {
-			t.Fatalf("%s is served as %q, want opaque bytes whatever type the file carries", name, header.Get("Content-Type"))
-		}
-		if header.Get("Content-Security-Policy") != artifactContentPolicy || !strings.Contains(header.Get("Content-Security-Policy"), "sandbox") {
-			t.Fatalf("%s carries the policy %q, want the one every file a run kept carries: %q", name, header.Get("Content-Security-Policy"), artifactContentPolicy)
-		}
-		if !strings.HasPrefix(header.Get("Content-Disposition"), "attachment") || header.Get("X-Content-Type-Options") != "nosniff" || header.Get("Cache-Control") != "no-store" {
-			t.Fatalf("%s headers = %v", name, header)
-		}
+	}
+}
+
+func TestADocumentServerThatCannotBeUsedSaysWhyWithoutItsSecrets(t *testing.T) {
+	ready := documentsAt("https://docs.oryxa.test", "https://docs.oryxa.test")
+	if ready.Problem() != "" || !ready.ready() {
+		t.Fatalf("a complete configuration has a problem: %q", ready.Problem())
+	}
+	if (DocumentsConfig{}).Problem() != "" {
+		t.Fatal("a deployment with no document server has nothing to report")
+	}
+	for name, test := range map[string]struct {
+		change func(*DocumentsConfig)
+		names  string
+	}{
+		"an address missing":     {func(c *DocumentsConfig) { c.APIURL = "" }, "AGENTS_PRIMARY_DOCUMENT_API_URL"},
+		"a short Docs secret":    {func(c *DocumentsConfig) { c.JWTSecret = "short" }, "AGENTS_PRIMARY_DOCUMENT_JWT_SECRET"},
+		"a short ticket secret":  {func(c *DocumentsConfig) { c.TicketSecret = "short" }, "AGENTS_PRIMARY_DOCUMENT_TICKET_SECRET"},
+		"the sample as a secret": {func(c *DocumentsConfig) { c.JWTSecret = publishedDocumentSecret }, "published example"},
+		"one secret for both":    {func(c *DocumentsConfig) { c.TicketSecret = c.JWTSecret }, "must differ"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := ready
+			test.change(&config)
+			problem := config.Problem()
+			if !strings.Contains(problem, test.names) {
+				t.Fatalf("Problem() = %q, want it to name %q", problem, test.names)
+			}
+			for _, secret := range []string{docsSecret, ticketSecret, config.JWTSecret, config.TicketSecret} {
+				if len(secret) > 8 && strings.Contains(problem, secret) {
+					t.Fatalf("Problem() = %q carries a secret", problem)
+				}
+			}
+		})
 	}
 }
 
@@ -239,21 +371,25 @@ func TestTheEditorNamesTheVersionItOpensWithoutReadingTheFile(t *testing.T) {
 	}
 }
 
-// Nothing is read for a deployment that has no working editor.
-func TestAnEditorThatIsNotSetUpReadsNothing(t *testing.T) {
-	short := documentsAt("https://docs.oryxa.test", "https://docs.oryxa.test")
-	short.JWTSecret = strings.Repeat("s", 31)
-	for name, config := range map[string]DocumentsConfig{"nothing set": {}, "a secret of 31 bytes": short} {
-		files := &fakeThreads{}
-		server := New(member(), files, Config{Documents: config}, nil)
-		for _, mode := range []string{"view", "edit"} {
-			response := serve(server, http.MethodGet, draftPath+"/editor?mode="+mode, "", bearer)
-			if response.Code != http.StatusServiceUnavailable || errorCode(t, response) != "document_editor_unavailable" {
-				t.Fatalf("%s: %s editor = %d %s, want 503", name, mode, response.Code, response.Body.String())
-			}
+// What Docs is given is opaque bytes: a file named like an Office file and
+// typed like a page must not be one if a browser is ever handed its URL.
+func TestTheSourceIsServedAsBytesThatCannotRunAsAPage(t *testing.T) {
+	server := New(member(), &fakeThreads{}, Config{Documents: documentsAt("https://docs.oryxa.test", "https://docs.oryxa.test")}, nil)
+	for name, want := range map[string]string{"draft.docx": "docx-original", "trap.docx": "<script>alert(1)</script>"} {
+		ticket := signedTicket(t, "source", fromNow(time.Hour), jwt.SigningMethodHS256, []byte(ticketSecret), func(ticket *documentTicket) { ticket.Name = name })
+		response := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/"+name+"/editor-source?ticket="+url.QueryEscape(ticket), "", nil)
+		if response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("%s = %d %q", name, response.Code, response.Body.String())
 		}
-		if files.fileReads != 0 || files.versionReads != 0 {
-			t.Fatalf("%s: read %d files and %d versions, want nothing read", name, files.fileReads, files.versionReads)
+		header := response.Header()
+		if header.Get("Content-Type") != "application/octet-stream" {
+			t.Fatalf("%s is served as %q, want opaque bytes whatever type the file carries", name, header.Get("Content-Type"))
+		}
+		if header.Get("Content-Security-Policy") != artifactContentPolicy || !strings.Contains(header.Get("Content-Security-Policy"), "sandbox") {
+			t.Fatalf("%s carries the policy %q, want the one every file a run kept carries: %q", name, header.Get("Content-Security-Policy"), artifactContentPolicy)
+		}
+		if !strings.HasPrefix(header.Get("Content-Disposition"), "attachment") || header.Get("X-Content-Type-Options") != "nosniff" || header.Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s headers = %v", name, header)
 		}
 	}
 }

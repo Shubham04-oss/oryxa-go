@@ -2156,16 +2156,29 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 
 Oryxa opens conversation artifacts for viewing first inside the primary agent's work panel. The viewer renders PDF, DOCX, PPTX, XLSX, CSV, Markdown, text and images in the browser without ONLYOFFICE chrome. Legacy Office and OpenDocument files can still be downloaded or opened for editing. The file-header Edit button opens [ONLYOFFICE Docs](https://api.onlyoffice.com/docs/docs-api/get-started/basic-concepts/) for DOC/DOCX/ODT/RTF, XLS/XLSX/ODS/CSV, PPT/PPTX/ODP and PDF. The editor gets a signed, expiring URL for the member's exact file version and sends a JWT-signed save callback. Oryxa saves the edited bytes as the next artifact version; an older editor cannot overwrite a newer version. The callback must return the original file type, so a failed legacy-format conversion cannot corrupt a file under the wrong extension.
 
-For local development, run `docker compose --profile documents up -d documents` from the repository root and start Go with:
+Two secrets are needed, each at least 32 bytes and different from the other (`openssl rand -hex 32` makes one), and neither may be the sample secret this README and `.env.example` once printed:
+
+- `AGENTS_PRIMARY_DOCUMENT_JWT_SECRET` is Docs' own `JWT_SECRET`. It signs the editor's configuration, which expires with the session it opens (a day at most), and verifies each save callback, which Docs signs with an expiry: a callback without one is refused.
+- `AGENTS_PRIMARY_DOCUMENT_TICKET_SECRET` is Oryxa's alone and is never sent to Docs. It signs the two URLs Docs is handed: one to read the file (good for an hour) and one to save through (good for a day). A ticket reads or replaces a member's file, so a secret Docs holds must not be able to make one.
+
+Without both, or with one shorter, alike or published, the editor answers `503 document_editor_unavailable` before it reads anything, honours no ticket, and the server logs why once at start-up (`document editing is off`), naming the variable and never its value.
+
+For local development, put the secrets in `.env`, run `docker compose --profile documents up -d documents` from the repository root and start Go with the same `.env`:
 
 ```sh
+# Docs' JWT_SECRET, which docker-compose.yml reads, and the same value for Go
+ORYXA_DOCUMENT_JWT_SECRET=<openssl rand -hex 32>
+AGENTS_PRIMARY_DOCUMENT_JWT_SECRET=<the same value>
+# Oryxa's own, a second value
+AGENTS_PRIMARY_DOCUMENT_TICKET_SECRET=<another openssl rand -hex 32>
 AGENTS_PRIMARY_DOCUMENT_SERVER_URL=http://localhost:8082
 AGENTS_PRIMARY_DOCUMENT_SERVER_INTERNAL_URL=http://localhost:8082
 AGENTS_PRIMARY_DOCUMENT_API_URL=http://host.docker.internal:3001
-AGENTS_PRIMARY_DOCUMENT_JWT_SECRET=oryxa-local-documents-secret-change-before-sharing
 ```
 
-`AGENTS_PRIMARY_DOCUMENT_API_URL` must be reachable **from the Docs container**; the example uses the Vite `/v1/` proxy. `AGENTS_PRIMARY_DOCUMENT_SERVER_URL` must be reachable from the member's browser. Use HTTPS for both public URLs in a deployed environment and a stable secret of at least 32 characters. Set the same secret as Docs' `JWT_SECRET`. The Community Edition compose service is for local evaluation; [ONLYOFFICE's licensing FAQ](https://helpcenter.onlyoffice.com/docs/faq/docs-community.aspx) states the AGPL terms for SaaS integrations and says Community Edition has no mobile web version. Production needs an edition and license compatible with Oryxa's distribution and phone editing requirements. Docs is a separate service with its own capacity requirements; it is not included in the existing production Fargate task.
+The compose service has no secret of its own to fall back on, and binds `127.0.0.1` only: started without `ORYXA_DOCUMENT_JWT_SECRET`, Docs makes up a secret Oryxa cannot sign with, and the editor reports that it cannot open the document.
+
+`AGENTS_PRIMARY_DOCUMENT_API_URL` must be reachable **from the Docs container**; the example uses the Vite `/v1/` proxy. `AGENTS_PRIMARY_DOCUMENT_SERVER_URL` must be reachable from the member's browser. Use HTTPS for both public URLs in a deployed environment. The Community Edition compose service is for local evaluation; [ONLYOFFICE's licensing FAQ](https://helpcenter.onlyoffice.com/docs/faq/docs-community.aspx) states the AGPL terms for SaaS integrations and says Community Edition has no mobile web version. Production needs an edition and license compatible with Oryxa's distribution and phone editing requirements. Docs is a separate service with its own capacity requirements; it is not included in the existing production Fargate task.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
