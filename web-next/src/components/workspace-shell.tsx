@@ -22,6 +22,7 @@ import {
 import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { FocusHeader } from "./agents-parts"
 import { PrimaryAgentFileViewer } from "./primary-agent-files"
+import { HomeOverview } from "./home-overview"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import { KnowledgeBases } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
@@ -81,7 +82,7 @@ type NavigationItem = {
 
 const navigation: Record<PrimaryMode, NavigationItem[]> = {
   home: [
-    { key: "overview", label: "Overview", icon: LayoutGrid },
+    { key: "overview", label: "Today", icon: LayoutGrid },
     { key: "knowledge", label: "Knowledge bases", icon: Sparkles },
     { key: "tools", label: "Tools", icon: Puzzle },
   ],
@@ -113,7 +114,7 @@ const defaultSections: Record<PrimaryMode, Section> = {
 }
 
 const headings: Record<Section, string> = {
-  overview: "Home",
+  overview: "Today",
   teamspaces: "Teamspaces",
   agents: "Agent overview",
   "multi-agents": "Multi-agent teams",
@@ -122,8 +123,6 @@ const headings: Record<Section, string> = {
   knowledge: "Knowledge bases",
   tools: "Tools",
 }
-
-const savedViews = ["Launch plan", "At-risk accounts", "Q4 pipeline"]
 
 export function WorkspaceShell({
   session,
@@ -158,7 +157,7 @@ export function WorkspaceShell({
   const firstDm = openable(initialDirectMessage)
   const startMode: PrimaryMode = firstDm ? "team" : initialMode
   const [isMobile, setIsMobile] = useState(false)
-  const [leftExpanded, setLeftExpanded] = useState(true)
+  const [leftExpanded, setLeftExpanded] = useState(startMode !== "home")
   const [rightExpanded, setRightExpanded] = useState(false)
   const [activeMode, setActiveMode] = useState<PrimaryMode>(startMode)
   const [sectionsByMode, setSectionsByMode] = useState<
@@ -462,6 +461,20 @@ export function WorkspaceShell({
     openPrimaryWork()
   }
 
+  function navigateFromHome(mode: PrimaryMode, next: Section) {
+    closePrimaryWork()
+    teamspaces.close()
+    agentsMode.close()
+    setActiveMode(mode)
+    setSectionsByMode((current) => ({ ...current, [mode]: next }))
+    if (isMobile) setLeftExpanded(false)
+  }
+
+  // #140 replaces this count-only destination with the Requests section.
+  function openHomeRequests() {
+    navigateFromHome("agents", "agents")
+  }
+
   function openPrimaryFile(file?: PrimaryAgentFileTarget) {
     setPrimaryViewer("file")
     setPrimaryFile(file ?? null)
@@ -652,18 +665,6 @@ export function WorkspaceShell({
               onOpen={openDirectMessage}
               onShowAll={showAllConversations}
             />
-          )}
-
-          {leftExpanded && activeMode === "home" && (
-            <div className="workspace-saved-views">
-              <p className="workspace-eyebrow">Saved views</p>
-              {savedViews.map((view) => (
-                <span className="workspace-saved-view" key={view}>
-                  <span className="workspace-view-dot" />
-                  {view}
-                </span>
-              ))}
-            </div>
           )}
 
           <div className="workspace-profile-area">
@@ -861,6 +862,21 @@ export function WorkspaceShell({
               className="workspace-canvas"
               aria-label={`${detailTitle || heading} canvas`}
             >
+              {section === "overview" && (
+                <HomeOverview
+                  key={selectedOrganization?.id ?? "preview"}
+                  organizationId={
+                    session ? selectedOrganization?.id : undefined
+                  }
+                  viewerId={viewerId}
+                  // New/open chat shortcuts await the chat owner's supported
+                  // API; disabled until they can reach the exact DO thread.
+                  onOpenRequests={openHomeRequests}
+                  onOpenAgent={openAgentOverview}
+                  onOpenTools={() => navigateFromHome("home", "tools")}
+                  onOpenKnowledge={() => navigateFromHome("home", "knowledge")}
+                />
+              )}
               {section === "knowledge" && (
                 <KnowledgeBases
                   organizationId={selectedOrganization?.id}

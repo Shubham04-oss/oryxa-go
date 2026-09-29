@@ -106,6 +106,39 @@ afterEach(() => {
 })
 
 describe("WorkspaceShell navigation", () => {
+  it("starts Home on collapsed rails, preserves explicit toggle choices and has no fake saved views", () => {
+    const { container } = render(<WorkspaceShell />)
+    const shell = container.querySelector(".workspace-shell")
+    expect(
+      screen.getByRole("heading", { name: "Today", level: 1 })
+    ).toBeTruthy()
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+    expect(shell?.getAttribute("data-right")).toBe("collapsed")
+    for (const label of [
+      "Saved views",
+      "Launch plan",
+      "At-risk accounts",
+      "Q4 pipeline",
+    ])
+      expect(screen.queryByText(label)).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
+    fireEvent.click(screen.getByRole("button", { name: /^Home$/ }))
+    expect(shell?.getAttribute("data-left")).toBe("expanded")
+    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+    expect(shell?.getAttribute("data-right")).toBe("expanded")
+    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
+    fireEvent.click(screen.getByRole("button", { name: "Today" }))
+    expect(shell?.getAttribute("data-right")).toBe("expanded")
+    fireEvent.click(
+      screen.getByRole("button", { name: "Collapse agent panel" })
+    )
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+    expect(shell?.getAttribute("data-right")).toBe("collapsed")
+  })
+
   it("uses the header title without repeating page introductions", () => {
     render(<WorkspaceShell />)
 
@@ -115,6 +148,7 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
     expect(screen.queryByText("Knowledge your team can build on.")).toBeNull()
 
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
     fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
     expect(
       screen.getByRole("heading", { name: "Teamspaces", level: 1 })
@@ -194,7 +228,7 @@ describe("WorkspaceShell navigation", () => {
       name: "Home navigation",
     })
     expect(
-      within(homeNavigation).getByRole("button", { name: "Overview" })
+      within(homeNavigation).getByRole("button", { name: "Today" })
     ).toBeTruthy()
     expect(
       within(homeNavigation).getByRole("button", { name: "Knowledge bases" })
@@ -203,6 +237,7 @@ describe("WorkspaceShell navigation", () => {
       screen.queryByRole("button", { name: "Multi-agent teams" })
     ).toBeNull()
 
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
     fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
     const teamNavigation = screen.getByRole("navigation", {
       name: "Team navigation",
@@ -211,7 +246,7 @@ describe("WorkspaceShell navigation", () => {
       within(teamNavigation).getByRole("button", { name: "People" })
     ).toBeTruthy()
     expect(
-      within(teamNavigation).queryByRole("button", { name: "Overview" })
+      within(teamNavigation).queryByRole("button", { name: "Today" })
     ).toBeNull()
     fireEvent.click(
       within(teamNavigation).getByRole("button", { name: "People" })
@@ -318,7 +353,7 @@ describe("WorkspaceShell navigation", () => {
     expect(within(panel).queryByText(/launch timeline/)).toBeNull()
     expect(within(panel).queryByRole("tablist")).toBeNull()
 
-    expect(shell?.getAttribute("data-left")).toBe("expanded")
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
     fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("expanded")
@@ -449,6 +484,7 @@ describe("WorkspaceShell navigation", () => {
   it("shows no example teamspaces without a workspace to read", () => {
     const api = mockApi(() => undefined)
     render(<WorkspaceShell />)
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
     fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
 
     expect(screen.getByText("No workspace to load")).toBeTruthy()

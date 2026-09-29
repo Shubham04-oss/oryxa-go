@@ -73,7 +73,7 @@ not permission to copy every incidental value into a new component.
 
   | Mode | Left navigation |
   | --- | --- |
-  | Home | Overview, Knowledge bases, Tools, then saved views |
+  | Home | Today, Knowledge bases, Tools |
   | Team | Teamspaces, People, then up to three visible recent conversations |
   | Agents | Agent overview, Multi-agent teams, Specialists |
 
@@ -89,6 +89,32 @@ not permission to copy every incidental value into a new component.
 
 ## 3. Focused work and content pages
 
+- **Home — Today.** Start Home with both sidebars collapsed. Expand one only
+  when the member uses its toggle, and keep the state they leave it in when
+  they return to Home; the normal mutual-collapse rules still apply. On a
+  phone, both navigation overlays start closed and close after a selection.
+  Today is a centered column about 360px wide on the `#1e1e1e` canvas, with
+  its composer and cards on `#111111`, tight rows and 11–12px type. No greeting,
+  starter prompts, saved-view examples or Teamspaces card.
+  - The composer always starts a **new** primary-agent conversation. It never
+    resumes the latest one. Sending follows the existing authenticated
+    `ThreadChatAgent` path, with the Home screen context captured before
+    leaving it.
+  - Keep up to three real recent conversations immediately below the composer,
+    including when nothing else needs the member. Each opens that exact
+    conversation. New chat starts a blank conversation, and All opens the
+    agent's work. Describe running work only from a real live signal, never
+    from a thread's update time.
+  - Then show Waiting on you for owner approvals and held answers to review,
+    and Needs attention for failed or expired tools and failed knowledge
+    documents. At most three rows per section; All opens the relevant section.
+    Hide sections that have nothing. With no decisions or failures, keep one
+    quiet line alongside any real recent conversations.
+  - Counts must reflect the response's limits: a full bounded requests response
+    is a lower bound (`N+`), not a total. Check only a fixed number of knowledge
+    bases, query failed documents directly, and state coverage naturally
+    (for example, “Checked 3 of 8 knowledge bases”). Loading, a refused read,
+    and partial coverage must never imply that all work is clear.
 - A teamspace or extensive agentic task is a focused work view: no left
   sidebar, naked conversation on the base surface, compact title/back header,
   and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
