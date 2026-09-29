@@ -577,9 +577,11 @@ task does nothing new. Run it from a checkout that has main's
 `release.auto.tfvars.json` (main's head, or this branch after main is merged
 into it), which names the release that is running: an older copy would roll the
 service back to an older image. Read the plan first. It should show the key, its
-alias, the two containers, the task role's and the execution role's policies and
-a new task definition, and nothing else, and the definition's image should not
-change. The execution role's is the one that lets ECS read a secret the
+alias, the two containers, the consent guardrail and its version
+(`answer_guard.tf`, which the task role's policy and the task definition now
+name, so a target on either takes it), the task role's and the execution role's
+policies and a new task definition, and nothing else, and the definition's image
+should not change. The execution role's is the one that lets ECS read a secret the
 definition names as a task starts, and the task definition does not depend on it,
 so the targets name it: without it the switch below makes a task that names two
 secrets it may not read, which fails to start and is rolled back.
