@@ -139,3 +139,34 @@ func TestConnectAppRefusesRestrictedExistingConnection(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 }
+
+func TestPendingAppConnectionIsResumableNeedsHuman(t *testing.T) {
+	testSessionStore(t)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/organizations":
+			fmt.Fprint(w, `{"organizations":[{"id":"org_1","slug":"acme"}]}`)
+		case "/v1/organizations/org_1/apps/offer":
+			fmt.Fprint(w, `{"offer":["github"]}`)
+		case "/v1/organizations/org_1/apps/connections":
+			fmt.Fprint(w, `{"connections":[{"id":"pending","toolkit":"github","status":"pending"}]}`)
+		default:
+			t.Errorf("unexpected request %s", r.URL)
+			w.WriteHeader(404)
+		}
+	}))
+	defer api.Close()
+	target := "https://provider.example/authorize?state=pending"
+	savePendingAppURL(api.URL, "org_1", "pending", target)
+	var stdout, stderr bytes.Buffer
+	getenv := func(key string) string {
+		if key == "ORYXA_ACCESS_TOKEN" {
+			return "access"
+		}
+		return ""
+	}
+	code := run(context.Background(), []string{"connect-app", "github", "--api", api.URL, "--org", "acme", "--json", "--no-input"}, &stdout, &stderr, getenv)
+	if code != 2 || !strings.Contains(stdout.String(), `"status":"needs_human"`) || !strings.Contains(stdout.String(), target) {
+		t.Fatalf("pending connection: exit%d %s %s", code, stdout.String(), stderr.String())
+	}
+}

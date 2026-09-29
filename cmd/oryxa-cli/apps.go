@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -52,7 +53,7 @@ func connectApp(ctx context.Context, toolkit string, opts options, stdout, stder
 			return report(stdout, opts.json, appConnectionResult("done", toolkit, connection, "", "already connected"))
 		}
 		if connection.Status == "pending" {
-			return reportError(fmt.Errorf("%s already has a pending connection %s; complete its browser page or remove it in app settings before retrying", toolkit, connection.ID), stderr)
+			return appNeedsBrowser(stdout, opts.json, toolkit, connection, pendingAppURL(opts.api, organization.ID, connection.ID))
 		}
 	}
 	connection, redirectURL, err := client.StartAppConnection(ctx, organization.ID, toolkit)
@@ -62,6 +63,7 @@ func connectApp(ctx context.Context, toolkit string, opts options, stdout, stder
 	if connection.ID == "" || connection.Toolkit != toolkit || !validAppRedirect(redirectURL) {
 		return reportError(fmt.Errorf("app connection API returned an invalid browser step"), stderr)
 	}
+	savePendingAppURL(opts.api, organization.ID, connection.ID, redirectURL)
 	if opts.noBrowser || opts.noInput {
 		return appNeedsBrowser(stdout, opts.json, toolkit, connection, redirectURL)
 	}
@@ -82,7 +84,7 @@ func connectApp(ctx context.Context, toolkit string, opts options, stdout, stder
 			if ctx.Err() != nil {
 				return reportError(ctx.Err(), stderr)
 			}
-			return 2
+			return appNeedsBrowser(stdout, opts.json, toolkit, connection, redirectURL)
 		case <-ticker.C:
 			updated, err := client.AppConnection(waitCtx, organization.ID, connection.ID)
 			if err != nil {
@@ -129,4 +131,31 @@ func validAppRedirect(target string) bool {
 	}
 	return parsed.Scheme == "https" || parsed.Scheme == "http" &&
 		(strings.EqualFold(parsed.Hostname(), "localhost") || parsed.Hostname() == "127.0.0.1")
+}
+
+func pendingAppAccount(api, organization, connection string) string {
+	return sessionAccount(api + "/" + organization + "/" + connection)
+}
+func savePendingAppURL(api, organization, connection, target string) {
+	encoded, _ := json.Marshal(struct {
+		URL       string
+		ExpiresAt time.Time
+	}{target, time.Now().Add(30 * time.Minute)})
+	_ = sessionStore.Set(sessionService+".connections", pendingAppAccount(api, organization, connection), string(encoded))
+}
+func pendingAppURL(api, organization, connection string) string {
+	account := pendingAppAccount(api, organization, connection)
+	encoded, err := sessionStore.Get(sessionService+".connections", account)
+	if err != nil {
+		return ""
+	}
+	var pending struct {
+		URL       string
+		ExpiresAt time.Time
+	}
+	if json.Unmarshal([]byte(encoded), &pending) != nil || time.Now().After(pending.ExpiresAt) || !validAppRedirect(pending.URL) {
+		_ = sessionStore.Delete(sessionService+".connections", account)
+		return ""
+	}
+	return pending.URL
 }
