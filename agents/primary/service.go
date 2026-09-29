@@ -200,13 +200,40 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	var interactionService *agentinteractions.Service
 	var teamspaceService *teamspaces.Service
 	// answerGuard reads what one member's agent tells another before they
-	// read it: answers to requests, and what agents say in rooms.
+	// read it: answers to requests, what agents say in rooms, what they
+	// publish to a teamspace's ledger, and, through the check route, what a
+	// side conversation is about to show a member. It is built before any of
+	// them, since each takes it as it is made.
+	//
+	// Every answer another member reads is checked first when a guardrail is
+	// named. The SDK honours AWS_ENDPOINT_URL_BEDROCK_RUNTIME, which points
+	// development at a stand-in.
 	var answerGuard *answerguard.Guard
+	if settings.AnswerGuardrailIdentifier != "" {
+		guard, err := answerguard.New(bedrockruntime.NewFromConfig(platform.AWS), answerguard.Config{
+			Identifier: settings.AnswerGuardrailIdentifier, Version: settings.AnswerGuardrailVersion, Logger: logger,
+		})
+		if err != nil {
+			sessionStore.Close()
+			return host.Service{}, err
+		}
+		answerGuard = guard
+		logger.Info("the answer guard checks every answer another member reads before they read it",
+			"guardrail", settings.AnswerGuardrailIdentifier, "version", settings.AnswerGuardrailVersion)
+	} else {
+		logger.Warn("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID is not set: answers reach the member who asked unchecked")
+	}
 	teamspaceStore := teamspaces.NewStore(platform.Database)
 	roomStore := rooms.NewStore(platform.Database)
 	teamRoomStore := agentteamrooms.NewStore(platform.Database)
 	if organizationDirectory != nil {
-		teamspaceService, err = teamspaces.New(teamspaceStore, organizationDirectory)
+		// The guard is passed only when there is one: a nil *Guard in the
+		// interface would not read as none.
+		teamspaceOptions := []teamspaces.Option{teamspaces.WithLogger(logger)}
+		if answerGuard != nil {
+			teamspaceOptions = append(teamspaceOptions, teamspaces.WithGuard(answerGuard))
+		}
+		teamspaceService, err = teamspaces.New(teamspaceStore, organizationDirectory, teamspaceOptions...)
 		if err != nil {
 			sessionStore.Close()
 			return host.Service{}, err
@@ -220,23 +247,8 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		if typeSafe != nil {
 			interactionConfig.Jev = typeSafe.Ask
 		}
-		// Every answer another member reads is checked first when a
-		// guardrail is named. The SDK honours AWS_ENDPOINT_URL_BEDROCK_RUNTIME,
-		// which points development at a stand-in.
-		if settings.AnswerGuardrailIdentifier != "" {
-			guard, err := answerguard.New(bedrockruntime.NewFromConfig(platform.AWS), answerguard.Config{
-				Identifier: settings.AnswerGuardrailIdentifier, Version: settings.AnswerGuardrailVersion, Logger: logger,
-			})
-			if err != nil {
-				sessionStore.Close()
-				return host.Service{}, err
-			}
-			answerGuard = guard
-			interactionConfig.Guard = guard
-			logger.Info("the answer guard checks every answer another member reads before they read it",
-				"guardrail", settings.AnswerGuardrailIdentifier, "version", settings.AnswerGuardrailVersion)
-		} else {
-			logger.Warn("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID is not set: answers reach the member who asked unchecked")
+		if answerGuard != nil {
+			interactionConfig.Guard = answerGuard
 		}
 		interactionService, err = agentinteractions.New(interactionConfig)
 		if err != nil {
@@ -501,6 +513,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}
 	if roomService != nil {
 		httpConfig.Rooms = roomService
+	}
+	// The check route reads with the same guard, when there is one; without
+	// it the route answers that nothing was checked.
+	if answerGuard != nil {
+		httpConfig.AnswerGuard = answerGuard
 	}
 	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpConfig, logger)
 
