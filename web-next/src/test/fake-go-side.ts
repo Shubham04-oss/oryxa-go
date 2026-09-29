@@ -1,10 +1,12 @@
 // A stand-in for the Go API a side conversation works with
-// (src/side-conversation-agent.ts): a member's threads and their runs, agent
-// requests in a teamspace, their decisions and their owners' reviews of
+// (src/side-conversation-agent.ts): a member's threads and their runs (which
+// a test may hold open), the answer guard's check of an agent's answer,
+// agent requests in a teamspace, their decisions and their owners' reviews of
 // answers the answer guard held, and the teamspace itself. It answers as the
 // member whose cookie a request carries, showing each what Go shows them,
-// keeps what it is asked, and records every call. Use its `fetch` as the
-// global one.
+// keeps what it is asked, and records every call. Like Go, it takes a body
+// with the fields it knows and no others, and a call that is given up on
+// (its signal aborts) ends. Use its `fetch` as the global one.
 import { vi } from "vitest"
 import type { Item } from "@/lib/threads/client"
 import { HELD_ANSWER_FIELDS } from "@/lib/side/asking"
@@ -179,6 +181,33 @@ export type GoCall = {
   body: unknown
 }
 
+/**
+ * What the answer guard's check answers (`POST …/answer-guard/check`):
+ * `checked` is false when no guardrail is set, and `shareable` holds one
+ * text for each one asked, or none at all (null) when nothing is to be
+ * shared.
+ */
+export type GuardVerdict = {
+  checked: boolean
+  state: "clear" | "masked" | "held"
+  kinds: string[]
+  shareable: string[] | null
+}
+
+/** One check the answer guard was asked, as Go took it. */
+export type GuardCheck = {
+  texts: string[]
+  origin: string
+  request: string
+  /** Whose cookie asked. */
+  caller: Person
+}
+
+/** Nothing found: every text may be shared as it was given. */
+export function passThrough({ texts }: { texts: string[] }): GuardVerdict {
+  return { checked: true, state: "clear", kinds: [], shareable: texts }
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -225,6 +254,88 @@ export function answer(author: string, text: string): Item[] {
   ]
 }
 
+/**
+ * Go's answer to a body that is not an object, or that has a field it does
+ * not know (it decodes every body with `DisallowUnknownFields`), or nothing
+ * when it is one it takes.
+ */
+function unknownFields(body: unknown, known: string[]): Response | undefined {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return goError(
+      400,
+      "invalid_request",
+      "invalid request: expected an object"
+    )
+  }
+  const unknown = Object.keys(body).find((field) => !known.includes(field))
+  return unknown === undefined
+    ? undefined
+    : goError(
+        400,
+        "invalid_request",
+        `invalid request: json: unknown field "${unknown}"`
+      )
+}
+
+/**
+ * A run the test holds open, as Go does while an agent works: what `send`
+ * writes streams to whoever reads it, and the stream ends when `finish`
+ * says so. Queue its `response` on `FakeGo.runAnswers`.
+ */
+export function openRun(): {
+  response: Response
+  /** Streams items, as the run goes on. */
+  send: (...items: Item[]) => void
+  /** Streams `run_completed` and ends the stream. */
+  finish: () => void
+} {
+  let stream!: ReadableStreamDefaultController<Uint8Array>
+  const write = (item: Item) =>
+    stream.enqueue(
+      encoder.encode(`event: ${item.type}\ndata: ${JSON.stringify(item)}\n\n`)
+    )
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        stream = controller
+        controller.enqueue(encoder.encode(": keep-alive\n\n"))
+      },
+    }),
+    {
+      headers: { "Content-Type": "text/event-stream", "X-Oryxa-Run": "run_1" },
+    }
+  )
+  return {
+    response,
+    send: (...items) => {
+      for (const item of items) write(item)
+    },
+    finish: () => {
+      write({ type: "run_completed", run_id: "run_1" })
+      stream.close()
+    },
+  }
+}
+
+/** What Go answers, unless `signal` aborts first: a call given up on rejects with the signal's reason, as a fetch does. */
+function unlessAborted<T>(
+  pending: T | Promise<T>,
+  signal: AbortSignal | null | undefined
+): Promise<T> {
+  if (!signal) return Promise.resolve(pending)
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason)
+      return
+    }
+    const abort = () => reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    Promise.resolve(pending)
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort))
+  })
+}
+
 export class FakeGo {
   readonly calls: GoCall[] = []
   readonly requests = new Map<string, GoInteraction>()
@@ -237,6 +348,17 @@ export class FakeGo {
   teamspace: Record<string, unknown> = teamspaceAnswer()
   /** What a new request asks to use when its requester names nothing, as Jev would judge it. */
   requestedTools: string[] = []
+  /** The checks the answer guard was asked, in order; each is among `calls` too. */
+  readonly checks: GuardCheck[] = []
+  /**
+   * What the answer guard answers a check: nothing found, every text shared
+   * as it was given, unless a test sets its own. It answers a verdict, or a
+   * response (a refusal, a body that is not JSON), or a promise of either,
+   * which a test may keep waiting, or a call may be given up on meanwhile.
+   */
+  check: (
+    check: GuardCheck
+  ) => GuardVerdict | Response | Promise<GuardVerdict | Response> = passThrough
   /** The answers held for review, by request: Go shows them to the target's owner alone. */
   readonly held = new Map<string, GoHeld>()
   /** Requests that no longer stand in their teamspace, by id, and why (Go's lapsed words). */
@@ -273,7 +395,10 @@ export class FakeGo {
       if (!caller || this.expired.has(cookie)) {
         return goError(401, "unauthorized", "access token is required")
       }
-      return this.answer(method, url, caller, body)
+      return await unlessAborted(
+        this.answer(method, url, caller, body),
+        init.signal
+      )
     }
   )
 
@@ -449,7 +574,7 @@ export class FakeGo {
     url: URL,
     caller: Person,
     body: unknown
-  ): Response {
+  ): Response | Promise<Response> {
     const base = `/v1/organizations/${org}`
     const path = url.pathname
     if (method === "POST" && path === `${base}/threads`) {
@@ -462,7 +587,16 @@ export class FakeGo {
         201
       )
     }
+    if (method === "POST" && path === `${base}/answer-guard/check`) {
+      return this.checkAnswer(caller, body)
+    }
     if (method === "POST" && /\/threads\/[^/]+\/runs$/.test(path)) {
+      const refused = unknownFields(body, [
+        "message",
+        "confirmations",
+        "teamspace_id",
+      ])
+      if (refused) return refused
       const next = this.runAnswers.shift()
       if (!next) return goError(500, "internal", "no run was expected")
       return next instanceof Response ? next : runStream(next)
@@ -638,6 +772,44 @@ export class FakeGo {
         caller
       )
     )
+  }
+
+  /**
+   * The answer guard's check, as Go takes it: only `texts` (one to eight,
+   * each at most 25,000 characters), `origin` (`owner`, an own agent's
+   * answer) and `request` (what was asked, at most 25,000 characters).
+   */
+  private async checkAnswer(caller: Person, body: unknown): Promise<Response> {
+    const invalid = (why: string) =>
+      goError(400, "invalid_request", `invalid request: ${why}`)
+    const refused = unknownFields(body, ["texts", "origin", "request"])
+    if (refused) return refused
+    const { texts, origin, request } = body as Record<string, unknown>
+    const runes = (text: string) => Array.from(text).length
+    if (
+      !Array.isArray(texts) ||
+      texts.length < 1 ||
+      texts.length > 8 ||
+      texts.some((text) => typeof text !== "string")
+    ) {
+      return invalid("texts must be from one to eight texts")
+    }
+    if ((texts as string[]).some((text) => runes(text) > 25_000)) {
+      return invalid("a text is longer than 25,000 characters")
+    }
+    if (origin !== "owner") return invalid("origin must be owner")
+    if (typeof request !== "string" || runes(request) > 25_000) {
+      return invalid("request must be a text of at most 25,000 characters")
+    }
+    const check: GuardCheck = {
+      texts: texts as string[],
+      origin,
+      request,
+      caller,
+    }
+    this.checks.push(check)
+    const answered = await this.check(check)
+    return answered instanceof Response ? answered : json(answered)
   }
 
   private create(caller: Person, body: Record<string, unknown>): Response {

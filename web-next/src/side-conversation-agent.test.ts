@@ -30,13 +30,15 @@ import {
   cy,
   goOrigin,
   legal,
+  openRun,
   org,
   pageOrigin,
+  passThrough,
   pricing,
   roster,
   teamspaceId,
 } from "./test/fake-go-side"
-import type { GoInteraction, Person } from "./test/fake-go-side"
+import type { GoInteraction, GuardVerdict, Person } from "./test/fake-go-side"
 
 vi.mock(
   "agents",
@@ -400,7 +402,7 @@ describe("SideConversationAgent: people's messages", () => {
 })
 
 describe("SideConversationAgent: asking one's own agent", () => {
-  it("runs the asker's own agent as them on a thread of theirs, with the conversation as untrusted data, and both see it answer", async () => {
+  it("runs the asker's own agent as them on a thread of theirs, with the conversation as untrusted data, pinned to the teamspace, and the asker sees it answer live while the other person reads it once it is checked", async () => {
     const { world, side } = await setup()
     const adaTab = await join(side, ada)
     const boTab = await join(side, bo)
@@ -418,6 +420,11 @@ describe("SideConversationAgent: asking one's own agent", () => {
     })
     const [run] = go.callsTo(`${base}/threads/thread-ada-1/runs`, "POST")
     expect(run.cookie).toBe(ada.cookie)
+    // Pinned: Go runs it in this teamspace and no other.
+    expect(run.body).toEqual({
+      message: expect.any(String) as unknown,
+      teamspace_id: teamspaceId,
+    })
     const prompt = (run.body as { message: string }).message
     expect(prompt.split("\n")[0]).toBe(
       "Side conversation with Bo · Launch room"
@@ -432,13 +439,23 @@ describe("SideConversationAgent: asking one's own agent", () => {
     )
     expect(prompt).toContain(`teamspace_id ${teamspaceId}`)
 
-    // The question, then the answer, stream to both people.
+    // The question, then the answer: it streams to Ada alone, whose it is,
+    // and Bo is sent it whole once the guard has checked it.
+    expect(adaTab.of("side-delta")).toEqual([
+      { type: "side-delta", seq: 3, at: 0, text: "We promised the " },
+      { type: "side-delta", seq: 3, at: 16, text: "beta on Friday." },
+    ])
+    expect(boTab.of("side-delta")).toEqual([])
+    // The guard was asked once, as Ada, about the answer to what she asked.
+    expect(go.checks).toEqual([
+      {
+        texts: ["We promised the beta on Friday."],
+        origin: "owner",
+        request: "Leo, what did we promise?",
+        caller: ada,
+      },
+    ])
     for (const socket of [adaTab, boTab]) {
-      const deltas = socket.of("side-delta")
-      expect(deltas).toEqual([
-        { type: "side-delta", seq: 3, at: 0, text: "We promised the " },
-        { type: "side-delta", seq: 3, at: 16, text: "beta on Friday." },
-      ])
       const [, question, reply] = itemsOf(socket)
       expect(question).toMatchObject({
         kind: "message",
@@ -545,6 +562,7 @@ describe("SideConversationAgent: asking one's own agent", () => {
     const [, second] = go.callsTo(`${base}/threads/thread-ada-1/runs`, "POST")
     expect(second.body).toEqual({
       confirmations: [{ id: "call_1", confirmed: true }],
+      teamspace_id: teamspaceId,
     })
     expect(lastItem(boTab, "agent-message")).toMatchObject({
       seq: waiting?.seq,
@@ -673,7 +691,10 @@ describe("SideConversationAgent: asking one's own agent", () => {
     const adaTab = await join(side, ada)
     go.runAnswers.push(answer("Leo", "Done."))
     await askMine(side, adaTab, "Go")
-    side.sql`UPDATE side_items SET state = 'streaming', settled = 0 WHERE kind = 'agent-message'`
+    // As a run cut off left it before an answer's text stopped being stored
+    // as it streamed: the partial answer was in the row, unchecked.
+    side.sql`UPDATE side_items SET state = 'streaming', settled = 0,
+      body = 'The key is hunter2, and so far' WHERE kind = 'agent-message'`
     const namespace = world.env.SideConversationAgent as {
       objects: Map<string, unknown>
     }
@@ -691,14 +712,804 @@ describe("SideConversationAgent: asking one's own agent", () => {
     expect(
       restarted.sql<{
         state: string
+        body: string
         data: string
-      }>`SELECT state, data FROM side_items WHERE kind = 'agent-message'`
+      }>`SELECT state, body, data FROM side_items WHERE kind = 'agent-message'`
     ).toEqual([
       {
         state: "failed",
+        // Nothing a lost run said was ever checked: none of it stays.
+        body: "",
         data: expect.stringContaining("cut off") as unknown,
       },
     ])
+    expect(
+      JSON.stringify(restarted.sql`SELECT * FROM side_items`)
+    ).not.toContain("hunter2")
+  })
+})
+
+describe("SideConversationAgent: checking an own agent's answer", () => {
+  const eventsOn = { REALTIME_PURGE_SECRET: eventsSecret }
+  const checkPath = `${base}/answer-guard/check`
+  const posted = realtimeEventTypes.messagePosted
+  const question = "Leo, what is the key?"
+  const raw = "Reach Ada at ada@sim.oryxa. The key is hunter2."
+  const hidden = "Reach Ada at ada@sim.oryxa. The key is {PASSWORD}."
+  const masksTheKey: GuardVerdict = {
+    checked: true,
+    state: "masked",
+    kinds: ["PASSWORD"],
+    shareable: [hidden],
+  }
+
+  /** The guard hides `hunter2` wherever it finds it, in every text. */
+  const hidesTheKey: FakeGo["check"] = ({ texts }) => ({
+    checked: true,
+    state: "masked",
+    kinds: ["PASSWORD"],
+    shareable: texts.map((text) => text.replaceAll("hunter2", "{KEY}")),
+  })
+
+  function json(body: unknown, status = 200) {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    })
+  }
+
+  function runsMade() {
+    return go.calls.filter((call) => call.path.endsWith("/runs")).length
+  }
+
+  /** What an agent says as Go streams it: two deltas and the finished message. */
+  function saying(text: string): Item[] {
+    const half = Math.ceil(text.length / 2)
+    return [
+      { type: "run_started", run_id: "run_1" },
+      { type: "delta", author: "Leo", text: text.slice(0, half) },
+      { type: "delta", author: "Leo", text: text.slice(half) },
+      { type: "message", author: "Leo", text },
+    ]
+  }
+
+  /** The member asks their agent, whose run stays open until the test ends it. */
+  async function askOpen(side: Side, socket: FakeSocket, body = question) {
+    const run = openRun()
+    go.runAnswers.push(run.response)
+    const before = runsMade()
+    const asking = askMine(side, socket, body)
+    await vi.waitFor(() => expect(runsMade()).toBe(before + 1))
+    return { run, asking }
+  }
+
+  function outbox(side: Side) {
+    return side.sql<{ type: string; detail: string }>`SELECT type, detail
+      FROM event_outbox ORDER BY position`.map((row) => ({
+      type: row.type,
+      detail: JSON.parse(row.detail) as Record<string, unknown>,
+    }))
+  }
+
+  /** The seqs of the messages recorded for Go. */
+  function recorded(side: Side) {
+    return outbox(side)
+      .filter((row) => row.type === posted)
+      .map((row) => (row.detail.message as { seq: number }).seq)
+  }
+
+  const stored = (side: Side) =>
+    side.sql<{
+      state: string
+      body: string
+    }>`SELECT state, body FROM side_items WHERE kind = 'agent-message'`
+
+  it("streams an own agent's answer to its owner alone, and keeps none of it in storage, in an inbox or on a page that opens meanwhile, until the guard has read it", async () => {
+    const { world, side } = await setup()
+    const adaTab = await join(side, ada)
+    const adaOther = await join(side, ada)
+    const boTab = await join(side, bo)
+    const { run, asking } = await askOpen(side, adaTab)
+    run.send(...saying(raw))
+    await vi.waitFor(() =>
+      expect(lastItem(adaTab, "agent-message")?.body).toBe(raw)
+    )
+
+    // Every tab of Ada's is sent it as it comes, and then whole; Bo is sent
+    // nothing of it, but that it is answering.
+    const first = raw.slice(0, Math.ceil(raw.length / 2))
+    for (const tab of [adaTab, adaOther]) {
+      expect(tab.of("side-delta")).toEqual([
+        { type: "side-delta", seq: 2, at: 0, text: first },
+        {
+          type: "side-delta",
+          seq: 2,
+          at: first.length,
+          text: raw.slice(first.length),
+        },
+      ])
+      expect(lastItem(tab, "agent-message")).toMatchObject({
+        status: "streaming",
+        body: raw,
+      })
+    }
+    expect(boTab.of("side-delta")).toEqual([])
+    expect(lastItem(boTab, "agent-message")).toMatchObject({
+      seq: 2,
+      status: "streaming",
+      body: "",
+    })
+    expect(JSON.stringify(boTab.sent)).not.toContain("hunter2")
+
+    // A page that opens meanwhile is sent what its person may read, and so
+    // is one that asks for older items.
+    const boLate = await join(side, bo)
+    const adaLate = await join(side, ada)
+    expect(lastItem(boLate, "agent-message")).toMatchObject({
+      status: "streaming",
+      body: "",
+    })
+    expect(lastItem(adaLate, "agent-message")).toMatchObject({
+      status: "streaming",
+      body: raw,
+    })
+    await say(side, boLate, {
+      type: "side-history",
+      requestId: "older-1",
+      beforeSeq: 100,
+      limit: 50,
+    })
+    expect(JSON.stringify(boLate.sent)).not.toContain("hunter2")
+
+    // Nothing of it is stored, or told to an inbox.
+    expect(JSON.stringify(side.sql`SELECT * FROM side_items`)).not.toContain(
+      "hunter2"
+    )
+    expect(stored(side)).toEqual([{ state: "streaming", body: "" }])
+    expect(JSON.stringify(await inboxOf(world, bo))).not.toContain("hunter2")
+
+    // Once the guard has read it, both are sent it.
+    run.finish()
+    await asking
+    for (const tab of [boTab, boLate]) {
+      expect(lastItem(tab, "agent-message")).toMatchObject({
+        status: "done",
+        body: raw,
+      })
+    }
+    expect(boTab.of("side-delta")).toEqual([])
+    expect(stored(side)).toEqual([{ state: "done", body: raw }])
+  })
+
+  it("keeps none of what a run a restart cut off had said, since none of it was checked", async () => {
+    const { world, side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    const { run } = await askOpen(side, adaTab)
+    run.send(...saying(raw))
+    await vi.waitFor(() =>
+      expect(lastItem(adaTab, "agent-message")?.body).toBe(raw)
+    )
+    const restarted = await world.restart<Side>("SideConversationAgent", name)
+    expect(stored(restarted)).toEqual([{ state: "failed", body: "" }])
+    expect(
+      JSON.stringify(restarted.sql`SELECT * FROM side_items`)
+    ).not.toContain("hunter2")
+    // A page that opens now, either person's, reads it failed and empty.
+    for (const person of [ada, bo]) {
+      const tab = await join(restarted, person)
+      expect(lastItem(tab, "agent-message")).toMatchObject({
+        status: "failed",
+        body: "",
+        error: "The answer was cut off before it finished.",
+      })
+    }
+    expect(JSON.stringify(boTab.sent)).not.toContain("hunter2")
+    expect(JSON.stringify(await inboxOf(world, bo))).not.toContain("hunter2")
+  })
+
+  type Ends = {
+    status: string
+    body: string
+    error?: string
+    code?: string
+  }
+  const unchecked: Ends = {
+    status: "failed",
+    body: "",
+    error: "This answer couldn't be checked, so it wasn't shared.",
+    code: "unchecked",
+  }
+
+  const settles: Array<{
+    name: string
+    /** What the guard answers. */
+    check: FakeGo["check"]
+    /** How the answer ends, for both people. */
+    ends: Ends
+    /** What its owner alone is told the guard found. */
+    guard?: { state: string; kinds: string[] }
+  }> = [
+    {
+      name: "clear: shared as it is, with nothing to tell",
+      check: ({ texts }) => ({
+        checked: true,
+        state: "clear",
+        kinds: [],
+        shareable: texts,
+      }),
+      ends: { status: "done", body: raw },
+    },
+    {
+      name: "masked: shared as the guard returns it, and its owner is told what it hid",
+      check: () => masksTheKey,
+      ends: { status: "done", body: hidden },
+      guard: { state: "masked", kinds: ["PASSWORD"] },
+    },
+    {
+      name: "held, with a version it would share: that one is shared",
+      check: () => ({
+        checked: true,
+        state: "held",
+        kinds: ["EMAIL", "PASSWORD"],
+        shareable: ["Reach Ada at {EMAIL}. The key is {PASSWORD}."],
+      }),
+      ends: {
+        status: "done",
+        body: "Reach Ada at {EMAIL}. The key is {PASSWORD}.",
+      },
+      guard: { state: "held", kinds: ["EMAIL", "PASSWORD"] },
+    },
+    {
+      name: "held, with none to share: none of it is",
+      check: () => ({
+        checked: true,
+        state: "held",
+        kinds: ["EMAIL"],
+        shareable: null,
+      }),
+      ends: unchecked,
+    },
+    {
+      name: "one it could not check: none of it is, whatever the answer holds",
+      check: () => ({
+        checked: true,
+        state: "held",
+        kinds: ["UNCHECKED"],
+        shareable: [raw],
+      }),
+      ends: unchecked,
+    },
+    {
+      name: "no guardrail set: shared as it is",
+      check: () => ({
+        checked: false,
+        state: "clear",
+        kinds: [],
+        shareable: [raw],
+      }),
+      ends: { status: "done", body: raw },
+    },
+    {
+      name: "a session that had ended: none of it is shared, and the page renews the session",
+      check: () =>
+        json(
+          {
+            error: {
+              code: "unauthorized",
+              message: "access token is required",
+            },
+          },
+          401
+        ),
+      ends: {
+        status: "failed",
+        body: "",
+        error:
+          "The session had ended before the answer could be checked, so it wasn't shared.",
+        code: sessionExpiredCode,
+      },
+    },
+    {
+      name: "an answer that is not JSON",
+      check: () => new Response("{not json", { status: 200 }),
+      ends: unchecked,
+    },
+    {
+      name: "an answer that is JSON but not the guard's",
+      check: () => json({ state: "clear", shareable: [raw] }),
+      ends: unchecked,
+    },
+    {
+      name: "a state it does not know",
+      check: () => json({ ...masksTheKey, state: "blocked" }),
+      ends: unchecked,
+    },
+    ...[400, 403, 404, 429, 500].map((status) => ({
+      name: `status ${status}, which is not the guard's answer`,
+      check: () =>
+        json(
+          { error: { code: "not_ok", message: `go says ${status}` } },
+          status
+        ),
+      ends: unchecked,
+    })),
+  ]
+
+  it.each(settles)(
+    "settles an answer once the guard has read it as its owner, and $name",
+    async ({ check, ends, guard }) => {
+      const { world, side } = await setup(eventsOn)
+      const adaTab = await join(side, ada)
+      const boTab = await join(side, bo)
+      go.check = check
+      go.runAnswers.push(answer("Leo", raw))
+      await askMine(side, adaTab, question)
+
+      // Asked once, as Ada, with her page's origin, about this answer, where
+      // it comes from and what she asked.
+      expect(go.checks).toEqual([
+        { texts: [raw], origin: "owner", request: question, caller: ada },
+      ])
+      const [call] = go.callsTo(checkPath, "POST")
+      expect(go.callsTo(checkPath)).toHaveLength(1)
+      expect(call).toMatchObject({
+        cookie: ada.cookie,
+        origin: pageOrigin,
+        body: { texts: [raw], origin: "owner", request: question },
+      })
+
+      // Both read how it ended; only Ada is told what the guard found.
+      for (const socket of [adaTab, boTab]) {
+        const item = lastItem(socket, "agent-message")
+        expect(item).toMatchObject({
+          seq: 2,
+          status: ends.status,
+          body: ends.body,
+        })
+        expect(item?.error).toBe(ends.error)
+        expect(item?.code).toBe(ends.code)
+      }
+      expect(lastItem(adaTab, "agent-message")?.guard).toEqual(guard)
+      expect(JSON.stringify(boTab.sent)).not.toContain('"guard"')
+      const late = { ada: await join(side, ada), bo: await join(side, bo) }
+      expect(lastItem(late.ada, "agent-message")?.guard).toEqual(guard)
+      expect(lastItem(late.bo, "agent-message")).not.toHaveProperty("guard")
+
+      // Stored as it was shared, and only that.
+      expect(stored(side)).toEqual([{ state: ends.status, body: ends.body }])
+      if (!ends.body.includes("hunter2")) {
+        expect(
+          JSON.stringify(side.sql`SELECT * FROM side_items`)
+        ).not.toContain("hunter2")
+      }
+      // The other person's inbox previews what was shared.
+      const [boInbox] = await inboxOf(world, bo)
+      expect(boInbox.lastMessage?.body).toBe(`Leo: ${ends.body || ends.error}`)
+      // Only an answer that was shared is a message Go is told of.
+      expect(recorded(side)).toEqual(ends.status === "done" ? [1, 2] : [1])
+      // What went wrong is logged, never a word of the answer.
+      expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(
+        "hunter2"
+      )
+      if (ends.code === sessionExpiredCode) {
+        expect(adaTab.last("side-session-expired")).toBeDefined()
+        expect(boTab.of("side-session-expired")).toEqual([])
+      }
+    }
+  )
+
+  it("gives up on a guard that does not answer in ten seconds, and shares none of the answer", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    go.check = () => new Promise<never>(() => undefined)
+    go.runAnswers.push(answer("Leo", raw))
+    const asking = askMine(side, adaTab, question)
+    await vi.waitFor(() => expect(go.checks).toHaveLength(1))
+
+    // Still reading it: the answer is still being made, for both.
+    await vi.advanceTimersByTimeAsync(sideTiming.guardTimeoutMs / 2)
+    expect(lastItem(boTab, "agent-message")).toMatchObject({
+      status: "streaming",
+      body: "",
+    })
+    await vi.advanceTimersByTimeAsync(sideTiming.guardTimeoutMs)
+    await asking
+    for (const socket of [adaTab, boTab]) {
+      expect(lastItem(socket, "agent-message")).toMatchObject({
+        status: "failed",
+        body: "",
+        code: "unchecked",
+        error: "This answer couldn't be checked, so it wasn't shared.",
+      })
+    }
+    expect(stored(side)).toEqual([{ state: "failed", body: "" }])
+    expect(JSON.stringify(side.sql`SELECT * FROM side_items`)).not.toContain(
+      "hunter2"
+    )
+  })
+
+  it("keeps an own agent's run going while the guard reads its answer, so a second ask is busy until it has", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    let release!: (verdict: GuardVerdict) => void
+    go.check = () =>
+      new Promise<GuardVerdict>((resolve) => {
+        release = resolve
+      })
+    go.runAnswers.push(answer("Leo", raw))
+    const asking = askMine(side, adaTab, question)
+    await vi.waitFor(() => expect(go.checks).toHaveLength(1))
+
+    // Its owner still reads it, and the other person nothing but that it is
+    // being made; a second ask is refused as busy.
+    expect(lastItem(adaTab, "agent-message")).toMatchObject({
+      status: "streaming",
+      body: raw,
+    })
+    expect(lastItem(boTab, "agent-message")).toMatchObject({
+      status: "streaming",
+      body: "",
+    })
+    const busy = await askMine(side, adaTab, "And the other key?")
+    expect(adaTab.last("side-failed")).toMatchObject({
+      clientId: busy,
+      code: "busy",
+    })
+    expect(runsMade()).toBe(1)
+    expect(go.checks).toHaveLength(1)
+
+    release(masksTheKey)
+    await asking
+    expect(lastItem(boTab, "agent-message")).toMatchObject({
+      status: "done",
+      body: hidden,
+    })
+    // The run is over: the next ask goes.
+    go.check = ({ texts }) => ({
+      checked: true,
+      state: "clear",
+      kinds: [],
+      shareable: texts,
+    })
+    go.runAnswers.push(answer("Leo", "There is none."))
+    await askMine(side, adaTab, "And the other key?")
+    expect(lastItem(boTab, "agent-message")).toMatchObject({
+      status: "done",
+      body: "There is none.",
+    })
+    expect(go.checks).toHaveLength(2)
+  })
+
+  it("checks whatever text an answer has once, however its run ended, and nothing when it has none", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    go.check = hidesTheKey
+
+    // A run that said nothing, and one Go refused: no text, no check.
+    go.runAnswers.push([
+      { type: "run_started", run_id: "run_1" },
+      { type: "run_completed", run_id: "run_1" },
+    ])
+    await askMine(side, adaTab, "Anything?")
+    go.runAnswers.push(
+      json({ error: { code: "internal", message: "boom" } }, 500)
+    )
+    await askMine(side, adaTab, "And now?")
+    expect(go.checks).toEqual([])
+    expect(stored(side)).toEqual([
+      { state: "done", body: "" },
+      { state: "failed", body: "" },
+    ])
+
+    // A run that failed after some words: the words are checked, and what
+    // the guard lets through is kept beside the failure.
+    go.runAnswers.push([
+      { type: "run_started", run_id: "run_3" },
+      { type: "message", author: "Leo", text: "The key is hunter2, and then" },
+      {
+        type: "run_failed",
+        run_id: "run_3",
+        error: "Krude ran into a problem and stopped. Try again.",
+      },
+    ])
+    await askMine(side, adaTab, "Tell me")
+    expect(go.checks.map((check) => check.texts)).toEqual([
+      ["The key is hunter2, and then"],
+    ])
+    for (const socket of [adaTab, boTab]) {
+      expect(lastItem(socket, "agent-message")).toMatchObject({
+        status: "failed",
+        body: "The key is {KEY}, and then",
+        error: "Krude ran into a problem and stopped. Try again.",
+      })
+    }
+    expect(JSON.stringify(side.sql`SELECT * FROM side_items`)).not.toContain(
+      "hunter2"
+    )
+  })
+
+  it("goes on from what a waiting answer shared, with the run's own question as what was asked, and shows the other person only that", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    go.check = hidesTheKey
+    go.runAnswers.push([
+      { type: "run_started", run_id: "run_1" },
+      {
+        type: "message",
+        author: "Leo",
+        text: "The key is hunter2. I can email it.",
+      },
+      {
+        type: "confirmation",
+        call_id: "call_1",
+        tool: "gmail_send",
+        status: "pending",
+      },
+      { type: "run_completed", run_id: "run_1" },
+    ])
+    await askMine(side, adaTab, question)
+    // Waiting, and what it said so far is shared as the guard lets it.
+    const waiting = lastItem(adaTab, "agent-message")
+    for (const socket of [adaTab, boTab]) {
+      expect(lastItem(socket, "agent-message")).toMatchObject({
+        status: "waiting",
+        body: "The key is {KEY}. I can email it.",
+      })
+    }
+    expect(stored(side)).toEqual([
+      { state: "waiting", body: "The key is {KEY}. I can email it." },
+    ])
+
+    const second = openRun()
+    go.runAnswers.push(second.response)
+    const confirming = say(side, adaTab, {
+      type: "side-confirm",
+      seq: waiting?.seq,
+      answers: [{ id: "call_1", confirmed: true }],
+    })
+    await vi.waitFor(() => expect(runsMade()).toBe(2))
+    second.send(
+      { type: "run_started", run_id: "run_2" },
+      { type: "message", author: "Leo", text: "Sent to hunter2." }
+    )
+    await vi.waitFor(() =>
+      expect(lastItem(adaTab, "agent-message")?.body).toBe(
+        "The key is {KEY}. I can email it.\n\nSent to hunter2."
+      )
+    )
+    // Its owner reads it live; the other person still reads what was shared.
+    expect(lastItem(boTab, "agent-message")).toMatchObject({
+      status: "streaming",
+      body: "The key is {KEY}. I can email it.",
+    })
+    second.finish()
+    await confirming
+
+    // The guard read what was shared, and what came after, as they stand,
+    // for the question the message answers; never the raw first part.
+    expect(
+      go.checks.map(({ texts, origin, request }) => ({
+        texts,
+        origin,
+        request,
+      }))
+    ).toEqual([
+      {
+        texts: ["The key is hunter2. I can email it."],
+        origin: "owner",
+        request: question,
+      },
+      {
+        texts: ["The key is {KEY}. I can email it.\n\nSent to hunter2."],
+        origin: "owner",
+        request: question,
+      },
+    ])
+    for (const socket of [adaTab, boTab]) {
+      expect(lastItem(socket, "agent-message")).toMatchObject({
+        status: "done",
+        body: "The key is {KEY}. I can email it.\n\nSent to {KEY}.",
+      })
+    }
+    expect(JSON.stringify(side.sql`SELECT * FROM side_items`)).not.toContain(
+      "hunter2"
+    )
+  })
+
+  it("pins both of a run's bodies to the conversation's teamspace, and to nothing else Go does not know", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    go.runAnswers.push([
+      { type: "run_started", run_id: "run_1" },
+      { type: "message", author: "Leo", text: "I can email the plan." },
+      {
+        type: "confirmation",
+        call_id: "call_1",
+        tool: "gmail_send",
+        status: "pending",
+      },
+      { type: "run_completed", run_id: "run_1" },
+    ])
+    await askMine(side, adaTab, "Email Bo the plan")
+    go.runAnswers.push(answer("Leo", "Sent."))
+    await say(side, adaTab, {
+      type: "side-confirm",
+      seq: 2,
+      answers: [{ id: "call_1", confirmed: true }],
+    })
+    const [first, second] = go
+      .callsTo(`${base}/threads/thread-ada-1/runs`, "POST")
+      .map((call) => call.body as Record<string, unknown>)
+    expect(Object.keys(first).sort()).toEqual(["message", "teamspace_id"])
+    expect(first.teamspace_id).toBe(teamspaceId)
+    expect(second).toEqual({
+      confirmations: [{ id: "call_1", confirmed: true }],
+      teamspace_id: teamspaceId,
+    })
+    // And Go's own words for a body it does not take stand in the fake.
+    const stray = await fetch(new URL(`${base}/threads/x/runs`, goOrigin), {
+      method: "POST",
+      headers: { Cookie: ada.cookie },
+      body: JSON.stringify({ message: "hi", teamspace: teamspaceId }),
+    })
+    expect(stray.status).toBe(400)
+  })
+
+  it("shows only what was shared to the other person's agent, its inbox and a later run, never what the guard hid", async () => {
+    const { world, side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    go.check = hidesTheKey
+    go.runAnswers.push(answer("Leo", raw))
+    await askMine(side, adaTab, question)
+
+    // Bo's inbox previews the answer as it was shared.
+    const [boInbox] = await inboxOf(world, bo)
+    expect(boInbox.lastMessage?.body).toBe(
+      "Leo: Reach Ada at ada@sim.oryxa. The key is {KEY}."
+    )
+
+    // A request Ada files to Bo's agent carries the conversation as its
+    // context: Leo's answer as it was shared.
+    await askTeammate(side, adaTab, bo.agentId, "Pull the launch notes")
+    const [filed] = go.callsTo(`${base}/agent-requests`, "POST")
+    const context = JSON.stringify(filed.body)
+    expect(context).toContain("The key is {KEY}.")
+    expect(context).not.toContain("hunter2")
+
+    // Bo's own agent, asked next, is shown the same.
+    go.check = ({ texts }) => ({
+      checked: true,
+      state: "clear",
+      kinds: [],
+      shareable: texts,
+    })
+    go.runAnswers.push(answer("Nia", "Noted."))
+    await askMine(side, boTab, "Nia, what did Leo say?")
+    const prompt = JSON.stringify(
+      go.calls.filter((call) => call.path.endsWith("/runs")).at(-1)?.body
+    )
+    expect(prompt).toContain("The key is {KEY}.")
+    expect(prompt).not.toContain("hunter2")
+    // Nothing but the guard was ever sent the answer as it was.
+    expect(
+      JSON.stringify(
+        go.calls
+          .filter((call) => call.path !== checkPath)
+          .map((call) => call.body)
+      )
+    ).not.toContain("hunter2")
+  })
+
+  it("leaves nothing of an answer whose run a purge stopped, and asks the guard nothing", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    const { run, asking } = await askOpen(side, adaTab)
+    run.send(...saying(raw))
+    await vi.waitFor(() =>
+      expect(lastItem(adaTab, "agent-message")?.body).toBe(raw)
+    )
+    await side.purge()
+    await asking
+    expect(side.sql`SELECT * FROM side_items`).toEqual([])
+    expect(go.checks).toEqual([])
+    expect(recorded(side)).toEqual([])
+    // A timer left running would fail nothing now, either.
+    await vi.advanceTimersByTimeAsync(sideTiming.runTimeoutMs)
+    expect(side.sql`SELECT * FROM side_items`).toEqual([])
+    expect(recorded(side)).toEqual([])
+  })
+
+  it("leaves nothing of an answer when it is purged while the guard reads it", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    let release!: (verdict: GuardVerdict) => void
+    go.check = () =>
+      new Promise<GuardVerdict>((resolve) => {
+        release = resolve
+      })
+    go.runAnswers.push(answer("Leo", raw))
+    const asking = askMine(side, adaTab, question)
+    await vi.waitFor(() => expect(go.checks).toHaveLength(1))
+    await side.purge()
+    const sent = adaTab.sent.length
+    release(masksTheKey)
+    await asking
+    expect(side.sql`SELECT * FROM side_items`).toEqual([])
+    expect(recorded(side)).toEqual([])
+    expect(adaTab.sent).toHaveLength(sent)
+    // Its run is over: the next ask goes.
+    const again = await join(side, ada)
+    go.check = passThrough
+    go.runAnswers.push(answer("Leo", "Fine."))
+    await askMine(side, again, question)
+    expect(lastItem(again, "agent-message")).toMatchObject({
+      status: "done",
+      body: "Fine.",
+    })
+  })
+
+  it("fails an answer whose run went on past five minutes, keeping what the guard lets through of what it said, and records no message for it", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    go.check = hidesTheKey
+    const { run, asking } = await askOpen(side, adaTab)
+    run.send(
+      { type: "run_started", run_id: "run_1" },
+      { type: "message", author: "Leo", text: "The key is hunter2, but" }
+    )
+    await vi.waitFor(() =>
+      expect(lastItem(adaTab, "agent-message")?.body).toBe(
+        "The key is hunter2, but"
+      )
+    )
+    await vi.advanceTimersByTimeAsync(sideTiming.runTimeoutMs)
+    await asking
+    for (const socket of [adaTab, boTab]) {
+      expect(lastItem(socket, "agent-message")).toMatchObject({
+        status: "failed",
+        body: "The key is {KEY}, but",
+        code: "timed_out",
+        error:
+          "The agent took longer than 5 minutes, so its answer was cut off.",
+      })
+    }
+    // A failure is no message for Go: only her question is.
+    expect(recorded(side)).toEqual([1])
+    expect(JSON.stringify(side.sql`SELECT * FROM side_items`)).not.toContain(
+      "hunter2"
+    )
+
+    // It can be asked again: nothing is left running.
+    go.check = passThrough
+    go.runAnswers.push(answer("Leo", "Now: none."))
+    await askMine(side, adaTab, "Again?")
+    expect(lastItem(boTab, "agent-message")).toMatchObject({
+      status: "done",
+      body: "Now: none.",
+    })
+  })
+
+  it("fails a run that said nothing before the five minutes ended with no text and no check", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    const { run, asking } = await askOpen(side, adaTab)
+    run.send({ type: "run_started", run_id: "run_1" })
+    await vi.advanceTimersByTimeAsync(sideTiming.runTimeoutMs)
+    await asking
+    expect(lastItem(adaTab, "agent-message")).toMatchObject({
+      status: "failed",
+      body: "",
+      code: "timed_out",
+    })
+    expect(go.checks).toEqual([])
+    expect(recorded(side)).toEqual([1])
   })
 })
 

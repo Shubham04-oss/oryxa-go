@@ -22,6 +22,8 @@ import {
   agentRequestBody,
   cardFields,
   clip,
+  guardCheckBody,
+  guardedAnswer,
   heldAnswerOf,
   isOpen,
   ownAgentPrompt,
@@ -29,7 +31,11 @@ import {
   resultText,
   statusLineText,
 } from "./lib/side/asking"
-import type { CardFields, TranscriptLine } from "./lib/side/asking"
+import type {
+  CardFields,
+  GuardedAnswer,
+  TranscriptLine,
+} from "./lib/side/asking"
 import { parseSideConversationName, peerIn } from "./lib/side/names"
 import type { SideConversationIds } from "./lib/side/names"
 import {
@@ -51,6 +57,7 @@ import type {
   SideAgentMessageStatus,
   SideConfirmation,
   SideFailure,
+  SideGuard,
   SideHeldAnswer,
   SideOutcome,
   SideRead,
@@ -125,6 +132,8 @@ export const sideTiming = {
   runTimeoutMs: 5 * 60_000,
   /** The longest a request, a decision or a read may take. */
   requestTimeoutMs: 30_000,
+  /** The longest the answer guard may take to check an agent's answer, which is not shared until it has. */
+  guardTimeoutMs: 10_000,
   /**
    * A request an agent filed is shown here when it was made after the
    * conversation first opened, less this much, for the two clocks.
@@ -179,6 +188,8 @@ type AgentData = {
   replyTo?: number
   via?: SideVia
   confirmations?: SideConfirmation[]
+  /** What the answer guard found in the answer, when it found anything: the owner's alone to see. */
+  guard?: SideGuard
 }
 
 /**
@@ -213,14 +224,26 @@ type StatusData = {
   agentId: string
 }
 
-/** An agent's answer as its run streams it, in memory. */
+/** What a run of a member's own agent here is sent (`POST …/threads/{id}/runs`): its input, and the teamspace Go pins it to. */
+type SideRunBody = RunInput & { teamspace_id: string }
+
+/** Why an agent's answer failed, in words for both people, and Go's code or the object's. */
+type RunFailure = { error: string; code?: string }
+
+/**
+ * An agent's answer as its run streams it, in memory: only its owner is sent
+ * it as it comes, and none of it is stored until the answer guard has read
+ * it (`settleRun`).
+ */
 type Draft = {
-  /** The finished messages of the run (and, continued, what it said before). */
+  /** Whose agent is answering: the only person its text is sent to before it is checked. */
+  owner: string
+  /** The finished messages of the run (and, continued, what it said before, as it was shared). */
   finished: string[]
   /** The next message, as its deltas arrive. */
   draft: string
   confirmations: SideConfirmation[]
-  failure?: { error: string; code?: string }
+  failure?: RunFailure
   /** A message stopped without text, in the model's words. */
   stopped?: string
   /** Its body reached `SIDE_MAX_AGENT_TEXT`: what else arrives is not kept. */
@@ -256,6 +279,25 @@ const runWords: RelayWords = {
 }
 
 const sessionEndedWords = "The session had ended before the agent could answer."
+
+/** What both people read on an answer the guard could not check: none of it was shared, so it has no words of its own. */
+const uncheckedFailure: RunFailure = {
+  error: "This answer couldn't be checked, so it wasn't shared.",
+  code: "unchecked",
+}
+
+/** As above, when it was the session that had ended (`sessionExpiredCode`): the page renews it. */
+const checkSessionFailure: RunFailure = {
+  error:
+    "The session had ended before the answer could be checked, so it wasn't shared.",
+  code: sessionExpiredCode,
+}
+
+/** A run that went on past `sideTiming.runTimeoutMs`: what it said before is kept, as far as the guard lets it be. */
+const timedOutFailure: RunFailure = {
+  error: "The agent took longer than 5 minutes, so its answer was cut off.",
+  code: "timed_out",
+}
 
 /** Why Send masked is refused for an answer the guard could not check. */
 const noMaskedWords =
@@ -415,6 +457,32 @@ function isExpiry(error: unknown): boolean {
 }
 
 /**
+ * Runs `work` with a signal that aborts after `ms` with a `TimeoutError`, as
+ * `AbortSignal.timeout` does, but on the object's own timer, which a test's
+ * clock can move (as the events' requests are, src/realtime-events.ts). The
+ * timer stops once `work` has ended, however it ended.
+ */
+async function withDeadline<T>(
+  ms: number,
+  work: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => {
+    controller.abort(
+      new DOMException(
+        `Go did not answer within ${ms / 1000} s`,
+        "TimeoutError"
+      )
+    )
+  }, ms)
+  try {
+    return await work(controller.signal)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
  * A teamspace's side conversation: two teammates and both their agents,
  * about work in that teamspace, away from its room. One object per pair and
  * teamspace, named `sideConversationName(org, teamspace, userA, userB)`,
@@ -426,8 +494,12 @@ function isExpiry(error: unknown): boolean {
  * - **A person's own agent** answers when they ask it (`side-ask-mine`):
  *   the object runs their primary agent as them, on a Go thread of theirs
  *   kept for this conversation, with the conversation framed as untrusted
- *   data, and streams the answer to both people as an agent's message. A
+ *   data, and streams the answer to its owner alone as an agent's message. A
  *   confirmation the run asks for goes to its owner alone, who answers it.
+ *   Nothing the agent says is stored, or sent to the other person, until its
+ *   run has ended and the answer guard has read it as the owner (Go's
+ *   `answer-guard/check`): what the guard lets through is stored and sent to
+ *   both, and an answer it could not check fails with none of it shared.
  * - **A teammate's agent** is asked through Go's agent requests
  *   (`side-ask-teammate`), filed as the asker in this teamspace. The card
  *   mirrors the request; its owner approves or declines one held for them
@@ -547,7 +619,12 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       this.rewrite(row, {
         state: "failed",
         settled: 1,
-        data: { ...data, error: runWords.cutOff },
+        // Nothing a lost run said was ever checked, so none of it is kept:
+        // an answer's text is stored only once the guard has read it, but a
+        // row from before that held what it had said so far, and would show
+        // it to the other person now.
+        body: "",
+        data: { ...data, error: runWords.cutOff, guard: undefined },
       })
     }
     if (this.syncPending()) await this.armRetry()
@@ -912,7 +989,11 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     )
   }
 
-  /** An item as `viewer` is sent it: a page id only on their own, a confirmation only to its agent's owner. */
+  /**
+   * An item as `viewer` is sent it: a page id only on their own, and to an
+   * agent's owner alone the confirmations it waits on, what the answer guard
+   * found in its answer and, while it streams, what it has said so far.
+   */
   private wire(row: ItemRow, viewer: string): SideWireItem {
     const base = { id: row.id, seq: row.seq, createdAt: row.created_at }
     const own = row.author_id === viewer && row.client_id !== null
@@ -932,24 +1013,31 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         const data = parseData<AgentData>(row)
         const draft = this.drafts.get(row.seq)
         const status = (row.state ?? "done") as SideAgentMessageStatus
+        const owner = row.author_id === viewer
         return {
           kind: "agent-message",
           ...base,
           agentId: data.agentId,
           agentName: data.agentName,
           ownerId: row.author_id,
-          body: draft ? clip(bodyOf(draft), SIDE_MAX_AGENT_TEXT) : row.body,
+          // What its run has said so far is its owner's alone to read, live;
+          // anybody else reads what is stored, which is only what the answer
+          // guard let through.
+          body:
+            draft && owner
+              ? clip(bodyOf(draft), SIDE_MAX_AGENT_TEXT)
+              : row.body,
           updatedAt: row.updated_at,
           status,
           ...(data.error ? { error: data.error } : {}),
           ...(data.code ? { code: data.code } : {}),
           ...(data.replyTo ? { replyTo: data.replyTo } : {}),
           ...(data.via ? { via: data.via } : {}),
-          ...(status === "waiting" &&
-          row.author_id === viewer &&
-          data.confirmations?.length
+          ...(status === "waiting" && owner && data.confirmations?.length
             ? { confirmations: data.confirmations }
             : {}),
+          // What the guard hid is for the one whose answer it was to know.
+          ...(owner && data.guard ? { guard: data.guard } : {}),
         }
       }
       case "request-card": {
@@ -1126,10 +1214,11 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
 
   /**
    * A message that asks the socket's person's own agent (their primary
-   * agent), which then answers as an agent's message both people see live.
-   * Sent again under the same page id, it is answered with what is stored,
-   * and an answer that failed only because the socket's session had ended
-   * is asked for again (the page renewed it and reopened the socket).
+   * agent), which then answers as an agent's message: its asker sees it live,
+   * and the other person reads it once the answer guard has checked it. Sent
+   * again under the same page id, it is answered with what is stored, and an
+   * answer that failed only because the socket's session had ended is asked
+   * for again (the page renewed it and reopened the socket).
    */
   private async askMine(
     actor: Actor,
@@ -1269,8 +1358,12 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
   /**
    * Runs the owner's primary agent as them on their thread for this
    * conversation, and streams what it says into the agent's message `seq`:
-   * deltas to every socket as they come, each finished message stored.
-   * A thread Go no longer has is started again, once.
+   * deltas to the owner's sockets alone, as they come. Nothing it says is
+   * stored, or sent to the other person, until its run has ended and the
+   * answer guard has read it as the owner (`settleRun`), all under one
+   * keep-alive, and the owner's run here goes on until then: it is still
+   * answering while the guard checks. A thread Go no longer has is started
+   * again, once.
    */
   private async runOwnAgent(
     actor: Actor,
@@ -1283,12 +1376,17 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     if (!row) return
     const epoch = this.epoch
     const controller = new AbortController()
-    const timeout = setTimeout(
-      () => controller.abort(),
-      sideTiming.runTimeoutMs
-    )
+    // Only the timer says a run took too long: an abort a purge makes, which
+    // leaves nothing, does not.
+    const run = { timedOut: false }
+    const timeout = setTimeout(() => {
+      run.timedOut = true
+      controller.abort()
+    }, sideTiming.runTimeoutMs)
     this.runs.set(owner, { seq, controller })
+    const request = this.askedOf(row, input)
     const draft: Draft = {
+      owner,
       finished: "confirmations" in input && row.body ? [row.body] : [],
       draft: "",
       confirmations: [],
@@ -1300,52 +1398,96 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       this.rewrite(row, {
         state: "streaming",
         settled: 0,
-        data: { ...data, error: undefined, code: undefined, confirmations: [] },
+        data: {
+          ...data,
+          error: undefined,
+          code: undefined,
+          confirmations: [],
+          guard: undefined,
+        },
       })
     )
     try {
       await this.keepAliveWhile(async () => {
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          const threadId = await this.threadFor(state)
-          if (this.epoch !== epoch) return
-          // Set from the stream: Go no longer has the thread.
-          const attemptState = { threadGone: false }
-          await relayGoRun({
-            connection: state,
-            words: runWords,
-            label: "side conversation",
-            signal: controller.signal,
-            request: () => ({
-              url: new URL(
-                organizationPath(
-                  this.ids.organizationId,
-                  "threads",
-                  threadId,
-                  "runs"
-                ),
-                this.env.ORYXA_API_ORIGIN
-              ),
-              body: this.runBody(owner, seq, input),
-              input,
-            }),
-            write: (item) => {
-              if (
-                item.type === "run_failed" &&
-                item.code === "not_found" &&
-                attempt === 0 &&
-                !("confirmations" in input)
-              ) {
-                attemptState.threadGone = true
-                return
-              }
-              this.fold(seq, draft, item)
-            },
-          })
-          if (!attemptState.threadGone) return
-          // The member deleted the thread: the next attempt starts another.
-          this.sql`DELETE FROM side_threads WHERE user_id = ${owner}`
-        }
+        await this.streamRun(actor, seq, input, draft, controller, epoch)
+        clearTimeout(timeout)
+        if (run.timedOut) draft.failure ??= timedOutFailure
+        // Purged meanwhile: nothing it said is kept or sent.
+        if (this.epoch !== epoch || !this.item(seq)) return
+        await this.settleRun(seq, draft, state, request, epoch)
       })
+    } finally {
+      clearTimeout(timeout)
+      this.drafts.delete(seq)
+      if (this.runs.get(owner)?.controller === controller) {
+        this.runs.delete(owner)
+      }
+    }
+    if (this.epoch !== epoch || !this.item(seq)) return
+    await this.events.plan()
+    await this.syncInboxes()
+    // Its agent may have asked the teammate's agent for something.
+    await this.readRequests()
+    await this.planPoll()
+  }
+
+  /**
+   * Relays a run of the owner's agent into `draft`, as it streams. Never
+   * throws: what goes wrong is the draft's failure, unless the run was
+   * aborted, which says nothing more (a run that took too long is told by
+   * `runOwnAgent`). A thread Go no longer has is started again, once.
+   */
+  private async streamRun(
+    actor: Actor,
+    seq: number,
+    input: RunInput,
+    draft: Draft,
+    controller: AbortController,
+    epoch: number
+  ): Promise<void> {
+    const { state } = actor
+    const owner = state.userId
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const threadId = await this.threadFor(state)
+        if (this.epoch !== epoch) return
+        // Set from the stream: Go no longer has the thread.
+        const attemptState = { threadGone: false }
+        await relayGoRun({
+          connection: state,
+          words: runWords,
+          label: "side conversation",
+          signal: controller.signal,
+          request: () => ({
+            url: new URL(
+              organizationPath(
+                this.ids.organizationId,
+                "threads",
+                threadId,
+                "runs"
+              ),
+              this.env.ORYXA_API_ORIGIN
+            ),
+            body: this.runBody(owner, seq, input),
+            input,
+          }),
+          write: (item) => {
+            if (
+              item.type === "run_failed" &&
+              item.code === "not_found" &&
+              attempt === 0 &&
+              !("confirmations" in input)
+            ) {
+              attemptState.threadGone = true
+              return
+            }
+            this.fold(seq, draft, item)
+          },
+        })
+        if (!attemptState.threadGone) return
+        // The member deleted the thread: the next attempt starts another.
+        this.sql`DELETE FROM side_threads WHERE user_id = ${owner}`
+      }
     } catch (error) {
       if (!controller.signal.aborted) {
         draft.failure = isExpiry(error)
@@ -1355,31 +1497,31 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
           console.error("side conversation: could not start a run", error)
         }
       }
-    } finally {
-      clearTimeout(timeout)
-      if (this.runs.get(owner)?.controller === controller) {
-        this.runs.delete(owner)
-      }
     }
-    if (this.epoch !== epoch || !this.item(seq)) {
-      this.drafts.delete(seq)
-      return
-    }
-    this.settleRun(seq, draft, state)
-    await this.events.plan()
-    await this.syncInboxes()
-    // Its agent may have asked the teammate's agent for something.
-    await this.readRequests()
-    await this.planPoll()
+  }
+
+  /**
+   * What the owner asked, for the guard to weigh the answer against: the
+   * run's message, or, for answers to confirmations, the question of the
+   * message they continue.
+   */
+  private askedOf(row: ItemRow, input: RunInput): string {
+    if ("message" in input) return input.message
+    const replyTo = parseData<AgentData>(row).replyTo
+    return (replyTo === undefined ? undefined : this.item(replyTo)?.body) ?? ""
   }
 
   /**
    * What a run is sent: answers go as they are; a question goes with the
-   * conversation before it, framed as untrusted data.
+   * conversation before it, framed as untrusted data. Either goes with the
+   * teamspace, which Go pins the run to and enforces on its tools: the
+   * prompt names it too, but a model may drop it or name another.
    */
-  private runBody(owner: string, seq: number, input: RunInput): RunInput {
-    if ("confirmations" in input) return input
+  private runBody(owner: string, seq: number, input: RunInput): SideRunBody {
     const ids = this.ids
+    if ("confirmations" in input) {
+      return { ...input, teamspace_id: ids.teamspaceId }
+    }
     const roster = this.roster()
     const peer = peerIn(ids, owner) ?? ""
     const answer = this.item(seq)
@@ -1401,6 +1543,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         transcript,
         question: input.message,
       }),
+      teamspace_id: ids.teamspaceId,
     }
   }
 
@@ -1424,10 +1567,14 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
           codePoints(bodyOf(draft)) > SIDE_MAX_AGENT_TEXT
         ) {
           draft.full = true
-          this.persistDraft(seq, draft)
+          this.showDraft(seq, draft)
           return
         }
-        this.tell({ type: "side-delta", seq, at, text: separator + item.text })
+        // Its owner's alone: nobody else reads it before the guard has.
+        this.tell(
+          { type: "side-delta", seq, at, text: separator + item.text },
+          (state) => state.userId === draft.owner
+        )
         return
       }
       case "message":
@@ -1438,7 +1585,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
           draft.stopped = item.error
         }
         draft.draft = ""
-        this.persistDraft(seq, draft)
+        this.showDraft(seq, draft)
         return
       case "confirmation":
         if (item.status !== "pending" || !item.call_id) return
@@ -1464,33 +1611,58 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     }
   }
 
-  /** Stores an answer's text so far and sends it whole: a socket that opens is sent it too. */
-  private persistDraft(seq: number, draft: Draft): void {
+  /**
+   * Sends an answer's text so far, whole, to its owner's sockets alone (a
+   * socket of theirs that opens is sent it too, `wire`). It is never stored:
+   * what an agent says is kept only once the answer guard has read it.
+   */
+  private showDraft(seq: number, draft: Draft): void {
     const row = this.item(seq)
     if (!row) return
-    this.announce(
-      this.rewrite(row, { body: clip(bodyOf(draft), SIDE_MAX_AGENT_TEXT) })
-    )
+    this.announce(row, (state) => state.userId === draft.owner)
   }
 
-  /** An answer's run ended: it is done, waits on its owner, or failed. */
-  private settleRun(
+  /**
+   * An answer's run ended: it is done, waits on its owner, or failed. Any
+   * text it has goes through the answer guard first, once, as its owner
+   * (`checkAnswer`), and only what the guard lets through is stored and sent
+   * to both people; a `waiting` message goes on from it. An answer the guard
+   * could not check is failed with no text at all, whatever the run itself
+   * ended with: nothing is shared that was not checked. A purge while the
+   * guard reads it leaves nothing.
+   */
+  private async settleRun(
     seq: number,
     draft: Draft,
-    state: SideConnectionState
-  ): void {
-    this.drafts.delete(seq)
-    const row = this.item(seq)
-    if (!row) return
-    const data = parseData<AgentData>(row)
-    const status: SideAgentMessageStatus = draft.failure
+    state: SideConnectionState,
+    request: string,
+    epoch: number
+  ): Promise<void> {
+    let failure = draft.failure
+    let status: SideAgentMessageStatus = failure
       ? "failed"
       : draft.confirmations.length > 0
         ? "waiting"
         : "done"
-    const body = clip(bodyOf(draft), SIDE_MAX_AGENT_TEXT)
+    let body = clip(bodyOf(draft), SIDE_MAX_AGENT_TEXT)
+    let guard: SideGuard | undefined
+    if (body !== "") {
+      const checked = await this.checkAnswer(state, body, request)
+      if (this.epoch !== epoch) return
+      if ("failure" in checked) {
+        failure = checked.failure
+        status = "failed"
+        body = ""
+      } else {
+        body = clip(checked.text, SIDE_MAX_AGENT_TEXT)
+        guard = checked.guard
+      }
+    }
+    const row = this.item(seq)
+    if (!row) return
+    const data = parseData<AgentData>(row)
     const error =
-      draft.failure?.error ??
+      failure?.error ??
       (body === "" && status === "done"
         ? (draft.stopped ?? "The agent had nothing to say.")
         : undefined)
@@ -1502,12 +1674,14 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         data: {
           ...data,
           error,
-          code: draft.failure?.code,
+          code: failure?.code,
           confirmations: status === "waiting" ? draft.confirmations : [],
+          guard,
         },
       })
       // The agent's final answer is a message Go is told of, as it ends:
-      // never its deltas, a wait on its owner, a failure, or nothing said.
+      // never its deltas, a wait on its owner, a failure (one that ran too
+      // long included), or nothing said.
       if (status === "done" && body !== "") {
         this.events.recordPosted(
           ended,
@@ -1517,8 +1691,52 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       }
       return ended
     })
+    // What the owner read live gives way to what was shared.
+    this.drafts.delete(seq)
     this.announce(settled)
-    if (draft.failure?.code === sessionExpiredCode) this.expire(state.cookie)
+    if (failure?.code === sessionExpiredCode) this.expire(state.cookie)
+  }
+
+  /**
+   * What the answer guard lets through of an own agent's answer `text` to
+   * the owner's `request`, asked as the owner (`POST …/answer-guard/check`,
+   * with their cookie and the page's origin, as their agent ran), within
+   * `sideTiming.guardTimeoutMs`. Fails closed: an answer the guard does not
+   * clearly say may be shared, by an error, a timeout, a status other than
+   * 200, an answer it cannot read, a hold with nothing to share or one it
+   * could not check, is not shared at all, and a session that had ended is
+   * said so, for the page to renew it.
+   */
+  private async checkAnswer(
+    state: SideConnectionState,
+    text: string,
+    request: string
+  ): Promise<GuardedAnswer | { failure: RunFailure }> {
+    let reply: unknown
+    try {
+      reply = await this.goAs<unknown>(
+        state,
+        organizationPath(this.ids.organizationId, "answer-guard", "check"),
+        {
+          method: "POST",
+          body: guardCheckBody(text, request),
+          timeoutMs: sideTiming.guardTimeoutMs,
+        }
+      )
+    } catch (error) {
+      if (isExpiry(error)) return { failure: checkSessionFailure }
+      // What went wrong, never a word of the answer.
+      console.error(
+        "side conversation: could not check an answer",
+        error instanceof ApiError
+          ? `Go answered ${error.status}`
+          : error instanceof Error
+            ? error.name
+            : "unknown"
+      )
+      return { failure: uncheckedFailure }
+    }
+    return guardedAnswer(reply, text) ?? { failure: uncheckedFailure }
   }
 
   /** The Go thread the person's own agent answers on here, started as them the first time. */
@@ -2275,7 +2493,9 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
   /**
    * Asks Go as `state`'s person: their cookie, and for a change their page's
    * origin, since Go takes a cookie-authenticated change only from an
-   * allowed one. Throws Go's refusal as an `ApiError`.
+   * allowed one. Given up on after `timeoutMs` (`sideTiming.requestTimeoutMs`
+   * unless a call says), its answer's body included. Throws Go's refusal as
+   * an `ApiError`.
    */
   private async goAs<T>(
     state: SideConnectionState,
@@ -2284,6 +2504,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       method?: "GET" | "POST"
       body?: unknown
       headers?: Record<string, string>
+      timeoutMs?: number
     } = {}
   ): Promise<T> {
     if (state.expired) throw new ApiError("Your session has ended.", 401)
@@ -2294,16 +2515,23 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     }
     if (options.body !== undefined) headers["Content-Type"] = "application/json"
     if (method !== "GET" && state.origin) headers.Origin = state.origin
-    const response = await fetch(new URL(path, this.env.ORYXA_API_ORIGIN), {
-      method,
-      headers,
-      body:
-        options.body === undefined ? undefined : JSON.stringify(options.body),
-      signal: AbortSignal.timeout(sideTiming.requestTimeoutMs),
-    })
-    if (!response.ok) throw await requestError(response)
-    const answer: T = await response.json()
-    return answer
+    return await withDeadline(
+      options.timeoutMs ?? sideTiming.requestTimeoutMs,
+      async (signal) => {
+        const response = await fetch(new URL(path, this.env.ORYXA_API_ORIGIN), {
+          method,
+          headers,
+          body:
+            options.body === undefined
+              ? undefined
+              : JSON.stringify(options.body),
+          signal,
+        })
+        if (!response.ok) throw await requestError(response)
+        const answer: T = await response.json()
+        return answer
+      }
+    )
   }
 
   /** What Go's failure means: a cookie it no longer takes is not used again; anything else is logged. */
@@ -2719,7 +2947,9 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
    * An item as an inbox is told of it. Its author is whose side it is to
    * that inbox: a person's own message or request reads through for them,
    * while an agent's message and a quiet line are the agent's, and count as
-   * unread for both until read. The preview names the agent.
+   * unread for both until read. The preview names the agent, and holds only
+   * what was shared: an item is told once it has settled, and an agent's
+   * answer settles with the text the answer guard let through.
    */
   private noted(row: ItemRow): NotedMessage {
     switch (row.kind) {
