@@ -517,6 +517,8 @@ func (s *Service) credential(ctx context.Context, source domain.Source) (domain.
 // running it again unchanged could do better.
 func syncError(err error) (string, bool) {
 	switch {
+	case errors.Is(err, domain.ErrProviderUnavailable):
+		return knowledgev1.SyncErrorProviderUnavailable, true
 	case errors.Is(err, domain.ErrNeedsReconnect):
 		return knowledgev1.SyncErrorNeedsReconnect, false
 	case errors.Is(err, domain.ErrScopeRequired):
@@ -529,8 +531,6 @@ func syncError(err error) (string, bool) {
 		return knowledgev1.SyncErrorNotFound, false
 	case errors.Is(err, domain.ErrRateLimited):
 		return knowledgev1.SyncErrorRateLimited, true
-	case errors.Is(err, domain.ErrProviderUnavailable):
-		return knowledgev1.SyncErrorProviderUnavailable, true
 	case errors.Is(err, domain.ErrLeaseLost):
 		return knowledgev1.SyncErrorLeaseLost, true
 	case errors.Is(err, domain.ErrGrantRequired):

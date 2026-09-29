@@ -29,7 +29,7 @@ func (s *Service) OfferedTools(ctx context.Context, credentials authclient.Crede
 	}
 	settings, err := s.policy.Get(ctx, organizationID)
 	if err != nil {
-		return OfferPolicy{}, fmt.Errorf("read the organization's app policy: %w", domain.ErrUnavailable)
+		return OfferPolicy{}, fmt.Errorf("read the organization's app policy: %w: %w", domain.ErrUnavailable, err)
 	}
 	autoSubscribe := s.autoSubscribe && (settings.AutoSubscribe == nil || *settings.AutoSubscribe)
 	employeeConnections := settings.EmployeeConnections == nil || *settings.EmployeeConnections
@@ -45,7 +45,7 @@ func (s *Service) allowEmployeeConnect(ctx context.Context, organizationID strin
 	}
 	settings, err := s.policy.Get(ctx, organizationID)
 	if err != nil {
-		return fmt.Errorf("read the organization's app policy: %w", domain.ErrUnavailable)
+		return fmt.Errorf("read the organization's app policy: %w: %w", domain.ErrUnavailable, err)
 	}
 	if settings.EmployeeConnections != nil && !*settings.EmployeeConnections {
 		return fmt.Errorf("employee app connections are disabled for this organization: %w", domain.ErrForbidden)
@@ -62,7 +62,7 @@ func (s *Service) allowToolkit(ctx context.Context, organizationID, toolkit stri
 	}
 	settings, err := s.policy.Get(ctx, organizationID)
 	if err != nil {
-		return fmt.Errorf("read the organization's app policy: %w", domain.ErrUnavailable)
+		return fmt.Errorf("read the organization's app policy: %w: %w", domain.ErrUnavailable, err)
 	}
 	if settings.Offer != nil && !slices.Contains(*settings.Offer, toolkit) {
 		return fmt.Errorf("%s is not offered by this organization: %w", toolkit, domain.ErrForbidden)
@@ -78,7 +78,7 @@ func (s *Service) defaultAutoSubscribe(ctx context.Context, organizationID strin
 	}
 	settings, err := s.policy.Get(ctx, organizationID)
 	if err != nil {
-		return false, fmt.Errorf("read the organization's app policy: %w", domain.ErrUnavailable)
+		return false, fmt.Errorf("read the organization's app policy: %w: %w", domain.ErrUnavailable, err)
 	}
 	return settings.AutoSubscribe == nil || *settings.AutoSubscribe, nil
 }

@@ -177,3 +177,20 @@ func TestWorkspacePolicyChecksCredentialReplacementBeforeProviderAccess(t *testi
 		})
 	}
 }
+
+func TestWorkspacePolicyFailuresKeepTheirCause(t *testing.T) {
+	h := newHarness(t)
+	cause := errors.New("stored policy decode failed at tools.offer")
+	h.service.policy = &fakePolicySource{err: cause}
+	ctx := context.Background()
+	for name, check := range map[string]func() error{
+		"offer":               func() error { _, err := h.service.OfferedTools(ctx, memberToken, "org_1"); return err },
+		"toolkit":             func() error { return h.service.allowToolkit(ctx, "org_1", "github") },
+		"employee preference": func() error { return h.service.allowEmployeeConnect(ctx, "org_1", false) },
+		"auto subscribe":      func() error { _, err := h.service.defaultAutoSubscribe(ctx, "org_1"); return err },
+	} {
+		if err := check(); !errors.Is(err, domain.ErrUnavailable) || !errors.Is(err, cause) {
+			t.Errorf("%s lost classification or cause: %v", name, err)
+		}
+	}
+}

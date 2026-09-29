@@ -240,7 +240,7 @@ func (s *Service) allowProvider(ctx context.Context, organizationID, provider st
 	}
 	settings, err := s.policy.Get(ctx, organizationID)
 	if err != nil {
-		return fmt.Errorf("read the organization's app policy: %w", domain.ErrProviderUnavailable)
+		return fmt.Errorf("read the organization's app policy: %w: %w", domain.ErrProviderUnavailable, err)
 	}
 	if settings.Offer != nil && !slices.Contains(*settings.Offer, provider) {
 		return fmt.Errorf("%s is not offered by this organization: %w", provider, domain.ErrForbidden)

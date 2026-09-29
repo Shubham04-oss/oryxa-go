@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -73,5 +74,18 @@ func TestWorkspaceOfferLeavesInternalFilesAloneAndFailsClosed(t *testing.T) {
 	}
 	if err := service.allowProvider(context.Background(), "org_1", "github"); !errors.Is(err, domain.ErrProviderUnavailable) {
 		t.Fatalf("unavailable policy = %v", err)
+	}
+}
+
+func TestWorkspacePolicyFailureKeepsDiagnosticCauseAndSafeSyncClassification(t *testing.T) {
+	cause := fmt.Errorf("invalid stored policy tools.offer: %w", domain.ErrInvalid)
+	service := New(Dependencies{Policy: &fakeWorkspacePolicy{err: cause}}, Config{})
+	err := service.allowProvider(context.Background(), "org_1", "github")
+	if !errors.Is(err, domain.ErrProviderUnavailable) || !errors.Is(err, cause) {
+		t.Fatalf("policy error lost cause or classification: %v", err)
+	}
+	reason, retry := syncError(err)
+	if reason != knowledgev1.SyncErrorProviderUnavailable || !retry {
+		t.Fatalf("sync failure=%q retry=%v", reason, retry)
 	}
 }

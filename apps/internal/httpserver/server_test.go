@@ -770,3 +770,14 @@ func TestPatternsAreAllOfApps(t *testing.T) {
 		}
 	}
 }
+
+func TestPolicyFailureCauseIsNotReturnedToClient(t *testing.T) {
+	cause := fmt.Errorf("invalid stored policy with sensitive diagnostics: %w", domain.ErrInvalid)
+	failure := fmt.Errorf("read workspace policy: %w: %w", domain.ErrUnavailable, cause)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/organizations/org_1/apps/offer", nil)
+	newServer(t, &fakeService{}).handleError(response, request, failure)
+	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), cause.Error()) || !strings.Contains(response.Body.String(), `"code":"unavailable"`) {
+		t.Fatalf("policy error response: %d %s", response.Code, response.Body)
+	}
+}

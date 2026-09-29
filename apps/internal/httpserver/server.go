@@ -589,6 +589,8 @@ func (server *Server) decode(writer http.ResponseWriter, request *http.Request, 
 // ErrorCode names a failure the way the API and the MCP endpoint both do.
 func ErrorCode(err error) (int, string) {
 	switch {
+	case errors.Is(err, domain.ErrUnavailable):
+		return http.StatusServiceUnavailable, "unavailable"
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		return http.StatusBadRequest, "invalid_credentials"
 	case errors.Is(err, domain.ErrInvalid):
@@ -613,8 +615,6 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusConflict, "conflict"
 	case errors.Is(err, domain.ErrRateLimited):
 		return http.StatusTooManyRequests, "rate_limited"
-	case errors.Is(err, domain.ErrUnavailable):
-		return http.StatusServiceUnavailable, "unavailable"
 	default:
 		return http.StatusInternalServerError, "internal"
 	}
