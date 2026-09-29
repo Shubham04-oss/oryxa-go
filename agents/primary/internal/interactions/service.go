@@ -568,7 +568,10 @@ func (service *Service) Respond(ctx context.Context, actor agents.InteractionAct
 	}
 	settings, err := service.organizationPolicy(ctx, request.OrganizationID)
 	if err != nil {
-		return agents.Interaction{}, err
+		// Work has already completed. Preserve it for its owner instead of
+		// causing a retry to repeat provider actions or discard the answer.
+		service.logger.ErrorContext(ctx, "hold completed answer because workspace policy could not be read", "request_id", request.ID, "error", err)
+		settings.HoldForReview = true
 	}
 	// Another member reads what is recorded here, so the guard reads it
 	// first, outside the ledger's transaction.

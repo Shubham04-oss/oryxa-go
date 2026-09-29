@@ -143,6 +143,27 @@ func TestWorkspacePolicyHoldsEveryCrossMemberAnswerForOwner(t *testing.T) {
 	}
 }
 
+func TestWorkspacePolicyReadFailurePreservesAnswerForOwnerReview(t *testing.T) {
+	var logs bytes.Buffer
+	service, _, approved := guardedService(t, &fakeGuard{}, &logs)
+	service.policy = fakeWorkspacePolicy{err: errors.New("policy storage unavailable")}
+	answer, err := service.Respond(context.Background(), target, approved.ID, answerGiven)
+	if err != nil || answer.Status != StatusReview || answer.Result != nil {
+		t.Fatalf("policy outage lost or released answer: %+v, %v", answer, err)
+	}
+	ownerView := asTheOwner(t, service, approved.ID)
+	if ownerView.Held == nil || ownerView.Held.Result.Content != answerGiven.Content {
+		t.Fatalf("owner cannot review completed work: %+v", ownerView)
+	}
+	requesterView, err := service.Get(context.Background(), requester, approved.ID)
+	if err != nil || requesterView.Result != nil || requesterView.Held != nil {
+		t.Fatalf("requester read held work: %+v, %v", requesterView, err)
+	}
+	if !strings.Contains(logs.String(), "policy storage unavailable") || strings.Contains(logs.String(), answerGiven.Content) {
+		t.Fatalf("policy failure must be diagnosable without answer text: %s", logs.String())
+	}
+}
+
 func TestWorkspacePolicyBoundsRequestExpiry(t *testing.T) {
 	service, _, _ := guardedService(t, nil, nil)
 	service.policy = fakeWorkspacePolicy{settings: policy.Settings{ExpireAfter: 2 * time.Hour}}
