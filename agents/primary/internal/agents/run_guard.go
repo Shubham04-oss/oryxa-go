@@ -14,9 +14,11 @@ import (
 )
 
 // RunGuardInput is trusted run metadata for an agent's shared publication.
-// It is carried on context, never in tool arguments, session state or storage.
-// Context contains only the member's earlier messages, never tool results or
-// private model replies. Sources are actual attempted calls plus synthetic
+// It is carried on context, never in tool arguments. Sources live only for
+// the run. Context contains earlier member messages, or a side run's shared
+// conversation, never tool results or private model replies. The side run's
+// original question/context is separately kept in its private session for
+// confirmation restoration. Sources are actual attempted calls plus synthetic
 // sources for material that entered the run without a tool.
 type RunGuardInput struct {
 	Request string

@@ -157,7 +157,8 @@ func (service *Service) guarded(ctx context.Context, actor primaryagents.Teamspa
 	outcome := service.guard.CheckWith(ctx, texts, &answerguard.RelevanceInput{
 		Request: run.Request, Context: run.Context, Sources: run.Sources,
 		Mode: string(settings.Relevance), Regulated: settings.Regulated,
-		OrganizationID: actor.OrganizationID, UserID: actor.UserID,
+		RequireCompleteInput: true,
+		OrganizationID:       actor.OrganizationID, UserID: actor.UserID,
 	}).At(len(texts), intensity)
 	if outcome.State != answerguard.StateClear || outcome.Shareable == nil {
 		// What was found is logged by kind, never by value.

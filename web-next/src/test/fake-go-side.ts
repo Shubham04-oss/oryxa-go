@@ -597,6 +597,7 @@ export class FakeGo {
         "message",
         "confirmations",
         "teamspace_id",
+        "publication_request",
       ])
       if (refused) return refused
       const next = this.runAnswers.shift()

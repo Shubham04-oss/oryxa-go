@@ -412,6 +412,18 @@ confirmation continuation.
 Context is the last six lines of the shared transcript snapshot the run saw,
 each at most 1,000 code points, never the owner's private Go transcript. Go's
 existing workspace/member settings and deployment ceiling decide relevance.
+For a ledger publication during the same Go run, the fresh run body also
+has `publication_request: {request, context}` beside its wrapped `message`.
+Only the clean original question can authorize sharing; peer transcript and
+prompt framing remain context. This object contains no sources or guard
+settings. The Worker builds it from the socket question and shared transcript
+rather than accepting it from a browser, and never sends it on the wire.
+Go validates it only for a fresh owned side-origin run and keeps its bounded
+question/context in existing private session metadata for confirmations.
+A confirmation body supplies no replacement object: Go restores the original,
+including after a service restart. Older Go side sessions without it cannot
+fall back to the wrapped prompt as their Request; their ledger publications
+are unchecked when private sources require judging in hold mode.
 Only while waiting for confirmation, the existing agent-message `data` JSON
 keeps an optional bounded `guardInput` (original request, source names and
 shared context). It is never sent on the wire, put in an inbox or read into an

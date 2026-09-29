@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
@@ -53,7 +54,7 @@ func TestAgentPublicationUsesTrustedSourcesAndCappedWorkspaceRelevance(t *testin
 		{name: "fresh public answer"},
 		{name: "only directory", sources: []string{"directory_load"}},
 		{name: "private history", sources: []string{relevance.ThreadHistory}, judged: true, held: true},
-		{name: "missing record", missing: true, judged: true, held: true},
+		{name: "missing record", missing: true, held: true},
 		{name: "new tool", sources: []string{"future_private_search"}, judged: true, held: true},
 		{name: "judge unavailable", sources: []string{"load_memory"}, result: relevance.Result{Err: errors.New("unavailable")}, judged: true, held: true},
 		{name: "regulated requested health", sources: []string{"load_memory"}, regulated: true, result: relevance.Result{Judged: true, Asked: []relevance.Category{relevance.Health}}, judged: true, held: true},
@@ -112,5 +113,23 @@ func TestAgentPublicationUsesPeerGuardIntensity(t *testing.T) {
 				t.Fatalf("summary=%q want=%q", shared.Summary, want)
 			}
 		})
+	}
+}
+
+func TestAgentPublicationCannotShareAnUnjudgedMiddle(t *testing.T) {
+	judge := &publicationJudge{result: relevance.Result{Judged: true}}
+	policy := &publicationPolicy{effective: guardpolicy.Effective{Peer: guardpolicy.LevelStrict, Relevance: guardpolicy.RelevanceHold}}
+	service, repo := guardedSpace(t, WithGuard(realGuard(t, &bedrockFinding{}, answerguard.WithRelevance(judge))), WithGuardPolicy(policy))
+	ctx := primaryagents.WithRunGuard(context.Background(), primaryagents.RunGuardInput{Request: "When is launch?", Sources: []string{"load_memory"}})
+	summary := strings.Repeat("a", 9_900) + "Ada is having surgery." + strings.Repeat("b", 9_900)
+	_, err := service.CollaborationPublish(ctx, ada, "token", "tsp_1", primaryagents.SharedEntryInput{
+		Kind: "result", Title: "Launch", Summary: summary,
+		Artifacts: []primaryagents.SharedArtifact{
+			{Name: "First", URI: "https://example.com/" + strings.Repeat("c", 3_900)},
+			{Name: "Second", URI: "https://example.com/" + strings.Repeat("d", 3_900)},
+		},
+	})
+	if !errors.Is(err, ErrUnchecked) || len(repo.entries) != 0 {
+		t.Fatalf("an oversized answer shared an unjudged middle: err=%v entries=%d", err, len(repo.entries))
 	}
 }

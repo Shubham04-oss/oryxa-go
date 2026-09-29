@@ -1517,9 +1517,10 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 	// told apart from one left out: a pin the caller meant, and did not get,
 	// would leave the run free to work in any teamspace the model names.
 	var body struct {
-		Message       string  `json:"message"`
-		TeamspaceID   *string `json:"teamspace_id"`
-		Confirmations []struct {
+		Message            string                      `json:"message"`
+		TeamspaceID        *string                     `json:"teamspace_id"`
+		PublicationRequest *threads.PublicationRequest `json:"publication_request"`
+		Confirmations      []struct {
 			ID        string `json:"id"`
 			Confirmed *bool  `json:"confirmed"`
 		} `json:"confirmations"`
@@ -1527,7 +1528,7 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 	if !server.decode(writer, request, &body) {
 		return
 	}
-	input := threads.RunInput{Message: body.Message}
+	input := threads.RunInput{Message: body.Message, PublicationRequest: body.PublicationRequest}
 	for _, answer := range body.Confirmations {
 		if answer.ID == "" || answer.Confirmed == nil {
 			writeError(writer, http.StatusBadRequest, "invalid_request", "every confirmation needs an id and whether it is confirmed")

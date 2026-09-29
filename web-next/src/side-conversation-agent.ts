@@ -232,7 +232,10 @@ type StatusData = {
 }
 
 /** What a run of a member's own agent here is sent (`POST …/threads/{id}/runs`): its input, and the teamspace Go pins it to. */
-type SideRunBody = RunInput & { teamspace_id: string }
+type SideRunBody = RunInput & {
+  teamspace_id: string
+  publication_request?: { request: string; context: string[] }
+}
 
 /** Why an agent's answer failed, in words for both people, and Go's code or the object's. */
 type RunFailure = { error: string; code?: string }
@@ -1576,6 +1579,10 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         question: input.message,
       }),
       teamspace_id: ids.teamspaceId,
+      publication_request: {
+        request: input.message,
+        context: guardContext(transcript),
+      },
     }
   }
 

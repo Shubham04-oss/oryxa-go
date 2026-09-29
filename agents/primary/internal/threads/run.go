@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -51,6 +52,10 @@ var errLeaseLost = errors.New("the run lost its hold on the thread")
 type RunInput struct {
 	Message       string
 	Confirmations []Answer
+	// PublicationRequest separates the member's question from a side run's
+	// wrapped prompt. It is content, not provenance: only fresh side-origin
+	// runs accept it, and confirmations restore what that message saved.
+	PublicationRequest *PublicationRequest
 	// StartedBy is who starts the run, agentsv1.StartedByMember unless set.
 	StartedBy string
 	// Wakeup names the batch of app events a message carries, for a run
@@ -72,6 +77,27 @@ type RunInput struct {
 	// this run's alone: it is never written to the thread, so the thread's next
 	// run has none unless its caller pins that run too.
 	TeamspaceID string
+}
+
+// PublicationRequest is the original question and shared conversation around
+// it, never a source list, guard setting or authorization exemption.
+type PublicationRequest struct {
+	Request string   `json:"request"`
+	Context []string `json:"context"`
+}
+
+const statePublicationRequest = "publication_guard_request"
+
+func (input PublicationRequest) valid() bool {
+	if strings.TrimSpace(input.Request) == "" || utf8.RuneCountInString(input.Request) > maxMessageRunes || len(input.Context) > relevance.MaxContextLines {
+		return false
+	}
+	for _, line := range input.Context {
+		if utf8.RuneCountInString(line) > relevance.MaxContextLineRunes {
+			return false
+		}
+	}
+	return true
 }
 
 // Answer is the member's decision on one confirmation.
@@ -121,6 +147,8 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 		return nil, fmt.Errorf("%w: a message holds at most %d characters", ErrInvalid, maxMessageRunes)
 	case input.Wakeup != "" && message == "":
 		return nil, fmt.Errorf("%w: a wake-up carries a message", ErrInvalid)
+	case input.PublicationRequest != nil && (message == "" || !input.PublicationRequest.valid()):
+		return nil, fmt.Errorf("%w: publication_request needs a fresh message, a nonempty question of at most %d characters and at most %d context lines of %d characters", ErrInvalid, maxMessageRunes, relevance.MaxContextLines, relevance.MaxContextLineRunes)
 	}
 	// A pin that is not one is the caller's mistake, refused rather than
 	// dropped: a run that was meant to be pinned and quietly is not would
@@ -139,11 +167,14 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 
 	// The thread must be the member's before this run takes it, even for a
 	// moment, or naming another member's thread could hold it from them.
-	if _, err := service.thread(ctx, member, threadID); err != nil {
+	stored, err := service.thread(ctx, member, threadID)
+	if err != nil {
 		return nil, err
 	}
+	if input.PublicationRequest != nil && stateString(stored.State(), stateOrigin) != OriginSideConversation {
+		return nil, fmt.Errorf("%w: publication_request is only for a side conversation", ErrInvalid)
+	}
 	run := &Run{service: service, member: member, threadID: threadID, startedBy: startedBy, teamspaceID: pinned}
-	var err error
 	if run.id, err = newRunID(); err != nil {
 		return nil, err
 	}
@@ -203,6 +234,23 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 	}
 	history := sessionEvents(stored)
 	run.guardInput = publicationGuardInput(history, message)
+	if stateString(stored.State(), stateOrigin) == OriginSideConversation {
+		// The wrapped prompt contains other people's untrusted words. It must
+		// never authorize a publication, including on old confirmations.
+		encoded := stateString(stored.State(), statePublicationRequest)
+		if message != "" {
+			encoded = ""
+			if input.PublicationRequest != nil {
+				bytes, _ := json.Marshal(input.PublicationRequest)
+				encoded = string(bytes)
+			}
+			if run.stateDelta == nil {
+				run.stateDelta = map[string]any{}
+			}
+			run.stateDelta[statePublicationRequest] = encoded
+		}
+		run.guardInput = sidePublicationGuardInput(encoded, len(history) > 0)
+	}
 	pending := pendingConfirmations(history, service.agent.Name())
 	if message != "" {
 		if len(pending) > 0 {
@@ -229,6 +277,20 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 	}
 	run.content = content
 	return nil
+}
+
+func sidePublicationGuardInput(encoded string, hasHistory bool) agents.RunGuardInput {
+	input := agents.RunGuardInput{}
+	if hasHistory {
+		input.Sources = []string{relevance.ThreadHistory}
+	}
+	var question PublicationRequest
+	if err := json.Unmarshal([]byte(encoded), &question); err != nil || !question.valid() {
+		input.Sources = append(input.Sources, agents.SourcesUnrecorded)
+		return input
+	}
+	input.Request, input.Context = question.Request, question.Context
+	return input
 }
 
 // answerContent is the member's answers as ADK reads them: one function
