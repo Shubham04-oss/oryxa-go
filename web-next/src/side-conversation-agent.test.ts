@@ -1252,6 +1252,36 @@ describe("SideConversationAgent: checking an own agent's answer", () => {
     )
   })
 
+  it("says only its own words of an answer that stopped without text, never the model's, which nothing has checked", async () => {
+    const { world, side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    go.runAnswers.push([
+      { type: "run_started", run_id: "run_1" },
+      {
+        type: "message",
+        author: "Leo",
+        error:
+          "MALFORMED_FUNCTION_CALL: send_email(to='bo@sim.oryxa', body='hunter2')",
+      },
+      { type: "run_completed", run_id: "run_1" },
+    ])
+    await askMine(side, adaTab, question)
+    for (const socket of [adaTab, boTab]) {
+      expect(lastItem(socket, "agent-message")).toMatchObject({
+        status: "done",
+        body: "",
+        error: "The agent had nothing to say.",
+      })
+      expect(JSON.stringify(socket.sent)).not.toContain("hunter2")
+    }
+    expect(go.checks).toEqual([])
+    expect(JSON.stringify(side.sql`SELECT * FROM side_items`)).not.toContain(
+      "hunter2"
+    )
+    expect(JSON.stringify(await inboxOf(world, bo))).not.toContain("hunter2")
+  })
+
   it("goes on from what a waiting answer shared, with the run's own question as what was asked, and shows the other person only that", async () => {
     const { side } = await setup()
     const adaTab = await join(side, ada)

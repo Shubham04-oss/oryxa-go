@@ -244,8 +244,6 @@ type Draft = {
   draft: string
   confirmations: SideConfirmation[]
   failure?: RunFailure
-  /** A message stopped without text, in the model's words. */
-  stopped?: string
   /** Its body reached `SIDE_MAX_AGENT_TEXT`: what else arrives is not kept. */
   full: boolean
 }
@@ -1579,11 +1577,10 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       }
       case "message":
         if (!fromAgent) return
-        if (item.text) {
-          draft.finished.push(item.text)
-        } else if (item.error) {
-          draft.stopped = item.error
-        }
+        // A message that stopped without text has only the model's own words
+        // for why (`item.error`), which may quote what it was asked or was
+        // about to do. Nothing checks them, so nobody is shown them.
+        if (item.text) draft.finished.push(item.text)
         draft.draft = ""
         this.showDraft(seq, draft)
         return
@@ -1664,7 +1661,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     const error =
       failure?.error ??
       (body === "" && status === "done"
-        ? (draft.stopped ?? "The agent had nothing to say.")
+        ? "The agent had nothing to say."
         : undefined)
     const settled = this.transaction(() => {
       const ended = this.rewrite(row, {
