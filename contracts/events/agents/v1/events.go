@@ -61,6 +61,14 @@ const (
 	// failed; held for the addressed member's review ("review"); and the
 	// end of that review: completed or failed once sent, or "withheld".
 	InteractionCompletedDetailType = "agents.interaction.completed.v1"
+	// InteractionLeaseRevokedDetailType announces that an owner ended, before
+	// it ran out, the lease that lets a member's follow-ups in one Slack thread
+	// be answered without asking the owner again.
+	InteractionLeaseRevokedDetailType = "agents.interaction.lease.revoked.v1"
+	// InteractionSecretViewedDetailType announces that the member who asked
+	// opened the one-time secret their request's owner shared with them. It
+	// says that it was opened and by whom, never what it held.
+	InteractionSecretViewedDetailType = "agents.interaction.secret.viewed.v1"
 	// TeamspaceCreatedDetailType announces a shared work space bound to a
 	// human team. Private prompts and contributed-agent instructions stay out
 	// of EventBridge.
@@ -182,7 +190,41 @@ type InteractionChanged struct {
 	// decision.decided_by: absent until it is decided, and for a decision an
 	// older build recorded without its decider.
 	DecidedBy *InteractionDecider `json:"decided_by,omitempty"`
+	// AskID names the ask the request belongs to: one Slack message put to
+	// several owners at once makes one request for each, and the first
+	// delivered answer settles them all. Absent for a request that belongs to
+	// no ask, which is every request an agent made.
+	AskID string `json:"ask_id,omitempty"`
+	// Origin is where the request was made: InteractionOriginAgent or
+	// InteractionOriginSlack. Absent only from an event an older build
+	// published, which is to be read as InteractionOriginAgent.
+	Origin string `json:"origin,omitempty"`
+	// Consent is how far the owner let the answer go, once they approved:
+	// InteractionConsentSummary or InteractionConsentAccess. Absent until the
+	// request is decided, for a rejection, and for an approval that granted no
+	// consent, which is every approval made before Slack asks.
+	Consent string `json:"consent,omitempty"`
 }
+
+// Where a request was made, as InteractionChanged.Origin.
+const (
+	// InteractionOriginAgent is a request an agent filed for its member, in
+	// the ordinary way.
+	InteractionOriginAgent = "agent"
+	// InteractionOriginSlack is a request the Slack app made on behalf of the
+	// member who mentioned it, to the members that message named.
+	InteractionOriginSlack = "slack"
+)
+
+// How far an owner let an answer go, as InteractionChanged.Consent.
+const (
+	// InteractionConsentSummary lets the answer be an AI summary alone.
+	InteractionConsentSummary = "summary"
+	// InteractionConsentAccess lets the answer quote what the owner's agent
+	// read, and, for an hour, answers the same member's follow-ups in that
+	// Slack thread.
+	InteractionConsentAccess = "access"
+)
 
 // Who decides a request, as InteractionChanged.Approval.
 const (
@@ -200,9 +242,31 @@ const (
 	DecidedByMember = "member"
 	// DecidedByAgent is an agent deciding in a run.
 	DecidedByAgent = "agent"
-	// DecidedBySystem is Oryxa closing a request made in a teamspace that no
-	// longer stands there.
+	// DecidedBySystem is Oryxa closing a request: one made in a teamspace that
+	// no longer stands there, or one of several an ask put to its owners once
+	// another owner's answer settled it.
 	DecidedBySystem = "system"
+	// DecidedByLease is Oryxa approving a follow-up in a Slack thread under a
+	// lease its owner gave, with no click. UserID is that owner, and Reason
+	// the lease's id.
+	DecidedByLease = "lease"
+	// DecidedByBypass is Oryxa approving a request that needs no owner click,
+	// because the Slack channel it came from, or who asked, is one the
+	// organization decided that for. It has no UserID, and Reason says which.
+	DecidedByBypass = "bypass"
+)
+
+// Where a decision was made, as InteractionDecider.Surface. A decision an
+// agent made, and one Oryxa made to close a request, name none.
+const (
+	// DecidedViaWeb is the owner in their own Oryxa session.
+	DecidedViaWeb = "web"
+	// DecidedViaSlack is the owner's click on the notice the Slack app sent.
+	DecidedViaSlack = "slack"
+	// DecidedViaLease is a lease, which is what DecidedByLease means.
+	DecidedViaLease = "lease"
+	// DecidedViaBypass is a bypass, which is what DecidedByBypass means.
+	DecidedViaBypass = "bypass"
 )
 
 // InteractionDecider is who decided a request.
@@ -212,6 +276,51 @@ type InteractionDecider struct {
 	UserID string `json:"user_id,omitempty"`
 	// AgentID is the agent that decided, when an agent did.
 	AgentID string `json:"agent_id,omitempty"`
+	// Surface is where the decision was made: DecidedViaWeb, DecidedViaSlack,
+	// DecidedViaLease or DecidedViaBypass. Absent from an agent's decision, one
+	// Oryxa made to close a request, and one an older build recorded.
+	Surface string `json:"surface,omitempty"`
+	// Reason is why Oryxa decided, for the decisions it makes on a standing
+	// permission: the lease's id, or the reason a bypass applied. It is a
+	// short code, never a person's words. Absent for the rest.
+	Reason string `json:"reason,omitempty"`
+}
+
+// InteractionLeaseRevoked is a lease ended by its owner. It carries
+// identities and the Slack thread the lease covered, never a question or an
+// answer.
+type InteractionLeaseRevoked struct {
+	LeaseID        string `json:"lease_id"`
+	OrganizationID string `json:"organization_id"`
+	// OwnerUserID gave the lease and revoked it; AskerUserID is the member
+	// whose follow-ups it approved.
+	OwnerUserID string `json:"owner_user_id"`
+	AskerUserID string `json:"asker_user_id"`
+	// ChannelID and ThreadTS are the Slack thread the lease covered.
+	ChannelID string `json:"channel_id"`
+	ThreadTS  string `json:"thread_ts"`
+	// RequestID is the request whose approval gave the lease, when it is
+	// known.
+	RequestID string `json:"request_id,omitempty"`
+	// ExpiresAt is when the lease would have run out, and RevokedAt when its
+	// owner ended it, in UTC.
+	ExpiresAt time.Time `json:"expires_at"`
+	RevokedAt time.Time `json:"revoked_at"`
+}
+
+// InteractionSecretViewed is a one-time secret opened by the member who
+// asked. It carries identities alone: what the secret held is never in an
+// event, a log or the ledger.
+type InteractionSecretViewed struct {
+	RequestID      string `json:"request_id"`
+	OrganizationID string `json:"organization_id"`
+	// AskID is the ask the request belongs to, absent when it belongs to none.
+	AskID string `json:"ask_id,omitempty"`
+	// OwnerUserID shared the secret, and AskerUserID, who opened it, is the
+	// member who asked.
+	OwnerUserID string    `json:"owner_user_id"`
+	AskerUserID string    `json:"asker_user_id"`
+	ViewedAt    time.Time `json:"viewed_at"`
 }
 
 // TeamspaceChanged is the safe lifecycle projection of a multi-user shared

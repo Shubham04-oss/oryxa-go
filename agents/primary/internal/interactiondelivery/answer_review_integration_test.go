@@ -18,7 +18,7 @@ import (
 // masking it in its masked version.
 type holdingGuard struct{}
 
-func (holdingGuard) Check(_ context.Context, texts []string) answerguard.Verdict {
+func (holdingGuard) CheckWith(_ context.Context, texts []string, _ *answerguard.RelevanceInput) answerguard.Verdict {
 	masked := slices.Clone(texts)
 	masked[0] = strings.ReplaceAll(masked[0], "priya@example.com", "{EMAIL}")
 	return answerguard.Verdict{State: answerguard.StateHeld, Kinds: []string{"EMAIL"}, Texts: slices.Clone(texts), Masked: masked}
