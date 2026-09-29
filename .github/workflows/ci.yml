@@ -124,8 +124,40 @@ jobs:
         run: pnpm typecheck
       - name: Tests
         run: pnpm test
-      - name: Build
+      - name: Build the production Worker
+        # The build deploy.yml ships, so the size below is the one that is
+        # uploaded.
         run: pnpm build
+        env:
+          CLOUDFLARE_ENV: production
+      - name: Worker size
+        # What `wrangler deploy` would upload, without uploading anything. A
+        # Worker has a size limit and starts slower the more code it holds,
+        # and a library only the browser needs can ride along in it unnoticed
+        # (the document viewer's PDF, Word, Excel and PowerPoint renderers
+        # did), so the size is printed on every run, with the biggest files
+        # behind it.
+        run: |
+          set -o pipefail
+          pnpm exec wrangler deploy --dry-run --outdir "$RUNNER_TEMP/worker" 2>&1 | tee "$RUNNER_TEMP/worker-dry-run.txt"
+          size=$(grep -m1 'Total Upload' "$RUNNER_TEMP/worker-dry-run.txt" || true)
+          if [ -z "$size" ]; then
+            echo "::warning::wrangler printed no 'Total Upload' line"
+            size="(no size reported)"
+          fi
+          {
+            echo "### web-next Worker"
+            echo
+            echo "\`$size\`"
+            echo
+            echo "Biggest files in the upload (bytes):"
+            echo
+            echo '```'
+            find "$RUNNER_TEMP/worker" -type f ! -name '*.map' -exec wc -c {} + | sort -rn | sed -n '1,12p'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          WRANGLER_SEND_METRICS: "false"
 
   image:
     name: Image
