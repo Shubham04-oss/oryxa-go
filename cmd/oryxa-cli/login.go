@@ -21,9 +21,10 @@ import (
 )
 
 type loginConfig struct {
-	ClientID    string `json:"cli_client_id"`
-	CallbackURL string `json:"cli_callback_url"`
-	Domain      string `json:"cognito_domain"`
+	ClientID          string   `json:"cli_client_id"`
+	CallbackURL       string   `json:"cli_callback_url"`
+	Domain            string   `json:"cognito_domain"`
+	IdentityProviders []string `json:"identity_providers"`
 }
 
 type callbackResult struct {
@@ -31,7 +32,7 @@ type callbackResult struct {
 	err  error
 }
 
-func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout io.Writer) (string, error) {
+func nativeOAuthLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout io.Writer, provider string) (string, error) {
 	config, err := fetchLoginConfig(ctx, api)
 	if err != nil {
 		return "", err
@@ -90,7 +91,11 @@ func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout
 		defer stop()
 		_ = server.Shutdown(shutdownCtx)
 	}()
-	authURL := oauth.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("nonce", nonce))
+	options := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("nonce", nonce)}
+	if provider != "" {
+		options = append(options, oauth2.SetAuthURLParam("identity_provider", provider))
+	}
+	authURL := oauth.AuthCodeURL(state, options...)
 	if asJSON {
 		_ = json.NewEncoder(stdout).Encode(map[string]any{"step": "login", "status": "needs_human", "next": map[string]string{"action": "open_url", "url": authURL}})
 	} else {
@@ -128,6 +133,18 @@ func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout
 }
 
 func fetchLoginConfig(ctx context.Context, api string) (loginConfig, error) {
+	config, err := fetchAuthConfig(ctx, api)
+	if err != nil {
+		return loginConfig{}, err
+	}
+	domain, err := url.Parse(config.Domain)
+	if config.ClientID == "" || err != nil || domain.Scheme != "https" || domain.Host == "" || domain.User != nil || domain.Path != "" || domain.RawQuery != "" || domain.Fragment != "" {
+		return loginConfig{}, fmt.Errorf("CLI browser sign-in is not configured on this server")
+	}
+	return config, nil
+}
+
+func fetchAuthConfig(ctx context.Context, api string) (loginConfig, error) {
 	parsed, err := url.Parse(strings.TrimRight(api, "/"))
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && (parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1"))) {
 		return loginConfig{}, fmt.Errorf("--api must be HTTPS or loopback HTTP")
@@ -147,10 +164,6 @@ func fetchLoginConfig(ctx context.Context, api string) (loginConfig, error) {
 	var config loginConfig
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&config); err != nil {
 		return loginConfig{}, err
-	}
-	domain, err := url.Parse(config.Domain)
-	if config.ClientID == "" || err != nil || domain.Scheme != "https" || domain.Host == "" || domain.User != nil || domain.Path != "" || domain.RawQuery != "" || domain.Fragment != "" {
-		return loginConfig{}, fmt.Errorf("CLI browser sign-in is not configured on this server")
 	}
 	return config, nil
 }

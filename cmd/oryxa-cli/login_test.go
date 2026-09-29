@@ -64,7 +64,7 @@ func TestNativeLoginKeepsTokenInMemory(t *testing.T) {
 		err   error
 	}, 1)
 	go func() {
-		token, err := nativeLogin(ctx, api.URL, true, true, writer)
+		token, err := nativeOAuthLogin(ctx, api.URL, true, true, writer, "Google")
 		result <- struct {
 			token string
 			err   error
@@ -84,7 +84,7 @@ func TestNativeLoginKeepsTokenInMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	authURL, err := url.Parse(step.Next.URL)
-	if err != nil || authURL.Query().Get("code_challenge") == "" || authURL.Query().Get("nonce") == "" {
+	if err != nil || authURL.Query().Get("code_challenge") == "" || authURL.Query().Get("nonce") == "" || authURL.Query().Get("identity_provider") != "Google" {
 		t.Fatalf("invalid authorization URL: %s, %v", step.Next.URL, err)
 	}
 	// The browser would follow Cognito's redirect to this loopback URL.

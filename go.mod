@@ -127,6 +127,7 @@ require (
 	golang.org/x/net v0.58.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.22.0
+	golang.org/x/term v0.45.0
 	google.golang.org/adk/v2 v2.4.0
 	google.golang.org/api v0.295.0
 	google.golang.org/genai v1.70.0

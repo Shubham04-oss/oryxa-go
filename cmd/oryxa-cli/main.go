@@ -89,7 +89,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return initCommand(ctx, opts, stdout, stderr, getenv)
 	}
 	if command == "login" {
-		client, err := signedInClient(ctx, opts, stdout, getenv)
+		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -103,16 +103,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return 0
 	}
 	if command == "setup" {
+		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
+		if err != nil {
+			return reportError(err, stderr)
+		}
 		document, err := setupDocument(opts, stderr)
 		if err != nil {
 			return reportError(err, stderr)
 		}
 		if opts.org != "" && opts.org != document.Metadata.Organization {
 			return reportError(fmt.Errorf("--org does not match metadata.organization"), stderr)
-		}
-		client, err := signedInClient(ctx, opts, stdout, getenv)
-		if err != nil {
-			return reportError(err, stderr)
 		}
 		state, err := client.Snapshot(ctx, document.Metadata.Organization)
 		if err != nil {
@@ -158,7 +158,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if opts.org == "" || opts.to <= 0 {
 			return reportError(fmt.Errorf("rollback requires --org and a positive --to version"), stderr)
 		}
-		client, err := signedInClient(ctx, opts, stdout, getenv)
+		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -205,7 +205,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if opts.org != "" && opts.org != document.Metadata.Organization {
 			return reportError(fmt.Errorf("--org does not match metadata.organization"), stderr)
 		}
-		client, err := signedInClient(ctx, opts, stdout, getenv)
+		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -253,7 +253,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return report(stdout, opts.json, plan)
 	}
 	if command == "pull" || command == "status" || command == "doctor" || command == "mappings" || command == "whoami" {
-		client, err := signedInClient(ctx, opts, stdout, getenv)
+		client, err := signedInClient(ctx, opts, stdout, stderr, getenv)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -415,14 +415,14 @@ func hasRemoval(plan runtime.Plan) bool {
 	return false
 }
 
-func signedInClient(ctx context.Context, opts options, stdout io.Writer, getenv func(string) string) (*runtime.Client, error) {
+func signedInClient(ctx context.Context, opts options, stdout, stderr io.Writer, getenv func(string) string) (*runtime.Client, error) {
 	token := getenv("ORYXA_ACCESS_TOKEN")
 	if token == "" {
 		if opts.noInput {
-			return nil, fmt.Errorf("browser sign-in is required under --no-input; run without --no-input or provide a short-lived ORYXA_ACCESS_TOKEN")
+			return nil, fmt.Errorf("interactive sign-in is required under --no-input; run without --no-input or provide a short-lived ORYXA_ACCESS_TOKEN")
 		}
 		var err error
-		token, err = nativeLogin(ctx, opts.api, opts.noBrowser, opts.json, stdout)
+		token, err = interactiveLogin(ctx, opts, os.Stdin, stdout, stderr)
 		if err != nil {
 			return nil, err
 		}
@@ -520,6 +520,9 @@ func report(writer io.Writer, asJSON bool, value any) int {
 
 func reportError(err error, stderr io.Writer) int {
 	fmt.Fprintln(stderr, err)
+	if errors.Is(err, errVerificationPending) {
+		return 2
+	}
 	if runtime.IsStatus(err, http.StatusConflict) {
 		return 5
 	}
@@ -537,9 +540,9 @@ func usage(writer io.Writer) {
 	fmt.Fprint(writer, `Usage: oryxa-cli <command> [flags]
 
 Commands:
-  setup      browser sign-in, plan and apply in one process
+  setup      sign in or create an account, plan and apply in one process
   agent-help print the coding-agent workspace mapping guide
-  login      browser sign-in and show the current account (no saved session)
+  login      sign in or create an account and show the current account
   init       write a starting oryxa.yaml to stdout or -o
   validate   validate a workspace file without contacting Oryxa
   plan       show changes against the current organization
@@ -553,7 +556,7 @@ Commands:
   whoami     show the authenticated user and organizations
   connect-app TOOLKIT  connect your own Composio app through its browser page
 
-Remote commands sign in through the browser when ORYXA_ACCESS_TOKEN is absent.
+Remote commands prompt for Google or email sign-in when ORYXA_ACCESS_TOKEN is absent.
 Each command keeps its session in memory and never saves the token. Use -f for
 the input file, --org for an organization
 slug, --api for the API URL, --json for machine-readable output, and --dry-run

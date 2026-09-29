@@ -21,24 +21,32 @@ Create a starting file and inspect it:
 ./bin/oryxa setup --agent-help        # mapping instructions for your coding agent
 ```
 
-After filling in members and teams, run the one-process setup flow. It opens
-Cognito in a browser, receives the redirect on `127.0.0.1`, shows the plan,
-and asks before applying. The access token stays in that process's memory.
-The server must have `COGNITO_CLI_CLIENT_ID` and its fixed callback URL from
-the Cognito provisioner. `--no-browser` prints the URL for a coding agent to
-open; `--json` prints machine-readable progress.
+After filling in members and teams, run the one-process setup flow. It first
+asks the creator to continue with Google, sign in with email, or create an
+email account. Google uses an authorization code with PKCE and a callback on
+`127.0.0.1`; the server must have `COGNITO_CLI_CLIENT_ID` and its fixed
+callback URL from the Cognito provisioner. Email sign-up prompts for a
+password without echoing it, asks for the verification link or token sent by
+Oryxa, verifies the account, and signs in. The access token stays in that
+process's memory. Setup creates a missing starter file only after sign-in,
+then shows the plan and asks before applying. `--no-browser` prints the Google
+URL for a coding agent to open; `--json` prints machine-readable progress.
+If email verification is deferred, setup exits `2` with a `verify_email`
+human step; rerun setup and choose email sign-in after verifying the link.
 
 ```sh
 ./bin/oryxa setup -f oryxa.yaml
 ```
 
-If the file is absent, `setup --org acme` writes a starter file before
-planning. It also accepts `--preset` and `--domains` for that first file.
+If the file is absent, `setup --org acme` writes a starter file after sign-in
+and before planning. Without `--org`, it asks for the slug. It also accepts
+`--preset` and `--domains` for that first file.
 
 Separate remote commands open browser sign-in when they need a session. They
 can also read a short-lived member access token from `ORYXA_ACCESS_TOKEN`.
 No token is accepted in the file or as a flag, and the CLI does not save it.
-`oryxa login` checks sign-in and shows the current account; its in-memory
+`oryxa login` offers the same sign-in or account-creation choices and shows the
+current account; its in-memory
 session ends with that command. For one sign-in and several setup steps, use
 `oryxa setup`. A reusable cross-command session needs a future in-memory
 daemon or a different security design.

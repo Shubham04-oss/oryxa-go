@@ -2,7 +2,7 @@
 
 Auth owns Google sign-in, email/password credentials, verification and password-reset state, browser sessions, users, organizations, memberships, and invitations. Cognito stores and validates passwords; PostgreSQL is the system of record for auth-owned action tokens and application state. Every PostgreSQL state change and its domain event are written in the same transaction, then an outbox worker publishes the event to EventBridge with at-least-once delivery.
 
-Cloudflare is the public edge. Route the public auth hostname to this service without exposing port 8080 directly. Keep Cloudflare rate limiting and bot protection enabled on `/v1/auth/login`, `/v1/auth/callback`, and `/v1/auth/refresh`.
+Cloudflare is the public edge. Route the public auth hostname to this service without exposing port 8080 directly. Keep Cloudflare rate limiting and bot protection enabled on `/v1/auth/login`, `/v1/auth/callback`, `/v1/auth/refresh`, and `/v1/auth/cli/password/*`.
 
 ## Lifecycle
 
@@ -22,6 +22,9 @@ Access JWTs are verified locally against Cognito's signed OIDC keys. The auth st
 | --- | --- | --- |
 | `GET` | `/healthz` | Liveness |
 | `GET` | `/v1/auth/config` | Public client configuration |
+| `POST` | `/v1/auth/cli/password/signup` | Native CLI email sign-up without browser cookies |
+| `POST` | `/v1/auth/cli/password/verify` | Native CLI email verification |
+| `POST` | `/v1/auth/cli/password/login` | Native CLI password sign-in; returns only a short-lived access token |
 | `GET` | `/v1/auth/login?return_to=...` | Start Google sign-in |
 | `GET` | `/v1/auth/callback` | Complete Cognito authorization-code flow |
 | `POST` | `/v1/auth/refresh` | Refresh browser session |

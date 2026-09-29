@@ -133,6 +133,9 @@ func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, s
 	server.handleFunc("GET /healthz", server.health)
 	server.handleFunc("GET /v1/auth/config", server.authConfig)
 	server.handleFunc("POST /v1/auth/cli/session", server.cliSession)
+	server.handleFunc("POST /v1/auth/cli/password/signup", server.cliPasswordSignUp)
+	server.handleFunc("POST /v1/auth/cli/password/verify", server.cliPasswordVerifyEmail)
+	server.handleFunc("POST /v1/auth/cli/password/login", server.cliPasswordLogin)
 	server.handleFunc("GET /v1/auth/login", server.login)
 	server.handleFunc("GET /v1/auth/callback", server.callback)
 	server.handleFunc("POST /v1/auth/refresh", server.refresh)
@@ -288,6 +291,20 @@ func (server *Server) passwordSignUp(writer http.ResponseWriter, request *http.R
 	if !server.requirePublicMutationOrigin(writer, request) {
 		return
 	}
+	server.signUpPassword(writer, request)
+}
+
+// Native CLI password requests carry no browser cookies. Their sign-in route
+// returns only the short-lived access token, which the CLI keeps in memory.
+func (server *Server) cliPasswordSignUp(writer http.ResponseWriter, request *http.Request) {
+	if !server.requireNativeAuthRequest(writer, request) {
+		return
+	}
+	noStore(writer)
+	server.signUpPassword(writer, request)
+}
+
+func (server *Server) signUpPassword(writer http.ResponseWriter, request *http.Request) {
 	var input struct {
 		Email       string `json:"email"`
 		Password    string `json:"password"`
@@ -308,6 +325,18 @@ func (server *Server) passwordVerifyEmail(writer http.ResponseWriter, request *h
 	if !server.requirePublicMutationOrigin(writer, request) {
 		return
 	}
+	server.verifyPasswordEmail(writer, request)
+}
+
+func (server *Server) cliPasswordVerifyEmail(writer http.ResponseWriter, request *http.Request) {
+	if !server.requireNativeAuthRequest(writer, request) {
+		return
+	}
+	noStore(writer)
+	server.verifyPasswordEmail(writer, request)
+}
+
+func (server *Server) verifyPasswordEmail(writer http.ResponseWriter, request *http.Request) {
 	var input struct {
 		Token string `json:"token"`
 	}
@@ -344,6 +373,26 @@ func (server *Server) passwordLogin(writer http.ResponseWriter, request *http.Re
 	if !server.requirePublicMutationOrigin(writer, request) {
 		return
 	}
+	server.loginPassword(writer, request, false)
+}
+
+func (server *Server) cliPasswordLogin(writer http.ResponseWriter, request *http.Request) {
+	if !server.requireNativeAuthRequest(writer, request) {
+		return
+	}
+	noStore(writer)
+	server.loginPassword(writer, request, true)
+}
+
+func (server *Server) requireNativeAuthRequest(writer http.ResponseWriter, request *http.Request) bool {
+	if request.Header.Get("Origin") != "" || !strings.HasPrefix(request.Header.Get("Content-Type"), "application/json") {
+		writeError(writer, http.StatusForbidden, "native CLI JSON request required")
+		return false
+	}
+	return true
+}
+
+func (server *Server) loginPassword(writer http.ResponseWriter, request *http.Request, native bool) {
 	var input struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -355,6 +404,10 @@ func (server *Server) passwordLogin(writer http.ResponseWriter, request *http.Re
 	session, err := server.passwords.Login(request.Context(), input.Email, input.Password)
 	if err != nil {
 		server.handleError(writer, err)
+		return
+	}
+	if native {
+		writeJSON(writer, http.StatusOK, map[string]any{"access_token": session.AccessToken, "expires_in": session.ExpiresIn, "user": session.User})
 		return
 	}
 	server.setSessionCookies(writer, session.AccessToken, session.RefreshToken, session.ExpiresIn)
