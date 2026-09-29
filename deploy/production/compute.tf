@@ -451,8 +451,15 @@ resource "aws_ecs_task_definition" "oryxa" {
       logConfiguration = { logDriver = "awslogs", options = local.log_options["cloudflared"] }
     },
     {
+      # A release and its digest, not "latest", so that a task that starts
+      # tomorrow runs what this one does. The digest is the multi-architecture
+      # index, which has linux/arm64 for Fargate; `latest` was v0.50.0 on
+      # 2026-09-29. To move to another release, read the digest of its tag:
+      #   token=$(curl -s https://public.ecr.aws/token/ | jq -r .token)
+      #   curl -sI -H "Authorization: Bearer $token" -H "Accept: application/vnd.oci.image.index.v1+json" \
+      #     https://public.ecr.aws/v2/aws-observability/aws-otel-collector/manifests/<tag> | grep -i docker-content-digest
       name             = "otel"
-      image            = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
+      image            = "public.ecr.aws/aws-observability/aws-otel-collector:v0.50.0@sha256:7968fb60db6a2390a47ba6a2df029745638486e285c9b2487da1b722d0855a3e"
       essential        = false
       secrets          = [{ name = "AOT_CONFIG_CONTENT", valueFrom = aws_ssm_parameter.otel_config.arn }]
       logConfiguration = { logDriver = "awslogs", options = local.log_options["otel"] }
