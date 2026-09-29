@@ -320,3 +320,60 @@ resource "cloudflare_ruleset" "custom_rules" {
     expression  = "(http.host in {\"${local.app_host}\" \"${local.api_host}\"} and starts_with(http.request.uri.path, \"/v1/internal\"))"
   }]
 }
+
+# Password sign-in at the edge. auth has no limit of its own on
+# /v1/auth/password/ (sign-up, verify, resend, login, forgot and reset).
+# Cognito locks one user out after repeated wrong passwords, but nothing slows
+# one address that tries many users, or asks for verification and reset mail
+# for any address, as fast as the tasks answer. This blocks a client IP that
+# asks more than var.signin_requests_per_period times in 10 seconds, for 10
+# seconds.
+#
+# Those numbers are the Free plan's only ones, and the zone's plan is not
+# known here, so the rule stays inside them: one rule, counted per client IP
+# (ip.src, with the data center Cloudflare requires beside it), a 10-second
+# window and a 10-second block, and an expression on the path alone, since
+# Free has no method or host to match on (Pro adds the host, Business the
+# method). The path is enough: every route under /v1/auth/password/ is a POST
+# (auth/internal/httpserver/server.go), so it selects the same requests.
+#
+# A paid plan allows longer windows, which suit a sign-in limit better. Pro
+# counts up to a minute and blocks for up to an hour, Business counts up to
+# ten minutes: then a handful of attempts a minute, blocked for an hour, is
+# the setting to want (period and mitigation_timeout below, and the variable).
+# A blocked request gets Cloudflare's own 429 page.
+#
+# This is the zone's entry-point ruleset for http_ratelimit, and the Free plan
+# allows one rate limiting rule, so it is the only one there can be.
+variable "signin_requests_per_period" {
+  description = "How many requests to /v1/auth/password/ one client IP may make in 10 seconds, at one Cloudflare data center, before it is blocked for 10 seconds. Ten seconds is the only window and block the Free plan allows; a paid plan allows longer ones (deploy/production/hardening.tf)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.signin_requests_per_period >= 1
+    error_message = "signin_requests_per_period is at least 1."
+  }
+}
+
+resource "cloudflare_ruleset" "rate_limits" {
+  zone_id     = data.cloudflare_zone.main.zone_id
+  name        = "${local.name} rate limits"
+  description = "Managed by OpenTofu (deploy/production/hardening.tf)."
+  kind        = "zone"
+  phase       = "http_ratelimit"
+
+  rules = [{
+    ref         = "limit_password_sign_in"
+    description = "Password sign-up, sign-in and reset attempts, per client IP"
+    action      = "block"
+    enabled     = true
+    expression  = "starts_with(http.request.uri.path, \"/v1/auth/password/\")"
+    ratelimit = {
+      characteristics     = ["cf.colo.id", "ip.src"]
+      period              = 10
+      requests_per_period = var.signin_requests_per_period
+      mitigation_timeout  = 10
+    }
+  }]
+}

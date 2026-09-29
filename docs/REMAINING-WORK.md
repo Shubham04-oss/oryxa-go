@@ -550,12 +550,14 @@ account:
 - **Alarms on what is only graphed.** SES bounces and complaints, EventBridge
   failed invocations and Bedrock throttling are now alarms, written and not
   applied (`hardening.tf`). Still open: every alarm mails one address.
-- **Smaller.** Nothing limits the rate of sign-in attempts at Cloudflare. Two
-  more are written and not applied: the RDS log groups, which never expired,
-  now keep 30 days (`hardening.tf` declares them and imports the ones RDS
-  made), and the task role's Cognito statement, which allowed `cognito-idp:*`
-  on every pool, now names the eight admin calls auth makes, on the one pool
-  (`compute.tf`).
+- **Smaller.** Written and not applied: the RDS log groups, which never
+  expired, now keep 30 days (`hardening.tf` declares them and imports the
+  ones RDS made); the task role's Cognito statement, which allowed
+  `cognito-idp:*` on every pool, now names the eight admin calls auth makes,
+  on the one pool (`compute.tf`); and Cloudflare now blocks a client IP that
+  makes more than 10 requests to `/v1/auth/password/` in 10 seconds, for 10
+  seconds (`hardening.tf`). That is the Free plan's only window; a paid plan
+  allows a longer one, which would suit sign-in better.
 
 ## 8. Housekeeping
 
