@@ -61,6 +61,8 @@ import type { AvatarIdentity } from "./workspace-avatar"
 import { cn } from "@/lib/utils"
 import { captureScreenContext } from "@/lib/agents/screen-context"
 import type { ScreenContext, ScreenItem } from "@/lib/agents/screen-context"
+import { requestPrimaryChat } from "@/lib/threads/chat-choice"
+import type { PrimaryChatTarget } from "@/lib/threads/chat-choice"
 
 type Section =
   | "overview"
@@ -459,6 +461,16 @@ export function WorkspaceShell({
     setPrimaryViewer("overview")
     setPrimaryFile(null)
     openPrimaryWork()
+  }
+
+  function openHomeConversation(target: PrimaryChatTarget) {
+    if (!selectedOrganization || !session) return
+    closePrimaryWork()
+    expandAgentPanel()
+    requestPrimaryChat(
+      { organizationId: selectedOrganization.id, userId: session.user.id },
+      target
+    )
   }
 
   function navigateFromHome(mode: PrimaryMode, next: Section) {
@@ -869,10 +881,14 @@ export function WorkspaceShell({
                     session ? selectedOrganization?.id : undefined
                   }
                   viewerId={viewerId}
-                  // New/open chat shortcuts await the chat owner's supported
-                  // API; disabled until they can reach the exact DO thread.
+                  onNewChat={(message) =>
+                    openHomeConversation({ kind: "new", message })
+                  }
+                  onOpenConversation={(threadId) =>
+                    openHomeConversation({ kind: "thread", threadId })
+                  }
                   onOpenRequests={openHomeRequests}
-                  onOpenAgent={openAgentOverview}
+                  onOpenAgent={() => navigateFromHome("agents", "agents")}
                   onOpenTools={() => navigateFromHome("home", "tools")}
                   onOpenKnowledge={() => navigateFromHome("home", "knowledge")}
                 />

@@ -89,20 +89,23 @@ not permission to copy every incidental value into a new component.
 
 ## 3. Focused work and content pages
 
-- **Home — Today.** Start Home with both sidebars collapsed. Expand one only
-  when the member uses its toggle, and keep the state they leave it in when
-  they return to Home; the normal mutual-collapse rules still apply. On a
+- **Home — Today.** Start Home with both sidebars collapsed. Ordinary
+  navigation never auto-expands one: keep the state the member leaves with
+  its toggles when they return to Home; the normal mutual-collapse rules
+  still apply. Home's explicit chat shortcuts open the right panel. On a
   phone, both navigation overlays start closed and close after a selection.
   Today is a centered column about 360px wide on the `#1e1e1e` canvas, with
   its composer and cards on `#111111`, tight rows and 11–12px type. No greeting,
   starter prompts, saved-view examples or Teamspaces card.
   - The composer always starts a **new** primary-agent conversation. It never
     resumes the latest one. Sending follows the existing authenticated
-    `ThreadChatAgent` path, with the Home screen context captured before
-    leaving it.
+    `ThreadChatAgent` path, with Home remaining the current screen context.
+    The shell opens the right panel, then requests the new conversation
+    through the shared chat-choice API; it does not navigate to focused work.
   - Keep up to three real recent conversations immediately below the composer,
     including when nothing else needs the member. Each opens that exact
-    conversation. New chat starts a blank conversation, and All opens the
+    conversation in the right panel while staying on Home. New chat starts
+    a blank conversation, and All opens the
     agent's work. Describe running work only from a real live signal, never
     from a thread's update time.
   - Then show Waiting on you for owner approvals and held answers to review,

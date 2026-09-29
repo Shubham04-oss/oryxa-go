@@ -248,11 +248,26 @@ describe("HomeOverview", () => {
   it("keeps three real recent conversations below the composer even when no decision or failure needs the member", async () => {
     stubApi({
       [`${path}/threads`]: {
-        threads: Array.from({ length: 4 }, (_, i) => ({
-          id: `old_${i}`,
-          title: `Completed plan ${i}`,
-          updated_at: "2026-09-23T10:00:00Z",
-        })),
+        threads: [
+          {
+            id: "app_update",
+            title: "Private app update",
+            origin: "app_update",
+            updated_at: "2026-09-23T10:00:00Z",
+          },
+          {
+            id: "side",
+            title: "Side conversation",
+            origin: "side",
+            updated_at: "2026-09-23T10:00:00Z",
+          },
+          ...Array.from({ length: 4 }, (_, i) => ({
+            id: `old_${i}`,
+            title: `Completed plan ${i}`,
+            origin: i === 1 ? "chat" : undefined,
+            updated_at: "2026-09-23T10:00:00Z",
+          })),
+        ],
       },
     })
     const callbacks = renderHome()
@@ -262,6 +277,8 @@ describe("HomeOverview", () => {
     const recent = screen.getByRole("region", { name: "Your agent" })
     expect(within(recent).getAllByRole("listitem")).toHaveLength(3)
     expect(screen.queryByText("Completed plan 3")).toBeNull()
+    expect(screen.queryByText("Private app update")).toBeNull()
+    expect(screen.queryByText("Side conversation")).toBeNull()
     fireEvent.click(
       within(recent).getByRole("button", { name: /Completed plan 1/ })
     )

@@ -142,7 +142,9 @@ export function HomeOverview({
   const waiting = (inbox.data ?? []).filter((request) =>
     waitsOnMember(request, viewerId ?? "", Date.now())
   )
-  const recent = (threads.data ?? []).slice(0, 3)
+  const recent = (threads.data ?? [])
+    .filter((thread) => !thread.origin || thread.origin === "chat")
+    .slice(0, 3)
   const toolProblems = (connections.data ?? []).filter(
     (connection) =>
       connection.status === "failed" || connection.status === "expired"

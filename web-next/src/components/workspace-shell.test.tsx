@@ -14,6 +14,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
 import { WorkspaceShell } from "./workspace-shell"
 import type { Session } from "@/lib/auth/client"
+import * as primaryChat from "@/lib/threads/chat-choice"
 import { json, mockApi, orgPath, teamspace, viewerId } from "@/test/teamspaces"
 
 // A signed-in shell holds the member's DM inbox open, and a teamspace its
@@ -21,6 +22,10 @@ import { json, mockApi, orgPath, teamspace, viewerId } from "@/test/teamspaces"
 vi.mock(
   "agents/react",
   async () => (await import("@/test/room-socket")).agentsReact
+)
+vi.mock(
+  "@cloudflare/ai-chat/react",
+  async () => (await import("@/test/agent-chat")).aiChatReact
 )
 
 function render(ui: ReactElement) {
@@ -103,9 +108,96 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe("WorkspaceShell navigation", () => {
+  it("opens the panel and emits workspace-scoped Home targets through the public contract without claiming delivery", async () => {
+    const request = vi
+      .spyOn(primaryChat, "requestPrimaryChat")
+      .mockImplementation(() => {})
+    const api = mockApi(({ url }) => {
+      if (url.pathname === `${orgPath}/threads`)
+        return json({
+          threads: [
+            {
+              id: "th_recent",
+              title: "Specific recent conversation",
+              origin: "chat",
+              updated_at: new Date().toISOString(),
+            },
+          ],
+        })
+      if (url.pathname.endsWith("/threads/th_recent"))
+        return json({
+          id: "th_recent",
+          title: "Specific recent conversation",
+          items: [],
+          pending_confirmations: [],
+        })
+      if (url.pathname.endsWith("/get-messages")) return json([])
+      if (url.pathname.endsWith("/agents")) return json({ agents: [] })
+      if (url.pathname.endsWith("/teamspaces")) return json({ teamspaces: [] })
+      if (url.pathname.endsWith("/corpora")) return json({ corpora: [] })
+      if (url.pathname.endsWith("/apps/connections"))
+        return json({ connections: [] })
+      if (url.pathname.endsWith("/agent-requests/inbox"))
+        return json({ requests: [] })
+      return undefined
+    })
+    const { container } = render(
+      <WorkspaceShell
+        session={session}
+        selectedOrganization={session.organizations[0]}
+        role="member"
+        organizationRole="member"
+      />
+    )
+    const shell = container.querySelector(".workspace-shell")
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Specific recent conversation/,
+      })
+    )
+    expect(request).toHaveBeenLastCalledWith(
+      { organizationId: "org_sim", userId: viewerId },
+      { kind: "thread", threadId: "th_recent" }
+    )
+    expect(shell?.getAttribute("data-right")).toBe("expanded")
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+    expect(
+      screen.getByRole("heading", { name: "Today", level: 1 })
+    ).toBeTruthy()
+    expect(shell?.getAttribute("data-primary-work")).toBeNull()
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Start a new conversation" }),
+      { target: { value: "  Start from Home  " } }
+    )
+    fireEvent.click(
+      within(screen.getByRole("main", { name: "Today canvas" })).getByRole(
+        "button",
+        { name: "Send message" }
+      )
+    )
+    expect(request).toHaveBeenLastCalledWith(
+      { organizationId: "org_sim", userId: viewerId },
+      { kind: "new", message: "Start from Home" }
+    )
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Your agent" })).getByRole(
+        "button",
+        { name: "New chat" }
+      )
+    )
+    expect(request).toHaveBeenLastCalledWith(
+      { organizationId: "org_sim", userId: viewerId },
+      { kind: "new", message: undefined }
+    )
+    expect(request).toHaveBeenCalledTimes(3)
+    expect(api.calls.every((call) => call.method === "GET")).toBe(true)
+  })
+
   it("starts Home on collapsed rails, preserves explicit toggle choices and has no fake saved views", () => {
     const { container } = render(<WorkspaceShell />)
     const shell = container.querySelector(".workspace-shell")
