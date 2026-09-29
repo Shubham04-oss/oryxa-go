@@ -8,6 +8,7 @@ import {
   ChartNoAxesColumn,
   Folder,
   House,
+  Inbox,
   LayoutGrid,
   LogOut,
   MoreHorizontal,
@@ -22,6 +23,8 @@ import {
 import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { KnowledgeBases } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
+import { RequestsCanvas } from "./requests-view"
+import { openRequest, useRequestsEntry } from "./requests-view-open"
 import { TeamspacesManagement } from "./teamspaces-management"
 import type { WorkspaceRole } from "./teamspaces-management"
 import { TeamspaceFocus } from "./teamspace-focus"
@@ -51,6 +54,7 @@ import { signOut } from "@/lib/auth/client"
 import type { Organization, Role, Session } from "@/lib/auth/client"
 import { useInbox } from "@/lib/dms"
 import { isNameId } from "@/lib/dms/names"
+import { OpenRequestProvider } from "@/lib/dms/request-navigation"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { cn } from "@/lib/utils"
 
@@ -63,6 +67,7 @@ type Section =
   | "agents"
   | "multi-agents"
   | "specialists"
+  | "requests"
 type PrimaryMode = "home" | "team" | "agents"
 
 type NavigationItem = {
@@ -86,6 +91,7 @@ const navigation: Record<PrimaryMode, NavigationItem[]> = {
     { key: "agents", label: "Agent overview", icon: ChartNoAxesColumn },
     { key: "multi-agents", label: "Multi-agent teams", icon: Workflow },
     { key: "specialists", label: "Specialists", icon: Bot },
+    { key: "requests", label: "Requests", icon: Inbox },
   ],
 }
 
@@ -111,6 +117,7 @@ const headings: Record<Section, string> = {
   agents: "Agent overview",
   "multi-agents": "Multi-agent teams",
   specialists: "Specialists",
+  requests: "Requests",
   people: "People",
   knowledge: "Knowledge bases",
   tools: "Tools",
@@ -118,7 +125,22 @@ const headings: Record<Section, string> = {
 
 const savedViews = ["Launch plan", "At-risk accounts", "Q4 pipeline"]
 
-export function WorkspaceShell({
+/**
+ * The workspace. A request named in a DM opens in Agents → Requests: what
+ * shows a DM reads `useOpenRequest` from the provider here, and its function
+ * is `openRequest` (requests-view-open.ts), which the shell below listens for.
+ */
+export function WorkspaceShell(
+  props: NonNullable<Parameters<typeof WorkspaceShellContent>[0]> = {}
+) {
+  return (
+    <OpenRequestProvider value={openRequest}>
+      <WorkspaceShellContent {...props} />
+    </OpenRequestProvider>
+  )
+}
+
+function WorkspaceShellContent({
   session,
   role = session ? "member" : "admin",
   organizationRole,
@@ -170,6 +192,8 @@ export function WorkspaceShell({
   const [settingsOpen, setSettingsOpen] = useState(false)
   // The page Settings opens on, when a link asked for one.
   const [settingsPage, setSettingsPage] = useState<SettingsPage>()
+  // The request a link or a note named, which Requests opens first.
+  const [requestFocus, setRequestFocus] = useState<string | null>(null)
   const agentsMode = useAgentsMode()
   const [chatRequest, setChatRequest] = useState<AgentPanelChatRequest | null>(
     null
@@ -231,6 +255,12 @@ export function WorkspaceShell({
     // /settings/billing, where billing sends a member back, lands here.
     if (view === "billing") {
       setSettingsPage("billing")
+      setSettingsOpen(true)
+      return
+    }
+    // Slack's install sends its admin back here (slack-settings.tsx).
+    if (view === "slack") {
+      setSettingsPage("slack")
       setSettingsOpen(true)
       return
     }
@@ -392,6 +422,26 @@ export function WorkspaceShell({
     if (selectedKnowledgeBase) setKnowledgeBaseSelection(null)
     if (selectedTeamspace) teamspaces.select(null)
   }
+
+  // A request named by a link or a note (requests-view-open.ts) opens in
+  // Agents → Requests, first; leaving Requests puts it away.
+  function openRequestsSection(requestId?: string) {
+    teamspaces.reset()
+    agentsMode.close()
+    setDmPeerId(null)
+    setKnowledgeBaseSelection(null)
+    setRequestFocus(requestId ?? null)
+    setActiveMode("agents")
+    setSectionsByMode((current) => ({ ...current, agents: "requests" }))
+    if (isMobile) {
+      setLeftExpanded(false)
+      setRightExpanded(false)
+    }
+  }
+  useEffect(() => {
+    if (section !== "requests") setRequestFocus(null)
+  }, [section])
+  useRequestsEntry(openRequestsSection)
 
   return (
     <div
@@ -761,6 +811,16 @@ export function WorkspaceShell({
                   viewerId={session?.user.id}
                   onOpen={openWork}
                   onNavigate={selectSection}
+                />
+              )}
+              {section === "requests" && (
+                <RequestsCanvas
+                  organizationId={
+                    session ? selectedOrganization?.id : undefined
+                  }
+                  viewerId={session?.user.id}
+                  focusRequestId={requestFocus}
+                  onFocusDone={() => setRequestFocus(null)}
                 />
               )}
             </main>
