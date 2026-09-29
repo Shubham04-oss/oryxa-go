@@ -11,6 +11,9 @@
 # names, URLs, IP and MAC addresses, licence plates and vehicle numbers are
 # too common in work answers. These lists are the service's own
 # (answerguard.MaskedKinds and HeldKinds), and a test holds them equal.
+#
+# The answer to a question asked in Slack is read by a second guardrail as well,
+# below: the consent guard's.
 
 locals {
   answer_guard_masked = [
@@ -69,5 +72,133 @@ resource "aws_bedrock_guardrail_version" "agent_answers" {
 
   lifecycle {
     replace_triggered_by = [aws_bedrock_guardrail.agent_answers]
+  }
+}
+
+# The consent guard's guardrail. The answer to a question asked in Slack is read
+# by it once the answer guard's has read it, before the asker reads it in the
+# channel (agents/primary/internal/consentguard). It is a guardrail of its own,
+# and the one above is left as it is: the answer guard calls that one with a single
+# text and no grounding source, and takes a topic or a contextual grounding filter
+# that acted for a response it cannot use, which it holds as unchecked
+# (answerguard.assess); and a change to that one makes a new version for every
+# answer the service reads. Only answers are read here too: the output side, never
+# the input, in the region, with no cross-region profile.
+#
+# Two things are set up in it, and nothing else:
+#
+# - Contextual grounding, with both filters. The consent guard sends what the
+#   run's tools returned as the grounding source, the asker's words as the query
+#   and the answer as the content to guard, with the full output scope, so that
+#   both scores come back whether or not they were found wanting. The thresholds
+#   here are a floor. The guard holds an answer scored under the higher of them
+#   and its own minimums (consentguard.DefaultMinGrounding and DefaultMinRelevance),
+#   which are the ones to tune, in code, with no new version of this guardrail.
+#   Bedrock takes 100,000 characters of source, 1,000 of query and 5,000 of
+#   response; the guard sends no more.
+# - Denied topics. The provider gives a topic no action of its own to set, so the
+#   guardrail blocks on one, as far as it blocks anything; the guard reads the
+#   findings, never the action, and holds the answer for its owner's review
+#   instead of showing the blocked message. They are the topics that go to no
+#   channel, whoever consented: they stand beside the relevance check's categories
+#   (relevance.Category) that are about people, and the credentials that are
+#   masked. They are the owner's to change, in local.consent_denied_topics, and
+#   each change is a new version of this guardrail.
+#
+# The classic tier is used: the standard tier needs a cross-region profile, and
+# a guardrail that leaves the region is one the service does not run.
+
+locals {
+  # A definition is at most 200 characters and an example at most 100, and there
+  # are at most five examples of a topic (the classic tier's limits).
+  consent_denied_topics = {
+    "Credentials" = {
+      definition = "Statements that reveal the value of a password, passcode, API key, access token, private key, recovery code or other secret that grants access."
+      examples = [
+        "The production database password is",
+        "Here is the API key for the payments account",
+        "Log in with this token",
+        "The recovery codes for the admin account are",
+        "Paste this private key into the config",
+      ]
+    }
+    "Compensation and HR records" = {
+      definition = "Pay, bonus, equity, performance reviews, disciplinary action, termination or immigration status of a named individual."
+      examples = [
+        "Her salary is",
+        "He was put on a performance improvement plan",
+        "She was terminated last month",
+        "Their equity grant is",
+        "His visa status is",
+      ]
+    }
+    "Health and personal life" = {
+      definition = "Medical conditions, treatment, mental health, family matters or relationships of a named individual."
+      examples = [
+        "She is on medical leave for surgery",
+        "His divorce was finalized",
+        "They are expecting a baby",
+        "He is being treated for depression",
+      ]
+    }
+  }
+}
+
+resource "aws_bedrock_guardrail" "consent_answers" {
+  name        = "${local.name}-consent-answers"
+  description = "Reads the answer to a question asked in Slack against what the run read, and for topics that go to no channel."
+  # The guard reads what was found, never the action, so neither message is
+  # shown; both are required all the same.
+  blocked_input_messaging   = "Oryxa's consent guard held this."
+  blocked_outputs_messaging = "Oryxa's consent guard held this answer."
+
+  contextual_grounding_policy_config {
+    filters_config {
+      type      = "GROUNDING"
+      threshold = 0.5
+    }
+    filters_config {
+      type      = "RELEVANCE"
+      threshold = 0.3
+    }
+  }
+
+  topic_policy_config {
+    tier_config {
+      tier_name = "CLASSIC"
+    }
+
+    dynamic "topics_config" {
+      for_each = local.consent_denied_topics
+      content {
+        name       = topics_config.key
+        definition = topics_config.value.definition
+        examples   = topics_config.value.examples
+        type       = "DENY"
+      }
+    }
+  }
+}
+
+# The numbered version the service pins, as for the guardrail above.
+resource "aws_bedrock_guardrail_version" "consent_answers" {
+  guardrail_arn = aws_bedrock_guardrail.consent_answers.guardrail_arn
+  description   = "The agents service's consent guard."
+  skip_destroy  = true
+
+  lifecycle {
+    replace_triggered_by = [aws_bedrock_guardrail.consent_answers]
+  }
+}
+
+locals {
+  # What the task role is allowed to apply, and what the task is told, for the
+  # consent guard: for compute.tf to add to the answer guard's policy statement
+  # and to the agents service's environment. The service refuses to start with
+  # one of the two set and not the other; this sets both.
+  consent_guardrail_arn = aws_bedrock_guardrail.consent_answers.guardrail_arn
+  consent_guardrail_environment = {
+    AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID      = aws_bedrock_guardrail.consent_answers.guardrail_id
+    AGENTS_PRIMARY_CONSENT_GUARDRAIL_VERSION = aws_bedrock_guardrail_version.consent_answers.version
   }
 }
