@@ -108,6 +108,13 @@ GitHub's OIDC, which can push the image and roll the service and nothing
 else, so infrastructure changes are still a `tofu apply` from a laptop. The
 Actions tab's Run workflow releases main's head on demand.
 
+Every action in both workflows is pinned to a full commit SHA, with its
+release in a comment beside it, so a tag that is moved cannot change what a
+release runs. To update one, look up the new release's tag with
+`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, and if its object is a
+`tag` rather than a commit, read the commit from `git/tags/<sha>`; then change
+the SHA and the comment together.
+
 Before its first run, once:
 
 - `tofu apply` in `deploy/production`, which creates the GitHub OIDC provider

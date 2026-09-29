@@ -55,7 +55,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # The commit CI passed, not whatever main holds by now.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -65,12 +65,12 @@ jobs:
         # The tag deploy/scripts/release.sh would give the same commit.
         run: echo "tag=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ env.AWS_DEPLOY_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build and push the image
         env:
@@ -136,7 +136,7 @@ jobs:
             -f message="deploy: record release $TAG" -f content="$content" \
             -f sha="$(jq -r .sha <<<"$file")" -f branch=main > /dev/null
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 26
 
