@@ -142,6 +142,61 @@ func TestApplyTeamLeadPromotesExistingMember(t *testing.T) {
 	}
 }
 
+func TestTeamsPruneDemotesOmittedLeadOnlyAfterApproval(t *testing.T) {
+	state := &fakeState{orgExists: true, teamCreates: 1,
+		members:     []Member{{UserID: "u1", Email: "owner@acme.com", Role: "owner"}, {UserID: "u2", Email: "lead@acme.com", Role: "member"}},
+		teamMembers: []TeamMember{{UserID: "u1", Email: "owner@acme.com", Role: "admin"}, {UserID: "u2", Email: "lead@acme.com", Role: "admin"}},
+	}
+	server := httptest.NewServer(http.HandlerFunc(state.serve))
+	defer server.Close()
+	client, err := NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"},
+		Teams: spec.Teams{Items: []spec.Team{{Name: "Engineering", Members: []string{"owner@acme.com", "lead@acme.com"}, Leads: []string{"owner@acme.com"}}}},
+	}
+	snapshot, err := client.Snapshot(context.Background(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutPrune, err := BuildPlan(document, snapshot)
+	if err != nil || len(withoutPrune.Changes) != 0 {
+		t.Fatalf("additive plan = %+v, %v", withoutPrune, err)
+	}
+	document.Teams.Prune = true
+	approved, err := BuildPlan(document, snapshot)
+	if err != nil || len(deletions(approved)) != 1 || deletions(approved)[0].Kind != "team_admin" {
+		t.Fatalf("prune plan = %+v, %v", approved, err)
+	}
+	if _, err := Apply(context.Background(), client, document); err == nil || state.roleChanges != 0 {
+		t.Fatalf("unapproved demotion = %v, role changes %d", err, state.roleChanges)
+	}
+	remaining, err := ApplyApproved(context.Background(), client, document, approved)
+	if err != nil || len(remaining.Changes) != 0 || state.roleChanges != 1 || state.teamMembers[1].Role != "member" {
+		t.Fatalf("approved demotion = %+v, %v; role changes %d, member %+v", remaining, err, state.roleChanges, state.teamMembers[1])
+	}
+}
+
+func TestTeamsPruneWaitsForReplacementLeadToJoin(t *testing.T) {
+	state := Snapshot{
+		Organization: &Organization{ID: "org_1", Slug: "acme"}, ActorID: "u1", ActorRole: "owner",
+		Members:     map[string]Member{"owner@acme.com": {UserID: "u1", Email: "owner@acme.com", Role: "owner"}},
+		Invitations: map[string]Invitation{"new@acme.com": {Email: "new@acme.com", Role: "member", Status: "pending"}},
+		Teams:       map[string]Team{"Engineering": {ID: "team_1", Name: "Engineering", Path: "engineering"}},
+		TeamMembers: map[string]map[string]TeamMember{"Engineering": {
+			"owner@acme.com": {UserID: "u1", Email: "owner@acme.com", Role: "admin"},
+		}},
+	}
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"},
+		Teams: spec.Teams{Prune: true, Items: []spec.Team{{Name: "Engineering", Members: []string{"owner@acme.com", "new@acme.com"}, Leads: []string{"new@acme.com"}}}},
+	}
+	plan, err := BuildPlan(document, state)
+	if err != nil || len(deletions(plan)) != 0 || len(plan.NeedsHuman) == 0 {
+		t.Fatalf("pending lead plan = %+v, %v", plan, err)
+	}
+}
+
 func TestPeoplePruneNeedsExactApprovedRemovalPlan(t *testing.T) {
 	state := &fakeState{
 		orgExists: true,
@@ -454,10 +509,14 @@ func (state *fakeState) serve(writer http.ResponseWriter, request *http.Request)
 		state.teamMembers = append(state.teamMembers, TeamMember{UserID: "u2", Email: "new@acme.com", Role: input.Role})
 		write(map[string]string{"status": "created"})
 	case "PATCH /v1/organizations/org_1/teams/team_1/members/u2":
+		var input struct {
+			Role string `json:"role"`
+		}
+		_ = json.NewDecoder(request.Body).Decode(&input)
 		state.roleChanges++
 		for i := range state.teamMembers {
 			if state.teamMembers[i].UserID == "u2" {
-				state.teamMembers[i].Role = "admin"
+				state.teamMembers[i].Role = input.Role
 			}
 		}
 		write(map[string]string{"status": "updated"})

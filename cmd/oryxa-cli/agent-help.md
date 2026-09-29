@@ -90,7 +90,9 @@ for the person to join and run apply again. Run `oryxa status --org SLUG
 
 Omission preserves existing people, teams, ownership hints, and chart facts.
 Explicit `prune: true` under the relevant section plans removals and requires
-review. `tools.offer` is an organization allowlist: omission allows every
+review. With `teams.prune: true`, a kept team's nonempty `leads` list also
+removes team-admin rights from its other listed members after review; omitting
+`leads` preserves current team-admin rights. `tools.offer` is an organization allowlist: omission allows every
 Composio toolkit, while `offer: []` allows none. Research actual toolkit slugs
 before listing them; a disallowed app's existing connection cannot act or
 deliver events or refresh knowledge sources until it is allowed again.

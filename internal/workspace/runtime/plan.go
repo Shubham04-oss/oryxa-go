@@ -111,6 +111,13 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 		if !exists {
 			plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "team", Name: team.Name})
 		}
+		joinedLead := false
+		for _, email := range team.Leads {
+			if _, joined := state.Members[email]; joined {
+				joinedLead = true
+				break
+			}
+		}
 		emails, roles := teamMemberRoles(team)
 		for _, email := range emails {
 			if _, joined := state.Members[email]; !joined {
@@ -124,6 +131,8 @@ func BuildPlan(document spec.Document, state Snapshot) (Plan, error) {
 				plan.Changes = append(plan.Changes, Change{Op: "create", Kind: "team_member", Name: team.Name + "/" + email, Role: roles[email]})
 			} else if roles[email] == "admin" && existing.Role != "admin" {
 				plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "team_member_role", Name: team.Name + "/" + email, Role: "admin"})
+			} else if document.Teams.Prune && joinedLead && roles[email] == "member" && existing.Role == "admin" {
+				plan.Changes = append(plan.Changes, Change{Op: "delete", Kind: "team_admin", Name: team.Name + "/" + email, Team: team.Name, Email: email})
 			}
 		}
 		if document.Teams.Prune && exists {
@@ -425,6 +434,14 @@ func applyRemovals(ctx context.Context, client *Client, state Snapshot, plan Pla
 			continue
 		}
 		if err := client.RemoveTeamMember(ctx, state.Organization.ID, state.Teams[change.Team].ID, state.TeamMembers[change.Team][change.Email].UserID); err != nil {
+			return err
+		}
+	}
+	for _, change := range plan.Changes {
+		if change.Op != "delete" || change.Kind != "team_admin" || removeTeam[change.Team] {
+			continue
+		}
+		if err := client.ChangeTeamMemberRole(ctx, state.Organization.ID, state.Teams[change.Team].ID, state.TeamMembers[change.Team][change.Email].UserID, "member"); err != nil {
 			return err
 		}
 	}

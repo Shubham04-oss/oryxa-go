@@ -109,7 +109,7 @@ The current file accepts these settings:
 | `directory.groups[]` | Maps a stable external group ID to a team with `{source, externalId, team}`; the team must exist or be declared in `teams` |
 | `directory.prune: true` | Removes mappings omitted from a reviewed source snapshot; omission keeps prior mappings |
 | `teams[].name`, `.members`, `.leads` | Create teams, add joined members, and grant team-admin rights to leads |
-| `teams: {items: [...], prune: true}` | Remove omitted teams and memberships after listing every removal for confirmation |
+| `teams: {items: [...], prune: true}` | Remove omitted teams and memberships; when a kept team lists leads, demote other listed members who were team admins. Every removal or demotion is listed for confirmation |
 | `agents.organization.enabled`, `.displayName`, `.description`, `.instructions` | Reconcile the existing organization agent; `plan` reads effective defaults without creating it |
 | `ownership[]` | Give agents explicit owner hints for a topic, system, or channel; only joined members appear in the agent's read view |
 | `orgChart.relationships`, `.authority`, `.executives` | Supply explicit reporting and authority relationships for agents to query |
