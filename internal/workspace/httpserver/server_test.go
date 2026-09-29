@@ -90,24 +90,12 @@ func (repo *memoryRepository) AtVersion(_ context.Context, _ string, number int6
 	return repo.versions[number-1], nil
 }
 
-func (repo *memoryRepository) Save(_ context.Context, _, actor string, document []byte) (store.Version, error) {
-	parsed, err := spec.Parse(document)
+func (repo *memoryRepository) Save(_ context.Context, _, actor string, document []byte, mappings []store.ExternalMapping) (store.Version, error) {
+	_, err := spec.Parse(document)
 	if err != nil {
 		return store.Version{}, err
 	}
-	repo.mappings = nil
-	if parsed.Directory != nil {
-		for _, identity := range parsed.Directory.Identities {
-			resourceID := ""
-			if identity.Member == "owner@acme.com" {
-				resourceID = "u1"
-			}
-			repo.mappings = append(repo.mappings, store.ExternalMapping{
-				Source: identity.Source, Kind: "user", ExternalID: identity.ExternalID,
-				Reference: identity.Member, ResourceID: resourceID,
-			})
-		}
-	}
+	repo.mappings = append([]store.ExternalMapping{}, mappings...)
 	if len(repo.versions) > 0 && bytes.Equal(repo.versions[len(repo.versions)-1].Document, document) {
 		return repo.versions[len(repo.versions)-1], nil
 	}

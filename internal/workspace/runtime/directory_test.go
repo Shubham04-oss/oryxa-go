@@ -104,3 +104,19 @@ func TestRetainedDeletedDirectoryTargetsAreDropped(t *testing.T) {
 		t.Fatal("explicit invalid mapping silently removed")
 	}
 }
+
+func TestDirectoryResolvesJoinedIDsFromAPISnapshot(t *testing.T) {
+	document := contextDocument()
+	document.Directory = &spec.Directory{Identities: []spec.ExternalIdentity{{Source: "google_workspace:acme.com", ExternalID: "user1", Member: "ada@acme.com"}}, Groups: []spec.ExternalGroup{{Source: "google_workspace:acme.com", ExternalID: "group1", Team: "Engineering"}}}
+	resolved, err := ResolveDirectory(document, directoryState(), nil)
+	if err != nil || len(resolved) != 2 {
+		t.Fatalf("resolve = %+v %v", resolved, err)
+	}
+	ids := map[string]string{}
+	for _, mapping := range resolved {
+		ids[mapping.Kind] = mapping.ResourceID
+	}
+	if ids["user"] != "u1" || ids["team"] != "t1" {
+		t.Fatalf("resolved wrong API resources: %+v", resolved)
+	}
+}

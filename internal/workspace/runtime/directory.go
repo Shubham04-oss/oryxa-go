@@ -13,6 +13,35 @@ type directoryRecord struct {
 	source, kind, externalID, reference string
 }
 
+// ResolveDirectory supplies API-resolved IDs to persistence. Storage never
+// reaches across service schemas to infer an identity from a reusable label.
+func ResolveDirectory(document spec.Document, state Snapshot, mapped []store.ExternalMapping) ([]store.ExternalMapping, error) {
+	effective, _, err := MergeDirectory(document, document, state, mapped, false)
+	if err != nil {
+		return nil, err
+	}
+	bindings := map[string]store.ExternalMapping{}
+	for _, mapping := range mapped {
+		bindings[directoryRecord{mapping.Source, mapping.Kind, mapping.ExternalID, mapping.Reference}.key()] = mapping
+	}
+	result := []store.ExternalMapping{}
+	for key, record := range records(effective.Directory) {
+		resourceID := bindings[key].ResourceID
+		if record.kind == "user" {
+			if member, ok := state.Members[record.reference]; ok {
+				resourceID = member.UserID
+			}
+		} else if team, ok := state.Teams[record.reference]; ok {
+			resourceID = team.ID
+		}
+		result = append(result, store.ExternalMapping{Source: record.source, Kind: record.kind, ExternalID: record.externalID, Reference: record.reference, ResourceID: resourceID})
+	}
+	slices.SortFunc(result, func(a, b store.ExternalMapping) int {
+		return strings.Compare(a.Source+"\x00"+a.Kind+"\x00"+a.ExternalID, b.Source+"\x00"+b.Kind+"\x00"+b.ExternalID)
+	})
+	return result, nil
+}
+
 func (record directoryRecord) key() string {
 	return record.source + "\x00" + record.kind + "\x00" + record.externalID
 }

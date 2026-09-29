@@ -24,7 +24,7 @@ type Repository interface {
 	Latest(context.Context, string) (store.Version, error)
 	AtVersion(context.Context, string, int64) (store.Version, error)
 	Versions(context.Context, string) ([]store.Version, error)
-	Save(context.Context, string, string, []byte) (store.Version, error)
+	Save(context.Context, string, string, []byte, []store.ExternalMapping) (store.Version, error)
 	Mappings(context.Context, string) ([]store.ExternalMapping, error)
 	SavePlan(context.Context, store.ReviewedPlan) error
 	ReviewedPlan(context.Context, string, string, string) (store.ReviewedPlan, error)
@@ -328,7 +328,19 @@ func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Re
 		if err != nil {
 			return err
 		}
-		version, err = server.repository.Save(request.Context(), state.Organization.ID, access.ID, encoded)
+		current, err := client.Snapshot(request.Context(), access.Slug)
+		if err != nil {
+			return err
+		}
+		mapped, err := server.repository.Mappings(request.Context(), state.Organization.ID)
+		if err != nil {
+			return err
+		}
+		resolved, err := runtime.ResolveDirectory(effective, current, mapped)
+		if err != nil {
+			return err
+		}
+		version, err = server.repository.Save(request.Context(), state.Organization.ID, access.ID, encoded, resolved)
 		return err
 	})
 	if attempt != nil {

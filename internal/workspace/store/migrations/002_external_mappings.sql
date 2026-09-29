@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS workspace.external_mappings (
-    organization_id text NOT NULL REFERENCES auth_organizations(id) ON DELETE CASCADE,
+    organization_id text NOT NULL,
     source text NOT NULL,
     kind text NOT NULL CHECK (kind IN ('user', 'team')),
     external_id text NOT NULL,
