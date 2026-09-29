@@ -28,6 +28,14 @@ import {
   workflowExecutionsQueryOptions,
 } from "@/lib/agents/queries"
 import "./workflow-overview.css"
+import { ApiError } from "@/lib/api/client"
+
+function workflowRefusal(error: unknown) {
+  return (
+    isUnavailableHere(error) ||
+    (error instanceof ApiError && [401, 403, 404].includes(error.status))
+  )
+}
 
 function scheduleLabel(workflow: AgentWorkflow) {
   if (!workflow.schedule) return "Runs when started"
@@ -39,12 +47,14 @@ function WorkflowDetail({
   organizationId,
   workflowId,
   teams,
+  refreshBlocked,
   onDeleted,
   onBusy,
 }: {
   organizationId: string
   workflowId: string
   teams: readonly AgentTeam[]
+  refreshBlocked: boolean
   onDeleted: () => void
   onBusy: (busy: boolean) => void
 }) {
@@ -93,13 +103,30 @@ function WorkflowDetail({
         Loading workflow…
       </p>
     )
-  if (workflowQuery.isError)
+  if (
+    workflowQuery.isError &&
+    (!workflow || workflowRefusal(workflowQuery.error))
+  )
     return (
-      <WorkflowQueryNotice
-        error={workflowQuery.error}
-        fallback="Could not load this workflow."
-        onRetry={() => void workflowQuery.refetch()}
-      />
+      <div>
+        <WorkflowQueryNotice
+          error={workflowQuery.error}
+          fallback="Could not load this workflow."
+          onRetry={() => void workflowQuery.refetch()}
+        />
+        {editing && (
+          <button
+            className="workspace-agents-button"
+            type="button"
+            onClick={() => {
+              setEditing(false)
+              onBusy(false)
+            }}
+          >
+            Cancel editing
+          </button>
+        )}
+      </div>
     )
   if (!workflow) return null
   const team = teams.find((entry) => entry.id === workflow.team_id)
@@ -116,24 +143,44 @@ function WorkflowDetail({
         : pausedAgent
           ? `${pausedAgent.name} is paused. Resume it in Specialists before running.`
           : undefined
+  const refreshWarning = workflowQuery.isError && (
+    <WorkflowQueryNotice
+      error={workflowQuery.error}
+      fallback={
+        editing
+          ? "Could not refresh this workflow. Your draft is kept."
+          : "Could not refresh this workflow. Try again before changing it."
+      }
+      onRetry={() => void workflowQuery.refetch()}
+    />
+  )
   if (editing)
     return (
-      <WorkflowForm
-        organizationId={organizationId}
-        workflow={workflow}
-        teams={teams}
-        onCancel={() => {
-          setEditing(false)
-          onBusy(false)
-        }}
-        onDone={() => {
-          setEditing(false)
-          onBusy(false)
-        }}
-      />
+      <div className="workflow-editor">
+        {refreshWarning}
+        <WorkflowForm
+          organizationId={organizationId}
+          workflow={workflow}
+          teams={teams}
+          blockedReason={
+            workflowQuery.isError || refreshBlocked
+              ? "Refresh this workflow before saving changes. Your draft is kept."
+              : undefined
+          }
+          onCancel={() => {
+            setEditing(false)
+            onBusy(false)
+          }}
+          onDone={() => {
+            setEditing(false)
+            onBusy(false)
+          }}
+        />
+      </div>
     )
   return (
     <div className="workflow-detail" aria-label={`${workflow.name} details`}>
+      {refreshWarning}
       <div className="workspace-agents-actions" data-align="start">
         <button
           className="workspace-agents-button"
@@ -142,14 +189,24 @@ function WorkflowDetail({
             run.isPending ||
             remove.isPending ||
             deleting ||
+            workflowQuery.isError ||
+            refreshBlocked ||
             Boolean(blocked) ||
+            !executions.data ||
             hasExecutionInFlight(executions.data)
           }
           aria-describedby={
             blocked ? `workflow-${workflowId}-blocked` : undefined
           }
           onClick={() => {
-            if (runLock.current || hasExecutionInFlight(executions.data)) return
+            if (
+              runLock.current ||
+              workflowQuery.isError ||
+              refreshBlocked ||
+              !executions.data ||
+              hasExecutionInFlight(executions.data)
+            )
+              return
             runLock.current = true
             onBusy(true)
             run.mutate()
@@ -162,7 +219,12 @@ function WorkflowDetail({
           className="workspace-agents-button"
           type="button"
           disabled={
-            run.isPending || remove.isPending || deleting || !teams.length
+            run.isPending ||
+            remove.isPending ||
+            deleting ||
+            workflowQuery.isError ||
+            refreshBlocked ||
+            !teams.length
           }
           onClick={() => {
             setEditing(true)
@@ -176,7 +238,13 @@ function WorkflowDetail({
           className="workspace-agents-button"
           data-variant="quiet-danger"
           type="button"
-          disabled={run.isPending || remove.isPending || deleting}
+          disabled={
+            run.isPending ||
+            remove.isPending ||
+            deleting ||
+            workflowQuery.isError ||
+            refreshBlocked
+          }
           onClick={() => {
             setDeleting(true)
             run.reset()
@@ -230,6 +298,11 @@ function WorkflowDetail({
           confirmLabel={`Delete ${workflow.name}`}
           pendingLabel="Deleting…"
           pending={remove.isPending}
+          blocked={
+            workflowQuery.isError || refreshBlocked
+              ? "Refresh this workflow before deleting it."
+              : undefined
+          }
           error={
             remove.isError
               ? agentsErrorMessage(
@@ -246,7 +319,8 @@ function WorkflowDetail({
             if (!remove.isPending) setDeleting(false)
           }}
           onConfirm={() => {
-            if (deleteLock.current) return
+            if (deleteLock.current || workflowQuery.isError || refreshBlocked)
+              return
             deleteLock.current = true
             onBusy(true)
             remove.mutate()
@@ -358,12 +432,14 @@ function WorkflowEntry({
   workflow,
   teams,
   initiallyOpen,
+  refreshBlocked,
   onDeleted,
 }: {
   organizationId: string
   workflow: AgentWorkflow
   teams: readonly AgentTeam[]
   initiallyOpen: boolean
+  refreshBlocked: boolean
   onDeleted: () => void
 }) {
   const id = useId()
@@ -427,6 +503,7 @@ function WorkflowEntry({
             organizationId={organizationId}
             workflowId={workflow.id}
             teams={teams}
+            refreshBlocked={refreshBlocked}
             onDeleted={onDeleted}
             onBusy={setBusy}
           />
@@ -446,6 +523,9 @@ export function WorkflowOverview({
   const [creating, setCreating] = useState(false)
   const [createdId, setCreatedId] = useState<string>()
   const unavailable = isUnavailableHere(workflows.error)
+  const fatalWorkflows = workflows.isError && workflowRefusal(workflows.error)
+  const visibleWorkflows = fatalWorkflows ? undefined : workflows.data
+  const refreshBlocked = workflows.isError || teams.isError
   return (
     <section
       className="workflow-overview"
@@ -460,17 +540,26 @@ export function WorkflowOverview({
           type="button"
           aria-expanded={creating}
           disabled={
-            creating || !workflows.data || !teams.data?.length || unavailable
+            creating ||
+            !workflows.data ||
+            !teams.data?.length ||
+            unavailable ||
+            refreshBlocked
           }
           onClick={() => setCreating(true)}
         >
           <Plus size={15} /> New workflow
         </button>
       </div>
-      {creating && teams.data && (
+      {creating && teams.data && !fatalWorkflows && (
         <WorkflowForm
           organizationId={organizationId}
           teams={teams.data}
+          blockedReason={
+            refreshBlocked
+              ? "Refresh workflows and teams before saving. Your draft is kept."
+              : undefined
+          }
           onCancel={() => setCreating(false)}
           onDone={(saved) => {
             setCreatedId(saved.id)
@@ -509,41 +598,43 @@ export function WorkflowOverview({
           </p>
         )
       )}
-      {workflows.isPending ? (
-        <p className="workspace-agents-muted" role="status">
-          Loading your workflows…
-        </p>
-      ) : workflows.isError ? (
+      {workflows.isError && (
         <WorkflowQueryNotice
           error={workflows.error}
           fallback="Could not load your workflows."
           onRetry={() => void workflows.refetch()}
           optional
         />
-      ) : workflows.data.length ? (
+      )}
+      {workflows.isPending ? (
+        <p className="workspace-agents-muted" role="status">
+          Loading your workflows…
+        </p>
+      ) : visibleWorkflows?.length ? (
         <>
           <ul className="workflow-list">
-            {workflows.data.map((workflow) => (
+            {visibleWorkflows.map((workflow) => (
               <WorkflowEntry
                 key={workflow.id}
                 organizationId={organizationId}
                 workflow={workflow}
                 teams={teams.data ?? []}
                 initiallyOpen={workflow.id === createdId}
+                refreshBlocked={refreshBlocked}
                 onDeleted={() => setCreatedId(undefined)}
               />
             ))}
           </ul>
           <p className="workspace-agents-count">
-            {plural(workflows.data.length, "workflow")}
+            {plural(visibleWorkflows.length, "workflow")}
           </p>
         </>
-      ) : (
+      ) : visibleWorkflows ? (
         <p className="workspace-agents-muted">
           No workflows yet. A workflow hands fixed tasks to one of your teams,
           when started or on a schedule.
         </p>
-      )}
+      ) : null}
     </section>
   )
 }

@@ -62,7 +62,9 @@ export function WorkflowQueryNotice({
       title={
         unavailable
           ? "Workflows aren't set up on this server."
-          : agentsErrorMessage(error, fallback)
+          : agentsErrorMessage(error, fallback, {
+              forbidden: "You can’t access this workflow or execution.",
+            })
       }
       alert={!unavailable}
       action={
@@ -193,8 +195,8 @@ export function WorkflowExecutionDetail({
             )}
             {status === "needs_confirmation" && (
               <p className="workspace-agents-note">
-                This run is waiting for your approval. Review pending actions in
-                the assigned agent's conversation before continuing.
+                This assignment needs your approval. It cannot be resumed from
+                this view yet.
               </p>
             )}
             {status === "failed" && (

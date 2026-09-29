@@ -17,6 +17,7 @@ import type {
   AgentWorkflow,
   WorkflowExecution,
 } from "@/lib/agents/agent-workflows"
+import { agentKeys } from "@/lib/agents/queries"
 
 const scout = agent({ id: "agt_scout", name: "Scout" })
 const quill = agent({ id: "agt_quill", name: "Quill" })
@@ -158,7 +159,11 @@ async function open() {
   fireEvent.click(
     await screen.findByRole("button", { name: "Open Weekly review workflow" })
   )
-  return screen.findByRole("button", { name: "Run now" })
+  const run = await screen.findByRole("button", { name: "Run now" })
+  await waitFor(() =>
+    expect(screen.queryByText("Loading executions…")).toBeNull()
+  )
+  return run
 }
 afterEach(() => {
   cleanup()
@@ -166,6 +171,226 @@ afterEach(() => {
 })
 
 describe("workflow overview", () => {
+  it("shows an explicit access refusal and an exit when an edited workflow is no longer owned", async () => {
+    let revoked = false
+    backend({
+      fail: (method, path) =>
+        revoked && method === "GET" && path.endsWith(weekly.id)
+          ? refusal(403, "forbidden", "access rejected SECRET")
+          : undefined,
+    })
+    const { client } = overview()
+    await open()
+    fireEvent.click(screen.getByRole("button", { name: "Edit workflow" }))
+    revoked = true
+    await client.invalidateQueries({
+      queryKey: agentKeys.workflow(ORG, weekly.id),
+      exact: true,
+    })
+    await screen.findByText("You can’t access this workflow or execution.")
+    expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull()
+    expect(document.body.textContent).not.toContain("SECRET")
+    fireEvent.click(screen.getByRole("button", { name: "Cancel editing" }))
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Close Weekly review workflow",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false)
+  })
+
+  it("shows that pending workflow approvals cannot be continued from this surface", async () => {
+    backend({
+      executions: [
+        {
+          ...execution,
+          status: "needs_confirmation",
+          result: {
+            team_id: crew.id,
+            results: [
+              {
+                agent_id: scout.id,
+                agent_name: "Scout",
+                status: "needs_confirmation",
+                pending_confirmations: ["internal_confirmation_id"],
+              },
+            ],
+          },
+        },
+      ],
+    })
+    overview()
+    await open()
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /^View Waiting for your approval .* execution$/,
+      })
+    )
+    await screen.findByText(
+      "This assignment needs your approval. It cannot be resumed from this view yet."
+    )
+    expect(
+      screen.getByText(/1 action needs your approval. It hasn't completed./)
+    ).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /approve|resume/i })).toBeNull()
+    expect(document.body.textContent).not.toContain("internal_confirmation_id")
+  })
+  it.each(["detail", "list"])(
+    "keeps an unsaved editor mounted through a failed cached %s refetch and recovery",
+    async (queryKind) => {
+      let failRefresh = false
+      const api = backend({
+        fail: (method, path) =>
+          failRefresh &&
+          method === "GET" &&
+          path.endsWith(queryKind === "detail" ? weekly.id : "/agent-workflows")
+            ? refusal(500, "internal", "upstream SECRET")
+            : undefined,
+      })
+      const { client } = overview()
+      await open()
+      fireEvent.click(screen.getByRole("button", { name: "Edit workflow" }))
+      const task = screen.getByLabelText("Task for assignment 1")
+      fireEvent.change(task, { target: { value: "Keep this unsaved draft" } })
+      failRefresh = true
+      await client.invalidateQueries({
+        queryKey:
+          queryKind === "detail"
+            ? agentKeys.workflow(ORG, weekly.id)
+            : agentKeys.workflowList(ORG),
+        exact: true,
+      })
+      await screen.findByText(
+        queryKind === "detail"
+          ? "Could not refresh this workflow. Your draft is kept."
+          : "Could not load your workflows."
+      )
+      expect(screen.getByLabelText("Task for assignment 1")).toBe(task)
+      expect((task as HTMLTextAreaElement).value).toBe(
+        "Keep this unsaved draft"
+      )
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Save changes",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(true)
+      expect(document.body.textContent).not.toContain("SECRET")
+      failRefresh = false
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+      await waitFor(() =>
+        expect(
+          (
+            screen.getByRole("button", {
+              name: "Save changes",
+            }) as HTMLButtonElement
+          ).disabled
+        ).toBe(false)
+      )
+      expect(screen.getByLabelText("Task for assignment 1")).toBe(task)
+      expect((task as HTMLTextAreaElement).value).toBe(
+        "Keep this unsaved draft"
+      )
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+      await screen.findByText("Keep this unsaved draft")
+      expect(api.writes[0].body).toMatchObject({
+        assignments: [
+          {
+            agent_id: scout.id,
+            task: "Keep this unsaved draft",
+            context: "Use the weekly notes",
+          },
+        ],
+      })
+    }
+  )
+  it("keeps each workflow readable when its history fails and retries before offering a run", async () => {
+    let unavailable = true
+    const api = backend({
+      fail: (_method, path) =>
+        unavailable && path.endsWith("/executions")
+          ? refusal(500, "internal", "database: SECRET")
+          : undefined,
+    })
+    overview()
+    const run = await open()
+    expect((run as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText("Summarise the week")).toBeTruthy()
+    expect(screen.getByText("Could not load executions.")).toBeTruthy()
+    expect(document.body.textContent).not.toContain("SECRET")
+    unavailable = false
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    await screen.findByText("No executions yet.")
+    expect((run as HTMLButtonElement).disabled).toBe(false)
+    expect(api.writes).toEqual([])
+  })
+
+  it("reports a detail that disappeared, without changing the remaining overview list", async () => {
+    backend({
+      fail: (_method, path) =>
+        path.endsWith(weekly.id)
+          ? refusal(404, "not_found", "workflow not found")
+          : undefined,
+    })
+    overview()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Weekly review workflow" })
+    )
+    await screen.findByText("It no longer exists.")
+    expect(screen.getByText("Weekly review")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Run now" })).toBeNull()
+  })
+
+  it("keeps a refused scheduled edit in place and shows a useful service message", async () => {
+    const api = backend({
+      fail: (method) =>
+        method === "PATCH"
+          ? refusal(
+              503,
+              "agent_workflows_unavailable",
+              "EventBridge ARN SECRET"
+            )
+          : undefined,
+    })
+    overview()
+    await open()
+    fireEvent.click(screen.getByRole("button", { name: "Edit workflow" }))
+    fireEvent.change(screen.getByLabelText("Schedule expression"), {
+      target: { value: "rate(1 day)" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+    await screen.findByText(
+      "Workflow scheduling isn't available on this server. Your changes haven't been saved."
+    )
+    expect(
+      (screen.getByLabelText("Schedule expression") as HTMLInputElement).value
+    ).toBe("rate(1 day)")
+    expect(document.body.textContent).not.toContain("SECRET")
+    expect(api.writes.length).toBe(1)
+  })
+
+  it("leaves a workflow intact when its schedule cannot be deleted", async () => {
+    const api = backend({
+      fail: (method) =>
+        method === "DELETE"
+          ? refusal(503, "agent_workflows_unavailable", "scheduler SECRET")
+          : undefined,
+    })
+    overview()
+    await open()
+    fireEvent.click(screen.getByRole("button", { name: "Delete workflow" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete Weekly review" })
+    )
+    await screen.findByText(
+      "The workflow schedule can't be removed on this server. The workflow hasn't been deleted."
+    )
+    expect(screen.getByText("Weekly review")).toBeTruthy()
+    expect(document.body.textContent).not.toContain("SECRET")
+    expect(api.writes.length).toBe(1)
+  })
   it("creates team-bound assignments and a schedule through the real client, without granting a role", async () => {
     const api = backend({ workflows: [] })
     overview()

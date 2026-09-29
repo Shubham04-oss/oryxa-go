@@ -21,7 +21,7 @@
 .workflow-detail-heading h4 { margin: 0; font-size: 12px; font-weight: 600; color: #ddd; }
 .workflow-detail-heading strong { font-size: 12px; color: #ddd; overflow-wrap: anywhere; }
 .workflow-assignment-list, .workflow-result-list { display: flex; flex-direction: column; gap: 8px; }
-.workflow-assignment-list li, .workflow-result-list li { display: flex; flex-direction: column; gap: 7px; min-width: 0; padding: 12px; border: 1px solid #393939; border-radius: 10px; background: var(--workspace-main, #1e1e1e); }
+.workflow-assignment-list li, .workflow-result-list li { display: flex; flex-direction: column; gap: 7px; min-width: 0; padding: 12px; border: 1px solid #393939; border-radius: 10px; background: var(--workspace-canvas, #1e1e1e); }
 .workflow-assignment-list li > strong { font-size: 12px; color: #ddd; }
 .workflow-assignment-list p, .workflow-result-output { margin: 0; color: #b0b0b0; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .workflow-assignment-list summary { cursor: pointer; color: #999; font-size: 11px; }

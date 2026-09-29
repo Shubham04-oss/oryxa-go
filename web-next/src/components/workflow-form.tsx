@@ -30,12 +30,14 @@ export function WorkflowForm({
   organizationId,
   workflow,
   teams,
+  blockedReason,
   onDone,
   onCancel,
 }: {
   organizationId: string
   workflow?: AgentWorkflow
   teams: readonly AgentTeam[]
+  blockedReason?: string
   onDone: (workflow: AgentWorkflow) => void
   onCancel: () => void
 }) {
@@ -139,7 +141,7 @@ export function WorkflowForm({
   }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (lock.current) return
+    if (lock.current || blockedReason) return
     const fields: CreateAgentWorkflowInput = {
       name: cleanLine(name),
       description: description.trim(),
@@ -440,6 +442,11 @@ export function WorkflowForm({
           {formError}
         </p>
       )}
+      {blockedReason && (
+        <p className="workspace-agents-note" role="status" id={`${id}-blocked`}>
+          {blockedReason}
+        </p>
+      )}
       <div className="workspace-agents-actions">
         <button
           className="workspace-agents-button"
@@ -453,7 +460,8 @@ export function WorkflowForm({
           className="workspace-agents-button"
           data-variant="primary"
           type="submit"
-          disabled={save.isPending}
+          disabled={save.isPending || Boolean(blockedReason)}
+          aria-describedby={blockedReason ? `${id}-blocked` : undefined}
         >
           {save.isPending
             ? "Saving…"
