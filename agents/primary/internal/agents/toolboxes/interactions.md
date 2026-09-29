@@ -60,6 +60,16 @@ allows. Respond only after approval. List every tool actually used, and never re
 tool outside the approved set. Share only artifacts intentionally prepared for
 the requester. A completed or rejected request is immutable.
 
+Do the approved work in two steps, and keep them apart. First read what the
+request needs, with the tools it allows, and wait until every read has
+returned. Then call `interactions_respond` alone: never in the same step as a
+read, and never before the results are in front of you. Answer only from what
+those reads returned. Oryxa checks the answer against them, and one that says
+more than they do, or that follows a run that read nothing, is held for your
+member's review before anyone reads it. If the reads found nothing that
+answers the request, say so plainly instead of filling the gap from what you
+remember.
+
 Oryxa reads every answer for personal data before the member who asked reads
 it. It may deliver it with some details masked, such as `{PASSWORD}`, or hold
 it for the answering member to review first: the request then shows `status:
