@@ -126,6 +126,9 @@ type fakeMembers struct {
 	members map[string]Member
 	err     error
 	asked   []string
+	// orgNames answers OrganizationName; nameErr fails it.
+	orgNames map[string]string
+	nameErr  error
 }
 
 func (members *fakeMembers) add(organizationID string, member Member) {
@@ -149,6 +152,19 @@ func (members *fakeMembers) ByEmail(_ context.Context, organizationID, email str
 		return Member{}, ErrNotMember
 	}
 	return member, nil
+}
+
+func (members *fakeMembers) OrganizationName(_ context.Context, organizationID string) (string, error) {
+	members.mu.Lock()
+	defer members.mu.Unlock()
+	if members.nameErr != nil {
+		return "", members.nameErr
+	}
+	name, ok := members.orgNames[organizationID]
+	if !ok {
+		return "", ErrGone
+	}
+	return name, nil
 }
 
 // fakeIdentities keeps the matches, as slack_identities does: one per Slack
@@ -312,6 +328,7 @@ func newHarness(t *testing.T) *harness {
 		asked: &fakeAsked{},
 	}
 	h.slack.channels[testChannel] = ChannelInfo{ID: testChannel}
+	h.members.orgNames = map[string]string{testOrg: "Acme"}
 	h.rebuild()
 	h.member(testAsker, "Ada")
 	return h
@@ -336,7 +353,7 @@ func (h *harness) member(slackID, name string) Person {
 	lower := strings.ToLower(name)
 	email := lower + "@acme.com"
 	h.slack.profiles[slackID] = Profile{
-		UserID: slackID, TeamID: testTeam, Email: email, EmailConfirmed: true, DisplayName: name,
+		UserID: slackID, TeamID: testTeam, Email: email, EmailConfirmed: true, Name: name,
 	}
 	member := Member{UserID: "usr_" + lower, Email: email, DisplayName: name, Role: "member"}
 	h.members.add(testOrg, member)
@@ -417,8 +434,8 @@ func (h *harness) only() Post {
 	return posts[0]
 }
 
-// refusal returns the refusal posted, and fails unless one was and nothing
-// was asked.
+// refusal returns the one refusal posted, and fails unless it was the only
+// message and nothing was asked.
 func (h *harness) refusal(job Job) (Post, RefusalParams) {
 	h.t.Helper()
 	post := h.only()
@@ -430,10 +447,32 @@ func (h *harness) refusal(job Job) (Post, RefusalParams) {
 	if !ok {
 		h.t.Fatalf("refusal params are %T", post.Params)
 	}
-	if post.OrganizationID != testOrg || post.IdempotencyKey != "slackrouter:"+job.InboundID+":refusal" {
-		h.t.Fatalf("refusal = %+v", post)
+	wantKey := "slackrouter:" + job.InboundID + ":refusal"
+	if params.UserID != "" {
+		wantKey += ":" + params.UserID
+	}
+	if post.OrganizationID != testOrg || post.IdempotencyKey != wantKey {
+		h.t.Fatalf("refusal = %+v, want key %q", post, wantKey)
 	}
 	return post, params
+}
+
+// refusals returns every refusal posted, in order, and fails if anything else
+// was.
+func (h *harness) refusals(job Job) []RefusalParams {
+	h.t.Helper()
+	var all []RefusalParams
+	for _, post := range h.slack.sent() {
+		if post.Template != TemplateRefusal {
+			h.t.Fatalf("posted %q, want refusals only", post.Template)
+		}
+		params := post.Params.(RefusalParams)
+		if post.IdempotencyKey != "slackrouter:"+job.InboundID+":refusal:"+params.UserID {
+			h.t.Fatalf("refusal key %q for %+v", post.IdempotencyKey, params)
+		}
+		all = append(all, params)
+	}
+	return all
 }
 
 func (h *harness) noAsk() {
@@ -452,21 +491,27 @@ func (h *harness) ask() AskInput {
 	return h.asks.created[0]
 }
 
-// ack returns the acknowledgement posted for an ask.
-func (h *harness) ack(job Job) AskAckParams {
+// ack returns the acknowledgement posted for an ask, whatever else was
+// posted with it.
+func (h *harness) ack(job Job) (Post, AskAckParams) {
 	h.t.Helper()
-	post := h.only()
-	if post.Template != TemplateAskAck {
-		h.t.Fatalf("posted %q, want an ask_ack", post.Template)
+	var found []Post
+	for _, post := range h.slack.sent() {
+		if post.Template == TemplateAskAck {
+			found = append(found, post)
+		}
 	}
-	params, ok := post.Params.(AskAckParams)
+	if len(found) != 1 {
+		h.t.Fatalf("posted %d acknowledgements, want 1: %+v", len(found), h.slack.sent())
+	}
+	params, ok := found[0].Params.(AskAckParams)
 	if !ok {
-		h.t.Fatalf("ack params are %T", post.Params)
+		h.t.Fatalf("ack params are %T", found[0].Params)
 	}
-	if post.IdempotencyKey != "slackrouter:"+job.InboundID+":ask_ack" {
-		h.t.Fatalf("ack key = %q", post.IdempotencyKey)
+	if found[0].IdempotencyKey != "slackrouter:"+job.InboundID+":ask_ack" || found[0].OrganizationID != testOrg {
+		h.t.Fatalf("ack = %+v", found[0])
 	}
-	return params
+	return found[0], params
 }
 
 // wire is what an adapter would put on the wire for a post's parameters.

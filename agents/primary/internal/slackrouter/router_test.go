@@ -26,9 +26,13 @@ func TestNewRouterNeedsWhatItReadsFrom(t *testing.T) {
 	}
 }
 
+// job2ts is the ts of the message a job is about.
+func job2ts(h *harness, job Job) string { return h.slack.inbound[job.InboundID].Mention.TS }
+
 func TestAMentionBecomesAnAsk(t *testing.T) {
 	h := newHarness(t)
 	raya := h.member("URAYA", "Raya")
+	h.router.deps.OpenURL = func(askID string) string { return "https://app.oryxa.test/agents/requests?ask_id=" + askID }
 	job := h.mention(toBot("ask <@URAYA> for the Q3 numbers"))
 	h.mustRun(job)
 
@@ -48,18 +52,17 @@ func TestAMentionBecomesAnAsk(t *testing.T) {
 		t.Fatalf("owners = %+v, want %+v asked for consent", ask.Owners, raya)
 	}
 
-	// The asker, and only the asker, hears who was asked.
-	ack := h.ack(job)
-	post := h.only()
-	wantTarget := Target{ChannelID: testChannel, ThreadTS: job2ts(h, job), UserID: testAsker}
-	if post.Target != wantTarget || post.OrganizationID != testOrg {
-		t.Fatalf("ack goes to %+v in %q, want the asker alone: %+v", post.Target, post.OrganizationID, wantTarget)
+	// The asker, and only the asker, hears who was asked, in the thread of
+	// their message.
+	post, ack := h.ack(job)
+	if want := (Target{ChannelID: testChannel, ThreadTS: job2ts(h, job), UserID: testAsker}); post.Target != want {
+		t.Fatalf("ack goes to %+v, want the asker alone: %+v", post.Target, want)
 	}
-	if ack.AskID != "ask_1" || len(ack.Owners) != 1 || ack.Owners[0] != (AskedOwner{Name: "Raya"}) || len(ack.Skipped) != 0 {
-		t.Fatalf("ack = %+v", ack)
+	if len(h.slack.sent()) != 1 || len(ack.Owners) != 1 || ack.Owners[0].UserID != "URAYA" {
+		t.Fatalf("ack = %+v among %d posts", ack, len(h.slack.sent()))
 	}
-	if wire(t, ack) != `{"ask_id":"ask_1","owners":[{"name":"Raya"}]}` {
-		t.Fatalf("ack on the wire = %s", wire(t, ack))
+	if got, want := wire(t, ack), `{"owners":[{"user_id":"URAYA"}],"open_url":"https://app.oryxa.test/agents/requests?ask_id=ask_1"}`; got != want {
+		t.Fatalf("ack on the wire = %s, want %s", got, want)
 	}
 	// The mention is recorded as having made its ask, and both people were
 	// resolved in one profile read.
@@ -69,7 +72,8 @@ func TestAMentionBecomesAnAsk(t *testing.T) {
 	if len(h.slack.profileAsk) != 1 || strings.Join(h.slack.profileAsk[0], ",") != testAsker+",URAYA" {
 		t.Fatalf("profile reads = %+v", h.slack.profileAsk)
 	}
-	// The matches were kept for whoever must go back from a member.
+	// The matches were kept for whoever must go back from a member to their
+	// Slack user, such as to send them a direct message.
 	if identity, ok := h.identities.get(testTeam, "URAYA"); !ok || identity.MemberUserID != "usr_raya" || identity.Email != "raya@acme.com" || identity.OrganizationID != testOrg {
 		t.Fatalf("Raya's match = %+v, %v", identity, ok)
 	}
@@ -78,8 +82,16 @@ func TestAMentionBecomesAnAsk(t *testing.T) {
 	}
 }
 
-// job2ts is the ts of the message a job is about.
-func job2ts(h *harness, job Job) string { return h.slack.inbound[job.InboundID].Mention.TS }
+func TestTheAckHasNoLinkWithoutAWebAddress(t *testing.T) {
+	h := newHarness(t)
+	h.member("URAYA", "Raya")
+	job := h.mention(toBot("ask <@URAYA>"))
+	h.mustRun(job)
+	_, ack := h.ack(job)
+	if got, want := wire(t, ack), `{"owners":[{"user_id":"URAYA"}]}`; got != want {
+		t.Fatalf("ack on the wire = %s, want %s", got, want)
+	}
+}
 
 func TestAMentionInAThreadIsAnsweredThere(t *testing.T) {
 	h := newHarness(t)
@@ -96,13 +108,16 @@ func TestAMentionInAThreadIsAnsweredThere(t *testing.T) {
 }
 
 func TestRefusals(t *testing.T) {
+	notInOryxa := func(h *harness, slackID, name string) {
+		h.slack.profiles[slackID] = Profile{UserID: slackID, TeamID: testTeam, Email: strings.ToLower(name) + "@acme.com", EmailConfirmed: true, Name: name}
+	}
 	for _, test := range []struct {
 		name   string
 		text   string
 		setup  func(h *harness) []func(*Mention)
 		reason consentpolicy.Reason
-		names  []string
-		hint   string
+		// the params on the wire
+		wire string
 	}{
 		{
 			name: "an asker who is a guest",
@@ -112,7 +127,7 @@ func TestRefusals(t *testing.T) {
 				h.profile(testAsker, func(p *Profile) { p.Guest = true })
 				return nil
 			},
-			reason: consentpolicy.NotMember, hint: "Only members",
+			reason: consentpolicy.NotMember, wire: `{"reason":"not_member","organization_name":"Acme"}`,
 		},
 		{
 			name: "an asker whose address no member uses",
@@ -122,36 +137,57 @@ func TestRefusals(t *testing.T) {
 				h.profile(testAsker, func(p *Profile) { p.Email = "ada@elsewhere.example" })
 				return nil
 			},
-			reason: consentpolicy.NotMember, hint: "Only members",
+			reason: consentpolicy.NotMember, wire: `{"reason":"not_member","organization_name":"Acme"}`,
+		},
+		{
+			name: "an asker refused without an organization name to give",
+			text: toBot("ask <@URAYA> for the Q3 numbers"),
+			setup: func(h *harness) []func(*Mention) {
+				h.member("URAYA", "Raya")
+				h.profile(testAsker, func(p *Profile) { p.Guest = true })
+				h.members.nameErr = errors.New("database down")
+				return nil
+			},
+			reason: consentpolicy.NotMember, wire: `{"reason":"not_member"}`,
 		},
 		{
 			name: "an owner who is not in Oryxa",
 			text: toBot("ask <@UMAYA> for the Q3 numbers"),
 			setup: func(h *harness) []func(*Mention) {
-				h.slack.profiles["UMAYA"] = Profile{UserID: "UMAYA", TeamID: testTeam, Email: "maya@acme.com", EmailConfirmed: true, DisplayName: "Maya"}
+				notInOryxa(h, "UMAYA", "Maya")
 				return nil
 			},
-			reason: consentpolicy.OwnerNotMember, names: []string{"Maya"}, hint: "Maya isn't in Oryxa, so I didn't ask them.",
-		},
-		{
-			name: "every owner named is not in Oryxa",
-			text: toBot("ask <@UMAYA> and <@UDAVE>"),
-			setup: func(h *harness) []func(*Mention) {
-				h.slack.profiles["UMAYA"] = Profile{UserID: "UMAYA", TeamID: testTeam, Email: "maya@acme.com", EmailConfirmed: true, DisplayName: "Maya"}
-				h.slack.profiles["UDAVE"] = Profile{UserID: "UDAVE", TeamID: testTeam, Email: "dave@acme.com", EmailConfirmed: true, DisplayName: "Dave"}
-				return nil
-			},
-			reason: consentpolicy.OwnerNotMember, names: []string{"Maya", "Dave"}, hint: "Maya and Dave aren't in Oryxa",
+			reason: consentpolicy.OwnerNotMember, wire: `{"reason":"owner_not_member","user_id":"UMAYA"}`,
 		},
 		{
 			name: "a group message",
 			text: toBot("ask <@URAYA>"),
 			setup: func(h *harness) []func(*Mention) {
 				h.member("URAYA", "Raya")
-				h.slack.channels[testChannel] = ChannelInfo{ID: testChannel, Private: true, GroupDM: true}
+				h.slack.channels[testChannel] = ChannelInfo{ID: testChannel, Private: true, MPIM: true}
 				return nil
 			},
-			reason: consentpolicy.GroupDM, hint: "group messages",
+			reason: consentpolicy.GroupDM, wire: `{"reason":"group_dm"}`,
+		},
+		{
+			name: "a direct message",
+			text: toBot("ask <@URAYA>"),
+			setup: func(h *harness) []func(*Mention) {
+				h.member("URAYA", "Raya")
+				h.slack.channels[testChannel] = ChannelInfo{ID: testChannel, Private: true, IM: true}
+				return nil
+			},
+			reason: consentpolicy.GroupDM, wire: `{"reason":"group_dm"}`,
+		},
+		{
+			name: "a conversation Slack will not describe to the bot",
+			text: toBot("ask <@URAYA>"),
+			setup: func(h *harness) []func(*Mention) {
+				h.member("URAYA", "Raya")
+				h.slack.channelErr = ErrUnreadable
+				return nil
+			},
+			reason: consentpolicy.GroupDM, wire: `{"reason":"group_dm"}`,
 		},
 		{
 			name: "a group message the delivery says so of",
@@ -160,7 +196,7 @@ func TestRefusals(t *testing.T) {
 				h.member("URAYA", "Raya")
 				return []func(*Mention){func(m *Mention) { m.ChannelType = "mpim" }}
 			},
-			reason: consentpolicy.GroupDM, hint: "group messages",
+			reason: consentpolicy.GroupDM, wire: `{"reason":"group_dm"}`,
 		},
 		{
 			name: "a channel shared with another organization",
@@ -170,7 +206,7 @@ func TestRefusals(t *testing.T) {
 				h.slack.channels[testChannel] = ChannelInfo{ID: testChannel, Shared: true}
 				return nil
 			},
-			reason: consentpolicy.ExternalChannel, hint: "shared with other organizations",
+			reason: consentpolicy.ExternalChannel, wire: `{"reason":"external_channel"}`,
 		},
 		{
 			name: "a channel the delivery says is shared",
@@ -179,22 +215,22 @@ func TestRefusals(t *testing.T) {
 				h.member("URAYA", "Raya")
 				return []func(*Mention){func(m *Mention) { m.SharedExternally = true }}
 			},
-			reason: consentpolicy.ExternalChannel, hint: "shared with other organizations",
+			reason: consentpolicy.ExternalChannel, wire: `{"reason":"external_channel"}`,
 		},
 		{
 			name:   "a mention that names nobody",
 			text:   toBot("what's the Q3 number?"),
-			reason: consentpolicy.NoOwner, hint: "Say who to ask",
+			reason: consentpolicy.NoOwner, wire: `{"reason":"no_owner"}`,
 		},
 		{
 			name:   "a mention that names only the asker",
 			text:   toBot("ask <@" + testAsker + "> for the Q3 numbers"),
-			reason: consentpolicy.NoOwner, hint: "Say who to ask",
+			reason: consentpolicy.NoOwner, wire: `{"reason":"no_owner"}`,
 		},
 		{
 			name:   "a mention of a group and of everyone",
 			text:   toBot("ask <!subteam^S123|@eng> and <!channel> for the Q3 numbers"),
-			reason: consentpolicy.NoOwner, hint: "Say who to ask",
+			reason: consentpolicy.NoOwner, wire: `{"reason":"no_owner"}`,
 		},
 		{
 			name: "an asker with five asks open",
@@ -204,7 +240,7 @@ func TestRefusals(t *testing.T) {
 				h.asks.open["usr_ada"] = consentpolicy.MaxOpenAsks
 				return nil
 			},
-			reason: consentpolicy.TooManyAsks, hint: "already have 5 requests waiting",
+			reason: consentpolicy.TooManyAsks, wire: `{"reason":"too_many_asks"}`,
 		},
 		{
 			name: "a mention that names six people",
@@ -215,7 +251,7 @@ func TestRefusals(t *testing.T) {
 				}
 				return nil
 			},
-			reason: consentpolicy.TooManyAsks, hint: "at most 5 people",
+			reason: consentpolicy.TooManyAsks, wire: `{"reason":"too_many_asks"}`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -228,14 +264,8 @@ func TestRefusals(t *testing.T) {
 			h.mustRun(job)
 
 			post, params := h.refusal(job)
-			if params.Reason != test.reason {
-				t.Fatalf("reason = %q, want %q (hint %q)", params.Reason, test.reason, params.Hint)
-			}
-			if !strings.Contains(params.Hint, test.hint) || strings.Contains(params.Hint, "\n") {
-				t.Fatalf("hint = %q, want one line holding %q", params.Hint, test.hint)
-			}
-			if strings.Join(params.Names, ",") != strings.Join(test.names, ",") {
-				t.Fatalf("names = %v, want %v", params.Names, test.names)
+			if params.Reason != test.reason || wire(t, params) != test.wire {
+				t.Fatalf("refusal on the wire = %s, want reason %q: %s", wire(t, params), test.reason, test.wire)
 			}
 			// Told to the asker in the thread of the mention, in nobody else's
 			// hearing.
@@ -244,6 +274,24 @@ func TestRefusals(t *testing.T) {
 				t.Fatalf("refusal = %+v, want it for the asker alone: %+v", post, want)
 			}
 		})
+	}
+}
+
+// TestEveryPersonLeftOutIsToldOf: apps' refusal names one person, so each
+// named person who is not in Oryxa is told of on their own, when nobody is
+// asked at all.
+func TestEveryPersonLeftOutIsToldOf(t *testing.T) {
+	h := newHarness(t)
+	for id, name := range map[string]string{"UMAYA": "Maya", "UDAVE": "Dave"} {
+		h.slack.profiles[id] = Profile{UserID: id, TeamID: testTeam, Email: strings.ToLower(name) + "@acme.com", EmailConfirmed: true, Name: name}
+	}
+	job := h.mention(toBot("ask <@UMAYA> and <@UDAVE>"))
+	h.mustRun(job)
+	h.noAsk()
+	got := h.refusals(job)
+	if len(got) != 2 || got[0] != (RefusalParams{Reason: consentpolicy.OwnerNotMember, UserID: "UMAYA"}) ||
+		got[1] != (RefusalParams{Reason: consentpolicy.OwnerNotMember, UserID: "UDAVE"}) {
+		t.Fatalf("refusals = %+v, want one for each, in the order named", got)
 	}
 }
 
@@ -270,10 +318,13 @@ func TestARefusalIsRetriedUntilItIsTold(t *testing.T) {
 	}
 }
 
+// TestOnePersonNotInOryxaIsLeftOutNotRefused: the rest are asked, and the
+// asker is told, once for the ask and once for the person left out, who was
+// not asked.
 func TestOnePersonNotInOryxaIsLeftOutNotRefused(t *testing.T) {
 	h := newHarness(t)
 	raya := h.member("URAYA", "Raya")
-	h.slack.profiles["UMAYA"] = Profile{UserID: "UMAYA", TeamID: testTeam, Email: "maya@acme.com", EmailConfirmed: true, DisplayName: "Maya"}
+	h.slack.profiles["UMAYA"] = Profile{UserID: "UMAYA", TeamID: testTeam, Email: "maya@acme.com", EmailConfirmed: true, Name: "Maya"}
 	job := h.mention(toBot("ask <@UMAYA> or <@URAYA>"))
 	h.mustRun(job)
 
@@ -281,12 +332,36 @@ func TestOnePersonNotInOryxaIsLeftOutNotRefused(t *testing.T) {
 	if len(ask.Owners) != 1 || ask.Owners[0].Person != raya {
 		t.Fatalf("owners = %+v, want Raya alone", ask.Owners)
 	}
-	ack := h.ack(job)
-	if len(ack.Owners) != 1 || ack.Owners[0].Name != "Raya" || len(ack.Skipped) != 1 || ack.Skipped[0] != "Maya" {
-		t.Fatalf("ack = %+v, want Raya asked and Maya left out", ack)
+	_, ack := h.ack(job)
+	if len(ack.Owners) != 1 || ack.Owners[0].UserID != "URAYA" {
+		t.Fatalf("ack = %+v, want Raya asked", ack)
 	}
-	if want := `{"ask_id":"ask_1","owners":[{"name":"Raya"}],"skipped":["Maya"]}`; wire(t, ack) != want {
-		t.Fatalf("ack on the wire = %s, want %s", wire(t, ack), want)
+	var refusals []RefusalParams
+	for _, post := range h.slack.sent() {
+		if post.Template == TemplateRefusal {
+			refusals = append(refusals, post.Params.(RefusalParams))
+			if post.IdempotencyKey != "slackrouter:"+job.InboundID+":refusal:UMAYA" {
+				t.Fatalf("refusal key = %q", post.IdempotencyKey)
+			}
+		}
+	}
+	if len(refusals) != 1 || refusals[0] != (RefusalParams{Reason: consentpolicy.OwnerNotMember, UserID: "UMAYA"}) {
+		t.Fatalf("refusals = %+v, want Maya left out", refusals)
+	}
+}
+
+// TestNotBeingToldWhoWasLeftOutLeavesTheAskStanding: the ask is the outcome.
+func TestNotBeingToldWhoWasLeftOutLeavesTheAskStanding(t *testing.T) {
+	h := newHarness(t)
+	h.member("URAYA", "Raya")
+	h.slack.profiles["UMAYA"] = Profile{UserID: "UMAYA", TeamID: testTeam, Email: "maya@acme.com", EmailConfirmed: true, Name: "Maya"}
+	h.slack.postErrFor[TemplateRefusal] = errors.New("apps is down")
+	job := h.mention(toBot("ask <@UMAYA> or <@URAYA>"))
+	if err := h.run(job); err != nil {
+		t.Fatalf("a refusal that was not sent failed a job whose ask was made: %v", err)
+	}
+	if len(h.asks.created) != 1 {
+		t.Fatal("the ask was not made")
 	}
 }
 
@@ -307,8 +382,8 @@ func TestParallelOwnersAreOneAsk(t *testing.T) {
 	if ask.Question != "ask the dev keys from @Raya or @Maya (engineering)" {
 		t.Fatalf("question = %q", ask.Question)
 	}
-	ack := h.ack(job)
-	if len(ack.Owners) != 2 || ack.Owners[0].Name != "Raya" || ack.Owners[1].Name != "Maya" {
+	_, ack := h.ack(job)
+	if len(ack.Owners) != 2 || ack.Owners[0].UserID != "URAYA" || ack.Owners[1].UserID != "UMAYA" {
 		t.Fatalf("ack = %+v", ack)
 	}
 }
@@ -339,26 +414,14 @@ func TestTheOpenAskLimitIsFiveAtOnce(t *testing.T) {
 	if len(h.asks.created) != 1 {
 		t.Fatal("a sixth ask was made")
 	}
-	if _, params := h.refusalAfterAsks(job, 1); params.Reason != consentpolicy.TooManyAsks {
-		t.Fatalf("reason = %q", params.Reason)
+	post := h.only()
+	if params, ok := post.Params.(RefusalParams); !ok || params.Reason != consentpolicy.TooManyAsks {
+		t.Fatalf("posted %+v, want the refusal", post)
 	}
 	// The limit is the asker's own, as a member of the organization.
-	if len(h.asks.created) != 1 || h.asks.countCalls != 2 {
+	if h.asks.countCalls != 2 {
 		t.Fatalf("counted %d times", h.asks.countCalls)
 	}
-}
-
-// refusalAfterAsks is refusal for a harness that has already made some asks.
-func (h *harness) refusalAfterAsks(job Job, asks int) (Post, RefusalParams) {
-	h.t.Helper()
-	post := h.only()
-	if post.Template != TemplateRefusal {
-		h.t.Fatalf("posted %q, want a refusal", post.Template)
-	}
-	if len(h.asks.created) != asks {
-		h.t.Fatalf("made %d asks, want %d", len(h.asks.created), asks)
-	}
-	return post, post.Params.(RefusalParams)
 }
 
 func TestTheOpenAskCountIsNotReadForSomeoneWhoIsNotAMember(t *testing.T) {
@@ -406,6 +469,17 @@ func TestTransientFailuresAreRetriedAndDoNothing(t *testing.T) {
 				t.Fatalf("something was said before the ask was made: %+v", h.slack.sent())
 			}
 		})
+	}
+}
+
+// TestAnAskThatCannotBeFiledIsDropped: a request the consent core refuses for
+// good is not tried again.
+func TestAnAskThatCannotBeFiledIsDropped(t *testing.T) {
+	h := newHarness(t)
+	h.member("URAYA", "Raya")
+	h.asks.createErr = Permanent(errors.New("invalid agent request"))
+	if err := h.run(h.mention(toBot("ask <@URAYA>"))); !IsPermanent(err) {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -535,7 +609,7 @@ func TestWhatCanNeverBeRoutedIsDropped(t *testing.T) {
 		},
 		"a message from another app": {
 			func(h *harness) Job {
-				h.slack.profiles["UOTHERBOT"] = Profile{UserID: "UOTHERBOT", TeamID: testTeam, Bot: true, DisplayName: "Other"}
+				h.slack.profiles["UOTHERBOT"] = Profile{UserID: "UOTHERBOT", TeamID: testTeam, Bot: true, Name: "Other"}
 				return h.mention(toBot("ask <@URAYA>"), func(m *Mention) { m.UserID = "UOTHERBOT" })
 			},
 			"written by a bot",
@@ -548,12 +622,12 @@ func TestWhatCanNeverBeRoutedIsDropped(t *testing.T) {
 			func(h *harness) Job { return h.mention(toBot("hi"), func(m *Mention) { m.ChannelID = "" }) },
 			"where it was written",
 		},
-		"a channel Slack will not describe": {
+		"a channel Slack does not know": {
 			func(h *harness) Job {
 				h.member("URAYA", "Raya")
 				return h.mention(toBot("ask <@URAYA>"), func(m *Mention) { m.ChannelID = "CNOTFOUND" })
 			},
-			"not readable",
+			"not known to Slack",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -574,7 +648,7 @@ func TestWhatCanNeverBeRoutedIsDropped(t *testing.T) {
 // between two programs.
 func TestABotIsNeverAnswered(t *testing.T) {
 	h := newHarness(t)
-	h.slack.profiles["UOTHERBOT"] = Profile{UserID: "UOTHERBOT", TeamID: testTeam, Bot: true, DisplayName: "Other"}
+	h.slack.profiles["UOTHERBOT"] = Profile{UserID: "UOTHERBOT", TeamID: testTeam, Bot: true, Name: "Other"}
 	job := h.mention(toBot("hello"), func(m *Mention) { m.UserID = "UOTHERBOT" })
 	if err := h.run(job); !IsPermanent(err) {
 		t.Fatalf("err = %v", err)
@@ -584,27 +658,36 @@ func TestABotIsNeverAnswered(t *testing.T) {
 	}
 }
 
-// TestNamesInMessagesAreCleaned: a name is a person's own words and reaches a
-// message about them; the markup Slack reads is removed before it does.
-func TestNamesInMessagesAreCleaned(t *testing.T) {
-	h := newHarness(t)
-	h.slack.profiles["UEVIL"] = Profile{
-		UserID: "UEVIL", TeamID: testTeam, Email: "evil@acme.com", EmailConfirmed: true,
-		DisplayName: "<https://phish.example|Click>\n<!channel> & co\u202e" + strings.Repeat("x", 100),
-	}
-	job := h.mention(toBot("ask <@UEVIL>"))
-	h.mustRun(job)
-	_, params := h.refusal(job)
-	if len(params.Names) != 1 {
-		t.Fatalf("names = %v", params.Names)
-	}
-	name := params.Names[0]
-	if strings.ContainsAny(name, "<>&|\n\u202e") || len([]rune(name)) > maxNameRunes {
-		t.Fatalf("name %q carries markup, or is too long", name)
-	}
-	if strings.ContainsAny(params.Hint, "<>&|") {
-		t.Fatalf("hint %q carries markup", params.Hint)
-	}
+// TestASlackNameIsNeverPutInAMessage: a name is a person's own words. A
+// refusal names the person by their Slack id, which apps shows as a mention;
+// the name itself only ever goes into the question and to the consent core,
+// cleaned of the markup Slack reads.
+func TestASlackNameIsNeverPutInAMessage(t *testing.T) {
+	evil := "<https://phish.example|Click>\n<!channel> & co\u202e" + strings.Repeat("x", 100)
+	t.Run("in a refusal", func(t *testing.T) {
+		h := newHarness(t)
+		h.slack.profiles["UEVIL"] = Profile{UserID: "UEVIL", TeamID: testTeam, Email: "evil@acme.com", EmailConfirmed: true, Name: evil}
+		job := h.mention(toBot("ask <@UEVIL>"))
+		h.mustRun(job)
+		_, params := h.refusal(job)
+		if got := wire(t, params); got != `{"reason":"owner_not_member","user_id":"UEVIL"}` {
+			t.Fatalf("refusal on the wire = %s", got)
+		}
+	})
+	t.Run("to the consent core and in the question", func(t *testing.T) {
+		h := newHarness(t)
+		h.member("UEVIL", "Placeholder")
+		h.slack.profiles["UEVIL"] = Profile{UserID: "UEVIL", TeamID: testTeam, Email: "placeholder@acme.com", EmailConfirmed: true, Name: evil}
+		h.mustRun(h.mention(toBot("ask <@UEVIL>")))
+		ask := h.ask()
+		name := ask.Owners[0].Name
+		if strings.ContainsAny(name, "<>&|\n\u202e") || len([]rune(name)) > maxNameRunes || name == "" {
+			t.Fatalf("owner name %q carries markup, or is too long", name)
+		}
+		if strings.ContainsAny(ask.Question, "\u202e|") || strings.Contains(ask.Question, "<https") {
+			t.Fatalf("question %q carries what the name did", ask.Question)
+		}
+	})
 }
 
 func TestContextIsHonouredMidJob(t *testing.T) {
@@ -619,33 +702,22 @@ func TestContextIsHonouredMidJob(t *testing.T) {
 	}
 }
 
-func TestEveryRefusalReasonHasAHint(t *testing.T) {
-	for _, reason := range []consentpolicy.Reason{
-		consentpolicy.NotMember, consentpolicy.OwnerNotMember, consentpolicy.GroupDM,
-		consentpolicy.ExternalChannel, consentpolicy.NoOwner, consentpolicy.TooManyAsks,
+// TestRefusalOnTheWire pins what an adapter encodes for the refusal template,
+// which apps decodes strictly: any other field is refused.
+func TestRefusalOnTheWire(t *testing.T) {
+	for _, test := range []struct {
+		params RefusalParams
+		want   string
+	}{
+		{RefusalParams{Reason: consentpolicy.NotMember, OrganizationName: "Acme"}, `{"reason":"not_member","organization_name":"Acme"}`},
+		{RefusalParams{Reason: consentpolicy.OwnerNotMember, UserID: "UMAYA"}, `{"reason":"owner_not_member","user_id":"UMAYA"}`},
+		{RefusalParams{Reason: consentpolicy.NoOwner}, `{"reason":"no_owner"}`},
 	} {
-		hint := refusalHint(reason, []string{"Maya"}, false)
-		if hint == "" || strings.Contains(hint, "\n") || hint == refusalHint("unknown", nil, false) {
-			t.Errorf("%s: hint %q", reason, hint)
+		if got := wire(t, test.params); got != test.want {
+			t.Fatalf("on the wire: %s, want %s", got, test.want)
 		}
 	}
-	if refusalHint(consentpolicy.TooManyAsks, nil, true) == refusalHint(consentpolicy.TooManyAsks, nil, false) {
-		t.Error("too many people and too many open asks read the same")
-	}
-	if got := refusalHint(consentpolicy.OwnerNotMember, []string{"A", "B", "C"}, false); !strings.HasPrefix(got, "A, B and C aren't") {
-		t.Errorf("hint = %q", got)
-	}
-}
-
-// TestRefusalOnTheWire pins what an adapter encodes for the refusal template,
-// which apps reads: the reason codes are its contract.
-func TestRefusalOnTheWire(t *testing.T) {
-	got := wire(t, RefusalParams{Reason: consentpolicy.OwnerNotMember, Hint: "Maya isn't in Oryxa, so I didn't ask them.", Names: []string{"Maya"}})
-	want := `{"reason":"owner_not_member","hint":"Maya isn't in Oryxa, so I didn't ask them.","names":["Maya"]}`
-	if got != want {
-		t.Fatalf("on the wire: %s, want %s", got, want)
-	}
-	if got := wire(t, RefusalParams{Reason: consentpolicy.NoOwner, Hint: "h"}); got != `{"reason":"no_owner","hint":"h"}` {
-		t.Fatalf("on the wire: %s", got)
+	if got := wire(t, Target{ChannelID: "C1", ThreadTS: "1700000000.000100", UserID: "U1"}); got != `{"channel_id":"C1","thread_ts":"1700000000.000100","user_id":"U1"}` {
+		t.Fatalf("target on the wire: %s", got)
 	}
 }

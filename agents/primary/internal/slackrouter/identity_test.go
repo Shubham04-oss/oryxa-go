@@ -21,7 +21,7 @@ type identityFixture struct {
 func newIdentityFixture() *identityFixture {
 	fixture := &identityFixture{members: &fakeMembers{}, identities: &fakeIdentities{}, profiles: map[string]Profile{}}
 	fixture.members.add(testOrg, Member{UserID: "usr_raya", Email: "raya@acme.com", DisplayName: "Raya Member", Role: "member"})
-	fixture.profiles["URAYA"] = Profile{UserID: "URAYA", TeamID: testTeam, Email: "raya@acme.com", EmailConfirmed: true, DisplayName: "Raya"}
+	fixture.profiles["URAYA"] = Profile{UserID: "URAYA", TeamID: testTeam, Email: "raya@acme.com", EmailConfirmed: true, Name: "Raya"}
 	fixture.resolver = &resolver{members: fixture.members, identities: fixture.identities, logger: nopLogger()}
 	return fixture
 }
@@ -131,11 +131,10 @@ func TestAddressesMatchWithoutRegardToCaseOrSpace(t *testing.T) {
 
 func TestANameIsWhatSlackCallsThemThenWhatAuthDoes(t *testing.T) {
 	fixture := newIdentityFixture()
-	fixture.change("URAYA", func(p *Profile) { p.DisplayName, p.RealName = "", "Raya R." })
-	if got, _ := fixture.resolve("URAYA"); got.Name != "Raya R." {
-		t.Fatalf("name = %q, want the real name when there is no display name", got.Name)
+	if got, _ := fixture.resolve("URAYA"); got.Name != "Raya" || got.Person.Name != "Raya" {
+		t.Fatalf("name = %q, want what Slack calls them", got.Name)
 	}
-	fixture.change("URAYA", func(p *Profile) { p.RealName = "" })
+	fixture.change("URAYA", func(p *Profile) { p.Name = "" })
 	if got, _ := fixture.resolve("URAYA"); got.Name != "Raya Member" || got.Person.Name != "Raya Member" {
 		t.Fatalf("name = %q, want the member's own when Slack has none", got.Name)
 	}
@@ -230,7 +229,7 @@ func TestAnOwnerWhoIsAGuestIsNotAsked(t *testing.T) {
 			job := h.mention(toBot("ask <@URAYA>"))
 			h.mustRun(job)
 			_, params := h.refusal(job)
-			if params.Reason != consentpolicy.OwnerNotMember || len(params.Names) != 1 || params.Names[0] != "Raya" {
+			if params != (RefusalParams{Reason: consentpolicy.OwnerNotMember, UserID: "URAYA"}) {
 				t.Fatalf("refusal = %+v", params)
 			}
 		})

@@ -147,9 +147,4 @@ func cleanName(name string) string {
 }
 
 // nameOf is what to call a person Slack described.
-func nameOf(profile Profile) string {
-	if name := cleanName(profile.DisplayName); name != unknownName {
-		return name
-	}
-	return cleanName(profile.RealName)
-}
+func nameOf(profile Profile) string { return cleanName(profile.Name) }

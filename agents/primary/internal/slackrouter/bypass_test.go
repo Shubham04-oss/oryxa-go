@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	markedThread = consentpolicy.Bypass{Reason: consentpolicy.HighPriorityChannel, AnswerTo: consentpolicy.InThread}
-	outranksDM   = consentpolicy.Bypass{Reason: consentpolicy.AskerOutranks, AnswerTo: consentpolicy.InDM}
+	markedThread = consentpolicy.Bypass{Reason: consentpolicy.PriorityChannel, AnswerTo: consentpolicy.InThread}
+	outranksDM   = consentpolicy.Bypass{Reason: consentpolicy.OrgChart, AnswerTo: consentpolicy.InDM}
 )
 
 func markChannel(h *harness, info ChannelInfo) {
@@ -31,9 +31,10 @@ func TestAMarkedPrivateChannelBypassesConsent(t *testing.T) {
 	if len(h.authority.asked) != 0 {
 		t.Fatalf("the chart was read for an ask the channel already bypassed: %v", h.authority.asked)
 	}
-	ack := h.ack(job)
-	if got, want := wire(t, ack), `{"ask_id":"ask_1","owners":[{"name":"Raya","bypass":"high_priority_channel","answer_to":"thread"}]}`; got != want {
-		t.Fatalf("ack on the wire = %s, want %s", got, want)
+	// The asker is told who was asked, as for any ask: how it was decided is
+	// the owner's notice's to say, and the answer's to show.
+	if _, ack := h.ack(job); wire(t, ack) != `{"owners":[{"user_id":"URAYA"}]}` {
+		t.Fatalf("ack on the wire = %s", wire(t, ack))
 	}
 }
 
@@ -71,10 +72,10 @@ func TestTheMarkIsReadAgainOnEveryUse(t *testing.T) {
 // refused, not bypassed, whoever asks and however it is marked.
 func TestAChannelThatBecameSharedIsNeverABypass(t *testing.T) {
 	for name, info := range map[string]ChannelInfo{
-		"marked, private and shared":     {Private: true, HighPriority: true, Shared: true},
-		"marked, private and a group DM": {Private: true, HighPriority: true, GroupDM: true},
-		"unmarked, private and shared":   {Private: true, Shared: true},
-		"marked, not private and shared": {HighPriority: true, Shared: true},
+		"marked, private and shared":          {Private: true, HighPriority: true, Shared: true},
+		"marked, private and a group message": {Private: true, HighPriority: true, MPIM: true},
+		"unmarked, private and shared":        {Private: true, Shared: true},
+		"marked, not private and shared":      {HighPriority: true, Shared: true},
 	} {
 		for _, outranks := range []bool{false, true} {
 			h := newHarness(t)
@@ -126,8 +127,8 @@ func TestAnAskerWhoOutranksTheOwnerBypassesToTheirDM(t *testing.T) {
 	if len(h.authority.asked) != 1 || h.authority.asked[0] != "usr_ada>usr_raya" {
 		t.Fatalf("chart questions = %v", h.authority.asked)
 	}
-	if got, want := wire(t, h.ack(job)), `{"ask_id":"ask_1","owners":[{"name":"Raya","bypass":"outranks","answer_to":"dm"}]}`; got != want {
-		t.Fatalf("ack on the wire = %s, want %s", got, want)
+	if _, ack := h.ack(job); wire(t, ack) != `{"owners":[{"user_id":"URAYA"}]}` {
+		t.Fatalf("ack on the wire = %s", wire(t, ack))
 	}
 }
 
@@ -180,7 +181,7 @@ func TestTheChartIsReadOnlyWhereItCouldChangeTheAnswer(t *testing.T) {
 	t.Run("not for a person who is not in Oryxa", func(t *testing.T) {
 		h := newHarness(t)
 		h.member("URAYA", "Raya")
-		h.slack.profiles["UMAYA"] = Profile{UserID: "UMAYA", TeamID: testTeam, Email: "maya@acme.com", EmailConfirmed: true, DisplayName: "Maya"}
+		h.slack.profiles["UMAYA"] = Profile{UserID: "UMAYA", TeamID: testTeam, Email: "maya@acme.com", EmailConfirmed: true, Name: "Maya"}
 		h.mustRun(h.mention(toBot("ask <@UMAYA> or <@URAYA>")))
 		if len(h.authority.asked) != 1 || h.authority.asked[0] != "usr_ada>usr_raya" {
 			t.Fatalf("chart questions = %v, want Raya's alone", h.authority.asked)
@@ -217,8 +218,7 @@ func TestOneOwnerBypassedAndOneAskedForConsent(t *testing.T) {
 	if h.asks.createCalls != 1 {
 		t.Fatalf("%d asks for one ask", h.asks.createCalls)
 	}
-	ack := h.ack(job)
-	if ack.Owners[0].Bypass != consentpolicy.AskerOutranks || ack.Owners[1].Bypass != "" || ack.Owners[1].AnswerTo != "" {
+	if _, ack := h.ack(job); len(ack.Owners) != 2 || ack.Owners[0].UserID != "URAYA" || ack.Owners[1].UserID != "UMAYA" {
 		t.Fatalf("ack = %+v", ack)
 	}
 }

@@ -10,6 +10,8 @@ import (
 
 // resolved is what became of one Slack user.
 type resolved struct {
+	// SlackUserID is who this is, whether or not they are a member.
+	SlackUserID string
 	// Member says the user is a full member of the workspace and matches a
 	// member of the organization. Person is set only then.
 	Member bool
@@ -50,18 +52,18 @@ func (resolver *resolver) resolve(ctx context.Context, organizationID, teamID, s
 	profile, known := profiles[slackUserID]
 	if !known {
 		resolver.forget(ctx, teamID, slackUserID)
-		return resolved{Name: unknownName, Why: "Slack does not know that user"}, nil
+		return resolved{SlackUserID: slackUserID, Name: unknownName, Why: "Slack does not know that user"}, nil
 	}
 	name := nameOf(profile)
 	if why := notAFullMember(profile, teamID); why != "" {
 		resolver.forget(ctx, teamID, slackUserID)
-		return resolved{Name: name, Why: why, Bot: profile.Bot}, nil
+		return resolved{SlackUserID: slackUserID, Name: name, Why: why, Bot: profile.Bot}, nil
 	}
 	email := strings.ToLower(strings.TrimSpace(profile.Email))
 	member, err := resolver.members.ByEmail(ctx, organizationID, email)
 	if errors.Is(err, ErrNotMember) {
 		resolver.forget(ctx, teamID, slackUserID)
-		return resolved{Name: name, Why: "no member of the organization has that address"}, nil
+		return resolved{SlackUserID: slackUserID, Name: name, Why: "no member of the organization has that address"}, nil
 	}
 	if err != nil {
 		return resolved{}, fmt.Errorf("match a Slack user to a member: %w", err)
@@ -79,7 +81,7 @@ func (resolver *resolver) resolve(ctx context.Context, organizationID, teamID, s
 	}); err != nil {
 		return resolved{}, fmt.Errorf("keep a Slack user's match to a member: %w", err)
 	}
-	return resolved{Member: true, Person: person, Name: name}, nil
+	return resolved{SlackUserID: slackUserID, Member: true, Person: person, Name: name}, nil
 }
 
 // forget drops a match that no longer holds. It is housekeeping, and nothing

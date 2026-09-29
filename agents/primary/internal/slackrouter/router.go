@@ -42,8 +42,12 @@ type Deps struct {
 	// Asked records the ask a mention became. Without it, a retry of a mention
 	// whose ask was made but whose job did not finish is routed again from the
 	// start, and the ask it made counts against its asker.
-	Asked  Asked
-	Logger *slog.Logger
+	Asked Asked
+	// OpenURL is the page of Oryxa's web app that shows an ask, for the link in
+	// the asker's acknowledgement. Without it the acknowledgement has no link.
+	// It must be a page on an origin apps has been told is the web app's.
+	OpenURL func(askID string) string
+	Logger  *slog.Logger
 }
 
 // Router routes one job at a time. It is safe to use from many goroutines.

@@ -107,7 +107,7 @@ func TestDecideBypassesForAMarkedPrivateChannel(t *testing.T) {
 	decision := Decide(ask(func(f *Facts) {
 		f.Channel = Channel{Private: true, HighPriority: true}
 	}))
-	want := Decision{Outcome: Allow, Bypass: Bypass{Reason: HighPriorityChannel, AnswerTo: InThread}}
+	want := Decision{Outcome: Allow, Bypass: Bypass{Reason: PriorityChannel, AnswerTo: InThread}}
 	if decision != want {
 		t.Fatalf("decision = %+v, want %+v", decision, want)
 	}
@@ -147,7 +147,7 @@ func TestDecideBypassesForAskerWhoOutranks(t *testing.T) {
 		"a private channel nobody marked": {Private: true},
 	} {
 		decision := Decide(ask(func(f *Facts) { f.Outranks, f.Channel = true, channel }))
-		want := Decision{Outcome: Allow, Bypass: Bypass{Reason: AskerOutranks, AnswerTo: InDM}}
+		want := Decision{Outcome: Allow, Bypass: Bypass{Reason: OrgChart, AnswerTo: InDM}}
 		if decision != want {
 			t.Fatalf("%s: decision = %+v, want %+v", name, decision, want)
 		}
@@ -171,7 +171,7 @@ func TestTheChannelBypassWinsWhenBothApply(t *testing.T) {
 		f.Outranks = true
 		f.Channel = Channel{Private: true, HighPriority: true}
 	}))
-	want := Decision{Outcome: Allow, Bypass: Bypass{Reason: HighPriorityChannel, AnswerTo: InThread}}
+	want := Decision{Outcome: Allow, Bypass: Bypass{Reason: PriorityChannel, AnswerTo: InThread}}
 	if decision != want {
 		t.Fatalf("decision = %+v, want %+v", decision, want)
 	}
@@ -213,7 +213,7 @@ func TestReasonCodesAreTheContract(t *testing.T) {
 			t.Fatalf("reason %q, want %q", reason, want)
 		}
 	}
-	for reason, want := range map[BypassReason]string{HighPriorityChannel: "high_priority_channel", AskerOutranks: "outranks"} {
+	for reason, want := range map[BypassReason]string{PriorityChannel: "priority_channel", OrgChart: "org_chart"} {
 		if string(reason) != want {
 			t.Fatalf("bypass reason %q, want %q", reason, want)
 		}

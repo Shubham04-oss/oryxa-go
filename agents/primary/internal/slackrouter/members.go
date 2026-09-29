@@ -44,4 +44,17 @@ func (members *AuthMembers) ByEmail(ctx context.Context, organizationID, email s
 	return member, nil
 }
 
+// OrganizationName implements Members.
+func (members *AuthMembers) OrganizationName(ctx context.Context, organizationID string) (string, error) {
+	var name string
+	err := members.database.Pool.QueryRow(ctx, `SELECT name FROM auth_organizations WHERE id = $1`, organizationID).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrGone
+	}
+	if err != nil {
+		return "", fmt.Errorf("read an organization's name: %w", err)
+	}
+	return name, nil
+}
+
 var _ Members = (*AuthMembers)(nil)

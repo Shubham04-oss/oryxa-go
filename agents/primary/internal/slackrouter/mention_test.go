@@ -111,9 +111,9 @@ func TestNameOf(t *testing.T) {
 		profile Profile
 		want    string
 	}{
-		{Profile{DisplayName: "Raya", RealName: "Raya Rao"}, "Raya"},
-		{Profile{RealName: "Raya Rao"}, "Raya Rao"},
-		{Profile{DisplayName: "<>", RealName: "Raya Rao"}, "Raya Rao"},
+		{Profile{Name: "Raya"}, "Raya"},
+		{Profile{Name: "  Raya   Rao "}, "Raya Rao"},
+		{Profile{Name: "<>"}, unknownName},
 		{Profile{}, unknownName},
 	} {
 		if got := nameOf(test.profile); got != test.want {

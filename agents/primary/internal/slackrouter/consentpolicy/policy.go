@@ -52,16 +52,18 @@ const (
 )
 
 // BypassReason is why an ask went ahead without the owner's consent. It is
-// recorded with the decision (decided_by {bypass, reason}) and shown to the
-// owner, so each value says something a person can read back.
+// recorded with the decision (decided_by {bypass, reason}), shown to the owner
+// in the notice that tells them, and audited, so each value is a short code
+// that names the rule and no more. They are the codes the owner's notice is
+// rendered from.
 type BypassReason string
 
 const (
-	// HighPriorityChannel is a private, unshared channel an administrator
-	// marked high priority.
-	HighPriorityChannel BypassReason = "high_priority_channel"
-	// AskerOutranks is an asker above the owner in the organization chart.
-	AskerOutranks BypassReason = "outranks"
+	// PriorityChannel is a private, unshared channel an administrator marked
+	// high priority.
+	PriorityChannel BypassReason = "priority_channel"
+	// OrgChart is an asker above the owner in the organization chart.
+	OrgChart BypassReason = "org_chart"
 )
 
 // AnswerTo is where a bypassed ask's answer goes.
@@ -188,9 +190,9 @@ func Decide(facts Facts) Decision {
 	case !facts.OwnerMember:
 		return deny(OwnerNotMember)
 	case facts.Channel.bypasses():
-		return Decision{Outcome: Allow, Bypass: Bypass{Reason: HighPriorityChannel, AnswerTo: InThread}}
+		return Decision{Outcome: Allow, Bypass: Bypass{Reason: PriorityChannel, AnswerTo: InThread}}
 	case facts.Outranks:
-		return Decision{Outcome: Allow, Bypass: Bypass{Reason: AskerOutranks, AnswerTo: InDM}}
+		return Decision{Outcome: Allow, Bypass: Bypass{Reason: OrgChart, AnswerTo: InDM}}
 	}
 	return Decision{Outcome: NeedsConsent}
 }

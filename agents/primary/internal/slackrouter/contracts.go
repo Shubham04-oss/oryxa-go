@@ -17,10 +17,13 @@ import (
 // An adapter reports a failure one of three ways, and the router treats each
 // differently:
 //
-//   - ErrGone: what was asked for is not there any more. It is not retried.
+//   - ErrGone, ErrUnreadable: what was asked for is not there, or is a kind of
+//     thing Slack will not describe. Each has its own meaning below; neither
+//     is retried.
 //   - Permanent(err): the call was understood and refused, and the same call
-//     would be refused again: a forged ticket, a request already decided,
-//     a thread apps will not post into. It is not retried.
+//     would be refused again: a forged ticket, a request already decided, a
+//     thread apps will not post into, an install that has ended. It is not
+//     retried.
 //   - anything else: the call did not complete. It is retried with a delay,
 //     a few times. An error that has a RetryAfter() time.Duration method
 //     lengthens the delay, so a 429's Retry-After is honoured.
@@ -33,28 +36,32 @@ const (
 	KindAction = "action"
 )
 
-// Surface is what Consent is told a click came from.
+// SurfaceSlack is what Consent is told a click came from.
 const SurfaceSlack = "slack"
 
 // Slack template names, rendered only in apps. The router posts these two;
-// the notice, the settled notice, the answer, the status and the
-// private-answer notes are the surfaces service's.
+// the owner's notice, the settled notice, the answer, the status and the
+// private-answer and bypass notes are the surfaces service's.
 const (
 	TemplateRefusal = "refusal"
 	TemplateAskAck  = "ask_ack"
 )
 
-// ErrGone is what an adapter answers for a thing that no longer exists: an
-// inbound row apps purged, or a channel Slack does not know.
-var ErrGone = errors.New("slackrouter: that no longer exists")
-
-// ErrNotMember is what Members answers for an address no member of the
-// organization uses.
-var ErrNotMember = errors.New("slackrouter: no member of the organization has that address")
-
-// ErrNoIdentity is what SlackUserFor answers for a member the router has
-// never matched to a Slack user.
-var ErrNoIdentity = errors.New("slackrouter: that member is not matched to a Slack user")
+var (
+	// ErrGone is what an adapter answers for a thing that no longer exists: an
+	// inbound row apps purged, or a channel Slack does not know.
+	ErrGone = errors.New("slackrouter: that no longer exists")
+	// ErrUnreadable is what Slack answers for a channel it would not describe
+	// to the bot because the bot has no scope for that kind of conversation.
+	// For this app that is a group message, and it is refused as one.
+	ErrUnreadable = errors.New("slackrouter: Slack will not describe that conversation to the bot")
+	// ErrNotMember is what Members answers for an address no member of the
+	// organization uses.
+	ErrNotMember = errors.New("slackrouter: no member of the organization has that address")
+	// ErrNoIdentity is what SlackUserFor answers for a member the router has
+	// never matched to a Slack user.
+	ErrNoIdentity = errors.New("slackrouter: that member is not matched to a Slack user")
+)
 
 // Inbound is one verified Slack delivery, as apps kept it. apps has already
 // checked its signature and mapped its workspace to an organization; the
@@ -85,15 +92,17 @@ type Mention struct {
 	// UserID is the Slack user who wrote it. A message with no user, a bot's,
 	// is dropped.
 	UserID string
-	// Text is the message as Slack sent it, mentions written <@U123>.
+	// Text is the message as Slack sent it, mentions written <@U123>. The
+	// router reads the people mentioned from it, and nowhere else.
 	Text string
 	TS   string
-	// ThreadTS is the thread the message is in, empty for a message that
-	// starts a thread of its own.
+	// ThreadTS is the thread the message is in. apps sets it to the message's
+	// own ts for one that starts a thread; empty is taken to mean the same.
 	ThreadTS string
 	// BotUserID is the bot's own Slack user id in this workspace, which the
 	// message's text mentions to address it and which is therefore not a
-	// person being asked.
+	// person being asked. A delivery without it cannot be told apart from an
+	// ask of the bot, and is dropped.
 	BotUserID string
 	// SharedExternally is the delivery's own is_ext_shared_channel.
 	SharedExternally bool
@@ -116,12 +125,13 @@ type Profile struct {
 	UserID string
 	TeamID string
 	// Email is as Slack has it, in any case. EmailConfirmed is Slack's own
-	// word that the person controls it; an address not confirmed proves
-	// nothing about who they are.
+	// word (is_email_confirmed) that the person controls it; an address not
+	// confirmed proves nothing about who they are, and a profile that does not
+	// say is one that did not confirm it.
 	Email          string
 	EmailConfirmed bool
-	DisplayName    string
-	RealName       string
+	// Name is what Slack calls them: their display name, or else their name.
+	Name string
 	// Guest is a single- or multi-channel guest. Bot, Deleted and Stranger
 	// (a Slack Connect user from another workspace) are what they say.
 	Guest    bool
@@ -130,33 +140,40 @@ type Profile struct {
 	Stranger bool
 }
 
-// ChannelInfo is a Slack channel as apps reads it now, never from a cache.
+// ChannelInfo is a Slack conversation as apps reads it now, never from a
+// cache.
 type ChannelInfo struct {
 	ID string
-	// Private is a private channel, Shared one shared with another
-	// organization, GroupDM a group message.
+	// Private is a private channel, which a direct message and a group message
+	// are as well. Shared is one shared with another organization.
 	Private bool
 	Shared  bool
-	GroupDM bool
+	// MPIM is a group message and IM a direct message: conversations, not
+	// channels.
+	MPIM bool
+	IM   bool
 	// HighPriority is an administrator's mark, kept in Oryxa, and only ever
 	// set on a private, unshared channel.
 	HighPriority bool
 }
 
-// Target says where a Slack message goes.
+// Target says where a Slack message goes, in the three ways apps takes:
+//
+//   - ChannelID and ThreadTS: a reply in a thread everyone in the channel sees;
+//   - with UserID as well: a message in that thread only that person sees;
+//   - UserID alone: a direct message from the bot to that person.
 type Target struct {
-	ChannelID string
-	// ThreadTS puts it in a thread.
-	ThreadTS string
-	// UserID is a Slack user: with a ChannelID, the one person an ephemeral
-	// message is shown to.
-	UserID string
+	ChannelID string `json:"channel_id,omitempty"`
+	ThreadTS  string `json:"thread_ts,omitempty"`
+	UserID    string `json:"user_id,omitempty"`
 }
 
-// Post is one templated message for apps to render and send. What the
-// message says is decided in apps from the template and Params, and never
-// here: Params is the typed struct this package defines for the template,
-// which the adapter encodes as JSON.
+// Post is one templated message for apps to render and send. What the message
+// says is decided in apps from the template and Params, and never here:
+// Params is the typed struct this package defines for the template, and the
+// adapter encodes it as JSON as it is. apps decodes it strictly, so a field
+// the template does not take is refused, and the structs below are exactly
+// the fields the two templates take.
 type Post struct {
 	OrganizationID string
 	// IdempotencyKey makes a retry of the same message nothing: apps sends
@@ -167,55 +184,54 @@ type Post struct {
 	Params         any
 }
 
-// RefusalParams are the parameters of the refusal template, shown only to
-// the asker.
+// RefusalParams are the parameters of the refusal template, shown only to the
+// asker. apps writes the words, from the reason.
 type RefusalParams struct {
 	// Reason is one of consentpolicy's refusal codes.
 	Reason consentpolicy.Reason `json:"reason"`
-	// Hint is one line saying what to do about it.
-	Hint string `json:"hint"`
-	// Names are the people a refusal is about, for owner_not_member. They
-	// come from Slack and are cleaned of markup here; apps escapes them
-	// again.
-	Names []string `json:"names,omitempty"`
+	// OrganizationName is the organization's name, for not_member. Left out,
+	// the message says "this organization".
+	OrganizationName string `json:"organization_name,omitempty"`
+	// UserID is the Slack user the refusal is about, for owner_not_member.
+	// apps shows it as a mention, which readers see as their name.
+	UserID string `json:"user_id,omitempty"`
 }
 
 // AskAckParams are the parameters of the ask_ack template, shown only to the
-// asker.
+// asker: who was asked, and where to see it.
 type AskAckParams struct {
-	AskID string `json:"ask_id"`
-	// Owners are the people asked, in the order they were named.
-	Owners []AskedOwner `json:"owners"`
-	// Skipped are the people named who are not in Oryxa and so were not asked.
-	Skipped []string `json:"skipped,omitempty"`
+	// Owners are the people asked, in the order they were named, as Slack users.
+	Owners []AskedPerson `json:"owners"`
+	// OpenURL is the ask in Oryxa's web app, or nothing.
+	OpenURL string `json:"open_url,omitempty"`
 }
 
-// AskedOwner is one person asked and whether they were asked at all: an
-// owner the ask bypassed is told, not asked, and the asker is told the same.
-type AskedOwner struct {
-	Name string `json:"name"`
-	// Bypass is why no consent was needed, when none was.
-	Bypass consentpolicy.BypassReason `json:"bypass,omitempty"`
-	// AnswerTo is where the answer will come, for a bypass.
-	AnswerTo consentpolicy.AnswerTo `json:"answer_to,omitempty"`
+// AskedPerson is one person asked, by Slack user id.
+type AskedPerson struct {
+	UserID string `json:"user_id"`
 }
 
 // Slack is what the router needs of apps' internal Slack API. Every call is
-// made with a service token the adapter holds, for the purpose "slack".
+// made with a service token the adapter holds, for the purpose "slack". An
+// install that has ended answers each of them the same way, and the adapter
+// makes it Permanent: nothing retried will work until the workspace installs
+// the app again.
 type Slack interface {
 	// Inbound reads one verified inbound row by id
-	// (GET /v1/internal/apps/slack/inbound/{id}). ErrGone once it is
-	// purged.
+	// (GET /v1/internal/apps/slack/inbound/{id}). ErrGone once it is purged.
 	Inbound(ctx context.Context, id string) (Inbound, error)
 	// Profiles reads the profiles of some users of a workspace
 	// (POST /v1/internal/apps/slack/profiles). A user Slack does not know is
 	// left out of the answer.
 	Profiles(ctx context.Context, organizationID, teamID string, userIDs []string) ([]Profile, error)
-	// Channel reads a channel now (GET /v1/internal/apps/slack/channels/{id}).
-	// ErrGone when Slack does not know it.
+	// Channel reads a conversation now (GET /v1/internal/apps/slack/channels/{id}).
+	// ErrGone when Slack does not know it, and ErrUnreadable when Slack will
+	// not describe it to the bot.
 	Channel(ctx context.Context, organizationID, channelID string) (ChannelInfo, error)
 	// Post sends a message (POST /v1/internal/apps/slack/post). Sending the
-	// same IdempotencyKey again sends nothing more.
+	// same IdempotencyKey again sends nothing more. A post apps will never
+	// send, such as into a thread it has not seen, is Permanent; a rate limit
+	// is an error with RetryAfter.
 	Post(ctx context.Context, post Post) error
 }
 
@@ -233,6 +249,8 @@ type Members interface {
 	// email, compared without regard to case, or ErrNotMember. Someone who
 	// belongs to other organizations only is not a member of this one.
 	ByEmail(ctx context.Context, organizationID, email string) (Member, error)
+	// OrganizationName is the organization's name, for a refusal that names it.
+	OrganizationName(ctx context.Context, organizationID string) (string, error)
 }
 
 // Person is a member of the organization, and the Slack user they are.
@@ -241,7 +259,7 @@ type Person struct {
 	// Email is the member's sign-in address, lower-cased. It is what the
 	// organization chart is written in.
 	Email string
-	// Name is what to call them in a message: their Slack name, cleaned.
+	// Name is what to call them: their Slack name, cleaned.
 	Name        string
 	SlackUserID string
 }
@@ -263,9 +281,12 @@ type Origin struct {
 type AskOwner struct {
 	Person
 	// Bypass, when set, lets this owner's request go ahead without their
-	// consent, for the reason and to the destination it says. It is the
-	// consent core's to record as decided_by {bypass, reason} and the
-	// surfaces service's to tell the owner and audit; the router only says it.
+	// consent, for the reason it says. The reason is the code recorded with the
+	// decision (decided_by {bypass, reason}); AnswerTo says where the answer
+	// goes, which whoever posts it derives from the reason as well: the thread
+	// for priority_channel, the asker's direct message for org_chart. Telling
+	// the owner and auditing it are the consent core's and the surfaces
+	// service's; the router only says it.
 	Bypass *consentpolicy.Bypass
 }
 
@@ -277,7 +298,7 @@ type AskInput struct {
 	// Question is what the asker wrote, without the mention of the bot and
 	// with the other mentions written as names.
 	Question string
-	// Owners are the people asked, in the parallel: the first answer that is
+	// Owners are the people asked, in parallel: the first answer that is
 	// delivered wins and the rest are closed.
 	Owners []AskOwner
 }
@@ -299,7 +320,8 @@ type Asks interface {
 	// Consent hands a click to the decision, unchanged: the ticket the button
 	// carried, the member who clicked, and the surface. It decides nothing
 	// here; whether the ticket is genuine, whether the clicker is the person
-	// it names and whether the request is still waiting are its to check.
+	// it names and whether the request is still waiting are its to check. A
+	// click it refuses, for any of those, is Permanent.
 	Consent(ctx context.Context, ticket, clickerUserID, surface string) error
 }
 

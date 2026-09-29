@@ -519,6 +519,13 @@ func TestAuthMembers(t *testing.T) {
 	if member, err := members.ByEmail(ctx, otherOrgID, outsiderEmail); err != nil || member.UserID != outsiderID {
 		t.Fatalf("ByEmail in their own organization = %+v, %v", member, err)
 	}
+	// The organization's name, for a refusal that gives it.
+	if name, err := members.OrganizationName(ctx, orgID); err != nil || name != "Members Test" {
+		t.Fatalf("OrganizationName = %q, %v", name, err)
+	}
+	if _, err := members.OrganizationName(ctx, "org_nope_"+suffix); !errors.Is(err, ErrGone) {
+		t.Fatalf("err = %v, want ErrGone for an organization that does not exist", err)
+	}
 	for name, ask := range map[string]struct{ org, email string }{
 		"an unknown address":                        {orgID, "nobody@members-test.example"},
 		"an address that is a prefix of a member's": {orgID, strings.Split(strings.ToLower(email), "@")[0]},

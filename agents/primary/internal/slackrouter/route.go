@@ -91,11 +91,11 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	gate := facts
 	gate.OwnerMember = true
 	if decision := consentpolicy.Decide(gate); decision.Outcome == consentpolicy.Deny {
-		return router.refuse(ctx, job, mention, decision.Reason, len(named) > consentpolicy.MaxOwners, nil)
+		return router.refuseAsk(ctx, job, mention, decision.Reason)
 	}
 
 	var asked []AskOwner
-	var skipped []string
+	var skipped []resolved
 	for _, owner := range owners {
 		ownerFacts := facts
 		ownerFacts.OwnerMember = owner.Member
@@ -113,9 +113,9 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 		case decision.Outcome == consentpolicy.Deny && decision.Reason == consentpolicy.OwnerNotMember:
 			// One person left out does not refuse the rest. The asker is told
 			// who was not asked.
-			skipped = append(skipped, owner.Name)
+			skipped = append(skipped, owner)
 		case decision.Outcome == consentpolicy.Deny:
-			return router.refuse(ctx, job, mention, decision.Reason, false, nil)
+			return router.refuseAsk(ctx, job, mention, decision.Reason)
 		case decision.Outcome == consentpolicy.Allow:
 			bypass := decision.Bypass
 			asked = append(asked, AskOwner{Person: owner.Person, Bypass: &bypass})
@@ -124,7 +124,9 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 		}
 	}
 	if len(asked) == 0 {
-		return router.refuse(ctx, job, mention, consentpolicy.OwnerNotMember, false, skipped)
+		// Everyone named is left out, and telling the asker so is the whole
+		// outcome of the job.
+		return router.tellNotAsked(ctx, job, mention, skipped)
 	}
 
 	question := cleanQuestion(mention.Text, mention.BotUserID, namesOf(profiles))
@@ -148,24 +150,36 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	router.logger.InfoContext(ctx, "a mention became an ask",
 		"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "ask_id", ask.ID,
 		"owners", len(asked), "bypassed", countBypassed(asked), "skipped", len(skipped))
-	router.acknowledge(ctx, job, mention, ask, asked, skipped)
+	router.acknowledge(ctx, job, mention, ask, asked)
+	if len(skipped) > 0 {
+		// The ask is made and is the job's outcome: a person who could not be
+		// told who was left out has the ask all the same.
+		if err := router.tellNotAsked(ctx, job, mention, skipped); err != nil {
+			router.logger.WarnContext(ctx, "the asker was not told who was left out; the ask stands",
+				"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "ask_id", ask.ID, "error", err)
+		}
+	}
 	return nil
 }
 
-// channel reads the channel the ask was made in, now, and says what the
+// channel reads the conversation the ask was made in, now, and says what the
 // policy needs of it.
 func (router *Router) channel(ctx context.Context, job Job, mention *Mention) (consentpolicy.Channel, error) {
 	info, err := router.deps.Slack.Channel(ctx, job.OrganizationID, mention.ChannelID)
 	switch {
+	case errors.Is(err, ErrUnreadable):
+		// The bot has no scope for a group message, which is what Slack will
+		// not describe to it: it is refused as one.
+		return consentpolicy.Channel{GroupDM: true}, nil
 	case errors.Is(err, ErrGone):
-		// A channel Slack will not describe cannot be told from a shared one,
-		// and the answer would go into it.
-		return consentpolicy.Channel{}, Permanent(fmt.Errorf("the channel is not readable: %w", err))
+		// A channel Slack does not know cannot be told from a shared one, and
+		// the answer would go into it.
+		return consentpolicy.Channel{}, Permanent(fmt.Errorf("the channel is not known to Slack: %w", err))
 	case err != nil:
 		return consentpolicy.Channel{}, fmt.Errorf("read the channel: %w", err)
 	}
 	return consentpolicy.Channel{
-		GroupDM:      info.GroupDM || mention.ChannelType == "mpim",
+		GroupDM:      info.MPIM || info.IM || mention.ChannelType == "mpim" || mention.ChannelType == "im",
 		Shared:       info.Shared || mention.SharedExternally,
 		Private:      info.Private,
 		HighPriority: info.HighPriority,
@@ -195,35 +209,75 @@ func (router *Router) outranks(ctx context.Context, job Job, asker, owner Person
 	return false, nil
 }
 
-// refuse tells the asker, and only the asker, why not, and finishes the job.
-func (router *Router) refuse(ctx context.Context, job Job, mention *Mention, reason consentpolicy.Reason, tooManyPeople bool, names []string) error {
+// refuseAsk tells the asker why the ask as a whole is refused.
+func (router *Router) refuseAsk(ctx context.Context, job Job, mention *Mention, reason consentpolicy.Reason) error {
+	params := RefusalParams{Reason: reason}
+	if reason == consentpolicy.NotMember {
+		params.OrganizationName = router.organizationName(ctx, job.OrganizationID)
+	}
+	return router.refuse(ctx, job, mention, "", params)
+}
+
+// tellNotAsked tells the asker, once for each, who was named and is not in
+// Oryxa, and so was not asked.
+func (router *Router) tellNotAsked(ctx context.Context, job Job, mention *Mention, skipped []resolved) error {
+	var failures []error
+	for _, person := range skipped {
+		params := RefusalParams{Reason: consentpolicy.OwnerNotMember, UserID: person.SlackUserID}
+		if err := router.refuse(ctx, job, mention, person.SlackUserID, params); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// refuse tells the asker, and only the asker, why not. apps writes the words
+// from the reason. person tells one refusal about one person from another: an
+// ask is refused once, and each person left out is told of once.
+func (router *Router) refuse(ctx context.Context, job Job, mention *Mention, person string, params RefusalParams) error {
+	key := "slackrouter:" + job.InboundID + ":" + TemplateRefusal
+	if person != "" {
+		key += ":" + person
+	}
 	err := router.deps.Slack.Post(ctx, Post{
 		OrganizationID: job.OrganizationID,
-		IdempotencyKey: "slackrouter:" + job.InboundID + ":" + TemplateRefusal,
+		IdempotencyKey: key,
 		Target:         Target{ChannelID: mention.ChannelID, ThreadTS: threadOf(mention), UserID: mention.UserID},
 		Template:       TemplateRefusal,
-		Params:         RefusalParams{Reason: reason, Hint: refusalHint(reason, names, tooManyPeople), Names: names},
+		Params:         params,
 	})
 	if err != nil {
 		return fmt.Errorf("tell the asker why not: %w", err)
 	}
 	router.logger.InfoContext(ctx, "a mention was refused",
-		"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "reason", string(reason))
+		"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "reason", string(params.Reason))
 	return nil
+}
+
+// organizationName reads the name a refusal to a non-member gives their
+// organization. It is decoration: without it the message says "this
+// organization".
+func (router *Router) organizationName(ctx context.Context, organizationID string) string {
+	name, err := router.deps.Members.OrganizationName(ctx, organizationID)
+	if err != nil {
+		router.logger.WarnContext(ctx, "could not read the organization's name for a refusal",
+			"organization_id", organizationID, "error", err)
+		return ""
+	}
+	return name
 }
 
 // acknowledge tells the asker, and only the asker, who was asked. The ask is
 // already made and is the job's outcome, so a message that cannot be sent
 // leaves the ask standing: the owners are told by their own notice, and the
 // asker only misses this line.
-func (router *Router) acknowledge(ctx context.Context, job Job, mention *Mention, ask Ask, asked []AskOwner, skipped []string) {
-	params := AskAckParams{AskID: ask.ID, Owners: make([]AskedOwner, 0, len(asked)), Skipped: skipped}
+func (router *Router) acknowledge(ctx context.Context, job Job, mention *Mention, ask Ask, asked []AskOwner) {
+	params := AskAckParams{Owners: make([]AskedPerson, 0, len(asked))}
 	for _, owner := range asked {
-		entry := AskedOwner{Name: owner.Name}
-		if owner.Bypass != nil {
-			entry.Bypass, entry.AnswerTo = owner.Bypass.Reason, owner.Bypass.AnswerTo
-		}
-		params.Owners = append(params.Owners, entry)
+		params.Owners = append(params.Owners, AskedPerson{UserID: owner.SlackUserID})
+	}
+	if router.deps.OpenURL != nil {
+		params.OpenURL = router.deps.OpenURL(ask.ID)
 	}
 	err := router.deps.Slack.Post(ctx, Post{
 		OrganizationID: job.OrganizationID,
