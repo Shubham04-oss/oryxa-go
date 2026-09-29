@@ -16,6 +16,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 // TestEveryServiceSharesOneListener mounts every service this binary carries,
@@ -63,15 +64,17 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 		"REALTIME_PURGE_SECRET":     "5f2b8e1c9a7d4036b1e8c2f94a6d0e3b7c1f5a9d2e8b4c6f0a3d7e1b9c5f2a84",
 		"REALTIME_EVENTS_QUEUE_URL": "http://localhost:4566/000000000000/realtime-events",
 	}
-	// Mounting never queries the database; rag only asks it for pgvector.
+	// This route-registration test supplies a policy provider so it never
+	// queries the detached database; schema detection is tested by host.
 	database := postgreskit.Detached(map[string]string{"vector": "0.8.6", "ltree": "1.3", "pg_trgm": "1.6"})
 	platform := host.Platform{
-		Logger:       slog.New(slog.DiscardHandler),
-		Database:     database,
-		AWS:          aws.Config{Region: "ap-south-1", Credentials: aws.AnonymousCredentials{}},
-		EventBusName: "default",
-		EventAuth:    host.TestRegistry(),
-		Getenv:       host.Environment(func(name string) string { return environment[name] }, definitions, "http://127.0.0.1:1"),
+		WorkspacePolicy: policy.Noop{},
+		Logger:          slog.New(slog.DiscardHandler),
+		Database:        database,
+		AWS:             aws.Config{Region: "ap-south-1", Credentials: aws.AnonymousCredentials{}},
+		EventBusName:    "default",
+		EventAuth:       host.TestRegistry(),
+		Getenv:          host.Environment(func(name string) string { return environment[name] }, definitions, "http://127.0.0.1:1"),
 	}
 	handler, closeAll, err := host.Assemble(context.Background(), platform, definitions)
 	if err != nil {
