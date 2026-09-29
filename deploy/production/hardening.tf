@@ -122,8 +122,8 @@ resource "aws_cloudwatch_metric_alarm" "ses" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = each.value.threshold
   treat_missing_data  = "notBreaching"
-  alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
+  alarm_actions       = local.ses_alarm_actions
+  ok_actions          = local.ses_alarm_actions
 }
 
 # EventBridge gave up delivering an event to a target: a consumer's queue
@@ -168,8 +168,8 @@ resource "aws_cloudwatch_metric_alarm" "ses_feedback_forwarding_failed" {
   comparison_operator = "GreaterThanThreshold"
   threshold           = 0
   treat_missing_data  = "notBreaching"
-  alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
+  alarm_actions       = local.ses_alarm_actions
+  ok_actions          = local.ses_alarm_actions
 }
 
 # Bedrock embeds, reranks and answers for rag. A throttled call is refused,

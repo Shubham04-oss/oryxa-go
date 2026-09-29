@@ -117,8 +117,24 @@ resource "aws_sns_topic_subscription" "alarms_email" {
   endpoint  = var.alarm_email
 }
 
+# An alarm can only notify a topic in its own region, so the alarms on SES,
+# which sends from ses_region, have a topic of their own there, mailing the same
+# address. Its subscription is confirmed once, from the mail SNS sends.
+resource "aws_sns_topic" "alarms_ses" {
+  provider = aws.ses
+  name     = "${local.name}-alarms"
+}
+
+resource "aws_sns_topic_subscription" "alarms_ses_email" {
+  provider  = aws.ses
+  topic_arn = aws_sns_topic.alarms_ses.arn
+  protocol  = "email"
+  endpoint  = var.alarm_email
+}
+
 locals {
-  alarm_actions = [aws_sns_topic.alarms.arn]
+  alarm_actions     = [aws_sns_topic.alarms.arn]
+  ses_alarm_actions = [aws_sns_topic.alarms_ses.arn]
 }
 
 # The service itself.

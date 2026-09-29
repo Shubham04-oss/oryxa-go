@@ -540,8 +540,10 @@ old revision. Before it:
 The apply rolls the service once, because the collector's image is pinned to a
 release and its digest, in a new task definition. Once it is done:
 
-- Set one of the SES alarms to ALARM to see that the mail arrives. They are in
-  ap-south-1 and notify the topic in us-west-2:
+- Confirm the subscription mail from the SES alarms' own topic, and set one of
+  them to ALARM to see that the mail arrives. They are in ap-south-1, and an
+  alarm can only notify a topic in its own region, so they notify
+  `oryxa-production-alarms` there, which mails the same address:
 
   ```sh
   aws cloudwatch set-alarm-state --region ap-south-1 \
