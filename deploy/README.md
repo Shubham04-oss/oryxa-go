@@ -557,7 +557,13 @@ What `production` adds for it:
   and `oryxa-production/slack-ticket-key`, 64 hex characters, the HMAC key that
   signs the buttons on owners' notices, so that a forged click made with a leaked
   signing secret decides nothing.
-- Nothing else: no queue, no bucket, no Cloudflare rule. Apps seals the bot's
+- Nothing else: no queue, no bucket, no Cloudflare rule. The screen of what
+  people ask in Slack uses Jev, so it needs `TYPESAFE_API_KEY`, which
+  production has already for the knowledge judge (`knowledge_judge: jev`):
+  without one every mention is refused as `screen_failed`, and nobody is asked.
+  Agents also needs its consent guardrail (`answer_guard.tf`), applied before
+  the release that names it: without permission on it, every answer to a Slack
+  question is held as unchecked. Apps seals the bot's
   token with the key it already has for "Oryxa's own sign-in"
   (`APPS_SIGNIN_KMS_KEY_ID`), and the rule that blocks `/v1/internal` at the
   edge stays, because agents calls apps' internal routes from inside the task
@@ -571,9 +577,11 @@ task does nothing new. Run it from a checkout that has main's
 `release.auto.tfvars.json` (main's head, or this branch after main is merged
 into it), which names the release that is running: an older copy would roll the
 service back to an older image. Read the plan first. It should show the key, its
-alias, the two containers, the task role's and the execution role's policies and
-a new task definition, and nothing else, and the definition's image should not
-change. The execution role's is the one that lets ECS read a secret the
+alias, the two containers, the consent guardrail and its version
+(`answer_guard.tf`, which the task role's policy and the task definition now
+name, so a target on either takes it), the task role's and the execution role's
+policies and a new task definition, and nothing else, and the definition's image
+should not change. The execution role's is the one that lets ECS read a secret the
 definition names as a task starts, and the task definition does not depend on it,
 so the targets name it: without it the switch below makes a task that names two
 secrets it may not read, which fails to start and is rolled back.
@@ -634,10 +642,23 @@ commands:
 4. **Provision the events.** `deploy/scripts/provision-app.sh` makes each
    service's EventBridge rules from what it subscribes to, so run it after the
    release that adds subscriptions: agents' queue starts receiving apps'
-   `apps.slack.message.received.v1` and `apps.slack.action.received.v1`, and
-   realtime's queue starts receiving agents' `agents.interaction.*` request
-   events. Without it those events are not delivered, and nothing fails to
-   start.
+   `apps.slack.message.received.v1`, `apps.slack.action.received.v1` and
+   `apps.slack.install.changed.v1` (a workspace's install ending, which has
+   agents forget it), and realtime's queue starts receiving agents'
+   `agents.interaction.*` request events. Without it those events are not
+   delivered, and nothing fails to start.
+
+   **Run it only once the release has finished rolling out, never before.** A
+   rule is matched by exact detail type, so widening it is what starts
+   delivering them, at once; a task that does not know a type fails it ("no
+   handler"), and after five receives the queue moves it to the dead-letter
+   queue, whose alarm mails. Agents' consumer knows the three from this release
+   on, and with `AGENTS_PRIMARY_SLACK_CONSENT` off it acknowledges and drops
+   them, so widening the rule while the switch is off is harmless, though it
+   feeds the queue for nothing. The order is therefore: the Worker (realtime
+   needs the web app's release), the release, then this. Confirm the running
+   task's image is the new one (`aws ecs describe-services`, one deployment,
+   `PRIMARY`) before running it.
 5. **Verify both request URLs in Slack's settings.** Slack does not check them
    when it creates an app from a manifest.
    - Event Subscriptions: the Request URL,

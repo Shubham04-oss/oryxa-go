@@ -57,6 +57,15 @@ type Deps struct {
 	// out for theirs, and no grant is asked for. NewAskerDirectory is the
 	// production one.
 	Directory Directory
+	// Redact takes what must never travel out of the words of an ask: they are
+	// sent to the screen, whose model is another company's, and then to the
+	// owner's agent as its task, which is kept in the ledger. An asker who
+	// pastes a key into their question has sent it to Slack already, and that
+	// is where it stops. Without one the words go as they are. It is applied
+	// once, right after the words are cleaned and before anything reads them,
+	// and it must return text the screen can still judge: masking a credential
+	// with a name for its kind does.
+	Redact func(text string) string
 	// Authority answers whether an asker outranks an owner. Without one, nobody
 	// does, and no ask bypasses on authority.
 	Authority Authority

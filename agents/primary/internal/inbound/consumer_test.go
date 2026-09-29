@@ -165,9 +165,10 @@ func TestSubscriptionsCoverEveryHandledEvent(t *testing.T) {
 		t.Fatalf("batching subscriptions = %v", subscriptions[batchingv1.Source])
 	}
 	// Batching decides when triggers wake Krude; hearing them straight from
-	// apps as well would wake Krude for each on its own.
-	if _, ok := subscriptions[appsv1.Source]; ok {
-		t.Fatalf("agents still subscribes to apps' triggers: %v", subscriptions[appsv1.Source])
+	// apps as well would wake Krude for each on its own. What agents hears from
+	// apps is the Slack surface's three events, and nothing else.
+	if strings.Join(subscriptions[appsv1.Source], ",") != appsv1.SlackMessageReceivedDetailType+","+appsv1.SlackActionReceivedDetailType+","+appsv1.SlackInstallChangedDetailType {
+		t.Fatalf("apps subscriptions = %v, want the Slack surface's message, click and install events and no trigger", subscriptions[appsv1.Source])
 	}
 	if strings.Join(subscriptions[authv1.Source], ",") != authv1.MemberRemovedDetailType+","+authv1.OrganizationDeletedDetailType {
 		t.Fatalf("auth subscriptions = %v", subscriptions[authv1.Source])

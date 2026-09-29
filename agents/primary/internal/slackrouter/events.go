@@ -10,28 +10,17 @@ import (
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 )
 
-// The bus events apps publishes when it has kept a verified Slack delivery.
-// They carry ids and nothing else: the delivery itself, what a member wrote
-// or clicked, is read back from apps when the job runs.
+// The bus events apps publishes when it has kept a verified Slack delivery,
+// which are apps' contract (contracts/events/apps/v1) and named here only so
+// that this package's callers do not import it for two strings. They carry ids
+// and nothing else: the delivery itself, what a member wrote or clicked, is read
+// back from apps when the job runs.
 const (
 	// MessageReceivedDetailType is a message that mentioned the bot.
-	MessageReceivedDetailType = "apps.slack.message.received.v1"
+	MessageReceivedDetailType = appsv1.SlackMessageReceivedDetailType
 	// ActionReceivedDetailType is a click on one of the bot's buttons.
-	ActionReceivedDetailType = "apps.slack.action.received.v1"
+	ActionReceivedDetailType = appsv1.SlackActionReceivedDetailType
 )
-
-// inboundReceived is the detail of both events.
-//
-// It is this package's own copy of the type apps' contract will hold, made
-// because contracts/events/apps/v1 does not have the Slack events yet. When it
-// does, delete this type and the two constants above and use theirs: the
-// fields and their names are the ones the contract pins.
-type inboundReceived struct {
-	InboundID      string    `json:"inbound_id"`
-	OrganizationID string    `json:"organization_id"`
-	TeamID         string    `json:"team_id"`
-	ReceivedAt     time.Time `json:"received_at"`
-}
 
 // Subscriptions are the detail types the router consumes, by source, for the
 // host that provisions the rule feeding agents' queue.
@@ -55,8 +44,16 @@ func jobFromEvent(detailType, eventID string, data []byte, now time.Time) (Job, 
 	default:
 		return Job{}, fmt.Errorf("event %s: %s is not a Slack inbound event", eventID, detailType)
 	}
-	var received inboundReceived
-	if err := json.Unmarshal(data, &received); err != nil {
+	// A message and a click have the one shape, and apps' contract gives each
+	// its own type; a change to either that the other does not follow shows here.
+	var received appsv1.SlackMessageReceived
+	if kind == KindAction {
+		var action appsv1.SlackActionReceived
+		if err := json.Unmarshal(data, &action); err != nil {
+			return Job{}, fmt.Errorf("event %s: decode Slack inbound event: %w", eventID, err)
+		}
+		received = appsv1.SlackMessageReceived(action)
+	} else if err := json.Unmarshal(data, &received); err != nil {
 		return Job{}, fmt.Errorf("event %s: decode Slack inbound event: %w", eventID, err)
 	}
 	if strings.TrimSpace(received.InboundID) == "" || strings.TrimSpace(received.OrganizationID) == "" || strings.TrimSpace(received.TeamID) == "" {

@@ -40,7 +40,10 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/secretshares"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/slackrouter"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/surfaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
@@ -120,6 +123,24 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	}
 	if err := guardpolicy.New(platform.Database, nil, guardpolicy.Cap{}).Migrate(ctx); err != nil {
 		return fmt.Errorf("migrate guard policy: %w", err)
+	}
+	// The Slack consent loop's tables exist whether or not the loop is on, so
+	// that switching it on is a setting and never a migration, and so that what
+	// it holds is forgotten with a member in a deployment that turned it off.
+	// The secret store needs a sealer to be built at all; with no key, this
+	// one only migrates.
+	if err := slackrouter.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate the Slack router: %w", err)
+	}
+	if err := surfaces.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate the Slack surfaces: %w", err)
+	}
+	shares, err := secretshares.New(platform.Database, unavailableSealer{}, nil)
+	if err != nil {
+		return err
+	}
+	if err := shares.Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate one-time secrets: %w", err)
 	}
 	scoped, err := platform.Database.WithSchema(ctx, schema, "oryxa-migrate-agents", 2)
 	if err != nil {
@@ -224,6 +245,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	// needs. Without a TypeSafe key there is none.
 	typeSafe := jevClient(settings, logger)
 	var interactionService *agentinteractions.Service
+	// primaries finds the primary agents an ask is filed between. The registry
+	// they are found through is built after the ledger, which Krude needs, so it
+	// is bound to this once it exists.
+	primaries := &primaryAgents{}
 	var teamspaceService *teamspaces.Service
 	// answerGuard reads what one member's agent tells another before they
 	// read it: answers to requests, what agents say in rooms, what they
@@ -233,7 +258,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	//
 	// Every answer another member reads is checked first when a guardrail is
 	// named. The SDK honours AWS_ENDPOINT_URL_BEDROCK_RUNTIME, which points
-	// development at a stand-in.
+	// development at a stand-in. The consent guard, which reads answers to
+	// questions asked in Slack, asks the same client, with its own guardrail.
+	bedrock := bedrockruntime.NewFromConfig(platform.AWS)
 	var answerGuard *answerguard.Guard
 	if settings.AnswerGuardrailIdentifier != "" {
 		guardOptions, err := relevanceOptions(ctx, settings, platform, logger)
@@ -241,7 +268,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			sessionStore.Close()
 			return host.Service{}, err
 		}
-		guard, err := answerguard.New(bedrockruntime.NewFromConfig(platform.AWS), answerguard.Config{
+		guard, err := answerguard.New(bedrock, answerguard.Config{
 			Identifier: settings.AnswerGuardrailIdentifier, Version: settings.AnswerGuardrailVersion, Logger: logger,
 		}, guardOptions...)
 		if err != nil {
@@ -282,11 +309,45 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		if answerGuard != nil {
 			interactionConfig.Guard = answerGuard
 		}
+		// How strictly the guard reads an answer, and what its relevance check
+		// does with what it finds, follow what the member who gives it chose,
+		// the organization's minimum and this deployment's ceiling: the same
+		// settings the check route reads with.
+		interactionConfig.GuardPolicy = guardSettings
+		if settings.SlackConsent {
+			// The tickets on an owner's buttons, the primary agents an ask is
+			// filed between, and the guard that reads what is answered before the
+			// asker reads it in Slack. Without them the ledger refuses asks and
+			// clicks (ErrConsentUnavailable).
+			consent, err := newConsentGuard(settings, bedrock, logger)
+			if err != nil {
+				sessionStore.Close()
+				return host.Service{}, err
+			}
+			interactionConfig.Agents = primaries
+			interactionConfig.TicketKey = settings.SlackTicketKey
+			interactionConfig.ConsentGuard = consent
+		}
 		interactionService, err = agentinteractions.New(interactionConfig)
 		if err != nil {
 			sessionStore.Close()
 			return host.Service{}, err
 		}
+	}
+	if settings.SlackConsent && interactionService == nil {
+		sessionStore.Close()
+		return host.Service{}, errors.New("AGENTS_PRIMARY_SLACK_CONSENT is on, and TEAMS_URL is not set: a request is between two members, and agents finds them through Teams")
+	}
+	// One-time secrets are kept sealed, for the hour they are shared, in a store
+	// of their own. Without a KMS key it still runs, for the forgetting and the
+	// sweeping, and shares nothing.
+	secretShares, secretsSealed, err := newSecretShares(settings, platform, logger)
+	if err != nil {
+		sessionStore.Close()
+		return host.Service{}, err
+	}
+	if settings.SecretsKMSKeyID == "" && settings.SlackConsent {
+		logger.Warn("AGENTS_PRIMARY_SECRETS_KMS_KEY_ID is not set: an owner cannot share a credential with a member who asked for one in Slack, whose answer is a one-time view in Oryxa")
 	}
 	agentSystemBinding := agents.NewAgentSystemBinding()
 	assemblyOptions := assembly.Options{
@@ -387,6 +448,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		closeAll()
 		return host.Service{}, err
 	}
+	primaries.bind(agentRegistry)
 	teamStore := agentteams.NewStore(platform.Database)
 	teamService, err := agentteams.New(teamStore)
 	if err != nil {
@@ -524,6 +586,23 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		return host.Service{}, err
 	}
 
+	// The Slack consent loop, when it is on: the router that turns a mention
+	// into an ask, and the worker that says in Slack what became of it.
+	var slack *slackLoop
+	if settings.SlackConsent {
+		slack, err = newSlackLoop(slackLoopConfig{
+			Settings: settings, Platform: platform, Logger: logger,
+			Interactions: interactionService, InteractionStore: interactionStore, Threads: service, Sessions: sessionStore,
+			Directory: organizationDirectory, Context: organizationContext, Tokens: memberTokens, Jev: typeSafe,
+		})
+		if err != nil {
+			closeAll()
+			return host.Service{}, fmt.Errorf("the Slack consent loop: %w", err)
+		}
+		logger.Info("the Slack consent loop is on: a member's mention of the bot asks the people it names, in Slack",
+			"apps", settings.AppsURL, "consent_guardrail", settings.ConsentGuardrailIdentifier != "", "secret_store", secretsSealed)
+	}
+
 	httpConfig := httpserver.Config{
 		AllowedOrigins:      settings.AllowedOrigins,
 		RunTimeout:          settings.RunTimeout,
@@ -554,6 +633,12 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if answerGuard != nil {
 		httpConfig.AnswerGuard = answerGuard
 	}
+	// The three routes that share, open and revoke a one-time secret answer
+	// 503 without a store that can seal one: set only when there is one, since
+	// a nil *Store in the interface would not read as none.
+	if secretsSealed {
+		httpConfig.SecretShares = secretShares
+	}
 	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpConfig, logger)
 
 	table, err := outbox.NewTable(platform.Database.Pool, schema+".agents_outbox")
@@ -583,7 +668,12 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		})
 	}), logger)
 
-	workers := []host.Worker{dispatcher.Run}
+	// The secret store sweeps what expired, whatever the deployment set: a
+	// secret is never kept past its hour.
+	workers := []host.Worker{dispatcher.Run, secretShares.Run}
+	if slack != nil {
+		workers = append(workers, slack.router.Run, slack.surfaces.Run)
+	}
 	if awsWorkflowConfigured && !settings.WorkflowLocal {
 		queue := sqs.NewFromConfig(platform.AWS, func(options *sqs.Options) {
 			if settings.SQSEndpoint != "" {
@@ -624,17 +714,29 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		// they run apart from the list above: Memory Bank being down cannot
 		// hold up the rest, nor the rest failing keep a member's memory from
 		// being forgotten.
-		consumer.WithIndependentForgetters(
+		independent := []inbound.Forgetter{
 			func(ctx context.Context, organizationID, memberID string) error {
 				_, err := service.Forget(ctx, organizationID, memberID)
 				return err
 			},
 			store.Forget,
 			guardSettings.Forget,
-		).
+			// A member's one-time secrets, whoever shared or was to open them: an
+			// empty member means the whole organization.
+			secretShares.Forget,
+		}
+		consumer.
 			WithTeamForgetter(teamspaceStore.ForgetTeam).
 			WithTeamMemberForgetter(teamspaceStore.ForgetTeamMember).
 			WithOrganizationSynthesisRecorder(organizationStore)
+		if slack != nil {
+			// The router and the surfaces are handed their events, and forget what
+			// they hold for a member, or for a workspace whose install ended. Each
+			// is independent of the others.
+			independent = append(independent, slack.memberForgetters...)
+			consumer.WithSlackRouter(slack.router).WithSurfaces(slack.surfaces).WithWorkspaceForgetters(slack.workspaceForgetters...)
+		}
+		consumer.WithIndependentForgetters(independent...)
 		queue := sqs.NewFromConfig(platform.AWS, func(options *sqs.Options) {
 			if settings.SQSEndpoint != "" {
 				options.BaseEndpoint = aws.String(settings.SQSEndpoint)
@@ -679,6 +781,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			"organization_synthesis_interval", organizationSynthesisInterval.String())
 	} else {
 		logger.Warn("AGENTS_EVENTS_QUEUE_URL is not set: app events, interaction requests, and shared publications will not wake agents, and a member's threads outlive their place in an organization")
+		if slack != nil {
+			logger.Warn("AGENTS_EVENTS_QUEUE_URL is not set: nothing tells the Slack consent loop what happened in Slack or in the ledger, so it asks nobody and says nothing")
+		}
 		// The interaction waker withholds answers left in review past their
 		// request's expiry; without it, this does.
 		if interactionService != nil {

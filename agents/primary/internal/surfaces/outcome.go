@@ -36,7 +36,11 @@ const (
 
 	statusHeld   = "held"
 	statusDenied = "denied"
-	statusClosed = "expired"
+	// statusExpired is a request that ran out of time, and statusFailed one that
+	// ended for a reason of its own: the work could not be done, or Oryxa closed
+	// it. Neither says more.
+	statusExpired = "expired"
+	statusFailed  = "failed"
 )
 
 // noAnswerText is what an answer that has no words says, which is the fact.
@@ -112,9 +116,23 @@ func (p *pass) outcome(ctx context.Context) error {
 	case outcomeDenied:
 		return p.tellAskerAlone(ctx, roleDenied, statusDenied)
 	case outcomeClosed:
-		return p.tellAskerAlone(ctx, roleClosed, statusClosed)
+		return p.tellAskerAlone(ctx, roleClosed, p.closedStatus())
 	}
 	return nil
+}
+
+// closedStatus is how a request that ended without an answer is said to have
+// ended. One still waiting, or with its answer waiting for review, that has run
+// out of time, or an answer withheld because its time ran out in review, is
+// expired. Every other ending is a failure, and is said to be: the work could
+// not be done, or Oryxa closed the request, and to say the time ran out of one
+// that failed is to say what did not happen.
+func (p *pass) closedStatus() string {
+	switch p.request.Status {
+	case interactions.StatusPending, interactions.StatusApproved, interactions.StatusReview, interactions.StatusWithheld:
+		return statusExpired
+	}
+	return statusFailed
 }
 
 // where is a place a message to the asker goes.

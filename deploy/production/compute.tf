@@ -185,6 +185,11 @@ locals {
       EMAIL_SUPPRESSIONS_TABLE = local.email_suppressions_table
     },
     { for service, url in local.queue_urls : (service == "email" ? "EMAIL_QUEUE_URL" : "${upper(service)}_EVENTS_QUEUE_URL") => url },
+    # The guardrail that grounds every answer to a question asked in Slack
+    # (answer_guard.tf). Both variables come together or the service refuses to
+    # start, and this is the one place that names either. They are set whatever
+    # the Slack switch says: nothing reads them while it is off.
+    local.consent_guardrail_environment,
     # Realtime has the web app's Worker purge a member's direct messages and
     # side conversations, at the app's origin; with REALTIME_PURGE_SECRET
     # (secrets.tf), only once realtime_purge turns it on.
@@ -326,11 +331,14 @@ resource "aws_iam_role_policy" "task" {
         Resource = ["arn:aws:bedrock:${var.aws_region}::foundation-model/*"]
       },
       {
-        # The answer guard reads answers with its own guardrail, and no other.
+        # The answer guard reads answers with its own guardrail, and the consent
+        # guard, which reads answers to questions asked in Slack, with its own:
+        # each these two and no other. Without the second, every such answer is
+        # held for its owner as unchecked.
         Sid      = "AnswerGuard"
         Effect   = "Allow"
         Action   = "bedrock:ApplyGuardrail"
-        Resource = aws_bedrock_guardrail.agent_answers.guardrail_arn
+        Resource = [aws_bedrock_guardrail.agent_answers.guardrail_arn, local.consent_guardrail_arn]
       },
       {
         # Krude's sandbox and browser are AWS's built-in AgentCore tools.

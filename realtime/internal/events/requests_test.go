@@ -96,7 +96,6 @@ func TestConsumerNotesEachMoveOfARequest(t *testing.T) {
 // whatever else the event carries never leaves realtime.
 func TestANoteCarriesIdentitiesAndAStateAlone(t *testing.T) {
 	changed := aRequest("approved", 2)
-	changed.TeamspaceID = "tsp_1"
 	changed.Approval = agentseventsv1.InteractionApprovalOwner
 	changed.AskID = "ask_1"
 	changed.Origin = agentseventsv1.InteractionOriginSlack
@@ -130,7 +129,7 @@ func TestANoteCarriesIdentitiesAndAStateAlone(t *testing.T) {
 	if !slices.Equal(names, want) {
 		t.Fatalf("a note's keys = %v, want %v", names, want)
 	}
-	for _, unwanted := range []string{"agent-a", "agent-b", "tsp_1", "ask_1", "access", "a reason", "member", "\"owner\""} {
+	for _, unwanted := range []string{"agent-a", "agent-b", "ask_1", "access", "a reason", "member", "\"owner\""} {
 		if strings.Contains(string(body), unwanted) {
 			t.Errorf("a note carries %q: %s", unwanted, body)
 		}
@@ -144,13 +143,16 @@ func TestANoteCarriesIdentitiesAndAStateAlone(t *testing.T) {
 func TestConsumerNotesNothingWhereThereIsNothingToNote(t *testing.T) {
 	for name, edit := range map[string]func(*agentseventsv1.InteractionChanged){
 		"a request between one member's own agents": func(changed *agentseventsv1.InteractionChanged) { changed.TargetUserID = changed.RequesterUserID },
-		"a status no note says":                     func(changed *agentseventsv1.InteractionChanged) { changed.Status = "expired" },
-		"a status this build has not heard of":      func(changed *agentseventsv1.InteractionChanged) { changed.Status = "paused" },
-		"an origin no note can carry":               func(changed *agentseventsv1.InteractionChanged) { changed.Origin = "Web App" },
-		"an asker a name cannot hold":               func(changed *agentseventsv1.InteractionChanged) { changed.RequesterUserID = "user~a" },
-		"an owner a name cannot hold":               func(changed *agentseventsv1.InteractionChanged) { changed.TargetUserID = "user b" },
-		"an organization a name cannot hold":        func(changed *agentseventsv1.InteractionChanged) { changed.OrganizationID = "org.1" },
-		"a request id a name cannot hold":           func(changed *agentseventsv1.InteractionChanged) { changed.RequestID = strings.Repeat("r", 129) },
+		"a request made in a teamspace, where a side conversation shows it": func(changed *agentseventsv1.InteractionChanged) {
+			changed.TeamspaceID = "tsp_1"
+		},
+		"a status no note says":                func(changed *agentseventsv1.InteractionChanged) { changed.Status = "expired" },
+		"a status this build has not heard of": func(changed *agentseventsv1.InteractionChanged) { changed.Status = "paused" },
+		"an origin no note can carry":          func(changed *agentseventsv1.InteractionChanged) { changed.Origin = "Web App" },
+		"an asker a name cannot hold":          func(changed *agentseventsv1.InteractionChanged) { changed.RequesterUserID = "user~a" },
+		"an owner a name cannot hold":          func(changed *agentseventsv1.InteractionChanged) { changed.TargetUserID = "user b" },
+		"an organization a name cannot hold":   func(changed *agentseventsv1.InteractionChanged) { changed.OrganizationID = "org.1" },
+		"a request id a name cannot hold":      func(changed *agentseventsv1.InteractionChanged) { changed.RequestID = strings.Repeat("r", 129) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			changed := aRequest("pending", 1)

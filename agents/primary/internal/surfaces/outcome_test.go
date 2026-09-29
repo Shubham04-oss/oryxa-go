@@ -171,31 +171,48 @@ func TestAnOwnerWhoDeclinesIsToldToTheAskerAlone(t *testing.T) {
 	}
 }
 
+// A request that ended without an answer says how: it ran out of time (expired),
+// or it could not be done or Oryxa closed it (failed). It never says the time ran
+// out of one that failed.
 func TestARequestThatEndedWithoutAnAnswerIsToldToTheAskerAlone(t *testing.T) {
-	for name, edit := range map[string]func(agents.Interaction) agents.Interaction{
-		"the owner's agent failed": func(r agents.Interaction) agents.Interaction {
+	for name, test := range map[string]struct {
+		edit  func(agents.Interaction) agents.Interaction
+		state string
+	}{
+		"the owner's agent failed": {func(r agents.Interaction) agents.Interaction {
 			r = memberDecided(r, interactions.DecisionApproved, interactions.ConsentSummary, interactions.SurfaceSlack)
 			r.Status = interactions.StatusFailed
 			r.Result = &agents.InteractionResult{Status: interactions.StatusFailed, Summary: "could not find it"}
 			return r
-		},
-		"Oryxa closed it": func(r agents.Interaction) agents.Interaction {
+		}, "failed"},
+		"the owner's agent failed, after its time was up": {func(r agents.Interaction) agents.Interaction {
+			r = memberDecided(r, interactions.DecisionApproved, interactions.ConsentSummary, interactions.SurfaceSlack)
+			r.Status = interactions.StatusFailed
+			r.Result = &agents.InteractionResult{Status: interactions.StatusFailed, Summary: "could not find it"}
+			r.ExpiresAt = testNow.Add(-time.Hour)
+			return r
+		}, "failed"},
+		"Oryxa closed it": {func(r agents.Interaction) agents.Interaction {
 			return decidedBy(r, interactions.DecisionRejected, agents.InteractionDecider{Kind: interactions.DecidedBySystem}, "")
-		},
-		"approved and never answered": func(r agents.Interaction) agents.Interaction {
+		}, "failed"},
+		"approved and never answered": {func(r agents.Interaction) agents.Interaction {
 			r = memberDecided(r, interactions.DecisionApproved, interactions.ConsentSummary, interactions.SurfaceSlack)
 			r.ExpiresAt = testNow.Add(-time.Hour)
 			return r
-		},
-		"completed with a failed result": func(r agents.Interaction) agents.Interaction {
+		}, "expired"},
+		"never decided": {func(r agents.Interaction) agents.Interaction {
+			r.ExpiresAt = testNow.Add(-time.Hour)
+			return r
+		}, "expired"},
+		"completed with a failed result": {func(r agents.Interaction) agents.Interaction {
 			r = completedWith(memberDecided(r, interactions.DecisionApproved, interactions.ConsentSummary, interactions.SurfaceSlack), "x")
 			r.Result.Status = interactions.StatusFailed
 			return r
-		},
+		}, "failed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t)
-			h.ledger.put(edit(pendingRequest()))
+			h.ledger.put(test.edit(pendingRequest()))
 			h.mustPass("irq_1")
 			var statuses []*message
 			for _, made := range h.api.sent() {
@@ -206,8 +223,8 @@ func TestARequestThatEndedWithoutAnAnswerIsToldToTheAskerAlone(t *testing.T) {
 					statuses = append(statuses, made)
 				}
 			}
-			if len(statuses) != 1 || statuses[0].param("state") != "expired" || statuses[0].Target.UserID != slackAsker {
-				t.Fatalf("statuses = %+v, want the asker told alone that it ended unanswered", statuses)
+			if len(statuses) != 1 || statuses[0].param("state") != test.state || statuses[0].Target.UserID != slackAsker {
+				t.Fatalf("statuses = %+v, want the asker told alone that it ended unanswered, as %s", statuses, test.state)
 			}
 			if got := h.notes.texts(); len(got) != 2 || !strings.HasSuffix(got[1], "· no answer") {
 				t.Fatalf("notes = %v", got)

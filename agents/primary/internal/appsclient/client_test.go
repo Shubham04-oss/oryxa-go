@@ -258,6 +258,9 @@ func TestProfilesAreAskedForInBatchesAppsTakesAndMissingOnesAreLeftOut(t *testin
 				"user_id": id, "team_id": "T1", "email": strings.ToLower(id) + "@acme.test", "email_confirmed": id != "U3",
 				"name": "Name " + id, "is_guest": id == "U4", "is_bot": id == "U5", "is_deleted": id == "U6", "is_stranger": id == "U7",
 			})
+			if id == "U1" {
+				profiles[len(profiles)-1]["title"] = "Staff engineer"
+			}
 		}
 		ok(w, map[string]any{"profiles": profiles, "missing": []string{"UGONE"}})
 	})
@@ -277,6 +280,11 @@ func TestProfilesAreAskedForInBatchesAppsTakesAndMissingOnesAreLeftOut(t *testin
 	}
 	if p := byID["U1"]; p.Email != "u1@acme.test" || !p.EmailConfirmed || p.Name != "Name U1" || p.TeamID != "T1" || p.Guest || p.Bot || p.Deleted || p.Stranger {
 		t.Fatalf("U1 = %+v", p)
+	}
+	// The title Slack has for a person reaches the router, which shows it to the
+	// screen as one more hint at what they do; one who set none has none.
+	if byID["U1"].Title != "Staff engineer" || byID["U2"].Title != "" {
+		t.Fatalf("titles = %q and %q, want the one U1 set and none for U2", byID["U1"].Title, byID["U2"].Title)
 	}
 	if byID["U3"].EmailConfirmed {
 		t.Fatalf("U3 = %+v, want an unconfirmed address kept as such", byID["U3"])

@@ -422,3 +422,106 @@ func TestFromEnvRefusesAListOfOrganizationsSeparatedByAnythingButCommas(t *testi
 		t.Errorf("an id as auth makes it: %v, %v, want it taken", config.GuardHoldOrgs, err)
 	}
 }
+
+// slackOn is the settings the Slack consent loop needs, with the switch on. A
+// test takes what it wants away from it.
+func slackOn() map[string]string {
+	return map[string]string{
+		"AGENTS_PRIMARY_SLACK_CONSENT":    "on",
+		"AGENTS_PRIMARY_SLACK_TICKET_KEY": strings.Repeat("ab", 32),
+		"AGENTS_PRIMARY_SERVICE_KEY_ID":   "alias/oryxa-production-agents-primary",
+		"APPS_URL":                        "http://127.0.0.1:8080",
+	}
+}
+
+// TestTheSlackConsentLoopIsOffUnlessSaidOn: unset, or off in any case, the loop
+// is off and nothing else of it is read, however much of it is set, and set
+// wrongly.
+func TestTheSlackConsentLoopIsOffUnlessSaidOn(t *testing.T) {
+	for _, values := range []map[string]string{
+		{},
+		{"AGENTS_PRIMARY_SLACK_CONSENT": "off"},
+		{"AGENTS_PRIMARY_SLACK_CONSENT": " OFF "},
+		{"AGENTS_PRIMARY_SLACK_CONSENT": "off", "AGENTS_PRIMARY_SLACK_TICKET_KEY": "not a key"},
+		{"AGENTS_PRIMARY_SLACK_TICKET_KEY": strings.Repeat("ab", 32)},
+	} {
+		config, err := FromEnv(env(values))
+		if err != nil || config.SlackConsent || config.SlackTicketKey != nil {
+			t.Errorf("%v: consent=%t key=%v err=%v, want the loop off with no key read", values, config.SlackConsent, config.SlackTicketKey, err)
+		}
+	}
+}
+
+// TestTheSlackConsentLoopReadsItsTicketKeyAsHex: on, the key is 64 hexadecimal
+// characters, in either case, and is 32 bytes.
+func TestTheSlackConsentLoopReadsItsTicketKeyAsHex(t *testing.T) {
+	values := slackOn()
+	values["AGENTS_PRIMARY_SLACK_CONSENT"] = " On "
+	values["AGENTS_PRIMARY_SLACK_TICKET_KEY"] = " " + strings.Repeat("0F", 32) + " "
+	config, err := FromEnv(env(values))
+	if err != nil || !config.SlackConsent {
+		t.Fatalf("on: consent=%t err=%v, want the loop on", config.SlackConsent, err)
+	}
+	if len(config.SlackTicketKey) != 32 || config.SlackTicketKey[0] != 0x0f || config.SlackTicketKey[31] != 0x0f {
+		t.Fatalf("ticket key = %x, want 32 bytes of 0x0f", config.SlackTicketKey)
+	}
+}
+
+// TestTheSlackConsentLoopRefusesToStartHalfSetUp: on, it stops the service
+// starting for what it cannot run without, naming it; and a ticket key it
+// refuses is never quoted.
+func TestTheSlackConsentLoopRefusesToStartHalfSetUp(t *testing.T) {
+	for name, edit := range map[string]func(map[string]string){
+		"no ticket key":                 func(values map[string]string) { delete(values, "AGENTS_PRIMARY_SLACK_TICKET_KEY") },
+		"a blank ticket key":            func(values map[string]string) { values["AGENTS_PRIMARY_SLACK_TICKET_KEY"] = "  " },
+		"a short ticket key":            func(values map[string]string) { values["AGENTS_PRIMARY_SLACK_TICKET_KEY"] = strings.Repeat("ab", 16) },
+		"a long ticket key":             func(values map[string]string) { values["AGENTS_PRIMARY_SLACK_TICKET_KEY"] = strings.Repeat("ab", 33) },
+		"a ticket key that is not hex":  func(values map[string]string) { values["AGENTS_PRIMARY_SLACK_TICKET_KEY"] = strings.Repeat("zz", 32) },
+		"no service key":                func(values map[string]string) { delete(values, "AGENTS_PRIMARY_SERVICE_KEY_ID") },
+		"no apps URL":                   func(values map[string]string) { delete(values, "APPS_URL") },
+		"a switch that is not a switch": func(values map[string]string) { values["AGENTS_PRIMARY_SLACK_CONSENT"] = "true" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			values := slackOn()
+			edit(values)
+			_, err := FromEnv(env(values))
+			if err == nil {
+				t.Fatal("FromEnv() error = nil, want a refusal to start")
+			}
+			if !strings.Contains(err.Error(), "AGENTS_PRIMARY_") && !strings.Contains(err.Error(), "APPS_URL") {
+				t.Errorf("error = %q, want it to name what is missing", err)
+			}
+			if key := values["AGENTS_PRIMARY_SLACK_TICKET_KEY"]; len(key) > 8 && strings.Contains(err.Error(), key) {
+				t.Errorf("error = %q, which quotes the ticket key", err)
+			}
+		})
+	}
+}
+
+// TestTheSecretStoreAndTheConsentGuardrailAreOptional: the KMS key of one-time
+// secrets is read as it is set, with or without the consent loop; the consent
+// guardrail is both or neither, and one without the other refuses to start.
+func TestTheSecretStoreAndTheConsentGuardrailAreOptional(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{}))
+	if err != nil || config.SecretsKMSKeyID != "" || config.ConsentGuardrailIdentifier != "" || config.ConsentGuardrailVersion != "" {
+		t.Fatalf("unset: config=%+v err=%v, want no secret store and no consent guardrail", config, err)
+	}
+	config, err = FromEnv(env(map[string]string{
+		"AGENTS_PRIMARY_SECRETS_KMS_KEY_ID":        " alias/oryxa-production-agents-secrets ",
+		"AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID":      " gr-consent ",
+		"AGENTS_PRIMARY_CONSENT_GUARDRAIL_VERSION": " 3 ",
+	}))
+	if err != nil || config.SecretsKMSKeyID != "alias/oryxa-production-agents-secrets" ||
+		config.ConsentGuardrailIdentifier != "gr-consent" || config.ConsentGuardrailVersion != "3" {
+		t.Fatalf("set: config=%+v err=%v", config, err)
+	}
+	for _, half := range []map[string]string{
+		{"AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID": "gr-consent"},
+		{"AGENTS_PRIMARY_CONSENT_GUARDRAIL_VERSION": "3"},
+	} {
+		if _, err := FromEnv(env(half)); err == nil ||
+			!strings.Contains(err.Error(), "AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID") || !strings.Contains(err.Error(), "AGENTS_PRIMARY_CONSENT_GUARDRAIL_VERSION") {
+			t.Errorf("half set %v: error=%v, want a refusal naming both settings", half, err)
+		}
+	}
+}
