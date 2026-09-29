@@ -21,6 +21,16 @@ type memoryRepository struct {
 	versions []store.Version
 	mappings []store.ExternalMapping
 	plans    map[string]store.ReviewedPlan
+	attempts map[string]store.ApplyAttempt
+}
+
+func (repo *memoryRepository) SaveAttempt(_ context.Context, attempt store.ApplyAttempt) error {
+	if repo.attempts == nil {
+		repo.attempts = map[string]store.ApplyAttempt{}
+	}
+	attempt.Completed = append([]store.CompletedOperation{}, attempt.Completed...)
+	repo.attempts[attempt.ID] = attempt
+	return nil
 }
 
 func TestWorkspaceServerValidatesUpstreamURLAtStartup(t *testing.T) {

@@ -3,6 +3,7 @@ package httpserver
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ type Repository interface {
 	Mappings(context.Context, string) ([]store.ExternalMapping, error)
 	SavePlan(context.Context, store.ReviewedPlan) error
 	ReviewedPlan(context.Context, string, string, string) (store.ReviewedPlan, error)
+	SaveAttempt(context.Context, store.ApplyAttempt) error
 }
 
 type Server struct {
@@ -279,6 +281,7 @@ func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Re
 	}
 	var remaining runtime.Plan
 	var version store.Version
+	var attempt *store.ApplyAttempt
 	err = server.repository.WithApplyLock(request.Context(), request.PathValue("organizationID"), func() error {
 		state, err := client.Snapshot(request.Context(), access.Slug)
 		if err != nil {
@@ -295,6 +298,20 @@ func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Re
 		if err != nil {
 			return err
 		}
+		now := time.Now().UTC()
+		attempt = &store.ApplyAttempt{ID: rand.Text(), OrganizationID: state.Organization.ID, ActorID: access.ID, Status: "running", Completed: []store.CompletedOperation{}, StartedAt: now, UpdatedAt: now}
+		if err := server.repository.SaveAttempt(request.Context(), *attempt); err != nil {
+			return err
+		}
+		base := client.HTTP.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		client.HTTP.Transport = progressTransport{base: base, completed: func(operation *http.Request) error {
+			attempt.Completed = append(attempt.Completed, store.CompletedOperation{Method: operation.Method, Path: operation.URL.Path})
+			attempt.UpdatedAt = time.Now().UTC()
+			return server.repository.SaveAttempt(operation.Context(), *attempt)
+		}}
 		remaining, err = runtime.ApplyApproved(request.Context(), client, document, runtime.RuntimeRemovals(issued))
 		if err != nil {
 			return err
@@ -314,8 +331,31 @@ func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Re
 		version, err = server.repository.Save(request.Context(), state.Organization.ID, access.ID, encoded)
 		return err
 	})
+	if attempt != nil {
+		attempt.Status = "done"
+		if err != nil {
+			attempt.Status = "partial"
+		} else if len(remaining.Changes) > 0 {
+			attempt.Status = "incomplete"
+		} else if len(remaining.NeedsHuman) > 0 {
+			attempt.Status = "needs_human"
+		}
+		attempt.UpdatedAt = time.Now().UTC()
+		progressCtx, cancel := context.WithTimeout(context.WithoutCancel(request.Context()), 5*time.Second)
+		progressErr := server.repository.SaveAttempt(progressCtx, *attempt)
+		cancel()
+		if err == nil {
+			err = progressErr
+		}
+	}
 	if err != nil {
-		writeApplyError(writer, err)
+		status, body := applyError(err)
+		if attempt != nil {
+			body["status"] = "partial"
+			body["apply_id"] = attempt.ID
+			body["completed"] = attempt.Completed
+		}
+		writeJSON(writer, status, body)
 		return
 	}
 	status := "done"
@@ -325,12 +365,17 @@ func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Re
 	if len(remaining.Changes) > 0 {
 		status = "incomplete"
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"step": "apply", "status": status, "remaining": remaining, "version": version.Number})
+	writeJSON(writer, http.StatusOK, map[string]any{"step": "apply", "status": status, "remaining": remaining, "version": version.Number, "apply_id": attempt.ID, "completed": attempt.Completed})
 }
 
 var errApprovalChanged = errors.New("the removal plan changed; review and confirm it again")
 
 func writeApplyError(writer http.ResponseWriter, err error) {
+	status, body := applyError(err)
+	writeJSON(writer, status, body)
+}
+
+func applyError(err error) (int, map[string]any) {
 	status, code, message := http.StatusBadGateway, "upstream_unavailable", "workspace apply could not complete; retry after checking the service"
 	var remote *runtime.StatusError
 	switch {
@@ -344,7 +389,7 @@ func writeApplyError(writer http.ResponseWriter, err error) {
 			code = remote.Code
 		}
 	}
-	writeJSON(writer, status, map[string]string{"code": code, "error": message})
+	return status, map[string]any{"code": code, "error": message}
 }
 
 func (server *Server) pull(writer http.ResponseWriter, request *http.Request) {
