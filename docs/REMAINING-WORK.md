@@ -6,6 +6,8 @@ code, credentials or an operator — and links to the document that holds the
 detail. Those documents stay the source of truth for their own services; this
 is the index.
 
+What is being built right now, lane by lane and by whom, is in [LANES.md](LANES.md). Read it before starting work beside other workers.
+
 Nothing here is a promise about behaviour. Where something was confirmed — by
 a command, by reading the code, or against a provider's documentation — it
 says so; where it was only noticed in passing, it says that instead.
