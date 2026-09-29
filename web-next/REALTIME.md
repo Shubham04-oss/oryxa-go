@@ -1002,6 +1002,77 @@ with the other person's name from the page's own directory.
 never arrives (the queue is behind, the rule is not widened, the Worker was
 down) costs a line that shows up late in a conversation, never a wrong answer.
 
+### Request notes on the page
+
+`useDirectMessages(org, viewer, peer)` hands a view `requests`: the notes its
+object holds, oldest line first, one for each request, at its latest revision
+(`DmRequestNote`: the note and `at`, where its line stands). They come with
+the snapshot and as `dm-request` frames; a frame no newer than the note held
+leaves it alone, and each snapshot's notes replace what was held.
+
+`components/direct-message.tsx` puts each note in the log where its `at` falls
+among the messages (`withRequests`), as **one quiet centered line**, in the
+side conversations' style (`workspace-side-status`):
+
+> You asked Priya's agent · waiting `10:04` Open
+
+- **Fixed words.** Who asked whose agent, from the viewer's side ("You asked
+  Priya's agent", "Priya asked your agent"), " in Slack" when the origin is
+  `slack`, then one word for where the request stands: `waiting`, `approved`,
+  `declined`, `answered`, `held`, `failed`, `not shared` (withheld) and, from
+  Go's read alone, `expired`. All of it is `src/lib/dms/request-notes.ts`; the
+  other person's name is the page's own directory's. No word of anyone's is in
+  a note, so none is shown.
+- **The state is Go's word to the member** while the request can still move
+  (`waiting`, `approved`, `held`): the line reads the request (`GET
+  …/agent-requests/{id}`, `useRequestStanding`, as the member's own session),
+  again for each revision, and once more when it is due to expire, which no
+  event says. Go's status replaces the note's; until it answers, or when it
+  cannot, the note's word stands. Go refusing the member the request (404 or
+  403) hides the line: it is not theirs to show. A request that can no longer
+  move is final, so opening a conversation with many finished requests reads
+  none of them.
+- **It moves in place.** Its place is where the request was first noted, its
+  state changes with the note, and a request that is new or moves on while the
+  conversation is open is said aloud through the log's announcer, as an
+  approval landing in a side conversation is ("You asked Priya's agent:
+  approved"). What was there when the conversation opened is not news.
+- **A day of its own.** A line that is the first thing said on its day starts
+  the day, like a message. A conversation with no message shows the line above
+  its "Say hello" invitation. One the member may no longer open shows none.
+- **Open** takes the member to the request in the Requests view. It is shown
+  only when the shell wired it (below): without, it would open nothing.
+
+**What the shell wires.** The Requests view is a screen of its own
+(`components/requests-view`), and this lane does not import it. The shell that
+holds both wraps what shows a DM in `OpenRequestProvider`, once, with the
+function that opens the Requests view at a request:
+
+```tsx
+import { OpenRequestProvider } from "@/lib/dms"
+
+<OpenRequestProvider
+  value={(requestId) => {
+    /* select the Requests section and the request with this id */
+  }}
+>
+  {/* the shell: its canvas and the agent panel, which mount DirectMessageView */}
+</OpenRequestProvider>
+```
+
+Every view of a DM (the main canvas and the right panel's DMs tab) reads it
+from there, so nothing is passed through the panel. A view may also take
+`onOpenRequest` on `DirectMessageView` (or `DirectMessageConversation`), which
+wins over the shell's. The function receives the request's id, which is the
+id `GET …/agent-requests/{id}` takes and the Requests view is opened by.
+
+**In the inbox.** The DMs tab lists a conversation with a request as it lists
+any other, moved up to when the request reached its state, with the fixed
+preview ("Asked your agent · waiting") beside or instead of the last message,
+whichever is newer. No screen changed for that: the preview is
+`Conversation.lastMessage`, which the list already shows, and the note counts
+no unread.
+
 ## Conversation events
 
 DMs and side conversations live only here, so nothing else in the platform
@@ -1139,6 +1210,9 @@ in the tab (`components/side-conversation.tsx` on `useSideConversation`);
 the DMs tab opens one from its list the same way, whichever page is open,
 since its object needs only the ids. Each place is its own view, with its
 own socket, mounted only while it shows, as a DM's is.
+
+A DM's log also holds a quiet line for each agent request between its two
+people ([Request notes on the page](#request-notes-on-the-page)).
 
 A specialist's chat (`components/specialist-chat.tsx`) is one component in
 two places: its focused view's conversation column, and the Agents tab once
