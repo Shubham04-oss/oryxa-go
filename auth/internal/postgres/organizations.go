@@ -265,13 +265,14 @@ func (store *Store) CreateInvitation(ctx context.Context, invitation domain.Invi
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO auth_invitations
-		    (id, organization_id, email, role, guest, token_hash, invited_by, status, expires_at, created_at)
-		VALUES ($1, $2, lower($3), $4, $5, $6, $7, $8, $9, $10)`,
+		    (id, organization_id, email, role, guest, quiet, token_hash, invited_by, status, expires_at, created_at)
+		VALUES ($1, $2, lower($3), $4, $5, $6, $7, $8, $9, $10, $11)`,
 		invitation.ID,
 		invitation.OrganizationID,
 		invitation.Email,
 		invitation.Role,
 		invitation.Guest,
+		invitation.Quiet,
 		invitation.TokenHash,
 		invitation.InvitedBy,
 		invitation.Status,
@@ -298,7 +299,7 @@ func (store *Store) Invitations(ctx context.Context, organizationID string) ([]d
 		return nil, fmt.Errorf("expire invitations: %w", err)
 	}
 	rows, err := store.pool.Query(ctx, `
-		SELECT id, organization_id, email, role, guest, invited_by, status, expires_at, created_at, accepted_at
+		SELECT id, organization_id, email, role, guest, quiet, invited_by, status, expires_at, created_at, accepted_at
 		FROM auth_invitations
 		WHERE organization_id = $1
 		ORDER BY created_at DESC, id`, organizationID)
@@ -323,7 +324,7 @@ func (store *Store) Invitations(ctx context.Context, organizationID string) ([]d
 
 func (store *Store) InvitationByTokenHash(ctx context.Context, tokenHash string) (domain.Invitation, error) {
 	invitation, err := scanInvitation(store.pool.QueryRow(ctx, `
-		SELECT id, organization_id, email, role, guest, invited_by, status, expires_at, created_at, accepted_at
+		SELECT id, organization_id, email, role, guest, quiet, invited_by, status, expires_at, created_at, accepted_at
 		FROM auth_invitations WHERE token_hash = $1`, tokenHash))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Invitation{}, domain.ErrNotFound
@@ -336,7 +337,7 @@ func (store *Store) InvitationByTokenHash(ctx context.Context, tokenHash string)
 
 func (store *Store) InvitationByID(ctx context.Context, organizationID, invitationID string) (domain.Invitation, error) {
 	invitation, err := scanInvitation(store.pool.QueryRow(ctx, `
-		SELECT id, organization_id, email, role, guest, invited_by, status, expires_at, created_at, accepted_at
+		SELECT id, organization_id, email, role, guest, quiet, invited_by, status, expires_at, created_at, accepted_at
 		FROM auth_invitations WHERE organization_id = $1 AND id = $2`, organizationID, invitationID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Invitation{}, domain.ErrNotFound
@@ -594,6 +595,7 @@ func scanInvitation(row rowScanner) (domain.Invitation, error) {
 		&invitation.Email,
 		&invitation.Role,
 		&invitation.Guest,
+		&invitation.Quiet,
 		&invitation.InvitedBy,
 		&invitation.Status,
 		&invitation.ExpiresAt,

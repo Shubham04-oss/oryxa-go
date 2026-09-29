@@ -225,3 +225,18 @@ Every ended membership emits `auth.member.removed.v1`, whose `reason` is `left`,
 Billing consumes `auth.organization.created.v1`, `auth.organization.updated.v1` and `auth.organization.deleted.v1`: it announces each new organization's first entitlements and cancels a deleted organization's subscription. See `billing/README.md`. Teams consumes those three and `auth.member.removed.v1`, so team data stays in step with the organizations it belongs to and members who leave an organization leave its teams. See `teams/README.md`.
 
 Email consumes `auth.user.registered.v1` (welcome), the delivery requests `auth.user.email-verification.delivery-requested.v1`, `auth.user.password-reset.delivery-requested.v1` and `auth.member.invited.v1` (it sends the supplied action URL and never executes auth state transitions), and `auth.member.invitation-revoked.v1`, `auth.member.role-changed.v1` and `auth.member.removed.v1` (notices to the affected member). See `email/README.md`.
+
+### Quiet invitations and rolling upgrades
+
+A quiet invitation stores `quiet=true`; revocation carries the same preference
+and sends no withdrawal email. A normal invitation explicitly stores false and
+its revocation carries `quiet:false`. Email rejects invitations without an
+acceptance link. A legacy revocation lacking the quiet field is acknowledged
+without mail because its original notification preference is unknown.
+
+Upgrade and drain old **email consumers before auth writers**: old consumers do
+not understand the additive quiet field. Migration `009_quiet_invitations.sql`
+marks existing invitations, and invitations from an old writer during rollout,
+quiet by default. Their original invitation events have been redacted after
+publication, so that preference cannot be recovered reliably. This suppresses
+legacy withdrawal notices; new ordinary invitations retain those notices.

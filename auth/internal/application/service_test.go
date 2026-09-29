@@ -706,3 +706,25 @@ func TestApplyBillingEntitlements(t *testing.T) {
 func fixedTime() time.Time {
 	return time.Date(2026, time.September, 13, 12, 0, 0, 0, time.UTC)
 }
+
+func TestQuietInvitationRetainsPreferenceThroughRevocation(t *testing.T) {
+	store := &fakeStore{actorMembership: domain.Membership{UserID: "owner-1", Role: domain.RoleOwner}, organization: domain.Organization{ID: "org-1", Name: "Acme"}}
+	service := New(store, "https://app.example.com/invitations/accept")
+	invitation, _, err := service.InviteMember(context.Background(), "owner-1", "org-1", InviteMemberInput{Email: "quiet@example.com", Role: domain.RoleMember, Quiet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.invitation.Quiet {
+		t.Fatal("quiet preference was not passed to the persistent store")
+	}
+	if err := service.RevokeInvitation(context.Background(), "owner-1", "org-1", invitation.ID); err != nil {
+		t.Fatal(err)
+	}
+	var revoked autheventsv1.MemberInvitationRevoked
+	if err := json.Unmarshal(store.events[len(store.events)-1].Data, &revoked); err != nil {
+		t.Fatal(err)
+	}
+	if revoked.Quiet == nil || !*revoked.Quiet {
+		t.Fatalf("revoked event lost quiet preference: %+v", revoked)
+	}
+}

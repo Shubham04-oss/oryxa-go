@@ -524,6 +524,7 @@ func (service *Service) InviteMember(ctx context.Context, actorID, organizationI
 		Email:          email,
 		Role:           input.Role,
 		Guest:          input.Guest,
+		Quiet:          input.Quiet,
 		TokenHash:      hashToken(token),
 		InvitedBy:      actorID,
 		Status:         domain.InvitationPending,
@@ -594,6 +595,7 @@ func (service *Service) RevokeInvitation(ctx context.Context, actorID, organizat
 		OrganizationName: organization.Name,
 		Email:            invitation.Email,
 		Role:             string(invitation.Role),
+		Quiet:            &invitation.Quiet,
 		RevokedBy:        actorID,
 		RevokedAt:        now,
 	}, now)

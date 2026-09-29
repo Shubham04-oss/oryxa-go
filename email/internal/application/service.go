@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"strings"
 	"time"
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
@@ -82,8 +83,8 @@ func (s *Service) MemberInvited(ctx context.Context, event delivery.EventRef, da
 	if data.Quiet {
 		return nil
 	}
-	if data.OrganizationName == "" || data.Role == "" {
-		return errors.New("invitation has no organization name or role")
+	if data.OrganizationName == "" || data.Role == "" || strings.TrimSpace(data.AcceptURL) == "" {
+		return errors.New("invitation has no organization name, role, or accept link")
 	}
 	return s.deliverAction(ctx, event, "invitation", data.Email, data.ExpiresAt, action{
 		Email:            data.Email,
@@ -147,6 +148,9 @@ func (s *Service) MemberPinged(ctx context.Context, event delivery.EventRef, dat
 }
 
 func (s *Service) MemberInvitationRevoked(ctx context.Context, event delivery.EventRef, data autheventsv1.MemberInvitationRevoked) error {
+	if data.Quiet == nil || *data.Quiet {
+		return nil
+	}
 	return s.deliverNotice(ctx, event, "invitation-revoked", data.Email, notice{OrganizationName: data.OrganizationName})
 }
 

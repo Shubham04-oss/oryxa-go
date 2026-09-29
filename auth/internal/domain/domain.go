@@ -83,6 +83,7 @@ type Invitation struct {
 	Email          string           `json:"email"`
 	Role           Role             `json:"role"`
 	Guest          bool             `json:"guest"`
+	Quiet          bool             `json:"quiet"`
 	TokenHash      string           `json:"-"`
 	InvitedBy      string           `json:"invited_by"`
 	Status         InvitationStatus `json:"status"`
