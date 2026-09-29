@@ -437,7 +437,9 @@ func (server *Server) answer(writer http.ResponseWriter, request *http.Request) 
 
 // credentials reads the caller's token or cookie, and enforces the origin
 // allowlist on the cookie path. A cookie travels on a cross-site request by
-// itself; a bearer token does not, so only the cookie needs the check.
+// itself; a bearer token does not, so only the cookie needs the check. A
+// cookie write that names no origin is refused like one that names a foreign
+// one.
 func (server *Server) credentials(writer http.ResponseWriter, request *http.Request) (authclient.Credentials, bool) {
 	credentials := authclient.Credentials{Authorization: request.Header.Get("Authorization")}
 	if cookie, err := request.Cookie(authclient.AccessCookieName); err == nil {
@@ -447,16 +449,24 @@ func (server *Server) credentials(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusUnauthorized, "sign in to use rag")
 		return authclient.Credentials{}, false
 	}
-	if credentials.Authorization == "" && request.Method != http.MethodGet {
-		origin := strings.TrimSpace(request.Header.Get("Origin"))
-		if origin != "" {
-			if _, allowed := server.allowedOrigins[origin]; !allowed {
-				writeError(writer, http.StatusForbidden, "this origin may not use rag")
-				return authclient.Credentials{}, false
-			}
-		}
+	if credentials.Authorization == "" && request.Method != http.MethodGet && request.Method != http.MethodHead &&
+		!server.validMutationOrigin(request) {
+		writeError(writer, http.StatusForbidden, "an allowed origin is required for cookie authentication")
+		return authclient.Credentials{}, false
 	}
 	return credentials, true
+}
+
+// validMutationOrigin is whether a write names an origin on the allowlist. A
+// write with no Origin header does not: nothing shows it did not come from
+// another site, which is all the check is for.
+func (server *Server) validMutationOrigin(request *http.Request) bool {
+	origin := strings.TrimSpace(request.Header.Get("Origin"))
+	if origin == "" {
+		return false
+	}
+	_, allowed := server.allowedOrigins[origin]
+	return allowed
 }
 
 // handleError maps a domain error onto a status.
