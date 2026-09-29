@@ -89,7 +89,12 @@ func newAuthHarness() *authHarness {
 		guardPolicy:  &fakeAnswerGuardPreferences{},
 	}
 	h.server = New(h.directory, h.threadsSvc, Config{
-		AllowedOrigins:      []string{"https://app.oryxa.test"},
+		AllowedOrigins: []string{"https://app.oryxa.test"},
+		Documents: DocumentsConfig{
+			PublicURL: "https://documents.oryxa.test", InternalURL: "https://documents.oryxa.test",
+			APIURL: "https://api.oryxa.test", JWTSecret: "example-auth-test-secret-with-32-chars",
+			TicketSecret: "example-ticket-test-secret-with-32-chars",
+		},
 		RunTimeout:          time.Minute,
 		Agents:              h.agents,
 		Teams:               h.teams,
@@ -257,6 +262,10 @@ var authzRoutes = []authzRoute{
 	{
 		pattern: "GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}", method: http.MethodGet,
 		path: "/v1/organizations/org_1/threads/thread_1/artifacts/file_other.png", malformedQuery: "?version=0", identity: lastThreadsMember,
+	},
+	{
+		pattern: "GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor", method: http.MethodGet,
+		path: "/v1/organizations/org_1/threads/thread_1/artifacts/draft.docx/editor", identity: lastThreadsMember,
 	},
 	// -- managed agents ---------------------------------------------------
 	{
@@ -491,6 +500,8 @@ var authzRoutes = []authzRoute{
 // this list short: anything added here skips the entire sweep above.
 var publicRoutePatterns = map[string]string{
 	"GET /healthz": "a liveness probe the host's load balancer calls before any caller can be identified; it answers 204 with no body and touches no organization or member state.",
+	"GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor-source":    "a document server fetch authenticated by a signed, expiring, resource-scoped ticket, tested in documents_test.go; it accepts no member cookie.",
+	"POST /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor-callback": "a document server save authenticated by both a signed, expiring, resource-scoped ticket and an ONLYOFFICE JWT, tested in documents_test.go; it accepts no member cookie.",
 }
 
 // TestEveryServerPatternIsAuthorizationTested is the coverage guard: every
@@ -498,8 +509,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 60 {
-		t.Fatalf("authzRoutes has %d entries, want 60 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 61 {
+		t.Fatalf("authzRoutes has %d entries, want 61 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {

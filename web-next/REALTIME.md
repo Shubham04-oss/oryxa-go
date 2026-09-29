@@ -37,6 +37,21 @@ delegation decides for itself, while a teammate's primary agent, or a
 specialist contributed with `request` delegation, waits for its owner's own
 approval, so nothing reads another member's apps unapproved.
 
+The primary and specialist chat send a bounded `screen_context` in the run
+body when a member sends a message or answers a confirmation. It is captured
+from the current Oryxa canvas at send time (view, selection and up to twelve
+marked visible items); it is not put in the transcript. The page holds it to
+Go's bounds (`lib/agents/screen-context.ts`): an item with no kind or id, a
+line break in any field, a field past its limit or a thirteenth item is left
+out, and Go leaves out the same when it reads the run, never refusing a
+member's message over a hint. Go keeps what is left in ADK's
+temporary state (`temp:`), which a tool can read while that one run goes on
+and which ADK drops before anything is stored: it is never in the session's
+state or an event's actions, and a run without one finds none.
+`get_current_screen` reads it, and only in a member's own runs, never an
+unattended, room or delivery one. Resource tools continue to authorize every
+item independently.
+
 ## Specialist chats
 
 `SpecialistChatAgent` (`src/specialist-chat-agent.ts`) is the member's chat

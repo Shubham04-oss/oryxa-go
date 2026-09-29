@@ -5,7 +5,7 @@ import { useRef, useState } from "react"
 import { AgentComposer } from "./agent-composer"
 import { AgentFace } from "./agents-parts"
 import { AgentConversation } from "./agent-conversation"
-import { AgentMarkdown } from "./agent-timeline"
+import { AgentActivity, AgentMarkdown } from "./agent-timeline"
 import { agentIdentity, formatTime, runeCount } from "./agents-format"
 import { IdentityAvatar } from "./workspace-avatar"
 import {
@@ -164,9 +164,10 @@ export function AgentTeamRoom({
           </div>
         )}
         {room.sending && (
-          <p className="workspace-agent-working" role="status">
-            The team is replying. This can take up to a minute and a half.
-          </p>
+          <AgentActivity
+            state="weaving"
+            label="The team is replying. This can take up to a minute and a half."
+          />
         )}
       </AgentConversation>
 

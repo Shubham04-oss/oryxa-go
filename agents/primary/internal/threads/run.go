@@ -50,6 +50,7 @@ var errLeaseLost = errors.New("the run lost its hold on the thread")
 type RunInput struct {
 	Message       string
 	Confirmations []Answer
+	ScreenContext *agents.ScreenContext
 	// StartedBy is who starts the run, agentsv1.StartedByMember unless set.
 	StartedBy string
 	// Wakeup names the batch of app events a message carries, for a run
@@ -183,6 +184,10 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 	for key, value := range identity {
 		run.stateDelta[key] = value
 	}
+	if run.stateDelta == nil {
+		run.stateDelta = map[string]any{}
+	}
+	run.stateDelta[agents.ScreenStateKey] = agents.EncodedScreenContext(input.ScreenContext)
 	stored, err := service.thread(ctx, run.member, run.threadID)
 	if err != nil {
 		return err

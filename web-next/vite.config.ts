@@ -23,6 +23,9 @@ const config = defineConfig(({ mode }) => {
   return {
     resolve: { tsconfigPaths: true },
     server: {
+      // The local document server fetches signed artifact URLs through the
+      // same /v1 proxy the browser uses from its Docker network.
+      allowedHosts: ["host.docker.internal"],
       proxy: { "^/v1/": { changeOrigin: true, target } },
     },
     plugins,

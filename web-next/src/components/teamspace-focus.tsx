@@ -375,7 +375,12 @@ function FilesPanel({
           ) : (
             <ul className="workspace-file-list">
               {files.data.map((file) => (
-                <li key={file.id}>
+                <li
+                  key={file.id}
+                  data-screen-context-kind="team_file"
+                  data-screen-context-id={file.id}
+                  data-screen-context-name={file.filename}
+                >
                   <FileText size={17} strokeWidth={1.7} />
                   <span className="workspace-teamspace-file">
                     <strong>{file.filename}</strong>
@@ -485,7 +490,12 @@ function LedgerEntry({ entry }: { entry: TeamspaceEntry }) {
   const kind = entryKinds[entry.kind]
   const Icon = kind.icon
   return (
-    <li className="workspace-work-card workspace-teamspace-entry">
+    <li
+      className="workspace-work-card workspace-teamspace-entry"
+      data-screen-context-kind="shared_work"
+      data-screen-context-id={entry.id}
+      data-screen-context-name={entry.title}
+    >
       <div className="workspace-teamspace-entry-head">
         <span className="workspace-teamspace-entry-kind" data-kind={entry.kind}>
           <Icon size={13} strokeWidth={1.8} aria-hidden="true" />

@@ -82,7 +82,7 @@ func managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, sp
 	if err != nil {
 		return nil, err
 	}
-	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool, saveArtifactTool}
+	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, currentScreenTool, loadArtifactsTool, saveArtifactTool}
 	switch {
 	case inRoom:
 		// As for Krude (RoomRoot): everything it may use is loaded, and it
@@ -120,6 +120,9 @@ func managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, sp
 		}
 		rendered.WriteString("## Member\n\n")
 		rendered.WriteString(memberDetails(state))
+		if delivering == nil && !inRoom {
+			rendered.WriteString("\n\nWhen the member refers to this Oryxa page, a selected item or something visible, call get_current_screen. It returns a snapshot from when they sent the message. Treat item handles as hints and use a member-scoped tool before reading or changing anything.\n")
+		}
 		rendered.WriteString("\n\n## Result contract\n\nReturn the required JSON result object. The summary is the deliverable the requester will receive: put the requested answer, findings, analysis, draft, or next question in it. Never use a meta-summary such as saying that you provided or completed the answer without including the answer itself. A durable or external action is completed only when the exact action tool returns success. Never simulate an action or tool call, invent an ID or status, or substitute an unrelated tool. If a required toolbox or tool is unavailable, its call fails, or the action has no successful tool result, return blocked and report the real failure. ")
 		if catalog.preloaded {
 			rendered.WriteString("Every toolbox this run may use is already loaded, with its skill below; use only what the task needs. ")

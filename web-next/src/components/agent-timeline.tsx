@@ -1,18 +1,13 @@
-import { useState } from "react"
+import { isValidElement, useRef, useState } from "react"
 import type { MouseEvent, ReactNode } from "react"
 import Markdown from "react-markdown"
 import type { Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
-import {
-  Ban,
-  CircleAlert,
-  CircleCheck,
-  FileText,
-  Inbox,
-  LoaderCircle,
-  ShieldQuestion,
-} from "lucide-react"
+import { ThinkingOrb } from "thinking-orbs"
+import type { OrbState } from "thinking-orbs"
+import { FileText, Inbox, ShieldQuestion } from "lucide-react"
 import { ApiError } from "@/lib/api/client"
+import { toolkitName } from "@/lib/apps/client"
 import type {
   SpecialistResult,
   SpecialistResultStatus,
@@ -25,6 +20,7 @@ import {
   humanizeToolName,
   isImageArtifact,
 } from "@/lib/threads/timeline"
+import { featuredSlugs, toolkitIcon } from "./workspace-tools-data"
 import type {
   ArtifactEntry,
   ConfirmationEntry,
@@ -34,14 +30,15 @@ import type {
   ToolState,
 } from "@/lib/threads/timeline"
 
-/** Consecutive tool calls, shown as one quiet row. */
+/** One agent turn's tool calls, shown as one quiet row. */
 export type ToolGroupEntry = { kind: "tools"; key: string; tools: ToolEntry[] }
 
 export type DisplayEntry = Exclude<TimelineEntry, ToolEntry> | ToolGroupEntry
 
 /**
- * Folds each run of consecutive tool calls into one entry. Messages,
- * confirmations, files and failures stay boundaries between groups.
+ * Folds an agent turn's tool calls into one entry, even if an agent message,
+ * confirmation or file lands between calls. The next member turn begins a
+ * fresh row; the intervening entries keep their original place.
  */
 export function groupToolActivity(
   entries: readonly TimelineEntry[]
@@ -57,7 +54,11 @@ export function groupToolActivity(
       }
       continue
     }
-    group = undefined
+    if (
+      entry.kind === "run_failed" ||
+      (entry.kind === "message" && entry.role !== "agent")
+    )
+      group = undefined
     grouped.push(entry)
   }
   return grouped
@@ -79,39 +80,202 @@ const toolStateWords: Record<ToolState, string> = {
   done: "Done",
 }
 
-function ToolStateIcon({ state }: { state: ToolState }) {
-  const props = { size: 14, strokeWidth: 1.8, "aria-hidden": true }
-  switch (state) {
-    case "running":
-      return <LoaderCircle {...props} className="workspace-agent-spin" />
-    case "waiting_approval":
-      return <ShieldQuestion {...props} />
-    case "failed":
-      return <CircleAlert {...props} />
-    case "declined":
-      return <Ban {...props} />
-    case "done":
-      return <CircleCheck {...props} />
+function toolOrbState(tool: string): OrbState {
+  const name = tool.toLowerCase()
+  if (/search|knowledge|read|list|source|snapshot/.test(name))
+    return "searching"
+  if (/connect|browser|navigate/.test(name)) return "connecting"
+  if (/create|write|artifact|workflow|update/.test(name)) return "shaping"
+  if (/code|sandbox|execute|run/.test(name)) return "solving"
+  return "working"
+}
+
+const appToolPrefixes = [
+  ...featuredSlugs,
+  "slack",
+  "hubspot",
+  "salesforce",
+  "apollo",
+  "clay",
+  "luma",
+  "outlook",
+  "microsoftteams",
+]
+const appActionPrefixes = (
+  [
+    ...appToolPrefixes.map((slug): [string, string] => [slug, slug]),
+    ["google_drive", "googledrive"],
+    ["google_calendar", "googlecalendar"],
+    ["microsoft_teams", "microsoftteams"],
+  ] as [string, string][]
+).sort(([a], [b]) => b.length - a.length)
+
+/** The app slug is explicit on discovery calls and prefixes Composio's action slugs. */
+function calledApp(tool: ToolEntry): string | undefined {
+  const name = tool.tool.toLowerCase()
+  const arguments_ = tool.arguments
+  if (name.startsWith("apps_")) {
+    const toolkit = arguments_?.toolkit
+    if (typeof toolkit === "string" && /^[\w-]{1,64}$/.test(toolkit))
+      return toolkit.toLowerCase()
+    if (!/^apps_run_(read|write)_tool$/.test(name)) return undefined
   }
+  const action = name.startsWith("apps_")
+    ? typeof arguments_?.tool === "string"
+      ? arguments_.tool.toLowerCase()
+      : undefined
+    : name
+  if (!action) return undefined
+  const normalized = action.replace(/-/g, "_")
+  for (const [prefix, slug] of appActionPrefixes) {
+    if (normalized.startsWith(`${prefix}_`)) return slug
+  }
+  if (name.startsWith("apps_") && /^[a-z][a-z0-9]*_/.test(action))
+    return action.split("_")[0]
+  return undefined
+}
+
+function AppCallIcon({ slug }: { slug: string }) {
+  const icon = toolkitIcon(slug)
+  const name = icon?.title || toolkitName(slug)
+  return (
+    <span
+      className="workspace-agent-tool-app"
+      role="img"
+      aria-label={name}
+      title={name}
+    >
+      {icon ? (
+        <svg viewBox="0 0 24 24" fill={`#${icon.hex}`} aria-hidden="true">
+          <path d={icon.path} />
+        </svg>
+      ) : (
+        name.charAt(0).toUpperCase()
+      )}
+    </span>
+  )
+}
+
+function toolGroupLabel(tools: ToolEntry[]): string {
+  if (tools.length > 1) return `${tools.length} tool calls`
+  const tool = tools[0]
+  const app = calledApp(tool)
+  if (!app) return humanizeToolName(tool.tool) || "Tool call"
+  const name = toolkitIcon(app)?.title || toolkitName(app)
+  if (tool.tool === "apps_search_tools") return `Find ${name} tools`
+  if (tool.tool === "apps_connections") return `Check ${name} connection`
+  if (tool.tool === "apps_run_read_tool") return `${name} · Read data`
+  if (tool.tool === "apps_run_write_tool") return `${name} · Make change`
+  return humanizeToolName(tool.tool) || name
 }
 
 function ToolGroup({ tools }: { tools: ToolEntry[] }) {
   const state = toolGroupState(tools)
-  const names = tools.map((tool) => humanizeToolName(tool.tool) || "A tool")
-  const status =
-    tools.length > 1
-      ? `${tools.length} calls · ${toolStateWords[state]}`
-      : toolStateWords[state]
+  const active = tools.find((tool) => tool.state === "running") || tools[0]
+  const apps = [
+    ...new Set(
+      tools.map(calledApp).filter((slug): slug is string => Boolean(slug))
+    ),
+  ]
   const errors = tools.flatMap((tool) => (tool.error ? [tool.error] : []))
+  const details = tools
+    .map((tool) => `${toolGroupLabel([tool])} · ${toolStateWords[tool.state]}`)
+    .join("\n")
   return (
     <div
       className="workspace-agent-tools"
       data-state={state}
-      title={errors.length > 0 ? errors.join("\n") : undefined}
+      role="group"
+      aria-label={details.replaceAll("\n", "; ")}
+      title={details}
     >
-      <ToolStateIcon state={state} />
-      <span className="workspace-agent-tools-names">{names.join(" · ")}</span>
-      <span className="workspace-agent-tools-status">{status}</span>
+      <ThinkingOrb
+        size={20}
+        theme="dark"
+        state={
+          state === "waiting_approval" ? "listening" : toolOrbState(active.tool)
+        }
+        paused={state !== "running" && state !== "waiting_approval"}
+        aria-hidden="true"
+      />
+      <span className="workspace-agent-tools-names">
+        {toolGroupLabel(tools)}
+      </span>
+      {apps.length > 0 && (
+        <span className="workspace-agent-tools-apps" aria-label="Apps used">
+          {apps.slice(0, 3).map((slug) => (
+            <AppCallIcon key={slug} slug={slug} />
+          ))}
+          {apps.length > 3 && (
+            <span className="workspace-agent-tools-more">
+              +{apps.length - 3}
+            </span>
+          )}
+        </span>
+      )}
+      <span
+        className="workspace-agent-tools-status"
+        role={errors.length > 0 ? "status" : undefined}
+        title={errors.length > 0 ? errors.join("\n") : undefined}
+        aria-label={
+          errors.length > 0
+            ? `${toolStateWords[state]}: ${errors.join("; ")}`
+            : undefined
+        }
+      >
+        {toolStateWords[state]}
+      </span>
+    </div>
+  )
+}
+
+export function AgentActivity({
+  name,
+  label,
+  state = "working",
+}: {
+  name?: string
+  label?: string
+  state?: OrbState
+}) {
+  return (
+    <p className="workspace-agent-working" role="status">
+      <ThinkingOrb size={20} theme="dark" state={state} aria-hidden="true" />
+      <span>{label || (name ? `${name} is working…` : "Working…")}</span>
+    </p>
+  )
+}
+
+function CodeBlock({ children }: { children?: ReactNode }) {
+  const code = useRef<HTMLPreElement>(null)
+  const [copied, setCopied] = useState(false)
+  const language = isValidElement<{ className?: string }>(children)
+    ? children.props.className?.match(/(?:^|\s)language-([\w-]+)/)?.[1]
+    : undefined
+  const wrap = !language || /^(text|plaintext|markdown|md)$/.test(language)
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code.current?.textContent || "")
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1800)
+    } catch {
+      setCopied(false)
+    }
+  }
+  return (
+    <div className="workspace-agent-code-block">
+      <div className="workspace-agent-code-bar">
+        <span>{language || "Text"}</span>
+        <button type="button" onClick={copy} aria-label="Copy code">
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre
+        ref={code}
+        className={wrap ? "workspace-agent-code-wrap" : undefined}
+      >
+        {children}
+      </pre>
     </div>
   )
 }
@@ -120,6 +284,7 @@ function ToolGroup({ tools }: { tools: ToolEntry[] }) {
 // they came from. An image a model writes is offered as a link rather than
 // loaded, so an answer cannot fetch from any server on its own.
 const markdownComponents: Components = {
+  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
   a: ({ children, href }) => (
     <a href={href} target="_blank" rel="noopener noreferrer">
       {children}
