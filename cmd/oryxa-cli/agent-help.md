@@ -42,6 +42,19 @@ review the plan before applying it. Slack installation remains a manual step.
 
 Example:
 
+The admin can also supply these answer-guard settings. Preserve explicit
+choices; do not infer them from a person's role or the source data.
+
+| Key | Allowed values | Applies to |
+| --- | --- | --- |
+| `safety.guard.pii.minimum.owner` | `secrets`, `strict` | Minimum masking for an answer the member starts |
+| `safety.guard.pii.minimum.peer` | `secrets`, `strict` | Minimum masking for an answer another member reads |
+| `safety.guard.relevance` | `hold`, `shadow`, `off` | Answers unrelated to the request |
+
+These choices round-trip through plan, apply, and pull. Enforcement through the
+agents service's workspace-to-guard-policy adapter is a separate integration;
+do not report these three overrides as active until that adapter is deployed.
+
 ```yaml
 apiVersion: oryxa.in/v1
 kind: Workspace

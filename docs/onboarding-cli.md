@@ -116,6 +116,9 @@ The current file accepts these settings:
 | `ownership: {items: [...], prune: true}`, `orgChart.prune: true` | Remove omitted owner hints or chart facts after a reviewed removal plan |
 | `rules.consent.expireAfter` | Sets the default and maximum lifetime of cross-member requests (`5m` through `7d`) |
 | `safety.guard.holdForReview` | Holds every cross-member answer for the addressed member to review; `regulated` defaults this to `true` |
+| `safety.guard.pii.minimum.owner` | Records the minimum PII masking level for answers the member starts: `secrets` or `strict` |
+| `safety.guard.pii.minimum.peer` | Records the minimum PII masking level for answers another member reads: `secrets` or `strict` |
+| `safety.guard.relevance` | Records how the relevance check handles answers unrelated to the request: `hold`, `shadow`, or `off` |
 | `agents.personal.proactive: on\|off` | Sets the organization default for app update wake-ups; a member's explicit preference takes precedence |
 | `tools.provider: composio` | Declares the existing Composio provider; Oryxa's own enabled app integrations use the same organization offer policy |
 | `tools.offer` | Enables only the listed toolkit slugs for this organization; omitting it enables all, and `[]` enables none. Existing connections stay recorded but cannot run, read, subscribe, deliver events, or refresh knowledge sources while disallowed. Previously indexed documents remain until their normal removal lifecycle |
@@ -123,6 +126,11 @@ The current file accepts these settings:
 | `tools.autoSubscribe` | Sets the default for new app connections; a member's per-connection choice takes precedence, and deployment-wide `APPS_AUTO_SUBSCRIBE=false` still disables automatic subscriptions |
 | `tools.wakeUpWithin` | Sets the maximum cadence used to schedule new digest triggers (`1m` through `90m`); omission uses `BATCHING_MAX_WAIT` (one hour by default). Already scheduled triggers keep their deadlines |
 | `search.mode: native\|none` | Enables the existing RAG knowledge toolbox or prevents organization agents from using its search and source tools; omission keeps existing behavior |
+
+The three PII/relevance settings are validated, planned, saved, and projected
+for the answer guard. Connecting that projection to the agents service's
+`guardpolicy` provider is a separate integration; until then these workspace
+overrides do not replace the guard's existing defaults and member preferences.
 
 The parser refuses unknown keys, duplicate members or teams, unrecognized
 roles, and unsupported sections. Omitting a person or team never removes it

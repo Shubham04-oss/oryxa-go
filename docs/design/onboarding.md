@@ -450,7 +450,9 @@ this person above that one?*
 | --- | --- | --- | --- | --- |
 | `safety.screen.strictness` | How hard the request screen checks need and plausibility before anyone is pinged | `standard`, `strict` (`standard`) | New | agents |
 | `safety.guard.bannedTopics` | Topics never let out, whoever approves | list of short descriptions | New | agents (Bedrock Guardrails) |
-| `safety.guard.pii` | Personal data in answers | `mask` | Today (Guardrails) | agents |
+| `safety.guard.pii.minimum.owner` | Minimum PII masking for answers the member starts | `secrets`, `strict` (omitted: no workspace override) | Workspace field implemented; guard-policy adapter pending | agents |
+| `safety.guard.pii.minimum.peer` | Minimum PII masking for answers another member reads | `secrets`, `strict` (omitted: no workspace override) | Workspace field implemented; guard-policy adapter pending | agents |
+| `safety.guard.relevance` | How the relevance check treats an answer unrelated to the request | `hold`, `shadow`, `off` (omitted: no workspace override) | Workspace field implemented; guard-policy adapter pending | agents |
 | `safety.guard.grounding` | Answers must match their approved source | `hold` (for the owner's review), `block` (`hold`) | New | agents |
 | `safety.guard.holdForReview` | Hold every cross-member answer for the owner | `false` (`true` in `regulated`) | Today (for held answers) | agents |
 
