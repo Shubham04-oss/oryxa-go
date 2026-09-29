@@ -2,8 +2,11 @@ package sources
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -366,5 +369,103 @@ func TestEachTargetIsCheckedAgainstTheBrokerBehindIt(t *testing.T) {
 	}
 	if len(reader.asked) != 1 {
 		t.Fatalf("asked apps %d times, want the check to have reached it", len(reader.asked))
+	}
+}
+
+// TestAppsWalksAFakeAppsServer is the whole arrangement over HTTP rather than
+// a stub: the extractor, the mirrored contract and the route itself, with no
+// network. A pass reads a page, resumes from the cursor that page carried, and
+// stops where the reader says the target is drained — which is the only
+// evidence that the two sides of the contract agree.
+func TestAppsWalksAFakeAppsServer(t *testing.T) {
+	type call struct {
+		path   string
+		token  string
+		asked  appsclient.PageRequest
+		target map[string]string
+	}
+	var calls []call
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		seen := call{path: request.URL.Path, token: request.Header.Get("Authorization")}
+		if err := json.NewDecoder(request.Body).Decode(&seen.asked); err != nil {
+			t.Errorf("decode the page request: %v", err)
+		}
+		calls = append(calls, seen)
+		writer.Header().Set("Content-Type", "application/json")
+		if seen.asked.Cursor == "" {
+			_, _ = writer.Write([]byte(`{"items": [
+				{"external_id": "42", "kind": "issue", "title": "Flaky test", "mime": "text/markdown",
+				 "content": "IyB0aXRsZQ==", "metadata": {"state": "open"},
+				 "updated_at": "2026-09-29T09:00:00Z"}],
+				"cursor": "page-2", "watermark": "2026-09-29T09:00:00Z"}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"items": [], "token": "start-token"}`))
+	}))
+	defer server.Close()
+
+	extractor := NewApps(appsclient.New(server.URL))
+	request := appsRequest()
+	first, err := extractor.Fetch(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(first.Items) != 1 || string(first.Items[0].Content) != "# title" {
+		t.Fatalf("first page = %+v, want the one issue the reader gave", first)
+	}
+	if first.Cursor != "page-2" || first.Watermark == nil {
+		t.Fatalf("first page = %+v, want the walk's own place carried on", first)
+	}
+
+	request.Cursor = domain.Cursor{Value: first.Cursor, Watermark: first.Watermark}
+	second, err := extractor.Fetch(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(second.Items) != 0 || second.Cursor != "" {
+		t.Fatalf("second page = %+v, want the target drained", second)
+	}
+	if second.Token != "start-token" {
+		t.Fatalf("second page = %+v, want the window the drained pass leaves", second)
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("apps was asked %d times, want once a page", len(calls))
+	}
+	for _, seen := range calls {
+		if seen.path != "/v1/organizations/org_1/apps/connections/apc_1/pages" {
+			t.Fatalf("path = %q, want the connection's own pages route", seen.path)
+		}
+		if seen.token != "Bearer member-token" {
+			t.Fatalf("Authorization = %q, want the member's own token", seen.token)
+		}
+		if seen.asked.Target["reader"] != "issues" || seen.asked.Limit != 100 {
+			t.Fatalf("asked for %+v, want the target and the page size", seen.asked)
+		}
+	}
+	if calls[1].asked.Cursor != "page-2" || calls[1].asked.Watermark == nil {
+		t.Fatalf("second call asked for %+v, want the walk resumed and the window carried", calls[1].asked)
+	}
+	if calls[0].asked.Cursor != "" || calls[0].asked.Watermark != nil {
+		t.Fatalf("first call asked for %+v, want the beginning of the target", calls[0].asked)
+	}
+}
+
+// TestAppsChecksWithOneItemOverHTTP holds the check to the route as well: it
+// is one item of the target, on the same path, with nothing a pass would not
+// have sent.
+func TestAppsChecksWithOneItemOverHTTP(t *testing.T) {
+	var asked appsclient.PageRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_ = json.NewDecoder(request.Body).Decode(&asked)
+		_, _ = writer.Write([]byte(`{"items": [{"external_id": "42"}]}`))
+	}))
+	defer server.Close()
+
+	if err := NewApps(appsclient.New(server.URL)).Check(context.Background(), appsRequest()); err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if asked.Limit != 1 || asked.Cursor != "" || asked.Full {
+		t.Fatalf("asked for %+v, want one item of the target and nothing more", asked)
 	}
 }
