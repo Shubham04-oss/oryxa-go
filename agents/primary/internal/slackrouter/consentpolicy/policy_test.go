@@ -222,3 +222,26 @@ func TestReasonCodesAreTheContract(t *testing.T) {
 		t.Fatalf("answer destinations = %q, %q", InThread, InDM)
 	}
 }
+
+// TestAnswerForFollowsTheReason: a decision's destination is a function of its
+// recorded reason, so a service reading only the reason agrees with the
+// router, and a reason it has never heard of is answered privately.
+func TestAnswerForFollowsTheReason(t *testing.T) {
+	for reason, want := range map[BypassReason]AnswerTo{
+		PriorityChannel: InThread, OrgChart: InDM, "something_new": InDM, "": InDM,
+	} {
+		if got := AnswerFor(reason); got != want {
+			t.Errorf("AnswerFor(%q) = %q, want %q", reason, got, want)
+		}
+	}
+	for _, facts := range []Facts{
+		ask(func(f *Facts) { f.Channel = Channel{Private: true, HighPriority: true} }),
+		ask(func(f *Facts) { f.Outranks = true }),
+		ask(func(f *Facts) { f.Outranks, f.Channel = true, Channel{Private: true} }),
+	} {
+		decision := Decide(facts)
+		if decision.Outcome != Allow || decision.Bypass.AnswerTo != AnswerFor(decision.Bypass.Reason) {
+			t.Errorf("Decide(%+v) = %+v", facts, decision)
+		}
+	}
+}

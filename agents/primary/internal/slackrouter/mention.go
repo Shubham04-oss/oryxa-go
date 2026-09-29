@@ -22,8 +22,10 @@ const (
 var (
 	// userMention is how Slack writes a mention in a message's text:
 	// <@U123>, or <@U123|name> in older messages. Enterprise users' ids start
-	// with W.
-	userMention = regexp.MustCompile(`<@([UW][A-Z0-9]+)(?:\|[^<>]*)?>`)
+	// with W. It is the shape of an id apps accepts, and the pattern apps reads
+	// mentions with: something that is not an id is not asked, and never sent
+	// to apps in a request it would refuse whole.
+	userMention = regexp.MustCompile(`<@([UW][A-Z0-9]{2,31})(?:\|[^>]*)?>`)
 	// token is any of Slack's angle-bracket forms: a mention, a channel, a
 	// broadcast, a link.
 	token          = regexp.MustCompile(`<([^<>]*)>`)

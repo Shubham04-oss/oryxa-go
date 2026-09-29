@@ -14,7 +14,7 @@ func TestMentionedUsers(t *testing.T) {
 	}{
 		{"none", "no mentions here", nil},
 		{"one", "<@U123> hi", []string{"U123"}},
-		{"in order, once each", "<@U2> and <@U1> and <@U2> again", []string{"U2", "U1"}},
+		{"in order, once each", "<@U222> and <@U111> and <@U222> again", []string{"U222", "U111"}},
 		{"the older form with a label", "<@U123|raya> and <@U123>", []string{"U123"}},
 		{"enterprise ids", "<@W0ABC123> hi", []string{"W0ABC123"}},
 		{"a user group is nobody", "<!subteam^S123|@eng> <!channel> <!here> <!everyone>", nil},
@@ -22,6 +22,8 @@ func TestMentionedUsers(t *testing.T) {
 		{"a link is nobody", "<https://example.com/@U123>", nil},
 		{"escaped text is not a mention", "&lt;@U123&gt;", nil},
 		{"lower case is not an id", "<@u123>", nil},
+		{"too short to be an id", "<@U1> <@UA>", nil},
+		{"too long to be an id", "<@U" + strings.Repeat("A", 40) + ">", nil},
 		{"a bare at sign", "@raya", nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {

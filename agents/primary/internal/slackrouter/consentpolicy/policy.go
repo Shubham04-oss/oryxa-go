@@ -80,6 +80,18 @@ const (
 	InDM AnswerTo = "dm"
 )
 
+// AnswerFor says where the answer to an ask that was bypassed for reason goes.
+// It is what Decide answers, so whoever posts the answer, working from the
+// reason recorded with the decision, reaches the same place the router said:
+// the thread for a priority channel, and for every other reason, including
+// one this does not know, the asker's direct message.
+func AnswerFor(reason BypassReason) AnswerTo {
+	if reason == PriorityChannel {
+		return InThread
+	}
+	return InDM
+}
+
 // Outcome is what may happen with an ask.
 type Outcome int
 
@@ -190,9 +202,9 @@ func Decide(facts Facts) Decision {
 	case !facts.OwnerMember:
 		return deny(OwnerNotMember)
 	case facts.Channel.bypasses():
-		return Decision{Outcome: Allow, Bypass: Bypass{Reason: PriorityChannel, AnswerTo: InThread}}
+		return Decision{Outcome: Allow, Bypass: Bypass{Reason: PriorityChannel, AnswerTo: AnswerFor(PriorityChannel)}}
 	case facts.Outranks:
-		return Decision{Outcome: Allow, Bypass: Bypass{Reason: OrgChart, AnswerTo: InDM}}
+		return Decision{Outcome: Allow, Bypass: Bypass{Reason: OrgChart, AnswerTo: AnswerFor(OrgChart)}}
 	}
 	return Decision{Outcome: NeedsConsent}
 }

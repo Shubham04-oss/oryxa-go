@@ -244,9 +244,9 @@ func TestRefusals(t *testing.T) {
 		},
 		{
 			name: "a mention that names six people",
-			text: toBot("ask <@U1> <@U2> <@U3> <@U4> <@U5> <@U6>"),
+			text: toBot("ask <@UP001> <@UP002> <@UP003> <@UP004> <@UP005> <@UP006>"),
 			setup: func(h *harness) []func(*Mention) {
-				for _, id := range []string{"U1", "U2", "U3", "U4", "U5", "U6"} {
+				for _, id := range []string{"UP001", "UP002", "UP003", "UP004", "UP005", "UP006"} {
 					h.member(id, "Person"+id)
 				}
 				return nil
