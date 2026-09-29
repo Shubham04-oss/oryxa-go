@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   FRESH_CONVERSATION_MS,
   chooseThread,
+  openingThread,
   publishPrimaryChatActivity,
   rememberChoice,
   rememberedChoice,
@@ -61,6 +62,87 @@ describe("chooseThread", () => {
   it("reads a thread with no origin as a chat, as Go does", () => {
     const threads = [{ id: "t1", updated_at: ago(60_000), origin: "" }]
     expect(chooseThread(threads, null, now)).toBe("t1")
+  })
+})
+
+describe("openingThread", () => {
+  const old = (id: string, origin = "chat") => ({
+    id,
+    updated_at: ago(3 * FRESH_CONVERSATION_MS),
+    origin,
+  })
+
+  it("asks nothing when the member's choice or freshness decides", async () => {
+    const waiting = vi.fn(async () => true)
+    const fresh = [{ id: "t2", updated_at: ago(60_000), origin: "chat" }]
+    expect(
+      await openingThread({ threads: fresh, choice: null, now, waiting })
+    ).toBe("t2")
+    expect(
+      await openingThread({ threads: [old("t1")], choice: "t1", now, waiting })
+    ).toBe("t1")
+    expect(
+      await openingThread({ threads: fresh, choice: "new", now, waiting })
+    ).toBeNull()
+    expect(
+      await openingThread({ threads: [], choice: null, now, waiting })
+    ).toBeNull()
+    expect(waiting).not.toHaveBeenCalled()
+  })
+
+  it("keeps an old latest conversation open only while it waits on the member", async () => {
+    const threads = [old("t2"), old("t1")]
+    const waits = vi.fn(async (id: string) => id === "t2")
+    expect(
+      await openingThread({ threads, choice: null, now, waiting: waits })
+    ).toBe("t2")
+    expect(waits).toHaveBeenCalledExactlyOnceWith("t2")
+
+    // Only the latest is asked about, not the older ones.
+    const nothing = vi.fn(async () => false)
+    expect(
+      await openingThread({ threads, choice: null, now, waiting: nothing })
+    ).toBeNull()
+    expect(nothing).toHaveBeenCalledExactlyOnceWith("t2")
+  })
+
+  it("asks about the latest chat, not an update from the member's apps", async () => {
+    const waiting = vi.fn(async () => true)
+    const threads = [old("w1", "wakeup"), old("t1")]
+    expect(await openingThread({ threads, choice: null, now, waiting })).toBe(
+      "t1"
+    )
+    expect(waiting).toHaveBeenCalledExactlyOnceWith("t1")
+    expect(
+      await openingThread({
+        threads: [old("w1", "wakeup")],
+        choice: null,
+        now,
+        waiting,
+      })
+    ).toBeNull()
+    expect(waiting).toHaveBeenCalledOnce()
+  })
+
+  it("falls back to the latest when the chosen conversation is gone", async () => {
+    const waiting = vi.fn(async () => true)
+    expect(
+      await openingThread({
+        threads: [old("t1")],
+        choice: "gone",
+        now,
+        waiting,
+      })
+    ).toBe("t1")
+  })
+
+  it("opens a new chat when the check itself fails", async () => {
+    const waiting = vi.fn(async () => {
+      throw new Error("offline")
+    })
+    expect(
+      await openingThread({ threads: [old("t1")], choice: null, now, waiting })
+    ).toBeNull()
   })
 })
 

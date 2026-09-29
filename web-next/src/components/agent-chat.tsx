@@ -11,8 +11,14 @@ import { AgentConversation } from "./agent-conversation"
 import { ApiError } from "@/lib/api/client"
 import { getSession } from "@/lib/auth/client"
 import { reopenSocket } from "@/lib/threads/agent-socket"
-import { publishPrimaryChatActivity } from "@/lib/threads/chat-choice"
-import type { PrimaryChatActivity } from "@/lib/threads/chat-choice"
+import {
+  PRIMARY_CHAT_AGENT,
+  openingThread,
+  publishPrimaryChatActivity,
+  rememberChoice,
+  rememberedChoice,
+} from "@/lib/threads/chat-choice"
+import type { ChatScope, PrimaryChatActivity } from "@/lib/threads/chat-choice"
 import {
   chatMessagesToItems,
   reconcileChatMessages,
@@ -76,12 +82,30 @@ async function loadTranscript(
 }
 
 /**
- * The Agents tab's chat with the member's primary agent: their most recent
- * conversation, or a new one started by their first message. It runs
- * through the thread's Durable Object (REALTIME.md), in the browser only.
+ * Whether a conversation waits on the member's confirmation, from Go's
+ * detail of it. One that can't be read counts as not waiting.
+ */
+async function waitsOnMember(
+  queryClient: QueryClient,
+  organizationId: string,
+  threadId: string
+): Promise<boolean> {
+  const detail = await queryClient
+    .fetchQuery(threadDetailQueryOptions(organizationId, threadId))
+    .catch(() => undefined)
+  return (detail?.pending_confirmations.length ?? 0) > 0
+}
+
+/**
+ * The Agents tab's chat with the member's primary agent. It opens the
+ * conversation the member chose in this browser session, or their latest one
+ * while it is fresh or still waits on them, and otherwise a new one that
+ * their first message starts (chat-choice.ts). It runs through the thread's
+ * Durable Object (REALTIME.md), in the browser only.
  */
 export function AgentChat({
   organizationId,
+  scope,
   agentName,
   onComposingChange,
   onOpenOverview,
@@ -91,6 +115,8 @@ export function AgentChat({
   getScreenContext,
 }: {
   organizationId: string
+  /** Whose choices the chat remembers for the session; without it none are. */
+  scope?: ChatScope
   agentName?: string
   onComposingChange: (composing: boolean) => void
   onOpenOverview?: () => void
@@ -109,8 +135,9 @@ export function AgentChat({
     ...threadListQueryOptions(organizationId),
     enabled: hydrated,
   })
-  // `undefined` until the list decides it; `null` for a conversation not
-  // started yet; then the thread the tab stays on, whatever the list does.
+  // `undefined` until the rules in chat-choice.ts decide it; `null` for a
+  // conversation not started yet; then the thread the tab stays on, whatever
+  // the list does.
   const [threadId, setThreadId] = useState<string | null | undefined>()
   const [draft, setDraft] = useState("")
   // The first message of a new conversation, until its thread's socket
@@ -139,9 +166,21 @@ export function AgentChat({
   }, [threadId, state])
   useEffect(() => () => publishPrimaryChatActivity(null), [])
 
+  // Once the list is here: the member's choice, else the latest conversation
+  // while it is fresh, else (after asking Go) one that still waits on them.
   useEffect(() => {
-    if (threadId === undefined && threads.data) {
-      setThreadId(threads.data[0]?.id ?? null)
+    if (threadId !== undefined || !threads.data) return
+    let stale = false
+    void openingThread({
+      threads: threads.data,
+      choice: scope ? rememberedChoice(scope, PRIMARY_CHAT_AGENT) : null,
+      now: Date.now(),
+      waiting: (id) => waitsOnMember(queryClient, organizationId, id),
+    }).then((chosen) => {
+      if (!stale) setThreadId(chosen)
+    })
+    return () => {
+      stale = true
     }
   }, [threadId, threads.data])
 
@@ -178,6 +217,7 @@ export function AgentChat({
         queryKey: threadKeys.list(organizationId),
       })
       setThreadId(thread.id)
+      if (scope) rememberChoice(scope, PRIMARY_CHAT_AGENT, thread.id)
     } catch (error) {
       setPending(null)
       setDraft(message)
@@ -191,6 +231,7 @@ export function AgentChat({
     setThreadId(null)
     setPending(null)
     setNotice("")
+    if (scope) rememberChoice(scope, PRIMARY_CHAT_AGENT, null)
   }
 
   let body
@@ -216,6 +257,7 @@ export function AgentChat({
           getScreenContext={getScreenContext}
           onMissing={() => {
             setThreadId(null)
+            if (scope) rememberChoice(scope, PRIMARY_CHAT_AGENT, null)
             setNotice("That conversation no longer exists.")
             void queryClient.invalidateQueries({
               queryKey: threadKeys.list(organizationId),

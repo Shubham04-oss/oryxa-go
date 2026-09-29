@@ -15,7 +15,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
 import { AgentChat } from "./agent-chat"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
-import { usePrimaryChatActivity } from "@/lib/threads/chat-choice"
+import {
+  PRIMARY_CHAT_AGENT,
+  rememberChoice,
+  rememberedChoice,
+  usePrimaryChatActivity,
+} from "@/lib/threads/chat-choice"
 import { itemsToChatMessages } from "@/lib/threads/chat-messages"
 import type { Item, Thread } from "@/lib/threads/client"
 
@@ -116,10 +121,19 @@ function json(body: unknown, status = 200): Response {
   })
 }
 
-const thread = (id: string, title: string): Thread => ({
+const HOUR = 60 * 60 * 1000
+
+/** A conversation last active `age` ago (a minute by default: fresh). */
+const thread = (
+  id: string,
+  title: string,
+  age = 60_000,
+  origin?: string
+): Thread => ({
   id,
   title,
-  updated_at: "2026-09-23T10:00:00Z",
+  updated_at: new Date(Date.now() - age).toISOString(),
+  ...(origin ? { origin } : {}),
 })
 
 /** Go and the Worker's HTTP side, by route. */
@@ -186,10 +200,13 @@ function renderWithQueries(ui: ReactElement) {
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
 }
 
+const scope = { organizationId: "org_1", userId: "user_1" }
+
 function renderChat() {
   return renderWithQueries(
     <AgentChat
       organizationId="org_1"
+      scope={scope}
       agentName="Leo"
       onComposingChange={vi.fn()}
     />
@@ -223,10 +240,11 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  window.sessionStorage.clear()
 })
 
 describe("AgentChat", () => {
-  it("opens the member's most recent conversation through its Durable Object", async () => {
+  it("opens the member's latest conversation through its Durable Object", async () => {
     stubApi({
       threads: [thread("th_2", "Plan the launch"), thread("th_1", "Older")],
     })
@@ -464,6 +482,187 @@ describe("AgentChat", () => {
       "user",
       "assistant",
     ])
+  })
+})
+
+describe("which conversation the chat opens", () => {
+  const blank = "Ask anything to start a conversation."
+  const detailPath = (id: string) => `GET /v1/organizations/org_1/threads/${id}`
+
+  async function opensThread(id: string) {
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        `org_1~${id}`
+      )
+    )
+    expect(
+      hooks.agentOptions.every((item) => item.name === `org_1~${id}`)
+    ).toBe(true)
+  }
+
+  it("opens a new chat once the latest conversation is an hour old", async () => {
+    stubApi({ threads: [thread("th_1", "Yesterday's plan", 25 * HOUR)] })
+    renderChat()
+
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(screen.getByText("New conversation")).toBeTruthy()
+    // No socket: nothing is opened until there is something to say.
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(composer().hasAttribute("disabled")).toBe(false)
+  })
+
+  it("reopens the latest conversation while it is fresh", async () => {
+    stubApi({
+      threads: [thread("th_2", "Plan the launch", 59 * 60_000)],
+    })
+    renderChat()
+    await opensThread("th_2")
+    expect(await screen.findByText("Plan the launch")).toBeTruthy()
+  })
+
+  it("never opens an update from the member's apps", async () => {
+    stubApi({
+      threads: [
+        thread("th_w", "From your apps", 60_000, "wakeup"),
+        thread("th_1", "Plan the launch", 5 * 60_000),
+      ],
+    })
+    renderChat()
+    await opensThread("th_1")
+  })
+
+  it("opens the conversation the member chose in this session, however old", async () => {
+    rememberChoice(scope, PRIMARY_CHAT_AGENT, "th_1")
+    stubApi({
+      threads: [
+        thread("th_2", "Fresh", 60_000),
+        thread("th_1", "Chosen", 30 * HOUR),
+      ],
+    })
+    renderChat()
+    await opensThread("th_1")
+  })
+
+  it("ignores a chosen conversation that no longer exists", async () => {
+    rememberChoice(scope, PRIMARY_CHAT_AGENT, "th_gone")
+    stubApi({ threads: [thread("th_1", "Fresh", 60_000)] })
+    renderChat()
+    await opensThread("th_1")
+  })
+
+  it("keeps a member's choice of a new chat over a fresh conversation, and asks Go about nothing", async () => {
+    rememberChoice(scope, PRIMARY_CHAT_AGENT, null)
+    const calls = stubApi({ threads: [thread("th_1", "Fresh", 60_000)] })
+    renderChat()
+
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(calls.some((call) => call.includes("/threads/th_1"))).toBe(false)
+  })
+
+  it("stays on a new chat after a reload, when the member started one", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    const first = renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("new")
+
+    // The same tab, loaded again: the conversation they left is still fresh.
+    first.unmount()
+    cleanup()
+    hooks.agentOptions.length = 0
+    renderChat()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+  })
+
+  it("remembers the conversation a first message starts, so a reload stays in it", async () => {
+    // It is old by the time of the reload, which only the choice can outlast.
+    stubApi({ threads: [], created: thread("th_new", "", 5 * HOUR) })
+    const first = renderChat()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    type("Plan the launch")
+    await opensThread("th_new")
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_new")
+
+    first.unmount()
+    cleanup()
+    hooks.agentOptions.length = 0
+    renderChat()
+    await opensThread("th_new")
+  })
+
+  it("reopens an old conversation that still waits on the member's confirmation", async () => {
+    const items: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Email Sam" },
+      {
+        type: "confirmation",
+        id: "ev_2",
+        call_id: "call_1",
+        tool_call_id: "tool_1",
+        tool: "send_email",
+        arguments: { to: "sam@example.com" },
+        status: "pending",
+      },
+    ]
+    const calls = stubApi({
+      threads: [thread("th_1", "Email Sam", 6 * HOUR)],
+      items,
+      pending: ["call_1"],
+    })
+    hooks.chat.messages = itemsToChatMessages(items)
+    renderChat()
+
+    await opensThread("th_1")
+    expect(calls).toContain(detailPath("th_1"))
+    open("org_1~th_1")
+    expect(
+      await screen.findByRole("group", { name: "Confirm Send email" })
+    ).toBeTruthy()
+  })
+
+  it("opens a new chat when the old conversation waits on nothing, having asked Go once", async () => {
+    const calls = stubApi({
+      threads: [thread("th_1", "Done long ago", 6 * HOUR)],
+      pending: [],
+    })
+    renderChat()
+
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(calls.filter((call) => call === detailPath("th_1"))).toHaveLength(1)
+  })
+
+  it("opens a new chat when Go can't say whether the old conversation waits", async () => {
+    stubApi({ threads: [thread("th_1", "Old", 6 * HOUR)] })
+    const fetcher = vi.mocked(fetch)
+    const answer = fetcher.getMockImplementation()
+    fetcher.mockImplementation(async (input, init) =>
+      String(input).endsWith("/threads/th_1")
+        ? json({ error: { code: "unavailable", message: "down" } }, 503)
+        : answer!(input, init)
+    )
+    renderChat()
+    // A read that fails is tried once more before the chat gives up on it.
+    expect(
+      await screen.findByText(blank, undefined, { timeout: 4000 })
+    ).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+  })
+
+  it("remembers nothing without a scope, and still applies the rules", async () => {
+    stubApi({ threads: [thread("th_1", "Old", 6 * HOUR)] })
+    renderWithQueries(
+      <AgentChat
+        organizationId="org_1"
+        agentName="Leo"
+        onComposingChange={vi.fn()}
+      />
+    )
+    expect(await screen.findByText(blank)).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(window.sessionStorage.length).toBe(0)
   })
 })
 

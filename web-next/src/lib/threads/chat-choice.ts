@@ -30,6 +30,13 @@ export type PrimaryChatRequest = PrimaryChatTarget & {
 /** How long after its last activity a conversation still reopens on its own. */
 export const FRESH_CONVERSATION_MS = 60 * 60 * 1000
 
+/**
+ * The primary chat's key in a remembered choice. A member has one primary
+ * agent and its conversations are theirs, so the key doesn't wait for the
+ * agents list to say the agent's id.
+ */
+export const PRIMARY_CHAT_AGENT = "primary"
+
 const NEW_CHAT = "new"
 
 function choiceKey(scope: ChatScope, agentId: string) {
@@ -68,25 +75,58 @@ export function rememberChoice(
   }
 }
 
+type ListedThread = Pick<Thread, "id" | "updated_at" | "origin">
+
+/** The newest conversation the member had with the agent: not an update from their apps, which the chat never opens. */
+function latestChatThread(
+  threads: readonly ListedThread[]
+): ListedThread | undefined {
+  return threads.find((thread) => !thread.origin || thread.origin === "chat")
+}
+
 /**
  * The conversation to open, or null for a new chat. `threads` is the list
  * Go answers, newest first; `choice` is `rememberedChoice`.
  */
 export function chooseThread(
-  threads: readonly Pick<Thread, "id" | "updated_at" | "origin">[],
+  threads: readonly ListedThread[],
   choice: string | null,
   now: number
 ): string | null {
   if (choice === NEW_CHAT) return null
   if (choice && threads.some((thread) => thread.id === choice)) return choice
-  const latest = threads.find(
-    (thread) => !thread.origin || thread.origin === "chat"
-  )
+  const latest = latestChatThread(threads)
   if (!latest) return null
   const updated = Date.parse(latest.updated_at)
   return Number.isFinite(updated) && now - updated < FRESH_CONVERSATION_MS
     ? latest.id
     : null
+}
+
+/**
+ * What the chat opens: `chooseThread`'s answer, except that an old latest
+ * conversation still opens while it waits on the member's confirmation. The
+ * list can't say that, so `waiting` asks (Go's detail of the thread), and only
+ * when neither the member's choice nor freshness decided. A check that fails
+ * counts as not waiting, and the chat opens new.
+ */
+export async function openingThread({
+  threads,
+  choice,
+  now,
+  waiting,
+}: {
+  threads: readonly ListedThread[]
+  choice: string | null
+  now: number
+  waiting: (threadId: string) => Promise<boolean>
+}): Promise<string | null> {
+  const chosen = chooseThread(threads, choice, now)
+  if (chosen !== null || choice === NEW_CHAT) return chosen
+  const latest = latestChatThread(threads)
+  if (!latest) return null
+  const held = await waiting(latest.id).catch(() => false)
+  return held ? latest.id : null
 }
 
 let latestRequest: PrimaryChatRequest | null = null

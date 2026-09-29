@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { ComponentType, KeyboardEvent, ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
@@ -34,6 +34,7 @@ import type { Inbox } from "@/lib/dms"
 import { isNameId, sideConversationName } from "@/lib/dms/names"
 import type { Teamspace } from "@/lib/teamspaces/client"
 import { teamspaceKeys, teamspaceQueryOptions } from "@/lib/teamspaces/queries"
+import type { ChatScope } from "@/lib/threads/chat-choice"
 import { cn } from "@/lib/utils"
 import type { ScreenContext } from "@/lib/agents/screen-context"
 
@@ -188,6 +189,15 @@ export function WorkspaceAgentPanel({
     enabled: Boolean(organizationId),
   })
   const viewerId = directMessages?.viewerId
+  // Whose choices the primary chat remembers for the session: this member's,
+  // in this organization.
+  const scope = useMemo<ChatScope | undefined>(
+    () =>
+      organizationId && viewerId
+        ? { organizationId, userId: viewerId }
+        : undefined,
+    [organizationId, viewerId]
+  )
   // On a teamspace page, its teammates: read as the page reads it (one
   // query, shared with the focused view), what the list knows shown at once.
   const queryClient = useQueryClient()
@@ -477,6 +487,7 @@ export function WorkspaceAgentPanel({
                 >
                   <AgentsView
                     organizationId={organizationId}
+                    scope={scope}
                     agents={agents.data}
                     agentId={agentId}
                     onSelectAgent={setAgentId}
@@ -658,6 +669,7 @@ function AgentsTabSide({
  */
 function AgentsView({
   organizationId,
+  scope,
   agents,
   agentId,
   onSelectAgent,
@@ -672,6 +684,7 @@ function AgentsView({
   getScreenContext,
 }: {
   organizationId?: string
+  scope?: ChatScope
   /** The member's agents, once read. */
   agents?: ManagedAgent[]
   /** The specialist in use, or null for the primary agent. */
@@ -742,6 +755,7 @@ function AgentsView({
       ) : organizationId ? (
         <AgentChat
           organizationId={organizationId}
+          scope={scope}
           agentName={agentName}
           onComposingChange={onComposingChange}
           inOverview={inAgentOverview}
