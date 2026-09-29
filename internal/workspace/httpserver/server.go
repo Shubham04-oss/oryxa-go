@@ -9,11 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/runtime"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
@@ -44,13 +45,13 @@ func New(repository Repository, apiURL string) (*Server, error) {
 	if repository == nil || strings.TrimSpace(apiURL) == "" {
 		return nil, fmt.Errorf("workspace API requires a repository and API URL")
 	}
-	validated, err := runtime.NewClient(apiURL, "startup-url-validation")
+	validated, err := runtime.ValidateAPIURL(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("workspace API URL is invalid: %w", err)
 	}
 	server := &Server{
-		repository: repository, apiURL: validated.BaseURL,
-		http: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		repository: repository, apiURL: validated,
+		http: &http.Client{Timeout: 15 * time.Second, Transport: observability.Transport(nil), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		mux:  http.NewServeMux(),
 	}
 	server.handle("POST /v1/organizations/{organizationID}/workspace:validate", server.validate)
@@ -96,40 +97,22 @@ func (server *Server) authorizeRole(writer http.ResponseWriter, request *http.Re
 		return actor{}, false
 	}
 	organizationID := request.PathValue("organizationID")
-	path := "/v1/organizations/" + url.PathEscape(organizationID)
-	authRequest, err := http.NewRequestWithContext(request.Context(), http.MethodGet, server.apiURL+path, nil)
+	client, err := server.client(actor{Token: parts[1]})
 	if err != nil {
-		writeError(writer, http.StatusBadGateway, "auth could not be reached")
+		writeError(writer, http.StatusInternalServerError, "workspace API URL is invalid")
 		return actor{}, false
 	}
-	authRequest.Header.Set("Authorization", "Bearer "+parts[1])
-	response, err := server.http.Do(authRequest)
+	access, err := client.OrganizationAccess(request.Context(), organizationID)
 	if err != nil {
-		writeError(writer, http.StatusBadGateway, "auth could not be reached")
-		return actor{}, false
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
 		status := http.StatusBadGateway
-		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusNotFound {
-			status = response.StatusCode
+		var remote *runtime.StatusError
+		if errors.As(err, &remote) && (remote.Status == http.StatusUnauthorized || remote.Status == http.StatusForbidden || remote.Status == http.StatusNotFound) {
+			status = remote.Status
 		}
 		writeError(writer, status, "auth did not authorize this organization")
 		return actor{}, false
 	}
-	var access struct {
-		Organization struct {
-			ID   string `json:"id"`
-			Slug string `json:"slug"`
-		} `json:"organization"`
-		Membership struct {
-			OrganizationID string `json:"organization_id"`
-			UserID         string `json:"user_id"`
-			Role           string `json:"role"`
-		} `json:"membership"`
-		Agent bool `json:"agent"`
-	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&access); err != nil || access.Organization.ID != organizationID || access.Membership.OrganizationID != organizationID || access.Membership.UserID == "" {
+	if access.Organization.ID != organizationID || access.Membership.OrganizationID != organizationID || access.Membership.UserID == "" {
 		writeError(writer, http.StatusBadGateway, "auth returned an invalid organization")
 		return actor{}, false
 	}
@@ -158,6 +141,10 @@ func decodeSubmitted(writer http.ResponseWriter, request *http.Request, slug str
 		writeError(writer, http.StatusBadRequest, "one request body is required")
 		return submitted{}, spec.Document{}, false
 	}
+	if err := cleantext.Check(body); err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
+		return submitted{}, spec.Document{}, false
+	}
 	document, err := spec.Parse([]byte(body.Document))
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err.Error())
@@ -171,7 +158,13 @@ func decodeSubmitted(writer http.ResponseWriter, request *http.Request, slug str
 }
 
 func (server *Server) client(actor actor) (*runtime.Client, error) {
-	return runtime.NewClient(server.apiURL, actor.Token)
+	client, err := runtime.NewClient(server.apiURL, actor.Token)
+	if err != nil {
+		return nil, err
+	}
+	httpClient := *server.http
+	client.HTTP = &httpClient
+	return client, nil
 }
 
 func (server *Server) validate(writer http.ResponseWriter, request *http.Request) {
@@ -537,6 +530,10 @@ func (server *Server) rollback(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusBadRequest, "one request body is required")
 		return
 	}
+	if err := cleantext.Check(body); err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
 	version, err := server.repository.AtVersion(request.Context(), request.PathValue("organizationID"), body.To)
 	if errors.Is(err, store.ErrVersionNotFound) {
 		writeError(writer, http.StatusNotFound, "workspace version was not found")
@@ -571,6 +568,10 @@ func (server *Server) rollbackPlan(writer http.ResponseWriter, request *http.Req
 	var extra any
 	if decoder.Decode(&extra) != io.EOF {
 		writeError(writer, http.StatusBadRequest, "one request body is required")
+		return
+	}
+	if err := cleantext.Check(body); err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
 	version, err := server.repository.AtVersion(request.Context(), request.PathValue("organizationID"), body.To)
@@ -625,35 +626,19 @@ func (server *Server) context(writer http.ResponseWriter, request *http.Request)
 		writeError(writer, http.StatusInternalServerError, "workspace context could not be read")
 		return
 	}
-	path := "/v1/organizations/" + url.PathEscape(request.PathValue("organizationID")) + "/directory"
-	membersRequest, err := http.NewRequestWithContext(request.Context(), http.MethodGet, server.apiURL+path, nil)
+	client, err := server.client(access)
 	if err != nil {
-		writeError(writer, http.StatusBadGateway, "members could not be reached")
+		writeError(writer, http.StatusInternalServerError, "workspace API URL is invalid")
 		return
 	}
-	membersRequest.Header.Set("Authorization", "Bearer "+access.Token)
-	response, err := server.http.Do(membersRequest)
+	emails, err := client.DirectoryEmails(request.Context(), request.PathValue("organizationID"))
 	if err != nil {
-		writeError(writer, http.StatusBadGateway, "members could not be reached")
-		return
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
 		writeError(writer, http.StatusBadGateway, "members could not be read")
 		return
 	}
-	var members struct {
-		Members []struct {
-			Email string `json:"email"`
-		} `json:"members"`
-	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(&members); err != nil {
-		writeError(writer, http.StatusBadGateway, "members response was invalid")
-		return
-	}
 	joined := map[string]bool{}
-	for _, member := range members.Members {
-		joined[strings.ToLower(member.Email)] = true
+	for _, email := range emails {
+		joined[strings.ToLower(email)] = true
 	}
 	owners := make([]spec.OwnerHint, 0)
 	for _, hint := range previous.Ownership.Items {
