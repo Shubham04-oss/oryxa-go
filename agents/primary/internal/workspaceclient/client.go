@@ -51,7 +51,7 @@ func (client *Client) Load(ctx context.Context, organizationID, token string) (a
 		return agents.DirectoryContext{}, fmt.Errorf("workspace context returned %d", response.StatusCode)
 	}
 	var result agents.DirectoryContext
-	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(&result); err != nil {
 		return agents.DirectoryContext{}, fmt.Errorf("workspace context response: %w", err)
 	}
 	return result, nil

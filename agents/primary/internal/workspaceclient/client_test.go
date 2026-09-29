@@ -2,11 +2,15 @@ package workspaceclient
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
@@ -28,6 +32,27 @@ func TestLoadCarriesMemberBearerAndParsesContext(t *testing.T) {
 	context, err := client.Load(context.Background(), "org_1", "member-token")
 	if err != nil || len(context.Ownership) != 1 || context.Ownership[0].System != "billing" || len(context.OrgChart.Authority) != 1 {
 		t.Fatalf("context=%+v err=%v", context, err)
+	}
+}
+
+func TestLoadAcceptsLargeOrganizationContext(t *testing.T) {
+	fixture := agents.DirectoryContext{}
+	for i := range 10000 {
+		fixture.Ownership = append(fixture.Ownership, spec.OwnerHint{Owner: fmt.Sprintf("member-%d@example.com", i), System: fmt.Sprintf("system-%d-%s", i, strings.Repeat("a", 180))})
+	}
+	encoded, err := json.Marshal(fixture)
+	if err != nil || len(encoded) <= 2<<20 {
+		t.Fatalf("fixture must exceed the former limit: %d bytes, %v", len(encoded), err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) { _, _ = writer.Write(encoded) }))
+	defer server.Close()
+	client, err := New(server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.Load(context.Background(), "org_1", "member-token")
+	if err != nil || len(got.Ownership) != 10000 {
+		t.Fatalf("large context ownership count = %d, %v", len(got.Ownership), err)
 	}
 }
 
