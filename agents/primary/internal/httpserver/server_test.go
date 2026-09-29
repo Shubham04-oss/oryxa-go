@@ -501,6 +501,15 @@ type fakeInteractions struct {
 	// agentDecisions and ownerDecisions count Decide and DecideAsOwner, and
 	// reviews ReviewAsOwner.
 	agentDecisions, ownerDecisions, reviews int
+	// consents are the choices ConsentAsOwner was given, and consentErr what
+	// it answers when it is set; revoked are the leases RevokeLease was given,
+	// secretErr what the secret authorizations answer when it is set, and
+	// limit the last limit Activity was given.
+	consents   []string
+	consentErr error
+	revoked    []string
+	secretErr  error
+	limit      int
 }
 
 func (service *fakeInteractions) Create(_ context.Context, actor primaryagents.InteractionActor, token, key string, input primaryagents.InteractionCreateInput) (primaryagents.Interaction, error) {
@@ -645,7 +654,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 61 {
+	if len(patterns) != 67 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)

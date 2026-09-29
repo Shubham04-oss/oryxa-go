@@ -128,6 +128,22 @@ type AgentInteractions interface {
 	// It takes the member's own token, which sending the answer to a
 	// request made in a teamspace reads that teamspace with.
 	ReviewAsOwner(context.Context, primaryagents.InteractionActor, string, string, primaryagents.InteractionReviewInput) (primaryagents.Interaction, error)
+	// ConsentAsOwner is the member's choice, in their own session, of a
+	// request that asks for consent: summary, access or deny. A request
+	// decided first is interactions.ErrAlreadyDecided, and the result then
+	// holds it as it stands, and so the winner.
+	ConsentAsOwner(context.Context, primaryagents.InteractionActor, string, string) (interactions.ConsentResult, error)
+	// Activity is what happened to the member's Slack asks, newest first.
+	Activity(context.Context, primaryagents.InteractionActor, int) ([]interactions.ActivityEntry, error)
+	// RevokeLease ends a lease the member gave.
+	RevokeLease(context.Context, primaryagents.InteractionActor, string) (interactions.Lease, error)
+	// AuthorizeSecretPut, AuthorizeSecretView and AuthorizeSecretRevoke say
+	// whether the member may share, open or revoke the secret of a request,
+	// and hand back the share the store keeps it under. Sharing also says how
+	// long the secret lives, given how long the member asked for.
+	AuthorizeSecretPut(context.Context, primaryagents.InteractionActor, string, time.Duration) (interactions.SecretShare, time.Duration, error)
+	AuthorizeSecretView(context.Context, primaryagents.InteractionActor, string) (interactions.SecretShare, error)
+	AuthorizeSecretRevoke(context.Context, primaryagents.InteractionActor, string) (interactions.SecretShare, error)
 }
 
 // Teamspaces is the shared multi-user agent-space catalogue. Authorization is
@@ -214,6 +230,11 @@ type Config struct {
 	// there is one; a nil pointer in the interface is read as none, but a
 	// caller should not lean on that.
 	AnswerGuardPreferences AnswerGuardPreferences
+	// SecretShares keeps the one-time secrets an owner shares with the member
+	// who asked (secretshares.Store). Nil answers 503 on the three secret
+	// routes: it is set only when there is one, since a nil pointer in the
+	// interface would not read as none.
+	SecretShares SecretShares
 }
 
 // Server serves the API.
@@ -230,6 +251,7 @@ type Server struct {
 	organizationContext OrganizationAgentContext
 	answerGuard         AnswerChecker
 	guardPreferences    AnswerGuardPreferences
+	secretShares        SecretShares
 	checks              *checkLimiter
 	allowedOrigins      map[string]struct{}
 	runTimeout          time.Duration
@@ -259,6 +281,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		organizationContext: config.OrganizationContext,
 		answerGuard:         config.AnswerGuard,
 		guardPreferences:    keptGuardPreferences(config.AnswerGuardPreferences),
+		secretShares:        config.SecretShares,
 		checks:              newCheckLimiter(checksPerWindow, checkWindow),
 		allowedOrigins:      map[string]struct{}{},
 		runTimeout:          config.RunTimeout,
@@ -310,10 +333,16 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests", server.listAgentRequests)
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/inbox", server.interactionInbox)
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/sent", server.interactionSent)
+	server.handle("GET /v1/organizations/{organizationID}/agent-requests/activity", server.interactionActivity)
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/{requestID}", server.getInteraction)
 	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/decision", server.decideInteraction)
 	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/response", server.respondInteraction)
 	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/review", server.reviewInteraction)
+	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/consent", server.consentInteraction)
+	server.handle("PUT /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", server.putSecret)
+	server.handle("GET /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", server.viewSecret)
+	server.handle("DELETE /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", server.revokeSecret)
+	server.handle("DELETE /v1/organizations/{organizationID}/agent-leases/{leaseID}", server.revokeLease)
 	server.handle("GET /v1/organizations/{organizationID}/organization-agent", server.getOrganizationAgent)
 	server.handle("PATCH /v1/organizations/{organizationID}/organization-agent", server.updateOrganizationAgent)
 	server.handle("GET /v1/organizations/{organizationID}/organization-agent/context", server.getOrganizationAgentContext)
@@ -433,9 +462,17 @@ func (server *Server) createInteraction(writer http.ResponseWriter, request *htt
 }
 
 // listAgentRequests lists the requests the member's agents sent and were
-// sent, together.
+// sent, together, or, with ?box=inbox or ?box=sent, one side of them.
 func (server *Server) listAgentRequests(writer http.ResponseWriter, request *http.Request) {
-	server.listInteractions(writer, request, interactions.BoxAll)
+	box := interactions.BoxAll
+	if query := request.URL.Query(); query.Has("box") {
+		box = strings.ToLower(strings.TrimSpace(query.Get("box")))
+		if box != interactions.BoxInbox && box != interactions.BoxSent && box != interactions.BoxAll {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "box must be inbox, sent or all")
+			return
+		}
+	}
+	server.listInteractions(writer, request, box)
 }
 
 func (server *Server) interactionInbox(writer http.ResponseWriter, request *http.Request) {
@@ -449,7 +486,8 @@ func (server *Server) interactionSent(writer http.ResponseWriter, request *http.
 // listInteractions lists one side of the member's requests, or both. Each
 // listing takes an optional ?teamspace_id= and ?with_user=, which together
 // are how a side conversation reads what two teammates asked each other in
-// one teamspace, as either of them.
+// one teamspace, as either of them; ?origin= (agent or slack) for the
+// requests made there; and ?ask_id= for the requests of one Slack message.
 func (server *Server) listInteractions(writer http.ResponseWriter, request *http.Request, box string) {
 	member, ok := server.memberWithAgent(writer, request)
 	if !ok {
@@ -466,14 +504,15 @@ func (server *Server) listInteractions(writer http.ResponseWriter, request *http
 	query := request.URL.Query()
 	// A filter left out lists everything, so one sent blank is a mistake to
 	// answer, never a quiet way of asking for everything.
-	for _, name := range []string{"teamspace_id", "with_user"} {
+	for _, name := range []string{"teamspace_id", "with_user", "origin", "ask_id"} {
 		if query.Has(name) && strings.TrimSpace(query.Get(name)) == "" {
 			writeError(writer, http.StatusBadRequest, "invalid_request", name+" must not be blank; leave it out to list every request")
 			return
 		}
 	}
 	listed, err := server.interactions.List(request.Context(), interactionActorOf(member), interactions.Query{
-		Box: box, TeamspaceID: query.Get("teamspace_id"), WithUserID: query.Get("with_user"), Limit: limit,
+		Box: box, TeamspaceID: query.Get("teamspace_id"), WithUserID: query.Get("with_user"),
+		Origin: query.Get("origin"), AskID: query.Get("ask_id"), Limit: limit,
 	})
 	if err != nil {
 		server.handleError(writer, request, err)
@@ -1820,6 +1859,16 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusConflict, "idempotency_key_reused"
 	case errors.Is(err, interactions.ErrClosed):
 		return http.StatusConflict, "request_closed"
+	case errors.Is(err, interactions.ErrAlreadyDecided):
+		return http.StatusConflict, "already_decided"
+	case errors.Is(err, interactions.ErrAnsweredElsewhere):
+		return http.StatusConflict, "answered_elsewhere"
+	case errors.Is(err, interactions.ErrRevoked):
+		return http.StatusConflict, "access_revoked"
+	case errors.Is(err, interactions.ErrSecretGone):
+		return http.StatusGone, "secret_gone"
+	case errors.Is(err, interactions.ErrConsentUnavailable):
+		return http.StatusServiceUnavailable, "consent_unavailable"
 	case errors.Is(err, interactions.ErrConflict):
 		return http.StatusConflict, "invalid_state"
 	case errors.Is(err, interactions.ErrNotFound):
