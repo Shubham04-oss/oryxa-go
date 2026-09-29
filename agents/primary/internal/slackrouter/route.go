@@ -65,15 +65,29 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	if err != nil {
 		return err
 	}
-	owners := make([]resolved, 0, len(named))
+	// Who is named is counted once the people are known: two Slack users who
+	// are the same member, or a Slack user who is the asker under another
+	// account, are one person and not a second owner.
+	owners, ownersNamed := make([]resolved, 0, len(named)), len(named)
 	if len(named) <= consentpolicy.MaxOwners {
+		seen := map[string]bool{}
+		if asker.Member {
+			seen[asker.Person.UserID] = true
+		}
 		for _, id := range named {
 			owner, err := router.resolver.resolve(ctx, job.OrganizationID, job.TeamID, id, profiles)
 			if err != nil {
 				return err
 			}
+			if owner.Member {
+				if seen[owner.Person.UserID] {
+					continue
+				}
+				seen[owner.Person.UserID] = true
+			}
 			owners = append(owners, owner)
 		}
+		ownersNamed = len(owners)
 	}
 	openAsks := 0
 	if asker.Member {
@@ -83,7 +97,7 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	}
 
 	facts := consentpolicy.Facts{
-		AskerMember: asker.Member, OwnersNamed: len(named), Channel: channel, OpenAsks: openAsks,
+		AskerMember: asker.Member, OwnersNamed: ownersNamed, Channel: channel, OpenAsks: openAsks,
 	}
 	// What refuses every owner alike refuses the ask. Asked of an owner who is
 	// a member, the policy can only refuse for a reason that is not about the

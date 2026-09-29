@@ -416,6 +416,30 @@ func TestAnOwnerNamedTwiceOrTheAskerNamedIsNotAskedTwice(t *testing.T) {
 	}
 }
 
+// TestTheSamePersonUnderAnotherAccountIsNotAnotherOwner: two Slack users who
+// are one member, and a Slack user who is the asker, are one person each.
+func TestTheSamePersonUnderAnotherAccountIsNotAnotherOwner(t *testing.T) {
+	h := newHarness(t)
+	raya := h.member("URAYA", "Raya")
+	// A second Slack user with Raya's address, and one with the asker's.
+	h.slack.profiles["URAYA2"] = Profile{UserID: "URAYA2", TeamID: testTeam, Email: "raya@acme.com", EmailConfirmed: true, Name: "Raya (old account)"}
+	h.slack.profiles["UADA2"] = Profile{UserID: "UADA2", TeamID: testTeam, Email: "ada@acme.com", EmailConfirmed: true, Name: "Ada (old account)"}
+	h.mustRun(h.mention(toBot("ask <@URAYA> and <@URAYA2> and <@UADA2>")))
+	ask := h.ask()
+	if len(ask.Owners) != 1 || ask.Owners[0].Person.UserID != raya.UserID || ask.Owners[0].Person.SlackUserID != "URAYA" {
+		t.Fatalf("owners = %+v, want Raya once, on the account first named", ask.Owners)
+	}
+
+	// Named only under the asker's other account, nobody is asked.
+	h2 := newHarness(t)
+	h2.slack.profiles["UADA2"] = Profile{UserID: "UADA2", TeamID: testTeam, Email: "ada@acme.com", EmailConfirmed: true, Name: "Ada (old account)"}
+	job := h2.mention(toBot("ask <@UADA2>"))
+	h2.mustRun(job)
+	if _, params := h2.refusal(job); params.Reason != consentpolicy.NoOwner {
+		t.Fatalf("reason = %q", params.Reason)
+	}
+}
+
 func TestTheOpenAskLimitIsFiveAtOnce(t *testing.T) {
 	h := newHarness(t)
 	h.member("URAYA", "Raya")
