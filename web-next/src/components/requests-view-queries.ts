@@ -76,7 +76,11 @@ export function activityQueryOptions(
   limit = ACTIVITY_LIMIT
 ) {
   return queryOptions({
-    queryKey: [...agentKeys.requests(organizationId), "activity", limit] as const,
+    queryKey: [
+      ...agentKeys.requests(organizationId),
+      "activity",
+      limit,
+    ] as const,
     queryFn: ({ signal }) =>
       listAgentActivity(organizationId, { limit, signal }),
     ...settling,
@@ -100,10 +104,21 @@ export type PeopleNames = {
   nameOf: (userId: string) => string | undefined
 }
 
-/** The members list, as `nameOf`. It is the list Settings and the DMs already read, so it costs no more. */
+/**
+ * The members list, as `nameOf`. It is the list Settings and the DMs already
+ * read, so it costs no more. `loading` lasts only until the list has answered
+ * once: a list that failed stays `error` (names fall back to what a request
+ * itself holds) however often it is tried again, so a failing members route
+ * never sends every card back to "loading" and forward again, and is not
+ * asked again by each card that mounts.
+ */
 export function usePeopleNames(organizationId: string): PeopleNames {
-  const members = useQuery(membersQueryOptions(organizationId))
+  const members = useQuery({
+    ...membersQueryOptions(organizationId),
+    retryOnMount: false,
+  })
   const { data } = members
+  const failed = members.errorUpdateCount > 0
   return useMemo(() => {
     const names = new Map(
       (data ?? []).map((member) => [
@@ -112,8 +127,8 @@ export function usePeopleNames(organizationId: string): PeopleNames {
       ])
     )
     return {
-      status: data ? "ready" : members.isError ? "error" : "loading",
+      status: data ? "ready" : failed ? "error" : "loading",
       nameOf: (userId) => names.get(userId),
     }
-  }, [data, members.isError])
+  }, [data, failed])
 }

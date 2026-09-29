@@ -1,0 +1,198 @@
+/* Agents → Requests (requests-view.tsx, requests-activity.tsx): the tabs, the
+   origin filter, the lists of request cards and Activity's rows. The page
+   scrolls and pads like the other Agents pages (.workspace-agents-page,
+   agents-mode.css); the tabs are the shared pill tabs (.workspace-work-tab),
+   the filter the shared pills. Cards come from request-card.css
+   (DESIGN.md §1, §3). */
+
+.workspace-requests-column {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 720px;
+}
+
+/* A request a link or a note named, above the lists. */
+.workspace-requests-pinned {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding-bottom: 6px;
+}
+.workspace-requests-pinned > .workspace-request-card {
+  align-self: stretch;
+}
+
+.workspace-requests-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+.workspace-requests-tabs {
+  display: flex;
+  gap: 8px;
+}
+.workspace-requests-tabs .workspace-work-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.workspace-requests-tabs .workspace-work-tab:focus-visible {
+  outline: 2px solid #d6d6d6;
+  outline-offset: 2px;
+}
+.workspace-requests-count {
+  display: inline-grid;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  place-items: center;
+  border-radius: 999px;
+  background: #e9e9e9;
+  color: #1e1e1e;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+.workspace-requests-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspace-requests-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.workspace-requests-group > .workspace-eyebrow {
+  margin-bottom: 10px;
+}
+.workspace-requests-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.workspace-requests-list > li {
+  min-width: 0;
+}
+
+/* Activity: one card of rows for each day. */
+.workspace-requests-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.workspace-requests-activity > .workspace-agents-note {
+  max-width: none;
+  margin: 0;
+}
+.workspace-requests-activity section > .workspace-eyebrow {
+  margin-bottom: 8px;
+}
+.workspace-requests-activity-list {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #393939;
+  border-radius: 14px;
+  background: var(--workspace-raised, #242424);
+  list-style: none;
+}
+.workspace-requests-activity-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 14px;
+}
+.workspace-requests-activity-row + .workspace-requests-activity-row {
+  border-top: 1px solid #303030;
+}
+.workspace-requests-activity-icon {
+  display: grid;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+  background: #2f2f2f;
+  color: #cfcfcf;
+}
+.workspace-requests-activity-row[data-kind="secret_viewed"]
+  .workspace-requests-activity-icon,
+.workspace-requests-activity-row[data-kind="lease_given"]
+  .workspace-requests-activity-icon {
+  color: #e6e6e6;
+}
+.workspace-requests-activity-text {
+  flex: 1;
+  min-width: 0;
+  padding-top: 3px;
+  color: #d8d8d8;
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.workspace-requests-activity-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 10px;
+  padding-top: 2px;
+}
+.workspace-requests-activity-actions time {
+  color: #777;
+  font-size: 10px;
+  line-height: 1.8;
+}
+
+@media (max-width: 800px) {
+  .workspace-agents-page.workspace-requests-page {
+    padding: 20px 16px 40px;
+  }
+  .workspace-requests-activity-row {
+    flex-wrap: wrap;
+    padding: 11px 12px;
+  }
+  .workspace-requests-activity-text {
+    flex-basis: calc(100% - 40px);
+  }
+  .workspace-requests-activity-actions {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    padding-left: 34px;
+  }
+  .workspace-requests-tabs .workspace-work-tab {
+    min-height: 36px;
+  }
+}
+
+/* The Agent overview's "Requests waiting" tile leads here. */
+.workspace-requests-stat-link {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #bdbdbd;
+  font: inherit;
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.workspace-requests-stat-link:hover {
+  color: #f2f2f2;
+}
+.workspace-requests-stat-link:focus-visible {
+  outline: 2px solid #d6d6d6;
+  outline-offset: 2px;
+}

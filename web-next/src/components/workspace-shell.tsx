@@ -8,6 +8,7 @@ import {
   ChartNoAxesColumn,
   Folder,
   House,
+  Inbox,
   LayoutGrid,
   LogOut,
   MoreHorizontal,
@@ -22,6 +23,8 @@ import {
 import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { KnowledgeBases } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
+import { RequestsCanvas } from "./requests-view"
+import { useRequestsEntry } from "./requests-view-open"
 import { TeamspacesManagement } from "./teamspaces-management"
 import type { WorkspaceRole } from "./teamspaces-management"
 import { TeamspaceFocus } from "./teamspace-focus"
@@ -63,6 +66,7 @@ type Section =
   | "agents"
   | "multi-agents"
   | "specialists"
+  | "requests"
 type PrimaryMode = "home" | "team" | "agents"
 
 type NavigationItem = {
@@ -86,6 +90,7 @@ const navigation: Record<PrimaryMode, NavigationItem[]> = {
     { key: "agents", label: "Agent overview", icon: ChartNoAxesColumn },
     { key: "multi-agents", label: "Multi-agent teams", icon: Workflow },
     { key: "specialists", label: "Specialists", icon: Bot },
+    { key: "requests", label: "Requests", icon: Inbox },
   ],
 }
 
@@ -111,6 +116,7 @@ const headings: Record<Section, string> = {
   agents: "Agent overview",
   "multi-agents": "Multi-agent teams",
   specialists: "Specialists",
+  requests: "Requests",
   people: "People",
   knowledge: "Knowledge bases",
   tools: "Tools",
@@ -170,6 +176,8 @@ export function WorkspaceShell({
   const [settingsOpen, setSettingsOpen] = useState(false)
   // The page Settings opens on, when a link asked for one.
   const [settingsPage, setSettingsPage] = useState<SettingsPage>()
+  // The request a link or a note named, which Requests opens first.
+  const [requestFocus, setRequestFocus] = useState<string | null>(null)
   const agentsMode = useAgentsMode()
   const [chatRequest, setChatRequest] = useState<AgentPanelChatRequest | null>(
     null
@@ -392,6 +400,26 @@ export function WorkspaceShell({
     if (selectedKnowledgeBase) setKnowledgeBaseSelection(null)
     if (selectedTeamspace) teamspaces.select(null)
   }
+
+  // A request named by a link or a note (requests-view-open.ts) opens in
+  // Agents → Requests, first; leaving Requests puts it away.
+  function openRequestsSection(requestId?: string) {
+    teamspaces.reset()
+    agentsMode.close()
+    setDmPeerId(null)
+    setKnowledgeBaseSelection(null)
+    setRequestFocus(requestId ?? null)
+    setActiveMode("agents")
+    setSectionsByMode((current) => ({ ...current, agents: "requests" }))
+    if (isMobile) {
+      setLeftExpanded(false)
+      setRightExpanded(false)
+    }
+  }
+  useEffect(() => {
+    if (section !== "requests") setRequestFocus(null)
+  }, [section])
+  useRequestsEntry(openRequestsSection)
 
   return (
     <div
@@ -761,6 +789,16 @@ export function WorkspaceShell({
                   viewerId={session?.user.id}
                   onOpen={openWork}
                   onNavigate={selectSection}
+                />
+              )}
+              {section === "requests" && (
+                <RequestsCanvas
+                  organizationId={
+                    session ? selectedOrganization?.id : undefined
+                  }
+                  viewerId={session?.user.id}
+                  focusRequestId={requestFocus}
+                  onFocusDone={() => setRequestFocus(null)}
                 />
               )}
             </main>
