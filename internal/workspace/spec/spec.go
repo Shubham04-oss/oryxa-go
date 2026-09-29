@@ -719,7 +719,30 @@ func (document Document) YAML() ([]byte, error) {
 	if err := document.Validate(); err != nil {
 		return nil, err
 	}
-	return yaml.Marshal(document)
+	var node yaml.Node
+	if err := node.Encode(document); err != nil {
+		return nil, err
+	}
+	quoteMultilineStrings(&node)
+	encoded, err := yaml.Marshal(&node)
+	if err != nil {
+		return nil, err
+	}
+	// Serialization is also a preflight: no apply may discover afterwards that
+	// the same document cannot be read when it is saved as a workspace version.
+	if _, err := Parse(encoded); err != nil {
+		return nil, fmt.Errorf("workspace YAML could not round trip: %w", err)
+	}
+	return encoded, nil
+}
+
+func quoteMultilineStrings(node *yaml.Node) {
+	if node.Kind == yaml.ScalarNode && node.Tag == "!!str" && strings.ContainsAny(node.Value, "\t\r\n") {
+		node.Style = yaml.DoubleQuotedStyle
+	}
+	for _, child := range node.Content {
+		quoteMultilineStrings(child)
+	}
 }
 
 // Normalize mirrors the public services before comparison or persistence.
