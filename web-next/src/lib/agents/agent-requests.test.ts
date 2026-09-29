@@ -209,6 +209,50 @@ describe("listing by origin and ask", () => {
       "/v1/organizations/org-1/agent-requests/inbox?origin=agent",
     ])
   })
+
+  const slack: AgentRequest = { ...request, id: "irq_slack", origin: "slack" }
+  const agent: AgentRequest = { ...request, id: "irq_agent", origin: "agent" }
+  const legacy: AgentRequest = { ...request, id: "irq_legacy" }
+  const anotherSlack: AgentRequest = {
+    ...slack,
+    id: "irq_another_slack",
+  }
+  const mixed = [slack, legacy, agent, anotherSlack]
+
+  it.each(["inbox", "sent"] as const)(
+    "filters a mixed %s when an older server ignores origin, treating legacy requests as agents'",
+    async (box) => {
+      const fetchMock = stubFetch(() => json({ requests: mixed }))
+
+      expect(
+        await listAgentRequests("org-1", box, { origin: "slack" })
+      ).toEqual([slack, anotherSlack])
+      expect(
+        await listAgentRequests("org-1", box, { origin: "agent" })
+      ).toEqual([legacy, agent])
+      expect(sent(fetchMock)).toEqual([
+        [
+          "GET",
+          `/v1/organizations/org-1/agent-requests/${box}?origin=slack`,
+          undefined,
+        ],
+        [
+          "GET",
+          `/v1/organizations/org-1/agent-requests/${box}?origin=agent`,
+          undefined,
+        ],
+      ])
+    }
+  )
+
+  it.each(["inbox", "sent"] as const)(
+    "leaves an unfiltered %s in the server's order",
+    async (box) => {
+      stubFetch(() => json({ requests: mixed }))
+
+      expect(await listAgentRequests("org-1", box)).toEqual(mixed)
+    }
+  )
 })
 
 describe("reviewing a held answer", () => {

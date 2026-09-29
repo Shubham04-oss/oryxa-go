@@ -281,7 +281,10 @@ export async function listAgentRequests(
     }),
     { signal }
   )
-  return result.requests
+  // Older Go builds ignore origin, so narrow their mixed lists here too.
+  return origin
+    ? result.requests.filter((request) => originOf(request) === origin)
+    : result.requests
 }
 
 /** `GET …/agent-requests/{requestID}` (server.getInteraction); 404 unless the caller sent or received it. */

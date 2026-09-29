@@ -245,6 +245,29 @@ describe("the origin filter", () => {
     expect(origins).toEqual(expect.arrayContaining(["", "slack", "agent"]))
   })
 
+  it("narrows an older server's mixed list and keeps legacy requests under Oryxa", async () => {
+    renderView({
+      // Older Go returns the whole list even when origin is requested.
+      [`GET ${inboxPath}`]: () => ({
+        requests: [slackRequest(), agentRequest({ origin: undefined })],
+      }),
+    })
+    await screen.findByText("What is the plan for the EU launch?")
+    expect(screen.getByText("Explain the service boundary.")).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("button", { name: "Slack" }))
+    await screen.findByText("What is the plan for the EU launch?")
+    expect(screen.queryByText("Explain the service boundary.")).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Oryxa" }))
+    await screen.findByText("Explain the service boundary.")
+    expect(screen.queryByText("What is the plan for the EU launch?")).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "All" }))
+    await screen.findByText("What is the plan for the EU launch?")
+    expect(screen.getByText("Explain the service boundary.")).toBeTruthy()
+  })
+
   it("says what an empty filtered list is not", async () => {
     renderView({
       [`GET ${inboxPath}`]: listRoute(() => [agentRequest()]),
