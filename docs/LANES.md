@@ -1,6 +1,6 @@
 # Lanes: parallel work
 
-Updated 2026-09-29. Read this before starting work beside other workers. A lane is a unit of work one worker can finish alone, with files that no other open lane touches. [REMAINING-WORK.md](REMAINING-WORK.md) stays the index of everything unfinished. This file covers what is being built now, and by whom.
+Updated 2026-09-29, evening. **Read [STATUS.md](STATUS.md) first**: what is live, what's open and what's next. Then read this before starting work beside other workers. A lane is a unit of work one worker can finish alone, with files that no other open lane touches. [REMAINING-WORK.md](REMAINING-WORK.md) stays the index of everything unfinished. This file covers what is being built now, and by whom.
 
 ## How lanes work
 
@@ -38,21 +38,23 @@ Slack lanes branch from `slack/base` (main plus S-A, S-B and S-E) and merge back
 
 | Lane | What | Owns | Needs | State |
 |---|---|---|---|---|
-| S-A | Apps gateway: Slack ingress, install, templates, the internal API, `slackfake` | `apps/internal/{slackbot,hooks,httpserver,serviceconfig,postgres}`, `contracts/events/apps/v1/slack.go`, `internal/slackfake` | — | built, in review (`feat/slack-apps-gateway`) |
-| S-B | Consent core: asks, the three choices, tickets, leases, bypass, one-time secret routes | `agents/primary/internal/{interactions,interactiondelivery,httpserver}`, `agents/primary/internal/agents/interactions.go`, `contracts/events/agents/v1` | — | built, in review (`feat/slack-consent-core`) |
-| S-E | Router: who is asked, identities, refusals, consent policy | `agents/primary/internal/slackrouter` | — | built, in review (`feat/slack-router`) |
-| S-C | Surfaces: owner notices, buttons, thread answers; the apps client; askers' notes | `agents/primary/internal/{surfaces,appsclient}`, `agents/primary/internal/threads/{notes,items}.go` | S-A, S-B | building |
-| S-D | Realtime relay: request events reach the Worker; DM and inbox objects note them | `realtime/**`, `web-next/src/{realtime-requests.ts,server.ts,direct-message-agent.ts,inbox-agent.ts}`, `web-next/src/lib/dms/**`, `web-next/REALTIME.md` | S-B | building |
-| S-G | Consent guard: the summary rule, Slack credential stripping, grounding | `agents/primary/internal/consentguard`, `deploy/production/answer_guard.tf` | S-B | building |
-| S-H | Web: the request card, Requests (Inbox, Sent, Activity), Slack settings | new `web-next/src/components/{request-card,requests-view,requests-activity,slack-settings}*`, `web-next/src/lib/agents/agent-requests.ts`, new `web-next/src/lib/apps/slack.ts` | S-A, S-B contracts | building |
-| S-I | One-time secret shares, plus the deploy tofu for Slack | `agents/primary/internal/secretshares`, `deploy/{production,scripts,README.md}` except `answer_guard.tf` | S-B | building |
-| S-K | Screen: one Jev read of the ask, plus a department check | `agents/primary/internal/slackrouter` | S-E | after S-E's review |
-| S-F | Wiring and the end-to-end test | `agents/primary/{service.go,README.md}`, `agents/primary/internal/{inbound,serviceconfig}`, `test/slack` | all above | last |
+| S-A | Apps gateway: Slack ingress, install, templates, the internal API, `slackfake` | `apps/internal/{slackbot,hooks,httpserver,serviceconfig,postgres}`, `contracts/events/apps/v1/slack.go`, `internal/slackfake` | — | built, merged into `slack/base` |
+| S-B | Consent core: asks, the three choices, tickets, leases, bypass, one-time secret routes | `agents/primary/internal/{interactions,interactiondelivery,httpserver}`, `agents/primary/internal/agents/interactions.go`, `contracts/events/agents/v1` | — | built, merged into `slack/base` |
+| S-E | Router: who is asked, identities, refusals, consent policy | `agents/primary/internal/slackrouter` | — | built, merged into `slack/base` |
+| S-C | Surfaces: owner notices, buttons, thread answers; the apps client; askers' notes | `agents/primary/internal/{surfaces,appsclient}`, `agents/primary/internal/threads/{notes,items}.go` | S-A, S-B | built, merged into `slack/base` |
+| S-D | Realtime relay: request events reach the Worker; DM and inbox objects note them | `realtime/**`, `web-next/src/{realtime-requests.ts,server.ts,direct-message-agent.ts,inbox-agent.ts}`, `web-next/src/lib/dms/**`, `web-next/REALTIME.md` | S-B | built, merged into `slack/base` |
+| S-G | Consent guard: the summary rule, Slack credential stripping, grounding | `agents/primary/internal/consentguard`, `deploy/production/answer_guard.tf` | S-B | built, merged into `slack/base` |
+| S-H | Web: the request card, Requests (Inbox, Sent, Activity), Slack settings | new `web-next/src/components/{request-card,requests-view,requests-activity,slack-settings}*`, `web-next/src/lib/agents/agent-requests.ts`, new `web-next/src/lib/apps/slack.ts` | S-A, S-B contracts | built, merged into `slack/base` |
+| S-I | One-time secret shares, plus the deploy tofu for Slack | `agents/primary/internal/secretshares`, `deploy/{production,scripts,README.md}` except `answer_guard.tf` | S-B | built, merged into `slack/base` |
+| S-K | Screen: one Jev read of the ask, plus a department check | `agents/primary/internal/slackrouter` | S-E | built, merged into `slack/base` |
+| S-F | Wiring and the end-to-end test | `agents/primary/{service.go,README.md}`, `agents/primary/internal/{inbound,serviceconfig}`, `test/slack` | all above | building (`feat/slack-wiring`) |
 | S-L, S-M | Slice 4: DMs with the bot, organization answers | see the plan | S-F | later |
 
 ## Web: fewer empty pages (open, suggested for the owner's worker)
 
 Each lane touches web-next only. The Go routes and web-next's API clients already exist, so this is screen work.
+
+**Start after #137 merges.** The owner's agent workspace PR edits `workspace-shell.tsx`, `workspace-agent-panel.tsx`, `agent-chat.tsx` and `agent-timeline.tsx`, and adds a files panel for the primary agent. Branch from main once it's in, and check that W-FILES and W-HISTORY don't duplicate what it adds.
 
 **Read first:** `web-next/AGENTS.md`, `DESIGN.md` in full, and the area's row in `PARITY.md`.
 - Show no example data. Give each block its own loading, empty and error states.
@@ -69,6 +71,28 @@ Test with component tests over mocked `fetch`, as the existing `*.test.tsx` file
 | W-WORKFLOWS | **Workflows**, today read-only on the agent overview. Create, edit and delete; Run now; executions with their statuses (an execution whose assignment didn't complete is `failed`), and each execution's detail. | new `components/workflow-*.{tsx,css}` plus tests; the workflows block in `agents-mode.tsx` | `lib/agents/agent-workflows.ts` (the full CRUD plus executions) |
 | W-CMDK | **⌘K / Ctrl+K palette.** Jump to a person (opens the DM), a teamspace, an agent, a specialist or team, a knowledge base, a tool, or a settings page. Recent items first; keyboard only is fine. | new `components/command-palette.{tsx,css,test.tsx}`, `hooks/use-command-palette.ts`; one mount in `workspace-shell.tsx` | the queries the shell already loads; `searchMembers` for people |
 | W-PANEL | **The right panel's Teams tab** ("Team rooms will appear here"): the member's teamspace rooms and multi-agent team rooms, each opening its room. Also a teammate in a room's participants gets a Message action that opens the side conversation. | `workspace-agent-panel.tsx`, new `components/panel-teams-tab.{tsx,css,test.tsx}`, the participant list in `teamspace-room.tsx` | teamspaces and agent-teams queries; `SideConversationView` |
+
+## Integrations, phase 2 (open, suggested for the owner's workers)
+
+The plan, the contracts and the per-toolkit template are in [design/integrations-plan.md](design/integrations-plan.md): see "Phase 2 work packages", "Work-package template" and "Review gates". Phase 1 is on main and switched off: sign-in, the token vault, the webhook ingress, and the manifests' auth and webhook sections.
+
+| Lane | What | Owns | Needs | Base and notes |
+|---|---|---|---|---|
+| I-2A | The runtime: registry-first tool routing, the pages route, the poll worker, push subscriptions through `hooks`, the recorded-response harness, `cmd/check`, `_template`, and the SDK modules (go-github, slack-go) | the plan's 2A files | — | See below. |
+| I-2B | Knowledge's `apps` extractor | the plan's 2B files | the pages route's contract (the plan's "Readers into knowledge") | Starts now from main, against a fake apps server. |
+| I-GITHUB, I-SLACK, I-GMAIL, I-GDRIVE, I-GCAL, I-NOTION | One toolkit each, in the plan's order | `apps/internal/integrations/<toolkit>/**` and nothing else | I-2A merged | See below. |
+
+**I-2A** branches from `slack/base`, not main, and opens its draft PR against `slack/base`.
+- The Slack stack changes `apps/internal/{httpserver,serviceconfig,hooks,postgres}` and already took apps migration `008`, so I-2A's migration is `009_native_triggers.sql`.
+- Retarget the PR to main after the Slack stack merges.
+
+**The toolkit lanes** follow the plan's work-package template. Each passes four gates:
+- **G1:** CI and `cmd/check`.
+- **G2:** the orchestrator's review.
+- **G3:** a live smoke test by the owner, with a real account.
+- **G4:** enabling it, which adds the registry line and `APPS_ORYXA_TOOLKITS`. That is the orchestrator's step, never the lane's.
+
+I-SLACK is members' own Slack (user tokens), not the Oryxa bot in `apps/internal/slackbot`.
 
 ## Guard and backend (open)
 
