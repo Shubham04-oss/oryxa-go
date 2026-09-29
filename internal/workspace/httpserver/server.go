@@ -311,15 +311,7 @@ func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Re
 		return err
 	})
 	if err != nil {
-		status := http.StatusBadGateway
-		if errors.Is(err, store.ErrApplyBusy) || errors.Is(err, errApprovalChanged) || errors.Is(err, errStalePlan) {
-			status = http.StatusConflict
-		}
-		if errors.Is(err, errStalePlan) {
-			writeJSON(writer, status, map[string]string{"code": "stale_plan", "error": err.Error()})
-			return
-		}
-		writeError(writer, status, err.Error())
+		writeApplyError(writer, err)
 		return
 	}
 	status := "done"
@@ -333,6 +325,23 @@ func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Re
 }
 
 var errApprovalChanged = errors.New("the removal plan changed; review and confirm it again")
+
+func writeApplyError(writer http.ResponseWriter, err error) {
+	status, code, message := http.StatusBadGateway, "upstream_unavailable", "workspace apply could not complete; retry after checking the service"
+	var remote *runtime.StatusError
+	switch {
+	case errors.Is(err, store.ErrApplyBusy):
+		status, code, message = http.StatusConflict, "apply_lock", err.Error()
+	case errors.Is(err, errApprovalChanged), errors.Is(err, runtime.ErrApprovalChanged), errors.Is(err, errStalePlan):
+		status, code, message = http.StatusConflict, "stale_plan", errStalePlan.Error()
+	case errors.As(err, &remote) && remote.Status >= 400 && remote.Status < 500:
+		status, code, message = remote.Status, "upstream_rejected", remote.Error()
+		if remote.Code != "" {
+			code = remote.Code
+		}
+	}
+	writeJSON(writer, status, map[string]string{"code": code, "error": message})
+}
 
 func (server *Server) pull(writer http.ResponseWriter, request *http.Request) {
 	access, ok := server.authorize(writer, request)

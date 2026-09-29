@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -546,13 +547,15 @@ func applyRemovals(ctx context.Context, client *Client, state Snapshot, plan Pla
 	return nil
 }
 
+var ErrApprovalChanged = errors.New("the removal plan changed or was not confirmed; run plan and confirm again")
+
 func verifyApprovedRemovals(plan Plan, approved *Plan) error {
 	wanted := deletions(plan)
 	if len(wanted) == 0 {
 		return nil
 	}
 	if approved == nil || !slices.Equal(wanted, deletions(*approved)) {
-		return fmt.Errorf("the removal plan changed or was not confirmed; run plan and confirm again")
+		return ErrApprovalChanged
 	}
 	return nil
 }

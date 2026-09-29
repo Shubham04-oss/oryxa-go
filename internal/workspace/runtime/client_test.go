@@ -18,6 +18,10 @@ func TestStatusErrorShowsOnlyWorkspaceValidationDetails(t *testing.T) {
 		{"server failure", "/v1/organizations/org1/workspace", `{"error":"database detail"}`, "application/json", "", http.StatusInternalServerError},
 		{"non JSON", "/v1/organizations/org1/workspace", `{"error":"not trusted"}`, "text/plain", "", http.StatusBadRequest},
 		{"multiline", "/v1/organizations/org1/workspace", `{"error":"first\nsecond"}`, "application/json", "", http.StatusBadRequest},
+		{"member denied", "/v1/organizations/org1/members/user1", `{"error":"only owners may change roles"}`, "application/json", "only owners may change roles", http.StatusForbidden},
+		{"invitation conflict", "/v1/organizations/org1/invitations", `{"error":"invitation already exists"}`, "application/json", "invitation already exists", http.StatusConflict},
+		{"credentials suppressed", "/v1/organizations/org1/workspace", `{"error":"invalid bearer abc123"}`, "application/json", "", http.StatusBadRequest},
+		{"terminal escape suppressed", "/v1/organizations/org1/workspace", `{"error":"invalid \u001b[31m"}`, "application/json", "", http.StatusBadRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			response := &http.Response{StatusCode: test.status, Header: http.Header{"Content-Type": []string{test.contentType}}, Body: io.NopCloser(strings.NewReader(test.body))}
@@ -30,5 +34,12 @@ func TestStatusErrorShowsOnlyWorkspaceValidationDetails(t *testing.T) {
 				t.Fatalf("error = %q, want %q", message, want)
 			}
 		})
+	}
+}
+
+func TestStatusErrorPreservesStructuredCode(t *testing.T) {
+	response := &http.Response{StatusCode: 409, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"code":"stale_plan","error":"review changes again"}`))}
+	if got := statusError(response, http.MethodPut, "/v1/organizations/org1/workspace"); got.Code != "stale_plan" {
+		t.Fatalf("structured code lost: %+v", got)
 	}
 }

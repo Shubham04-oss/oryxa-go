@@ -9,8 +9,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 )
@@ -29,6 +31,7 @@ type StatusError struct {
 	Path   string
 	Status int
 	Detail string
+	Code   string
 }
 
 func (err *StatusError) Error() string {
@@ -92,24 +95,33 @@ func (client *Client) request(ctx context.Context, method, path string, input, o
 	return nil
 }
 
-// Only workspace client errors carry a short, structured reason back to the
-// CLI. Other API responses may contain provider data or credentials, so their
-// bodies are never included in errors.
+var errorCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+var credentialPattern = regexp.MustCompile(`(?i)(bearer|token|credential|secret|password|authorization|eyJ[A-Za-z0-9_-]+\.|xox[baprs]-|ghp_|sk_live_|AKIA[0-9A-Z]|[A-Za-z0-9_+/=-]{80,})`)
+
+// Only bounded structured client errors from our setup APIs carry detail.
+// Provider responses and any credential-like text are never propagated.
 func statusError(response *http.Response, method, path string) *StatusError {
 	result := &StatusError{Method: method, Path: path, Status: response.StatusCode}
-	if response.StatusCode != http.StatusBadRequest && response.StatusCode != http.StatusConflict && response.StatusCode != http.StatusUnprocessableEntity {
+	if response.StatusCode < 400 || response.StatusCode >= 500 {
 		return result
 	}
-	if !strings.Contains(path, "/workspace") || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	setupAPI := len(parts) >= 3 && parts[0] == "v1" && parts[1] == "organizations" &&
+		(len(parts) == 3 || strings.HasPrefix(parts[3], "workspace") || parts[3] == "members" || parts[3] == "invitations" || parts[3] == "teams" || parts[3] == "organization-agent")
+	if !setupAPI || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
 		return result
 	}
 	var body struct {
 		Error string `json:"error"`
+		Code  string `json:"code"`
 	}
 	if json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&body) == nil {
 		detail := strings.TrimSpace(body.Error)
-		if len(detail) <= 512 && !strings.ContainsAny(detail, "\r\n") {
+		if len(detail) <= 512 && strings.IndexFunc(detail, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) < 0 && !credentialPattern.MatchString(detail) {
 			result.Detail = detail
+		}
+		if errorCodePattern.MatchString(body.Code) {
+			result.Code = body.Code
 		}
 	}
 	return result
