@@ -29,6 +29,9 @@ review the plan before applying it. Slack installation remains a manual step.
    `rules.consent.expireAfter` and `safety.guard.holdForReview`. Map the
    organization default for app update wake-ups to
    `agents.personal.proactive: on` or `off`. Do not infer these policies.
+   The review rule covers cross-member agent requests, with 24 hours to review
+   completed work. It does not create review queues for rooms, teamspace
+   publications, or side-conversation answers.
 8. If the admin chooses Oryxa's own knowledge search, set `search.mode:
    native`; if they explicitly turn agent knowledge tools off, use
    `search.mode: none`. Leave it out when no search decision was made.

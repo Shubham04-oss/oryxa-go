@@ -298,9 +298,10 @@ func (store *Store) Respond(ctx context.Context, id string, answer Answer, at ti
 			return ErrExpired
 		}
 		err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
-			SET status=$2, result=$3, held_result=$4, guard=$5, revision=revision+1, updated_at=$6
+			SET status=$2, result=$3, held_result=$4, guard=$5, revision=revision+1, updated_at=$6,
+			    expires_at=CASE WHEN $2='review' THEN $7 ELSE expires_at END
 			WHERE id=$1 RETURNING `+selectColumns,
-			id, status, resultJSON, heldJSON, guardJSON, at), &result)
+			id, status, resultJSON, heldJSON, guardJSON, at, at.Add(ReviewWindow)), &result)
 		if err != nil {
 			return err
 		}

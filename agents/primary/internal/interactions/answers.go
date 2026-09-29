@@ -21,6 +21,10 @@ import (
 // withheld by Oryxa.
 
 const (
+	// ReviewWindow starts when completed work is held. Consent expiry bounds
+	// execution; it must not consume the member's time to inspect the answer.
+	ReviewWindow = 24 * time.Hour
+
 	// StatusReview is an answer held for the addressed member's review. The
 	// member who asked sees the status and no result. It is not terminal:
 	// the member's review, or the request's expiry, ends it.

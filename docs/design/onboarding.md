@@ -454,7 +454,7 @@ this person above that one?*
 | `safety.guard.pii.minimum.peer` | Minimum PII masking for answers another member reads | `secrets`, `strict` (omitted: no workspace override) | Workspace field implemented; guard-policy adapter pending | agents |
 | `safety.guard.relevance` | How the relevance check treats an answer unrelated to the request | `hold`, `shadow`, `off` (omitted: no workspace override) | Workspace field implemented; guard-policy adapter pending | agents |
 | `safety.guard.grounding` | Answers must match their approved source | `hold` (for the owner's review), `block` (`hold`) | New | agents |
-| `safety.guard.holdForReview` | Hold every cross-member answer for the owner | `false` (`true` in `regulated`) | Today (for held answers) | agents |
+| `safety.guard.holdForReview` | Hold cross-member agent-request answers for the owner, with a fresh 24-hour review window; other answer surfaces retain their own guard behavior | `false` (`true` in `regulated`) | Today (agent-request ledger) | agents |
 
 ### J. Tools, through Composio as today
 

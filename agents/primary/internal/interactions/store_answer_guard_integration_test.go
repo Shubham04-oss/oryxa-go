@@ -170,11 +170,11 @@ func TestTheLedgerWithholdsAnAnswerWhoseRequestExpiredInReview(t *testing.T) {
 	inTime := approvedRequest(t, store, organizationID, organizationID+"_in_time", made.Add(3*time.Hour))
 	stillApproved := approvedRequest(t, store, organizationID, organizationID+"_approved", made)
 	for _, request := range []agents.Interaction{ranOut, inTime} {
-		if _, err := store.Respond(ctx, request.ID, heldAnswer(), made.Add(2*time.Minute)); err != nil {
+		if _, err := store.Respond(ctx, request.ID, heldAnswer(), request.CreatedAt.Add(2*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// ranOut and stillApproved expired at 10:00, and inTime expires at 13:00.
+	// Approved work still expires at 10:00; held work has its own review window.
 	at := made.Add(90 * time.Minute)
 
 	closed, err := store.CloseExpired(ctx, "expired", at.Add(-time.Hour), at, 100)
@@ -185,6 +185,7 @@ func TestTheLedgerWithholdsAnAnswerWhoseRequestExpiredInReview(t *testing.T) {
 		t.Fatalf("giving up on a request in review: error=%v, want ErrConflict", err)
 	}
 
+	at = at.Add(ReviewWindow)
 	withheld, err := store.WithholdExpired(ctx, ExpiredBeforeReview, at, 100)
 	if err != nil || len(withheld) != 1 || withheld[0].ID != ranOut.ID {
 		t.Fatalf("withheld = %+v, %v; want the answer whose request expired", withheld, err)
@@ -204,8 +205,25 @@ func TestTheLedgerWithholdsAnAnswerWhoseRequestExpiredInReview(t *testing.T) {
 	if again, err := store.WithholdExpired(ctx, ExpiredBeforeReview, at, 100); err != nil || len(again) != 0 {
 		t.Fatalf("withholding again = %+v, %v; want nothing left", again, err)
 	}
-	if _, err := store.Review(ctx, inTime.ID, agents.InteractionReview{Action: ReviewSend, DecidedBy: agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b"}}, made.Add(4*time.Hour)); !errors.Is(err, ErrExpired) {
+	if _, err := store.Review(ctx, inTime.ID, agents.InteractionReview{Action: ReviewSend, DecidedBy: agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b"}}, made.Add(ReviewWindow+4*time.Hour)); !errors.Is(err, ErrExpired) {
 		t.Fatalf("reviewing past the request's expiry: error=%v, want ErrExpired", err)
+	}
+}
+
+func TestHeldAnswerGetsFullReviewWindowNearConsentExpiry(t *testing.T) {
+	database, store := openInteractionStore(t)
+	ctx := context.Background()
+	organizationID := testOrganization(t, database)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	request := approvedRequest(t, store, organizationID, organizationID+"_late_answer", now)
+	answeredAt := request.ExpiresAt.Add(-time.Minute)
+	held, err := store.Respond(ctx, request.ID, heldAnswer(), answeredAt)
+	if err != nil || !held.ExpiresAt.Equal(answeredAt.Add(ReviewWindow)) {
+		t.Fatalf("review did not get full window: %+v %v", held, err)
+	}
+	_, err = store.Review(ctx, request.ID, agents.InteractionReview{Action: ReviewSend, DecidedBy: agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b"}}, request.ExpiresAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("original consent expiry prevented review: %v", err)
 	}
 }
 

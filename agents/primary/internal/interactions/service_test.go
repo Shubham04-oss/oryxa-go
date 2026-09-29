@@ -153,7 +153,13 @@ func (repo *fakeRepository) Respond(_ context.Context, id string, answer Answer,
 	if request.Status != StatusApproved {
 		return agents.Interaction{}, ErrConflict
 	}
+	if !request.ExpiresAt.After(at) {
+		return agents.Interaction{}, ErrExpired
+	}
 	request.Status, request.Result, request.Held, request.Guard = status, answer.Result, answer.Held, answer.Guard
+	if answer.Held != nil {
+		request.ExpiresAt = at.Add(ReviewWindow)
+	}
 	if request.Result != nil {
 		request.Result.CompletedAt = at
 	}

@@ -115,7 +115,7 @@ The current file accepts these settings:
 | `orgChart.relationships`, `.authority`, `.executives` | Supply explicit reporting and authority relationships for agents to query |
 | `ownership: {items: [...], prune: true}`, `orgChart.prune: true` | Remove omitted owner hints or chart facts after a reviewed removal plan |
 | `rules.consent.expireAfter` | Sets the default and maximum lifetime of cross-member requests (`5m` through `7d`) |
-| `safety.guard.holdForReview` | Holds every cross-member answer for the addressed member to review; `regulated` defaults this to `true` |
+| `safety.guard.holdForReview` | Holds cross-member agent-request answers for the addressed member's review for 24 hours from completion; `regulated` defaults this to `true`. Room posts, teamspace publications, and side-conversation answers use their existing answer guard without this review queue |
 | `safety.guard.pii.minimum.owner` | Records the minimum PII masking level for answers the member starts: `secrets` or `strict` |
 | `safety.guard.pii.minimum.peer` | Records the minimum PII masking level for answers another member reads: `secrets` or `strict` |
 | `safety.guard.relevance` | Records how the relevance check handles answers unrelated to the request: `hold`, `shadow`, or `off` |
