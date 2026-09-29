@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"iter"
 	"strings"
+	"sync"
+	"time"
 
 	aiplatform "cloud.google.com/go/aiplatform/apiv1beta1"
 	"cloud.google.com/go/aiplatform/apiv1beta1/aiplatformpb"
@@ -14,6 +16,8 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/genai"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"google.golang.org/adk/v2/memory"
 	"google.golang.org/adk/v2/session"
@@ -27,6 +31,19 @@ const defaultRecalled = 10
 
 // maxRecalled is Memory Bank's own ceiling on one search.
 const maxRecalled = 100
+
+// forgetParallelism is how many memories one Forget deletes at once. Each
+// delete is a long-running operation Forget waits on, so deleting one at a
+// time made a member with a few hundred memories a cleanup of minutes; a few
+// at once brings it down to seconds without asking Memory Bank for a burst it
+// may refuse.
+const forgetParallelism = 4
+
+// defaultForgetTimeout bounds the deleting one Forget does once it has found
+// what to delete, so a large bank cannot hold the cleanup that called it, and
+// what runs after it, for as long as it takes. What is left is forgotten the
+// next time Forget runs, since it finds only that.
+const defaultForgetTimeout = time.Minute
 
 // wildcard cannot appear in a scope value: Memory Bank reserves it, and a
 // scope it rejects would be a run with no memory rather than a clear failure.
@@ -82,6 +99,14 @@ type MemoryBank struct {
 	parent   string
 	recalled int32
 	wait     bool
+	// forgetTimeout is what Forget allows itself for deleting, when set;
+	// zero means defaultForgetTimeout.
+	forgetTimeout time.Duration
+	// deleting holds a place for each delete under way, however many Forgets
+	// there are: an organization going takes each of its members with it, so
+	// several run at once, and together they must not send Memory Bank more
+	// deletes than one would. Nil means no bound beyond each Forget's own.
+	deleting chan struct{}
 }
 
 var _ Backend = (*MemoryBank)(nil)
@@ -125,6 +150,7 @@ func NewMemoryBank(ctx context.Context, options MemoryBankOptions) (*MemoryBank,
 			options.ProjectID, location, options.AgentEngine),
 		recalled: int32(recalled),
 		wait:     options.WaitForWrites,
+		deleting: make(chan struct{}, forgetParallelism),
 	}, nil
 }
 
@@ -207,6 +233,10 @@ func (bank *MemoryBank) Search(ctx context.Context, scope Scope, query string) (
 // here: forgetting too little is the failure that matters, and it would be a
 // quiet one. Forgetting runs when a member leaves or an organization is
 // deleted, not on any hot path.
+//
+// It deletes a few memories at once, keeps going past one that fails, and
+// stops at its own deadline, saying how many were left rather than holding
+// the queue message that asked for it. Forgetting again removes what is left.
 func (bank *MemoryBank) Forget(ctx context.Context, organizationID, userID string) error {
 	if strings.Contains(organizationID, wildcard) || strings.Contains(userID, wildcard) {
 		return fmt.Errorf("adkmemory: a scope cannot contain %q", wildcard)
@@ -215,9 +245,11 @@ func (bank *MemoryBank) Forget(ctx context.Context, organizationID, userID strin
 	// memories while paging through it would move the page under the cursor
 	// and leave some of them behind.
 	var forgetting []string
+	var listing error
 	for remembered, err := range bank.api.list(ctx, bank.parent) {
 		if err != nil {
-			return fmt.Errorf("list memories to forget: %w", err)
+			listing = fmt.Errorf("list memories to forget: %w", err)
+			break
 		}
 		scope := remembered.GetScope()
 		if scope[FieldOrganizationID] != organizationID {
@@ -228,10 +260,81 @@ func (bank *MemoryBank) Forget(ctx context.Context, organizationID, userID strin
 		}
 		forgetting = append(forgetting, remembered.GetName())
 	}
-	for _, name := range forgetting {
-		if err := bank.api.remove(ctx, name); err != nil {
-			return fmt.Errorf("forget memory %s: %w", name, err)
+	// A listing that broke off still found memories worth deleting; the
+	// listing is not resumed, so deleting them cannot move a page under it.
+	return errors.Join(listing, bank.deleteAll(ctx, forgetting))
+}
+
+// deleteAll deletes names, forgetParallelism at a time, until they are all
+// gone or the time allowed runs out. One that fails does not stop the others:
+// forgetting what can be forgotten matters more than stopping at what cannot.
+// The error says how many were left, and why the first of them was.
+func (bank *MemoryBank) deleteAll(ctx context.Context, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(bank.forgetTimeout, defaultForgetTimeout))
+	defer cancel()
+
+	var (
+		group   sync.WaitGroup
+		mutex   sync.Mutex
+		forgot  int
+		failure error
+	)
+	pending := make(chan string)
+	for range min(forgetParallelism, len(names)) {
+		group.Go(func() {
+			for name := range pending {
+				err := bank.forgetOne(ctx, name)
+				mutex.Lock()
+				switch {
+				case err == nil:
+					forgot++
+				case failure == nil:
+					failure = fmt.Errorf("forget memory %s: %w", name, err)
+				}
+				mutex.Unlock()
+			}
+		})
+	}
+	for _, name := range names {
+		if ctx.Err() != nil {
+			break
 		}
+		select {
+		case pending <- name:
+		case <-ctx.Done():
+		}
+	}
+	close(pending)
+	group.Wait()
+
+	if forgot == len(names) {
+		return nil
+	}
+	// Nothing failed of its own accord, so what was left was left by the time
+	// allowed, or by the caller giving up.
+	if failure == nil {
+		failure = context.Cause(ctx)
+	}
+	return fmt.Errorf("forgot %d of %d memories: %w", forgot, len(names), failure)
+}
+
+// forgetOne deletes one memory, once Memory Bank has room for another delete.
+func (bank *MemoryBank) forgetOne(ctx context.Context, name string) error {
+	if bank.deleting != nil {
+		select {
+		case bank.deleting <- struct{}{}:
+			defer func() { <-bank.deleting }()
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	// A memory that is already gone, because another Forget overlapped this
+	// one, is forgotten all the same.
+	if err := bank.api.remove(ctx, name); status.Code(err) != codes.NotFound {
+		return err
 	}
 	return nil
 }
