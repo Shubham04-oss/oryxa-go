@@ -583,8 +583,9 @@ type harness struct {
 }
 
 type harnessOptions struct {
-	config Config
-	tokens TokenVerifier
+	config   Config
+	tokens   TokenVerifier
+	surfaces Surfaces
 }
 
 func newHarness(t *testing.T, options ...func(*harnessOptions)) *harness {
@@ -621,7 +622,7 @@ func newHarness(t *testing.T, options ...func(*harnessOptions)) *harness {
 	service, err := New(Dependencies{
 		Store:        h.store,
 		Sealer:       secrets.Envelope{Keys: h.keys, KeyID: "alias/test", Service: "oryxa-apps"},
-		Integrations: registry, Subscriptions: h.subscriptions, Tokens: settings.tokens,
+		Integrations: registry, Subscriptions: h.subscriptions, Tokens: settings.tokens, Surfaces: settings.surfaces,
 		Logger: slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Clock:  h.clock.Now,
 	}, settings.config)

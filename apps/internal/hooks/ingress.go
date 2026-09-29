@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,7 +19,12 @@ import (
 )
 
 // ingress takes every app's deliveries, at POST /v1/apps/hooks/{endpointID}.
-type ingress struct{ service *Service }
+// With an alias it is instead a surface's static URL, which names its
+// endpoint by toolkit and not by id.
+type ingress struct {
+	service *Service
+	alias   *alias
+}
 
 // ServeHTTP runs the plan's twelve steps in order. A delivery that fails
 // verification is answered 401 and nothing in it is used or logged. Anything
@@ -33,10 +39,19 @@ func (h ingress) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	now := s.now().UTC()
+	if h.alias != nil {
+		// A surface's app waits a few seconds for its answer and delivers
+		// again when it does not get one. Everything from here on that
+		// touches the database does so inside a deadline of its own, which
+		// leaves room to answer, and nothing on the way calls anything else.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.surfaceDeadline)
+		defer cancel()
+	}
 
-	// 1. The endpoint, by the id in the path. An unknown one is refused
-	// before its body is read.
-	endpoint, ok := s.lookup(ctx, writer, request, now)
+	// 1. The endpoint, by the id in the path, or a surface's by its toolkit.
+	// An unknown one is refused before its body is read.
+	endpoint, ok := h.lookup(ctx, writer, request, now)
 	if !ok {
 		return
 	}
@@ -99,6 +114,13 @@ func (h ingress) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// 9. A surface's delivery goes to the surface, which records it and its
+	// dedupe mark together; there is nothing to parse or route.
+	if h.alias != nil {
+		h.deliver(ctx, writer, endpoint, d, key, now, log)
+		return
+	}
+
 	// 9. The integration's own reading of it.
 	events, triggers, parsing, err := s.parse(ctx, endpoint, d)
 	if err != nil {
@@ -133,9 +155,47 @@ func (h ingress) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.WriteHeader(http.StatusOK)
 }
 
-// lookup finds the endpoint a request is for. A malformed id is refused
-// without asking the store, and a lapsed endpoint answers as an unknown one.
-func (s *Service) lookup(ctx context.Context, writer http.ResponseWriter, request *http.Request, now time.Time) (Endpoint, bool) {
+// deliver hands a verified, unhandled delivery to its surface, and answers
+// 200 once the surface has recorded it.
+func (h ingress) deliver(ctx context.Context, writer http.ResponseWriter, endpoint Endpoint, d *delivery, key string, now time.Time, log *slog.Logger) {
+	surface, ok := h.service.surface(endpoint.Toolkit)
+	if !ok {
+		writeError(writer, http.StatusNotFound, "not_found", "resource not found")
+		return
+	}
+	// The surface never sees the delivery's own credentials, as an
+	// integration does not.
+	header := d.header.Clone()
+	header.Del("Authorization")
+	header.Del("Cookie")
+	if err := surface.Deliver(ctx, h.alias.kind, key, header, bytes.Clone(d.body), now); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			err = fmt.Errorf("%w: the delivery could not be recorded in time: %v", errUnavailable, err)
+		}
+		failed(ctx, writer, log, err)
+		return
+	}
+	writer.WriteHeader(http.StatusOK)
+}
+
+// lookup finds the endpoint a request is for. A surface's alias asks for its
+// toolkit's deployment endpoint, making it the first time; anything else is
+// found by the id in the path. A malformed id is refused without asking the
+// store, and a lapsed endpoint answers as an unknown one.
+func (h ingress) lookup(ctx context.Context, writer http.ResponseWriter, request *http.Request, now time.Time) (Endpoint, bool) {
+	s := h.service
+	if h.alias != nil {
+		if h.alias.toolkit == "" {
+			writeError(writer, http.StatusNotFound, "not_found", "resource not found")
+			return Endpoint{}, false
+		}
+		endpoint, _, err := s.DeploymentEndpoint(ctx, h.alias.toolkit)
+		if err != nil {
+			failed(ctx, writer, s.logger, err)
+			return Endpoint{}, false
+		}
+		return endpoint, true
+	}
 	id := request.PathValue("endpointID")
 	if id == "" {
 		id, _ = strings.CutPrefix(request.URL.Path, PathPrefix)
@@ -151,6 +211,12 @@ func (s *Service) lookup(ctx context.Context, writer http.ResponseWriter, reques
 		return Endpoint{}, false
 	case err != nil:
 		failed(ctx, writer, s.logger, err)
+		return Endpoint{}, false
+	}
+	// A surface is reached at its own URLs, which say what kind of delivery
+	// each is. Its endpoint's id is no address.
+	if _, isSurface := s.surface(endpoint.Toolkit); isSurface {
+		writeError(writer, http.StatusNotFound, "not_found", "resource not found")
 		return Endpoint{}, false
 	}
 	return endpoint, true
