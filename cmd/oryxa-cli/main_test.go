@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -91,5 +92,41 @@ func TestSensitiveReviewIncludesRoleElevationAndPolicyChanges(t *testing.T) {
 		if !hasSensitiveChanges(runtime.Plan{Changes: []runtime.Change{change}}) {
 			t.Fatalf("sensitive change escaped review: %+v", change)
 		}
+	}
+}
+
+func TestBootstrapCreatesOnlyOrganizationThenUsesServerPlanAndApply(t *testing.T) {
+	calls := []string{}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v1/organizations":
+			fmt.Fprint(w, `{"id":"org_1"}`)
+		case "GET /v1/organizations":
+			fmt.Fprint(w, `{"organizations":[{"id":"org_1","slug":"acme"}]}`)
+		case "POST /v1/organizations/org_1/workspace:plan":
+			fmt.Fprint(w, `{"plan_id":"issued","plan_hash":"hash","base_version":0,"changes":[]}`)
+		case "PUT /v1/organizations/org_1/workspace":
+			var body struct {
+				Approved runtime.Plan `json:"approved_plan"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Approved.PlanID != "issued" {
+				t.Errorf("unissued bootstrap plan: %+v %v", body, err)
+			}
+			fmt.Fprint(w, `{"step":"apply","status":"done","version":1}`)
+		default:
+			t.Errorf("CLI directly mutated bootstrap members/teams: %s", r.URL.Path)
+			w.WriteHeader(400)
+		}
+	}))
+	defer api.Close()
+	client, err := runtime.NewClient(api.URL, "access")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := spec.Document{APIVersion: spec.APIVersion, Kind: "Workspace", Metadata: spec.Metadata{Organization: "acme"}}
+	result, err := workspaceApply(context.Background(), client, document, runtime.Snapshot{}, runtime.Plan{}, options{yes: true}, io.Discard, io.Discard)
+	if err != nil || result.Version != 1 || len(calls) != 4 {
+		t.Fatalf("bootstrap: %+v %v calls=%v", result, err, calls)
 	}
 }

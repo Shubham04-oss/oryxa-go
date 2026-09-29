@@ -154,7 +154,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 				return reportError(fmt.Errorf("apply was cancelled"), stderr)
 			}
 		}
-		result, err := workspaceApply(ctx, client, document, state, plan)
+		result, err := workspaceApply(ctx, client, document, state, plan, opts, stdout, stderr)
 		if err != nil {
 			return reportError(err, stderr)
 		}
@@ -249,7 +249,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 					}
 				}
 			}
-			result, err := workspaceApply(ctx, client, document, state, approved)
+			result, err := workspaceApply(ctx, client, document, state, approved, opts, stdout, stderr)
 			if err != nil {
 				return reportError(err, stderr)
 			}
@@ -362,18 +362,38 @@ func workspacePlan(ctx context.Context, client *runtime.Client, document spec.Do
 	return client.WorkspacePlan(ctx, state.Organization.ID, document)
 }
 
-func workspaceApply(ctx context.Context, client *runtime.Client, document spec.Document, state runtime.Snapshot, approved runtime.Plan) (runtime.WorkspaceApplyResult, error) {
+func workspaceApply(ctx context.Context, client *runtime.Client, document spec.Document, state runtime.Snapshot, approved runtime.Plan, opts options, stdout, stderr io.Writer) (runtime.WorkspaceApplyResult, error) {
 	if state.Organization == nil {
-		if _, err := runtime.ApplyApproved(ctx, client, document, approved); err != nil {
+		name := document.Metadata.Organization
+		if document.Organization != nil && document.Organization.Name != "" {
+			name = document.Organization.Name
+		}
+		if err := client.CreateOrganization(ctx, name, document.Metadata.Organization, document); err != nil {
 			return runtime.WorkspaceApplyResult{}, err
 		}
-		var err error
-		state, err = client.Snapshot(ctx, document.Metadata.Organization)
+		organization, err := client.OrganizationBySlug(ctx, document.Metadata.Organization)
 		if err != nil {
 			return runtime.WorkspaceApplyResult{}, err
 		}
-		if state.Organization == nil {
-			return runtime.WorkspaceApplyResult{}, fmt.Errorf("created organization has not appeared in the API; retry apply")
+		state.Organization = &organization
+		approved, err = client.WorkspacePlan(ctx, organization.ID, document)
+		if err != nil {
+			return runtime.WorkspaceApplyResult{}, err
+		}
+		if hasSensitiveChanges(approved) {
+			if code := report(stdout, opts.json, approved); code != 0 {
+				return runtime.WorkspaceApplyResult{}, fmt.Errorf("write bootstrap plan")
+			}
+			if opts.noInput {
+				return runtime.WorkspaceApplyResult{}, fmt.Errorf("sensitive changes require an interactive confirmation; organization created, rerun apply to review the server plan")
+			}
+			if !opts.yes {
+				fmt.Fprint(stderr, "Confirm these sensitive changes? [y/N] ")
+				answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+					return runtime.WorkspaceApplyResult{}, fmt.Errorf("apply was cancelled; organization created")
+				}
+			}
 		}
 	}
 	return client.WorkspaceApply(ctx, state.Organization.ID, document, approved)
