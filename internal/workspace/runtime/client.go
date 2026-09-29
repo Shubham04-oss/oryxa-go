@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 )
 
@@ -53,15 +54,16 @@ func IsStatus(err error, status int) bool {
 }
 
 func NewClient(baseURL, token string) (*Client, error) {
-	parsed, err := url.Parse(strings.TrimRight(baseURL, "/"))
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && (parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1"))) {
-		return nil, fmt.Errorf("--api must be an HTTPS URL or a loopback HTTP URL")
+	baseURL, err := ValidateAPIURL(baseURL)
+	if err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("ORYXA_ACCESS_TOKEN is required for remote commands")
 	}
-	return &Client{BaseURL: strings.TrimRight(parsed.String(), "/"), Token: token, HTTP: &http.Client{
+	return &Client{BaseURL: baseURL, Token: token, HTTP: &http.Client{
 		Timeout:       20 * time.Second,
+		Transport:     observability.Transport(nil),
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}}, nil
 }

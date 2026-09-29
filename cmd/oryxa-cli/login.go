@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
+	workspaceruntime "github.com/Shubham04-oss/oryxa-go/internal/workspace/runtime"
 	"golang.org/x/oauth2"
 )
 
@@ -197,11 +199,11 @@ func fetchLoginConfig(ctx context.Context, api string) (loginConfig, error) {
 const browserStartPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Oryxa CLI sign-in</title><style>body{font:16px system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.5rem;color:#222}a{display:inline-block;padding:.75rem 1rem;border-radius:.5rem;background:#222;color:#fff;text-decoration:none;margin:.5rem .75rem .5rem 0}a.secondary{background:#eee;color:#222}p{line-height:1.5}</style><h1>Continue to Oryxa CLI</h1><p>Sign in in your browser. Oryxa will return a short-lived session to the CLI.</p><a href="/authorize?session={session}">Sign in</a><a class="secondary" href="/signup?session={session}" target="_blank" rel="noopener noreferrer">Create account</a><p>Creating an account? Verify your email, then return to this tab and choose Sign in.</p></html>`
 
 func fetchAuthConfig(ctx context.Context, api string) (loginConfig, error) {
-	parsed, err := url.Parse(strings.TrimRight(api, "/"))
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && (parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1"))) {
-		return loginConfig{}, fmt.Errorf("--api must be HTTPS or loopback HTTP")
+	api, err := workspaceruntime.ValidateAPIURL(api)
+	if err != nil {
+		return loginConfig{}, &inputError{err}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(parsed.String(), "/")+"/v1/auth/config", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, api+"/v1/auth/config", nil)
 	if err != nil {
 		return loginConfig{}, err
 	}
@@ -251,6 +253,7 @@ func loginHTTPClient(ctx context.Context) *http.Client {
 		base = configured
 	}
 	client := *base
+	client.Transport = observability.Transport(client.Transport)
 	client.Timeout = 20 * time.Second
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &client

@@ -348,3 +348,11 @@ func TestAnswerGuardPoliciesValidateAndRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceRejectsTextDatabaseWouldRefuse(t *testing.T) {
+	text := "hello" + string(rune(0)) + "world"
+	document := Document{APIVersion: APIVersion, Kind: "Workspace", Metadata: Metadata{Organization: "acme"}, Agents: &Agents{Organization: &OrganizationAgent{Description: &text}}}
+	if err := document.Validate(); err == nil {
+		t.Fatal("NUL text passed workspace preflight")
+	}
+}

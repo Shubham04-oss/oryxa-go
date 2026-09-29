@@ -17,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -373,6 +374,9 @@ func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
 }
 
 func (document Document) Validate() error {
+	if err := cleantext.Check(document); err != nil {
+		return fmt.Errorf("workspace text is invalid: %w", err)
+	}
 	var node yaml.Node
 	if err := node.Encode(document); err != nil {
 		return fmt.Errorf("encode workspace values: %w", err)
