@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
@@ -816,7 +817,7 @@ func slugify(value string) string {
 
 func organizationFields(rawName, rawSlug string) (string, string, error) {
 	name := strings.TrimSpace(rawName)
-	if name == "" || len(name) > 120 {
+	if name == "" || utf8.RuneCountInString(name) > 120 {
 		return "", "", fmt.Errorf("organization name must contain 1-120 characters: %w", domain.ErrInvalid)
 	}
 	slug := slugify(rawSlug)
