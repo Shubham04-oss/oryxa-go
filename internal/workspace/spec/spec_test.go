@@ -234,3 +234,23 @@ func TestTimezoneUsesPortableIANAIdentifiers(t *testing.T) {
 		}
 	}
 }
+
+func TestMetadataDomainsPreservesExplicitEmptyOnRoundTrip(t *testing.T) {
+	for _, domains := range []string{"", ", domains: []", ", domains: [acme.com]"} {
+		document, err := Parse([]byte("apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme" + domains + "}\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := document.YAML()
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := Parse(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (parsed.Metadata.Domains == nil) != (document.Metadata.Domains == nil) || len(parsed.Metadata.Domains) != len(document.Metadata.Domains) {
+			t.Fatalf("domain intent changed: %q -> %s", domains, encoded)
+		}
+	}
+}

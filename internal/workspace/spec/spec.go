@@ -48,6 +48,17 @@ type Metadata struct {
 	Domains      []string `yaml:"domains,omitempty" json:"domains,omitempty"`
 }
 
+func (metadata Metadata) MarshalYAML() (any, error) {
+	var domains *[]string
+	if metadata.Domains != nil {
+		domains = &metadata.Domains
+	}
+	return struct {
+		Organization string    `yaml:"organization"`
+		Domains      *[]string `yaml:"domains,omitempty"`
+	}{metadata.Organization, domains}, nil
+}
+
 type Organization struct {
 	Name     string  `yaml:"name,omitempty" json:"name,omitempty"`
 	Timezone *string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
