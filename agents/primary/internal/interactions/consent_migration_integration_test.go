@@ -4,14 +4,20 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io/fs"
+	"net/url"
+	"os"
 	"path"
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
 // consentChecks are the checks 013 adds to the requests, and the one it
@@ -108,41 +114,139 @@ func TestTheConsentMigrationsAreSafeToApplyAgain(t *testing.T) {
 	}
 }
 
-// oldDeciderCheck is 005's check as it stood before 013: three kinds.
-const oldDeciderCheck = `CHECK (
-	(decided_by_kind = '' AND decided_by_user_id = '' AND decided_by_agent_id = '')
-	OR (decided_by_kind = 'member' AND decided_by_user_id <> '' AND decided_by_agent_id = '')
-	OR (decided_by_kind = 'agent' AND decided_by_user_id <> '' AND decided_by_agent_id <> '')
-	OR (decided_by_kind = 'system' AND decided_by_user_id = '' AND decided_by_agent_id = '')
-) NOT VALID`
-
-// TestADatabaseFromBefore013EndsUpWithTheWiderDeciderCheck: the release that
-// brings 013 meets a database whose decider check knows three kinds, and its
-// requests written by that check. Migrating replaces the check, under its name,
-// with the one that also knows the lease and the bypass, and validates it;
-// before that a lease's decision could not be stored.
-func TestADatabaseFromBefore013EndsUpWithTheWiderDeciderCheck(t *testing.T) {
-	database, store := openInteractionStore(t)
+// scratchDatabase is a database of its own, made for one test and dropped after
+// it, for a test that has to put the schema where a release met it before, which
+// the database every other test shares must not be put through: a lease or a
+// bypass cannot be stored while the older decider check is in place. It skips
+// where the database's user may not make one.
+func scratchDatabase(t *testing.T) *postgreskit.Database {
+	t.Helper()
+	shared, _ := openInteractionStore(t)
 	ctx := context.Background()
-	if err := pgx.BeginFunc(ctx, database.Pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `ALTER TABLE agents_primary.agent_interactions
-			DROP CONSTRAINT agent_interactions_decided_by_check,
-			ADD CONSTRAINT agent_interactions_decided_by_check `+oldDeciderCheck); err != nil {
-			return err
+	name := fmt.Sprintf("oryxa_interactions_upgrade_%d", time.Now().UnixNano())
+	if _, err := shared.Pool.Exec(ctx, `CREATE DATABASE `+name); err != nil {
+		t.Skipf("the test database's user cannot make a database of its own: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := shared.Pool.Exec(context.Background(), `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`); err != nil {
+			t.Errorf("drop %s: %v", name, err)
 		}
-		_, err := tx.Exec(ctx, `DELETE FROM oryxa_migrations WHERE service='agent-interactions' AND name >= '013'`)
-		return err
-	}); err != nil {
+	})
+	scratch, err := url.Parse(os.Getenv("AGENTS_PRIMARY_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal("the test database's URL cannot be read")
+	}
+	scratch.Path = "/" + name
+	database, err := postgreskit.Open(ctx, postgreskit.Config{URL: scratch.String(), ApplicationName: "oryxa-agent-interactions-upgrade-test", Schema: "public"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Migrate(ctx); err != nil {
-		t.Fatalf("migrating: %v", err)
+	t.Cleanup(database.Close)
+	return database
+}
+
+// migrationsBefore013 is the interactions' migrations as a release before 013
+// carried them: every file up to 012.
+func migrationsBefore013(t *testing.T) fs.FS {
+	t.Helper()
+	names, err := fs.Glob(migrations, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := fstest.MapFS{}
+	for _, name := range names {
+		if path.Base(name) >= "013" {
+			continue
+		}
+		contents, err := fs.ReadFile(migrations, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		older[name] = &fstest.MapFile{Data: contents}
+	}
+	return older
+}
+
+// TestADatabaseFromBefore013IsUpgradedWithItsRequestsIntact: the release that
+// brings 013 meets a database at 012, whose decider check knows three kinds, with
+// requests in it that check let through. Migrating adds the columns with their
+// defaults, so those requests read as requests an agent made with no consent and
+// no ask, widens the decider check under its name so a lease and a bypass can be
+// stored, and validates every check over what is already there.
+func TestADatabaseFromBefore013IsUpgradedWithItsRequestsIntact(t *testing.T) {
+	database := scratchDatabase(t)
+	ctx := context.Background()
+	if err := database.Migrate(ctx, "agent-interactions", migrationsBefore013(t), "migrations/*.sql", migrationsAdvisoryLock); err != nil {
+		t.Fatalf("migrating to 012: %v", err)
+	}
+	var columns int
+	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema='agents_primary'
+		AND table_name='agent_interactions' AND column_name IN ('ask_id', 'origin', 'consent')`).Scan(&columns); err != nil || columns != 0 {
+		t.Fatalf("a database at 012 has %d of 013's columns (%v)", columns, err)
+	}
+	// What the release before this one wrote: pending, decided by each kind of
+	// decider it knew, and answered.
+	insert := func(id, status, kind, userID, agentID string) {
+		t.Helper()
+		if _, err := database.Pool.Exec(ctx, `INSERT INTO agents_primary.agent_interactions
+			(id, organization_id, requester_user_id, requester_agent_id, requester_agent_name, target_user_id, target_agent_id, target_agent_name,
+			 purpose, task, status, idempotency_key, expires_at, decided_by_kind, decided_by_user_id, decided_by_agent_id)
+			VALUES ($1, 'org_1', 'user_a', 'agt_a', 'Crew', 'user_b', 'agt_b', 'Carl', 'Launch', 'Review it.', $2, $1, now() + interval '1 day', $3, $4, $5)`,
+			id, status, kind, userID, agentID); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+	insert("irq_pending", "pending", "", "", "")
+	insert("irq_member", "approved", "member", "user_b", "")
+	insert("irq_agent", "approved", "agent", "user_b", "agt_b")
+	insert("irq_system", "rejected", "system", "", "")
+	if _, err := database.Pool.Exec(ctx, `UPDATE agents_primary.agent_interactions SET decided_by_kind='lease', decided_by_user_id='user_b' WHERE id='irq_member'`); err == nil {
+		t.Fatal("a database at 012 stored a lease decision")
+	}
+
+	if err := NewStore(database).Migrate(ctx); err != nil {
+		t.Fatalf("migrating from 012: %v", err)
+	}
+	rows, err := database.Pool.Query(ctx, `SELECT id, origin, ask_id, consent, decided_via, decided_reason, secret_viewed_at IS NULL, decided_by_kind, status
+		FROM agents_primary.agent_interactions ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for rows.Next() {
+		var id, origin, askID, consent, via, reason, kind, status string
+		var unviewed bool
+		if err := rows.Scan(&id, &origin, &askID, &consent, &via, &reason, &unviewed, &kind, &status); err != nil {
+			t.Fatal(err)
+		}
+		if origin != "agent" || askID != "" || consent != "" || via != "" || reason != "" || !unviewed {
+			t.Errorf("%s reads as origin %q ask %q consent %q via %q reason %q after the upgrade", id, origin, askID, consent, via, reason)
+		}
+		seen++
+	}
+	rows.Close()
+	if seen != 4 {
+		t.Fatalf("%d requests after the upgrade, want the four", seen)
 	}
 	validated := validatedChecks(t, ctx, database.Pool)
 	for _, name := range consentChecks {
 		if !validated[name] {
 			t.Errorf("check %s validated=%v after migrating from before 013", name, validated[name])
 		}
+	}
+	// Now a lease and a bypass can be stored, and the rows written before are as
+	// they were.
+	for name, set := range map[string]string{
+		"a lease":  `status='approved', decided_by_kind='lease', decided_by_user_id='user_b', decided_by_agent_id='', decided_via='lease', consent='access'`,
+		"a bypass": `status='approved', decided_by_kind='bypass', decided_by_user_id='', decided_by_agent_id='', decided_via='bypass', consent='access'`,
+	} {
+		if _, err := database.Pool.Exec(ctx, `UPDATE agents_primary.agent_interactions SET `+set+` WHERE id='irq_member'`); err != nil {
+			t.Errorf("%s was refused after the upgrade: %v", name, err)
+		}
+	}
+	// Migrating again changes nothing: every file is recorded as it is now.
+	if err := NewStore(database).Migrate(ctx); err != nil {
+		t.Fatal(err)
 	}
 	names, err := fs.Glob(migrations, "migrations/*.sql")
 	if err != nil {
