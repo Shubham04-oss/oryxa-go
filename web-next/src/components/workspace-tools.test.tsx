@@ -296,6 +296,38 @@ describe("WorkspaceTools", () => {
     expect(screen.queryByRole("button", { name: "Connect Zoom" })).toBeNull()
   })
 
+  it("withdraws connection actions when refreshing a cached offer fails", async () => {
+    let unavailable = false
+    fakeFetch(
+      ({ path }) =>
+        path === `${org}/apps/offer` && unavailable
+          ? apiError("unavailable", "offer unavailable", 503)
+          : undefined,
+      catalog(),
+      connections({ connections: [] })
+    )
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    renderBase(
+      <QueryClientProvider client={client}>
+        <WorkspaceTools organizationId="org-1" />
+      </QueryClientProvider>
+    )
+    expect(await screen.findByRole("heading", { name: "Zoom" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Zoom details" }))
+    expect(
+      await screen.findByRole("button", { name: "Connect Zoom" })
+    ).toBeTruthy()
+    unavailable = true
+    await client.refetchQueries()
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Connect Zoom" })).toBeNull()
+    })
+    expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy()
+    client.clear()
+  })
+
   it("filters the apps on screen for a query too short for Composio's search, and searches the catalog from three characters", async () => {
     const state = { connections: [connection()] }
     const { requests } = fakeFetch(

@@ -199,6 +199,7 @@ export function WorkspaceTools({
     Boolean(organizationId) &&
     signedIn &&
     Boolean(offerQuery.data) &&
+    !offerQuery.isError &&
     offerQuery.data?.can_connect !== false
   const isOffered = (toolkit: string) =>
     !organizationId ||
