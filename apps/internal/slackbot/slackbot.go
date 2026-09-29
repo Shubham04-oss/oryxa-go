@@ -57,8 +57,11 @@
 // Not confirmed, and to be checked against a real workspace: whether
 // app_uninstalled and tokens_revoked are subscribed under bot_events, whether
 // app_mention reaches the bot in a group DM and carries channel_type or
-// is_ext_shared_channel, whether Slack's app-approval flow keeps the install
-// link's state, and apps.uninstall's arguments.
+// is_ext_shared_channel, which of team_id, context_team_id and
+// authorizations names the install for a delivery from a shared channel,
+// whether Slack's app-approval flow keeps the install link's state,
+// apps.uninstall's arguments, and that users.info carries is_email_confirmed
+// (a user object that does not say is taken as unconfirmed).
 package slackbot
 
 import (
