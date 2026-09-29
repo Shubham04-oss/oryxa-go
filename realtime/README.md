@@ -318,6 +318,16 @@ curl -i http://localhost:8080/v1/realtime/events -H 'Content-Type: application/j
   -H "X-Oryxa-Timestamp: $timestamp" -H "X-Oryxa-Signature: v1=$signature" --data-binary "$body"
 ```
 
+A request note can be signed by hand the same way, over `requests.`, and sent to a Worker running locally (`REALTIME_PURGE_SECRET` in web-next's `.dev.vars` the same value). It answers `204` and, with a DM open, the page shows the line:
+
+```sh
+secret=…  # REALTIME_PURGE_SECRET, as the Worker has it
+timestamp=$(date +%s)
+body='{"organization_id":"org_1","request_id":"irq_1","revision":1,"asker_user_id":"user-a","owner_user_id":"user-b","origin":"agent","state":"waiting","changed_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
+signature=$(printf '%s' "requests.$timestamp.$body" | openssl dgst -sha256 -hmac "$secret" | awk '{print $NF}')
+curl -i http://localhost:3001/internal/realtime/requests -H "X-Oryxa-Timestamp: $timestamp" -H "X-Oryxa-Signature: v1=$signature" --data-binary "$body"
+```
+
 The storage's integration tests need a PostgreSQL they may create schemas in, each test in a schema of its own, dropped when it ends:
 
 ```sh

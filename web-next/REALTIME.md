@@ -1069,8 +1069,8 @@ id `GET …/agent-requests/{id}` takes and the Requests view is opened by.
 
 **In the inbox.** The DMs tab lists a conversation with a request as it lists
 any other, moved up to when the request reached its state, with the fixed
-preview ("Asked your agent · waiting") beside or instead of the last message,
-whichever is newer. No screen changed for that: the preview is
+preview ("Asked your agent · waiting") in place of the last message while the
+request is the newer of the two. No screen changed for that: the preview is
 `Conversation.lastMessage`, which the list already shows, and the note counts
 no unread.
 
