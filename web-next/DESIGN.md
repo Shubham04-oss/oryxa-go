@@ -102,15 +102,16 @@ not permission to copy every incidental value into a new component.
     `ThreadChatAgent` path, with Home remaining the current screen context.
     The shell opens the right panel, then requests the new conversation
     through the shared chat-choice API; it does not navigate to focused work.
-  - Keep up to three real recent conversations immediately below the composer,
-    including when nothing else needs the member. Each opens that exact
+  - After the composer, show Waiting on you for owner approvals and held
+    answers to review, then Your agent, then Needs attention for failed or
+    expired tools and failed knowledge documents.
+  - Keep up to three real recent conversations in Your agent, including when
+    nothing else needs the member. Each opens that exact
     conversation in the right panel while staying on Home. New chat starts
     a blank conversation, and All opens the
     agent's work. Describe running work only from a real live signal, never
     from a thread's update time.
-  - Then show Waiting on you for owner approvals and held answers to review,
-    and Needs attention for failed or expired tools and failed knowledge
-    documents. At most three rows per section; All opens the relevant section.
+  - At most three rows per section; All opens the relevant section.
     Hide sections that have nothing. With no decisions or failures, keep one
     quiet line alongside any real recent conversations.
   - Counts must reflect the response's limits: a full bounded requests response

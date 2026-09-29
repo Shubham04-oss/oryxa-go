@@ -245,6 +245,39 @@ describe("HomeOverview", () => {
     expect(within(card).getByText("From the latest 100 requests.")).toBeTruthy()
   })
 
+  it("puts member decisions before recent conversations and failures below the composer", async () => {
+    stubApi({
+      [`${path}/agent-requests/inbox`]: { requests: [request()] },
+      [`${path}/threads`]: {
+        threads: [
+          {
+            id: "recent",
+            title: "Recent conversation",
+            origin: "chat",
+            updated_at: "2026-09-23T10:00:00Z",
+          },
+        ],
+      },
+      [`${path}/apps/connections`]: {
+        connections: [connection("Broken tool", "failed")],
+      },
+    })
+    const { container } = renderHome()
+    await screen.findByRole("region", { name: "Waiting on you" })
+    await screen.findByRole("region", { name: "Your agent" })
+    await screen.findByRole("region", { name: "Needs attention" })
+    expect(
+      Array.from(
+        container.querySelectorAll("textarea[aria-label], section[aria-label]")
+      ).map((element) => element.getAttribute("aria-label"))
+    ).toEqual([
+      "Start a new conversation",
+      "Waiting on you",
+      "Your agent",
+      "Needs attention",
+    ])
+  })
+
   it("keeps three real recent conversations below the composer even when no decision or failure needs the member", async () => {
     stubApi({
       [`${path}/threads`]: {

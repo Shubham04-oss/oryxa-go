@@ -211,6 +211,40 @@ export function HomeOverview({
       />
       {enabled ? (
         <>
+          <ReadNotice name="requests" query={inbox} />
+          {waiting.length > 0 && (
+            <section className="home-card" aria-label="Waiting on you">
+              <header>
+                <h2>
+                  Waiting on you · {waiting.length}
+                  {(inbox.data?.length ?? 0) >= requestLimit ? "+" : ""}
+                </h2>
+                <button type="button" onClick={onOpenRequests}>
+                  All
+                </button>
+              </header>
+              <ul>
+                {waiting.slice(0, 3).map((request) => (
+                  <li key={request.id} className="home-row">
+                    <button type="button" onClick={onOpenRequests}>
+                      <span>{request.purpose || request.task}</span>
+                      <small>
+                        {request.status === "review"
+                          ? "Answer to review"
+                          : "Request to approve"}{" "}
+                        · {request.requester.agent_name}
+                      </small>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {(inbox.data?.length ?? 0) >= requestLimit && (
+                <p className="home-quiet">
+                  From the latest {requestLimit} requests.
+                </p>
+              )}
+            </section>
+          )}
           <ReadNotice name="agent work" query={threads} />
           {(agentRunning || recent.length > 0) && (
             <section className="home-card" aria-label="Your agent">
@@ -248,40 +282,6 @@ export function HomeOverview({
                   </li>
                 ))}
               </ul>
-            </section>
-          )}
-          <ReadNotice name="requests" query={inbox} />
-          {waiting.length > 0 && (
-            <section className="home-card" aria-label="Waiting on you">
-              <header>
-                <h2>
-                  Waiting on you · {waiting.length}
-                  {(inbox.data?.length ?? 0) >= requestLimit ? "+" : ""}
-                </h2>
-                <button type="button" onClick={onOpenRequests}>
-                  All
-                </button>
-              </header>
-              <ul>
-                {waiting.slice(0, 3).map((request) => (
-                  <li key={request.id} className="home-row">
-                    <button type="button" onClick={onOpenRequests}>
-                      <span>{request.purpose || request.task}</span>
-                      <small>
-                        {request.status === "review"
-                          ? "Answer to review"
-                          : "Request to approve"}{" "}
-                        · {request.requester.agent_name}
-                      </small>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              {(inbox.data?.length ?? 0) >= requestLimit && (
-                <p className="home-quiet">
-                  From the latest {requestLimit} requests.
-                </p>
-              )}
             </section>
           )}
           <ReadNotice name="tools" query={connections} />
