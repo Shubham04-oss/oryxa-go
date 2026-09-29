@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 	"go.yaml.in/yaml/v3"
+	"reflect"
 	"time"
 )
 
@@ -40,51 +41,34 @@ type Settings struct {
 
 // FromDocument projects a manifest that the write path already validated.
 func FromDocument(document spec.Document) (Settings, error) {
-	var err error
-	settings := Settings{}
-	if document.Rules != nil && document.Rules.Consent != nil && document.Rules.Consent.ExpireAfter != nil {
-		settings.ExpireAfter, err = spec.ParseDuration(*document.Rules.Consent.ExpireAfter)
-		if err != nil {
-			return Settings{}, err
+	settings := Settings{Regulated: document.Preset == "regulated"}
+	target := reflect.ValueOf(&settings).Elem()
+	for _, setting := range spec.SettingsCatalog() {
+		if setting.Projection == "" {
+			continue
 		}
-	}
-	if document.Safety != nil && document.Safety.Guard != nil && document.Safety.Guard.HoldForReview != nil {
-		settings.HoldForReview = *document.Safety.Guard.HoldForReview
-	}
-	if document.Safety != nil && document.Safety.Guard != nil {
-		guard := document.Safety.Guard
-		if guard.PII != nil && guard.PII.Minimum != nil {
-			if guard.PII.Minimum.Owner != nil {
-				settings.PIIMinimumOwner = *guard.PII.Minimum.Owner
-			}
-			if guard.PII.Minimum.Peer != nil {
-				settings.PIIMinimumPeer = *guard.PII.Minimum.Peer
-			}
+		value, present := setting.Get(document)
+		if !present {
+			continue
 		}
-		if guard.Relevance != nil {
-			settings.GuardRelevance = *guard.Relevance
-		}
-	}
-	settings.Regulated = document.Preset == "regulated"
-	if document.Agents != nil && document.Agents.Personal != nil && document.Agents.Personal.Proactive != nil {
-		settings.Proactive = *document.Agents.Personal.Proactive
-	}
-	if document.Tools != nil && document.Tools.Offer != nil {
-		copyOfOffer := append([]string{}, (*document.Tools.Offer)...)
-		settings.Offer = &copyOfOffer
-	}
-	if document.Tools != nil {
-		settings.EmployeeConnections = document.Tools.EmployeeConnections
-		settings.AutoSubscribe = document.Tools.AutoSubscribe
-		if document.Tools.WakeUpWithin != nil {
-			settings.WakeUpWithin, err = spec.ParseDuration(*document.Tools.WakeUpWithin)
+		if setting.Kind == "duration" {
+			duration, err := spec.ParseDuration(value.(string))
 			if err != nil {
 				return Settings{}, err
 			}
+			value = duration
 		}
-	}
-	if document.Search != nil {
-		settings.SearchMode = document.Search.Mode
+		field := target.FieldByName(setting.Projection)
+		if !field.IsValid() {
+			return Settings{}, fmt.Errorf("setting projection is missing %s", setting.Projection)
+		}
+		next := reflect.ValueOf(value)
+		if field.Kind() == reflect.Pointer {
+			field.Set(reflect.New(field.Type().Elem()))
+			field.Elem().Set(next)
+		} else {
+			field.Set(next)
+		}
 	}
 	return settings, nil
 }

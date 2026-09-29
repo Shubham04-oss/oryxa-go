@@ -96,6 +96,7 @@ The current file accepts these settings:
 
 | Setting | Effect |
 | --- | --- |
+| `unset` | Explicit policy paths to reset to deployment defaults; cannot name the same setting both here and in its section |
 | `metadata.organization` | Organization slug; creates the organization if missing |
 | `metadata.domains` | Stored in auth and enforced for new invitations and invitation acceptance |
 | `organization.name` | Organization display name |
@@ -163,3 +164,24 @@ validate, plan, apply, status, pull, and mappings. It also confirmed an
 invitation can be resumed after the member joins and an external ID then binds
 to that member. A deployed environment and live provider OAuth still need
 verification.
+
+
+### Reset an optional policy
+
+Omitting a policy preserves the last applied value. Reset selected policies explicitly:
+
+```yaml
+unset:
+  - tools.offer
+  - tools.wakeUpWithin
+  - rules.consent.expireAfter
+```
+
+These reset requests appear in the reviewed plan and are consumed by apply. The
+saved and pulled workspace contains the effective defaults without an `unset`
+operation. `tools.offer: []` allows no toolkits; `unset: [tools.offer]` restores
+all available toolkits. A null offer is invalid. Supported reset paths come from
+the same settings catalog used for validation, merging, planning, and operational
+policy projection, including all `safety.guard` settings and personal proactive
+policy. Unknown paths, repeated paths, and setting and resetting the same path
+in one file are rejected before any write.

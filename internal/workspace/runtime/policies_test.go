@@ -98,3 +98,33 @@ func TestAnswerGuardPoliciesArePreservedReplacedAndPlanned(t *testing.T) {
 		t.Fatalf("hold with the others: %+v %+v %v", effective.Safety, plan, err)
 	}
 }
+
+func TestExplicitUnsetResetsOnlyNamedPoliciesAndPreservesGuardFields(t *testing.T) {
+	previous := contextDocument()
+	offer := []string{"gmail"}
+	expiry, wake, peer := "6h", "30m", "strict"
+	previous.Tools = &spec.Tools{Offer: &offer, WakeUpWithin: &wake}
+	previous.Rules = &spec.Rules{Consent: &spec.ConsentRules{ExpireAfter: &expiry}}
+	previous.Safety = &spec.Safety{Guard: &spec.GuardSafety{PII: &spec.GuardPII{Minimum: &spec.GuardPIIMinimum{Peer: &peer}}}}
+	submitted := contextDocument()
+	submitted.Unset = []string{"tools.offer", "tools.wakeUpWithin", "rules.consent.expireAfter"}
+	effective, plan, err := MergePolicies(previous, submitted, false)
+	if err != nil || len(plan.Changes) != 3 || effective.Tools != nil || effective.Rules != nil || len(effective.Unset) != 0 || *effective.Safety.Guard.PII.Minimum.Peer != "strict" {
+		t.Fatalf("unset result: %+v %+v %v", effective, plan, err)
+	}
+	if previous.Tools.Offer == nil || previous.Rules.Consent.ExpireAfter == nil {
+		t.Fatal("merge mutated previous saved document")
+	}
+	encoded, err := effective.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulled, err := spec.Parse(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, noop, err := MergePolicies(pulled, submitted, false)
+	if err != nil || len(noop.Changes) != 0 || again.Tools != nil {
+		t.Fatalf("unset did not converge: %+v %v", noop, err)
+	}
+}

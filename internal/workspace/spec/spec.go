@@ -24,6 +24,7 @@ import (
 const APIVersion = "oryxa.in/v1"
 
 type Document struct {
+	Unset         []string      `yaml:"unset,omitempty" json:"unset,omitempty"`
 	APIVersion    string        `yaml:"apiVersion" json:"apiVersion"`
 	Kind          string        `yaml:"kind" json:"kind"`
 	Metadata      Metadata      `yaml:"metadata" json:"metadata"`
@@ -419,58 +420,8 @@ func (document Document) Validate() error {
 	if document.Organization != nil && (strings.TrimSpace(document.Organization.Name) == "" || utf8.RuneCountInString(document.Organization.Name) > 120) && document.Organization.Name != "" {
 		return fmt.Errorf("organization.name must be between 1 and 120 characters")
 	}
-	if document.Rules != nil && document.Rules.Consent != nil && document.Rules.Consent.ExpireAfter != nil {
-		duration, err := ParseDuration(*document.Rules.Consent.ExpireAfter)
-		if err != nil || duration < 5*time.Minute || duration > 7*24*time.Hour {
-			return fmt.Errorf("rules.consent.expireAfter must be between 5m and 7d")
-		}
-	}
-	if document.Safety != nil && document.Safety.Guard != nil {
-		guard := document.Safety.Guard
-		if guard.PII != nil && guard.PII.Minimum != nil {
-			for _, minimum := range []struct {
-				name  string
-				level *string
-			}{{"owner", guard.PII.Minimum.Owner}, {"peer", guard.PII.Minimum.Peer}} {
-				if minimum.level != nil && *minimum.level != "secrets" && *minimum.level != "strict" {
-					return fmt.Errorf("safety.guard.pii.minimum.%s must be secrets or strict", minimum.name)
-				}
-			}
-		}
-		if guard.Relevance != nil {
-			switch *guard.Relevance {
-			case "hold", "shadow", "off":
-			default:
-				return fmt.Errorf("safety.guard.relevance must be hold, shadow or off")
-			}
-		}
-	}
-	if document.Tools != nil {
-		if document.Tools.Provider != "" && document.Tools.Provider != "composio" {
-			return fmt.Errorf("tools.provider must be composio")
-		}
-		if document.Tools.Offer != nil {
-			seen := map[string]bool{}
-			for _, toolkit := range *document.Tools.Offer {
-				if !toolkitPattern.MatchString(toolkit) || seen[toolkit] {
-					return fmt.Errorf("tools.offer must contain unique lowercase toolkit slugs")
-				}
-				seen[toolkit] = true
-			}
-		}
-		if document.Tools.WakeUpWithin != nil {
-			duration, err := ParseDuration(*document.Tools.WakeUpWithin)
-			if err != nil || duration < time.Minute || duration > 90*time.Minute {
-				return fmt.Errorf("tools.wakeUpWithin must be between 1m and 90m")
-			}
-		}
-	}
-	if document.Search != nil {
-		switch document.Search.Mode {
-		case "native", "none":
-		default:
-			return fmt.Errorf("search.mode must be native or none; external search is not yet supported")
-		}
+	if err := document.validateSettings(); err != nil {
+		return err
 	}
 	if document.Organization != nil && document.Organization.Timezone != nil {
 		if *document.Organization.Timezone == "" || *document.Organization.Timezone == "Local" {
@@ -490,13 +441,6 @@ func (document Document) Validate() error {
 		}
 		if agent.Instructions != nil && (strings.TrimSpace(*agent.Instructions) == "" || utf8.RuneCountInString(*agent.Instructions) > 20000) {
 			return fmt.Errorf("agents.organization.instructions must be between 1 and 20000 characters")
-		}
-	}
-	if document.Agents != nil && document.Agents.Personal != nil && document.Agents.Personal.Proactive != nil {
-		switch *document.Agents.Personal.Proactive {
-		case "on", "off":
-		default:
-			return fmt.Errorf("agents.personal.proactive must be on or off")
 		}
 	}
 	seenDomains := map[string]bool{}

@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 	"strings"
 	"testing"
 	"time"
@@ -23,5 +24,30 @@ func TestLegacyProjectionDoesNotValidateUnrelatedManifestText(t *testing.T) {
 	value, err := FromYAML([]byte("agents:\n  organization:\n    future: " + strings.Repeat("x", 600000) + "\n  personal: {proactive: off}\n"))
 	if err != nil || value.Proactive != "off" {
 		t.Fatalf("projection = %+v %v", value, err)
+	}
+}
+
+func TestEveryCatalogProjectionFieldExistsAndUsesKnownTypes(t *testing.T) {
+	document := spec.Document{}
+	for _, setting := range spec.SettingsCatalog() {
+		var value any
+		switch setting.Kind {
+		case "duration":
+			value = "6h"
+			if setting.Path == "tools.wakeUpWithin" {
+				value = "30m"
+			}
+		case "enum":
+			value = setting.Values[0]
+		case "bool":
+			value = true
+		case "toolkits":
+			value = []string{}
+		}
+		setting.Set(&document, value)
+	}
+	settings, err := FromDocument(document)
+	if err != nil || settings.Offer == nil || len(*settings.Offer) != 0 || settings.PIIMinimumOwner != "secrets" || settings.PIIMinimumPeer != "secrets" || settings.GuardRelevance != "hold" || settings.WakeUpWithin != 30*time.Minute {
+		t.Fatalf("catalog projection incomplete: %+v %v", settings, err)
 	}
 }
