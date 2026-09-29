@@ -370,13 +370,15 @@ func (service *Service) Execute(ctx context.Context, dispatch Dispatch) (Executi
 			status = ExecutionNeedsConfirmation
 			break
 		}
-		if result.Status == "failed" {
+		// Anything but completed is work that was not done: failed, and also
+		// blocked, needs_input, or a status this does not know.
+		if result.Status != "completed" {
 			status = ExecutionFailed
 		}
 	}
 	errorText := ""
 	if status == ExecutionFailed {
-		errorText = "one or more workflow assignments failed"
+		errorText = "one or more workflow assignments did not complete"
 	}
 	return service.repository.FinishExecution(ctx, scope, executionID, status, encoded, errorText)
 }
