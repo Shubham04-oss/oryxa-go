@@ -97,6 +97,37 @@ type Verdict struct {
 	Masked []string
 }
 
+// Shareable is the n texts a verdict on n texts allows to be shown to
+// somebody who has nobody to review them first, or nil when it allows none.
+// It is the one rule every place that shares a checked text applies, so that
+// a room, the teamspace ledger and the check route cannot come to differ:
+//
+//   - nothing found, or only kinds that are always masked: the verdict's
+//     Texts, which are the texts as given or as the guardrail masked them;
+//   - a held kind, when the guard also made the fully masked version of every
+//     text: that Masked version, with each held value replaced by its kind;
+//   - anything else shares nothing: an answer that could not be checked
+//     (held as [Unchecked], and never given a masked version, since nothing
+//     in it was read), a verdict that does not carry a text for each of the n
+//     texts, and a state this code does not know.
+//
+// A non-nil result is always a copy, and holds exactly n texts; for n of zero
+// it is empty rather than nil, since there was nothing to withhold. Nil is
+// the only "share nothing", so a caller that treats it as one cannot be
+// handed a partial answer.
+func (verdict Verdict) Shareable(n int) []string {
+	if len(verdict.Texts) != n {
+		return nil
+	}
+	switch {
+	case verdict.State == StateClear, verdict.State == StateMasked:
+		return append([]string{}, verdict.Texts...)
+	case verdict.State == StateHeld && len(verdict.Masked) == n:
+		return append([]string{}, verdict.Masked...)
+	}
+	return nil
+}
+
 // Client is Bedrock's runtime; *bedrockruntime.Client is one.
 type Client interface {
 	ApplyGuardrail(context.Context, *bedrockruntime.ApplyGuardrailInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ApplyGuardrailOutput, error)
