@@ -329,21 +329,31 @@ func bootStack(t *testing.T, databaseServerURL string) *stack {
 	if err := command.Start(); err != nil {
 		t.Fatalf("start oryxa: %v", err)
 	}
-	exited := make(chan error, 1)
-	go func() { exited <- command.Wait() }()
+	// done is closed when the process has ended, and waited holds how, so that
+	// whoever looks, at any time, sees the same.
+	done := make(chan struct{})
+	var waited error
+	go func() {
+		waited = command.Wait()
+		close(done)
+	}()
 	t.Cleanup(func() {
-		_ = command.Process.Signal(syscall.SIGTERM)
 		select {
-		case <-exited:
-		case <-time.After(20 * time.Second):
-			_ = command.Process.Kill()
-			<-exited
+		case <-done:
+		default:
+			_ = command.Process.Signal(syscall.SIGTERM)
+			select {
+			case <-done:
+			case <-time.After(20 * time.Second):
+				_ = command.Process.Kill()
+				<-done
+			}
 		}
 		if t.Failed() {
 			t.Logf("what oryxa logged:\n%s", tail(s.logs.String(), 24_000))
 		}
 	})
-	s.waitUntilServing(exited)
+	s.waitUntilServing(done, &waited)
 	s.install()
 	return s
 }
@@ -356,13 +366,13 @@ func tail(text string, max int) string {
 	return "…" + text[len(text)-max:]
 }
 
-func (s *stack) waitUntilServing(exited <-chan error) {
+func (s *stack) waitUntilServing(done <-chan struct{}, waited *error) {
 	s.t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
-		case err := <-exited:
-			s.t.Fatalf("oryxa stopped before it served: %v\n%s", err, tail(s.logs.String(), 24_000))
+		case <-done:
+			s.t.Fatalf("oryxa stopped before it served: %v\n%s", *waited, tail(s.logs.String(), 24_000))
 		default:
 		}
 		response, err := http.Get(s.baseURL + "/healthz")
