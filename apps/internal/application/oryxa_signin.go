@@ -50,9 +50,6 @@ func (s *Service) ConnectOryxa(ctx context.Context, credentials authclient.Crede
 	if caller.Agent {
 		return OryxaConnect{}, fmt.Errorf("an agent cannot connect an app: %w", domain.ErrForbidden)
 	}
-	if err := s.allowConnect(organizationID, caller.UserID); err != nil {
-		return OryxaConnect{}, err
-	}
 	toolkit, err := domain.CheckToolkit(input.Toolkit)
 	if err != nil {
 		return OryxaConnect{}, err
@@ -62,6 +59,9 @@ func (s *Service) ConnectOryxa(ctx context.Context, credentials authclient.Crede
 	}
 	autoSubscribe, err := s.defaultAutoSubscribe(ctx, organizationID)
 	if err != nil {
+		return OryxaConnect{}, err
+	}
+	if err := s.allowConnect(organizationID, caller.UserID); err != nil {
 		return OryxaConnect{}, err
 	}
 	manifest, err := s.enabled(toolkit)

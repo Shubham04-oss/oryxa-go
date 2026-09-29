@@ -67,9 +67,6 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	if caller.Agent {
 		return domain.Connection{}, "", fmt.Errorf("an agent cannot connect an app: %w", domain.ErrForbidden)
 	}
-	if err := s.allowConnect(organizationID, caller.UserID); err != nil {
-		return domain.Connection{}, "", err
-	}
 	toolkit, err := domain.CheckToolkit(input.Toolkit)
 	if err != nil {
 		return domain.Connection{}, "", err
@@ -79,6 +76,9 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	}
 	autoSubscribe, err := s.defaultAutoSubscribe(ctx, organizationID)
 	if err != nil {
+		return domain.Connection{}, "", err
+	}
+	if err := s.allowConnect(organizationID, caller.UserID); err != nil {
 		return domain.Connection{}, "", err
 	}
 	if err := s.oneCurrentConnection(ctx, organizationID, caller.UserID, toolkit); err != nil {
