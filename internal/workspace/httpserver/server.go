@@ -308,23 +308,20 @@ func (server *Server) applyDocument(writer http.ResponseWriter, request *http.Re
 			attempt.UpdatedAt = time.Now().UTC()
 			return server.repository.SaveAttempt(operation.Context(), *attempt)
 		}}
-		remaining, err = runtime.ApplyApproved(request.Context(), client, document, runtime.RuntimeRemovals(issued))
+		var current runtime.Snapshot
+		remaining, current, err = runtime.ApplyApprovedFromSnapshot(request.Context(), client, document, runtime.RuntimeRemovals(issued), state)
 		if err != nil {
 			return err
 		}
 		if len(remaining.Changes) != 0 {
 			return nil
 		}
-		_, contextPlan, err := runtime.MergeContext(effective, effective, state, false)
+		_, contextPlan, err := runtime.MergeContext(effective, effective, current, false)
 		if err != nil {
 			return err
 		}
 		remaining = runtime.CombinePlans(remaining, contextPlan)
 		encoded, err := effective.YAML()
-		if err != nil {
-			return err
-		}
-		current, err := client.Snapshot(request.Context(), access.Slug)
 		if err != nil {
 			return err
 		}

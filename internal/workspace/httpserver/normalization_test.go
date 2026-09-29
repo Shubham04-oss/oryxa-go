@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/runtime"
@@ -20,7 +21,11 @@ func TestNormalizedBlockTextSavesVersionOneAndConverges(t *testing.T) {
 			var mu sync.Mutex
 			agent := runtime.OrganizationAgent{Name: "Default", Description: "Default", Instructions: "Default", Status: "active", CanManage: true}
 			writes := 0
+			var snapshotReads atomic.Int32
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/organizations" {
+					snapshotReads.Add(1)
+				}
 				if r.URL.Path != "/v1/organizations/org1/organization-agent" {
 					fallback.Config.Handler.ServeHTTP(w, r)
 					return
@@ -61,6 +66,7 @@ func TestNormalizedBlockTextSavesVersionOneAndConverges(t *testing.T) {
 			document := "apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\norganization: {name: '  Acme  '}\nagents:\n  organization:\n    displayName: 'Acme  Assistant'\n    description: " + style + "\n      Helpful assistant.\n    instructions: " + style + "\n      Coordinate teams.\n"
 			path := "/v1/organizations/org1/workspace"
 			plan := reviewedPlan(t, workspace, path, document)
+			snapshotReads.Store(0)
 			response := workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": document, "approved_plan": plan})
 			var result runtime.WorkspaceApplyResult
 			err = json.NewDecoder(response.Body).Decode(&result)
@@ -68,9 +74,18 @@ func TestNormalizedBlockTextSavesVersionOneAndConverges(t *testing.T) {
 			if err != nil || response.StatusCode != 200 || result.Status != "done" || result.Version != 1 || len(repo.versions) != 1 {
 				t.Fatalf("first apply failed to persist v1: %+v status%d err%v", result, response.StatusCode, err)
 			}
+			if snapshotReads.Load() != 2 {
+				t.Fatalf("apply must reuse initial and verified final state: snapshots=%d", snapshotReads.Load())
+			}
 			next := reviewedPlan(t, workspace, path, document)
 			if len(next.Changes) != 0 || writes != 1 {
 				t.Fatalf("normalized service values did not converge: %+v writes%d", next, writes)
+			}
+			snapshotReads.Store(0)
+			response = workspaceRequest(t, workspace, http.MethodPut, path, "owner-token", map[string]any{"document": document, "approved_plan": next})
+			response.Body.Close()
+			if response.StatusCode != 200 || snapshotReads.Load() != 1 || writes != 1 {
+				t.Fatalf("no-op apply repeated reads/writes: status%d snapshots%d writes%d", response.StatusCode, snapshotReads.Load(), writes)
 			}
 			saved, err := spec.Parse(repo.versions[0].Document)
 			if err != nil {

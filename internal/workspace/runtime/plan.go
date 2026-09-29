@@ -400,19 +400,37 @@ func ApplyApproved(ctx context.Context, client *Client, document spec.Document, 
 	return apply(ctx, client, document, &approved)
 }
 
+// ApplyApprovedFromSnapshot reuses the fresh snapshot already read under the
+// server's apply lock, and returns the verified final state for persistence.
+// Callers must not supply a snapshot retained from an earlier plan request.
+func ApplyApprovedFromSnapshot(ctx context.Context, client *Client, document spec.Document, approved Plan, state Snapshot) (Plan, Snapshot, error) {
+	if state.Organization == nil || state.Organization.Slug != document.Metadata.Organization {
+		return Plan{}, Snapshot{}, fmt.Errorf("apply snapshot does not belong to the requested workspace")
+	}
+	remaining, err := applyState(ctx, client, document, &approved, &state)
+	return remaining, state, err
+}
+
 func apply(ctx context.Context, client *Client, document spec.Document, approved *Plan) (Plan, error) {
-	document = document.Normalize()
 	state, err := client.Snapshot(ctx, document.Metadata.Organization)
 	if err != nil {
 		return Plan{}, err
 	}
-	document = resolveTeamNames(document, state)
-	initial, err := BuildPlan(document, state)
+	return applyState(ctx, client, document, approved, &state)
+}
+
+func applyState(ctx context.Context, client *Client, document spec.Document, approved *Plan, state *Snapshot) (Plan, error) {
+	document = document.Normalize()
+	document = resolveTeamNames(document, *state)
+	initial, err := BuildPlan(document, *state)
 	if err != nil {
 		return Plan{}, err
 	}
 	if err := verifyApprovedRemovals(initial, approved); err != nil {
 		return Plan{}, err
+	}
+	if len(initial.Changes) == 0 {
+		return initial, nil
 	}
 	if state.Organization == nil {
 		name := document.Metadata.Organization
@@ -422,7 +440,7 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 		if err := client.CreateOrganization(ctx, name, document.Metadata.Organization, document); err != nil {
 			return Plan{}, err
 		}
-		state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
+		*state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -437,7 +455,7 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 	}
 	if document.People != nil {
 		for _, member := range document.People.Members {
-			role := desiredMemberRole(member, state)
+			role := desiredMemberRole(member, *state)
 			if existing, ok := state.Members[member.Email]; ok {
 				if existing.Role != role {
 					if err := client.ChangeMemberRole(ctx, state.Organization.ID, existing.UserID, role); err != nil {
@@ -451,18 +469,22 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 			}
 		}
 	}
+	createdTeams := false
 	for _, team := range document.Teams.Items {
 		if _, exists := state.Teams[team.Name]; !exists {
 			if err := retryNotFound(ctx, func() error { return client.CreateTeam(ctx, state.Organization.ID, team.Name, document.Teams.Prune) }); err != nil {
 				return Plan{}, err
 			}
+			createdTeams = true
 		}
 	}
 	// Refresh after creating teams: their IDs and the creator's automatic team
 	// memberships are server-assigned, and must be observed before adding more.
-	state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
-	if err != nil {
-		return Plan{}, err
+	if createdTeams {
+		*state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
+		if err != nil {
+			return Plan{}, err
+		}
 	}
 	for _, team := range document.Teams.Items {
 		current, exists := state.Teams[team.Name]
@@ -490,7 +512,7 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 			}
 		}
 	}
-	input, err := organizationAgentInput(document, state)
+	input, err := organizationAgentInput(document, *state)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -500,26 +522,31 @@ func apply(ctx context.Context, client *Client, document spec.Document, approved
 		}
 	}
 	if (document.People != nil && document.People.Prune) || document.Teams.Prune {
-		state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
+		*state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
 		if err != nil {
 			return Plan{}, err
 		}
-		currentPlan, err := BuildPlan(document, state)
+		currentPlan, err := BuildPlan(document, *state)
 		if err != nil {
 			return Plan{}, err
 		}
 		if err := verifyApprovedRemovals(currentPlan, approved); err != nil {
 			return Plan{}, err
 		}
-		if err := applyRemovals(ctx, client, state, currentPlan); err != nil {
+		if len(deletions(currentPlan)) == 0 {
+			// The prune safety read is already the final readback when no
+			// destructive writes remain.
+			return currentPlan, nil
+		}
+		if err := applyRemovals(ctx, client, *state, currentPlan); err != nil {
 			return Plan{}, err
 		}
 	}
-	state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
+	*state, err = settledSnapshot(ctx, client, document.Metadata.Organization)
 	if err != nil {
 		return Plan{}, err
 	}
-	return BuildPlan(document, state)
+	return BuildPlan(document, *state)
 }
 
 func applyRemovals(ctx context.Context, client *Client, state Snapshot, plan Plan) error {
