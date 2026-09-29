@@ -25,6 +25,8 @@ export type Thread = {
   created_at?: string
   /** RFC 3339. `listThreads` answers newest first by it. */
   updated_at: string
+  /** Why the thread exists: "chat", "side_conversation" or "wakeup". Missing reads as "chat", as in Go. */
+  origin?: string
 }
 
 /** A thread and everything that happened in it (Go: `threads.Detail`). */
