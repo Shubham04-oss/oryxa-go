@@ -924,6 +924,16 @@ call of its own and all within 5 seconds: `summary`, `content`, and the
 approval allowed, the requester's own vocabulary. Nor is the decision's
 `message`, which is written when a request is decided, not answered.
 
+How strictly it reads a request's answer, and whether its relevance check runs
+and what it does, follow the settings of the member who gives the answer: what
+they chose for answers another member reads, the organization's minimum and the
+deployment's ceiling (`interactions.Config.GuardPolicy`, wired to the same
+settings the check route reads with; see [How strictly the guard reads an
+answer](#how-strictly-the-guard-reads-an-answer)). A member who chose `secrets`
+for those has an email address in an answer delivered as written. An answer to a
+request made in Slack is read a second time, by the consent guard, before its
+asker reads it there (see [The Slack consent loop](#the-slack-consent-loop)).
+
 What it found is read from each finding in the assessments, never from the
 response's top-level action: the held kinds are detect-only, so an answer
 with nothing else in it comes back with action `NONE` and no outputs, its
@@ -1134,9 +1144,11 @@ its question did not ask for, such as the reason for a no when only a yes or no
 was asked, takes reading the question and the answer together, and is the
 relevance judge's (`internal/relevance`, which documents how it decides and how
 it is measured). The answer guard runs it after the personal data read, from
-`Guard.CheckWith`, for the answers a caller asks it to: today the check route
-below. `Guard.Check`, which every other place that reads an answer calls,
-never runs it.
+`Guard.CheckWith`, for the answers a caller asks it to: the check route below,
+and the answers the request ledger records (`interactions.answer`, told the
+request in its asker's words and the toolboxes the run could read, and run in
+the mode the answer's owner's settings say). `Guard.Check`, which every other
+place that reads an answer calls, never runs it.
 
 - **The gate.** A judge runs only for an answer whose `sources`, the tools the
   run called from what the run recorded, may have read something private
