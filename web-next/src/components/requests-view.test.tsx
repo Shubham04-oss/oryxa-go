@@ -113,18 +113,24 @@ describe("Inbox", () => {
       [`GET ${inboxPath}`]: listRoute(() => [earlier, slackRequest()]),
     })
 
-    const waiting = await screen.findByRole("region", {
-      name: "Waiting for you",
-    })
+    const list = await screen.findByRole("list", { name: "Inbox" })
+    await within(list).findByText("What is the plan for the EU launch?")
+    const order = within(list)
+      .getAllByRole("listitem")
+      .map(
+        (item) =>
+          item.querySelector(".workspace-request-task")?.textContent ??
+          item.textContent
+      )
+    // A heading, what waits, a heading, what came before.
+    expect(order).toEqual([
+      "Waiting for you",
+      "What is the plan for the EU launch?",
+      "Earlier",
+      "Explain the service boundary.",
+    ])
     expect(
-      within(waiting).getByText("What is the plan for the EU launch?")
-    ).toBeTruthy()
-    expect(
-      within(waiting).getByRole("group", { name: /Choose what Krude/ })
-    ).toBeTruthy()
-    const before = screen.getByRole("region", { name: "Earlier" })
-    expect(
-      within(before).getByText("Explain the service boundary.")
+      within(list).getByRole("group", { name: /Choose what Krude/ })
     ).toBeTruthy()
     // The tab says how many wait.
     expect(screen.getByRole("tab", { name: "Inbox, 1 waiting" })).toBeTruthy()
@@ -296,6 +302,86 @@ describe("a request decided elsewhere", () => {
   })
 })
 
+describe("a list that keeps each request where it was", () => {
+  it("leaves the card the member just answered where it is, and says nothing waits once nothing does", async () => {
+    let served: AgentRequest[] = [slackRequest(), earlier]
+    renderView({ [`GET ${inboxPath}`]: listRoute(() => served) })
+    const before = await screen.findByRole("article", { name: /asked you/ })
+    expect(screen.getByText("Waiting for you")).toBeTruthy()
+
+    // Answered in Slack: Go lists it first now, among the requests that
+    // no longer wait.
+    served = [approvedRequest("summary"), earlier]
+    focusManager.setFocused(false)
+    focusManager.setFocused(true)
+
+    await screen.findByText(/Approved in Slack by you/)
+    // The same card, in the same place: not moved, and not made again.
+    expect(screen.getByRole("article", { name: /asked you/ })).toBe(before)
+    // Nothing waits any more, so no heading says so.
+    expect(screen.queryByText("Waiting for you")).toBeNull()
+    expect(screen.queryByText("Earlier")).toBeNull()
+    const cards = screen
+      .getAllByRole("article")
+      .map((card) => card.getAttribute("aria-label"))
+    expect(cards).toEqual([
+      "Raya Patel asked you, in Slack",
+      "Raya Patel asked Krude, in Oryxa",
+    ])
+  })
+
+  it("puts a request that arrives, and one that starts waiting later, above the rest", async () => {
+    const answered = approvedRequest("summary", { id: "irq_answered" })
+    let served: AgentRequest[] = [answered, earlier]
+    renderView({ [`GET ${inboxPath}`]: listRoute(() => served) })
+    await screen.findByText("Explain the service boundary.")
+    expect(screen.queryByText("Waiting for you")).toBeNull()
+
+    // Its answer was held for review, and a new ask came in besides.
+    served = [
+      slackRequest({ id: "irq_new", task: "A brand new ask." }),
+      {
+        ...answered,
+        status: "review",
+        revision: 3,
+        guard: { state: "held", kinds: ["EMAIL"] },
+        held: {
+          result: {
+            status: "completed",
+            summary: "Held text.",
+            content: "",
+            tools_used: [],
+            artifacts: [],
+            completed_at: "2026-09-29T12:10:00Z",
+          },
+        },
+      },
+      earlier,
+    ]
+    focusManager.setFocused(false)
+    focusManager.setFocused(true)
+
+    await screen.findByText("A brand new ask.")
+    const list = screen.getByRole("list", { name: "Inbox" })
+    const order = within(list)
+      .getAllByRole("listitem")
+      .map(
+        (item) =>
+          item.querySelector(".workspace-request-task")?.textContent ??
+          item.textContent
+      )
+    // Both go above what was there; the answer that came back held is the
+    // later change, so it is first.
+    expect(order).toEqual([
+      "Waiting for you",
+      "What is the plan for the EU launch?",
+      "A brand new ask.",
+      "Earlier",
+      "Explain the service boundary.",
+    ])
+  })
+})
+
 describe("the tabs", () => {
   it("move with the arrow keys, and Activity is one of them", async () => {
     renderView({
@@ -379,13 +465,9 @@ describe("a request a link or a note named", () => {
 
     expect(screen.queryByRole("region", { name: "Opened request" })).toBeNull()
     expect(onFocusDone).toHaveBeenCalledTimes(1)
-    await waitFor(() =>
-      expect(
-        within(
-          screen.getByRole("region", { name: "Waiting for you" })
-        ).getByText("What is the plan for the EU launch?")
-      ).toBeTruthy()
-    )
+    const list = await screen.findByRole("list", { name: "Inbox" })
+    await within(list).findByText("What is the plan for the EU launch?")
+    expect(within(list).getByText("Waiting for you")).toBeTruthy()
   })
 
   it("says plainly when it cannot be found", async () => {

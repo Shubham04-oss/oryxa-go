@@ -67,10 +67,16 @@
 .workspace-requests-groups {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 14px;
 }
-.workspace-requests-group > .workspace-eyebrow {
-  margin-bottom: 10px;
+.workspace-requests-heading {
+  margin-top: 10px;
+}
+.workspace-requests-heading:first-child {
+  margin-top: 0;
+}
+.workspace-requests-heading > .workspace-eyebrow {
+  margin: 0;
 }
 .workspace-requests-list {
   display: flex;

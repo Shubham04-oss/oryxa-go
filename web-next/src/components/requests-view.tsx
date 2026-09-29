@@ -14,6 +14,7 @@ import { agentsErrorMessage, plural } from "./agents-format"
 import { RequestCard, RequestCardById } from "./request-card"
 import { waitsOnOwner } from "./request-card-format"
 import { RequestsActivity } from "./requests-activity"
+import { useStableLayout } from "./requests-view-layout"
 import {
   activityQueryOptions,
   requestListQueryOptions,
@@ -129,6 +130,15 @@ function RequestList({
 }) {
   const people = usePeopleNames(organizationId)
   const query = useQuery(requestListQueryOptions(organizationId, box, origin))
+  const requests = (query.data ?? []).filter((request) => request.id !== hideId)
+  const now = Date.now()
+  const waitsNow = (request: AgentRequest) =>
+    box === "inbox" && waitsOnOwner(request, viewerId, now)
+  // Each request keeps the place it first had while the list is open: the one
+  // the member has just answered stays under their pointer.
+  const layout = useStableLayout(requests, (request) =>
+    waitsNow(request) ? "waiting" : "earlier"
+  )
 
   if (query.isPending || people.status === "loading") {
     return (
@@ -161,54 +171,44 @@ function RequestList({
       />
     )
   }
-
-  const requests = query.data.filter((request) => request.id !== hideId)
   if (requests.length === 0) {
     const words = emptyWords[box][origin]
     return <AgentsNotice title={words.title}>{words.body}</AgentsNotice>
   }
 
-  const now = Date.now()
-  const waiting =
-    box === "inbox"
-      ? requests.filter((request) => waitsOnOwner(request, viewerId, now))
-      : []
-  const groups: Array<{ label?: string; requests: AgentRequest[] }> =
-    waiting.length > 0
-      ? [
-          { label: "Waiting for you", requests: waiting },
-          {
-            label: "Earlier",
-            requests: requests.filter((request) => !waiting.includes(request)),
-          },
-        ]
-      : [{ requests }]
+  // Headings only while something waits: they are items of the one list, so
+  // one going or coming never makes a card again.
+  const headed = layout.waiting.some(waitsNow)
+  const rows: Array<{ heading: string } | { request: AgentRequest }> = [
+    ...(headed ? [{ heading: "Waiting for you" }] : []),
+    ...layout.waiting.map((request) => ({ request })),
+    ...(headed && layout.earlier.length > 0 ? [{ heading: "Earlier" }] : []),
+    ...layout.earlier.map((request) => ({ request })),
+  ]
 
   return (
     <div className="workspace-requests-groups">
-      {groups
-        .filter((group) => group.requests.length > 0)
-        .map((group) => (
-          <section
-            className="workspace-requests-group"
-            key={group.label ?? "all"}
-            aria-label={group.label ?? (box === "inbox" ? "Inbox" : "Sent")}
-          >
-            {group.label && <p className="workspace-eyebrow">{group.label}</p>}
-            <ul className="workspace-requests-list">
-              {group.requests.map((request) => (
-                <li key={request.id}>
-                  <RequestCard
-                    organizationId={organizationId}
-                    viewerId={viewerId}
-                    request={request}
-                    lease={leases.get(request.id)}
-                  />
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
+      <ul
+        className="workspace-requests-list"
+        aria-label={box === "inbox" ? "Inbox" : "Sent"}
+      >
+        {rows.map((row) =>
+          "heading" in row ? (
+            <li className="workspace-requests-heading" key={row.heading}>
+              <p className="workspace-eyebrow">{row.heading}</p>
+            </li>
+          ) : (
+            <li key={row.request.id}>
+              <RequestCard
+                organizationId={organizationId}
+                viewerId={viewerId}
+                request={row.request}
+                lease={leases.get(row.request.id)}
+              />
+            </li>
+          )
+        )}
+      </ul>
       {query.data.length >= AGENT_REQUESTS_LIMIT && (
         <p className="workspace-agents-note">
           Showing the latest {plural(AGENT_REQUESTS_LIMIT, "request")}.
