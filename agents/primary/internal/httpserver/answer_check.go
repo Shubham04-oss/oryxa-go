@@ -14,11 +14,12 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
-// AnswerChecker reads texts for personal data before somebody reads them.
-// *answerguard.Guard implements it; it never fails, holding what it cannot
-// check.
+// AnswerChecker reads texts for personal data before somebody reads them, and,
+// when it is given a *answerguard.RelevanceInput, for whether they carry
+// private material their request did not ask for. *answerguard.Guard
+// implements it; it never fails, holding what it cannot check.
 type AnswerChecker interface {
-	Check(ctx context.Context, texts []string) answerguard.Verdict
+	CheckWith(ctx context.Context, texts []string, relevance *answerguard.RelevanceInput) answerguard.Verdict
 }
 
 // What a check accepts. The web app's side conversation asks it about an
@@ -31,14 +32,25 @@ const (
 	// maxCheckTextRunes is the longest one of them, and the longest request
 	// it may carry, in characters.
 	maxCheckTextRunes = 25_000
+	// maxCheckSources is how many names of tools the run called a check may
+	// carry, and maxCheckSourceRunes the longest of them, in characters.
+	maxCheckSources     = 64
+	maxCheckSourceRunes = 128
+	// maxCheckContextLines is how many lines of the conversation around the
+	// request a check may carry, and maxCheckContextLineRunes the longest of
+	// them, in characters: what the relevance judge reads of the context.
+	maxCheckContextLines     = 6
+	maxCheckContextLineRunes = 1_000
 	// checksPerWindow is how many checks a member may make in checkWindow.
 	checksPerWindow = 30
 	checkWindow     = time.Minute
 	// maxCheckBodyBytes is the largest request body: room for the most texts of
-	// the most characters, at up to four bytes each, and a request as long, in
-	// place of the 256 KiB every other route reads. A body past it is cut off,
-	// and answered as the malformed JSON it has become.
-	maxCheckBodyBytes = (maxCheckTexts+1)*maxCheckTextRunes*4 + 64<<10
+	// the most characters, at up to four bytes each, a request as long, the most
+	// sources and context lines of the most characters, and 64 KiB for the rest,
+	// in place of the 256 KiB every other route reads. A body past it is cut
+	// off, and answered as the malformed JSON it has become.
+	maxCheckBodyBytes = (maxCheckTexts+1)*maxCheckTextRunes*4 +
+		maxCheckSources*maxCheckSourceRunes*4 + maxCheckContextLines*maxCheckContextLineRunes*4 + 64<<10
 )
 
 // The origins a check names: whose answer it is that is to be read.
@@ -74,46 +86,106 @@ func intensityOf(level guardpolicy.Level) answerguard.Intensity {
 	return answerguard.IntensityStrict
 }
 
-// checkLevel is how much of what the guard finds is acted on before an answer
-// of this origin is shared, for this member: the level that applies to them,
+// relevanceModeOf is the mode the guard is asked to check relevance in when a
+// member's settings say mode. It is only ever hold, shadow or off: a mode
+// nobody knows, or none, is hold, so a check never does less than the settings
+// could have asked of it, as intensityOf never reads looser.
+func relevanceModeOf(mode guardpolicy.RelevanceMode) string {
+	switch mode {
+	case guardpolicy.RelevanceOff:
+		return answerguard.RelevanceOff
+	case guardpolicy.RelevanceShadow:
+		return answerguard.RelevanceShadow
+	default:
+		return answerguard.RelevanceHold
+	}
+}
+
+// checkSettings is what applies to one check, from its caller's settings.
+type checkSettings struct {
+	// intensity is how much of what the guard finds is acted on before an
+	// answer is shared.
+	intensity answerguard.Intensity
+	// relevance is what the relevance check does with what its judge finds:
+	// answerguard.RelevanceHold, RelevanceShadow or RelevanceOff.
+	relevance string
+	// regulated is whether the caller's organization runs the regulated preset.
+	regulated bool
+}
+
+// checkSettingsFor is what applies to a check of an answer of this origin, for
+// this member. The intensity is how much of what the guard finds is acted on
+// before an answer of this origin is shared: the level that applies to them,
 // which is what they chose, or the default, and never less than their
 // organization's minimum asks (guardpolicy.Effective). It is a choice of
 // intensity, made here and nowhere else, so that the route does not change
-// when a level does.
+// when a level does. The relevance mode and whether the organization is
+// regulated are read from the same Effective: one read of the settings serves
+// the whole check.
 //
-// Where no settings are kept it is the default, as it always was. Where the
-// member's own levels cannot be read, Effective answers the strictest reading
-// with its error: the check goes on with that, and the log says so, by who and
-// which origin and why, never with a text.
-func (server *Server) checkLevel(ctx context.Context, member threads.Member, origin string) answerguard.Intensity {
+// Where no settings are kept the intensity is the default, as it always was,
+// and the relevance check is off: nothing says how an organization wants an
+// off-topic answer treated. Where the member's own levels cannot be read,
+// Effective answers the strictest reading with its error: the check goes on
+// with that, and the log says so, by who and which origin and why, never with
+// a text.
+func (server *Server) checkSettingsFor(ctx context.Context, member threads.Member, origin string) checkSettings {
 	if server.guardPreferences == nil {
-		return defaultCheckLevel(origin)
+		return checkSettings{intensity: defaultCheckLevel(origin), relevance: answerguard.RelevanceOff}
 	}
 	effective, err := server.guardPreferences.Effective(ctx, member.OrganizationID, member.UserID)
 	if err != nil {
 		server.logger.WarnContext(ctx, "an answer check could not read the member's answer guard settings, so it reads as strictly as it can",
 			"organization_id", member.OrganizationID, "user_id", member.UserID, "origin", origin, "error", err)
 	}
-	return intensityOf(effective.For(guardpolicy.Origin(origin)))
+	return checkSettings{
+		intensity: intensityOf(effective.For(guardpolicy.Origin(origin))),
+		relevance: relevanceModeOf(effective.Relevance),
+		regulated: effective.Regulated,
+	}
 }
 
 // answerCheckRequest is what a check is asked. Request is what was asked, to
-// which the texts are an answer; it is only measured. It is reserved for a
-// relevance check that is still to come, and is neither kept, read by the
-// guard nor logged.
+// which the texts are an answer; Sources are the names of the tools the run
+// that gave it called, and Context up to six lines of the conversation around
+// the request. The relevance check reads all three when the member's settings
+// say to run it, and none of them is kept, sent to the guardrail or logged.
 type answerCheckRequest struct {
 	Texts   []string `json:"texts"`
 	Origin  *string  `json:"origin"`
 	Request string   `json:"request"`
+	Sources []string `json:"sources"`
+	Context []string `json:"context"`
 }
 
 // answerCheckResult is what a check answers. Shareable is a text for each
 // one asked about, or null when none may be shared.
 type answerCheckResult struct {
-	Checked   bool     `json:"checked"`
-	State     string   `json:"state"`
-	Kinds     []string `json:"kinds"`
-	Shareable []string `json:"shareable"`
+	Checked   bool                 `json:"checked"`
+	State     string               `json:"state"`
+	Kinds     []string             `json:"kinds"`
+	Shareable []string             `json:"shareable"`
+	Relevance answerCheckRelevance `json:"relevance"`
+}
+
+// answerCheckRelevance is what the relevance check made of the answer: whether
+// a judge read it, whether it would hold it, and whether it did. It is
+// decisions alone: the categories of what an answer carried that was not asked
+// for are named in kinds when it is held, and nothing else of the judge's is
+// ever sent.
+type answerCheckRelevance struct {
+	Judged    bool `json:"judged"`
+	WouldHold bool `json:"would_hold"`
+	Held      bool `json:"held"`
+}
+
+// relevanceResult is the outcome as the route answers it: nothing judged, as
+// far as the answer says, when the guard reported none.
+func relevanceResult(outcome *answerguard.RelevanceOutcome) answerCheckRelevance {
+	if outcome == nil {
+		return answerCheckRelevance{}
+	}
+	return answerCheckRelevance{Judged: outcome.Judged, WouldHold: outcome.WouldHold, Held: outcome.Held}
 }
 
 // checkAnswer reads texts an agent's answer is made of, for the side
@@ -121,23 +193,34 @@ type answerCheckResult struct {
 // them:
 //
 //	POST /v1/organizations/{org}/answer-guard/check
-//	{"texts": ["..."], "origin": "owner" | "peer", "request": "..."}
+//	{"texts": ["..."], "origin": "owner" | "peer", "request": "...",
+//	 "sources": ["tool", ...], "context": ["line", ...]}
 //
 // It is the member's own call, as every route that changes or spends
 // something is: a cookie needs an allowed origin, an agent's token is refused,
 // and the caller must be a member of the organization. A check is 1 to 8
 // texts, each at most 25,000 characters (else 400), and a member may make 30 a
 // minute (else 429 rate_limited, with Retry-After). origin, when sent, is
-// exactly "owner" or "peer" (else 400). How much is taken out follows the
-// member's own settings for that origin (checkLevel): by default peer, which is
-// what a check that names no origin is, is the guard's full rule, and owner,
-// an answer the member started themselves, masks only what is always masked.
+// exactly "owner" or "peer" (else 400). sources, when sent, are at most 64
+// names of at most 128 characters, and context at most 6 lines of at most
+// 1,000 (else 400). How much is taken out follows the member's own settings for
+// that origin (checkSettingsFor): by default peer, which is what a check that
+// names no origin is, is the guard's full rule, and owner, an answer the member
+// started themselves, masks only what is always masked.
+//
+// The relevance check runs as the member's settings say (hold, shadow or off;
+// off where none are kept), for an answer whose sources may have read something
+// private: none sent means nothing is judged. An answer it holds is state
+// "held", kinds with "OFF_TOPIC" and the categories it carried, and shareable
+// null, whatever intensity the answer is read at; in shadow the answer is as
+// the read left it, and the relevance block says what would have been held.
 //
 // With no guardrail configured nothing is checked, and it says so
 // (checked: false) and shares the texts as given. Otherwise the state is what
 // was acted on at the origin's level, kinds are its kinds, and shareable is a
 // text for each one asked about, or null when none may be shared (an answer
-// the guard could not read is kinds ["UNCHECKED"]).
+// the guard could not read is kinds ["UNCHECKED"]). Either way the answer
+// carries relevance: {judged, would_hold, held}.
 func (server *Server) checkAnswer(writer http.ResponseWriter, request *http.Request) {
 	member, ok := server.member(writer, request)
 	if !ok {
@@ -161,10 +244,28 @@ func (server *Server) checkAnswer(writer http.ResponseWriter, request *http.Requ
 	case utf8.RuneCountInString(body.Request) > maxCheckTextRunes:
 		writeError(writer, http.StatusBadRequest, "invalid_request", "request holds at most "+strconv.Itoa(maxCheckTextRunes)+" characters")
 		return
+	case len(body.Sources) > maxCheckSources:
+		writeError(writer, http.StatusBadRequest, "invalid_request", "sources holds at most "+strconv.Itoa(maxCheckSources)+" names")
+		return
+	case len(body.Context) > maxCheckContextLines:
+		writeError(writer, http.StatusBadRequest, "invalid_request", "context holds at most "+strconv.Itoa(maxCheckContextLines)+" lines")
+		return
 	}
 	for _, text := range body.Texts {
 		if utf8.RuneCountInString(text) > maxCheckTextRunes {
 			writeError(writer, http.StatusBadRequest, "invalid_request", "each text holds at most "+strconv.Itoa(maxCheckTextRunes)+" characters")
+			return
+		}
+	}
+	for _, name := range body.Sources {
+		if utf8.RuneCountInString(name) > maxCheckSourceRunes {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "each source holds at most "+strconv.Itoa(maxCheckSourceRunes)+" characters")
+			return
+		}
+	}
+	for _, line := range body.Context {
+		if utf8.RuneCountInString(line) > maxCheckContextLineRunes {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "each context line holds at most "+strconv.Itoa(maxCheckContextLineRunes)+" characters")
 			return
 		}
 	}
@@ -185,18 +286,25 @@ func (server *Server) checkAnswer(writer http.ResponseWriter, request *http.Requ
 		})
 		return
 	}
-	intensity := server.checkLevel(request.Context(), member, origin)
-	outcome := server.answerGuard.Check(request.Context(), body.Texts).At(len(body.Texts), intensity)
+	settings := server.checkSettingsFor(request.Context(), member, origin)
+	verdict := server.answerGuard.CheckWith(request.Context(), body.Texts, &answerguard.RelevanceInput{
+		Request: body.Request, Context: body.Context, Sources: body.Sources,
+		Regulated: settings.regulated, Mode: settings.relevance,
+		OrganizationID: member.OrganizationID, UserID: member.UserID,
+	})
+	outcome := verdict.At(len(body.Texts), settings.intensity)
 	if outcome.State != answerguard.StateClear || outcome.Shareable == nil {
 		// What was found is logged by kind, never by value; neither a text nor
 		// what was asked is ever logged. The intensity is not called level: a
 		// record has one of those already, and a second key of the name would
 		// hide its severity from whatever reads the line.
 		server.logger.InfoContext(request.Context(), "the answer guard read texts a member asked it to check",
-			"organization_id", member.OrganizationID, "user_id", member.UserID, "origin", origin, "intensity", intensity,
+			"organization_id", member.OrganizationID, "user_id", member.UserID, "origin", origin, "intensity", settings.intensity,
 			"texts", len(body.Texts), "state", outcome.State, "kinds", outcome.Kinds, "shareable", outcome.Shareable != nil)
 	}
-	writeJSON(writer, http.StatusOK, answerCheckResult{Checked: true, State: outcome.State, Kinds: outcome.Kinds, Shareable: outcome.Shareable})
+	writeJSON(writer, http.StatusOK, answerCheckResult{
+		Checked: true, State: outcome.State, Kinds: outcome.Kinds, Shareable: outcome.Shareable, Relevance: relevanceResult(verdict.Relevance),
+	})
 }
 
 // checkKey names a member: a person in one organization.

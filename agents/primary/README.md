@@ -1025,14 +1025,21 @@ organization. Only that member's settings are ever read or changed; nothing in
 the path or body names whose they are. A server with no settings kept answers
 `503 answer_guard_unavailable`.
 
-`relevance` is how the relevance check will treat an answer that does not
-answer what was asked: `hold`, `shadow` (run and record, never hold) or `off`.
-It is the organization's own, `hold` when it has none, held to the deployment's
-ceiling: `AGENTS_PRIMARY_GUARD_RELEVANCE_CAP`, `shadow` unless set, so the
-check holds nobody's answers until a deployment says it may, except for the
-organizations `AGENTS_PRIMARY_GUARD_HOLD_ORGS` lists, a comma-separated list of
-organization ids. The check itself is still to come. `regulated` says the
-organization runs the regulated preset, and is only carried.
+`relevance` is how the relevance check (see [The relevance check](#the-relevance-check))
+treats an answer that carries private material its question did not ask for:
+`hold`, `shadow` (run and record, never hold) or `off`. It is the
+organization's own, `hold` when it has none, held to the deployment's ceiling:
+`AGENTS_PRIMARY_GUARD_RELEVANCE_CAP`, `shadow` unless set, so the check holds
+nobody's answers until a deployment says it may, except for the organizations
+`AGENTS_PRIMARY_GUARD_HOLD_ORGS` lists, a comma-separated list of organization
+ids. A deployment therefore starts by watching, holds for the organizations it
+names once the check has earned it, and then raises the ceiling. `regulated`
+says the organization runs the regulated preset, for which the relevance check
+also holds health, HR and pay details the question did ask for.
+
+There is no `off` level for personal data, as there is no level below
+`secrets`; `off` is only a mode of the relevance check, which holds or records
+what the personal data read never looks at.
 
 A member's levels are kept in `agents_primary.guard_preferences`, no row
 meaning the defaults, and every change of a level is appended, in the
@@ -1043,6 +1050,45 @@ member, or with the organization: `guardpolicy.Service.Forget` runs beside the
 threads' and wake-ups' cleanup. If a member's own levels cannot be read, the
 level that applies to their answers is `strict`, with the error.
 
+### The relevance check
+
+Personal data is read by its shape. Whether an answer carries private material
+its question did not ask for, such as the reason for a no when only a yes or no
+was asked, takes reading the question and the answer together, and is the
+relevance judge's (`internal/relevance`, which documents how it decides and how
+it is measured). The answer guard runs it after the personal data read, from
+`Guard.CheckWith`, for the answers a caller asks it to: today the check route
+below. `Guard.Check`, which every other place that reads an answer calls,
+never runs it.
+
+- **The gate.** A judge runs only for an answer whose `sources`, the tools the
+  run called from what the run recorded, may have read something private
+  (`relevance.NeedsJudging`); a tool nobody has classified counts as private.
+  With none, or only tools that read nothing private, nothing is judged and no
+  model is called.
+- **The judge.** One call to `AGENTS_PRIMARY_MODEL_LITE` through a Gen AI client
+  on the agents' own project, location and credentials, with no retries and a
+  6 second bound, shown the texts as the agent gave them. It names categories
+  and nothing else; whether to hold is decided in code (`relevance.ShouldHold`),
+  applied by the guard itself from what the judge found: for any extra, for a
+  judge that could not tell, and, in a regulated organization, for health, HR
+  or pay that was asked for. Without a guardrail it does not run, since the
+  check lives in the answer guard, and startup says so. A client that cannot be
+  built stops the service rather than start without the check.
+- **The modes.** In `hold`, an answer the check would hold is held for its
+  owner: `state: "held"`, `kinds` with `OFF_TOPIC`, the categories of what it
+  carried (`personal_life`, `health`, `hr`, `compensation`, `others_private`,
+  `credentials`) and `UNCHECKED` when the judge could not tell, beside any kinds
+  the personal data read held it for, and nothing to share at any intensity:
+  never a masked version of an answer that is off topic. In `shadow`, the
+  answer is exactly what the personal data read made of it, and the check only
+  records what it would have held. In `off`, no judge is asked.
+- **What is logged.** One line for each answer a judge read, with what
+  `relevance.LogFields` names (the decision, its categories, the model, the
+  latency, whether anything was cut, why it failed), the mode, whether the
+  answer was held, and the organization and member: a warning when the judge
+  could not tell. Never a text, the request, the context or a source.
+
 ### Checking an answer before it is shown
 
 A side conversation shows a member what a teammate's agent answered. The web
@@ -1050,7 +1096,8 @@ app has the agents service read the answer first, and shows what it may:
 
 ```text
 POST /v1/organizations/{org}/answer-guard/check
-{"texts": ["..."], "origin": "peer", "request": "..."}
+{"texts": ["..."], "origin": "peer", "request": "...",
+ "sources": ["tool", ...], "context": ["line", ...]}
 ```
 
 It is the member's own call, as every route that changes or spends something
@@ -1058,19 +1105,33 @@ is: a cookie needs an allowed origin, an agent's token is `403 forbidden`, no
 credentials are `401 unauthorized`, and the caller has to be a member of the
 organization. `texts` is 1 to 8 texts of at most 25,000 characters each.
 `origin` is optional and exactly `"peer"`, the default, or `"owner"`; `request`
-is optional, at most 25,000 characters, and says what was asked. It is only
-measured: nothing reads it, keeps it or logs it, and it is reserved for a
-relevance check still to come. Anything else, an unknown field included, is
-`400 invalid_request`. The body may run to about a megabyte, since eight texts
-of 25,000 wide characters are more than the 256 KiB every other route reads.
+is optional, at most 25,000 characters, and says what was asked; `sources` is
+optional, at most 64 names of at most 128 characters, the tools the run that
+gave the answer called; `context` is optional, at most 6 lines of at most 1,000
+characters of the conversation around the request. The three are for the
+relevance check (see [The relevance check](#the-relevance-check)) and are read
+by nothing else: none is kept, sent to the guardrail or logged. Anything else,
+an unknown field included, is `400 invalid_request`. The body may run to about a
+megabyte, since eight texts of 25,000 wide characters are more than the 256 KiB
+every other route reads.
 
 The answer is `{"checked": true, "state": "clear" | "masked" | "held",
-"kinds": [...], "shareable": [...] | null}`. `shareable` is one text for each
-text sent, or `null`, meaning share nothing. `kinds` are entity names, never
-values, and `["UNCHECKED"]` when the guard could not read the text, which
-shares nothing, as does a verdict that does not add up. With no guardrail
-configured nothing is checked, and it says so: `{"checked": false, "state":
-"clear", "kinds": [], "shareable": [the texts as given]}`.
+"kinds": [...], "shareable": [...] | null, "relevance": {"judged": false,
+"would_hold": false, "held": false}}`. `shareable` is one text for each text
+sent, or `null`, meaning share nothing. `kinds` are entity names, never values,
+and `["UNCHECKED"]` when the guard could not read the text, which shares
+nothing, as does a verdict that does not add up. `relevance` says whether a
+judge read the answer (`judged`), whether the check would hold it (`would_hold`,
+recorded in `shadow` too) and whether it did (`held`), and nothing of what the
+judge found: an answer held for relevance is `state: "held"`, `shareable:
+null` and `kinds` with `OFF_TOPIC` and the categories it carried, whatever
+intensity it is read at, so `held: true` always comes with those. The mode comes from the
+caller's settings (`relevance`, above): `off` where no settings are kept, so a
+check that sends no `sources`, or is made in an organization whose mode is
+`off`, or with no judge configured, is `{"judged": false, ...}`. With no
+guardrail configured nothing is checked, and it says so: `{"checked": false,
+"state": "clear", "kinds": [], "shareable": [the texts as given], "relevance":
+{"judged": false, "would_hold": false, "held": false}}`.
 
 How much is taken out follows the caller's own settings for the `origin` (see
 [How strictly the guard reads an answer](#how-strictly-the-guard-reads-an-answer)):
@@ -1120,8 +1181,8 @@ the limit is let in again as their oldest check leaves the minute. A request
 that was refused before it was read, malformed or not the member's to make,
 counts for nothing, and the limit holds with no guardrail configured too, so
 what development lets through is what production will. What was found is
-logged by kind, never by value, and no text and nothing of `request` is ever
-logged.
+logged by kind, never by value, and no text and nothing of `request`,
+`context` or `sources` is ever logged.
 
 ### A teamspace is a room
 
@@ -2079,7 +2140,7 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AGENTS_PRIMARY_MODEL` | `gemini-3.5-flash-lite` | Main model: conversation and grounded research |
-| `AGENTS_PRIMARY_MODEL_LITE` | `gemini-3.5-flash-lite` | Lite model: planning and bulk single-turn work |
+| `AGENTS_PRIMARY_MODEL_LITE` | `gemini-3.5-flash-lite` | Lite model: planning and bulk single-turn work, and the answer guard's relevance judge (see [The relevance check](#the-relevance-check)) |
 | `AGENTS_PRIMARY_DELIVERY_THINKING` | unset | Thinking level asked of the model on every call of a run delivering an agent request, and no other run: `minimal`, `low`, `medium` or `high`. Unset, each model thinks as it does by default. A level either model does not take refuses to start (see [Models and routing](#models-and-routing)) |
 | `AGENTS_PRIMARY_PROMPT_CACHE` | `true` | Use explicit Vertex cached contents for large stable prefixes |
 | `AGENTS_PRIMARY_CACHE_TTL_SECONDS` | `3600` | How long a created cache lives; 60–86400 seconds |

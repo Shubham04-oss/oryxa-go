@@ -29,16 +29,24 @@ import (
 const checkPath = "/v1/organizations/org_1/answer-guard/check"
 
 // fakeAnswerChecker answers every check with what verdict makes of its texts,
-// clear as given when it makes nothing, and keeps every check it was asked.
+// clear as given when it makes nothing, and keeps every check it was asked,
+// and the relevance input each came with (nil for a check that had none).
 type fakeAnswerChecker struct {
-	mu      sync.Mutex
-	asked   [][]string
-	verdict func(texts []string) answerguard.Verdict
+	mu        sync.Mutex
+	asked     [][]string
+	relevance []*answerguard.RelevanceInput
+	verdict   func(texts []string) answerguard.Verdict
 }
 
-func (fake *fakeAnswerChecker) Check(_ context.Context, texts []string) answerguard.Verdict {
+func (fake *fakeAnswerChecker) CheckWith(_ context.Context, texts []string, relevance *answerguard.RelevanceInput) answerguard.Verdict {
 	fake.mu.Lock()
 	fake.asked = append(fake.asked, slices.Clone(texts))
+	if relevance != nil {
+		kept := *relevance
+		kept.Context, kept.Sources = slices.Clone(relevance.Context), slices.Clone(relevance.Sources)
+		relevance = &kept
+	}
+	fake.relevance = append(fake.relevance, relevance)
 	fake.mu.Unlock()
 	if fake.verdict != nil {
 		return fake.verdict(texts)
@@ -204,7 +212,7 @@ func TestTheCheckRouteWithNoGuardrailChecksNothingAndSaysSo(t *testing.T) {
 		`{"texts":["The password is hunter2.","write to priya@example.com"],"origin":"peer","request":"What is it?"}`,
 	} {
 		response := serve(server, http.MethodPost, checkPath, body, bearer)
-		want := `{"checked":false,"state":"clear","kinds":[],"shareable":["The password is hunter2.","write to priya@example.com"]}` + "\n"
+		want := `{"checked":false,"state":"clear","kinds":[],"shareable":["The password is hunter2.","write to priya@example.com"],"relevance":{"judged":false,"would_hold":false,"held":false}}` + "\n"
 		if response.Code != http.StatusOK || response.Body.String() != want {
 			t.Errorf("%s = %d %s, want %s", body, response.Code, response.Body.String(), want)
 		}
@@ -442,9 +450,9 @@ func TestAnOriginChoosesHowStrictlyAnAnswerIsReadWhenNobodyChose(t *testing.T) {
 	}
 }
 
-// TestTheCheckRouteKeepsAndLogsNothingItWasAsked: what was asked is measured
-// and dropped, never handed to the guard; and the log names what was found by
-// kind, never by value, and holds no text and none of what was asked.
+// TestTheCheckRouteKeepsAndLogsNothingItWasAsked: what was asked is never
+// among the texts the guard reads for personal data; and the log names what was
+// found by kind, never by value, and holds no text and none of what was asked.
 func TestTheCheckRouteKeepsAndLogsNothingItWasAsked(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
