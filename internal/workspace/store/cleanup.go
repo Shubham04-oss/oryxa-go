@@ -53,17 +53,22 @@ func (store *Store) Cleanup(ctx context.Context, event Departure) error {
 				return err
 			}
 			refs := map[string]bool{}
-			rows, err := tx.Query(ctx, `DELETE FROM workspace.external_mappings WHERE organization_id=$1 AND kind=$2 AND resource_id=$3 RETURNING reference`, event.OrganizationID, event.Kind, event.ResourceID)
+			rows, err := tx.Query(ctx, `DELETE FROM workspace.external_mappings WHERE organization_id=$1 AND kind=$2
+                AND (resource_id=$3 OR (resource_id IS NULL AND lower(btrim(reference))=$4 AND updated_at<=$5))
+                RETURNING reference,resource_id`, event.OrganizationID, event.Kind, event.ResourceID, normalizeReference(event.Reference), event.OccurredAt)
 			if err != nil {
 				return err
 			}
 			for rows.Next() {
 				var ref string
-				if err := rows.Scan(&ref); err != nil {
+				var resourceID *string
+				if err := rows.Scan(&ref, &resourceID); err != nil {
 					rows.Close()
 					return err
 				}
-				refs[normalizeReference(ref)] = true
+				if resourceID != nil {
+					refs[normalizeReference(ref)] = true
+				}
 			}
 			err = rows.Err()
 			rows.Close()

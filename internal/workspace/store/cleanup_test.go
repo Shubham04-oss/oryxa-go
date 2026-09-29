@@ -264,3 +264,43 @@ func TestOutOfOrderDeparturesUseLastAdministratorApplyTime(t *testing.T) {
 		t.Fatalf("out-of-order departure kept stale facts: %s", latest.Document)
 	}
 }
+
+func TestCleanupForgetsOldUnresolvedBindingsButKeepsNewerReferences(t *testing.T) {
+	storage, org := cleanupStore(t)
+	ctx := context.Background()
+	// The member joined and left between applies, so this external mapping was
+	// never resolved to a user ID. A newer invitation with that email is separate.
+	if _, err := storage.database.Pool.Exec(ctx, `UPDATE workspace.external_mappings SET resource_id=NULL,updated_at=now()-interval '1 hour' WHERE organization_id=$1 AND kind='user'`, org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storage.database.Pool.Exec(ctx, `INSERT INTO workspace.external_mappings (organization_id,source,kind,external_id,reference,updated_at) VALUES($1,'google:example.com','user','newer-user','left@example.com',now()+interval '1 hour')`, org); err != nil {
+		t.Fatal(err)
+	}
+	// A reviewed file created after departure refers to a new pending
+	// invitation using the same email. Removing the older unresolved mapping
+	// does not prove the newer file's reference is the departed identity.
+	for _, table := range []string{"configs", "versions"} {
+		if _, err := storage.database.Pool.Exec(ctx, `UPDATE workspace.`+table+` SET applied_at=now()+interval '1 hour' WHERE organization_id=$1`, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := storage.Cleanup(ctx, Departure{EventID: org + "_removed", OrganizationID: org, Kind: "user", ResourceID: "user_1", Reference: "left@example.com", OccurredAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	mappings, err := storage.Mappings(ctx, org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldFound, newFound := false, false
+	for _, mapping := range mappings {
+		oldFound = oldFound || mapping.ExternalID == "external-user"
+		newFound = newFound || mapping.ExternalID == "newer-user"
+	}
+	if oldFound || !newFound {
+		t.Fatalf("cleanup old/new unresolved bindings: %+v", mappings)
+	}
+	latest, err := storage.Latest(ctx, org)
+	if err != nil || !bytes.Contains(latest.Document, []byte("left@example.com")) {
+		t.Fatalf("newer pending reference removed: %s %v", latest.Document, err)
+	}
+}
