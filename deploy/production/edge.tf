@@ -46,6 +46,10 @@ resource "aws_iam_instance_profile" "edge" {
 }
 
 resource "aws_instance" "edge" {
+  # The newest Amazon Linux image, read when the instance is made. A newer one
+  # appearing later does not replace it: that would drop Hyperdrive's tunnel
+  # for the minutes a new instance takes, on no change of ours. Replace it on
+  # purpose (tofu apply -replace=aws_instance.edge) to move to a newer image.
   ami                         = data.aws_ssm_parameter.al2023_arm64.value
   instance_type               = "t4g.nano"
   subnet_id                   = aws_subnet.public[0].id
@@ -84,4 +88,8 @@ resource "aws_instance" "edge" {
   tags = { Name = "${local.name}-hyperdrive-connector" }
 
   depends_on = [aws_secretsmanager_secret_version.db_tunnel_token]
+
+  lifecycle {
+    ignore_changes = [ami]
+  }
 }

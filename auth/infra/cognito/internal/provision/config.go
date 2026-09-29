@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -25,6 +27,11 @@ type Config struct {
 	// URL}/v1/agent-grant/callback. Optional; the agent resource server and
 	// app client are provisioned only when it is set.
 	AgentCallbackURL string
+	// CLICallbackURL is a fixed loopback redirect for the public setup CLI.
+	// Empty leaves the native app client unprovisioned.
+	CLICallbackURL string
+	// CLICallbackURLs includes registered fallback ports for concurrent sign-ins.
+	CLICallbackURLs []string
 }
 
 func FromEnv() (Config, error) {
@@ -39,6 +46,8 @@ func FromEnv() (Config, error) {
 		CallbackURLs:       splitList(os.Getenv("COGNITO_CALLBACK_URLS")),
 		LogoutURLs:         splitList(os.Getenv("COGNITO_LOGOUT_URLS")),
 		AgentCallbackURL:   strings.TrimSpace(os.Getenv("COGNITO_AGENT_CALLBACK_URL")),
+		CLICallbackURL:     strings.TrimSpace(os.Getenv("COGNITO_CLI_CALLBACK_URL")),
+		CLICallbackURLs:    splitList(os.Getenv("COGNITO_CLI_CALLBACK_URLS")),
 	}
 
 	if config.DomainPrefix == "" {
@@ -66,6 +75,22 @@ func FromEnv() (Config, error) {
 		if err := validateRedirectURL(config.AgentCallbackURL); err != nil {
 			return Config{}, err
 		}
+	}
+	if config.CLICallbackURL != "" && !slices.Contains(config.CLICallbackURLs, config.CLICallbackURL) {
+		config.CLICallbackURLs = append([]string{config.CLICallbackURL}, config.CLICallbackURLs...)
+	}
+	for _, callback := range config.CLICallbackURLs {
+		parsed, err := url.Parse(callback)
+		if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.User != nil || parsed.RawPath != "" || parsed.Path != "/callback" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return Config{}, errors.New("CLI callback URLs must be http://127.0.0.1:<port>/callback")
+		}
+		port, err := strconv.Atoi(parsed.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return Config{}, errors.New("CLI callback URLs must use a valid fixed port")
+		}
+	}
+	if config.CLICallbackURL == "" && len(config.CLICallbackURLs) > 0 {
+		config.CLICallbackURL = config.CLICallbackURLs[0]
 	}
 
 	return config, nil

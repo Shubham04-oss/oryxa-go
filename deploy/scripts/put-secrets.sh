@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Copies the secrets an operator holds into Secrets Manager, where the tasks
-# read them: COMPOSIO_API_KEY, and TYPESAFE_API_KEY and REALTIME_PURGE_SECRET
-# when they are set, from the environment or the repository's .env.
-# Values go from the file to AWS on stdin; nothing is printed. The Cognito
-# agent client's secret and Composio's webhook secret are stored by the
-# scripts that create them (provision-app.sh, composio-webhook.sh).
+# read them: COMPOSIO_API_KEY, and TYPESAFE_API_KEY, REALTIME_PURGE_SECRET,
+# APPS_DEFAULT_OAUTH_CLIENTS and APPS_HOOK_SECRETS when they are set, from the
+# environment or the repository's .env; the last two, Oryxa's own sign-in's,
+# may also be typed at a hidden prompt. Values go from the file, or the
+# prompt, to AWS on stdin; nothing is printed. The Cognito agent client's
+# secret and Composio's webhook secret are stored by the scripts that create
+# them (provision-app.sh, composio-webhook.sh).
 
 source "$(dirname "$0")/lib.sh"
 load_environment
@@ -54,3 +56,31 @@ if [[ -n "$(value_of REALTIME_PURGE_SECRET)" ]]; then
   value_of REALTIME_PURGE_SECRET | put_secret "$(secret_id realtime-purge-secret)"
   step "stored REALTIME_PURGE_SECRET"
 fi
+
+# Oryxa's own sign-in's two secrets (docs/design/integrations-plan.md, work
+# package 1F) are each JSON holding more than one value: Oryxa's own OAuth
+# apps by toolkit, and the deployment's webhook secrets by toolkit. Each is
+# read like the ones above if it is already in the environment or .env, or
+# else, on a terminal, typed once at a hidden prompt that never echoes it.
+# Leaving a prompt blank skips it, same as never setting the variable: both
+# are needed only once a toolkit is switched on, and their containers exist
+# whatever apps_signin_secrets_ready says (deploy/README.md, "Oryxa's own
+# sign-in").
+for entry in "APPS_DEFAULT_OAUTH_CLIENTS:apps-default-oauth-clients" "APPS_HOOK_SECRETS:apps-hook-secrets"; do
+  variable=${entry%%:*}
+  slug=${entry#*:}
+  signin_secret_value=$(value_of "$variable")
+  if [[ -z $signin_secret_value && -t 0 ]]; then
+    read -rsp "$variable (JSON, blank to skip): " signin_secret_value
+    echo >&2
+  fi
+  if [[ -n $signin_secret_value ]]; then
+    if ! jq -e . >/dev/null 2>&1 <<<"$signin_secret_value"; then
+      echo "$variable is not valid JSON; nothing was stored" >&2
+      exit 1
+    fi
+    printf '%s' "$signin_secret_value" | put_secret "$(secret_id "$slug")"
+    step "stored $variable"
+  fi
+  unset signin_secret_value variable slug
+done

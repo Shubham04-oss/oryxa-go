@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -65,6 +66,19 @@ function stubApi(routes: Record<string, unknown>) {
       calls.filter((call) => call.method === method && call.path === path),
   }
 }
+
+/** A response the test lets go when it chooses: return `pending` from a route, then `answer` it. */
+function held() {
+  let answer!: (response: Response) => void
+  const pending = new Promise<Response>((resolve) => (answer = resolve))
+  return { answer, pending }
+}
+
+/** Lets what a settled request set going (state updates, the next request) run to its end. */
+const settle = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  })
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
 const day = 86_400_000
@@ -437,6 +451,114 @@ describe("creating a knowledge base", () => {
     expect((await screen.findByRole("alert")).textContent).toBe(
       "You don't have permission to do that here."
     )
+  })
+
+  describe("when Cancel is pressed after the request went out", () => {
+    const newBaseHeading = () =>
+      screen.queryByRole("heading", { name: "New knowledge base" })
+
+    /** Sends "First try" and cancels, its request still out. */
+    async function sendThenCancel(
+      request: ReturnType<typeof held>,
+      list: Corpus[]
+    ) {
+      const api = stubApi({
+        "GET /v1/capabilities": capabilities(true),
+        "GET /v1/organizations/org_1/corpora": () => json({ corpora: list }),
+        "POST /v1/organizations/org_1/corpora": () => request.pending,
+      })
+      const view = renderKnowledge()
+      await screen.findByText("No knowledge bases yet")
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "New knowledge base" })
+      )
+      fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+        target: { value: "First try" },
+      })
+      fireEvent.click(screen.getByRole("button", { name: "Create base" }))
+      await waitFor(() =>
+        expect(
+          api.find("POST", "/v1/organizations/org_1/corpora")
+        ).toHaveLength(1)
+      )
+      expect(screen.getByRole("button", { name: "Creating…" })).toBeTruthy()
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+      expect(newBaseHeading()).toBeNull()
+      return view
+    }
+
+    it("does not open the base it made anyway, but the list learns of it", async () => {
+      const made = corpus({ id: "cor_9", name: "First try", slug: "first-try" })
+      const list: Corpus[] = []
+      const request = held()
+      const { onSelect } = await sendThenCancel(request, list)
+
+      // A request that is out cannot be recalled: the base exists by now.
+      list.push(made)
+      request.answer(json(made, 201))
+
+      expect(
+        await screen.findByRole("button", { name: "Open First try" })
+      ).toBeTruthy()
+      expect(onSelect).not.toHaveBeenCalled()
+      expect(newBaseHeading()).toBeNull()
+    })
+
+    it("leaves a form opened since exactly as the member left it", async () => {
+      const made = corpus({ id: "cor_9", name: "First try", slug: "first-try" })
+      const list: Corpus[] = []
+      const request = held()
+      const { onSelect } = await sendThenCancel(request, list)
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "New knowledge base" })
+      )
+      fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+        target: { value: "Second try" },
+      })
+      list.push(made)
+      request.answer(json(made, 201))
+      await screen.findByRole("button", { name: "Open First try" })
+
+      const name = screen.getByRole("textbox", { name: "Name" })
+      expect((name as HTMLInputElement).value).toBe("Second try")
+      expect(newBaseHeading()).toBeTruthy()
+      expect(onSelect).not.toHaveBeenCalled()
+    })
+
+    it("does not show its failure in a form opened since", async () => {
+      const request = held()
+      await sendThenCancel(request, [])
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "New knowledge base" })
+      )
+      request.answer(json({ error: "you may not do that here" }, 403))
+      await settle()
+
+      expect(screen.queryByRole("alert")).toBeNull()
+    })
+  })
+
+  it("closes the form on Cancel when nothing was sent", async () => {
+    const api = stubApi({
+      "GET /v1/capabilities": capabilities(true),
+      "GET /v1/organizations/org_1/corpora": { corpora: [] },
+    })
+    renderKnowledge()
+    await screen.findByText("No knowledge bases yet")
+
+    fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "Never sent" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+    expect(
+      screen.queryByRole("heading", { name: "New knowledge base" })
+    ).toBeNull()
+    expect(api.find("POST", "/v1/organizations/org_1/corpora")).toHaveLength(0)
   })
 })
 
@@ -899,6 +1021,107 @@ describe("adding content", () => {
       expect(
         api.find("DELETE", "/v1/organizations/org_1/files/file_8")
       ).toHaveLength(1)
+    )
+  })
+
+  describe("when Cancel is pressed after the request went out", () => {
+    /** Sends a note and cancels, its request still out; `documents` is what the list will read. */
+    async function sendNoteThenCancel(
+      request: ReturnType<typeof held>,
+      documents: CorpusDocument[]
+    ) {
+      const api = stubApi({
+        ...addingRoutes(documents),
+        [`POST ${corpusPath}/documents`]: () => request.pending,
+      })
+      renderKnowledge(openHandbook)
+      await screen.findByText(
+        documents.length ? "Decision log" : "No documents yet"
+      )
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
+      fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
+        target: { value: "We chose pgvector." },
+      })
+      fireEvent.click(screen.getByRole("button", { name: "Add note" }))
+      await waitFor(() =>
+        expect(api.find("POST", `${corpusPath}/documents`)).toHaveLength(1)
+      )
+      expect(screen.getByRole("button", { name: "Adding…" })).toBeTruthy()
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+      expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
+      return api
+    }
+
+    const landed = () =>
+      document({
+        id: "doc_new",
+        title: "Decision log",
+        status: "pending",
+        attempts: 0,
+        created_at: ago(0),
+        updated_at: ago(0),
+      })
+
+    it("leaves a form opened since exactly as the member left it, and still lists the document", async () => {
+      const documents: CorpusDocument[] = []
+      const request = held()
+      await sendNoteThenCancel(request, documents)
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
+      fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
+        target: { value: "Something else." },
+      })
+
+      // A request that is out cannot be recalled: the document exists by now.
+      documents.unshift(landed())
+      request.answer(json(landed(), 202))
+      expect(await screen.findByText("Decision log")).toBeTruthy()
+
+      const text = screen.getByRole("textbox", { name: "Text" })
+      expect((text as HTMLTextAreaElement).value).toBe("Something else.")
+      expect(screen.getByRole("button", { name: "Add note" })).toBeTruthy()
+    })
+
+    it("does not tell the member the document was already there", async () => {
+      const existing = document({ id: "doc_new", title: "Decision log" })
+      const documents = [existing]
+      const request = held()
+      await sendNoteThenCancel(request, documents)
+
+      request.answer(json(existing, 202))
+      await settle()
+
+      expect(screen.getByText("Decision log")).toBeTruthy()
+      expect(screen.queryByText(/already/)).toBeNull()
+    })
+  })
+
+  it("tells a member what they added was already there, and closes the form", async () => {
+    const existing = document({ id: "doc_1", title: "Decision log" })
+    const api = stubApi({
+      ...addingRoutes([existing]),
+      [`POST ${corpusPath}/documents`]: () => json(existing, 202),
+    })
+    renderKnowledge(openHandbook)
+    await screen.findByText("Decision log")
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
+    fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
+      target: { value: "We chose pgvector for local runs." },
+    })
+    const reads = api.find("GET", `${corpusPath}/documents`).length
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }))
+
+    expect(
+      await screen.findByText("That note is already in this knowledge base.")
+    ).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Add note" })).toBeNull()
+    // The lists are read again, as for any document added.
+    await waitFor(() =>
+      expect(api.find("GET", `${corpusPath}/documents`).length).toBeGreaterThan(
+        reads
+      )
     )
   })
 })

@@ -21,6 +21,8 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/gcpauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
+	workspacestore "github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
 )
 
 // migrationLock serializes every service's migrations across replicas that
@@ -285,6 +287,16 @@ func Assemble(ctx context.Context, platform Platform, definitions []Definition) 
 }
 
 func mount(ctx context.Context, platform Platform, selected []Definition) ([]mounted, error) {
+	if platform.WorkspacePolicy == nil {
+		platform.WorkspacePolicy = policy.Noop{}
+		if platform.Database != nil {
+			provider, err := workspacePolicyProvider(ctx, workspacestore.New(platform.Database), platform.Logger)
+			if err != nil {
+				return nil, err
+			}
+			platform.WorkspacePolicy = provider
+		}
+	}
 	services := make([]mounted, 0, len(selected))
 	for _, definition := range selected {
 		scoped := platform

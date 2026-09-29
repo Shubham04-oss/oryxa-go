@@ -2,12 +2,17 @@
 // member's connections to third-party apps coming and going, the triggers
 // those apps deliver, and the tools run in them.
 //
-// Apps connects apps through Composio, which holds every credential. A
-// connection belongs to one member in one organization, and everything an
-// event describes happened as that member. Events never carry a token, a
-// secret or a credential, and never a tool's arguments or results, which can
-// hold anything the member's app does. Delivery is at least once, as
-// everywhere on the bus: deduplicate on the envelope's event_id.
+// A connection is made through one of two brokers: Composio, which holds its
+// credential, or Oryxa's own sign-in, which apps keeps sealed. A connection
+// belongs to one member in one organization, and everything an event
+// describes happened as that member. Events never carry a token, a secret or
+// a credential, and never a tool's arguments or results, which can hold
+// anything the member's app does. Delivery is at least once, as everywhere on
+// the bus: deduplicate on the envelope's event_id.
+//
+// Changes are additive only. What Oryxa's own sign-in added is left out when
+// empty, so a Composio connection's events are byte for byte what they were
+// before it.
 package v1
 
 import (
@@ -29,7 +34,21 @@ const (
 	TriggerDisabledDetailType     = "apps.trigger.disabled.v1"
 	ActionCompletedDetailType     = "apps.action.completed.v1"
 	ActionFailedDetailType        = "apps.action.failed.v1"
+
+	// CredentialReplacedDetailType is a member replacing the key, password or
+	// client credentials an Oryxa connection holds.
+	CredentialReplacedDetailType = "apps.credential.replaced.v1"
+	// OAuthClientSavedDetailType and OAuthClientRemovedDetailType are an
+	// organization admin saving or removing the organization's own OAuth
+	// client for a registration. Both carry OAuthClientChanged.
+	OAuthClientSavedDetailType   = "apps.oauth_client.saved.v1"
+	OAuthClientRemovedDetailType = "apps.oauth_client.removed.v1"
 )
+
+// BrokerOryxa is the Broker of a connection made through Oryxa's own sign-in
+// rather than Composio. A Composio connection's events leave Broker out, so
+// they stay byte-identical to what they were before there was a choice.
+const BrokerOryxa = "oryxa"
 
 // Why a connection never became usable. A connection fails before it is ever
 // active, so nothing could have been read or run through it.
@@ -44,6 +63,31 @@ const (
 	// FailedAbandoned is a member who started connecting and never came back
 	// before the link expired.
 	FailedAbandoned = "abandoned"
+	// FailedInvalidCredentials is a key, a password, or a field that broke
+	// its rule, or that the app refused when it was tried. Oryxa's sign-in
+	// only.
+	FailedInvalidCredentials = "invalid_credentials"
+	// FailedUnavailable is an app, or something Oryxa relies on, that did not
+	// answer while the sign-in was finishing; nothing was kept. Oryxa's
+	// sign-in only.
+	FailedUnavailable = "unavailable"
+	// FailedNotConnectable is a sign-in with no OAuth client to go through:
+	// the organization has none of its own and refused Oryxa's, or Oryxa has
+	// none for the app. Oryxa's sign-in only.
+	FailedNotConnectable = "not_connectable"
+)
+
+// Why an Oryxa connection expired: ConnectionExpired's Reason. A Composio
+// connection's reason is Composio's own wording.
+const (
+	// ExpiredRefreshRejected is an OAuth refresh the app refused
+	// (invalid_grant), or an OAuth token that expired with nothing to renew
+	// it.
+	ExpiredRefreshRejected = "refresh_rejected"
+	// ExpiredCredentialRejected is a credential the app refused: a key, a
+	// password or a token whose test call it answered 401 to, or client
+	// credentials that no longer mint a token.
+	ExpiredCredentialRejected = "credential_rejected"
 )
 
 // MaxTriggerDataBytes is the most of a trigger's payload an event carries.
@@ -66,20 +110,26 @@ const (
 // connection ends as ConnectionConnected, ConnectionFailed, or
 // ConnectionRemoved, when it is removed while still pending.
 type ConnectionInitiated struct {
-	ConnectionID   string    `json:"connection_id"`
-	OrganizationID string    `json:"organization_id"`
-	MemberID       string    `json:"member_id"`
-	Toolkit        string    `json:"toolkit"`
-	InitiatedAt    time.Time `json:"initiated_at"`
+	ConnectionID   string `json:"connection_id"`
+	OrganizationID string `json:"organization_id"`
+	MemberID       string `json:"member_id"`
+	Toolkit        string `json:"toolkit"`
+	// Broker is BrokerOryxa for a connection made through Oryxa's own
+	// sign-in, and left out for Composio's.
+	Broker      string    `json:"broker,omitempty"`
+	InitiatedAt time.Time `json:"initiated_at"`
 }
 
 // ConnectionConnected is a member's connection that has just become usable.
 type ConnectionConnected struct {
-	ConnectionID   string    `json:"connection_id"`
-	OrganizationID string    `json:"organization_id"`
-	MemberID       string    `json:"member_id"`
-	Toolkit        string    `json:"toolkit"`
-	ConnectedAt    time.Time `json:"connected_at"`
+	ConnectionID   string `json:"connection_id"`
+	OrganizationID string `json:"organization_id"`
+	MemberID       string `json:"member_id"`
+	Toolkit        string `json:"toolkit"`
+	// Broker is BrokerOryxa for a connection made through Oryxa's own
+	// sign-in, and left out for Composio's.
+	Broker      string    `json:"broker,omitempty"`
+	ConnectedAt time.Time `json:"connected_at"`
 }
 
 // ConnectionFailed is a connection that never became usable, and why. It was
@@ -87,35 +137,52 @@ type ConnectionConnected struct {
 // the Failed constants — never the app's own wording, which can carry
 // anything.
 type ConnectionFailed struct {
-	ConnectionID   string    `json:"connection_id"`
-	OrganizationID string    `json:"organization_id"`
-	MemberID       string    `json:"member_id"`
-	Toolkit        string    `json:"toolkit"`
-	Reason         string    `json:"reason"`
-	FailedAt       time.Time `json:"failed_at"`
+	ConnectionID   string `json:"connection_id"`
+	OrganizationID string `json:"organization_id"`
+	MemberID       string `json:"member_id"`
+	Toolkit        string `json:"toolkit"`
+	// Broker is BrokerOryxa for a connection made through Oryxa's own
+	// sign-in, and left out for Composio's.
+	Broker   string    `json:"broker,omitempty"`
+	Reason   string    `json:"reason"`
+	FailedAt time.Time `json:"failed_at"`
 }
 
 // ConnectionExpired is a connection whose credential can no longer be
 // renewed. The member has to connect the app again; until then nothing can
 // run as it.
 type ConnectionExpired struct {
-	ConnectionID   string    `json:"connection_id"`
-	OrganizationID string    `json:"organization_id"`
-	MemberID       string    `json:"member_id"`
-	Toolkit        string    `json:"toolkit"`
-	Reason         string    `json:"reason,omitempty"`
-	ExpiredAt      time.Time `json:"expired_at"`
+	ConnectionID   string `json:"connection_id"`
+	OrganizationID string `json:"organization_id"`
+	MemberID       string `json:"member_id"`
+	Toolkit        string `json:"toolkit"`
+	// Broker is BrokerOryxa for a connection made through Oryxa's own
+	// sign-in, and left out for Composio's.
+	Broker    string    `json:"broker,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	ExpiredAt time.Time `json:"expired_at"`
 }
 
 // ConnectionRemoved is a connection that is gone for good, and its
-// credential revoked.
+// credential revoked: by Composio, or for an Oryxa connection by apps, which
+// says in ProviderRevoked whether the app confirmed it.
 type ConnectionRemoved struct {
-	ConnectionID   string    `json:"connection_id"`
-	OrganizationID string    `json:"organization_id"`
-	MemberID       string    `json:"member_id"`
-	Toolkit        string    `json:"toolkit"`
-	Reason         string    `json:"reason"`
-	RemovedAt      time.Time `json:"removed_at"`
+	ConnectionID   string `json:"connection_id"`
+	OrganizationID string `json:"organization_id"`
+	MemberID       string `json:"member_id"`
+	Toolkit        string `json:"toolkit"`
+	// Broker is BrokerOryxa for a connection made through Oryxa's own
+	// sign-in, and left out for Composio's.
+	Broker string `json:"broker,omitempty"`
+	Reason string `json:"reason"`
+	// ProviderRevoked says, for an Oryxa connection, whether the app confirmed
+	// the credential no longer works: it revoked it, or it was already gone.
+	// It is false for a key or a password, which only its owner can revoke,
+	// for an app that cannot revoke, for a grant another connection still
+	// shares, and for an app that did not answer, whose revocation is retried
+	// later. It is left out for a Composio connection.
+	ProviderRevoked *bool     `json:"provider_revoked,omitempty"`
+	RemovedAt       time.Time `json:"removed_at"`
 }
 
 // TriggerSubscribed is a member subscribing one of their connections to an
@@ -204,4 +271,31 @@ type ActionFailed struct {
 	Agent          bool      `json:"agent"`
 	Error          string    `json:"error"`
 	FinishedAt     time.Time `json:"finished_at"`
+}
+
+// CredentialReplaced is a member replacing the key, password or client
+// credentials an Oryxa connection holds, once the app accepted the new one in
+// its test call. Kind is the credential's kind: api_token, basic or
+// oauth2_client_credentials. It never carries the credential.
+type CredentialReplaced struct {
+	ConnectionID   string    `json:"connection_id"`
+	OrganizationID string    `json:"organization_id"`
+	MemberID       string    `json:"member_id"`
+	Toolkit        string    `json:"toolkit"`
+	Kind           string    `json:"kind"`
+	ReplacedAt     time.Time `json:"replaced_at"`
+}
+
+// OAuthClientChanged is an organization admin saving or removing the
+// organization's own OAuth client for a registration (github, google, …):
+// the detail of both OAuthClientSavedDetailType and
+// OAuthClientRemovedDetailType. ClientID is the client's public id, empty for
+// a row that only refuses Oryxa's default client. It never carries the
+// client's secret.
+type OAuthClientChanged struct {
+	OrganizationID string    `json:"organization_id"`
+	Client         string    `json:"client"`
+	ClientID       string    `json:"client_id"`
+	ActorID        string    `json:"actor_id"`
+	ChangedAt      time.Time `json:"changed_at"`
 }

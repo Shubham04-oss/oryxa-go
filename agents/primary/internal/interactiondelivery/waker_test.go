@@ -272,11 +272,19 @@ func testRequest(status string) agents.Interaction {
 	}
 }
 
+// decidable is a request an agent may decide: one made in a teamspace to a
+// specialist its member let decide there, which a waker whose teamspace
+// requests still stand (standsStill) wakes to decide. A request made outside
+// any teamspace is its member's to decide, and wakes nobody.
+func decidable(status string) agents.Interaction {
+	return requestWithApproval(status, interactions.ApprovalAgent)
+}
+
 func TestTargetLifecycleUsesOneStableThreadAndRequiresLedgerTransitions(t *testing.T) {
 	store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_1", KindTargetRequested, 1)}}
-	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest("pending")}}
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable("pending")}}
 	runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", "approved") }}
-	waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	waker := NewWaker(store, runs, requests, standsStill(), nil)
 
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
@@ -305,8 +313,8 @@ func TestTargetLifecycleUsesOneStableThreadAndRequiresLedgerTransitions(t *testi
 
 func TestTargetRunWithoutARecordedTransitionIsRetriedAsFailure(t *testing.T) {
 	store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_1", KindTargetRequested, 1)}}
-	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest("pending")}}
-	waker := NewWaker(store, &fakeAgentRuns{}, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable("pending")}}
+	waker := NewWaker(store, &fakeAgentRuns{}, requests, standsStill(), nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -367,9 +375,9 @@ func TestEveryDeliveryRunStartsWithItsInteractionsToolboxLoaded(t *testing.T) {
 		if kind == KindTargetApproved {
 			status = interactions.StatusApproved
 		}
-		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(status)}}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable(status)}}
 		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusCompleted) }}
-		waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+		waker := NewWaker(store, runs, requests, standsStill(), nil)
 		if err := waker.WakeDue(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -395,9 +403,9 @@ func TestEveryDeliveryRunIsPinnedToItsRequest(t *testing.T) {
 		if kind == KindTargetApproved {
 			status = interactions.StatusApproved
 		}
-		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(status)}}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable(status)}}
 		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusCompleted) }}
-		waker := NewWaker(&fakeDeliveries{pending: []Delivery{testDelivery("evt_1", kind, 1)}}, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+		waker := NewWaker(&fakeDeliveries{pending: []Delivery{testDelivery("evt_1", kind, 1)}}, runs, requests, standsStill(), nil)
 		if err := waker.WakeDue(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -427,7 +435,7 @@ func TestEveryDeliveryRunStartIsLoggedWithWhatItWasGiven(t *testing.T) {
 		KindRequesterCompleted: {[]string{"interactions"}, []string{"interactions_get"}},
 	} {
 		status := interactions.StatusPending
-		request := testRequest(status)
+		request := decidable(status)
 		if kind == KindTargetApproved {
 			request = allowing(request, agents.AppsToolboxName)
 		}
@@ -440,8 +448,10 @@ func TestEveryDeliveryRunStartIsLoggedWithWhatItWasGiven(t *testing.T) {
 			}
 			return []string{"interactions"}
 		}
+		config := standsStill()
+		config.Toolboxes = toolboxes
 		waker := NewWaker(&fakeDeliveries{pending: []Delivery{testDelivery("evt_1", kind, 1)}}, runs, requests,
-			Config{Interval: time.Second, Lease: time.Minute, Toolboxes: toolboxes}, slog.New(slog.NewJSONHandler(&logs, nil)))
+			config, slog.New(slog.NewJSONHandler(&logs, nil)))
 		if err := waker.WakeDue(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -480,9 +490,9 @@ func TestEveryDeliveryRunStartIsLoggedWithWhatItWasGiven(t *testing.T) {
 // request has nothing of the member's loaded, and is told it only decides:
 // approved, the work runs on its own, with exactly what was allowed.
 func TestDecidingANewRequestReadsTheRequestAlone(t *testing.T) {
-	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(interactions.StatusPending)}}
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable(interactions.StatusPending)}}
 	runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusApproved) }}
-	waker := NewWaker(&fakeDeliveries{pending: []Delivery{testDelivery("evt_1", KindTargetRequested, 1)}}, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	waker := NewWaker(&fakeDeliveries{pending: []Delivery{testDelivery("evt_1", KindTargetRequested, 1)}}, runs, requests, standsStill(), nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}

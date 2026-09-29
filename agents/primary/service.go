@@ -30,6 +30,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/directoryclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardpolicy"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/inbound"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactiondelivery"
@@ -43,6 +44,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/workspaceclient"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
@@ -116,6 +118,9 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	if err := interactiondelivery.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return err
 	}
+	if err := guardpolicy.New(platform.Database, nil, guardpolicy.Cap{}).Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate guard policy: %w", err)
+	}
 	scoped, err := platform.Database.WithSchema(ctx, schema, "oryxa-migrate-agents", 2)
 	if err != nil {
 		return err
@@ -180,7 +185,21 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 
 	registryStore := managedagents.NewStore(platform.Database)
 	interactionStore := agentinteractions.NewStore(platform.Database)
+	workspacePolicy := platform.WorkspaceSettings()
+	wakeupStore := wakeups.NewStoreWithPolicy(platform.Database, workspacePolicy)
+	// What each member chose about how strictly the answer guard reads what
+	// their agent says, apart for an answer they started themselves and one
+	// another member reads. No organization's policy can be read yet, so every
+	// organization gets the defaults: NoOrgPolicies says so without a warning,
+	// where nil would say it on the first check. The deployment's ceiling holds
+	// the relevance check to what it has earned.
+	guardSettings := guardpolicy.New(platform.Database, guardpolicy.NoOrgPolicies{}, guardpolicy.Cap{
+		Relevance: settings.GuardRelevanceCap, HoldOrgs: settings.GuardHoldOrgs,
+	}).WithLogger(logger)
+	logger.Info("the answer guard's relevance check is held to a ceiling",
+		"ceiling", settings.GuardRelevanceCap, "organizations_exempt", len(settings.GuardHoldOrgs))
 	var organizationDirectory agents.Directory
+	var organizationContext agents.ContextDirectory
 	if settings.TeamsURL != "" {
 		organizationDirectory, err = directoryclient.New(settings.TeamsURL, &http.Client{Transport: observability.Transport(nil)}, registryStore)
 		if err != nil {
@@ -189,6 +208,13 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		}
 	} else {
 		logger.Warn("TEAMS_URL is not set: agents cannot discover people or teams")
+	}
+	if settings.WorkspaceURL != "" {
+		organizationContext, err = workspaceclient.New(settings.WorkspaceURL, &http.Client{Timeout: 15 * time.Second, Transport: observability.Transport(nil)})
+		if err != nil {
+			sessionStore.Close()
+			return host.Service{}, err
+		}
 	}
 	// One agent-token exchange serves Krude's tools and the request ledger,
 	// which reads a request's teamspace again as its addressed member.
@@ -199,11 +225,46 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	typeSafe := jevClient(settings, logger)
 	var interactionService *agentinteractions.Service
 	var teamspaceService *teamspaces.Service
+	// answerGuard reads what one member's agent tells another before they
+	// read it: answers to requests, what agents say in rooms, what they
+	// publish to a teamspace's ledger, and, through the check route, what a
+	// side conversation is about to show a member. It is built before any of
+	// them, since each takes it as it is made.
+	//
+	// Every answer another member reads is checked first when a guardrail is
+	// named. The SDK honours AWS_ENDPOINT_URL_BEDROCK_RUNTIME, which points
+	// development at a stand-in.
+	var answerGuard *answerguard.Guard
+	if settings.AnswerGuardrailIdentifier != "" {
+		guardOptions, err := relevanceOptions(ctx, settings, platform, logger)
+		if err != nil {
+			sessionStore.Close()
+			return host.Service{}, err
+		}
+		guard, err := answerguard.New(bedrockruntime.NewFromConfig(platform.AWS), answerguard.Config{
+			Identifier: settings.AnswerGuardrailIdentifier, Version: settings.AnswerGuardrailVersion, Logger: logger,
+		}, guardOptions...)
+		if err != nil {
+			sessionStore.Close()
+			return host.Service{}, err
+		}
+		answerGuard = guard
+		logger.Info("the answer guard checks every answer another member reads before they read it",
+			"guardrail", settings.AnswerGuardrailIdentifier, "version", settings.AnswerGuardrailVersion)
+	} else {
+		logger.Warn("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID is not set: answers reach the member who asked unchecked, and the relevance check, which runs in the answer guard, does not run")
+	}
 	teamspaceStore := teamspaces.NewStore(platform.Database)
 	roomStore := rooms.NewStore(platform.Database)
 	teamRoomStore := agentteamrooms.NewStore(platform.Database)
 	if organizationDirectory != nil {
-		teamspaceService, err = teamspaces.New(teamspaceStore, organizationDirectory)
+		// The guard is passed only when there is one: a nil *Guard in the
+		// interface would not read as none.
+		teamspaceOptions := []teamspaces.Option{teamspaces.WithLogger(logger)}
+		if answerGuard != nil {
+			teamspaceOptions = append(teamspaceOptions, teamspaces.WithGuard(answerGuard))
+		}
+		teamspaceService, err = teamspaces.New(teamspaceStore, organizationDirectory, teamspaceOptions...)
 		if err != nil {
 			sessionStore.Close()
 			return host.Service{}, err
@@ -214,25 +275,12 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			Repository: interactionStore, Directory: organizationDirectory, Teamspaces: teamspaceService, Tokens: memberTokens,
 			Logger: logger,
 		}
+		interactionConfig.Policy = workspacePolicy
 		if typeSafe != nil {
 			interactionConfig.Jev = typeSafe.Ask
 		}
-		// Every answer another member reads is checked first when a
-		// guardrail is named. The SDK honours AWS_ENDPOINT_URL_BEDROCK_RUNTIME,
-		// which points development at a stand-in.
-		if settings.AnswerGuardrailIdentifier != "" {
-			guard, err := answerguard.New(bedrockruntime.NewFromConfig(platform.AWS), answerguard.Config{
-				Identifier: settings.AnswerGuardrailIdentifier, Version: settings.AnswerGuardrailVersion, Logger: logger,
-			})
-			if err != nil {
-				sessionStore.Close()
-				return host.Service{}, err
-			}
-			interactionConfig.Guard = guard
-			logger.Info("the answer guard checks every answer another member reads before they read it",
-				"guardrail", settings.AnswerGuardrailIdentifier, "version", settings.AnswerGuardrailVersion)
-		} else {
-			logger.Warn("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID is not set: answers reach the member who asked unchecked")
+		if answerGuard != nil {
+			interactionConfig.Guard = answerGuard
 		}
 		interactionService, err = agentinteractions.New(interactionConfig)
 		if err != nil {
@@ -243,8 +291,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	agentSystemBinding := agents.NewAgentSystemBinding()
 	assemblyOptions := assembly.Options{
 		Settings: settings, AWS: platform.AWS, Google: platform.Google, Logger: logger,
-		Directory: organizationDirectory, AgentSystem: agentSystemBinding, Tokens: memberTokens,
+		Directory: organizationDirectory, Context: organizationContext, AgentSystem: agentSystemBinding, Tokens: memberTokens,
 	}
+	assemblyOptions.Policy = workspacePolicy
 	// interactionService and teamspaceService are concrete *Service pointers,
 	// nil when TEAMS_URL is unset. Boxed directly into these interface fields
 	// they would leave Build seeing a configured-but-nil collaborator rather
@@ -304,9 +353,17 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		// at all until their agent has approved the request that woke it. A
 		// run delivering one interaction is offered nothing that lists the
 		// member's other requests, and starts with all it may reach loaded.
+		// A seat's turn in a room answers from the room alone, whether or
+		// not its member is reading the room.
 		Unattended: func(definition managedagents.Definition, profile managedagents.UnattendedProfile) (agent.Agent, error) {
 			spec := agents.ManagedSpec{
 				ID: definition.ID, Name: definition.Name, Description: definition.Description, Instructions: definition.Instructions,
+			}
+			if profile == managedagents.RoomSeat {
+				if definition.Kind == managedagents.KindPrimary {
+					return krude.Room, nil
+				}
+				return krude.ManagedRoom(spec)
 			}
 			if profile.Delivers() {
 				if definition.Kind == managedagents.KindPrimary {
@@ -440,6 +497,12 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			return host.Service{}, err
 		}
 		relay.Logger = logger
+		// The team reads what an agent says in a room, so the answer guard
+		// reads it first. Set only when there is one: a nil *Guard in the
+		// interface would not read as none.
+		if answerGuard != nil {
+			relay.Guard = answerGuard
+		}
 		compactor, err := rooms.NewModelCompactor(krude.Compact)
 		if err != nil {
 			closeAll()
@@ -473,7 +536,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		TeamRooms:           teamRoomService,
 		Workflows:           workflowService,
 		OrganizationContext: organizationStore,
-		Preferences:         wakeups.NewStore(platform.Database),
+		Preferences:         wakeupStore,
+		// Always built above, so never a nil *Service in the interface.
+		AnswerGuardPreferences: guardSettings,
 	}
 	// Same reasoning as assemblyOptions above: a nil *Service must leave the
 	// interface field unset, or server.interactions/.teamspaces/.rooms would
@@ -487,6 +552,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}
 	if roomService != nil {
 		httpConfig.Rooms = roomService
+	}
+	// The check route reads with the same guard, when there is one; without
+	// it the route answers that nothing was checked.
+	if answerGuard != nil {
+		httpConfig.AnswerGuard = answerGuard
 	}
 	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpConfig, logger)
 
@@ -536,15 +606,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			"state_machine", settings.WorkflowStateMachineARN, "scheduler", workflowScheduler != nil)
 	}
 	if settings.EventsQueueURL != "" {
-		store := wakeups.NewStore(platform.Database)
+		store := wakeupStore
 		deliveryStore := interactiondelivery.NewStore(platform.Database)
 		deliveryCleaner := interactiondelivery.NewCleaner(deliveryStore, agentRegistry)
 		consumer, err := inbound.NewConsumer(store, deliveryStore, []inbound.Forgetter{
-			func(ctx context.Context, organizationID, memberID string) error {
-				_, err := service.Forget(ctx, organizationID, memberID)
-				return err
-			},
-			store.Forget,
 			deliveryCleaner.Forget,
 			interactionStore.Forget,
 			organizationStore.Forget,
@@ -558,7 +623,20 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			closeAll()
 			return host.Service{}, err
 		}
-		consumer.WithTeamForgetter(teamspaceStore.ForgetTeam).
+		// A member's threads and memory, their wake-ups and their answer guard
+		// settings need no other cleanup done first and none needs them, so
+		// they run apart from the list above: Memory Bank being down cannot
+		// hold up the rest, nor the rest failing keep a member's memory from
+		// being forgotten.
+		consumer.WithIndependentForgetters(
+			func(ctx context.Context, organizationID, memberID string) error {
+				_, err := service.Forget(ctx, organizationID, memberID)
+				return err
+			},
+			store.Forget,
+			guardSettings.Forget,
+		).
+			WithTeamForgetter(teamspaceStore.ForgetTeam).
 			WithTeamMemberForgetter(teamspaceStore.ForgetTeamMember).
 			WithOrganizationSynthesisRecorder(organizationStore)
 		queue := sqs.NewFromConfig(platform.AWS, func(options *sqs.Options) {

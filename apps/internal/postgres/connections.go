@@ -10,9 +10,24 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 )
 
-const connectionColumns = `id, organization_id, member_id, toolkit, auth_config_id, composio_user_id,
+// connectionColumns are read from apps_connections, unaliased, in a SELECT or
+// an UPDATE's RETURNING. credential_kind is an Oryxa connection's credential's
+// kind, read beside it: it lives in apps_credentials, which signin keeps.
+const connectionColumns = `id, organization_id, member_id, toolkit, broker,
+	COALESCE((SELECT credential.kind FROM apps_credentials credential
+		WHERE credential.connection_id = apps_connections.id), '') AS credential_kind,
+	auth_config_id, composio_user_id,
 	composio_account_id, status, status_reason, label, return_to, auto_subscribe, auto_subscribed_at,
 	auto_subscribe_attempts, created_at, updated_at, connected_at, removed_at`
+
+// brokerOf is the broker a connection is stored under: Composio's unless it
+// says otherwise, as every connection made before Oryxa's sign-in is.
+func brokerOf(connection domain.Connection) string {
+	if connection.Broker == "" {
+		return domain.BrokerComposio
+	}
+	return connection.Broker
+}
 
 // CreateConnection records a pending connection, with the hash of the state
 // its browser round trip carries so PendingConnection can find it again. The
@@ -23,12 +38,12 @@ func (store *Store) CreateConnection(ctx context.Context, connection domain.Conn
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO apps_connections (
 				id, organization_id, member_id, toolkit, auth_config_id, composio_user_id, composio_account_id,
-				status, status_reason, label, state_hash, return_to, auto_subscribe, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)`,
+				status, status_reason, label, state_hash, return_to, auto_subscribe, created_at, updated_at, broker
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14, $15)`,
 			connection.ID, connection.OrganizationID, connection.MemberID, connection.Toolkit, connection.AuthConfigID,
 			connection.ComposioUserID, nullable(connection.ComposioAccountID), string(connection.Status),
 			connection.StatusReason, connection.Label, nullable(stateHash), connection.ReturnTo,
-			connection.AutoSubscribe, connection.CreatedAt,
+			connection.AutoSubscribe, connection.CreatedAt, brokerOf(connection),
 		); err != nil {
 			return mapWriteError("create connection", err)
 		}
@@ -113,6 +128,9 @@ func (store *Store) FailConnection(ctx context.Context, id, reason string, now t
 // a second replica's next tick would see the same rows as unclaimed again and
 // take them too, doubling the Composio calls. The lease is what closes that
 // window between passes, not just within one.
+//
+// Only Composio's connections are claimed: subscribing is a Composio call,
+// and an Oryxa connection's triggers are its own integration's.
 func (store *Store) ConnectionsAwaitingSubscribe(ctx context.Context, maxAttempts, limit int, now, leaseUntil time.Time) ([]domain.Connection, error) {
 	return queryConnections(ctx, store.pool, `
 		UPDATE apps_connections SET auto_subscribe_attempts = auto_subscribe_attempts + 1,
@@ -120,6 +138,7 @@ func (store *Store) ConnectionsAwaitingSubscribe(ctx context.Context, maxAttempt
 		WHERE id IN (
 			SELECT id FROM apps_connections
 			WHERE status = 'active' AND auto_subscribe AND auto_subscribed_at IS NULL
+				AND broker = 'composio'
 				AND auto_subscribe_attempts < $1
 				AND (auto_subscribe_claimed_until IS NULL OR auto_subscribe_claimed_until <= $3)
 			ORDER BY connected_at
@@ -127,6 +146,20 @@ func (store *Store) ConnectionsAwaitingSubscribe(ctx context.Context, maxAttempt
 			FOR UPDATE SKIP LOCKED
 		)
 		RETURNING `+connectionColumns, maxAttempts, limit, now, leaseUntil)
+}
+
+// RefundAutoSubscribeAttempt retains the lease as policy backoff. Matching both
+// the lease and attempt makes retries idempotent and prevents an old worker from
+// refunding a different worker's provider attempt.
+func (store *Store) RefundAutoSubscribeAttempt(ctx context.Context, id string, attempt int, leaseUntil time.Time) error {
+	_, err := store.pool.Exec(ctx, `UPDATE apps_connections
+ SET auto_subscribe_attempts = auto_subscribe_attempts - 1
+ WHERE id = $1 AND auto_subscribe_attempts = $2 AND auto_subscribe_attempts > 0
+ AND auto_subscribe_claimed_until = $3 AND auto_subscribed_at IS NULL`, id, attempt, leaseUntil)
+	if err != nil {
+		return mapWriteError("refund automatic subscription attempt", err)
+	}
+	return nil
 }
 
 // MarkSubscribed records that a connection has been subscribed to what its
@@ -305,6 +338,71 @@ func (store *Store) FailPendingConnectionsBefore(ctx context.Context, cutoff, no
 	return count, nil
 }
 
+// FailPendingOryxaConnectionsBefore fails every pending Oryxa connection
+// created before cutoff: its sign-in lasted ten minutes, so a member who never
+// came back is not coming back, and the one-current-connection slot is theirs
+// again. Like FailPendingConnectionsBefore, the events are built from exactly
+// the rows this sweep changed and written in the same transaction.
+func (store *Store) FailPendingOryxaConnectionsBefore(ctx context.Context, cutoff, now time.Time, events func([]domain.Connection) ([]domain.Event, error)) (int64, error) {
+	var count int64
+	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		failed, err := queryConnections(ctx, tx, `
+			UPDATE apps_connections
+			SET status = 'failed', status_reason = 'link expired', state_hash = NULL, updated_at = $2
+			WHERE status = 'pending' AND broker = 'oryxa' AND created_at < $1
+			RETURNING `+connectionColumns, cutoff, now)
+		if err != nil {
+			return fmt.Errorf("fail abandoned Oryxa sign-ins: %w", err)
+		}
+		count = int64(len(failed))
+		if count == 0 {
+			return nil
+		}
+		built, err := events(failed)
+		if err != nil {
+			return err
+		}
+		return insertEvents(ctx, tx, built...)
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// RelabelConnection records that an active connection's credential was
+// replaced: its label becomes the account the new credential names, and
+// event is written in the same transaction. It answers false, writing
+// nothing, when the connection is no longer active.
+func (store *Store) RelabelConnection(ctx context.Context, id, label string, now time.Time, event domain.Event) (domain.Connection, bool, error) {
+	var relabelled domain.Connection
+	changed := false
+	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		connections, err := queryConnections(ctx, tx, `
+			UPDATE apps_connections SET label = $2, updated_at = $3
+			WHERE id = $1 AND status = 'active'
+			RETURNING `+connectionColumns, id, label, now)
+		if err != nil {
+			return err
+		}
+		if len(connections) == 0 {
+			return nil
+		}
+		relabelled, changed = connections[0], true
+		return insertEvents(ctx, tx, event)
+	})
+	return relabelled, changed, err
+}
+
+// RecordEvents writes events that announce a change kept elsewhere, such as
+// an organization's OAuth client, which signin keeps.
+func (store *Store) RecordEvents(ctx context.Context, events ...domain.Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+	return store.inTx(ctx, func(tx pgx.Tx) error { return insertEvents(ctx, tx, events...) })
+}
+
 func queryConnections(ctx context.Context, db querier, sql string, args ...any) ([]domain.Connection, error) {
 	rows, err := db.Query(ctx, sql, args...)
 	if err != nil {
@@ -330,7 +428,7 @@ func scanConnection(rows pgx.Rows) (domain.Connection, error) {
 	var status string
 	var composioAccountID *string
 	if err := rows.Scan(&connection.ID, &connection.OrganizationID, &connection.MemberID, &connection.Toolkit,
-		&connection.AuthConfigID, &connection.ComposioUserID, &composioAccountID, &status, &connection.StatusReason,
+		&connection.Broker, &connection.CredentialKind, &connection.AuthConfigID, &connection.ComposioUserID, &composioAccountID, &status, &connection.StatusReason,
 		&connection.Label, &connection.ReturnTo, &connection.AutoSubscribe, &connection.AutoSubscribedAt,
 		&connection.AutoSubscribeAttempts, &connection.CreatedAt, &connection.UpdatedAt,
 		&connection.ConnectedAt, &connection.RemovedAt); err != nil {

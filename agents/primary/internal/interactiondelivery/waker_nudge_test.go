@@ -52,13 +52,13 @@ func runWaker(t *testing.T, waker *Waker) func() {
 // hour away here, is only the backstop.
 func TestANudgedDeliveryStartsAtOnceWithoutThePoll(t *testing.T) {
 	store := &fakeDeliveries{}
-	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest("pending")}}
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable("pending")}}
 	started := make(chan time.Time, 1)
 	runs := &fakeAgentRuns{onExecute: func() {
 		started <- time.Now()
 		requests.setStatus("irq_1", "approved")
 	}}
-	waker := NewWaker(store, runs, requests, Config{Interval: time.Hour, Lease: time.Minute}, nil)
+	waker := NewWaker(store, runs, requests, Config{Interval: time.Hour, Lease: time.Minute, Standing: standsAlways{}}, nil)
 	stop := runWaker(t, waker)
 
 	recorded := time.Now()
@@ -149,10 +149,18 @@ func deliveryTo(eventID, requestID, agentID string) Delivery {
 	return delivery
 }
 
+// standsAlways reads every request made in a teamspace again as still
+// standing, from any number of runs at once.
+type standsAlways struct{}
+
+func (standsAlways) Recheck(_ context.Context, request agents.Interaction) (agents.Interaction, interactions.Verdict, error) {
+	return request, interactions.VerdictStands, nil
+}
+
 func pendingRequests(ids ...string) *fakeRequests {
 	requests := &fakeRequests{requests: map[string]agents.Interaction{}}
 	for _, id := range ids {
-		request := testRequest(interactions.StatusPending)
+		request := decidable(interactions.StatusPending)
 		request.ID = id
 		requests.requests[id] = request
 	}
@@ -180,7 +188,7 @@ func TestADeliveryRecordedWhileAnotherRunsStartsInAFreeSlot(t *testing.T) {
 	requests := pendingRequests("irq_1", "irq_2")
 	runs := newGatedRuns(requests, map[string]string{"agt_1": "irq_1", "agt_2": "irq_2"})
 	store := &fakeDeliveries{}
-	waker := NewWaker(store, runs, requests, Config{Interval: time.Hour, Lease: time.Minute, Concurrency: 2}, nil)
+	waker := NewWaker(store, runs, requests, Config{Interval: time.Hour, Lease: time.Minute, Concurrency: 2, Standing: standsAlways{}}, nil)
 	stop := runWaker(t, waker)
 
 	store.record(deliveryTo("evt_1", "irq_1", "agt_1"))
@@ -205,7 +213,7 @@ func TestWithEverySlotTakenADeliveryStartsAsOneFrees(t *testing.T) {
 	requests := pendingRequests("irq_1", "irq_2")
 	runs := newGatedRuns(requests, map[string]string{"agt_1": "irq_1", "agt_2": "irq_2"})
 	store := &fakeDeliveries{}
-	waker := NewWaker(store, runs, requests, Config{Interval: time.Hour, Lease: time.Minute, Concurrency: 1}, nil)
+	waker := NewWaker(store, runs, requests, Config{Interval: time.Hour, Lease: time.Minute, Concurrency: 1, Standing: standsAlways{}}, nil)
 	stop := runWaker(t, waker)
 
 	store.record(deliveryTo("evt_1", "irq_1", "agt_1"))

@@ -89,4 +89,96 @@ describe("Organisation settings", () => {
     )
     expect(confirm.hasAttribute("disabled")).toBe(false)
   })
+
+  it("lets Cancel close the confirmation while nothing has been sent", () => {
+    setup("owner")
+    fireEvent.click(screen.getByRole("button", { name: "Delete organisation" }))
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull()
+    expect(
+      screen.getByRole("button", { name: "Delete organisation" })
+    ).toBeTruthy()
+  })
+})
+
+describe("Leaving or deleting an organisation that is already under way", () => {
+  /** Go's answer to the DELETE, held until the test lets it go. */
+  function heldDelete() {
+    let answer!: (response: Response) => void
+    const held = new Promise<Response>((resolve) => (answer = resolve))
+    const fetchMock = vi.fn(async () => held)
+    vi.stubGlobal("fetch", fetchMock)
+    const assign = vi.fn()
+    vi.stubGlobal("location", { assign })
+    return { answer, assign, fetchMock }
+  }
+
+  const cancel = () => screen.getByRole("button", { name: "Cancel" })
+
+  it("keeps Cancel disabled while a leave runs, and goes on to the home page", async () => {
+    const { answer, assign, fetchMock } = heldDelete()
+    setup("member")
+    fireEvent.click(screen.getByRole("button", { name: "Leave organisation" }))
+    fireEvent.click(screen.getByRole("button", { name: "Leave organisation" }))
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/v1/organizations/org-1/members/user-1",
+        expect.objectContaining({ method: "DELETE" })
+      )
+    )
+    // The request is out: Cancel cannot take it back, so it is not offered,
+    // and pressing it anyway leaves the confirmation where it is.
+    expect(cancel().hasAttribute("disabled")).toBe(true)
+    fireEvent.click(cancel())
+    expect(screen.getByText(/Leave Old name\?/)).toBeTruthy()
+    expect(
+      screen
+        .getByRole("button", { name: "Leave organisation" })
+        .hasAttribute("disabled")
+    ).toBe(true)
+
+    answer(new Response(null, { status: 204 }))
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/"))
+    // Nor between the answer and the page going away.
+    expect(cancel().hasAttribute("disabled")).toBe(true)
+  })
+
+  it("keeps Cancel disabled while a delete runs, and offers it again if Go refuses", async () => {
+    const { answer, assign } = heldDelete()
+    setup("owner")
+    fireEvent.click(screen.getByRole("button", { name: "Delete organisation" }))
+    fireEvent.change(
+      screen.getByRole("textbox", {
+        name: "Type organisation name to confirm",
+      }),
+      { target: { value: "Old name" } }
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Delete organisation" }))
+
+    await waitFor(() => expect(cancel().hasAttribute("disabled")).toBe(true))
+    fireEvent.click(cancel())
+    expect(
+      screen.getByRole("textbox", { name: "Type organisation name to confirm" })
+    ).toBeTruthy()
+
+    answer(
+      new Response(JSON.stringify({ error: "you may not delete this" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "you may not delete this"
+    )
+    expect(assign).not.toHaveBeenCalled()
+    expect(cancel().hasAttribute("disabled")).toBe(false)
+    fireEvent.click(cancel())
+    expect(
+      screen.queryByRole("textbox", {
+        name: "Type organisation name to confirm",
+      })
+    ).toBeNull()
+  })
 })

@@ -63,6 +63,9 @@ var krudeInstructionText string
 //go:embed instructions/krude_unattended.md
 var unattendedInstructionText string
 
+//go:embed instructions/krude_room.md
+var roomInstructionText string
+
 // krudeInstruction is a Go text/template rendered on every turn by instruction.
 // The sub-agents' instructions are ADK templates instead: {key} is replaced
 // with that session state value, and a turn fails when the key is missing
@@ -73,27 +76,48 @@ var krudeInstruction = template.Must(template.New("krude").Parse(krudeInstructio
 // there for, rendered the same way.
 var unattendedInstruction = template.Must(template.New("krude-unattended").Parse(unattendedInstructionText))
 
+// roomInstruction is Krude's instruction for its turn in a room, rendered
+// the same way.
+var roomInstruction = template.Must(template.New("krude-room").Parse(roomInstructionText))
+
 // Gemini returns the named Gemini model on Vertex AI in the given Google Cloud
 // project and location. It authenticates with credentials when there are any,
 // such as those internal/gcpauth federates from AWS, and otherwise with
 // Application Default Credentials: locally the login from `gcloud auth
 // application-default login`, elsewhere the file GOOGLE_APPLICATION_CREDENTIALS
 // names. An API key in the environment is never used.
-func Gemini(ctx context.Context, name, project, location string, credentials *auth.Credentials) (model.LLM, error) {
+//
+// A call Vertex answers with 429, 500, 502, 503 or 504 is tried again, up to
+// four attempts in all unless WithAttempts says otherwise, after waits that
+// double from about two seconds. Only the request is repeated. Once Vertex has
+// started a streamed answer, an error ends the stream as it always did, so a
+// retry never yields what was already yielded.
+func Gemini(ctx context.Context, name, project, location string, credentials *auth.Credentials, options ...GeminiOption) (model.LLM, error) {
 	if project == "" {
 		return nil, errors.New("a Google Cloud project is required: the agents reach Gemini through Vertex AI")
 	}
-	return gemini.NewModel(ctx, name, &genai.ClientConfig{
+	config := geminiConfig{retries: defaultRetries}
+	for _, option := range options {
+		option(&config)
+	}
+	llm, err := gemini.NewModel(ctx, name, &genai.ClientConfig{
 		Backend:     genai.BackendVertexAI,
 		Project:     project,
 		Location:    location,
 		Credentials: credentials,
+		HTTPOptions: genai.HTTPOptions{RetryOptions: config.retries.options()},
 	})
+	if err != nil {
+		return nil, err
+	}
+	return repairedHistory{llm}, nil
 }
 
 // GeminiClient returns a Gen AI client on the same Vertex AI project and
 // location as the agents, for services that share their configuration such as
-// explicit prompt caching. It authenticates as Gemini does.
+// explicit prompt caching. It authenticates as Gemini does. It does not retry:
+// a cache that cannot be made is skipped and the request goes out uncached at
+// once, and the next request tries again.
 func GeminiClient(ctx context.Context, project, location string, credentials *auth.Credentials) (*genai.Client, error) {
 	if project == "" {
 		return nil, errors.New("a Google Cloud project is required: Vertex AI serves the models")
@@ -180,6 +204,36 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agen
 // same thread.
 func UnattendedRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
 	return unattendedRoot(router, toolboxes, nil)
+}
+
+// RoomRoot returns Krude for its turn in a room its member's team shares,
+// whether its member is reading the room or away: what steers it is what
+// everyone in the room wrote, and everyone in the room reads what it says.
+// So it answers from the room alone. It reaches none of the member's apps,
+// knowledge, memory, files or requests; it has no web research, sub-agents
+// or helpers; and it has only the toolboxes given, each loaded, with its
+// skill, from its first model call, with nothing to list, load or look up.
+// The caller gives it the room toolbox, which files what it cannot answer
+// with its member.
+//
+// It answers to the same name as Root, since it takes turns in a thread of
+// its member's.
+func RoomRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
+	if router == nil {
+		return nil, errors.New("a model router is required")
+	}
+	catalog, err := newToolCatalog(toolboxes)
+	if err != nil {
+		return nil, err
+	}
+	catalog.preloaded = true
+	return llmagent.New(llmagent.Config{
+		Name:                RootName,
+		Description:         "Krude, speaking for a member in a room their team shares.",
+		Model:               router.For(modelrouter.RoleChat),
+		InstructionProvider: instructionFrom(roomInstruction, catalog, false),
+		Toolsets:            []tool.Toolset{catalog.loaded()},
+	})
 }
 
 // delivery is how a run that delivers one interaction runs.

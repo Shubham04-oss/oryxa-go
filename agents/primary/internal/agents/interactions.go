@@ -209,9 +209,10 @@ type Interaction struct {
 	// Approval is who decides the request, set from the target's own
 	// standing when it was made: "agent" lets the addressed agent (or its
 	// member's primary agent) decide, while "owner" holds it for that member
-	// to decide in their own session. A request made in a teamspace becomes
-	// "owner" if its member later takes deciding back; nothing turns "owner"
-	// back into "agent".
+	// to decide in their own session. A request made outside a teamspace is
+	// always "owner". A request made in a teamspace becomes "owner" if its
+	// member later takes deciding back; nothing turns "owner" back into
+	// "agent".
 	Approval       string                   `json:"approval"`
 	Requester      InteractionParty         `json:"requester"`
 	Target         InteractionParty         `json:"target"`
@@ -249,7 +250,8 @@ type InteractionCreateInput struct {
 	// TeamspaceID scopes the request to one shared teamspace, where who
 	// approves it follows the target's owner's choice for that teamspace:
 	// the owner, unless they gave that agent automatic delegation there.
-	TeamspaceID          string                   `json:"teamspace_id,omitempty" jsonschema:"Optional id of the shared teamspace this request belongs to, for asking a teammate's agent there: their primary agent or a specialist they contributed to it. The teammate then approves it themself first, unless they chose automatic delegation for that specialist."`
+	// Outside a teamspace the owner always approves it.
+	TeamspaceID          string                   `json:"teamspace_id,omitempty" jsonschema:"Optional id of the shared teamspace this request belongs to, for asking a teammate's agent there: their primary agent or a specialist they contributed to it. The teammate then approves it themself first, unless they chose automatic delegation for that specialist. Without one, the member you ask always approves it themself first."`
 	Purpose              string                   `json:"purpose" jsonschema:"Why this agent is the appropriate recipient."`
 	Task                 string                   `json:"task" jsonschema:"The bounded question or work request. Do not put instructions for bypassing the recipient's policy here."`
 	Context              []InteractionContextItem `json:"context,omitempty"`
@@ -284,14 +286,14 @@ type InteractionService interface {
 	Respond(context.Context, InteractionActor, string, InteractionResponseInput) (Interaction, error)
 }
 
+// InteractionConfig configures the interactions toolbox. Without Delivering
+// it is the member's own agent's, in a conversation they are in: a run
+// nobody is watching has no interactions toolbox at all, since what steers it
+// is text somebody else wrote, and that must not list, decide or answer the
+// member's requests.
 type InteractionConfig struct {
 	Service InteractionService
 	Tokens  memberauth.TokenSource
-	// Answering leaves out interactions_create, for a run nobody is watching
-	// that exists to answer what another member's agent already asked. Such a
-	// run may read, decide and respond; starting fresh requests on other
-	// members is the member's own business, in a conversation they are in.
-	Answering bool
 	// Delivering is for a run that delivers one interaction, to the agent
 	// that has to decide it, answer it or hear its outcome. It offers only
 	// what one request needs, reading it, deciding it and answering it: none
@@ -308,7 +310,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	}
 	tools := interactionTools{service: config.Service, tokens: config.Tokens, delivering: config.Delivering}
 	create, err := functiontool.New(functiontool.Config{
-		Name: "interactions_create", Description: "Creates a durable, scoped request for an agent discovered in the organization directory. It emits a routing event; it does not invoke the target directly. Pass teamspace_id to ask a teammate's agent inside that shared teamspace; the teammate then approves it themself first, unless they gave that specialist automatic delegation there.",
+		Name: "interactions_create", Description: "Creates a durable, scoped request for an agent discovered in the organization directory. It emits a routing event; it does not invoke the target directly. The member you ask approves it themself first; pass teamspace_id to ask a teammate's agent inside that shared teamspace, where a specialist they gave automatic delegation decides for itself.",
 	}, tools.create)
 	if err != nil {
 		return Toolbox{}, err
@@ -332,7 +334,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 		return Toolbox{}, err
 	}
 	decide, err := functiontool.New(functiontool.Config{
-		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. The member who asked reads an agent's decision in fixed words, approved or declined, never its message. A request whose approval is \"owner\" is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it. A request made in a teamspace is checked against it again first, and may turn out held for the member, or closed by Oryxa because it no longer stands there.",
+		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. The member who asked reads an agent's decision in fixed words, approved or declined, never its message. A request whose approval is \"owner\", and every request made outside a teamspace, is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it. A request made in a teamspace is checked against it again first, and may turn out held for the member, or closed by Oryxa because it no longer stands there.",
 	}, tools.decide)
 	if err != nil {
 		return Toolbox{}, err
@@ -345,17 +347,13 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	}
 	offered := []tool.Tool{create, inbox, sent, get, decide, respond}
 	description := "Durable agent-to-agent requests: send, inspect, approve or reject, and answer through an audited JSON contract without direct invocation."
-	switch {
-	case config.Delivering:
+	if config.Delivering {
 		description = "The one agent-to-agent request being delivered to this agent: read it, and decide it or answer it, as this run is for, through an audited JSON contract."
 		return Toolbox{
 			Name: InteractionsToolboxName, Description: description,
 			Instructions: interactionsInstructions,
 			Toolset:      deliveringTools{tools: []tool.Tool{get, decide, respond}},
 		}, nil
-	case config.Answering:
-		offered = []tool.Tool{inbox, sent, get, decide, respond}
-		description = "Durable agent-to-agent requests addressed to this member: inspect, approve or reject, and answer through an audited JSON contract."
 	}
 	return Toolbox{
 		Name: InteractionsToolboxName, Description: description,
@@ -475,7 +473,17 @@ func (tools interactionTools) actor(ctx agent.Context, needsToken bool) (Interac
 	return actor, token, nil
 }
 
+// create files a request. A run pinned to one teamspace (WithPinnedTeamspace)
+// files it there whatever the model named: a request that names no teamspace
+// is made in the pinned one, and one that names another is refused, before
+// anything is filed or a token is asked for. The ledger then checks the seat
+// and the team as it always does; the pin grants nothing of its own.
 func (tools interactionTools) create(ctx agent.Context, input InteractionCreateInput) (Interaction, error) {
+	teamspaceID, err := pinnedTeamspaceFor(ctx, input.TeamspaceID)
+	if err != nil {
+		return Interaction{}, err
+	}
+	input.TeamspaceID = teamspaceID
 	actor, token, err := tools.actor(ctx, true)
 	if err != nil {
 		return Interaction{}, err

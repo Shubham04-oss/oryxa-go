@@ -53,6 +53,14 @@ func NewAdaptiveScheduler(rule Rule) (AdaptiveScheduler, error) {
 	return AdaptiveScheduler{rule: rule}, nil
 }
 
+// WithMaxWait keeps the deployment's batch sizes while using an
+// organization's cadence for newly recorded digest triggers.
+func (scheduler AdaptiveScheduler) WithMaxWait(maxWait time.Duration) (AdaptiveScheduler, error) {
+	rule := scheduler.rule
+	rule.MaxWait = maxWait
+	return NewAdaptiveScheduler(rule)
+}
+
 func (scheduler AdaptiveScheduler) Valid() bool {
 	return scheduler.rule.Size > 0 && scheduler.rule.MaxWait > 0 && scheduler.rule.MaxWait <= MaximumDeliveryDelay && scheduler.rule.Largest >= scheduler.rule.Size
 }

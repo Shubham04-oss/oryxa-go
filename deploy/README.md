@@ -28,7 +28,7 @@ Systems Manager (ECS Exec, Session Manager) is the administrative path.
 
 | Owner | What |
 | --- | --- |
-| `deploy/production` (OpenTofu) | VPC, database, KMS keys, ECR, ECS cluster, service and task definition, IAM, the event bus, log groups, dashboard, alarms, secrets' containers, the connector instance, the SES event forwarder, everything in Cloudflare (tunnels, DNS, Access, Hyperdrive, routes), and in Google Cloud the workload identity pool and service account |
+| `deploy/production` (OpenTofu) | VPC, database, KMS keys, ECR, ECS cluster, service and task definition, IAM, the event bus, log groups, dashboard, alarms, secrets' containers, the connector instance, the SES event forwarder, everything in Cloudflare (tunnels, DNS, Access, Hyperdrive, routes, and the zone's WAF and rate-limit rules), and in Google Cloud the workload identity pool and service account |
 | The services' provisioners (`deploy/scripts/provision-app.sh`) | Each service's event queue, dead-letter queue and EventBridge rules (generated from the code that consumes them), the files, artifacts and vector buckets, email's tables, queue and SES configuration set, auth's Cognito user pool |
 | `deploy/scripts/memory-bank.sh` | The Vertex AI agent engine that holds Memory Bank |
 | `deploy/scripts/composio-webhook.sh` | Composio's webhook subscription |
@@ -38,14 +38,23 @@ OpenTofu names everything the scripts create, so the task's configuration and
 IAM can refer to it before it exists. Its state is in S3
 (`oryxa-tofu-state-<account>`), locked with a lock file.
 
+Each bucket's lifecycle rules have one owner, since S3 keeps one lifecycle
+configuration per bucket and a put replaces it whole. The files and artifacts
+buckets are the provisioners': every run of `provision-app.sh` puts their
+rules again, including the one that removes the older versions a delete leaves
+behind, so that rule is in their code. OpenTofu turns their versioning on
+(`production/hardening.tf`), and owns the rules of the knowledge-base
+documents bucket, which it creates.
+
 ## Before the first deploy
 
 - AWS credentials for the account (`aws login`, or any profile), and
   `AWS_PROFILE` pointing at them.
 - A Cloudflare API token for the account and the `oryxa.in` zone with: Zone
   DNS edit, Workers Routes edit, Cloudflare Tunnel edit, Access: Apps and
-  Policies edit, Access: Service Tokens edit, Hyperdrive edit. Export it as
-  `CLOUDFLARE_API_TOKEN`.
+  Policies edit, Access: Service Tokens edit, Hyperdrive edit, Zone WAF edit
+  (for the custom and rate-limiting rules in `production/hardening.tf`).
+  Export it as `CLOUDFLARE_API_TOKEN`.
 - Google Cloud Application Default Credentials for the project
   (`gcloud auth application-default login`), for OpenTofu and memory-bank.sh.
 - A Google OAuth web client for sign-in, in `~/.config/oryxa/google-oauth.env`
@@ -56,7 +65,7 @@ IAM can refer to it before it exists. Its state is in S3
 ## First deploy
 
 ```sh
-cd deploy/production && tofu init && tofu apply && cd -  # the platform
+cd deploy/production && tofu init && tofu apply -var first_deploy=true && cd -  # the platform
 deploy/scripts/provision-app.sh     # queues, buckets, email, Cognito
 deploy/scripts/put-secrets.sh       # Composio's API key
 deploy/scripts/memory-bank.sh       # Memory Bank
@@ -65,6 +74,13 @@ deploy/scripts/release.sh           # build, push, run one task
 deploy/scripts/composio-webhook.sh  # triggers to api.oryxa.in
 deploy/scripts/web.sh               # the web app at app.oryxa.in
 ```
+
+`first_deploy=true` belongs to that first apply alone. The files and artifacts
+buckets are made by `provision-app.sh`, after it, so their versioning cannot be
+turned on yet; the apply that follows the script, run without the flag, does.
+The flag also has OpenTofu create the database's two log groups itself, before
+the instance. Without it, OpenTofu adopts the ones RDS made (`import` blocks in
+`production/hardening.tf`), and an empty account has none to adopt.
 
 Then add the `google_redirect_uri` provision-app.sh printed to the Google
 OAuth client's authorized redirect URIs, and confirm the alarm subscription
@@ -91,6 +107,13 @@ It runs as `oryxa-production-github-deploy` (`production/github.tf`) through
 GitHub's OIDC, which can push the image and roll the service and nothing
 else, so infrastructure changes are still a `tofu apply` from a laptop. The
 Actions tab's Run workflow releases main's head on demand.
+
+Every action in both workflows is pinned to a full commit SHA, with its
+release in a comment beside it, so a tag that is moved cannot change what a
+release runs. To update one, look up the new release's tag with
+`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, and if its object is a
+`tag` rather than a commit, read the commit from `git/tags/<sha>`; then change
+the SHA and the comment together.
 
 Before its first run, once:
 
@@ -440,6 +463,97 @@ What to expect afterwards:
   artifacts), each billed by Bedrock by the characters it reads, with a
   minimum per call.
 
+### Oryxa's own sign-in
+
+Work package 1F (`docs/design/integrations-plan.md`) gives `apps` a KMS vault
+and the settings its own sign-in needs (`apps/README.md`, "Oryxa's own
+sign-in"), which still ships switched off. Apply it targeted, so it picks up
+nothing else pending in this configuration, in this order:
+
+```sh
+(cd deploy/production && tofu apply \
+  -target=aws_kms_key.apps_signin -target=aws_kms_alias.apps_signin \
+  -target=aws_iam_role_policy.task -target=aws_secretsmanager_secret.external \
+  -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
+deploy/scripts/put-secrets.sh   # APPS_DEFAULT_OAUTH_CLIENTS, APPS_HOOK_SECRETS
+echo '{"apps_signin_secrets_ready": true}' | jq . > deploy/production/apps_signin.auto.tfvars.json
+(cd deploy/production && tofu apply \
+  -target=aws_ecs_task_definition.oryxa -target=aws_ecs_service.oryxa)
+```
+
+The first apply creates `alias/oryxa-production-apps-signin` (a 30-day
+deletion window and `prevent_destroy`, since losing it loses every sealed
+credential for good), lets the task role `kms:GenerateDataKey` and
+`kms:Decrypt` on that key alone, conditioned on
+`kms:EncryptionContext:service = oryxa-apps`, gives the task
+`APPS_SIGNIN_KMS_KEY_ID` and `APPS_SIGNIN_REDIRECT_URI`
+(`https://app.oryxa.in/v1/apps/oauth/callback`), and makes empty containers
+for the two secrets below — but `APPS_ORYXA_TOOLKITS` stays `""`, so `apps`
+still refuses every Oryxa connection and Composio keeps serving everything.
+An ECS task whose definition names a secret with no value fails to start, so
+the task definition does not reference `APPS_DEFAULT_OAUTH_CLIENTS` or
+`APPS_HOOK_SECRETS` until `apps_signin_secrets_ready` says `put-secrets.sh`
+has filled them in; commit `apps_signin.auto.tfvars.json` once it is `true`,
+so every other checkout's apply keeps naming them.
+
+**Switching a toolkit on** is the plan's gate G4: change
+`APPS_ORYXA_TOOLKITS = ""` in `compute.tf` to a comma list naming it
+(`"github"`, `"github,slack"`, ...) and apply. First, register
+`https://app.oryxa.in/v1/apps/oauth/callback` — exactly, including scheme and
+path — as the redirect URI on that toolkit's own OAuth app at GitHub, Slack
+or Notion; a mismatched URI sends the member's browser somewhere the
+provider refuses or apps does not recognize.
+
+### Applying the launch-review hardening
+
+`production/hardening.tf`, with small edits in `compute.tf`, `database.tf`,
+`keys.tf`, `knowledge_base.tf`, `observability.tf` and `variables.tf`, and a
+lifecycle rule in the files and artifacts provisioners, answers the findings of
+the 2026-09-28 launch review (`docs/REMAINING-WORK.md`, section 7):
+recoverable files, more alarms, a 30-day expiry on the database's log groups,
+keys that cannot be destroyed, a narrower Cognito grant, a pinned collector
+image, and two Cloudflare rules. It was written without applying anything. The
+apply is a plain `tofu apply`, and removes nothing but the task definition's
+old revision. Before it:
+
+1. **Run `deploy/scripts/provision-app.sh` first,** from a checkout with this
+   change. It puts the rule that removes older versions on the files and
+   artifacts buckets. They are not versioned yet, and S3 documents that rule as
+   having no effect on a bucket that is not. The apply then turns versioning on
+   with the rule already in place. In the other order, older versions in those
+   two buckets are not removed until the script has run.
+2. **The API token has Zone WAF edit** (see "Before the first deploy"), or the
+   two rulesets fail.
+3. **The zone has no rules of its own at Cloudflare yet.** A zone has one
+   entry-point ruleset for each phase, and OpenTofu takes each over whole. If
+   the dashboard's Security, WAF, Custom rules or Rate limiting rules already
+   hold anything, creating these fails, or replaces it. Import that ruleset
+   instead, and add its rules to `hardening.tf` so that the apply keeps them.
+   Its id is in the answer to
+   `GET /zones/<zone id>/rulesets/phases/<phase>/entrypoint`:
+
+   ```sh
+   tofu import cloudflare_ruleset.custom_rules zones/<zone id>/<ruleset id>
+   tofu import cloudflare_ruleset.rate_limits zones/<zone id>/<ruleset id>
+   ```
+
+The apply rolls the service once, because the collector's image is pinned to a
+release and its digest, in a new task definition. Once it is done:
+
+- Confirm the subscription mail from the SES alarms' own topic, and set one of
+  them to ALARM to see that the mail arrives. They are in ap-south-1, and an
+  alarm can only notify a topic in its own region, so they notify
+  `oryxa-production-alarms` there, which mails the same address:
+
+  ```sh
+  aws cloudwatch set-alarm-state --region ap-south-1 \
+    --alarm-name oryxa-production-ses-complaints \
+    --state-value ALARM --state-reason test
+  ```
+
+- Deletes from the files, artifacts and knowledge-base documents buckets are
+  now soft for 30 days (see "Recovering a deleted file").
+
 ## Looking at it
 
 - **Dashboard** `oryxa-production` in CloudWatch: the tunnel, API latency by
@@ -453,9 +567,21 @@ What to expect afterwards:
   `/oryxa-production/cloudflared`, `/oryxa-production/otel`.
 - **Database**: Performance Insights and Enhanced Monitoring in RDS; queries
   slower than 500 ms are logged to `/aws/rds/instance/oryxa-production/postgresql`.
+  That log group and `/upgrade` beside it keep 30 days, as the task's do.
+- **Cloudflare's rules on the zone** (`production/hardening.tf`): `app.` and
+  `api.` block every path under `/v1/internal`, and a client IP that POSTs to
+  `/v1/auth/password/` more than `signin_requests_per_period` (20) times in a
+  minute, counted at each Cloudflare data center, is blocked for ten minutes.
+  The zone is on the Enterprise plan, which allows the window, the block and
+  matching on the method. Blocked requests are in the zone's Security events,
+  and a blocked one gets Cloudflare's own 429 page.
 - **Alarms** mail `alarm_email`: no running task, CPU or memory high, database
   CPU, storage, memory or connections, a queue backing up, anything in a
-  dead-letter queue, the connector instance failing its checks.
+  dead-letter queue, the connector instance failing its checks, three or more
+  application errors in 15 minutes, an SES complaint or a few bounces in an
+  hour, EventBridge giving up on a delivery (including the forwarding of SES's
+  events), and Bedrock throttling. The three about mail are in ap-south-1,
+  beside SES; the rest are in us-west-2.
 
 A shell in the running task: `aws ecs execute-command --cluster
 oryxa-production --task <id> --container oryxa --interactive --command sh`
@@ -468,9 +594,39 @@ aws ssm start-session --target <instance id> \
   --parameters host=<database address>,portNumber=5432,localPortNumber=15432
 ```
 
+## Recovering a deleted file
+
+**A deleted object in the files, artifacts or knowledge-base documents bucket
+stays recoverable for 30 days.** The three buckets are versioned
+(`production/hardening.tf`): what the task deletes only gets a delete marker
+laid over its newest version, an overwrite keeps the version it replaced, and
+S3 removes those older versions 30 days after they stopped being the newest.
+The task role cannot delete a version itself. An object a lifecycle rule
+expires (a file after 90 days, an artifact after 30) is kept for 30 more days
+after that, the same way. The rule that removes the older versions reaches the
+files and artifacts buckets with `provision-app.sh`, so until that has run
+their older versions are kept without limit.
+
+To bring a deleted object back, find its delete marker and remove it, which
+makes the newest real version current again; to bring an overwritten one back,
+copy the older version over it:
+
+```sh
+aws s3api list-object-versions --bucket oryxa-production-files-<account> --prefix <key>
+aws s3api delete-object --bucket oryxa-production-files-<account> --key <key> \
+  --version-id <the delete marker's VersionId>
+aws s3api copy-object --bucket oryxa-production-files-<account> --key <key> \
+  --copy-source "oryxa-production-files-<account>/<key>?versionId=<an older VersionId>"
+```
+
+That restores the bytes only. What names the object in PostgreSQL, such as the
+row files keeps for each file, is not brought back with it. Once the 30 days
+have passed the older versions are gone. The S3 Vectors buckets are not
+versioned.
+
 ## At launch
 
-- Aurora Serverless v2 in place of the t4g.micro instance: snapshot, restore
+- Aurora Serverless v2 in place of the t4g.small instance: snapshot, restore
   into a cluster, point the `database-url` secret and Hyperdrive at it.
 - A second task and Multi-AZ.
 - A database user for Hyperdrive with only what Workers read, rather than the

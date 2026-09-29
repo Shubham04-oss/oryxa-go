@@ -59,7 +59,21 @@ type ProxyResult struct {
 // anything in.
 var readPosts = map[string][]string{
 	"notion": {"/v1/search", "/v1/databases/{}/query", "/v1/blocks/{}/children/list"},
-	"slack":  {"/api/conversations.history", "/api/conversations.replies", "/api/search.messages"},
+}
+
+// Slack exposes RPC actions even over GET (for example auth.revoke and
+// conversations.inviteShared). HTTP method alone is not a read boundary there.
+// Keep an explicit list so newly added RPCs cannot gain unconfirmed access.
+var slackReads = []string{
+	"/api/auth.test", "/api/auth.teams.list",
+	"/api/conversations.history", "/api/conversations.info", "/api/conversations.list",
+	"/api/conversations.members", "/api/conversations.replies",
+	"/api/users.conversations", "/api/users.info", "/api/users.list",
+	"/api/users.lookupByEmail", "/api/users.getPresence", "/api/users.profile.get",
+	"/api/team.info", "/api/search.all", "/api/search.messages", "/api/search.files",
+	"/api/files.info", "/api/files.list", "/api/chat.getPermalink",
+	"/api/reactions.get", "/api/reactions.list", "/api/pins.list", "/api/bookmarks.list",
+	"/api/emoji.list", "/api/usergroups.list", "/api/usergroups.users.list",
 }
 
 // forbiddenHeaders are headers a caller may not set: the credential is
@@ -145,9 +159,15 @@ func (s *Service) Proxy(ctx context.Context, credentials authclient.Credentials,
 	return result, nil
 }
 
-// checkRead says whether a method and path only read. A GET or HEAD always
-// does; a POST does only where the app's own read API is one.
+// checkRead checks RPC actions explicitly; otherwise GET and HEAD read, and
+// POST is permitted only for the named read APIs.
 func checkRead(toolkit, method, path string) error {
+	if toolkit == "slack" {
+		if (method == http.MethodGet || method == http.MethodHead || method == http.MethodPost) && slices.Contains(slackReads, strings.TrimRight(path, "/")) {
+			return nil
+		}
+		return fmt.Errorf("%s %s is not an approved read: %w", method, path, domain.ErrNotReadOnly)
+	}
 	switch method {
 	case http.MethodGet, http.MethodHead:
 		return nil

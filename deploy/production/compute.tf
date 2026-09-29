@@ -73,6 +73,9 @@ locals {
       COGNITO_DOMAIN             = var.cognito.domain
       COGNITO_CALLBACK_URL       = "${local.app_url}/v1/auth/callback"
       COGNITO_AGENT_CLIENT_ID    = var.cognito.agent_client_id
+      COGNITO_CLI_CLIENT_ID      = var.cognito.cli_client_id
+      COGNITO_CLI_CALLBACK_URL   = "http://127.0.0.1:8765/callback"
+      COGNITO_CLI_CALLBACK_URLS  = "http://127.0.0.1:8765/callback,http://127.0.0.1:8766/callback,http://127.0.0.1:8767/callback,http://127.0.0.1:8768/callback"
       COGNITO_AGENT_CALLBACK_URL = "${local.app_url}/v1/agent-grant/callback"
       AUTH_RETURN_URLS           = local.app_url
       INVITATION_ACCEPT_URL      = "${local.app_url}/invitations/accept"
@@ -96,6 +99,19 @@ locals {
       # app's billing page, which both web-next and the old web/ app serve.
       APPS_PUBLIC_BASE_URL = local.api_url
       BILLING_URL          = "${local.app_url}/settings/billing"
+
+      # Oryxa's own sign-in (docs/design/integrations-plan.md, phase 1):
+      # apps' vault key, and the one OAuth callback registered with every
+      # app. The callback has to be on the host a member's browser sends the
+      # connect request to, because that is where the state cookie is set
+      # (apps/README.md, "Oryxa's own sign-in") — the web app's own origin,
+      # not the API host Composio's callback uses. APPS_ORYXA_TOOLKITS is
+      # named explicitly, empty, rather than left out: ECS's own filter below
+      # drops a blank value the same as leaving it unset, but switching a
+      # toolkit on later (gate G4) is then a one-line change here.
+      APPS_SIGNIN_KMS_KEY_ID   = aws_kms_alias.apps_signin.name
+      APPS_SIGNIN_REDIRECT_URI = "${local.app_url}/v1/apps/oauth/callback"
+      APPS_ORYXA_TOOLKITS      = ""
 
       FILES_BUCKET_NAME = local.files_bucket
 
@@ -329,10 +345,40 @@ resource "aws_iam_role_policy" "task" {
         Resource = aws_kms_key.auth.arn
       },
       {
-        Sid      = "Cognito"
+        # Oryxa's own sign-in. One task role can use this key for every
+        # service in the binary (deploy/README.md's "one task role" risk),
+        # but the encryption context confines what it seals to apps' own
+        # rows: a ciphertext bound to another service, resource type or id
+        # fails to open even under this same grant (internal/secrets.Envelope,
+        # apps/internal/signin.SealService).
+        Sid      = "SealAppsSignin"
         Effect   = "Allow"
-        Action   = "cognito-idp:*"
-        Resource = "arn:aws:cognito-idp:${var.aws_region}:${local.account_id}:userpool/*"
+        Action   = ["kms:GenerateDataKey", "kms:Decrypt"]
+        Resource = aws_kms_key.apps_signin.arn
+        Condition = {
+          StringEquals = { "kms:EncryptionContext:service" = "oryxa-apps" }
+        }
+      },
+      {
+        # The eight admin calls that password sign-up, email verification and
+        # password reset sign with the task role (auth/internal/passwordflow),
+        # and nothing else auth asks Cognito. Sign-in (InitiateAuth) and
+        # session refresh (GetTokensFromRefreshToken) are its other two calls;
+        # Cognito authorizes those by app client and never reads IAM for them,
+        # so they need no statement. DescribeUserPoolClient, which answers
+        # with a client's secret, is left out on purpose: only
+        # deploy/scripts/provision-app.sh reads it, as the operator.
+        Sid    = "Cognito"
+        Effect = "Allow"
+        Action = [
+          "cognito-idp:AdminCreateUser", "cognito-idp:AdminDeleteUser", "cognito-idp:AdminSetUserPassword",
+          "cognito-idp:AdminDisableUser", "cognito-idp:AdminEnableUser", "cognito-idp:AdminGetUser",
+          "cognito-idp:AdminUpdateUserAttributes", "cognito-idp:AdminUserGlobalSignOut",
+        ]
+        # The one pool auth's provisioner made, which app.auto.tfvars.json
+        # names. Until the provisioner has run there is no pool to name, and
+        # any pool matches.
+        Resource = "arn:aws:cognito-idp:${var.aws_region}:${local.account_id}:userpool/${var.cognito.user_pool_id == "" ? "*" : var.cognito.user_pool_id}"
       },
       {
         Sid      = "SendMail"
@@ -408,8 +454,15 @@ resource "aws_ecs_task_definition" "oryxa" {
       logConfiguration = { logDriver = "awslogs", options = local.log_options["cloudflared"] }
     },
     {
+      # A release and its digest, not "latest", so that a task that starts
+      # tomorrow runs what this one does. The digest is the multi-architecture
+      # index, which has linux/arm64 for Fargate; `latest` was v0.50.0 on
+      # 2026-09-29. To move to another release, read the digest of its tag:
+      #   token=$(curl -s https://public.ecr.aws/token/ | jq -r .token)
+      #   curl -sI -H "Authorization: Bearer $token" -H "Accept: application/vnd.oci.image.index.v1+json" \
+      #     https://public.ecr.aws/v2/aws-observability/aws-otel-collector/manifests/<tag> | grep -i docker-content-digest
       name             = "otel"
-      image            = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
+      image            = "public.ecr.aws/aws-observability/aws-otel-collector:v0.50.0@sha256:7968fb60db6a2390a47ba6a2df029745638486e285c9b2487da1b722d0855a3e"
       essential        = false
       secrets          = [{ name = "AOT_CONFIG_CONTENT", valueFrom = aws_ssm_parameter.otel_config.arn }]
       logConfiguration = { logDriver = "awslogs", options = local.log_options["otel"] }

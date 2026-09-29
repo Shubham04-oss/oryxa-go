@@ -98,6 +98,8 @@ function fakeFetch(...handlers: Handler[]) {
         const response = handler(request)
         if (response) return response
       }
+      if (request.path === `${org}/apps/offer`)
+        return json({ offer: null, auto_subscribe_default: true })
       return apiError("not_found", "resource not found", 404)
     }
   )
@@ -109,6 +111,8 @@ function fakeFetch(...handlers: Handler[]) {
 function catalog(): Handler {
   return ({ method, path, params }) => {
     if (method !== "GET") return undefined
+    if (path === `${org}/apps/offer`)
+      return json({ offer: null, auto_subscribe_default: true })
     if (path === "/v1/apps/catalog") {
       if (params.get("search") === "slack")
         return json({
@@ -259,6 +263,71 @@ describe("WorkspaceTools", () => {
     expect(screen.queryByRole("heading", { name: "Gmail" })).toBeNull()
   })
 
+  it("keeps offline preview tools visible with an organization selected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => json({ error: { message: "offline" } }, 502))
+    )
+    render(<WorkspaceTools organizationId="org-1" />)
+    expect(await screen.findByText(/Layout preview/)).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Gmail details" })).toBeTruthy()
+    expect(
+      screen.queryByText("No tools found. Try a different search.")
+    ).toBeNull()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand GitHub connection" })
+    )
+    expect(screen.getByRole("tab", { name: "Events" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Connect Gmail" })).toBeNull()
+  })
+
+  it("shows the catalog with an unknown offer while withholding connection actions", async () => {
+    fakeFetch(
+      ({ path }) =>
+        path === `${org}/apps/offer`
+          ? apiError("not_found", "not available", 404)
+          : undefined,
+      catalog(),
+      connections({ connections: [] })
+    )
+    render(<WorkspaceTools organizationId="org-1" />)
+    expect(await screen.findByRole("heading", { name: "Zoom" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Zoom details" }))
+    expect(screen.queryByRole("button", { name: "Connect Zoom" })).toBeNull()
+  })
+
+  it("withdraws connection actions when refreshing a cached offer fails", async () => {
+    let unavailable = false
+    fakeFetch(
+      ({ path }) =>
+        path === `${org}/apps/offer` && unavailable
+          ? apiError("unavailable", "offer unavailable", 503)
+          : undefined,
+      catalog(),
+      connections({ connections: [] })
+    )
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    renderBase(
+      <QueryClientProvider client={client}>
+        <WorkspaceTools organizationId="org-1" />
+      </QueryClientProvider>
+    )
+    expect(await screen.findByRole("heading", { name: "Zoom" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Zoom details" }))
+    expect(
+      await screen.findByRole("button", { name: "Connect Zoom" })
+    ).toBeTruthy()
+    unavailable = true
+    await client.refetchQueries()
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Connect Zoom" })).toBeNull()
+    })
+    expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy()
+    client.clear()
+  })
+
   it("filters the apps on screen for a query too short for Composio's search, and searches the catalog from three characters", async () => {
     const state = { connections: [connection()] }
     const { requests } = fakeFetch(
@@ -291,6 +360,50 @@ describe("WorkspaceTools", () => {
       await screen.findByRole("heading", { name: "Messaging" })
     ).toBeTruthy()
     expect(searched("slack")).toBe(true)
+  })
+
+  it("shows only offered apps and keeps restricted connections removable", async () => {
+    const state = { connections: [connection()] }
+    fakeFetch(
+      ({ path }) =>
+        path === `${org}/apps/offer`
+          ? json({ offer: ["zoom"], auto_subscribe_default: false })
+          : undefined,
+      catalog(),
+      connections(state),
+      quietDetails()
+    )
+    render(<WorkspaceTools organizationId="org-1" />)
+    expect(await screen.findByRole("heading", { name: "Zoom" })).toBeTruthy()
+    expect(screen.queryByRole("heading", { name: "Gmail" })).toBeNull()
+    fireEvent.click(
+      screen.getByRole("button", { name: /Expand GitHub connection/ })
+    )
+    expect(screen.getByText(/not offered by your workspace/)).toBeTruthy()
+    expect(screen.queryByRole("tab", { name: "Events" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy()
+  })
+
+  it("keeps the catalog visible when employee connections are disabled", async () => {
+    fakeFetch(
+      ({ path }) =>
+        path === `${org}/apps/offer`
+          ? json({
+              offer: ["gmail"],
+              employee_connections: false,
+              can_connect: false,
+              auto_subscribe_default: true,
+            })
+          : undefined,
+      catalog(),
+      connections({ connections: [] }),
+      quietDetails()
+    )
+    render(<WorkspaceTools organizationId="org-1" />)
+    expect(await screen.findByRole("heading", { name: "Gmail" })).toBeTruthy()
+    expect(screen.getByText(/turned off employee app connections/)).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Gmail details" }))
+    expect(screen.queryByRole("button", { name: "Connect Gmail" })).toBeNull()
   })
 
   it("stays live and says so when apps answers but the catalog is down", async () => {

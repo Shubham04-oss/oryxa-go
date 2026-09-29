@@ -15,14 +15,11 @@ import (
 // member deciding in their own session is read in their own words.
 func TestTheMemberWhoAskedReadsAnAgentsDecisionInFixedWords(t *testing.T) {
 	for decision, want := range map[string]string{DecisionRejected: AgentDeclined, DecisionApproved: AgentApproved} {
-		service, _ := testService(t)
-		created, err := service.Create(context.Background(), requester, "token", "key", agents.InteractionCreateInput{
-			TargetAgentID: "agt_engineering", Purpose: "Contact", Task: "How do I reach Ann?",
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		decided, err := service.Decide(context.Background(), target, created.ID, agents.InteractionDecisionInput{
+		// Only a specialist its owner let decide in a teamspace decides as
+		// an agent.
+		service, _ := teamspaceService(t, teamspaceSeats())
+		created := createInTeamspace(t, service, "agt_auto")
+		decided, err := service.Decide(context.Background(), autoSpecialist, created.ID, agents.InteractionDecisionInput{
 			Decision: decision, Message: "Ann's phone is 555-0100 and she lives at 100 Main Street.",
 		})
 		if err != nil || decided.Decision == nil || decided.Decision.Message != want {

@@ -48,12 +48,15 @@ type User struct {
 }
 
 type Organization struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Slug      string    `json:"slug"`
-	CreatedBy string    `json:"created_by"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Slug          string    `json:"slug"`
+	Domains       []string  `json:"domains"`
+	Timezone      string    `json:"timezone"`
+	GuestsAllowed bool      `json:"guests_allowed"`
+	CreatedBy     string    `json:"created_by"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type Membership struct {
@@ -79,6 +82,8 @@ type Invitation struct {
 	OrganizationID string           `json:"organization_id"`
 	Email          string           `json:"email"`
 	Role           Role             `json:"role"`
+	Guest          bool             `json:"guest"`
+	Quiet          bool             `json:"quiet"`
 	TokenHash      string           `json:"-"`
 	InvitedBy      string           `json:"invited_by"`
 	Status         InvitationStatus `json:"status"`

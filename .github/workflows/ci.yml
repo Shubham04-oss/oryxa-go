@@ -36,8 +36,8 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
       - name: gofmt
@@ -57,7 +57,7 @@ jobs:
         # and skip otherwise; here they share one, as they do on a laptop,
         # with the extensions infra/postgres/init gives a fresh local volume.
         run: |
-          for service in AGENTS_PRIMARY APPS AUTH BATCHING BILLING POSTGRESKIT RAG TEAMS; do
+          for service in AGENTS_PRIMARY APPS AUTH BATCHING BILLING POSTGRESKIT RAG TEAMS WORKSPACE; do
             echo "${service}_TEST_DATABASE_URL=postgres://oryxa:oryxa@localhost:5432/oryxa?sslmode=disable" >> "$GITHUB_ENV"
           done
           docker exec -i "${{ job.services.postgres.id }}" psql -U oryxa -d oryxa -v ON_ERROR_STOP=1 < infra/postgres/init/001_extensions.sql
@@ -76,8 +76,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 26
       - name: pnpm
@@ -109,8 +109,8 @@ jobs:
       run:
         working-directory: web-next
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 26
       - name: pnpm
@@ -132,7 +132,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Build
         run: docker build --tag oryxa:ci .
 
@@ -141,8 +141,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: opentofu/setup-opentofu@v1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f # v1.0.8
       - name: Validate deploy/production
         # Without the S3 backend: this checks the configuration, not the state.
         run: |

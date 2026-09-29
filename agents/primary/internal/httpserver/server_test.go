@@ -254,6 +254,17 @@ func (service *fakeTeamspaces) OrganizationAgent(_ context.Context, actor teamsp
 	return service.organizationAgent, nil
 }
 
+func (service *fakeTeamspaces) PreviewOrganizationAgent(_ context.Context, actor teamspaces.Actor) (teamspaces.OrganizationAgent, error) {
+	service.actors = append(service.actors, actor)
+	if service.organizationAgent.ID == "" {
+		return teamspaces.OrganizationAgent{
+			OrganizationID: actor.OrganizationID, Name: "Oryxa Agent",
+			Instructions: "Coordinate shared context.", Status: teamspaces.StatusActive, CanManage: true,
+		}, nil
+	}
+	return service.organizationAgent, nil
+}
+
 func (service *fakeTeamspaces) UpdateOrganizationAgent(_ context.Context, actor teamspaces.Actor, input teamspaces.OrganizationAgentUpdate) (teamspaces.OrganizationAgent, error) {
 	agent, err := service.OrganizationAgent(context.Background(), actor)
 	if err != nil {
@@ -653,7 +664,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 61 {
+	if len(patterns) != 64 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -726,12 +737,15 @@ func TestTeamspacesExposeOrganizationAgentWhisperersAndExplicitAgentContribution
 		Teamspaces: spaces, OrganizationContext: &fakeOrganizationContext{},
 	}, nil)
 
+	preview := serve(server, http.MethodGet, "/v1/organizations/org_1/organization-agent?preview=1", "", bearer)
+	if preview.Code != http.StatusOK || spaces.organizationAgent.ID != "" {
+		t.Fatalf("read-only preview=%d %s; saved=%+v", preview.Code, preview.Body.String(), spaces.organizationAgent)
+	}
 	created := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces",
 		`{"team_id":"team_engineering","name":"Engineering Space"}`, bearer)
 	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"id":"tsp_engineering"`) || !strings.Contains(created.Body.String(), `"id":"oag_oryxa"`) || !strings.Contains(created.Body.String(), `"mode":"whisperer"`) {
 		t.Fatalf("create=%d %s", created.Code, created.Body.String())
 	}
-
 	organizationAgent := serve(server, http.MethodGet, "/v1/organizations/org_1/organization-agent", "", bearer)
 	if organizationAgent.Code != http.StatusOK || !strings.Contains(organizationAgent.Body.String(), `"id":"oag_oryxa"`) {
 		t.Fatalf("organization agent=%d %s", organizationAgent.Code, organizationAgent.Body.String())

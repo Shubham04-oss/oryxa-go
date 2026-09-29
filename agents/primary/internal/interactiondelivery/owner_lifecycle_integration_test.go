@@ -335,11 +335,11 @@ func (world *ownerApprovalWorld) dropped(t *testing.T, eventID string) bool {
 	return handled && dropped
 }
 
-// TestApprovedWorkThatKeepsFailingIsClosedAndTheRequesterTold: B's agent
-// approves A's request, and every run woken to do the work fails. After the
-// last attempt the delivery is dropped and the request failed, saying why,
-// rather than left approved for good; its completed event reaches A as any
-// failed result does.
+// TestApprovedWorkThatKeepsFailingIsClosedAndTheRequesterTold: B approves
+// A's request, made outside any teamspace and so theirs to decide, and every
+// run woken to do the work fails. After the last attempt the delivery is
+// dropped and the request failed, saying why, rather than left approved for
+// good; its completed event reaches A as any failed result does.
 func TestApprovedWorkThatKeepsFailingIsClosedAndTheRequesterTold(t *testing.T) {
 	world := newOwnerApprovalWorld(t)
 	ctx := context.Background()
@@ -350,10 +350,12 @@ func TestApprovedWorkThatKeepsFailingIsClosedAndTheRequesterTold(t *testing.T) {
 	created, err := requests.Create(ctx, world.a, "member-token", "failing", agents.InteractionCreateInput{
 		TargetAgentID: "agt_b", Purpose: "Launch", Task: "Review the launch plan.",
 	})
-	if err != nil || created.Approval != interactions.ApprovalAgent {
+	if err != nil || created.Approval != interactions.ApprovalOwner {
 		t.Fatalf("created = %+v, %v", created, err)
 	}
-	if _, err := requests.Decide(ctx, world.b, created.ID, agents.InteractionDecisionInput{Decision: interactions.DecisionApproved, Message: "Go ahead."}); err != nil {
+	bSignedIn := world.b
+	bSignedIn.Session = agents.SessionMember
+	if _, err := requests.DecideAsOwner(ctx, bSignedIn, "member-token", created.ID, agents.InteractionDecisionInput{Decision: interactions.DecisionApproved, Message: "Go ahead."}); err != nil {
 		t.Fatal(err)
 	}
 

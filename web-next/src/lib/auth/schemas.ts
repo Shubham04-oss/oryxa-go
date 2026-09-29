@@ -1,6 +1,11 @@
 import { z } from "zod"
 
-const email = z.email("Enter a valid email").trim()
+// Trimmed before the format is checked: Zod runs a string format's own check
+// ahead of `.trim()` on the same schema, so `z.email().trim()` refused an
+// address with a stray space (from a paste, or a phone's keyboard) instead of
+// cleaning it.
+const emailMessage = "Enter a valid email"
+const email = z.string(emailMessage).trim().pipe(z.email(emailMessage))
 // Cognito's allowed special characters, plus a space (which Cognito also
 // accepts as long as it isn't leading or trailing — checked separately below).
 const passwordSymbol = /[$^*.[\]{}()?"!@#%&/\\,><':;|_~`=+ -]/

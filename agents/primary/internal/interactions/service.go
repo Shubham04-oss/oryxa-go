@@ -19,6 +19,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 var (
@@ -60,15 +61,17 @@ const (
 	DecidedBySystem = "system"
 
 	// ApprovalAgent lets the addressed agent, or its member's primary agent,
-	// decide: every request made outside a teamspace, and one made in a
-	// teamspace to a specialist its owner contributed there with automatic
-	// delegation, for as long as they keep it so.
+	// decide: a request made in a teamspace to a specialist its owner
+	// contributed there with automatic delegation, for as long as they keep
+	// it so. An older build stored it for every request made outside a
+	// teamspace as well; those are held all the same (HeldForOwner).
 	ApprovalAgent = "agent"
 	// ApprovalOwner holds the request for the addressed agent's member, who
-	// decides it in their own session and never through an agent: one made in
-	// a teamspace to a teammate's primary agent, or to a specialist
-	// contributed there with request delegation, and one its owner has since
-	// taken deciding back for, or that could not be read again.
+	// decides it in their own session and never through an agent: every
+	// request made outside a teamspace, one made in a teamspace to a
+	// teammate's primary agent, or to a specialist contributed there with
+	// request delegation, and one its owner has since taken deciding back
+	// for, or that could not be read again.
 	ApprovalOwner = "owner"
 
 	defaultExpiry   = 24 * time.Hour
@@ -154,6 +157,9 @@ type Teamspaces interface {
 type Config struct {
 	Repository Repository
 	Directory  agents.Directory
+	// Policy reads the last applied organization workspace policy. Nil uses
+	// the original defaults for deployments without the workspace service.
+	Policy policy.Provider
 	// Teamspaces enables requests made inside a teamspace. Without it a
 	// request naming one is refused.
 	Teamspaces Teamspaces
@@ -189,6 +195,7 @@ type Service struct {
 	guard      Guard
 	logger     *slog.Logger
 	now        func() time.Time
+	policy     policy.Provider
 }
 
 func New(config Config) (*Service, error) {
@@ -211,7 +218,7 @@ func New(config Config) (*Service, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Service{
-		repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens,
+		repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens, policy: config.Policy,
 		jev: config.Jev, jevTimeout: jevTimeout, guard: config.Guard, logger: logger, now: now,
 	}, nil
 }
@@ -278,7 +285,19 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 		return agents.Interaction{}, err
 	}
 	now := service.now().UTC()
+	settings, err := service.organizationPolicy(ctx, actor.OrganizationID)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
 	expires := time.Duration(input.ExpiresInSeconds) * time.Second
+	if settings.ExpireAfter > 0 {
+		if expires > settings.ExpireAfter {
+			return agents.Interaction{}, fmt.Errorf("%w: expires_in_seconds exceeds the organization's consent expiry", ErrInvalid)
+		}
+		if expires == 0 {
+			expires = settings.ExpireAfter
+		}
+	}
 	if expires == 0 {
 		expires = defaultExpiry
 	}
@@ -305,6 +324,17 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 		return service.replay(actor, created, input)
 	}
 	return created, nil
+}
+
+func (service *Service) organizationPolicy(ctx context.Context, organizationID string) (policy.Settings, error) {
+	if service.policy == nil {
+		return policy.Settings{}, nil
+	}
+	settings, err := service.policy.Get(ctx, organizationID)
+	if err != nil {
+		return policy.Settings{}, fmt.Errorf("read organization workspace policy: %w", err)
+	}
+	return settings, nil
 }
 
 // replay answers a create whose idempotency key already names a stored
@@ -345,25 +375,23 @@ func namedByRequester(stored agents.Interaction) []string {
 // HeldForOwner is whether only the addressed agent's member may decide a
 // request, in their own session. It fails closed: any approval but the
 // agent's own holds the request, one this code does not know included, and
-// so does a request made in a teamspace that names none. Only a request made
-// outside any teamspace may name none: it predates teamspaces and is its
-// agent's to decide, as it always was.
+// so does one naming none. A request made outside any teamspace is held
+// whatever it names: no standing rule of its member's lets an agent decide
+// what is asked of it there, so the "agent" an older build stored for every
+// such request decides nothing.
 func HeldForOwner(request agents.Interaction) bool {
-	if request.Approval == "" {
-		return request.TeamspaceID != ""
-	}
-	return request.Approval != ApprovalAgent
+	return request.TeamspaceID == "" || request.Approval != ApprovalAgent
 }
 
-// approval is who decides a new request. Outside a teamspace the addressed
-// agent does, as it always has. Inside one it follows the target's standing
-// there and nothing the requester sends: a specialist its owner contributed
-// with automatic delegation decides for itself, while a teammate's primary
-// agent, or a specialist contributed with request delegation, waits for its
-// owner.
+// approval is who decides a new request, which follows the target's standing
+// and nothing the requester sends. Outside a teamspace its owner does: whether
+// to send one there is the requester's choice, and no standing rule of the
+// owner's covers it. Inside one, a specialist its owner contributed with
+// automatic delegation decides for itself, while a teammate's primary agent,
+// or a specialist contributed with request delegation, waits for its owner.
 func (service *Service) approval(ctx context.Context, actor agents.InteractionActor, directory agents.OrganizationDirectory, teamspaceID string, target agents.DirectoryAgent) (string, error) {
 	if teamspaceID == "" {
-		return ApprovalAgent, nil
+		return ApprovalOwner, nil
 	}
 	if service.teamspaces == nil {
 		return "", fmt.Errorf("%w: requests inside a teamspace are not available on this server", ErrInvalid)
@@ -431,10 +459,11 @@ func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, 
 
 // Decide records a decision an agent makes, through its interactions tool:
 // the addressed agent's own, or its member's primary agent mediating. A
-// request held for its owner (HeldForOwner) is never an agent's to decide,
-// whichever agent asks, and one made in a teamspace is read again first
-// (agentMayDecide): held for its owner if they have since taken deciding
-// back, closed if it no longer stands.
+// request held for its owner (HeldForOwner), every one made outside a
+// teamspace among them, is never an agent's to decide, whichever agent asks,
+// and one made in a teamspace is read again first (agentMayDecide): held for
+// its owner if they have since taken deciding back, closed if it no longer
+// stands.
 func (service *Service) Decide(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput) (agents.Interaction, error) {
 	return service.decide(ctx, actor, "", id, input, false)
 }
@@ -533,12 +562,30 @@ func (service *Service) Respond(ctx context.Context, actor agents.InteractionAct
 	if err := validateResponse(request, input); err != nil {
 		return agents.Interaction{}, err
 	}
+	settings, err := service.organizationPolicy(ctx, request.OrganizationID)
+	if err != nil {
+		// Work has already completed. Preserve it for its owner instead of
+		// causing a retry to repeat provider actions or discard the answer.
+		service.logger.ErrorContext(ctx, "hold completed answer because workspace policy could not be read", "request_id", request.ID, "error", err)
+		settings.HoldForReview = true
+	}
 	// Another member reads what is recorded here, so the guard reads it
 	// first, outside the ledger's transaction.
-	return service.viewed(actor)(service.repository.Respond(ctx, request.ID, service.answer(ctx, request, input), service.now().UTC()))
+	answer := service.answer(ctx, request, input)
+	if settings.HoldForReview && request.Requester.UserID != request.Target.UserID && answer.Result != nil {
+		answer.Held = &agents.InteractionHeld{Result: *answer.Result}
+		answer.Result = nil
+	}
+	return service.viewed(actor)(service.repository.Respond(ctx, request.ID, answer, service.now().UTC()))
 }
 
 func (service *Service) view(request agents.Interaction) agents.Interaction {
+	if request.TeamspaceID == "" {
+		// Its member decides a request made outside a teamspace, whatever an
+		// older build stored for it (HeldForOwner), so it reads as held for
+		// them, and their own session offers them the decision.
+		request.Approval = ApprovalOwner
+	}
 	expired := !request.ExpiresAt.After(service.now())
 	switch {
 	case (request.Status == StatusPending || request.Status == StatusApproved) && expired:
@@ -606,7 +653,7 @@ func validateCreate(input agents.InteractionCreateInput) error {
 		return fmt.Errorf("%w: context holds at most %d items", ErrInvalid, maxContextItems)
 	case len(input.RequestedTools) > maxListItems || len(input.RequestedPermissions) > maxListItems:
 		return fmt.Errorf("%w: tools and permissions each hold at most %d items", ErrInvalid, maxListItems)
-	case input.ExpiresInSeconds != 0 && (time.Duration(input.ExpiresInSeconds)*time.Second < minimumExpiry || time.Duration(input.ExpiresInSeconds)*time.Second > maximumExpiry):
+	case input.ExpiresInSeconds != 0 && (input.ExpiresInSeconds < int(minimumExpiry/time.Second) || input.ExpiresInSeconds > int(maximumExpiry/time.Second)):
 		return fmt.Errorf("%w: expires_in_seconds must be between 300 and 604800", ErrInvalid)
 	}
 	for _, item := range input.Context {

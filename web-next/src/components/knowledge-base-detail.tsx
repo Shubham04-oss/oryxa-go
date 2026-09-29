@@ -346,6 +346,7 @@ function AddContentForm({
   onCancel: () => void
 }) {
   const id = useId()
+  const queryClient = useQueryClient()
   const [kind, setKind] = useState<ContentKind>("note")
   const [title, setTitle] = useState("")
   const [text, setText] = useState("")
@@ -383,7 +384,12 @@ function AddContentForm({
         access: documentAccess,
       })
     },
-    onSuccess: (document) => onAdded(document, kind),
+    // A request that is out cannot be recalled, so the document exists once
+    // it lands whether or not the form still waits for it, and the lists have
+    // to know. What the form does with it (`submit`) is another matter.
+    onSuccess: () => {
+      void afterDocumentsChange(queryClient, organizationId, corpus.id)
+    },
   })
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -391,7 +397,13 @@ function AddContentForm({
     const found = contentErrors(kind, { text, url, file })
     setErrors(found)
     if (Object.keys(found).length) return
-    add.mutate()
+    // Runs only while this form still waits for the request. Cancel closes
+    // the form, which drops it: an upload that lands after that neither
+    // closes the form a member has opened since nor tells them of a document
+    // they backed out of.
+    add.mutate(undefined, {
+      onSuccess: (document) => onAdded(document, kind),
+    })
   }
 
   const describedBy = (field: keyof ContentErrors) =>
@@ -947,7 +959,6 @@ export function KnowledgeBaseDetail({
           ? "That note is already in this knowledge base."
           : "That was already here. If its text changed, it’s being indexed again."
     )
-    void afterDocumentsChange(queryClient, organizationId, corpusId)
   }
 
   return (

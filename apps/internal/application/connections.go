@@ -33,6 +33,19 @@ type ConnectInput struct {
 	// this app can deliver. Unset means the deployment's own default, which
 	// is to subscribe.
 	AutoSubscribe *bool
+
+	// Kind, Fields and Host are Oryxa's own sign-in's (ConnectOryxa).
+	//
+	// Kind picks the manifest's method by its kind; empty is its first.
+	Kind string
+	// Fields are what the member typed: a key's standard fields (token;
+	// username and password; client_id and client_secret) and the method's
+	// connection-level ones. They are never logged or answered.
+	Fields map[string]string
+	// Host is the host the request was sent to. The browser keeps the state
+	// cookie for that host alone, so an OAuth sign-in starts only from the
+	// redirect URI's host.
+	Host string
 }
 
 // callbackPath is where Composio sends a member's browser back to.
@@ -58,19 +71,21 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	if err != nil {
 		return domain.Connection{}, "", err
 	}
-	current, err := s.store.Connections(ctx, organizationID, domain.ConnectionQuery{
-		MemberID: caller.UserID, Toolkit: toolkit,
-		Statuses: []domain.ConnectionStatus{domain.ConnectionPending, domain.ConnectionActive},
-	})
+	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
+		return domain.Connection{}, "", err
+	}
+	if err := s.allowEmployeeConnect(ctx, organizationID, caller.Role.IsOrgAdmin()); err != nil {
+		return domain.Connection{}, "", err
+	}
+	autoSubscribe, err := s.defaultAutoSubscribe(ctx, organizationID)
 	if err != nil {
 		return domain.Connection{}, "", err
 	}
-	if len(current) > 0 {
-		state := "already connected"
-		if current[0].Status == domain.ConnectionPending {
-			state = "already being connected"
-		}
-		return domain.Connection{}, "", fmt.Errorf("%s is %s for this member: %w", toolkit, state, domain.ErrConflict)
+	if err := s.allowConnect(organizationID, caller.UserID); err != nil {
+		return domain.Connection{}, "", err
+	}
+	if err := s.oneCurrentConnection(ctx, organizationID, caller.UserID, toolkit); err != nil {
+		return domain.Connection{}, "", err
 	}
 	returnTo := strings.TrimSpace(input.ReturnTo)
 	if returnTo != "" && !s.returnAllowed(returnTo) {
@@ -104,7 +119,7 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	connection := domain.Connection{
 		ID: id, OrganizationID: organizationID, MemberID: caller.UserID, Toolkit: toolkit,
 		AuthConfigID: config.AuthConfigID, ComposioUserID: userID, ComposioAccountID: link.ConnectedAccountID,
-		Status: domain.ConnectionPending, ReturnTo: returnTo, AutoSubscribe: s.autoSubscribe,
+		Status: domain.ConnectionPending, ReturnTo: returnTo, AutoSubscribe: autoSubscribe,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if input.AutoSubscribe != nil {
@@ -232,6 +247,11 @@ func (s *Service) CompleteConnection(ctx context.Context, state, reportedStatus,
 	connection, err := s.store.PendingConnection(ctx, hashState(state))
 	if err != nil {
 		return Completion{}, err
+	}
+	if connection.Oryxa() {
+		// An Oryxa sign-in comes back through its own callback; Composio's
+		// never finishes one.
+		return Completion{}, domain.ErrNotFound
 	}
 	if reportedAccountID != "" && reportedAccountID != connection.ComposioAccountID {
 		s.logger.WarnContext(ctx, "callback named another account", "connection_id", connection.ID)
@@ -396,10 +416,13 @@ func (s *Service) RemoveConnection(ctx context.Context, credentials authclient.C
 
 // remove deletes a connection at Composio and records it removed. Deleting
 // what Composio no longer has is not an error, so a retry after a failed
-// record finishes the job.
+// record finishes the job. An Oryxa connection is revoked at its app instead.
 func (s *Service) remove(ctx context.Context, connection domain.Connection, reason string) error {
 	if connection.Status == domain.ConnectionRemoved {
 		return nil
+	}
+	if connection.Oryxa() {
+		return s.removeOryxa(ctx, connection, reason)
 	}
 	triggers, err := s.store.Triggers(ctx, connection.OrganizationID, TriggerQuery{ConnectionID: connection.ID})
 	if err != nil {
@@ -438,7 +461,9 @@ func (s *Service) remove(ctx context.Context, connection domain.Connection, reas
 
 // returnAllowed says whether target is one of the return origins or a page
 // beneath one, refusing the tricks a redirect target can play.
-func (s *Service) returnAllowed(target string) bool {
+func (s *Service) returnAllowed(target string) bool { return returnAllowed(s.returnOrigins, target) }
+
+func returnAllowed(origins []*url.URL, target string) bool {
 	parsed, err := url.Parse(target)
 	if err != nil || parsed.User != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
 		return false
@@ -450,7 +475,7 @@ func (s *Service) returnAllowed(target string) bool {
 			return false
 		}
 	}
-	for _, origin := range s.returnOrigins {
+	for _, origin := range origins {
 		if !strings.EqualFold(parsed.Scheme, origin.Scheme) || !strings.EqualFold(parsed.Host, origin.Host) {
 			continue
 		}

@@ -45,6 +45,7 @@ func New(baseURL string) *Client {
 }
 
 type organizationResponse struct {
+	CLI          bool `json:"cli"`
 	Organization struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -96,6 +97,9 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 	var decoded organizationResponse
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&decoded); err != nil {
 		return domain.Membership{}, fmt.Errorf("decode auth membership: %w", err)
+	}
+	if decoded.CLI {
+		return domain.Membership{}, domain.ErrForbidden
 	}
 	if decoded.Organization.ID != organizationID || decoded.Membership.OrganizationID != organizationID || decoded.Membership.UserID == "" {
 		return domain.Membership{}, fmt.Errorf("auth answered for a different organization or no member")

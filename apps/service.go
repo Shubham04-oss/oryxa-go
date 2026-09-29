@@ -1,16 +1,19 @@
 // Package apps assembles the service: a member's third-party apps, reached
-// through Composio, and the safety layer around them.
+// through Composio or through Oryxa's own sign-in, and the safety layer
+// around them.
 //
-// Composio holds every credential and answers to one project API key that
-// reaches every user in the project, so the key never leaves this process and
-// nothing outside apps chooses whose account a call uses. What a host has to
-// do — install the schema, serve the API and the MCP endpoint, run the
-// background work — is named here, and nothing in it assumes apps owns the
-// process.
+// Composio holds its connections' credentials and answers to one project API
+// key that reaches every user in the project, so the key never leaves this
+// process and nothing outside apps chooses whose account a call uses. Oryxa's
+// own sign-in keeps its connections' credentials here, sealed with a KMS key
+// bound to service oryxa-apps. What a host has to do — install the schema,
+// serve the API, the MCP endpoint and the webhook ingress, run the background
+// work — is named here, and nothing in it assumes apps owns the process.
 package apps
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -19,9 +22,12 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/hooks"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/httpserver"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/integration"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/mcpserver"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/postgres"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/signin"
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
@@ -41,6 +47,8 @@ type Dependencies struct {
 	Directory application.Directory
 	// Composio is the API every app is reached through. Required.
 	Composio application.Composio
+	// Policy is the applied workspace file, when workspace is mounted.
+	Policy application.PolicySource
 	// Sink is where published events go. Without one, apps still works and
 	// its outbox simply fills up, which a host should not choose to do.
 	Sink events.Sink
@@ -48,6 +56,18 @@ type Dependencies struct {
 	// a consumer that cannot check signatures would run any message a queue
 	// handed it, so New refuses to build without one.
 	Verifier *eventauth.Verifier
+	// Signin, Hooks and Integrations are Oryxa's own sign-in, the webhook
+	// ingress its apps deliver to, and the integrations this build ships,
+	// all built on Store. They come together or not at all. Without them
+	// Oryxa's own sign-in is not configured: its routes refuse, the ingress
+	// answers every endpoint as unknown, and a connection made through it
+	// can be removed but not revoked at its app until they are back.
+	Signin       *signin.Service
+	Hooks        *hooks.Service
+	Integrations *integration.Registry
+	// Services verifies the service tokens apps' internal routes take.
+	// Without it there are no internal routes.
+	Services httpserver.ServiceVerifier
 	Logger   *slog.Logger
 }
 
@@ -65,6 +85,14 @@ type Config struct {
 	// NoAutoSubscribe stops a newly connected app from being subscribed to
 	// everything it can deliver.
 	NoAutoSubscribe bool
+	// OryxaToolkits are the toolkits Oryxa's own sign-in is switched on for.
+	// Empty means off: every Oryxa request is refused.
+	OryxaToolkits []string
+	// SigninRedirectURI is the one OAuth callback registered with every app.
+	SigninRedirectURI string
+	// DefaultOAuthClients are Oryxa's own OAuth apps, which Oryxa's sign-in
+	// saves once it runs.
+	DefaultOAuthClients []application.DefaultClient
 }
 
 // Service is apps, ready to mount.
@@ -75,6 +103,8 @@ type Service struct {
 	mcp        *mcpserver.Handler
 	dispatcher *outbox.Dispatcher
 	consumer   *events.Consumer
+	// oryxa says Oryxa's own sign-in is configured, so its upkeep runs.
+	oryxa bool
 }
 
 // New assembles the service. It does not touch the database, start anything,
@@ -84,10 +114,25 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	var oryxa *application.Oryxa
+	switch {
+	case dependencies.Signin != nil && dependencies.Hooks != nil && dependencies.Integrations != nil:
+		oryxa = &application.Oryxa{
+			Store: dependencies.Store, Signin: dependencies.Signin, Hooks: dependencies.Hooks,
+			Integrations: dependencies.Integrations, Toolkits: config.OryxaToolkits,
+			RedirectURI: config.SigninRedirectURI, DefaultClients: config.DefaultOAuthClients,
+		}
+	case dependencies.Signin != nil || dependencies.Hooks != nil || dependencies.Integrations != nil:
+		return nil, errors.New("apps: Oryxa's sign-in, its webhook ingress and the integrations come together or not at all")
+	case len(config.OryxaToolkits) > 0 || len(config.DefaultOAuthClients) > 0:
+		return nil, errors.New("apps: Oryxa's sign-in is given toolkits or default OAuth apps, and is not configured")
+	}
 	app, err := application.New(application.Dependencies{
 		Store:     dependencies.Store,
 		Directory: dependencies.Directory,
 		Composio:  dependencies.Composio,
+		Policy:    dependencies.Policy,
+		Oryxa:     oryxa,
 		Logger:    logger,
 	}, application.Config{
 		PublicBaseURL:   config.PublicBaseURL,
@@ -104,12 +149,20 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	var ingress http.Handler
+	if dependencies.Hooks != nil {
+		ingress = dependencies.Hooks.Handler()
+	}
 	service := &Service{
-		app:      app,
-		store:    dependencies.Store,
-		mcp:      mcp,
-		handler:  httpserver.New(app, httpserver.Config{AllowedOrigins: config.AllowedOrigins, MCP: mcp}, logger),
+		app:   app,
+		store: dependencies.Store,
+		mcp:   mcp,
+		handler: httpserver.New(app, httpserver.Config{
+			AllowedOrigins: config.AllowedOrigins, MCP: mcp,
+			Oryxa: app, Hooks: ingress, Services: dependencies.Services,
+		}, logger),
 		consumer: consumer,
+		oryxa:    oryxa != nil,
 	}
 	if dependencies.Sink != nil {
 		// A trigger's payload is the app's own data — an email's body, an
@@ -152,11 +205,16 @@ func (service *Service) Routes() []string { return service.handler.Patterns() }
 const WebhookPath = "/v1/apps/webhooks/composio"
 
 // Workers is the background work apps needs running. A host starts each one
-// and waits for it on the way down.
+// and waits for it on the way down. Where Oryxa's own sign-in is configured,
+// its upkeep is one of them: sign-ins never finished, the daily health
+// checks, revocations to try again, and lapsed webhook endpoints.
 func (service *Service) Workers() []Worker {
 	workers := []Worker{service.app.RunMaintenance, service.app.RunAutoSubscribe}
 	if service.dispatcher != nil {
 		workers = append(workers, service.dispatcher.Run)
+	}
+	if service.oryxa {
+		workers = append(workers, service.app.RunOryxa)
 	}
 	return workers
 }

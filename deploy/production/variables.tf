@@ -99,9 +99,9 @@ variable "task_memory" {
 }
 
 variable "database_instance_class" {
-  description = "Cheap until launch, when the database moves to Aurora Serverless v2."
+  description = "Cheap until launch, when the database moves to Aurora Serverless v2. A db.t4g.small (2 GiB) is headroom over the db.t4g.micro (1 GiB) it replaced, not a repair: measured over 7 days, the micro had 86 to 140 MiB free, 44 to 82 MiB parked in swap but only about 0.5 KB/s of swap traffic, and CPU at 5%, so it was not swapping constantly."
   type        = string
-  default     = "db.t4g.micro"
+  default     = "db.t4g.small"
 }
 
 variable "alarm_email" {
@@ -117,12 +117,14 @@ variable "cognito" {
     client_id       = string
     domain          = string
     agent_client_id = string
+    cli_client_id   = optional(string, "")
   })
   default = {
     user_pool_id    = ""
     client_id       = ""
     domain          = ""
     agent_client_id = ""
+    cli_client_id   = ""
   }
 }
 

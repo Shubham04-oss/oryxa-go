@@ -30,7 +30,10 @@ const (
 	maxReceiveCount = 5
 	// The consumer only records the event and returns — it is Krude's own run,
 	// woken afterwards, that can take minutes reading what came in — so this
-	// stays at apps' 60 seconds rather than growing with Krude's own work.
+	// stays at apps' 60 seconds rather than growing with Krude's own work. A
+	// message that takes longer, such as a member's removal, has its
+	// visibility extended by the consumer while it is handled, for up to five
+	// minutes.
 	visibilityTimeoutSeconds = 60
 )
 

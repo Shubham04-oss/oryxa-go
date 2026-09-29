@@ -82,7 +82,7 @@ func (f *fakeAutomation) close() error {
 func TestManagerReusesAndIsolatesBrowserSessions(t *testing.T) {
 	api := &fakeRuntime{}
 	connector := &fakeConnector{}
-	manager, err := newManager(api, Options{connector: connector, SessionTimeout: time.Hour})
+	manager, err := newManager(api, Options{connector: connector, SessionTimeout: time.Hour, resolver: publicResolver()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,6 +255,9 @@ func TestBrowserRequestValidation(t *testing.T) {
 		{name: "reject localhost", request: Request{Action: Navigate, URL: "http://localhost:8080"}, wantErr: true},
 		{name: "reject private IP", request: Request{Action: Navigate, URL: "http://10.0.0.1/private"}, wantErr: true},
 		{name: "reject metadata IP", request: Request{Action: Navigate, URL: "http://169.254.169.254/latest/meta-data"}, wantErr: true},
+		{name: "reject a name for the metadata IP", request: Request{Action: Navigate, URL: "http://metadata.test/latest/meta-data"}, wantErr: true},
+		{name: "reject an unknown host", request: Request{Action: Navigate, URL: "https://no-such-host.test/"}, wantErr: true},
+		{name: "navigate a public IP", request: Request{Action: Navigate, URL: "http://93.184.216.34/"}},
 		{name: "snapshot", request: Request{Action: Snapshot}},
 		{name: "click", request: Request{Action: Click, Selector: "#submit"}},
 		{name: "blank selector", request: Request{Action: Click, Selector: " "}, wantErr: true},
@@ -263,9 +266,11 @@ func TestBrowserRequestValidation(t *testing.T) {
 		{name: "screenshot", request: Request{Action: Screenshot}},
 		{name: "unknown", request: Request{Action: "launch"}, wantErr: true},
 	}
+	resolver := publicResolver()
+	resolver.answers["metadata.test"] = addresses("169.254.169.254")
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := test.request.validate()
+			err := test.request.validate(t.Context(), resolver)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("validate error = %v", err)
 			}

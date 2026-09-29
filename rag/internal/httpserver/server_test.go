@@ -475,6 +475,72 @@ func TestCookieMutationsNeedAnAllowedOrigin(t *testing.T) {
 	}
 }
 
+// TestACookieWriteWithNoOriginIsRefused: the check denies by default. A cookie
+// write that names no origin cannot be shown not to have come from another
+// site, so every route that changes something refuses it as it does a foreign
+// origin, and admits it only from an allowed one. A bearer token, and a read,
+// need no origin.
+func TestACookieWriteWithNoOriginIsRefused(t *testing.T) {
+	t.Parallel()
+	const organization = "/v1/organizations/org_1"
+	writes := []struct{ name, method, path, body string }{
+		{"create a corpus", http.MethodPost, organization + "/corpora", `{"name":"Handbook","scope":"organization"}`},
+		{"delete a corpus", http.MethodDelete, organization + "/corpora/cor_1", ""},
+		{"add a document", http.MethodPost, organization + "/corpora/cor_1/documents", `{"text":"hello"}`},
+		{"delete a document", http.MethodDelete, organization + "/corpora/cor_1/documents/doc_1", ""},
+		{"search", http.MethodPost, organization + "/corpora/cor_1/search", `{"query":"rotation"}`},
+		{"answer", http.MethodPost, organization + "/corpora/cor_1/answer", `{"query":"rotation"}`},
+	}
+	// origin is what the request names, or nothing when it is left out;
+	// bearer keeps the token the helper sends by default.
+	as := func(origin string, bearer bool) func(*http.Request) {
+		return func(request *http.Request) {
+			if !bearer {
+				request.Header.Del("Authorization")
+			}
+			request.AddCookie(&http.Cookie{Name: authclient.AccessCookieName, Value: "session"})
+			if origin != "" {
+				request.Header.Set("Origin", origin)
+			}
+		}
+	}
+	server := newServer(&fakeService{})
+	for _, write := range writes {
+		t.Run(write.name, func(t *testing.T) {
+			for name, refused := range map[string]string{
+				"no origin":      "",
+				"a blank origin": "  ",
+				"the null one":   "null",
+				"a foreign one":  "https://evil.test",
+				"a lookalike":    "https://app.oryxa.test.evil.test",
+				"a scheme swap":  "http://app.oryxa.test",
+			} {
+				recorder := do(t, server, write.method, write.path, write.body, as(refused, false))
+				if recorder.Code != http.StatusForbidden {
+					t.Errorf("a cookie write with %s got %d, want 403", name, recorder.Code)
+				}
+			}
+			if recorder := do(t, server, write.method, write.path, write.body, as("https://app.oryxa.test", false)); recorder.Code >= 300 {
+				t.Errorf("a cookie write from an allowed origin got %d: %s", recorder.Code, recorder.Body)
+			}
+			// The bearer token wins over a cookie sent beside it, as it does
+			// in the call to auth, so neither header decides the outcome.
+			if recorder := do(t, server, write.method, write.path, write.body, as("", true)); recorder.Code >= 300 {
+				t.Errorf("a bearer-token write with no origin got %d: %s", recorder.Code, recorder.Body)
+			}
+			if recorder := do(t, server, write.method, write.path, write.body); recorder.Code >= 300 {
+				t.Errorf("a bearer-token write got %d: %s", recorder.Code, recorder.Body)
+			}
+		})
+	}
+	// A read changes nothing, so a cookie needs no origin to make one.
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		if recorder := do(t, server, method, organization+"/corpora", "", as("", false)); recorder.Code != http.StatusOK {
+			t.Errorf("a cookie %s with no origin got %d, want 200", method, recorder.Code)
+		}
+	}
+}
+
 func TestResponsesAreNotCached(t *testing.T) {
 	t.Parallel()
 	// Search results and answers are an organization's own text; nothing in

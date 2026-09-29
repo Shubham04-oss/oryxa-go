@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 )
@@ -260,6 +261,34 @@ func TestBlankIDsKeepsTheRouteAndHidesTheIdentifiers(t *testing.T) {
 	} {
 		if got := blankIDs(path); got != want {
 			t.Errorf("blankIDs(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestProxyRejectsSlackMutatingGETRPCsEvenForAgents(t *testing.T) {
+	for _, caller := range []authclient.Credentials{memberToken, agentToken} {
+		for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost} {
+			for _, endpoint := range []string{"/api/auth.revoke", "/api/conversations.inviteShared?channel=C123&user_ids=U123", "/api/chat.delete?channel=C123&ts=123", "/api/new.method"} {
+				h := newHarness(t)
+				h.activeConnection("apc_1", "user-1", "slack", "ca_1")
+				_, err := h.service.Proxy(context.Background(), caller, "org_1", ProxyInput{Toolkit: "slack", Method: method, Endpoint: endpoint})
+				if !errors.Is(err, domain.ErrNotReadOnly) || len(h.composio.proxied) != 0 {
+					t.Errorf("%s %s reached provider or was accepted: %v", method, endpoint, err)
+				}
+			}
+		}
+	}
+}
+
+func TestProxyRetainsExplicitSlackReads(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost} {
+		for _, endpoint := range []string{"/api/conversations.history?channel=C123", "/api/users.conversations", "/api/search.messages?query=test"} {
+			h := newHarness(t)
+			h.activeConnection("apc_1", "user-1", "slack", "ca_1")
+			_, err := h.service.Proxy(context.Background(), agentToken, "org_1", ProxyInput{Toolkit: "slack", Method: method, Endpoint: endpoint})
+			if err != nil || len(h.composio.proxied) != 1 {
+				t.Errorf("%s %s = %v requests=%d", method, endpoint, err, len(h.composio.proxied))
+			}
 		}
 	}
 }

@@ -23,10 +23,11 @@ type fakeInteractions struct {
 	actor InteractionActor
 	token string
 	key   string
+	input InteractionCreateInput
 }
 
 func (service *fakeInteractions) Create(_ context.Context, actor InteractionActor, token, key string, input InteractionCreateInput) (Interaction, error) {
-	service.actor, service.token, service.key = actor, token, key
+	service.actor, service.token, service.key, service.input = actor, token, key, input
 	return Interaction{ID: "irq_1", OrganizationID: actor.OrganizationID, Requester: InteractionParty{UserID: actor.UserID, AgentID: actor.AgentID}, Target: InteractionParty{AgentID: input.TargetAgentID}, Purpose: input.Purpose, Task: input.Task, Status: "pending"}, nil
 }
 func (*fakeInteractions) Inbox(context.Context, InteractionActor, int) ([]Interaction, error) {
@@ -88,40 +89,6 @@ func TestInteractionToolboxNeedsAService(t *testing.T) {
 	}
 }
 
-// TestAnAnsweringToolboxCannotStartNewRequests: the toolbox a woken agent
-// gets answers what another member asked; it does not let that member's words
-// turn into fresh requests on everyone else.
-func TestAnAnsweringToolboxCannotStartNewRequests(t *testing.T) {
-	names := func(answering bool) []string {
-		t.Helper()
-		toolbox, err := InteractionToolbox(InteractionConfig{Service: &fakeInteractions{}, Answering: answering})
-		if err != nil {
-			t.Fatal(err)
-		}
-		tools, err := toolbox.Toolset.Tools(nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var offered []string
-		for _, one := range tools {
-			offered = append(offered, one.Name())
-		}
-		return offered
-	}
-	if !slices.Contains(names(false), "interactions_create") {
-		t.Fatal("a member's own agent cannot start a request")
-	}
-	answering := names(true)
-	if slices.Contains(answering, "interactions_create") {
-		t.Fatalf("a run nobody is watching was offered interactions_create: %v", answering)
-	}
-	for _, needed := range []string{"interactions_get", "interactions_decide", "interactions_respond"} {
-		if !slices.Contains(answering, needed) {
-			t.Fatalf("a woken agent cannot %s: %v", needed, answering)
-		}
-	}
-}
-
 // TestADeliveringToolboxHoldsOnlyItsOneRequest: a run delivering one
 // interaction is offered, from its first model call, exactly the
 // interactions tools its purpose uses: reading and deciding its request in
@@ -130,7 +97,7 @@ func TestAnAnsweringToolboxCannotStartNewRequests(t *testing.T) {
 // what it is for. It never has a tool that lists the member's other
 // requests or starts new ones.
 func TestADeliveringToolboxHoldsOnlyItsOneRequest(t *testing.T) {
-	toolbox, err := InteractionToolbox(InteractionConfig{Service: &fakeInteractions{}, Answering: true, Delivering: true})
+	toolbox, err := InteractionToolbox(InteractionConfig{Service: &fakeInteractions{}, Delivering: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +208,7 @@ func TestADeliveryRunDoesOnlyWhatItIsFor(t *testing.T) {
 		"":              {"get irq_1"},
 	} {
 		service := &pinnedInteractions{}
-		toolbox, err := InteractionToolbox(InteractionConfig{Service: service, Answering: true, Delivering: true})
+		toolbox, err := InteractionToolbox(InteractionConfig{Service: service, Delivering: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -282,7 +249,7 @@ func TestADeliveryRunActsOnItsOwnRequestAlone(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			service := &pinnedInteractions{}
-			toolbox, err := InteractionToolbox(InteractionConfig{Service: service, Answering: true, Delivering: testCase.delivering})
+			toolbox, err := InteractionToolbox(InteractionConfig{Service: service, Delivering: testCase.delivering})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -367,7 +334,7 @@ func TestADeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
 		"the member's own run answers": {false, DeliveryWorks, answer, 2},
 	} {
 		t.Run(name, func(t *testing.T) {
-			toolbox, err := InteractionToolbox(InteractionConfig{Service: &recordingInteractions{}, Answering: true, Delivering: testCase.delivering})
+			toolbox, err := InteractionToolbox(InteractionConfig{Service: &recordingInteractions{}, Delivering: testCase.delivering})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -396,7 +363,7 @@ func TestADeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
 // specialist, whose runs otherwise end on their JSON result, ends a delivery
 // run on the recorded answer too, with no result written after it.
 func TestASpecialistsDeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
-	toolbox, err := InteractionToolbox(InteractionConfig{Service: &recordingInteractions{}, Answering: true, Delivering: true})
+	toolbox, err := InteractionToolbox(InteractionConfig{Service: &recordingInteractions{}, Delivering: true})
 	if err != nil {
 		t.Fatal(err)
 	}

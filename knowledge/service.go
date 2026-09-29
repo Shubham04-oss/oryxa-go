@@ -21,6 +21,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
+	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/events"
@@ -69,7 +70,10 @@ type Dependencies struct {
 	// token that acts as a member for an internal source.
 	Directory application.Directory
 	Apps      application.Apps
-	Grants    application.Grants
+	Policy    interface {
+		Get(context.Context, string) (workspacepolicy.Settings, error)
+	}
+	Grants application.Grants
 	// Sink is where published events go. A host on the bus passes an
 	// EventBridge publisher; a host that also runs the retrieval pipeline can
 	// pass that instead, and nothing inside changes.
@@ -140,6 +144,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		Store:      dependencies.Store,
 		Directory:  dependencies.Directory,
 		Apps:       dependencies.Apps,
+		Policy:     dependencies.Policy,
 		Grants:     dependencies.Grants,
 		Extractors: extractors,
 		Originals:  dependencies.Originals,

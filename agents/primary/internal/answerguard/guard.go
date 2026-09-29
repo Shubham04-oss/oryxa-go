@@ -15,6 +15,18 @@
 // guardrail blocked something or answered in a way this code does not
 // expect, holds the answer as unchecked: it fails closed.
 //
+// # Relevance
+//
+// Personal data is read by its shape. Whether an answer carries private
+// material its question did not ask for takes reading the two together, which
+// is the relevance judge's (package relevance). A guard built with
+// WithRelevance runs it from CheckWith, after the read above and only for an
+// answer whose sources may have read something private. Depending on the mode
+// it is asked in, an answer the judge would hold is held for its owner
+// (OffTopic) and shares nothing, or is only recorded as one it would have held,
+// so that the check can be watched before it holds anything. Check never runs
+// it.
+//
 // A finding's match is the value it found, by Bedrock's design. Nothing here
 // logs it, or any text: the guard logs kinds and reasons alone.
 package answerguard
@@ -34,6 +46,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/aws/smithy-go"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/relevance"
 )
 
 // The states of a Verdict.
@@ -43,8 +57,9 @@ const (
 	// StateMasked is an answer in which only kinds that are always masked
 	// were found; it is delivered with them masked.
 	StateMasked = "masked"
-	// StateHeld is an answer with a kind held for review, or one that could
-	// not be checked, which waits for the answering member.
+	// StateHeld is an answer with a kind held for review, one that could not
+	// be checked, or one the relevance check held (OffTopic), which waits for
+	// the answering member.
 	StateHeld = "held"
 )
 
@@ -83,7 +98,10 @@ type Verdict struct {
 	State string
 	// Kinds are the entity types found, sorted: the masked ones when
 	// masked, the held ones when held, and only Unchecked for an answer that
-	// could not be checked. Never a value.
+	// could not be checked. An answer the relevance check held also names
+	// OffTopic, the categories of what it carried (relevance.Category names,
+	// as they are spelled) and, when the judge could not tell, Unchecked,
+	// beside whatever the read held it for. Never a value.
 	Kinds []string
 	// Texts are the answer's texts, one for each given, as they may be
 	// delivered: the guardrail's output, with the kinds that are always
@@ -93,8 +111,59 @@ type Verdict struct {
 	// Masked are Texts with every held value also replaced by its kind, as
 	// {EMAIL}, for a held answer the guard could check; nil otherwise. A
 	// text a held value could not be found in to replace is its kinds
-	// alone.
+	// alone. It is not shared for an answer the relevance check held.
 	Masked []string
+	// Given are the texts exactly as Check was handed them, whatever was
+	// found in them: what may be shared where nothing at all is to be masked
+	// (IntensityOff). They hold the secrets Texts has masked, so a verdict is
+	// never logged, kept or sent anywhere: it lives for the request it was
+	// made for, and what is shared from it is read out with Shareable or At.
+	Given []string
+	// SecretKinds are the kinds that are always masked (MaskedKinds) that
+	// were found, sorted, whatever the state: the ones the guardrail masked in
+	// Texts, and any it left there, which the answer is held for. A held
+	// verdict's Kinds name only what it is held for, so this is what says,
+	// beside an email address, that a password was found and masked too. Never
+	// a value; nil for an answer that could not be checked.
+	SecretKinds []string
+	// Relevance is what the relevance check made of the answer, or nil when
+	// it was not asked for: Check never sets it, and neither does CheckWith
+	// given no RelevanceInput. When it is set and Held, the answer is held for
+	// what it carried that its request did not ask for, and shares nothing.
+	Relevance *RelevanceOutcome
+}
+
+// Shareable is the n texts a verdict on n texts allows to be shown to
+// somebody who has nobody to review them first, or nil when it allows none.
+// It is the one rule every place that shares a checked text applies, so that
+// a room, the teamspace ledger and the check route cannot come to differ:
+//
+//   - nothing found, or only kinds that are always masked: the verdict's
+//     Texts, which are the texts as given or as the guardrail masked them;
+//   - a held kind, when the guard also made the fully masked version of every
+//     text: that Masked version, with each held value replaced by its kind;
+//   - anything else shares nothing: an answer that could not be checked
+//     (held as [Unchecked], and never given a masked version, since nothing
+//     in it was read), an answer the relevance check held (however it was
+//     masked, since what is wrong with it is what it says, not how it is
+//     spelled), a verdict that does not carry a text for each of the n texts,
+//     and a state this code does not know.
+//
+// A non-nil result is always a copy, and holds exactly n texts; for n of zero
+// it is empty rather than nil, since there was nothing to withhold. Nil is
+// the only "share nothing", so a caller that treats it as one cannot be
+// handed a partial answer.
+func (verdict Verdict) Shareable(n int) []string {
+	if verdict.heldForRelevance() || len(verdict.Texts) != n {
+		return nil
+	}
+	switch {
+	case verdict.State == StateClear, verdict.State == StateMasked:
+		return append([]string{}, verdict.Texts...)
+	case verdict.State == StateHeld && len(verdict.Masked) == n:
+		return append([]string{}, verdict.Masked...)
+	}
+	return nil
 }
 
 // Client is Bedrock's runtime; *bedrockruntime.Client is one.
@@ -115,17 +184,21 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// Guard checks answers with one guardrail.
+// Guard checks answers with one guardrail, and with a relevance judge when it
+// was given one.
 type Guard struct {
 	client     Client
 	identifier string
 	version    string
 	timeout    time.Duration
 	logger     *slog.Logger
+	// judge runs the relevance check for CheckWith; nil when there is none.
+	judge relevance.Judge
 }
 
-// New builds a guard. It contacts nothing until an answer is checked.
-func New(client Client, config Config) (*Guard, error) {
+// New builds a guard. It contacts nothing until an answer is checked. The
+// options add to it: WithRelevance, for the relevance check.
+func New(client Client, config Config, options ...Option) (*Guard, error) {
 	identifier, version := strings.TrimSpace(config.Identifier), strings.TrimSpace(config.Version)
 	if client == nil || identifier == "" || version == "" {
 		return nil, errors.New("answerguard: a Bedrock client, a guardrail identifier and a version are required")
@@ -138,11 +211,16 @@ func New(client Client, config Config) (*Guard, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Guard{client: client, identifier: identifier, version: version, timeout: timeout, logger: logger}, nil
+	guard := &Guard{client: client, identifier: identifier, version: version, timeout: timeout, logger: logger}
+	for _, option := range options {
+		option(guard)
+	}
+	return guard, nil
 }
 
 // Check reads an answer's texts, each on its own and all within the guard's
-// timeout, and says what it found. A text that is empty is not sent.
+// timeout, and says what it found. A text that is empty is not sent. It reads
+// for personal data only: CheckWith adds the relevance check.
 func (guard *Guard) Check(ctx context.Context, texts []string) Verdict {
 	checking, cancel := context.WithTimeout(ctx, guard.timeout)
 	defer cancel()
@@ -167,7 +245,7 @@ func (guard *Guard) Check(ctx context.Context, texts []string) Verdict {
 				delivered[index] = readings[index].output
 			}
 		}
-		return Verdict{State: StateHeld, Kinds: []string{Unchecked}, Texts: delivered}
+		return Verdict{State: StateHeld, Kinds: []string{Unchecked}, Texts: delivered, Given: slices.Clone(texts)}
 	}
 
 	var masked []string
@@ -184,11 +262,13 @@ func (guard *Guard) Check(ctx context.Context, texts []string) Verdict {
 		for index, text := range delivered {
 			fully[index] = maskHeld(text, held, readings[index].held)
 		}
-		return Verdict{State: StateHeld, Kinds: kindsOf(held), Texts: delivered, Masked: fully}
+		return Verdict{State: StateHeld, Kinds: kindsOf(held), Texts: delivered, Masked: fully,
+			Given: slices.Clone(texts), SecretKinds: secretKinds(masked, held)}
 	case len(masked) > 0:
-		return Verdict{State: StateMasked, Kinds: sortedUnique(masked), Texts: delivered}
+		return Verdict{State: StateMasked, Kinds: sortedUnique(masked), Texts: delivered,
+			Given: slices.Clone(texts), SecretKinds: sortedUnique(masked)}
 	default:
-		return Verdict{State: StateClear, Texts: slices.Clone(texts)}
+		return Verdict{State: StateClear, Texts: slices.Clone(texts), Given: slices.Clone(texts)}
 	}
 }
 
@@ -413,6 +493,18 @@ func placeholders(matches []heldMatch) []string {
 		kinds[index] = "{" + kind + "}"
 	}
 	return kinds
+}
+
+// secretKinds are the kinds that are always masked among those the guardrail
+// anonymized and those it found and left in a text, which are held for.
+func secretKinds(anonymized []string, held []heldMatch) []string {
+	kinds := slices.Clone(anonymized)
+	for _, found := range held {
+		if slices.Contains(MaskedKinds(), found.kind) {
+			kinds = append(kinds, found.kind)
+		}
+	}
+	return sortedUnique(kinds)
 }
 
 func kindsOf(matches []heldMatch) []string {

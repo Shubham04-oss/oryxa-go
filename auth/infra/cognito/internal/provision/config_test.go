@@ -51,3 +51,22 @@ func TestValidateRedirectURL(t *testing.T) {
 		})
 	}
 }
+
+func TestFromEnvRequiresLoopbackCLICallback(t *testing.T) {
+	t.Setenv("COGNITO_DOMAIN_PREFIX", "oryxa-demo-test")
+	t.Setenv("COGNITO_CALLBACK_URLS", "http://localhost:8080/v1/auth/callback")
+	t.Setenv("GOOGLE_OAUTH_CLIENT_ID", "")
+	t.Setenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
+	t.Setenv("COGNITO_DEMO_PASSWORD_ONLY", "true")
+	for _, callback := range []string{"https://example.com/callback", "http://localhost:8765/callback", "http://127.0.0.1:8765/wrong"} {
+		t.Setenv("COGNITO_CLI_CALLBACK_URL", callback)
+		if _, err := FromEnv(); err == nil {
+			t.Fatalf("accepted %q", callback)
+		}
+	}
+	t.Setenv("COGNITO_CLI_CALLBACK_URL", "http://127.0.0.1:8765/callback")
+	config, err := FromEnv()
+	if err != nil || config.CLICallbackURL != "http://127.0.0.1:8765/callback" {
+		t.Fatalf("config = %+v, error = %v", config, err)
+	}
+}

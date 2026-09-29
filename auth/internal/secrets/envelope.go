@@ -1,29 +1,29 @@
 // Package secrets envelope-encrypts a member's stored agent refresh token.
-// Each value gets a fresh KMS data key, and its binding is both the KMS
-// encryption context and the AES-GCM associated data, so ciphertext cannot be
-// moved to another grant or opened by another service.
+// It is internal/secrets bound to auth's own name: each value's KMS encryption
+// context and AES-GCM associated data carry service=oryxa-auth, as they did
+// before that package existed. Grants sealed before still open, and sealing is
+// unchanged byte for byte: testdata/envelopes.golden.json pins both. Nothing
+// sealed here opens in another service.
 package secrets
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
+	// Aliased: this package is also named secrets, and wraps that one.
+	sharedsecrets "github.com/Shubham04-oss/oryxa-go/internal/secrets"
 )
 
-const envelopeVersion = 1
+// service is the name every value auth seals is bound to. Changing it would
+// leave every stored grant unopenable.
+const service = "oryxa-auth"
 
 // ResourceAgentGrant is the resource type auth's envelope encryption binds:
 // a member's stored agent refresh token.
 const ResourceAgentGrant = "agent-grant"
 
-var ErrInvalidEnvelope = errors.New("invalid encrypted envelope")
+var ErrInvalidEnvelope = sharedsecrets.ErrInvalidEnvelope
 
 // Binding ties ciphertext to exactly the resource it was sealed for, so a
 // value cannot be moved to a different resource and cannot be opened by
@@ -35,17 +35,10 @@ type Binding struct {
 }
 
 func (b Binding) Context() map[string]string {
-	return map[string]string{
-		"service":       "oryxa-auth",
-		"resource_type": b.ResourceType,
-		"resource_id":   b.ResourceID,
-	}
+	return sharedsecrets.Binding(b).Context(service)
 }
 
-type DataKeys interface {
-	GenerateDataKey(context.Context, string, map[string]string) (plaintext, encrypted []byte, err error)
-	DecryptDataKey(context.Context, []byte, map[string]string) ([]byte, error)
-}
+type DataKeys = sharedsecrets.DataKeys
 
 type Envelope struct {
 	Keys  DataKeys
@@ -54,92 +47,17 @@ type Envelope struct {
 }
 
 func (e Envelope) Seal(ctx context.Context, binding Binding, plaintext []byte) (domain.SealedData, error) {
-	if err := validateBinding(binding); err != nil {
-		return domain.SealedData{}, err
-	}
-	dataKey, encryptedKey, err := e.Keys.GenerateDataKey(ctx, e.KeyID, binding.Context())
-	if err != nil {
-		return domain.SealedData{}, fmt.Errorf("generate data key: %w", err)
-	}
-	defer wipe(dataKey)
-	if len(dataKey) != 32 || len(encryptedKey) == 0 {
-		return domain.SealedData{}, fmt.Errorf("%w: data key must be 256 bits", ErrInvalidEnvelope)
-	}
-	gcm, err := newGCM(dataKey)
-	if err != nil {
-		return domain.SealedData{}, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	random := e.Rand
-	if random == nil {
-		random = rand.Reader
-	}
-	if _, err := io.ReadFull(random, nonce); err != nil {
-		return domain.SealedData{}, fmt.Errorf("generate nonce: %w", err)
-	}
-	aad, _ := json.Marshal(binding.Context())
-	return domain.SealedData{
-		Version:          envelopeVersion,
-		Nonce:            nonce,
-		Ciphertext:       gcm.Seal(nil, nonce, plaintext, aad),
-		EncryptedDataKey: append([]byte(nil), encryptedKey...),
-	}, nil
+	sealed, err := e.shared().Seal(ctx, sharedsecrets.Binding(binding), plaintext)
+	return domain.SealedData(sealed), err
 }
 
 func (e Envelope) Open(ctx context.Context, binding Binding, sealed domain.SealedData) ([]byte, error) {
-	if err := validateBinding(binding); err != nil {
-		return nil, err
-	}
-	if sealed.Version != envelopeVersion || len(sealed.Nonce) == 0 || len(sealed.Ciphertext) == 0 || len(sealed.EncryptedDataKey) == 0 {
-		return nil, ErrInvalidEnvelope
-	}
-	dataKey, err := e.Keys.DecryptDataKey(ctx, sealed.EncryptedDataKey, binding.Context())
-	if err != nil {
-		return nil, fmt.Errorf("decrypt data key: %w", err)
-	}
-	defer wipe(dataKey)
-	if len(dataKey) != 32 {
-		return nil, fmt.Errorf("%w: data key must be 256 bits", ErrInvalidEnvelope)
-	}
-	gcm, err := newGCM(dataKey)
-	if err != nil {
-		return nil, err
-	}
-	if len(sealed.Nonce) != gcm.NonceSize() {
-		return nil, ErrInvalidEnvelope
-	}
-	aad, _ := json.Marshal(binding.Context())
-	plaintext, err := gcm.Open(nil, sealed.Nonce, sealed.Ciphertext, aad)
-	if err != nil {
-		return nil, fmt.Errorf("%w: authentication failed", ErrInvalidEnvelope)
-	}
-	return plaintext, nil
+	return e.shared().Open(ctx, sharedsecrets.Binding(binding), sharedsecrets.SealedData(sealed))
 }
 
-func newGCM(key []byte) (cipher.AEAD, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("create cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("create gcm: %w", err)
-	}
-	return gcm, nil
-}
-
-func validateBinding(binding Binding) error {
-	if binding.ResourceType == "" || binding.ResourceID == "" {
-		return fmt.Errorf("%w: incomplete encryption binding", ErrInvalidEnvelope)
-	}
-	return nil
+func (e Envelope) shared() sharedsecrets.Envelope {
+	return sharedsecrets.Envelope{Keys: e.Keys, KeyID: e.KeyID, Service: service, Rand: e.Rand}
 }
 
 // Wipe overwrites plaintext once it is no longer needed.
-func Wipe(value []byte) { wipe(value) }
-
-func wipe(value []byte) {
-	for i := range value {
-		value[i] = 0
-	}
-}
+func Wipe(value []byte) { sharedsecrets.Wipe(value) }

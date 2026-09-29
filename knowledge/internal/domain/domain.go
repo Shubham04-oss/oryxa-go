@@ -233,6 +233,13 @@ type AppConnection struct {
 	MemberID          string
 	ComposioAccountID string
 	Label             string
+	// Broker is who holds this connection's credential: "composio" (also
+	// what apps' connection view means by a missing value) or "oryxa",
+	// Oryxa's own sign-in. A provider source may read through an oryxa
+	// connection only once the extractor mounted for its toolkit is
+	// registered as one that reads through apps rather than Composio's
+	// proxy.
+	Broker string
 }
 
 // AppTarget is one thing inside a connection that could be indexed, as apps

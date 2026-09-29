@@ -31,6 +31,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
+	"github.com/Shubham04-oss/oryxa-go/internal/cliscope"
 )
 
 const maxJSONBytes = 256 << 10
@@ -134,6 +135,7 @@ type AgentInteractions interface {
 // resolved from the live human-team directory on every call.
 type Teamspaces interface {
 	OrganizationAgent(context.Context, teamspaces.Actor) (teamspaces.OrganizationAgent, error)
+	PreviewOrganizationAgent(context.Context, teamspaces.Actor) (teamspaces.OrganizationAgent, error)
 	UpdateOrganizationAgent(context.Context, teamspaces.Actor, teamspaces.OrganizationAgentUpdate) (teamspaces.OrganizationAgent, error)
 	List(context.Context, teamspaces.Actor) ([]teamspaces.Space, error)
 	Get(context.Context, teamspaces.Actor, string) (teamspaces.Space, error)
@@ -203,6 +205,18 @@ type Config struct {
 	// OrganizationContext exposes the durable shared synthesis and proposed
 	// follow-ups produced by the singleton organization agent.
 	OrganizationContext OrganizationAgentContext
+	// AnswerGuard reads the texts of an answer a member's side conversation is
+	// about to show them, for the answer-guard check route. Nil means no
+	// guardrail is configured: the route then checks nothing, and says so. It
+	// is set only when there is one; a nil *answerguard.Guard in the interface
+	// would not read as none.
+	AnswerGuard AnswerChecker
+	// AnswerGuardPreferences keeps each member's own answer guard levels, and
+	// tells what applies to their answers once their organization's minimum is
+	// counted in. Nil answers that none are kept here. It is set only when
+	// there is one; a nil pointer in the interface is read as none, but a
+	// caller should not lean on that.
+	AnswerGuardPreferences AnswerGuardPreferences
 }
 
 // Server serves the API.
@@ -218,6 +232,9 @@ type Server struct {
 	teamspaces          Teamspaces
 	rooms               Rooms
 	organizationContext OrganizationAgentContext
+	answerGuard         AnswerChecker
+	guardPreferences    AnswerGuardPreferences
+	checks              *checkLimiter
 	allowedOrigins      map[string]struct{}
 	runTimeout          time.Duration
 	unavailable         string
@@ -245,6 +262,9 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		teamspaces:          config.Teamspaces,
 		rooms:               config.Rooms,
 		organizationContext: config.OrganizationContext,
+		answerGuard:         config.AnswerGuard,
+		guardPreferences:    keptGuardPreferences(config.AnswerGuardPreferences),
+		checks:              newCheckLimiter(checksPerWindow, checkWindow),
 		allowedOrigins:      map[string]struct{}{},
 		runTimeout:          config.RunTimeout,
 		unavailable:         config.Unavailable,
@@ -321,6 +341,10 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/catchup", server.catchUpOnRoom)
 	server.handle("GET /v1/organizations/{organizationID}/preferences", server.getPreferences)
 	server.handle("PUT /v1/organizations/{organizationID}/preferences", server.setPreferences)
+	server.handle("POST /v1/organizations/{organizationID}/answer-guard/check", server.checkAnswer)
+	guardPreferences := newGuardPreferenceHandlers(server.guardPreferences, server.member, logger)
+	server.handle("GET /v1/organizations/{organizationID}/answer-guard/preferences", guardPreferences.get)
+	server.handle("PUT /v1/organizations/{organizationID}/answer-guard/preferences", guardPreferences.put)
 	return server
 }
 
@@ -904,7 +928,13 @@ func (server *Server) getOrganizationAgent(writer http.ResponseWriter, request *
 		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
 		return
 	}
-	agent, err := server.teamspaces.OrganizationAgent(request.Context(), teamspaceActorOf(member))
+	var agent teamspaces.OrganizationAgent
+	var err error
+	if request.URL.Query().Get("preview") == "1" {
+		agent, err = server.teamspaces.PreviewOrganizationAgent(request.Context(), teamspaceActorOf(member))
+	} else {
+		agent, err = server.teamspaces.OrganizationAgent(request.Context(), teamspaceActorOf(member))
+	}
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -1304,7 +1334,7 @@ func (server *Server) getAgentWorkflowExecution(writer http.ResponseWriter, requ
 // handle registers a route and remembers its pattern, so a host serving
 // several services knows which paths are this one's.
 func (server *Server) handle(pattern string, handler http.HandlerFunc) {
-	server.mux.HandleFunc(pattern, handler)
+	server.mux.Handle(pattern, cliscope.Wrap(pattern, handler))
 	server.patterns = append(server.patterns, pattern)
 }
 
@@ -1457,9 +1487,14 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 	if !ok {
 		return
 	}
+	// teamspace_id is optional and pins this run to one teamspace (see
+	// threads.RunInput.TeamspaceID). It is a pointer so that one sent blank is
+	// told apart from one left out: a pin the caller meant, and did not get,
+	// would leave the run free to work in any teamspace the model names.
 	var body struct {
 		Message       string                       `json:"message"`
 		ScreenContext *primaryagents.ScreenContext `json:"screen_context"`
+		TeamspaceID   *string                      `json:"teamspace_id"`
 		Confirmations []struct {
 			ID        string `json:"id"`
 			Confirmed *bool  `json:"confirmed"`
@@ -1479,6 +1514,14 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		input.Confirmations = append(input.Confirmations, threads.Answer{ID: answer.ID, Confirmed: *answer.Confirmed})
+	}
+	if body.TeamspaceID != nil {
+		pinned, err := primaryagents.CleanTeamspacePin(*body.TeamspaceID)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		input.TeamspaceID = pinned
 	}
 
 	started, err := server.threads.StartRun(request.Context(), member, request.PathValue("threadID"), input)
@@ -1721,7 +1764,14 @@ func (server *Server) limit(writer http.ResponseWriter, request *http.Request) (
 // decode reads a JSON body with no unknown fields, answering 400 itself when
 // it cannot.
 func (server *Server) decode(writer http.ResponseWriter, request *http.Request, target any) bool {
-	decoder := json.NewDecoder(io.LimitReader(request.Body, maxJSONBytes))
+	return server.decodeUpTo(writer, request, target, maxJSONBytes)
+}
+
+// decodeUpTo is decode for a route whose body may be larger than the 256 KiB
+// the rest read. A body past limit is cut off there, and answered 400 as the
+// malformed JSON it has become.
+func (server *Server) decodeUpTo(writer http.ResponseWriter, request *http.Request, target any, limit int64) bool {
+	decoder := json.NewDecoder(io.LimitReader(request.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil || decoder.More() {
 		writeError(writer, http.StatusBadRequest, "invalid_request", "request body must be one JSON object with known fields")

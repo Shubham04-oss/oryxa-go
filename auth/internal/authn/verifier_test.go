@@ -32,11 +32,41 @@ func newSigner(t *testing.T) signer {
 	return signer{t: t, key: key}
 }
 
-func (s signer) verifier(clientID, agentClientID string) *Verifier {
+func (s signer) verifier(clientID, agentClientID, cliClientID string) *Verifier {
 	keys := &oidc.StaticKeySet{PublicKeys: []crypto.PublicKey{&s.key.PublicKey}}
 	return newVerifier(func(config *oidc.Config) *oidc.IDTokenVerifier {
 		return oidc.NewVerifier(testIssuer, keys, config)
-	}, clientID, agentClientID)
+	}, clientID, agentClientID, cliClientID)
+}
+
+func TestVerifyCLIRequiresClientVerifiedEmailAndNonce(t *testing.T) {
+	s := newSigner(t)
+	verifier := s.verifier("web-client", "agent-client", "cli-client")
+	if _, err := verifier.Verify(context.Background(), accessToken(s, "cli-client")); err != nil {
+		t.Fatalf("CLI access token rejected: %v", err)
+	}
+	identity := func(audience, nonce string, verified bool) string {
+		return s.token(map[string]any{
+			"sub": "member-1", "aud": audience, "nonce": nonce,
+			"email": "person@example.com", "email_verified": verified, "token_use": "id",
+		})
+	}
+	claims, err := verifier.VerifyCLIIdentityToken(context.Background(), identity("cli-client", "nonce", true), "nonce")
+	if err != nil || claims.Email != "person@example.com" {
+		t.Fatalf("CLI identity = %+v, %v", claims, err)
+	}
+	for _, test := range []struct {
+		token, nonce string
+	}{
+		{identity("web-client", "nonce", true), "nonce"},
+		{identity("cli-client", "wrong", true), "nonce"},
+		{identity("cli-client", "nonce", false), "nonce"},
+		{s.token(map[string]any{"sub": "member-1", "aud": "cli-client", "nonce": "nonce", "email": "person@example.com", "email_verified": true, "token_use": "access"}), "nonce"},
+	} {
+		if _, err := verifier.VerifyCLIIdentityToken(context.Background(), test.token, test.nonce); err == nil {
+			t.Fatal("accepted a mismatched or unverified CLI identity")
+		}
+	}
 }
 
 func (s signer) token(claims map[string]any) string {
@@ -64,7 +94,7 @@ func accessToken(s signer, clientID string) string {
 
 func TestVerifyAcceptsTheWebClientAndTheAgentClient(t *testing.T) {
 	s := newSigner(t)
-	verifier := s.verifier("web-client", "agent-client")
+	verifier := s.verifier("web-client", "agent-client", "")
 
 	for _, clientID := range []string{"web-client", "agent-client"} {
 		claims, err := verifier.Verify(context.Background(), accessToken(s, clientID))
@@ -79,7 +109,7 @@ func TestVerifyAcceptsTheWebClientAndTheAgentClient(t *testing.T) {
 
 func TestVerifyRefusesAgentTokensWithoutAnAgentClient(t *testing.T) {
 	s := newSigner(t)
-	verifier := s.verifier("web-client", "")
+	verifier := s.verifier("web-client", "", "")
 
 	if _, err := verifier.Verify(context.Background(), accessToken(s, "agent-client")); err == nil {
 		t.Fatal("Verify() accepted an agent token with no agent client configured")
@@ -91,7 +121,7 @@ func TestVerifyRefusesAgentTokensWithoutAnAgentClient(t *testing.T) {
 
 func TestVerifyAgentIdentityToken(t *testing.T) {
 	s := newSigner(t)
-	verifier := s.verifier("web-client", "agent-client")
+	verifier := s.verifier("web-client", "agent-client", "")
 	identity := func(audience, nonce string) string {
 		// No email: an agent grant's ID token needs nothing of the profile.
 		return s.token(map[string]any{"sub": "member-1", "aud": audience, "nonce": nonce, "token_use": "id"})
@@ -111,7 +141,7 @@ func TestVerifyAgentIdentityToken(t *testing.T) {
 			t.Fatalf("VerifyAgentIdentityToken() accepted %s", name)
 		}
 	}
-	if _, err := s.verifier("web-client", "").VerifyAgentIdentityToken(context.Background(), identity("agent-client", "nonce-1"), "nonce-1"); err == nil {
+	if _, err := s.verifier("web-client", "", "").VerifyAgentIdentityToken(context.Background(), identity("agent-client", "nonce-1"), "nonce-1"); err == nil {
 		t.Fatal("VerifyAgentIdentityToken() accepted a token with no agent client configured")
 	}
 	// The web client's own identity check still refuses the agent client's

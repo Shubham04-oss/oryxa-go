@@ -47,7 +47,7 @@ func thinkingHarness(t *testing.T, llm model.LLM, thinking genai.ThinkingLevel, 
 // the member's apps and knowledge, read-only, and the one request.
 func approvedReach(t *testing.T) []Toolbox {
 	t.Helper()
-	interactions, err := InteractionToolbox(InteractionConfig{Service: &fakeInteractions{}, Answering: true, Delivering: true})
+	interactions, err := InteractionToolbox(InteractionConfig{Service: &fakeInteractions{}, Delivering: true})
 	if err != nil {
 		t.Fatal(err)
 	}

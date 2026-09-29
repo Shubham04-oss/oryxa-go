@@ -65,6 +65,13 @@ type RunInput struct {
 	// Delivery names the one interaction a run delivering one is about: its
 	// interactions tools act on that request alone.
 	Delivery agents.Delivery
+	// TeamspaceID pins this run to one teamspace: its tools file requests,
+	// read and publish there and in no other, whatever teamspace the model
+	// names (agents.WithPinnedTeamspace). Empty pins nothing; anything else
+	// has to be a teamspace id as agents.CleanTeamspacePin has it. The pin is
+	// this run's alone: it is never written to the thread, so the thread's next
+	// run has none unless its caller pins that run too.
+	TeamspaceID string
 }
 
 // Answer is the member's decision on one confirmation.
@@ -85,6 +92,10 @@ type Run struct {
 	content    *genai.Content
 	stateDelta map[string]any
 	started    time.Time
+	// teamspaceID is the teamspace the run is pinned to, or "". It lives on
+	// the run's context and nowhere else: not in stateDelta, not in the run's
+	// record, not in an event.
+	teamspaceID string
 	// remembering is the run's view of memory, scoped to the member's
 	// organization. It is built when the run starts driving, and nil when
 	// the service has no memory.
@@ -110,6 +121,16 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 	case input.Wakeup != "" && message == "":
 		return nil, fmt.Errorf("%w: a wake-up carries a message", ErrInvalid)
 	}
+	// A pin that is not one is the caller's mistake, refused rather than
+	// dropped: a run that was meant to be pinned and quietly is not would
+	// answer as though it were.
+	pinned := ""
+	if input.TeamspaceID != "" {
+		var err error
+		if pinned, err = agents.CleanTeamspacePin(input.TeamspaceID); err != nil {
+			return nil, fmt.Errorf("%w: %s", ErrInvalid, err)
+		}
+	}
 	startedBy := cmp.Or(input.StartedBy, agentsv1.StartedByMember)
 	if startedBy != agentsv1.StartedByMember && startedBy != agentsv1.StartedByTrigger && startedBy != agentsv1.StartedByTeam && startedBy != agentsv1.StartedByWorkflow && startedBy != agentsv1.StartedByOrganization {
 		return nil, fmt.Errorf("%w: a run is started by a member, trigger, team coordinator, workflow or organization agent", ErrInvalid)
@@ -120,7 +141,7 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 	if _, err := service.thread(ctx, member, threadID); err != nil {
 		return nil, err
 	}
-	run := &Run{service: service, member: member, threadID: threadID, startedBy: startedBy}
+	run := &Run{service: service, member: member, threadID: threadID, startedBy: startedBy, teamspaceID: pinned}
 	var err error
 	if run.id, err = newRunID(); err != nil {
 		return nil, err
@@ -276,6 +297,8 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	defer cancelTimeout()
 	runContext = usage.WithCounter(runContext, counter)
 	runContext = memberauth.WithRunOrigin(runContext, run.startedBy)
+	// The pin rides on this run's context alone, beside the run's origin.
+	runContext = agents.WithPinnedTeamspace(runContext, run.teamspaceID)
 	if run.member.AccessToken != "" {
 		runContext = memberauth.WithAccessToken(runContext, run.member.AccessToken)
 	}

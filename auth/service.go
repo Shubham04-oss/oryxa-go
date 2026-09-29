@@ -6,6 +6,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -66,7 +67,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if err != nil {
 		return host.Service{}, fmt.Errorf("discover Cognito issuer: %w", err)
 	}
-	verifier := authn.New(provider, config.CognitoClientID, config.CognitoAgentClientID)
+	verifier := authn.New(provider, config.CognitoClientID, config.CognitoAgentClientID, config.CognitoCLIClientID)
 	store := postgres.New(platform.Database)
 	service := application.NewWithConfig(store, application.Config{
 		InvitationAcceptURL:  config.InvitationAcceptURL,
@@ -125,6 +126,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		})
 	}), logger)
 	workers := []host.Worker{dispatcher.Run}
+	if config.CognitoCLIClientID != "" {
+		workers = append(workers, cliSessionSweeper(store, logger))
+	}
 
 	if config.EventsQueueURL != "" {
 		sqsConfig := platform.AWS
@@ -175,6 +179,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("AUTH_SERVICE_CALLERS is not set: the internal API refuses every call, so no service can mint agent tokens")
 	}
 
+	verificationURL, err := url.Parse(config.EmailVerificationURL)
+	if err != nil {
+		return host.Service{}, fmt.Errorf("parse email verification URL: %w", err)
+	}
+	cliSignUpURL := verificationURL.Scheme + "://" + verificationURL.Host + "/auth/sign-up"
 	server := httpserver.New(verifier, oauth, passwords, service, httpserver.Config{
 		CognitoDomain:      config.CognitoDomain,
 		CognitoClientID:    config.CognitoClientID,
@@ -183,6 +192,14 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		CookieDomain:       config.CookieDomain,
 		CookieSecure:       config.CookieSecure,
 		GoogleEnabled:      config.GoogleEnabled,
+		CLIClientID:        config.CognitoCLIClientID,
+		CLIIssuer:          config.CognitoIssuer,
+		CLICallbackURL:     config.CognitoCLICallbackURL,
+		CLICallbackURLs:    config.CognitoCLICallbackURLs,
+		CLISignUpURL:       cliSignUpURL,
+		CLIVerifier:        verifier,
+		CLICompleteLogin:   service.CompleteLogin,
+		CLISessions:        store,
 		AgentClientID:      config.CognitoAgentClientID,
 		AgentGrants:        agentGrants,
 		Services:           services,

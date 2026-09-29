@@ -49,11 +49,18 @@ const maxToolSearch = 50
 // SearchTools finds a toolkit's tools for a member: its featured tools
 // without a query, the tools matching one with it.
 func (s *Service) SearchTools(ctx context.Context, credentials authclient.Credentials, organizationID, toolkit, query string, limit int) ([]ToolView, error) {
-	if _, err := s.caller(ctx, credentials, organizationID); err != nil {
+	caller, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
 		return nil, err
 	}
-	toolkit, err := domain.CheckToolkit(toolkit)
+	toolkit, err = domain.CheckToolkit(toolkit)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
+		return nil, err
+	}
+	if err := s.notThroughOryxa(ctx, organizationID, caller.UserID, toolkit); err != nil {
 		return nil, err
 	}
 	if limit <= 0 || limit > maxToolSearch {
@@ -251,6 +258,9 @@ func (s *Service) tool(ctx context.Context, slug string) (composio.Tool, error) 
 // connectionFor is the member's own connection a tool runs with: the one
 // named, or their only active connection to the app.
 func (s *Service) connectionFor(ctx context.Context, organizationID, memberID, toolkit, connectionID string) (domain.Connection, error) {
+	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
+		return domain.Connection{}, err
+	}
 	if connectionID != "" {
 		connection, err := s.store.Connection(ctx, organizationID, connectionID)
 		if err != nil {
@@ -266,6 +276,9 @@ func (s *Service) connectionFor(ctx context.Context, organizationID, memberID, t
 		}
 		switch connection.Status {
 		case domain.ConnectionActive:
+			if connection.Oryxa() {
+				return domain.Connection{}, errOryxaNotYet(connection.Toolkit)
+			}
 			return connection, nil
 		case domain.ConnectionExpired:
 			return domain.Connection{}, fmt.Errorf("the %s connection expired: %w", toolkit, domain.ErrNeedsReconnect)
@@ -291,6 +304,11 @@ func (s *Service) connectionFor(ctx context.Context, organizationID, memberID, t
 	}
 	switch {
 	case len(active) == 1:
+		if active[0].Oryxa() {
+			// Composio's key cannot act through a connection it does not
+			// hold, and its own integration's tools arrive with phase 2.
+			return domain.Connection{}, errOryxaNotYet(active[0].Toolkit)
+		}
 		return active[0], nil
 	case len(active) > 1:
 		// connection_id used to disambiguate this; it is gone from the tool
@@ -302,6 +320,28 @@ func (s *Service) connectionFor(ctx context.Context, organizationID, memberID, t
 	default:
 		return domain.Connection{}, fmt.Errorf("%s is not connected: %w", toolkit, domain.ErrNotConnected)
 	}
+}
+
+// notThroughOryxa refuses a search over an app the member connected through
+// Oryxa's own sign-in: Composio's tools cannot run through it, and its own
+// integration's tools arrive with phase 2.
+func (s *Service) notThroughOryxa(ctx context.Context, organizationID, memberID, toolkit string) error {
+	if s.oryxa == nil {
+		// No Oryxa connection can exist where there is no Oryxa sign-in.
+		return nil
+	}
+	connections, err := s.store.Connections(ctx, organizationID, domain.ConnectionQuery{
+		MemberID: memberID, Toolkit: toolkit, Statuses: []domain.ConnectionStatus{domain.ConnectionActive},
+	})
+	if err != nil {
+		return err
+	}
+	for _, connection := range connections {
+		if connection.Oryxa() {
+			return errOryxaNotYet(toolkit)
+		}
+	}
+	return nil
 }
 
 // actionEvent is what a finished run announces. A read announces nothing: an

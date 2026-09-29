@@ -12,6 +12,7 @@ import {
 } from "@/lib/auth/settings"
 import { getTeam, listTeams, setTeamEmailNotices } from "@/lib/settings/client"
 import type { Team } from "@/lib/settings/client"
+import { WorkspaceAnswerCheckSettings } from "./workspace-answer-check-settings"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { IdentityAvatar } from "./workspace-avatar"
 
@@ -282,6 +283,10 @@ export function WorkspaceAccountSettings({
           </p>
         )}
       </section>
+      <WorkspaceAnswerCheckSettings
+        organization={organization}
+        preview={preview}
+      />
       <section
         className="workspace-settings-section"
         aria-label="Team call emails"

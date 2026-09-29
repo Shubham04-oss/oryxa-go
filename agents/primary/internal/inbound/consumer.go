@@ -9,6 +9,11 @@
 // Batching decides when app triggers make a batch, while interaction events
 // carry routing identity and state only; authoritative request content stays
 // in agents' own ledger.
+//
+// Messages are handled side by side, a few at a time, so one that takes long,
+// such as a member's cleanup, holds up none of the others. Nothing here relies
+// on the order messages come in: the queue is a standard one, which promises
+// none, and every handler is safe to repeat and to run beside another.
 package inbound
 
 import (
@@ -17,7 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -94,20 +99,27 @@ type Consumer struct {
 	recorder             Recorder
 	interactionRecorder  InteractionRecorder
 	organizationRecorder OrganizationSynthesisRecorder
-	forget               []Forgetter
-	forgetTeam           TeamForgetter
-	forgetTeamMember     TeamMemberForgetter
-	logger               *slog.Logger
-	metrics              observability.ConsumerMetrics
+	// forget is the ordered forgetters, which stop at the first that fails;
+	// forgetIndependently is the ones that do not depend on any other.
+	forget              []Forgetter
+	forgetIndependently []Forgetter
+	forgetTeam          TeamForgetter
+	forgetTeamMember    TeamMemberForgetter
+	logger              *slog.Logger
+	metrics             observability.ConsumerMetrics
 	// verifier proves who published each event. Nil is a build error caught
 	// at mount: a consumer that cannot check signatures would run any
 	// message a queue handed it.
 	verifier *eventauth.Verifier
-	// queueName is set once, at the top of Poll, before Poll's single
-	// goroutine starts calling handle; it is not touched concurrently.
+	// concurrency is how many messages Poll handles at once.
+	concurrency int
+	// queueName is set once, at the top of Poll, before any goroutine that
+	// calls handle starts; it is only read after that.
 	queueName string
 	// interactionRecorded is told each time an interaction delivery is newly
 	// recorded, so its agent is woken at once rather than on the next poll.
+	// It is called from whichever goroutine handled the message, so it must
+	// be safe to call at the same time as itself.
 	interactionRecorded func()
 }
 
@@ -132,9 +144,28 @@ func (consumer *Consumer) WithTeamMemberForgetter(forget TeamMemberForgetter) *C
 	return consumer
 }
 
+// WithIndependentForgetters adds cleanup that depends on no other and that no
+// other depends on, for the events NewConsumer's forgetters run for. Each runs
+// whatever became of the rest, and the rest run whatever became of it, so one
+// that is slow or keeps failing, such as memory kept in an outside service,
+// cannot keep the others from removing what they hold. The event still fails
+// while any of them does, and the queue delivers it again.
+func (consumer *Consumer) WithIndependentForgetters(forget ...Forgetter) *Consumer {
+	consumer.forgetIndependently = append(consumer.forgetIndependently, forget...)
+	return consumer
+}
+
+// WithConcurrency sets how many messages are handled at once: at least one.
+// Without it, defaultConcurrency.
+func (consumer *Consumer) WithConcurrency(handlers int) *Consumer {
+	consumer.concurrency = max(handlers, 1)
+	return consumer
+}
+
 // WithInteractionNudge tells nudge each time an interaction delivery is newly
 // recorded, so the waker delivers it at once instead of on its next poll.
-// interactiondelivery.Waker's Nudge is one; it must not wait.
+// interactiondelivery.Waker's Nudge is one; it must not wait, and it is
+// called from the goroutines handling messages side by side.
 func (consumer *Consumer) WithInteractionNudge(nudge func()) *Consumer {
 	consumer.interactionRecorded = nudge
 	return consumer
@@ -153,7 +184,10 @@ func NewConsumer(recorder Recorder, interactionRecorder InteractionRecorder, for
 	if err != nil {
 		logger.Warn("consumer metrics unavailable; handling continues without them", "error", err)
 	}
-	return &Consumer{recorder: recorder, interactionRecorder: interactionRecorder, forget: forget, logger: logger, metrics: metrics, verifier: verifier}, nil
+	return &Consumer{
+		recorder: recorder, interactionRecorder: interactionRecorder, forget: forget, logger: logger, metrics: metrics,
+		verifier: verifier, concurrency: defaultConcurrency,
+	}, nil
 }
 
 type eventBridgeEvent struct {
@@ -183,6 +217,8 @@ type receivedEnvelope struct {
 // it. The bus delivers at least once, and every handler is safe to repeat:
 // app triggers, interaction deliveries, and organization synthesis deliveries
 // use event ids, and forgetting what is already gone removes nothing more.
+// Poll calls it for several messages at once, so it is safe to call
+// concurrently too.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 	return consumer.handle(ctx, body, time.Now())
 }
@@ -422,50 +458,117 @@ func (consumer *Consumer) batchReady(ctx context.Context, envelope receivedEnvel
 	return nil
 }
 
+// forgetAll runs every forgetter for a member, or an organization, that is
+// gone: the ordered ones, then the independent ones, each of which runs
+// whatever becomes of the rest. The ordered ones stop at the first that fails,
+// instead of running every one and joining the errors:
+// consumer.forget is built in a deliberate order (see service.go) where a
+// later forgetter's delete can remove rows an earlier, failed one still needs
+// to find its own state on retry - for example interactiondelivery.Cleaner's
+// AffectedThreads LEFT JOINs agent_interactions rows that a later forgetter
+// deletes outright. Since the whole event is retried on error anyway, running
+// the remaining ordered forgetters here would only risk destroying state the
+// retry depends on.
+//
+// Every failure is returned, so the queue delivers the event again and, when
+// it keeps failing, moves it to the dead-letter queue rather than losing it.
 func (consumer *Consumer) forgetAll(ctx context.Context, eventID, organizationID, memberID string) error {
-	// Stop at the first failing forgetter instead of running every one and
-	// joining the errors. consumer.forget is built in a deliberate order
-	// (see service.go) where a later forgetter's delete can remove rows an
-	// earlier, failed one still needs to find its own state on retry - for
-	// example interactiondelivery.Cleaner's AffectedThreads LEFT JOINs
-	// agent_interactions rows that a later forgetter deletes outright. Since
-	// the whole event is retried on error anyway, running the remaining
-	// forgetters here would only risk destroying state the retry depends on.
-	for _, forget := range consumer.forget {
+	var failures []error
+	for index, forget := range consumer.forget {
 		if err := forget(ctx, organizationID, memberID); err != nil {
-			return fmt.Errorf("event %s: %w", eventID, err)
+			failures = append(failures, fmt.Errorf("forgetter %d of %d: %w", index+1, len(consumer.forget), err))
+			break
 		}
+	}
+	// Whatever the ordered ones did: these depend on none of them. They are
+	// the ones that can be slow, such as memory kept in an outside service, so
+	// they come last, and what is quick to remove is removed first.
+	for index, forget := range consumer.forgetIndependently {
+		if err := forget(ctx, organizationID, memberID); err != nil {
+			failures = append(failures, fmt.Errorf("independent forgetter %d of %d: %w", index+1, len(consumer.forgetIndependently), err))
+		}
+	}
+	if err := errors.Join(failures...); err != nil {
+		return fmt.Errorf("event %s: %w", eventID, err)
 	}
 	consumer.logger.InfoContext(ctx, "forgot what agents kept", "event_id", eventID, "organization_id", organizationID, "member", memberID != "")
 	return nil
 }
 
+// queueAPI is the slice of *sqs.Client that Poll calls, so a test can hand it
+// a queue instead of reaching AWS.
 type queueAPI interface {
 	ReceiveMessage(context.Context, *sqs.ReceiveMessageInput, ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
-	DeleteMessageBatch(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
+	DeleteMessage(context.Context, *sqs.DeleteMessageInput, ...func(*sqs.Options)) (*sqs.DeleteMessageOutput, error)
+	ChangeMessageVisibility(context.Context, *sqs.ChangeMessageVisibilityInput, ...func(*sqs.Options)) (*sqs.ChangeMessageVisibilityOutput, error)
 }
+
+const (
+	// receiveSize is how many messages one receive asks for at most: the most
+	// SQS gives.
+	receiveSize = 10
+	// defaultConcurrency is how many messages Poll handles at once. Most only
+	// record what they were told and are done in milliseconds, while a
+	// member's cleanup can take minutes, so this leaves room for a few of
+	// those at once without holding up the rest. It stays small because
+	// handlers share the database pool with the rest of the service.
+	defaultConcurrency = 8
+	// deleteTimeout bounds acknowledging one handled message.
+	deleteTimeout = 10 * time.Second
+)
+
+// The queue hands a message to one consumer for a minute before it hands it
+// to another (see infra/events/internal/provision), and moves one it has
+// handed out five times to the dead-letter queue. A handler that takes longer
+// than a minute, such as a member's cleanup, would be run again beside itself
+// and use up those five, so while a message is being handled its visibility is
+// extended. These are vars so tests can shorten them.
+var (
+	// visibilityBeat is how often a message being handled is kept from coming
+	// back.
+	visibilityBeat = 20 * time.Second
+	// visibilityExtension is how long from each beat the message is kept.
+	visibilityExtension = time.Minute
+	// handlingTimeout is the longest a message is kept from coming back, and
+	// its handler is allowed to run: past it the message is left to be
+	// delivered again, so one that hangs cannot hold a place for ever.
+	handlingTimeout = 5 * time.Minute
+)
 
 // receiveBackoff is how long Poll waits after a failed receive before trying
 // again. A var so tests can shorten it.
 var receiveBackoff = 5 * time.Second
 
-// Poll long-polls the agents-events queue until ctx is cancelled, deleting
-// only the messages it handled.
+// Poll long-polls the agents-events queue until ctx is cancelled, handling up
+// to the consumer's concurrency at once, and deleting each message it handled
+// as soon as it has. A message that takes long holds one place and nothing
+// else: the next receive goes on beside it. Poll returns once every message it
+// received has been handled or given up on.
 func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL string) {
-	// Poll runs as this consumer's only goroutine for its whole life, calling
-	// handle sequentially, so setting this once up front and never touching
-	// it again needs no lock.
+	// queueName is written here, before any handler goroutine starts, and only
+	// read after.
 	consumer.queueName = observability.QueueName(queueURL)
+	places := make(chan struct{}, max(consumer.concurrency, 1))
+	var handling sync.WaitGroup
+	defer handling.Wait()
 	for {
+		// Receive no more than there are places to handle at once: a message
+		// received with nobody free to handle it would sit out its visibility
+		// timeout, and come back to be handled twice.
+		asked := reserve(ctx, places, receiveSize)
+		if asked == 0 {
+			return
+		}
 		output, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:            aws.String(queueURL),
-			MaxNumberOfMessages: 10,
+			MaxNumberOfMessages: int32(asked),
 			WaitTimeSeconds:     20,
 		})
 		if ctx.Err() != nil {
 			return
 		}
 		if err != nil {
+			release(places, asked)
 			consumer.logger.ErrorContext(ctx, "receive from agents queue failed", "error", err)
 			select {
 			case <-ctx.Done():
@@ -477,31 +580,104 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 		// One timestamp for the whole batch: ReceiveMessage already returned,
 		// so every message in it was equally "received" as of now.
 		receivedAt := time.Now()
-
-		var handled []sqstypes.DeleteMessageBatchRequestEntry
-		for index, message := range output.Messages {
-			if err := consumer.handle(ctx, aws.ToString(message.Body), receivedAt); err != nil {
-				consumer.logger.ErrorContext(ctx, "event failed", "sqs_message_id", aws.ToString(message.MessageId), "error", err)
-				continue
-			}
-			handled = append(handled, sqstypes.DeleteMessageBatchRequestEntry{
-				Id:            aws.String(strconv.Itoa(index)),
-				ReceiptHandle: message.ReceiptHandle,
+		release(places, asked-len(output.Messages))
+		for _, message := range output.Messages {
+			handling.Go(func() {
+				defer release(places, 1)
+				consumer.process(ctx, client, queueURL, message, receivedAt)
 			})
 		}
-		if len(handled) == 0 {
-			continue
+	}
+}
+
+// reserve waits for a free place, and takes as many more as are free, up to
+// limit. It answers how many it took: none once ctx has ended.
+func reserve(ctx context.Context, places chan struct{}, limit int) int {
+	select {
+	case places <- struct{}{}:
+	case <-ctx.Done():
+		return 0
+	}
+	taken := 1
+	for taken < limit {
+		select {
+		case places <- struct{}{}:
+			taken++
+		default:
+			return taken
 		}
-		deleted, err := client.DeleteMessageBatch(ctx, &sqs.DeleteMessageBatchInput{QueueUrl: aws.String(queueURL), Entries: handled})
-		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				consumer.logger.ErrorContext(ctx, "delete handled messages failed", "error", err)
+	}
+	return taken
+}
+
+// release gives back count places.
+func release(places chan struct{}, count int) {
+	for range count {
+		<-places
+	}
+}
+
+// process handles one received message, and deletes it once it has been
+// handled. One that failed is left on the queue, to be delivered again once
+// its visibility timeout runs out.
+func (consumer *Consumer) process(ctx context.Context, client queueAPI, queueURL string, message sqstypes.Message, receivedAt time.Time) {
+	handlingContext, cancel := context.WithTimeout(ctx, handlingTimeout)
+	defer cancel()
+	stopExtending := consumer.extendVisibility(handlingContext, client, queueURL, message)
+	err := consumer.handle(handlingContext, aws.ToString(message.Body), receivedAt)
+	stopExtending()
+	switch {
+	case err == nil:
+	case ctx.Err() != nil:
+		// Stopping, a deploy say, cut it short: it did not fail, and the queue
+		// delivers it again to whoever runs next.
+		consumer.logger.InfoContext(ctx, "event interrupted; the queue delivers it again", "sqs_message_id", aws.ToString(message.MessageId), "error", err)
+		return
+	default:
+		consumer.logger.ErrorContext(ctx, "event failed", "sqs_message_id", aws.ToString(message.MessageId), "error", err)
+		return
+	}
+	// Deleted even as the consumer stops, for what was handled and not deleted
+	// is handled again.
+	deleteContext, cancelDelete := context.WithTimeout(context.WithoutCancel(ctx), deleteTimeout)
+	defer cancelDelete()
+	if _, err := client.DeleteMessage(deleteContext, &sqs.DeleteMessageInput{
+		QueueUrl: aws.String(queueURL), ReceiptHandle: message.ReceiptHandle,
+	}); err != nil {
+		consumer.logger.ErrorContext(ctx, "delete handled message failed", "sqs_message_id", aws.ToString(message.MessageId), "error", err)
+	}
+}
+
+// extendVisibility keeps a message from coming back to the queue while it is
+// being handled, until the function it returns is called or ctx ends. One
+// that is handled in less than a beat, which is nearly all of them, costs no
+// call. A beat that fails is tried again on the next: the message is kept for
+// longer than a beat.
+func (consumer *Consumer) extendVisibility(ctx context.Context, client queueAPI, queueURL string, message sqstypes.Message) func() {
+	beating, stop := context.WithCancel(ctx)
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(visibilityBeat)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-beating.Done():
+				return
+			case <-ticker.C:
+				_, err := client.ChangeMessageVisibility(beating, &sqs.ChangeMessageVisibilityInput{
+					QueueUrl: aws.String(queueURL), ReceiptHandle: message.ReceiptHandle,
+					VisibilityTimeout: int32(visibilityExtension / time.Second),
+				})
+				if err != nil && beating.Err() == nil {
+					consumer.logger.WarnContext(ctx, "keep a message being handled from coming back failed",
+						"sqs_message_id", aws.ToString(message.MessageId), "error", err)
+				}
 			}
-			continue
 		}
-		for _, failure := range deleted.Failed {
-			consumer.logger.ErrorContext(ctx, "delete handled message failed",
-				"code", aws.ToString(failure.Code), "message", aws.ToString(failure.Message))
-		}
+	}()
+	return func() {
+		stop()
+		<-stopped
 	}
 }

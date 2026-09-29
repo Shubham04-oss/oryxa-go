@@ -156,7 +156,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if err != nil {
 		return host.Service{}, err
 	}
-	service, err := New(Dependencies{
+	dependencies := Dependencies{
 		Store:     postgres.New(platform.Database),
 		Directory: authclient.New(config.AuthURL),
 		Apps:      apps,
@@ -171,7 +171,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Originals:  documentOriginals,
 		Judge:      documentJudge,
 		Logger:     logger,
-	}, Config{
+	}
+	dependencies.Policy = platform.WorkspaceSettings()
+	service, err := New(dependencies, Config{
 		AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval,
 		Services: serviceVerifier, OriginalsBucket: config.OriginalsBucket,
 	})

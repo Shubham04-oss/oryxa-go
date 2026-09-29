@@ -1,12 +1,14 @@
 // Package application is what apps does: connect a member's third-party apps
-// through Composio, run tools in them as that member, subscribe to the events
-// they deliver, and turn Composio's webhooks into events on the bus.
+// through Composio, or through Oryxa's own sign-in where it is switched on,
+// run tools in them as that member, subscribe to the events they deliver, and
+// turn Composio's webhooks into events on the bus.
 //
-// Composio holds every credential and answers to one project API key, which
-// reaches every user in the project. So nothing outside this package ever
-// chooses whose account a call uses: every call is decided here, from auth's
-// answer about the caller, and made with the Composio user this organization
-// files that member under.
+// Composio holds every credential of its connections and answers to one
+// project API key, which reaches every user in the project. So nothing outside
+// this package ever chooses whose account a call uses: every call is decided
+// here, from auth's answer about the caller, and made with the Composio user
+// this organization files that member under. An Oryxa connection's credential
+// is kept by signin, sealed, and every Composio path refuses one.
 package application
 
 import (
@@ -23,6 +25,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 // Config is what the application needs to know about where it runs.
@@ -48,14 +51,22 @@ type Dependencies struct {
 	Store     Store
 	Directory Directory
 	Composio  Composio
-	Logger    *slog.Logger
-	Clock     func() time.Time
+	Policy    PolicySource
+	// Oryxa is Oryxa's own sign-in, when this deployment has one: signin,
+	// hooks and the integrations. Without it every Oryxa request is refused.
+	Oryxa  *Oryxa
+	Logger *slog.Logger
+	Clock  func() time.Time
 }
+
+// PolicySource reads the organization's last applied workspace file.
+type PolicySource = policy.Provider
 
 type Service struct {
 	store         Store
 	directory     Directory
 	composio      Composio
+	policy        PolicySource
 	logger        *slog.Logger
 	now           func() time.Time
 	publicBaseURL string
@@ -75,6 +86,14 @@ type Service struct {
 	triggers *triggerCatalog
 	// subscribeWake wakes RunAutoSubscribe when a connection completes.
 	subscribeWake chan struct{}
+
+	// oryxa is Oryxa's own sign-in, or nil when this deployment has none.
+	oryxa *oryxaBroker
+	// connects bounds how many connects and key replacements a member starts.
+	connects *RateLimiter
+	// defaultsSaved says Oryxa's own OAuth apps have all been saved once.
+	defaultsMu    sync.Mutex
+	defaultsSaved bool
 }
 
 func New(dependencies Dependencies, config Config) (*Service, error) {
@@ -82,6 +101,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		store:         dependencies.Store,
 		directory:     dependencies.Directory,
 		composio:      dependencies.Composio,
+		policy:        dependencies.Policy,
 		logger:        dependencies.Logger,
 		now:           dependencies.Clock,
 		publicBaseURL: strings.TrimRight(config.PublicBaseURL, "/"),
@@ -98,14 +118,40 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		service.now = time.Now
 	}
 	service.triggers = newTriggerCatalog(service.composio, func() time.Time { return service.now() })
-	for _, origin := range config.ReturnOrigins {
-		parsed, err := url.Parse(strings.TrimSpace(origin))
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return nil, fmt.Errorf("return origin %q must be absolute", origin)
-		}
-		service.returnOrigins = append(service.returnOrigins, parsed)
+	origins, err := parseReturnOrigins(config.ReturnOrigins)
+	if err != nil {
+		return nil, err
+	}
+	service.returnOrigins = origins
+	service.connects = NewRateLimiter(ConnectBudget, ConnectWindow, func() time.Time { return service.now() })
+	if service.oryxa, err = newOryxaBroker(dependencies.Oryxa); err != nil {
+		return nil, err
 	}
 	return service, nil
+}
+
+func parseReturnOrigins(origins []string) ([]*url.URL, error) {
+	parsed := make([]*url.URL, 0, len(origins))
+	for _, origin := range origins {
+		value, err := url.Parse(strings.TrimSpace(origin))
+		if err != nil || value.Scheme == "" || value.Host == "" {
+			return nil, fmt.Errorf("return origin %q must be absolute", origin)
+		}
+		parsed = append(parsed, value)
+	}
+	return parsed, nil
+}
+
+// ReturnChecker answers the rule a member's browser is held to before it is
+// sent back to a page: the page must be under one of origins, as apps'
+// returnAllowed checks it. Oryxa's sign-in checks its return pages with it
+// too, at the start and again at the callback.
+func ReturnChecker(origins []string) (func(string) bool, error) {
+	parsed, err := parseReturnOrigins(origins)
+	if err != nil {
+		return nil, err
+	}
+	return func(target string) bool { return returnAllowed(parsed, target) }, nil
 }
 
 // caller is who is asking, checked against auth on every call rather than

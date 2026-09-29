@@ -31,11 +31,12 @@ func (store *Store) Migrate(ctx context.Context) error {
 }
 
 func (store *Store) Create(ctx context.Context, request agents.Interaction, idempotencyKey string) (agents.Interaction, error) {
-	// A request that names no approval is decided by its agent, as every
-	// request made before teamspaces was — but only outside a teamspace. One
-	// made in a teamspace must say who approves it, and never gets the
-	// permissive default by leaving it out. The column keeps its 'agent'
-	// default for an older build's inserts, which never name a teamspace.
+	// A request that names no approval is stored as "agent", as every request
+	// made before teamspaces was — but only outside a teamspace, where
+	// HeldForOwner holds it for its member whatever it names. One made in a
+	// teamspace must say who approves it, and never gets the permissive
+	// default by leaving it out. The column keeps its 'agent' default for an
+	// older build's inserts, which never name a teamspace.
 	if request.Approval == "" {
 		if request.TeamspaceID != "" {
 			return agents.Interaction{}, fmt.Errorf("%w: a request made in a teamspace must say who approves it", ErrInvalid)
@@ -297,9 +298,10 @@ func (store *Store) Respond(ctx context.Context, id string, answer Answer, at ti
 			return ErrExpired
 		}
 		err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
-			SET status=$2, result=$3, held_result=$4, guard=$5, revision=revision+1, updated_at=$6
+			SET status=$2, result=$3, held_result=$4, guard=$5, revision=revision+1, updated_at=$6,
+			    expires_at=CASE WHEN $2='review' THEN $7 ELSE expires_at END
 			WHERE id=$1 RETURNING `+selectColumns,
-			id, status, resultJSON, heldJSON, guardJSON, at), &result)
+			id, status, resultJSON, heldJSON, guardJSON, at, at.Add(ReviewWindow)), &result)
 		if err != nil {
 			return err
 		}

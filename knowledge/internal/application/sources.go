@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
@@ -25,6 +26,19 @@ type RegisterInput struct {
 // filesProvider is the one source that reads the organization's own storage
 // rather than a third-party app, so it takes no connection.
 const filesProvider = "files"
+
+// appsReaders is which toolkits' mounted extractor reads through apps itself
+// rather than through Composio's proxy, and so can serve a source registered
+// on an oryxa connection. Empty until phase 2's apps extractor exists (WP
+// 2B): a toolkit is added here once its own reader is mounted, which is the
+// one thing that changes to let that toolkit's oryxa connections register.
+//
+// This is properly a property of extractor registration, which belongs on
+// the registry (knowledge/internal/sources.Registry) once such a thing
+// exists there — but adding it means widening the Extractor interface and
+// touching every extractor that implements it, well outside this file. A
+// local set is the narrowest stand-in until 2B needs the real thing.
+var appsReaders = map[string]bool{}
 
 // RegisterSource records something to index and schedules its first run.
 //
@@ -68,6 +82,9 @@ func (s *Service) registerFor(ctx context.Context, credentials authclient.Creden
 // register records a source for a caller whose right to it has been decided.
 func (s *Service) register(ctx context.Context, credentials authclient.Credentials, caller domain.OrgMembership, organizationID string, input RegisterInput) (domain.Source, error) {
 	provider := strings.TrimSpace(input.Provider)
+	if err := s.allowProvider(ctx, organizationID, provider); err != nil {
+		return domain.Source{}, err
+	}
 	extractor, err := s.extractors.Extractor(provider)
 	if err != nil {
 		return domain.Source{}, err
@@ -195,6 +212,14 @@ func (s *Service) usableConnection(ctx context.Context, credentials authclient.C
 	if connection.Status != "active" {
 		return domain.AppConnection{}, fmt.Errorf("the connection is %s: %w", connection.Status, domain.ErrConflict)
 	}
+	if connection.Broker == appsv1.BrokerOryxa && !appsReaders[provider] {
+		// Composio-backed extractors read through Composio's own proxy, which
+		// cannot see a connection Oryxa's own sign-in holds instead. Nothing
+		// could ever complete a pass on it until 2B mounts an extractor for
+		// this toolkit that reads through apps.
+		return domain.AppConnection{}, fmt.Errorf(
+			"%s reads through this connection once its own integration arrives: %w", provider, domain.ErrConflict)
+	}
 	if connection.MemberID != callerID {
 		return domain.AppConnection{}, fmt.Errorf(
 			"a member indexes only through their own connection: %w", domain.ErrForbidden)
@@ -295,6 +320,9 @@ func (s *Service) SyncSource(ctx context.Context, credentials authclient.Credent
 	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
 		// Answering not-found tells the caller nothing they did not know.
 		return domain.Source{}, domain.ErrNotFound
+	}
+	if err := s.allowProvider(ctx, organizationID, source.Provider); err != nil {
+		return domain.Source{}, err
 	}
 	switch source.Status {
 	case domain.StatusActive:

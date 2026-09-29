@@ -37,6 +37,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
+	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -55,12 +56,15 @@ type Options struct {
 	// token of its own. When nil, Build uses auth's agent-token exchange if
 	// Settings names both AuthURL and ServiceKeyID, and otherwise none.
 	Tokens memberauth.TokenSource
+	// Policy controls live organization search behavior.
+	Policy workspacepolicy.Provider
 	// HTTP is the client the apps toolbox's MCP calls go out on. Defaults to
 	// a fresh http.Client.
 	HTTP *http.Client
 	// Directory is the caller-visible people, team and agent directory. When
 	// nil, the directory toolbox is absent.
 	Directory agents.Directory
+	Context   agents.ContextDirectory
 	// Interactions is the durable cross-user request ledger. When nil, agents
 	// can discover one another but cannot exchange requests.
 	Interactions agents.InteractionService
@@ -115,14 +119,18 @@ type Krude struct {
 	// Root is Krude, the agent every conversation starts with.
 	Root agent.Agent
 	// Unattended is Krude for a run nobody is watching, such as a wake-up:
-	// it reads the member's apps and knowledge, answers the interactions
-	// another member's agent addressed to this one, and can reach nothing
-	// else.
+	// it reads the member's apps and knowledge, and can reach nothing else,
+	// the member's requests included.
 	Unattended agent.Agent
 	// UnattendedQuiet is Unattended without the apps toolbox, for a run that
-	// has not been allowed to read the member's apps, such as a room's
-	// stand-in.
+	// has not been allowed to read the member's apps.
 	UnattendedQuiet agent.Agent
+	// Room is Krude for its turn in a room its member's team shares, its
+	// member reading the room or away alike: it answers from the room alone,
+	// reaching none of the member's apps, knowledge, memory or requests, and
+	// files what it cannot answer with its member, as a request from the
+	// person who asked.
+	Room agent.Agent
 	// Artifacts keeps what conversations produce: S3 when Settings names a
 	// bucket, memory otherwise.
 	Artifacts artifact.Service
@@ -137,6 +145,9 @@ type Krude struct {
 	toolboxes       []agents.Toolbox
 	unattended      []agents.Toolbox
 	unattendedQuiet []agents.Toolbox
+	// room is what a turn in a room has: filing what it cannot answer from
+	// the room with its member, and nothing else.
+	room []agents.Toolbox
 	// deliveryToolboxes are the toolboxes of each reach a run delivering one
 	// interaction may have, and delivering is Krude for each (Delivering).
 	deliveryToolboxes map[DeliveryReach][]agents.Toolbox
@@ -290,17 +301,20 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 	}
 	// What a run nobody watches may use: nothing that reaches outside, since
-	// text from the member's apps steers it. See agents.UnattendedRoot.
+	// text from the member's apps steers it, and none of the member's
+	// requests, which that text must not list, decide or answer. See
+	// agents.UnattendedRoot.
 	var unattended []agents.Toolbox
 	// unattendedQuiet is the unattended list without the apps toolbox, for a
 	// run nobody is watching that has not been allowed to read the member's
-	// apps at all — an interaction another member's agent asked for, before
-	// this member's agent has approved anything.
+	// apps at all.
 	var unattendedQuiet []agents.Toolbox
-	// deliveringInteractions replaces the interactions toolbox in both lists
-	// for a run that delivers one interaction, and is all a report of one's
-	// outcome has (deliveryToolboxes).
+	// deliveringInteractions joins either list for a run that delivers one
+	// interaction, and is all a report of one's outcome has
+	// (deliveryToolboxes).
 	var deliveringInteractions *agents.Toolbox
+	// room is what a turn in a room has (agents.RoomRoot).
+	var room []agents.Toolbox
 	if settings.AppsURL != "" {
 		httpClient := options.HTTP
 		if httpClient == nil {
@@ -337,6 +351,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 		knowledgeToolbox, err := agents.KnowledgeToolbox(agents.KnowledgeConfig{
 			Rag:          ragclient.New(settings.RagURL, nil),
+			Policy:       options.Policy,
 			Sources:      sources,
 			Tokens:       tokens,
 			MinRelevance: settings.KnowledgeMinRelevance,
@@ -347,6 +362,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			toolboxes = append(toolboxes, knowledgeToolbox)
 			readOnlyKnowledge, err := agents.KnowledgeToolbox(agents.KnowledgeConfig{
 				Rag:          ragclient.New(settings.RagURL, nil),
+				Policy:       options.Policy,
 				Sources:      sources,
 				ReadOnly:     true,
 				Tokens:       tokens,
@@ -361,7 +377,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 	}
 	if options.Directory != nil {
-		directoryToolbox, err := agents.DirectoryToolbox(agents.DirectoryConfig{Directory: options.Directory, Tokens: tokens})
+		directoryToolbox, err := agents.DirectoryToolbox(agents.DirectoryConfig{Directory: options.Directory, Context: options.Context, Tokens: tokens})
 		if err != nil {
 			return fail("organization directory toolbox", err)
 		}
@@ -375,23 +391,23 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 		toolboxes = append(toolboxes, interactionToolbox)
 		// An interaction is delivered to an agent whose member is away, and
-		// the run has to read the request, record a decision and answer it.
-		// It may not start requests of its own on other members, and nothing
-		// the directory, teamspaces or agent system offer belongs in a run
-		// another member asked for.
-		answeringToolbox, err := agents.InteractionToolbox(agents.InteractionConfig{Service: options.Interactions, Tokens: tokens, Answering: true})
-		if err != nil {
-			return fail("agent interactions toolbox for an unwatched run", err)
-		}
-		unattended = append(unattended, answeringToolbox)
-		unattendedQuiet = append(unattendedQuiet, answeringToolbox)
-		// A run delivering one interaction is about that request alone: it
-		// cannot list the member's other requests at all.
+		// the run reads that one request and decides or answers it, as its
+		// delivery is for: it cannot list the member's other requests at all,
+		// nor start requests of its own on other members, and nothing the
+		// directory, teamspaces or agent system offer belongs in a run another
+		// member asked for.
 		deliveringToolbox, err := agents.InteractionToolbox(agents.InteractionConfig{Service: options.Interactions, Tokens: tokens, Delivering: true})
 		if err != nil {
 			return fail("agent interactions toolbox for a delivery", err)
 		}
 		deliveringInteractions = &deliveringToolbox
+		// A turn in a room files with its member what it cannot answer from
+		// the room, and holds none of their requests.
+		roomToolbox, err := agents.RoomToolbox(agents.RoomConfig{Service: options.Interactions})
+		if err != nil {
+			return fail("room toolbox", err)
+		}
+		room = append(room, roomToolbox)
 		logger.InfoContext(ctx, "agent interactions toolbox configured")
 	}
 	if options.Teamspaces != nil {
@@ -405,6 +421,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	krude.toolboxes = toolboxes
 	krude.unattended = unattended
 	krude.unattendedQuiet = unattendedQuiet
+	krude.room = room
 	krude.deliveryToolboxes = deliveryToolboxes(unattended, unattendedQuiet, deliveringInteractions)
 	krude.deliveryThinking = settings.DeliveryThinking
 	if settings.DeliveryThinking != "" {
@@ -477,8 +494,8 @@ func (krude *Krude) Managed(spec agents.ManagedSpec) (agent.Agent, error) {
 // ManagedUnattended builds the same specialist for a run nobody is watching:
 // the reduced toolboxes Krude itself gets when it is woken, and no memory,
 // because what steers such a run is text somebody else wrote. withApps says
-// whether the run may read the member's connected apps; a room's stand-in
-// may not, and an interaction's delivery has ManagedDelivering. The agent
+// whether the run may read the member's connected apps; a turn in a room has
+// ManagedRoom, and an interaction's delivery ManagedDelivering. The agent
 // answers to the same name as the attended one, which is what binds the two
 // in a run.
 func (krude *Krude) ManagedUnattended(spec agents.ManagedSpec, withApps bool) (agent.Agent, error) {
@@ -487,6 +504,12 @@ func (krude *Krude) ManagedUnattended(spec agents.ManagedSpec, withApps bool) (a
 		toolboxes = krude.unattended
 	}
 	return agents.Managed(krude.router, toolboxes, false, spec)
+}
+
+// ManagedRoom builds the specialist for its turn in a room, as Room is
+// Krude: it answers from the room alone, with no memory.
+func (krude *Krude) ManagedRoom(spec agents.ManagedSpec) (agent.Agent, error) {
+	return agents.ManagedRoom(krude.router, krude.room, spec)
 }
 
 // buildAgents builds Krude, for every kind of run, from the router and the
@@ -502,6 +525,9 @@ func (krude *Krude) buildAgents() error {
 	}
 	if krude.UnattendedQuiet, err = agents.UnattendedRoot(krude.router, krude.unattendedQuiet); err != nil {
 		return fmt.Errorf("unattended root agent without apps: %w", err)
+	}
+	if krude.Room, err = agents.RoomRoot(krude.router, krude.room); err != nil {
+		return fmt.Errorf("root agent in a room: %w", err)
 	}
 	krude.delivering = map[DeliveryReach]agent.Agent{}
 	for _, reach := range []DeliveryReach{DeliveryReport, DeliveryQuiet, DeliveryReads, DeliveryApps} {
@@ -554,36 +580,27 @@ func (krude *Krude) toolboxesFor(reach DeliveryReach) []agents.Toolbox {
 // deliveryToolboxes are the toolboxes of each reach: approved work allowed
 // the apps and the knowledge has an unwatched run's, approved work allowed
 // the apps alone the same without the knowledge, and approved work allowed
-// the knowledge alone those without the apps, each with the interactions
-// toolbox swapped for the delivering one; deciding a new request, and a
-// report, have the delivering interactions toolbox alone.
+// the knowledge alone those without the apps, each with the delivering
+// interactions toolbox beside them; deciding a new request, and a report,
+// have the delivering interactions toolbox alone.
 func deliveryToolboxes(unattended, unattendedQuiet []agents.Toolbox, delivering *agents.Toolbox) map[DeliveryReach][]agents.Toolbox {
-	report := []agents.Toolbox{}
-	if delivering != nil {
-		report = append(report, *delivering)
-	}
 	apps := slices.DeleteFunc(slices.Clone(unattended), func(box agents.Toolbox) bool { return box.Name == agents.KnowledgeToolboxName })
 	return map[DeliveryReach][]agents.Toolbox{
-		DeliveryReads:  replaceToolbox(unattended, delivering),
-		DeliveryApps:   replaceToolbox(apps, delivering),
-		DeliveryQuiet:  replaceToolbox(unattendedQuiet, delivering),
-		DeliveryReport: report,
+		DeliveryReads:  withToolbox(unattended, delivering),
+		DeliveryApps:   withToolbox(apps, delivering),
+		DeliveryQuiet:  withToolbox(unattendedQuiet, delivering),
+		DeliveryReport: withToolbox(nil, delivering),
 	}
 }
 
-// replaceToolbox is toolboxes with the one named like replacement swapped
-// for it, or toolboxes as they are when there is no replacement.
-func replaceToolbox(toolboxes []agents.Toolbox, replacement *agents.Toolbox) []agents.Toolbox {
-	replaced := slices.Clone(toolboxes)
-	if replacement == nil {
-		return replaced
+// withToolbox is toolboxes with extra after them, or toolboxes as they are
+// when there is no extra.
+func withToolbox(toolboxes []agents.Toolbox, extra *agents.Toolbox) []agents.Toolbox {
+	with := append([]agents.Toolbox{}, toolboxes...)
+	if extra != nil {
+		with = append(with, *extra)
 	}
-	for index, box := range replaced {
-		if box.Name == replacement.Name {
-			replaced[index] = *replacement
-		}
-	}
-	return replaced
+	return with
 }
 
 // Compact answers one prompt on the lite model and returns the text, with no

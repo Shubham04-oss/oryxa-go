@@ -15,10 +15,12 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/authn"
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/clisession"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/oauthflow"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/passwordflow"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
+	"github.com/Shubham04-oss/oryxa-go/internal/cliscope"
 )
 
 const (
@@ -29,6 +31,10 @@ const (
 
 type accessTokenVerifier interface {
 	Verify(context.Context, string) (authn.Claims, error)
+}
+
+type cliIdentityVerifier interface {
+	VerifyCLIIdentityToken(context.Context, string, string) (authn.IdentityClaims, error)
 }
 
 type authFlow interface {
@@ -74,6 +80,14 @@ type Config struct {
 	CookieDomain       string
 	CookieSecure       bool
 	GoogleEnabled      bool
+	CLIClientID        string
+	CLIIssuer          string
+	CLICallbackURL     string
+	CLICallbackURLs    []string
+	CLISignUpURL       string
+	CLIVerifier        cliIdentityVerifier
+	CLISessions        clisession.Store
+	CLICompleteLogin   func(context.Context, application.FederatedIdentity) (domain.User, bool, error)
 
 	// AgentClientID is COGNITO_AGENT_CLIENT_ID: the Cognito agent app
 	// client's ID. Whenever it is set, a verified access token whose
@@ -89,21 +103,24 @@ type Config struct {
 }
 
 type Server struct {
-	verifier       accessTokenVerifier
-	oauth          authFlow
-	passwords      passwordAuth
-	service        authService
-	config         Config
-	allowedOrigins map[string]struct{}
-	mux            *http.ServeMux
-	patterns       []string
+	verifier           accessTokenVerifier
+	oauth              authFlow
+	passwords          passwordAuth
+	service            authService
+	config             Config
+	allowedOrigins     map[string]struct{}
+	mux                *http.ServeMux
+	patterns           []string
+	cliChallengeLimits cliChallengeLimiter
 }
 
 type authContextKey struct{}
 
 type authenticatedRequest struct {
-	Claims     authn.Claims
-	FromCookie bool
+	Claims            authn.Claims
+	FromCookie        bool
+	CLITokenHash      string
+	CLIOrganizationID string
 }
 
 func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, service authService, config Config) *Server {
@@ -124,6 +141,8 @@ func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, s
 
 	server.handleFunc("GET /healthz", server.health)
 	server.handleFunc("GET /v1/auth/config", server.authConfig)
+	server.handleFunc("POST /v1/auth/cli/session", server.cliSession)
+	server.handleFunc("POST /v1/auth/cli/challenge", server.cliChallenge)
 	server.handleFunc("GET /v1/auth/login", server.login)
 	server.handleFunc("GET /v1/auth/callback", server.callback)
 	server.handleFunc("POST /v1/auth/refresh", server.refresh)
@@ -225,6 +244,14 @@ func (server *Server) authConfig(writer http.ResponseWriter, _ *http.Request) {
 		config["identity_provider"] = "Google"
 	}
 	config["identity_providers"] = identityProviders
+	if server.config.CLIClientID != "" {
+		config["cli_client_id"] = server.config.CLIClientID
+		config["cli_issuer"] = server.config.CLIIssuer
+		config["cli_callback_url"] = server.config.CLICallbackURL
+		config["cli_callback_urls"] = server.config.CLICallbackURLs
+		config["cognito_domain"] = server.config.CognitoDomain
+		config["cli_signup_url"] = server.config.CLISignUpURL
+	}
 	writeJSON(writer, http.StatusOK, config)
 }
 
@@ -435,7 +462,7 @@ func (server *Server) logout(writer http.ResponseWriter, request *http.Request) 
 	if rawToken, _, ok := server.requestToken(request); ok {
 		// An agent's token is the member's identity, but signing the member
 		// out is theirs alone to do.
-		if claims, err := server.verifier.Verify(request.Context(), rawToken); err == nil && !server.isAgentToken(claims) {
+		if claims, err := server.verifier.Verify(request.Context(), rawToken); err == nil && !server.isAgentToken(claims) && !server.isCLIToken(claims) {
 			if err := server.service.SignOut(request.Context(), claims.Subject); err != nil {
 				slog.ErrorContext(request.Context(), "enqueue sign-out event", "error", err)
 			}
@@ -452,7 +479,8 @@ func (server *Server) me(writer http.ResponseWriter, request *http.Request) {
 		server.handleError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"user": user, "organizations": organizations})
+	organizations = filterCLIOrganizations(authenticated, organizations)
+	writeJSON(writer, http.StatusOK, map[string]any{"user": user, "organizations": organizations, "cli": server.isCLIToken(authenticated.Claims)})
 }
 
 func (server *Server) organizations(writer http.ResponseWriter, request *http.Request) {
@@ -462,6 +490,7 @@ func (server *Server) organizations(writer http.ResponseWriter, request *http.Re
 		server.handleError(writer, err)
 		return
 	}
+	organizations = filterCLIOrganizations(authenticated, organizations)
 	writeJSON(writer, http.StatusOK, map[string]any{"organizations": organizations})
 }
 
@@ -472,7 +501,26 @@ func (server *Server) createOrganization(writer http.ResponseWriter, request *ht
 		return
 	}
 	authenticated := requestAuth(request)
+	if authenticated.CLITokenHash != "" {
+		if err := server.config.CLISessions.ReserveCLIOrganization(request.Context(), authenticated.CLITokenHash); err != nil {
+			server.handleError(writer, err)
+			return
+		}
+	}
 	organization, err := server.service.CreateOrganization(request.Context(), authenticated.Claims.Subject, input)
+	if authenticated.CLITokenHash != "" {
+		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(request.Context()), 5*time.Second)
+		defer cancel()
+		if err == nil {
+			if bindErr := server.config.CLISessions.FinishCLIOrganization(finishCtx, authenticated.CLITokenHash, organization.ID); bindErr != nil {
+				server.handleError(writer, bindErr)
+				return
+			}
+		} else if errors.Is(err, domain.ErrInvalid) || errors.Is(err, domain.ErrConflict) || errors.Is(err, domain.ErrForbidden) {
+			// Definite pre-creation failures may be corrected and retried.
+			_ = server.config.CLISessions.FinishCLIOrganization(finishCtx, authenticated.CLITokenHash, "")
+		}
+	}
 	if err != nil {
 		server.handleError(writer, err)
 		return
@@ -492,6 +540,9 @@ func (server *Server) organization(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	response := map[string]any{"organization": organization, "membership": membership}
+	if server.isCLIToken(authenticated.Claims) {
+		response["cli"] = true
+	}
 	if server.isAgentToken(authenticated.Claims) {
 		response["agent"] = true
 	}
@@ -546,6 +597,8 @@ func (server *Server) inviteMember(writer http.ResponseWriter, request *http.Req
 	var input struct {
 		Email string      `json:"email"`
 		Role  domain.Role `json:"role"`
+		Quiet bool        `json:"quiet"`
+		Guest bool        `json:"guest"`
 	}
 	if err := readJSON(request, &input); err != nil {
 		writeError(writer, http.StatusBadRequest, "invalid request body")
@@ -556,7 +609,7 @@ func (server *Server) inviteMember(writer http.ResponseWriter, request *http.Req
 		request.Context(),
 		authenticated.Claims.Subject,
 		request.PathValue("organizationID"),
-		application.InviteMemberInput{Email: input.Email, Role: input.Role},
+		application.InviteMemberInput{Email: input.Email, Role: input.Role, Quiet: input.Quiet, Guest: input.Guest},
 	)
 	if err != nil {
 		server.handleError(writer, err)
@@ -701,11 +754,20 @@ func (server *Server) authenticated(next http.Handler) http.Handler {
 			writeError(writer, http.StatusUnauthorized, "access token is invalid")
 			return
 		}
+		if server.isCLIToken(claims) && !cliscope.Allowed(request.Pattern) {
+			writeError(writer, http.StatusForbidden, "CLI sessions can only configure workspace setup")
+			return
+		}
 		if server.isAgentToken(claims) && !agentAllowedPatterns[request.Pattern] {
 			writeError(writer, http.StatusForbidden, "agents cannot do this")
 			return
 		}
 		value := authenticatedRequest{Claims: claims, FromCookie: fromCookie}
+		if server.isCLIToken(claims) {
+			if !server.authorizeCLI(writer, request, rawToken, &value) {
+				return
+			}
+		}
 		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), authContextKey{}, value)))
 	})
 }
@@ -717,6 +779,10 @@ func (server *Server) authenticated(next http.Handler) http.Handler {
 // Cognito can issue such a token as soon as the agent app client exists.
 func (server *Server) isAgentToken(claims authn.Claims) bool {
 	return server.config.AgentClientID != "" && claims.ClientID == server.config.AgentClientID
+}
+
+func (server *Server) isCLIToken(claims authn.Claims) bool {
+	return server.config.CLIClientID != "" && claims.ClientID == server.config.CLIClientID
 }
 
 func (server *Server) requestToken(request *http.Request) (string, bool, bool) {

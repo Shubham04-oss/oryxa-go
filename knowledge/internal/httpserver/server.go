@@ -341,6 +341,10 @@ func (server *Server) decode(writer http.ResponseWriter, request *http.Request, 
 // never carry tokens, secrets or provider responses, so they can be logged.
 func (server *Server) handleError(writer http.ResponseWriter, request *http.Request, err error) {
 	switch {
+	case errors.Is(err, domain.ErrProviderUnavailable):
+		server.logger.WarnContext(request.Context(), "provider unavailable", "path", request.URL.Path, "error", err)
+		writeError(writer, http.StatusServiceUnavailable, "provider_unavailable", "the provider or a service it depends on did not answer; retry")
+
 	case errors.Is(err, domain.ErrInvalid):
 		writeError(writer, http.StatusBadRequest, "invalid_request", strings.TrimSuffix(err.Error(), ": "+domain.ErrInvalid.Error()))
 	case errors.Is(err, domain.ErrUnauthorized):
@@ -360,9 +364,6 @@ func (server *Server) handleError(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusUnprocessableEntity, "credential_rejected", "the provider rejected the credential")
 	case errors.Is(err, domain.ErrRateLimited):
 		writeError(writer, http.StatusTooManyRequests, "rate_limited", "too many requests; retry")
-	case errors.Is(err, domain.ErrProviderUnavailable):
-		server.logger.WarnContext(request.Context(), "provider unavailable", "path", request.URL.Path, "error", err)
-		writeError(writer, http.StatusServiceUnavailable, "provider_unavailable", "the provider or a service it depends on did not answer; retry")
 	default:
 		server.logger.ErrorContext(request.Context(), "knowledge request failed",
 			"method", request.Method, "path", request.URL.Path, "error", err)

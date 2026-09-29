@@ -1,8 +1,11 @@
 // Package httpserver is apps' HTTP API: the catalog of apps, a member's
 // connections to them, the triggers subscribed on those connections, tools
 // run in them, and the two routes Composio itself calls — the browser's
-// return from connecting, and webhook deliveries. It turns requests into
-// application calls and domain errors into the documented error codes.
+// return from connecting, and webhook deliveries. Oryxa's own sign-in adds
+// its OAuth callback, key replacement, the manifests its forms are rendered
+// from, organizations' own OAuth clients, and the webhook ingress its apps
+// deliver to. It turns requests into application calls and domain errors
+// into the documented error codes.
 package httpserver
 
 import (
@@ -22,6 +25,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
+	"github.com/Shubham04-oss/oryxa-go/internal/cliscope"
 )
 
 const (
@@ -36,6 +40,7 @@ type appsService interface {
 	CatalogToolkit(ctx context.Context, toolkit string) (application.ToolkitView, error)
 	CatalogTools(ctx context.Context, toolkit, search, cursor string, limit int) ([]application.ToolView, string, error)
 	CatalogTriggers(ctx context.Context, toolkit, cursor string, limit int) ([]application.TriggerTypeView, string, error)
+	OfferedTools(ctx context.Context, credentials authclient.Credentials, organizationID string) (application.OfferPolicy, error)
 	Connect(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ConnectInput) (domain.Connection, string, error)
 	CompleteConnection(ctx context.Context, state, status, accountID string) (application.Completion, error)
 	Connections(ctx context.Context, credentials authclient.Credentials, organizationID, toolkit string, organization bool) ([]domain.Connection, error)
@@ -55,21 +60,38 @@ type Config struct {
 	AllowedOrigins []string
 	// MCP serves the apps MCP endpoint, when set.
 	MCP http.Handler
+	// Oryxa serves Oryxa's own sign-in. Without it, its routes answer that
+	// it is not switched on.
+	Oryxa OryxaService
+	// Hooks is the webhook ingress Oryxa's own integrations' apps deliver
+	// to, at hooks.Pattern. Without it, every endpoint is unknown.
+	Hooks http.Handler
+	// Services verifies the service tokens apps' internal routes take.
+	// Without it there are no internal routes.
+	Services ServiceVerifier
 }
 
 type Server struct {
 	service        appsService
+	oryxa          OryxaService
+	services       ServiceVerifier
 	allowedOrigins map[string]struct{}
 	logger         *slog.Logger
 	mux            *http.ServeMux
 	patterns       []string
+	// callbacks bounds how many OAuth callbacks one address brings back.
+	callbacks *application.RateLimiter
 }
 
 func New(service appsService, config Config, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	server := &Server{service: service, allowedOrigins: map[string]struct{}{}, logger: logger, mux: http.NewServeMux()}
+	server := &Server{
+		service: service, oryxa: config.Oryxa, services: config.Services,
+		allowedOrigins: map[string]struct{}{}, logger: logger, mux: http.NewServeMux(),
+		callbacks: application.NewRateLimiter(application.CallbackBudget, application.CallbackWindow, nil),
+	}
 	for _, origin := range config.AllowedOrigins {
 		if parsed, err := url.Parse(origin); err == nil && parsed.Scheme != "" && parsed.Host != "" {
 			server.allowedOrigins[parsed.Scheme+"://"+parsed.Host] = struct{}{}
@@ -82,6 +104,7 @@ func New(service appsService, config Config, logger *slog.Logger) *Server {
 	server.handle("GET /v1/apps/catalog/{toolkit}/triggers", server.catalogTriggers)
 	server.handle("GET /v1/apps/connect/callback", server.completeConnection)
 	server.handle("POST /v1/apps/webhooks/composio", server.receiveWebhook)
+	server.handle("GET /v1/organizations/{organizationID}/apps/offer", server.offeredTools)
 	server.handle("GET /v1/organizations/{organizationID}/apps/connections", server.listConnections)
 	server.handle("POST /v1/organizations/{organizationID}/apps/connections", server.connect)
 	server.handle("GET /v1/organizations/{organizationID}/apps/connections/{connectionID}", server.getConnection)
@@ -92,6 +115,7 @@ func New(service appsService, config Config, logger *slog.Logger) *Server {
 	server.handle("GET /v1/organizations/{organizationID}/apps/triggers", server.listTriggers)
 	server.handle("POST /v1/organizations/{organizationID}/apps/triggers", server.createTrigger)
 	server.handle("DELETE /v1/organizations/{organizationID}/apps/triggers/{triggerID}", server.removeTrigger)
+	server.routeOryxa(config.Hooks)
 	if config.MCP != nil {
 		server.handleHandler("POST /v1/mcp/apps", config.MCP)
 		server.handleHandler("POST /v1/organizations/{organizationID}/apps/mcp", config.MCP)
@@ -106,7 +130,7 @@ func (server *Server) handle(pattern string, handler http.HandlerFunc) {
 }
 
 func (server *Server) handleHandler(pattern string, handler http.Handler) {
-	server.mux.Handle(pattern, handler)
+	server.mux.Handle(pattern, cliscope.Wrap(pattern, handler))
 	server.patterns = append(server.patterns, pattern)
 }
 
@@ -164,11 +188,30 @@ func (server *Server) catalogTriggers(writer http.ResponseWriter, request *http.
 	writeJSON(writer, http.StatusOK, map[string]any{"triggers": triggers, "next_cursor": optional(next)})
 }
 
+func (server *Server) offeredTools(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	offer, err := server.service.OfferedTools(request.Context(), credentials, request.PathValue("organizationID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, offer)
+}
+
 // connectionView is what a connection looks like over the wire. The state
 // that names its browser round trip is nobody's business once issued.
 type connectionView struct {
-	ID                string `json:"id"`
-	Toolkit           string `json:"toolkit"`
+	ID      string `json:"id"`
+	Toolkit string `json:"toolkit"`
+	// Broker is composio or oryxa: who holds the connection's credential.
+	Broker string `json:"broker"`
+	// CredentialKind is an Oryxa connection's credential kind (oauth2_code,
+	// api_token, basic, oauth2_client_credentials) once it holds one. Only a
+	// key, a password or client credentials can be replaced.
+	CredentialKind    string `json:"credential_kind,omitempty"`
 	Status            string `json:"status"`
 	StatusReason      string `json:"status_reason,omitempty"`
 	Label             string `json:"label,omitempty"`
@@ -190,8 +233,13 @@ type connectionView struct {
 }
 
 func viewConnection(connection domain.Connection) connectionView {
+	broker := connection.Broker
+	if broker == "" {
+		broker = domain.BrokerComposio
+	}
 	return connectionView{
-		ID: connection.ID, Toolkit: connection.Toolkit, Status: string(connection.Status),
+		ID: connection.ID, Toolkit: connection.Toolkit, Broker: broker, CredentialKind: connection.CredentialKind,
+		Status:       string(connection.Status),
 		StatusReason: connection.StatusReason, Label: connection.Label, MemberID: connection.MemberID,
 		ComposioAccountID: connection.ComposioAccountID, AutoSubscribe: connection.AutoSubscribe,
 		AutoSubscribedAt: connection.AutoSubscribedAt, AutoSubscribeAttempts: connection.AutoSubscribeAttempts,
@@ -212,8 +260,29 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 		// AutoSubscribe left out means the deployment's default, which is to
 		// subscribe to everything the app can deliver.
 		AutoSubscribe *bool `json:"auto_subscribe"`
+		// Broker is composio, the default, or oryxa; Kind and Fields are
+		// Oryxa's own sign-in's.
+		Broker string            `json:"broker"`
+		Kind   string            `json:"kind"`
+		Fields map[string]string `json:"fields"`
 	}
 	if !server.decode(writer, request, &body) {
+		return
+	}
+	broker, err := domain.CheckBroker(body.Broker)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	if broker == domain.BrokerOryxa {
+		server.connectOryxa(writer, request, credentials, application.ConnectInput{
+			Toolkit: body.Toolkit, ReturnTo: body.ReturnTo, Alias: body.Alias, AutoSubscribe: body.AutoSubscribe,
+			Kind: body.Kind, Fields: body.Fields, Host: request.Host,
+		})
+		return
+	}
+	if body.Kind != "" || body.Fields != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "kind and fields are for connecting through broker oryxa")
 		return
 	}
 	connection, redirectURL, err := server.service.Connect(request.Context(), credentials, request.PathValue("organizationID"),
@@ -238,20 +307,7 @@ func (server *Server) completeConnection(writer http.ResponseWriter, request *ht
 		server.handleError(writer, request, err)
 		return
 	}
-	if completion.ReturnTo == "" {
-		writeJSON(writer, http.StatusOK, map[string]any{"connection": viewConnection(completion.Connection)})
-		return
-	}
-	target, err := url.Parse(completion.ReturnTo)
-	if err != nil {
-		server.handleError(writer, request, err)
-		return
-	}
-	values := target.Query()
-	values.Set("app_connection", completion.Connection.ID)
-	values.Set("status", string(completion.Connection.Status))
-	target.RawQuery = values.Encode()
-	http.Redirect(writer, request, target.String(), http.StatusSeeOther)
+	server.sendBack(writer, request, completion)
 }
 
 func (server *Server) listConnections(writer http.ResponseWriter, request *http.Request) {
@@ -533,6 +589,10 @@ func (server *Server) decode(writer http.ResponseWriter, request *http.Request, 
 // ErrorCode names a failure the way the API and the MCP endpoint both do.
 func ErrorCode(err error) (int, string) {
 	switch {
+	case errors.Is(err, domain.ErrUnavailable):
+		return http.StatusServiceUnavailable, "unavailable"
+	case errors.Is(err, domain.ErrInvalidCredentials):
+		return http.StatusBadRequest, "invalid_credentials"
 	case errors.Is(err, domain.ErrInvalid):
 		return http.StatusBadRequest, "invalid_request"
 	case errors.Is(err, domain.ErrUnauthorized):
@@ -555,8 +615,6 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusConflict, "conflict"
 	case errors.Is(err, domain.ErrRateLimited):
 		return http.StatusTooManyRequests, "rate_limited"
-	case errors.Is(err, domain.ErrUnavailable):
-		return http.StatusServiceUnavailable, "unavailable"
 	default:
 		return http.StatusInternalServerError, "internal"
 	}
@@ -580,7 +638,7 @@ func Message(err error) string {
 	}
 	sentinels := []error{
 		domain.ErrInvalid, domain.ErrForbidden, domain.ErrConflict, domain.ErrNotConnected, domain.ErrChooseConnection,
-		domain.ErrNeedsReconnect, domain.ErrNotReadOnly, domain.ErrNotConnectable,
+		domain.ErrNeedsReconnect, domain.ErrNotReadOnly, domain.ErrNotConnectable, domain.ErrInvalidCredentials,
 	}
 	// A sentinel says the same thing the code already does, so it is dropped
 	// from the wording however it was attached: wrapped onto the end with %w,
@@ -614,7 +672,8 @@ func strip(line string, sentinels []error) string {
 
 // handleError answers a failed call with the README's error codes. Errors
 // never carry tokens, secrets or Composio's responses beyond a refused
-// request's own reason, so they can be logged.
+// request's own reason, so they can be logged. An invalid_credentials error
+// also names its field, never the field's value.
 func (server *Server) handleError(writer http.ResponseWriter, request *http.Request, err error) {
 	status, code := ErrorCode(err)
 	switch {
@@ -624,7 +683,12 @@ func (server *Server) handleError(writer http.ResponseWriter, request *http.Requ
 	case code == "rate_limited":
 		server.logger.WarnContext(request.Context(), "apps request rate limited", "path", request.URL.Path)
 	}
-	writeError(writer, status, code, Message(err))
+	failure := map[string]string{"code": code, "message": Message(err)}
+	var invalid *domain.InvalidCredentials
+	if code == "invalid_credentials" && errors.As(err, &invalid) && invalid.Field != "" {
+		failure["field"] = invalid.Field
+	}
+	writeJSON(writer, status, map[string]map[string]string{"error": failure})
 }
 
 func writeError(writer http.ResponseWriter, status int, code, message string) {

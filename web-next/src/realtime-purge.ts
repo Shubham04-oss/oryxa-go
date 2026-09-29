@@ -2,12 +2,15 @@
 // leaves behind (auth.member.removed.v1), a whole organization's
 // (auth.organization.deleted.v1), and a teamspace's side conversations,
 // those of a member who left its team (agents.teamspace.member.removed.v1)
-// or all of them once it is deleted (agents.teamspace.deleted.v1). No
+// or all of them once it is deleted (agents.teamspace.deleted.v1). The same
+// purges reach the teamspaces' rooms: a member who left is shut out of them,
+// and a deleted organization's or teamspace's let go of what they held. No
 // cookie: Go signs each request with a secret the two share. REALTIME.md
 // holds the contract Go builds against.
 import { getAgentByName } from "agents"
 import type { ConversationEnv } from "./conversation-env"
 import { inboxName, isNameId, registryName } from "./lib/dms/names"
+import { teamspaceRoomAgentName } from "./lib/rooms/room-agent"
 import { isPurgeEventId } from "./realtime-registry-agent"
 import type { PurgeTarget } from "./realtime-registry-agent"
 
@@ -303,11 +306,13 @@ export function parsePurgeRequest(body: Uint8Array): PurgeRequest | undefined {
  * body at most `maxPurgeBodyBytes` (413), the signature itself, compared in
  * constant time (401), and the body (400).
  * Then the purge is carried out: a member's or an organization's by the
- * organization's registry (`RealtimeRegistryAgent.purge`), a teamspace's by
- * the registry too, through every member's inbox
- * (`RealtimeRegistryAgent.purgeTeamspace`), and a member's in one
- * teamspace by that member's inbox (`InboxAgent.purgeTeamspace`). 204 once
- * it is done, or was done already for this event, or found nothing to
+ * organization's registry (`RealtimeRegistryAgent.purge`), through every
+ * room registered and every member's inbox; a teamspace's by the registry
+ * too, through its room and every member's inbox
+ * (`RealtimeRegistryAgent.purgeTeamspace`); and a member's in one teamspace
+ * by that member's inbox (`InboxAgent.purgeTeamspace`) and the teamspace's
+ * room (`TeamspaceRoomAgent.purgeMember`), both asked whichever fails. 204
+ * once it is done, or was done already for this event, or found nothing to
  * purge; 503 when part of it failed, and Go sends it again.
  */
 export async function handlePurge(
@@ -369,11 +374,21 @@ export async function handlePurge(
     if (purge.scope === "teamspace_member") {
       // The member's own inbox finds their side conversations there, and
       // remembers the removal itself, whatever the event that brings it.
-      const inbox = await getAgentByName(
-        env.InboxAgent,
-        inboxName(purge.organization_id, purge.user_id)
-      )
-      await inbox.purgeTeamspace(purge.teamspace_id, removedAt)
+      // The teamspace's room shuts them out. Both are asked, whichever
+      // fails, and either failing asks Go for the event again.
+      const done = await Promise.allSettled([
+        getAgentByName(
+          env.InboxAgent,
+          inboxName(purge.organization_id, purge.user_id)
+        ).then((inbox) => inbox.purgeTeamspace(purge.teamspace_id, removedAt)),
+        getAgentByName(
+          env.TeamspaceRoomAgent,
+          teamspaceRoomAgentName(purge.organization_id, purge.teamspace_id)
+        ).then((room) => room.purgeMember(purge.user_id, removedAt)),
+      ])
+      for (const outcome of done) {
+        if (outcome.status === "rejected") throw outcome.reason
+      }
     } else {
       const registry = await getAgentByName(
         env.RealtimeRegistryAgent,

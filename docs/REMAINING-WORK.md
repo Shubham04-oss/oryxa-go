@@ -6,6 +6,8 @@ code, credentials or an operator — and links to the document that holds the
 detail. Those documents stay the source of truth for their own services; this
 is the index.
 
+What is being built right now, lane by lane and by whom, is in [LANES.md](LANES.md). Read it before starting work beside other workers.
+
 Nothing here is a promise about behaviour. Where something was confirmed — by
 a command, by reading the code, or against a provider's documentation — it
 says so; where it was only noticed in passing, it says that instead.
@@ -32,13 +34,31 @@ tag `archive/connections-and-integrations-2026-09-17`, and
 restores any of it. The provider research in `docs/research/` stays as
 reference.
 
-**Next, from 2026-09-28.** The owner's plan, not yet built: Nango as Oryxa's
-own integrations provider beside Composio — OAuth connections, and Nango's
-syncs and webhooks feeding rag — so that Composio is no longer the only way to
-an app; Cedar, through `cedar-go`, for access control and permissions;
-knowledge bases gaining access policies and metadata filtering; teams whose
-agents read what the member has on screen and work together; and the primary
-agent's name, Krude, reconsidered.
+**Next, from 2026-09-28.** Where the day's plans ended up:
+
+- **The product's target is [north-star.md](north-star.md): Switchboard.** It
+  is an operator that brokers answers for others with the owner's one-click
+  consent, and does work for its own owner. From the evening of 2026-09-28
+  the focus is agents and teams, in that document's build order. Connectors
+  and knowledge bases are on hold.
+- **Integrations: our own sign-ins, not Nango.** Nango, Activepieces pieces
+  and AgentCore Identity were each researched and ruled out
+  ([integrations-research.md](design/integrations-research.md)). The archived
+  `connections` service is only a reference.
+- **The integrations plan** is in
+  [integrations-plan.md](design/integrations-plan.md). It has three phases:
+  1. One sign-in and token system in `apps`, covering OAuth2, API tokens and
+     basic credentials, with fields each integration declares. One webhook
+     ingress, where each integration declares how its app signs requests.
+     Phase 1 is being built, and ships switched off.
+  2. Integrations on official SDKs, built by cheap-model workers.
+  3. AgentCore Gateway in front of apps' MCP server.
+- **Composio stays the tool provider** meanwhile.
+- **Knowledge bases are postponed.** That includes the Cedar permission layer
+  (PR #109 and branches `feat/rag-authz` and `feat/kb-policies-web`), whose
+  review found policy bypasses to fix before any merge.
+- **The owner builds agents and teams in parallel:** screen context and
+  naming, in [agents-and-teams.md](design/agents-and-teams.md).
 
 First, [Open bugs](#open-bugs), then:
 
@@ -500,31 +520,47 @@ service that fails without them.
 Found by the 2026-09-28 launch review, each checked against the files or the
 account:
 
-- **An alarm on errors.** Nothing alarms on the application's own errors: a
-  TypeSafe key that no longer worked failed every Jev call for four days, and
-  only the logs said so. A metric filter on `level = "ERROR"` in
-  `/oryxa-production/app`, with an alarm, would have caught it.
+- **An alarm on errors.** Written and not applied. Nothing alarmed on the
+  application's own errors: a TypeSafe key that no longer worked failed every
+  Jev call for four days, and only the logs said so. `hardening.tf` now
+  counts `level = "ERROR"` in `/oryxa-production/app` and alarms on 3 in 15
+  minutes.
 - **CI runs every database suite.** `ci.yml` names a test database for eight
   services; knowledge, files, realtime and the outbox skip their integration
   tests in CI, while every merge now deploys.
-- **Files that can be recovered.** The files, artifacts and knowledge-base
-  documents buckets have no versioning, and the task may delete from them.
-- **The auth key kept safe.** `aws_kms_key.auth` envelope-encrypts every agent
-  grant with the minimum deletion window of 7 days and no `prevent_destroy`;
-  the services' signing keys likewise.
+- **Files that can be recovered.** Written and not applied: OpenTofu versions
+  the files, artifacts and knowledge-base documents buckets (`hardening.tf`),
+  and a lifecycle rule removes older versions 30 days after they stop being the
+  newest, so a deleted object stays recoverable for 30 days. Each bucket's
+  lifecycle has one owner: OpenTofu's for the knowledge-base documents bucket
+  (`knowledge_base.tf`), the provisioners' for the other two
+  (`files/infra/storage/internal/provision`, `agents/primary/infra/artifacts`,
+  which put their rules again on every run of `provision-app.sh`). The rule
+  reaches those two on the next `provision-app.sh` run; until then their older
+  versions do not expire, so run it before the apply that turns versioning on.
+- **The auth key kept safe.** Written and not applied. `aws_kms_key.auth`
+  envelope-encrypts every agent grant, and had the minimum deletion window of
+  7 days and no `prevent_destroy`, as the services' signing keys did. Every
+  key in `keys.tf` (auth's, the three signing keys, and the apps sign-in key,
+  which already had both) now has a 30-day window and `prevent_destroy`.
 - **No single point of failure.** One Fargate task and a single-AZ
-  `db.t4g.micro` (backed up for 7 days, deletion-protected) carry everything;
+  `db.t4g.small` (backed up for 7 days, deletion-protected) carry everything;
   deploy/README.md's "At launch" names a second task and Aurora or Multi-AZ.
 - **A schema change someone reviews.** Migrations run at start, and a merge now
   releases with no approval. The ECS circuit breaker catches a task that never
   turns healthy, not a migration that runs and does damage, and which builds
   are safe to roll back to is kept in prose, release by release.
 - **Alarms on what is only graphed.** SES bounces and complaints, EventBridge
-  failed invocations and Bedrock throttling are on the dashboard with no
-  alarm, and every alarm mails one address.
-- **Smaller.** The RDS log group never expires; the task role's Cognito
-  statement allows `cognito-idp:*` on every pool; and nothing limits the rate
-  of sign-in attempts at Cloudflare.
+  failed invocations and Bedrock throttling are now alarms, written and not
+  applied (`hardening.tf`). Still open: every alarm mails one address.
+- **Smaller.** Written and not applied: the RDS log groups, which never
+  expired, now keep 30 days (`hardening.tf` declares them and imports the
+  ones RDS made); the task role's Cognito statement, which allowed
+  `cognito-idp:*` on every pool, now names the eight admin calls auth makes,
+  on the one pool (`compute.tf`); and Cloudflare now blocks a client IP that
+  makes more than 10 requests to `/v1/auth/password/` in 10 seconds, for 10
+  seconds (`hardening.tf`). That is the Free plan's only window; a paid plan
+  allows a longer one, which would suit sign-in better.
 
 ## 8. Housekeeping
 

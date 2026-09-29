@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
+	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 // awaiting records a connection that has just become active and is owed its
@@ -485,5 +487,32 @@ func TestAutoSubscribableOrdersWhatItTakesAndNamesWhatItLeaves(t *testing.T) {
 	}
 	if len(skipped) != 1 || skipped[0] != "M_NEEDS_A_REPO" {
 		t.Fatalf("skipped = %v, want the one needing a repository", skipped)
+	}
+}
+
+func TestWorkspacePolicySkipsNeverExhaustProviderSubscriptionAttempts(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unavailable_%v", unavailable), func(t *testing.T) {
+			h := newHarness(t)
+			connection := h.awaiting("apc_1", "github", "ca_1")
+			none := []string{}
+			source := &fakePolicySource{settings: policy.Settings{Offer: &none}}
+			if unavailable {
+				source.err = errors.New("policy database temporarily unavailable")
+			}
+			h.service.policy = source
+			for range autoSubscribeAttempts + 2 {
+				h.service.subscribeConnections(context.Background())
+			}
+			if len(h.store.triggers) != 0 || h.store.subscribeAttempts[connection.ID] != 0 {
+				t.Fatalf("policy skip spent provider attempts: attempts=%d triggers=%d", h.store.subscribeAttempts[connection.ID], len(h.store.triggers))
+			}
+			source.settings.Offer = nil
+			source.err = nil
+			h.service.subscribeConnections(context.Background())
+			if len(h.store.triggers) == 0 || h.store.connections[connection.ID].AutoSubscribedAt == nil {
+				t.Fatal("subscription did not resume when policy allowed the app")
+			}
+		})
 	}
 }

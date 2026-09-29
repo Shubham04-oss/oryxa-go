@@ -357,3 +357,129 @@ describe("deleting a conversation", () => {
     expect(logged).toHaveBeenCalled()
   })
 })
+
+describe("security headers", () => {
+  const site = "https://app.oryxa.in"
+  const secured = (response: Response) => {
+    expect(response.headers.get("Strict-Transport-Security")).toBe(
+      "max-age=31536000; includeSubDomains"
+    )
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff")
+    expect(response.headers.get("Referrer-Policy")).toBe(
+      "strict-origin-when-cross-origin"
+    )
+    expect(response.headers.get("X-Frame-Options")).toBe("DENY")
+    expect(response.headers.get("Content-Security-Policy")).toBe(
+      "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+    )
+    expect(
+      response.headers.get("Content-Security-Policy-Report-Only")
+    ).toContain("connect-src 'self' wss://app.oryxa.in")
+  }
+
+  it("puts them on the app's pages, which are otherwise left as TanStack Start made them", async () => {
+    sdk.startFetch.mockResolvedValueOnce(
+      new Response("<!doctype html><p>the app</p>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      })
+    )
+    const response = await send(new Request(`${site}/`))
+
+    secured(response)
+    expect(response.status).toBe(200)
+    expect(response.headers.get("Content-Type")).toBe(
+      "text/html; charset=utf-8"
+    )
+    expect(await response.text()).toBe("<!doctype html><p>the app</p>")
+  })
+
+  it("puts them on a redirect from the app, whose headers TanStack Start may have frozen", async () => {
+    sdk.startFetch.mockResolvedValueOnce(
+      Response.redirect(`${site}/auth/sign-in`, 307)
+    )
+    const response = await send(new Request(`${site}/`))
+
+    secured(response)
+    expect(response.status).toBe(307)
+    expect(response.headers.get("Location")).toBe(`${site}/auth/sign-in`)
+  })
+
+  it("puts them on the Worker's own answers: a refusal, a 404 and a purge's 405", async () => {
+    const refused = await send(
+      new Request(
+        `${site}/agents/thread-chat-agent/org_sim~thread_1/get-messages`
+      )
+    )
+    expect(refused.status).toBe(401)
+    secured(refused)
+
+    const missing = await send(new Request(`${site}/agents/other-agent/x~y`))
+    expect(missing.status).toBe(404)
+    secured(missing)
+
+    const purge = await send(new Request(`${site}/internal/realtime/purge`))
+    expect(purge.status).toBe(405)
+    secured(purge)
+  })
+
+  it("puts them on what a Durable Object answers, and on Go's answer to a delete", async () => {
+    sdk.routeAgentRequest.mockResolvedValueOnce(
+      json([{ id: "user_1", role: "user", parts: [] }], 200)
+    )
+    const read = await send(
+      new Request(`${chat.replace(app, site)}/get-messages`, {
+        headers: { Cookie: cookie },
+      })
+    )
+    secured(read)
+    expect(await read.json()).toEqual([
+      { id: "user_1", role: "user", parts: [] },
+    ])
+
+    fetchMock.mockResolvedValueOnce(goError(500, "internal", "Go's words"))
+    const deleted = await send(
+      new Request(chat.replace(app, site), {
+        method: "DELETE",
+        headers: { Origin: site, Cookie: cookie },
+      })
+    )
+    expect(deleted.status).toBe(500)
+    secured(deleted)
+    expect(await errorOf(deleted)).toEqual({
+      code: "internal",
+      message: "Go's words",
+    })
+  })
+
+  it("hands a WebSocket upgrade over exactly as the Durable Object made it", async () => {
+    // Node cannot build a 101 Response; the object's is this shape.
+    const upgrade = {
+      status: 101,
+      headers: new Headers({ Upgrade: "websocket" }),
+      body: null,
+      webSocket: {},
+    } as unknown as Response
+    sdk.routeAgentRequest.mockResolvedValueOnce(upgrade)
+
+    const response = await send(
+      socketRequest(chat.replace(app, site), { Origin: site })
+    )
+
+    expect(response).toBe(upgrade)
+    expect(response.headers.has("Content-Security-Policy")).toBe(false)
+  })
+
+  it("still sends the rest over plain http, as in development, but not HSTS", async () => {
+    const response = await send(new Request(`${app}/`))
+
+    expect(response.headers.get("Strict-Transport-Security")).toBeNull()
+    expect(response.headers.get("X-Frame-Options")).toBe("DENY")
+    expect(response.headers.get("Content-Security-Policy")).toContain(
+      "frame-ancestors 'none'"
+    )
+    expect(
+      response.headers.get("Content-Security-Policy-Report-Only")
+    ).toContain("connect-src 'self' ws://localhost:3003")
+  })
+})

@@ -19,6 +19,7 @@ import { parseSpecialistAgentName } from "./lib/specialists/chat-messages"
 import { parseThreadAgentName } from "./lib/threads/chat-messages"
 import { REALTIME_PURGE_PATH, handlePurge } from "./realtime-purge"
 import { RealtimeRegistryAgent } from "./realtime-registry-agent"
+import { withSecurityHeaders } from "./security-headers"
 import {
   SideConversationAgent,
   sideRequestHeaders,
@@ -424,12 +425,23 @@ function callerIn(
   const answer = organization.answer as {
     membership?: { user_id?: unknown } | null
     agent?: unknown
+    cli?: unknown
   } | null
   if (answer?.agent === true) {
     return failure(
       403,
       "forbidden",
       "An agent cannot open a member's conversations."
+    )
+  }
+  // A token the setup CLI signed in with is the member's, but it is for
+  // configuring the workspace and nothing else: auth marks it (cli: true)
+  // and it opens none of a member's conversations here.
+  if (answer?.cli === true) {
+    return failure(
+      403,
+      "forbidden",
+      "A setup session cannot open a member's conversations."
     )
   }
   const userId = answer?.membership?.user_id
@@ -687,21 +699,27 @@ const realtimeObjects = new Map(
 /** `/agents/{segment}/{name}`, optionally with one more segment: a read. */
 const realtimePath = /^\/agents\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/?$/
 
+async function respond(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url)
+  if (url.pathname === REALTIME_PURGE_PATH) return handlePurge(request, env)
+  const match = realtimePath.exec(url.pathname)
+  const object = match ? realtimeObjects.get(match[1]) : undefined
+  if (match && object) {
+    const [, , rawName, read] = match as Array<string | undefined>
+    if (read === undefined || object.reads.includes(read)) {
+      return object.route(request, env, url, rawName ?? "", read)
+    }
+  }
+  if (url.pathname.startsWith("/agents/")) {
+    return failure(404, "not_found", "Not found.")
+  }
+  return handler.fetch(request)
+}
+
 export default {
+  // Every answer, the app's pages and the Worker's own alike, leaves through
+  // one place that sets the security headers (src/security-headers.ts).
   async fetch(request, env) {
-    const url = new URL(request.url)
-    if (url.pathname === REALTIME_PURGE_PATH) return handlePurge(request, env)
-    const match = realtimePath.exec(url.pathname)
-    const object = match ? realtimeObjects.get(match[1]) : undefined
-    if (match && object) {
-      const [, , rawName, read] = match as Array<string | undefined>
-      if (read === undefined || object.reads.includes(read)) {
-        return object.route(request, env, url, rawName ?? "", read)
-      }
-    }
-    if (url.pathname.startsWith("/agents/")) {
-      return failure(404, "not_found", "Not found.")
-    }
-    return handler.fetch(request)
+    return withSecurityHeaders(await respond(request, env), request)
   },
 } satisfies ExportedHandler<Env>

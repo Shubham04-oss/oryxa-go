@@ -34,6 +34,12 @@ const (
 	abortMultipartDays       = 1
 )
 
+// recoverableDeleteDays is how long an object that was deleted or replaced
+// stays recoverable. OpenTofu versions the bucket
+// (deploy/production/hardening.tf); S3 removes an older version this many days
+// after it stopped being the newest, and then the delete marker left behind.
+const recoverableDeleteDays = 30
+
 var tags = map[string]string{
 	"application": "oryxa",
 	"managed-by":  "oryxa-go",
@@ -242,6 +248,16 @@ func ensureBucket(ctx context.Context, client *s3.Client, config Config) error {
 				},
 				AbortIncompleteMultipartUpload: &s3types.AbortIncompleteMultipartUpload{
 					DaysAfterInitiation: aws.Int32(abortMultipartDays),
+				},
+			}, {
+				ID:     aws.String("recoverable-deletes"),
+				Status: s3types.ExpirationStatusEnabled,
+				Filter: &s3types.LifecycleRuleFilter{},
+				NoncurrentVersionExpiration: &s3types.NoncurrentVersionExpiration{
+					NoncurrentDays: aws.Int32(recoverableDeleteDays),
+				},
+				Expiration: &s3types.LifecycleExpiration{
+					ExpiredObjectDeleteMarker: aws.Bool(true),
 				},
 			}},
 		},

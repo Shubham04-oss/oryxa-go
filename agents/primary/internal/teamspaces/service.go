@@ -6,12 +6,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"slices"
 	"strings"
 	"unicode/utf8"
 
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
 )
 
 const (
@@ -45,19 +47,54 @@ type Directory interface {
 	Load(context.Context, string, string) (primaryagents.OrganizationDirectory, error)
 }
 
+// Guard checks the texts an agent publishes to a teamspace before the team
+// reads them. *answerguard.Guard implements it; it never fails, holding what it
+// cannot check.
+type Guard interface {
+	Check(ctx context.Context, texts []string) answerguard.Verdict
+}
+
 type Service struct {
 	repository Repository
 	directory  Directory
+	// guard, when there is one, reads what an agent publishes through
+	// CollaborationPublish. What a member publishes is theirs: PublishEntry
+	// never asks it.
+	guard  Guard
+	logger *slog.Logger
 }
 
-func New(repository Repository, directory Directory) (*Service, error) {
+// Option is something a Service may be given beyond what it cannot do without.
+type Option func(*Service)
+
+// WithGuard has every publication an agent makes (CollaborationPublish) read
+// by guard before the team does. A publication a member makes, and one lifted
+// from a room message, carry the member's own words and are not read. Nil, as
+// no option, reads nothing; a nil *answerguard.Guard boxed in the interface
+// would not read as none, so a caller passes the option only when it has one.
+func WithGuard(guard Guard) Option { return func(service *Service) { service.guard = guard } }
+
+// WithLogger records what the guard found in a publication, by kind and never
+// by value. Without it, nothing is logged.
+func WithLogger(logger *slog.Logger) Option {
+	return func(service *Service) { service.logger = logger }
+}
+
+func New(repository Repository, directory Directory, options ...Option) (*Service, error) {
 	if repository == nil {
 		return nil, errors.New("teamspaces: a repository is required")
 	}
 	if directory == nil {
 		return nil, errors.New("teamspaces: an organization directory is required")
 	}
-	return &Service{repository: repository, directory: directory}, nil
+	service := &Service{repository: repository, directory: directory, logger: slog.New(slog.DiscardHandler)}
+	for _, option := range options {
+		option(service)
+	}
+	if service.logger == nil {
+		service.logger = slog.New(slog.DiscardHandler)
+	}
+	return service, nil
 }
 
 func (service *Service) OrganizationAgent(ctx context.Context, actor Actor) (OrganizationAgent, error) {
@@ -67,6 +104,23 @@ func (service *Service) OrganizationAgent(ctx context.Context, actor Actor) (Org
 	}
 	agent, err := service.repository.EnsureOrganizationAgent(ctx, actor.OrganizationID, access.organizationName, actor.UserID)
 	if err != nil {
+		return OrganizationAgent{}, err
+	}
+	agent.CanManage = access.canManageOrganization
+	return agent, nil
+}
+
+// PreviewOrganizationAgent returns effective settings without creating the
+// organization agent. Workspace plans use this read-only projection.
+func (service *Service) PreviewOrganizationAgent(ctx context.Context, actor Actor) (OrganizationAgent, error) {
+	access, err := service.organizationAccess(ctx, actor)
+	if err != nil {
+		return OrganizationAgent{}, err
+	}
+	agent, err := service.repository.GetOrganizationAgent(ctx, actor.OrganizationID)
+	if errors.Is(err, ErrNotFound) {
+		agent = defaultOrganizationAgent(actor.OrganizationID, access.organizationName)
+	} else if err != nil {
 		return OrganizationAgent{}, err
 	}
 	agent.CanManage = access.canManageOrganization

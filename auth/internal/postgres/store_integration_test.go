@@ -154,6 +154,7 @@ func TestStoreLifecycle(t *testing.T) {
 
 	invitation := domain.Invitation{
 		ID:             "it-invite-" + suffix,
+		Quiet:          true,
 		OrganizationID: organizationID,
 		Email:          member.Email,
 		Role:           domain.RoleMember,
@@ -165,6 +166,19 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 	if err := store.CreateInvitation(ctx, invitation, testEvent(eventPrefix+"-invited", "auth.member.invited.v1", now)); err != nil {
 		t.Fatalf("CreateInvitation() error = %v", err)
+	}
+	for _, read := range []func() (domain.Invitation, error){
+		func() (domain.Invitation, error) { return store.InvitationByID(ctx, organizationID, invitation.ID) },
+		func() (domain.Invitation, error) { return store.InvitationByTokenHash(ctx, invitation.TokenHash) },
+	} {
+		found, err := read()
+		if err != nil || !found.Quiet {
+			t.Fatalf("quiet invitation roundtrip = %+v, %v", found, err)
+		}
+	}
+	listed, err := store.Invitations(ctx, organizationID)
+	if err != nil || len(listed) != 1 || !listed[0].Quiet {
+		t.Fatalf("quiet invitation list = %+v, %v", listed, err)
 	}
 	// The member finds the invitation under their own address, however it is
 	// cased, until it expires; nobody else sees it.
@@ -198,10 +212,14 @@ func TestStoreLifecycle(t *testing.T) {
 
 	// Someone already in the organization isn't offered another way in.
 	reinvited := invitation
+	reinvited.Quiet = false
 	reinvited.ID = "it-reinvite-" + suffix
 	reinvited.TokenHash = "it-reinvite-token-hash-" + suffix
 	if err := store.CreateInvitation(ctx, reinvited, testEvent(eventPrefix+"-reinvited", "auth.member.invited.v1", now)); err != nil {
 		t.Fatalf("CreateInvitation(member again) error = %v", err)
+	}
+	if found, err := store.InvitationByID(ctx, organizationID, reinvited.ID); err != nil || found.Quiet {
+		t.Fatalf("normal invitation must explicitly persist quiet=false: %+v, %v", found, err)
 	}
 	if received, err := store.ReceivedInvitations(ctx, memberID, member.Email, now); err != nil || len(received) != 0 {
 		t.Fatalf("ReceivedInvitations(already a member) = %+v, %v; want none", received, err)

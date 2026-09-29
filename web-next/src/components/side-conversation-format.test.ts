@@ -3,6 +3,7 @@ import {
   agentRole,
   askedAgentName,
   cardState,
+  guardNote,
   isSideNews,
   reviewHeadline,
   sideNews,
@@ -489,6 +490,51 @@ describe("an answer held for review", () => {
     )
     for (const kinds of [["UNCHECKED"], ["EMAIL", "UNCHECKED", "SWIFT_CODE"]]) {
       expect(reviewHeadline("Nia", kinds)).not.toMatch(/[A-Z]{2,}_|UNCHECKED/)
+    }
+  })
+
+  it("tells an answer's owner what the guard hid from the other person, in plain words, and nothing when it named nothing", () => {
+    const note = (state: "clear" | "masked" | "held", kinds: string[]) =>
+      guardNote({ state, kinds })
+    expect(note("masked", ["PASSWORD"])).toBe("Shared with a password hidden")
+    expect(note("held", ["EMAIL", "PHONE"])).toBe(
+      "Shared with an email address and a phone number hidden"
+    )
+    // Each thing once, in the order the guard found it, whatever its code.
+    expect(
+      note("masked", [
+        "PASSWORD",
+        "US_SOCIAL_SECURITY_NUMBER",
+        "US_PASSPORT_NUMBER",
+        "AWS_SECRET_KEY",
+        "AWS_ACCESS_KEY",
+        "CREDIT_DEBIT_CARD_NUMBER",
+        "IBAN",
+      ])
+    ).toBe(
+      "Shared with a password, an ID number, an access key, card details and other personal details hidden"
+    )
+    expect(note("masked", ["PIN", "SWIFT_CODE", "ADDRESS"])).toBe(
+      "Shared with a PIN, bank details and a street address hidden"
+    )
+    // A kind this page does not know reads as one thing, never as its code.
+    expect(note("masked", ["LICENSE_PLATE", "constructor"])).toBe(
+      "Shared with other personal details hidden"
+    )
+    expect(note("held", ["EMAIL", "UNCHECKED"])).toBe(
+      "Shared with an email address hidden"
+    )
+    // Nothing named, nothing to say.
+    for (const [state, kinds] of [
+      ["clear", []],
+      ["masked", []],
+      ["held", []],
+      ["held", ["UNCHECKED"]],
+    ] as const) {
+      expect(note(state, [...kinds])).toBeUndefined()
+    }
+    for (const kinds of [["PASSWORD"], ["CA_HEALTH_NUMBER", "SWIFT_CODE"]]) {
+      expect(note("masked", kinds)).not.toMatch(/[A-Z]{2,}_|UNCHECKED/)
     }
   })
 })

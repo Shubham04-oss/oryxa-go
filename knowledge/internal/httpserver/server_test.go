@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -482,5 +483,15 @@ func TestSetSourceKindsPassesTheChoiceThrough(t *testing.T) {
 		`{"include_kinds":null}`, bearer())
 	if recorder.Code != http.StatusOK || service.kinds != nil {
 		t.Fatalf("PUT null = %d, kinds %v; want the default back", recorder.Code, service.kinds)
+	}
+}
+
+func TestPolicyDiagnosticCauseIsNotReturnedToCaller(t *testing.T) {
+	failure := fmt.Errorf("read policy: %w: invalid stored sensitive diagnostic: %w", domain.ErrProviderUnavailable, domain.ErrInvalid)
+	server := testServer(t, &fakeService{})
+	response := httptest.NewRecorder()
+	server.handleError(response, httptest.NewRequest(http.MethodGet, "/v1/organizations/org_1/knowledge/sources", nil), failure)
+	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "sensitive diagnostic") {
+		t.Fatalf("policy error response = %d %s", response.Code, response.Body)
 	}
 }

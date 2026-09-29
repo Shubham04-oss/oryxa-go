@@ -73,12 +73,20 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 	if connection.MemberID != caller.UserID {
 		return domain.Trigger{}, domain.ErrNotFound
 	}
+	if err := s.allowToolkit(ctx, organizationID, connection.Toolkit); err != nil {
+		return domain.Trigger{}, err
+	}
 	switch connection.Status {
 	case domain.ConnectionActive:
 	case domain.ConnectionExpired:
 		return domain.Trigger{}, fmt.Errorf("the connection expired: %w", domain.ErrNeedsReconnect)
 	default:
 		return domain.Trigger{}, fmt.Errorf("the connection is %s: %w", connection.Status, domain.ErrNotConnected)
+	}
+	if connection.Oryxa() {
+		// A Composio trigger watches a Composio account; an Oryxa
+		// connection's triggers come from its own integration.
+		return domain.Trigger{}, errOryxaNotYet(connection.Toolkit)
 	}
 
 	// The connection's own app decides which events it can deliver, so a

@@ -1469,6 +1469,67 @@ describe("What a side conversation holds", () => {
       within(view).queryByRole("group", { name: "Confirm Delete file" })
     ).toBeNull()
   })
+
+  it("tells an answer's owner, quietly, what the guard hid from the other person, and nobody else", async () => {
+    const view = await openWithPriya()
+    opened(
+      snapshot([
+        message(1, viewerId, "What's the key?", { asksAgentId: "agt_leo" }),
+        agentMessage(2, {
+          body: "The key is {PASSWORD}.",
+          replyTo: 1,
+          guard: { state: "masked", kinds: ["PASSWORD"] },
+        }),
+        // Nothing found, or nothing named: nothing to say.
+        agentMessage(3, {
+          body: "Friday.",
+          guard: { state: "clear", kinds: [] },
+        }),
+        agentMessage(4, {
+          body: "Thursday.",
+          guard: { state: "masked", kinds: [] },
+        }),
+        agentMessage(5, { body: "Saturday." }),
+        // Priya's agent's answer is hers: the note is the owner's alone,
+        // even were the page handed one.
+        agentMessage(6, {
+          agentId: "agt_nia",
+          agentName: "Nia",
+          ownerId: priya,
+          body: "Noted {PASSWORD}.",
+          guard: { state: "masked", kinds: ["PASSWORD"] },
+        }),
+        // A held answer's own note, on the owner's copy, for what it hid.
+        agentMessage(7, {
+          body: "Reach Ada at {EMAIL}.",
+          guard: { state: "held", kinds: ["EMAIL", "PHONE"] },
+        }),
+      ])
+    )
+    const notes = within(view).getAllByText(/^Shared with /)
+    expect(notes.map((note) => note.textContent)).toEqual([
+      "Shared with a password hidden",
+      "Shared with an email address and a phone number hidden",
+    ])
+    const [first, , , , second] = within(view).getAllByRole("article", {
+      name: "Leo, your agent",
+    })
+    expect(within(first).getByText("The key is {PASSWORD}.")).toBeTruthy()
+    expect(within(first).getByText("Shared with a password hidden")).toBe(
+      notes[0]
+    )
+    expect(
+      within(second).getByText(
+        "Shared with an email address and a phone number hidden"
+      )
+    ).toBe(notes[1])
+    const nia = within(view).getByRole("article", {
+      name: "Nia, Priya's agent",
+    })
+    expect(within(nia).getByText("Noted {PASSWORD}.")).toBeTruthy()
+    expect(within(nia).queryByText(/^Shared with /)).toBeNull()
+    expect(notes[0].className).toBe("workspace-side-via")
+  })
 })
 
 describe("A side conversation's states", () => {

@@ -190,6 +190,83 @@ export function agentRequestBody(input: {
   }
 }
 
+/**
+ * The longest a text of an answer's check, or the request beside it, may
+ * be, in code points (Go's limit on `POST …/answer-guard/check`). An agent's
+ * answer is at most `SIDE_MAX_AGENT_TEXT`, which fits.
+ */
+export const GUARD_MAX_TEXT = 25_000
+
+/**
+ * An answer's check as Go takes it (`POST …/answer-guard/check`), with only
+ * its known fields: the answer's text (Go takes up to eight; a side
+ * conversation checks one answer at a time), where it comes from (`owner`:
+ * the member started their own agent, so Go leaves the personal data they
+ * would say themselves as it is, and still masks passwords, keys and card,
+ * bank and ID numbers), and what the owner asked, which Go weighs the answer
+ * against.
+ */
+export type GuardCheckBody = {
+  texts: string[]
+  origin: "owner"
+  request: string
+}
+
+/** The check of an own agent's answer `text` to the owner's `request`, each cut to what Go takes. */
+export function guardCheckBody(text: string, request: string): GuardCheckBody {
+  return {
+    texts: [clip(text, GUARD_MAX_TEXT)],
+    origin: "owner",
+    request: clip(request, GUARD_MAX_TEXT),
+  }
+}
+
+/** The kind the answer guard reports when it could not check an answer at all. */
+export const UNCHECKED_KIND = "UNCHECKED"
+
+/** What the answer guard lets through of an answer: the text as it may be shared, and what it found, when it found anything. */
+export type GuardedAnswer = { text: string; guard?: SideGuard }
+
+/**
+ * Go's answer to the check of one `text` (`checked`, `state`, `kinds`, and
+ * `shareable`: one entry for each text sent, or null for none shared), as
+ * what may be shared of it: the text as Go returned it, and what it found.
+ * Fails closed: nothing is shared unless Go's answer is exactly what the
+ * contract says. A null `shareable` (the guard holds the answer and has no
+ * version it would share), a state this page does not know, `UNCHECKED`
+ * among the kinds (the guard could not tell), more or fewer texts than were
+ * sent, a text that is not one, or none left of one that had some, and
+ * anything that is not an object, are all nothing. Go's `checked: false` is
+ * no guardrail being set: the text goes as it is. `kinds` only says what was
+ * hidden, so one that is not a list of names is none, and never why an
+ * answer is not shared.
+ */
+export function guardedAnswer(
+  value: unknown,
+  text: string
+): GuardedAnswer | undefined {
+  if (!isRecord(value) || typeof value.checked !== "boolean") return undefined
+  if (!value.checked) return { text }
+  const { state, kinds, shareable } = value
+  if (typeof state !== "string" || !guardStates.has(state)) return undefined
+  if (
+    !Array.isArray(shareable) ||
+    shareable.length !== 1 ||
+    typeof shareable[0] !== "string"
+  ) {
+    return undefined
+  }
+  const shared: string = shareable[0]
+  if (shared.trim() === "" && text.trim() !== "") return undefined
+  const guard = guardOf({ state, kinds })
+  if (!guard || guard.kinds.includes(UNCHECKED_KIND)) return undefined
+  return {
+    text: shared,
+    // Nothing found: nothing to tell.
+    ...(guard.state !== "clear" || guard.kinds.length > 0 ? { guard } : {}),
+  }
+}
+
 /** Go's request as it has it now, read as data. */
 export type GoRequest = AgentRequest
 

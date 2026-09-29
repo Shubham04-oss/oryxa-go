@@ -281,8 +281,50 @@ func TestTheWakerReadsATeamspaceRequestAgainBeforeWakingItsAgent(t *testing.T) {
 	}
 }
 
-// TestOnlyATeamspaceRequestsAgentIsReadAgain: a request outside any
-// teamspace, and a report to the member who asked, wake as they always did.
+// TestOnlyARequestItsAgentMayDecideWakesItToDecide: an agent is woken to
+// decide a new request only where its member's standing rules let it — a
+// specialist they contributed to a teamspace with automatic delegation, still
+// seated so — and that run reads and decides the one request alone. A request
+// made outside any teamspace, whatever approval an older build stored for it,
+// and one held for its owner, wake nobody: their member decides them.
+func TestOnlyARequestItsAgentMayDecideWakesItToDecide(t *testing.T) {
+	outside := requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent)
+	outside.TeamspaceID = ""
+	outsideHeld := requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner)
+	outsideHeld.TeamspaceID = ""
+	for name, testCase := range map[string]struct {
+		request agents.Interaction
+		woken   bool
+	}{
+		"a specialist its member let decide":                   {requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), true},
+		"a request held for its owner":                         {requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner), false},
+		"a request made outside any teamspace":                 {outsideHeld, false},
+		"one an older build stored outside any as its agent's": {outside, false},
+	} {
+		store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_requested", KindTargetRequested, 1)}}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testCase.request}}
+		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusApproved) }}
+		if err := NewWaker(store, runs, requests, standsStill(), nil).WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if woken := len(runs.calls) == 1; woken != testCase.woken || len(store.done) != 1 {
+			t.Fatalf("%s: runs %+v, done %v; want woken %t, its delivery done", name, runs.calls, store.done, testCase.woken)
+		}
+		if !testCase.woken {
+			continue
+		}
+		deciding := runs.calls[0]
+		if deciding.reach != managedagents.DeliveryReport || deciding.input.Delivery.Purpose != agents.DeliveryDecides {
+			t.Fatalf("%s: the deciding run was %+v, want it reading and deciding its request alone", name, deciding)
+		}
+	}
+}
+
+// TestOnlyATeamspaceRequestsAgentIsReadAgain: a report to the member who
+// asked wakes their agent as it always did, unread; a new request made
+// outside any teamspace, whatever approval an older build stored for it, is
+// its member's to decide, so it wakes nobody, and there is no teamspace to
+// read it again in.
 func TestOnlyATeamspaceRequestsAgentIsReadAgain(t *testing.T) {
 	outside := requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent)
 	outside.TeamspaceID = ""
@@ -292,9 +334,10 @@ func TestOnlyATeamspaceRequestsAgentIsReadAgain(t *testing.T) {
 	for name, testCase := range map[string]struct {
 		delivery Delivery
 		request  agents.Interaction
+		woken    bool
 	}{
-		"a request outside any teamspace": {testDelivery("evt_requested", KindTargetRequested, 1), outside},
-		"a rejection's report":            {report, rejected},
+		"a request outside any teamspace": {testDelivery("evt_requested", KindTargetRequested, 1), outside, false},
+		"a rejection's report":            {report, rejected, true},
 	} {
 		standing := &fakeStanding{verdict: interactions.VerdictHeld}
 		store := &fakeDeliveries{pending: []Delivery{testCase.delivery}}
@@ -304,8 +347,8 @@ func TestOnlyATeamspaceRequestsAgentIsReadAgain(t *testing.T) {
 		if err := waker.WakeDue(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if len(standing.asked) != 0 || len(runs.calls) != 1 {
-			t.Fatalf("%s: read again %v, runs %+v; want it woken as before, unread", name, standing.asked, runs.calls)
+		if woken := len(runs.calls) == 1; len(standing.asked) != 0 || woken != testCase.woken || len(store.done) != 1 {
+			t.Fatalf("%s: read again %v, runs %+v, done %v; want it unread, woken %t, its delivery done", name, standing.asked, runs.calls, store.done, testCase.woken)
 		}
 	}
 }

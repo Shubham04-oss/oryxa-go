@@ -47,6 +47,10 @@ type Store interface {
 	// leaseUntil as it claims them, so a second pass cannot claim the same
 	// connection while this one still owns it.
 	ConnectionsAwaitingSubscribe(ctx context.Context, maxAttempts, limit int, now, leaseUntil time.Time) ([]domain.Connection, error)
+	// RefundAutoSubscribeAttempt refunds a claimed attempt that never reached
+	// the provider because workspace policy blocked it. The lease and attempt
+	// must still match so a stale worker cannot alter a later claim.
+	RefundAutoSubscribeAttempt(ctx context.Context, id string, attempt int, leaseUntil time.Time) error
 	// MarkSubscribed records that a connection has been subscribed to what
 	// its app delivers.
 	MarkSubscribed(ctx context.Context, id string, now time.Time) error
