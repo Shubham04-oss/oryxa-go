@@ -1,6 +1,12 @@
 # Every pull request, and every push to main, builds and tests what a release
 # would ship: the Go services (with their PostgreSQL integration tests), the
-# web app as the production Worker, and the image the Dockerfile makes.
+# web app as the production Worker, and the image the Dockerfile makes. A job
+# runs only when the change touches what it checks (the changes job), so a
+# docs-only change runs nothing.
+#
+# Jobs run where the repository variable CI_RUNNER says: the self-hosted runner
+# in deploy/runner (["self-hosted","oryxa-mac"]), or GitHub's own machines when
+# it is unset.
 
 name: CI
 
@@ -17,9 +23,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Changes
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.paths.outputs.go }}
+      web: ${{ steps.paths.outputs.web }}
+      web_next: ${{ steps.paths.outputs.web_next }}
+      tofu: ${{ steps.paths.outputs.tofu }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - name: What the change touches
+        id: paths
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # The files this change touches: a pull request's against where it
+          # branched, a push's against the commit before it. Anything unknown,
+          # or the workflow itself, checks everything.
+          all=false
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            all=true
+          else
+            files=$(git diff --name-only "$(git merge-base "$BASE" HEAD)" HEAD)
+            grep -q '^\.github/' <<<"$files" && all=true
+          fi
+          if [ "$all" = true ]; then
+            printf 'go=true\nweb=true\nweb_next=true\ntofu=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Docs and Markdown never change a build. Go covers everything that
+          # is not the two web apps or the deployment: services, contracts,
+          # infra, tests, the Dockerfile.
+          code=$(grep -v -E '(^docs/|\.md$)' <<<"$files" || true)
+          has() { grep -q -E "$1" <<<"$code" && echo true || echo false; }
+          {
+            echo "go=$(grep -v -E '^(web/|web-next/|deploy/)' <<<"$code" | grep -q . && echo true || echo false)"
+            echo "web=$(has '^web/')"
+            echo "web_next=$(has '^web-next/')"
+            echo "tofu=$(has '^deploy/production/')"
+          } >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
   go:
     name: Go
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 20
     services:
       # The same pgvector image docker-compose.yml runs locally.
@@ -70,7 +123,9 @@ jobs:
 
   web:
     name: Web
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 15
     defaults:
       run:
@@ -103,7 +158,9 @@ jobs:
 
   web-next:
     name: Web next
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.web_next == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 15
     defaults:
       run:
@@ -129,7 +186,9 @@ jobs:
 
   image:
     name: Image
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -138,7 +197,9 @@ jobs:
 
   tofu:
     name: OpenTofu
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.tofu == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0

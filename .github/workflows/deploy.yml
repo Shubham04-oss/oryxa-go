@@ -32,13 +32,44 @@ env:
   CLOUDFLARE_ACCOUNT_ID: f50cbb237cd6f0ab48cc3679f727d132
 
 jobs:
-  production:
-    name: Production
+  scope:
+    name: Scope
     # CI started by a push to main, and passed; or a run started by hand.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    outputs:
+      deploy: ${{ steps.scope.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+      - name: Whether anything a release ships changed
+        id: scope
+        env:
+          BY_HAND: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          # A run started by hand always releases. Otherwise a release follows
+          # only a change a release ships since the one main records: docs,
+          # Markdown and the release record itself ship nothing.
+          recorded=$(jq -r .image_tag deploy/production/release.auto.tfvars.json)
+          if [ "$BY_HAND" = true ] || ! git cat-file -e "$recorded^{commit}" 2>/dev/null; then
+            echo deploy=true >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          shipped=$(git diff --name-only "$recorded" HEAD |
+            grep -v -E '(^docs/|\.md$|^deploy/production/release\.auto\.tfvars\.json$)' || true)
+          if [ -n "$shipped" ]; then echo deploy=true; else echo deploy=false; fi >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  production:
+    name: Production
+    needs: scope
+    if: needs.scope.outputs.deploy == 'true'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 45
     environment: production
     permissions:
