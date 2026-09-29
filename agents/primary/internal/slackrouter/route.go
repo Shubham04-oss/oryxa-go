@@ -123,6 +123,12 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	if question == "" {
 		return Permanent(errors.New("the message holds no question"))
 	}
+	// What is redacted is what the screen reads, what the ask is filed with and
+	// so what the owners' agents are asked. The message itself stays in apps for
+	// its seven days, as the asker wrote it, which is not something to send on.
+	if router.deps.Redact != nil {
+		question = router.deps.Redact(question)
+	}
 	input := ScreenInput{
 		Question: question,
 		Asker:    ScreenAsker{OrgRole: asker.Role, Title: asker.Title},
