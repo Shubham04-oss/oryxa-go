@@ -121,7 +121,7 @@ func (h ingress) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// 9. The integration's own reading of it.
+	// 9. Otherwise, the integration's own reading of it.
 	events, triggers, parsing, err := s.parse(ctx, endpoint, d)
 	if err != nil {
 		log.WarnContext(ctx, "an integration could not parse a verified delivery", "error", truncate(err.Error(), maxLoggedError))
