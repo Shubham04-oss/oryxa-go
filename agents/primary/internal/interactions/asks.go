@@ -140,6 +140,15 @@ type Ask struct {
 // Open says the ask is still waiting for an answer.
 func (ask Ask) Open() bool { return ask.WinnerRequestID == "" }
 
+// AnsweredElsewhere says a request of the ask was not answered because another
+// owner's answer settled the ask first: the ask has a winner, and it is not this
+// request. Such a request was closed with "Answered by ...", a pending one
+// rejected and an approved one failed, and its notice says so rather than that
+// it failed or was denied.
+func AnsweredElsewhere(ask Ask, request agents.Interaction) bool {
+	return ask.ID != "" && ask.ID == request.AskID && ask.WinnerRequestID != "" && ask.WinnerRequestID != request.ID
+}
+
 // Lease is what an owner gave an asker in one Slack thread: for as long as it
 // lives, the asker's follow-ups there are approved with no click. It is given
 // by approving a request with access, and ends when it expires or the owner

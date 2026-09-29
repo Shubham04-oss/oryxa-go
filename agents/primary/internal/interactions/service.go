@@ -743,6 +743,12 @@ func validateDecision(request agents.Interaction, input agents.InteractionDecisi
 	if !isToolSubset(input.AllowedTools, request.RequestedTools) || !isSubset(input.GrantedPermissions, request.RequestedPermissions) {
 		return fmt.Errorf("%w: approved tools and permissions must be requested subsets", ErrInvalid)
 	}
+	// A request that asks for consent is approved with the consent it grants,
+	// so that how far its answer may go is never left to be guessed: an approval
+	// that grants neither is no approval of it.
+	if input.Decision == DecisionApproved && asksConsent(request) && ConsentFor(input.Decision, input.GrantedPermissions) == "" {
+		return fmt.Errorf("%w: a request that asks for consent is approved granting consent:summary or consent:access", ErrInvalid)
+	}
 	return nil
 }
 

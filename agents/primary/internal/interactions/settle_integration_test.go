@@ -54,6 +54,11 @@ func TestTheFirstDeliveredAnswerWinsTheAsk(t *testing.T) {
 	if got := ledger.events(forRaya.ID); got[len(got)-1] != agentsv1.InteractionCompletedDetailType+":completed" {
 		t.Fatalf("Raya's events = %v", got)
 	}
+	// The ask says which request won, and so which were answered elsewhere.
+	if !AnsweredElsewhere(ask, ledger.read(forMaya.ID)) || AnsweredElsewhere(ask, ledger.read(forRaya.ID)) ||
+		AnsweredElsewhere(Ask{}, ledger.read(forMaya.ID)) || AnsweredElsewhere(ask, agents.Interaction{ID: "irq_other"}) {
+		t.Fatalf("AnsweredElsewhere is wrong for %+v", ask)
+	}
 	// Maya's agent, still at work, has nothing to record its answer on.
 	if late, err := ledger.answer(forMaya); !errors.Is(err, ErrConflict) || late.Status == StatusCompleted {
 		t.Fatalf("Maya's late answer = %+v, %v; want ErrConflict", late, err)
@@ -314,5 +319,33 @@ func TestAnAnswerToASlackAskIsReadAtItsOwnersLevelAsItsRunWasAsked(t *testing.T)
 	if rel.Request != "Where do the dev keys live?" || !slices.Equal(rel.Sources, []string{"interactions_get", "knowledge_search"}) ||
 		rel.OrganizationID != ledger.org || rel.UserID != raya || rel.Mode != answerguard.RelevanceOff || rel.Regulated {
 		t.Fatalf("the guard was told %+v", rel)
+	}
+}
+
+// An answer that comes after its ask was won, which closing the siblings makes
+// unlikely, is not delivered either: the request is closed, saying who answered,
+// and the agent is told. The state is made by hand here, since the ledger's own
+// steps close every sibling with the win.
+func TestAnAnswerAfterTheAskWasWonIsNotDelivered(t *testing.T) {
+	ledger := newSlackLedger(t)
+	result, forRaya, forMaya := approvedBoth(t, ledger)
+	if _, err := ledger.database.Pool.Exec(context.Background(), `UPDATE agents_primary.interaction_asks
+		SET winner_request_id=$2, settled_at=$3 WHERE id=$1`, result.Ask.ID, forRaya.ID, ledger.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	answered, err := ledger.answer(forMaya)
+	if !errors.Is(err, ErrAnsweredElsewhere) || answered.Status == StatusCompleted {
+		t.Fatalf("Maya's answer after the win = %+v, %v; want ErrAnsweredElsewhere", answered, err)
+	}
+	closed := ledger.read(forMaya.ID)
+	if closed.Status != StatusFailed || closed.Result == nil || closed.Result.Summary != "Answered by Name of "+raya {
+		t.Fatalf("Maya's request = %+v, result %+v", closed, closed.Result)
+	}
+	if got := ledger.events(forMaya.ID); got[len(got)-1] != agentsv1.InteractionCompletedDetailType+":failed" {
+		t.Fatalf("Maya's events = %v", got)
+	}
+	// The winner stays the one the ask named.
+	if ask, err := ledger.service.Ask(context.Background(), result.Ask.ID); err != nil || ask.WinnerRequestID != forRaya.ID {
+		t.Fatalf("the ask = %+v, %v", ask, err)
 	}
 }

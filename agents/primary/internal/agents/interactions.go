@@ -79,7 +79,7 @@ type Delivery struct {
 	// private, so it is judged. The waker sets them from the reach it gives the
 	// run, which is everything the run can call, so they never depend on what
 	// the run says it did. Nil records nothing: an answer from such a run is
-	// judged as one whose sources cannot be read (SourcesUnreadable), never let
+	// judged as one whose sources cannot be read (SourcesUnrecorded), never let
 	// through unread; an empty list records that the run reaches nothing private.
 	Sources []string
 }
@@ -664,11 +664,11 @@ func (tools interactionTools) respond(ctx agent.Context, args interactionRespons
 // ledger the names of the toolboxes and tools its run may have read.
 type runSourcesKey struct{}
 
-// SourcesUnreadable stands for a run whose sources were not recorded. It is no
+// SourcesUnrecorded stands for a run whose sources were not recorded. It is no
 // tool the relevance check knows to read nothing private, so an answer from such
 // a run is judged as one from a run that read something private would be, and
 // never let through unchecked for want of a record.
-const SourcesUnreadable = "run_sources_unrecorded"
+const SourcesUnrecorded = "run_sources_unrecorded"
 
 // WithRunSources returns ctx carrying the names of the toolboxes and tools a
 // run may have read, which the ledger's Respond reads for the answer it is
@@ -690,12 +690,12 @@ func RunSources(ctx context.Context) []string {
 // deliverySources are the sources the waker recorded for the run answering:
 // what it reaches that may hold private material. A run that recorded none, such
 // as a member's own turn, or one started before they were kept, has
-// SourcesUnreadable instead of nothing.
+// SourcesUnrecorded instead of nothing.
 func deliverySources(ctx agent.ReadonlyContext) []string {
 	value, err := ctx.ReadonlyState().Get(deliverySourcesKey)
 	recorded, ok := value.(string)
 	if err != nil || !ok {
-		return []string{SourcesUnreadable}
+		return []string{SourcesUnrecorded}
 	}
 	if recorded == "" {
 		return []string{}

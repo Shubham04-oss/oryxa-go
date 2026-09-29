@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,9 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 )
+
+// The ledger the server is wired with does everything it asks of one.
+var _ AgentInteractions = (*interactions.Service)(nil)
 
 // slackServer is the server with a request ledger and, when there is one, a
 // store of secrets, as an organization that has the Slack app has them.
@@ -430,5 +434,27 @@ func TestASecretIsRevokedByItsOwner(t *testing.T) {
 	}
 	if response := serve(server, http.MethodDelete, path, "", bearer); response.Code != http.StatusNoContent {
 		t.Fatalf("revoking what is gone = %d, want 204", response.Code)
+	}
+}
+
+// The ledger's new refusals are answered with codes of their own, and the ones a
+// client acts on differently are told apart from the rest.
+func TestTheConsentLoopsErrorsHaveTheirOwnCodes(t *testing.T) {
+	for _, testCase := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{interactions.ErrAlreadyDecided, http.StatusConflict, "already_decided"},
+		{interactions.ErrAnsweredElsewhere, http.StatusConflict, "answered_elsewhere"},
+		{interactions.ErrRevoked, http.StatusConflict, "access_revoked"},
+		{interactions.ErrSecretGone, http.StatusGone, "secret_gone"},
+		{interactions.ErrConsentUnavailable, http.StatusServiceUnavailable, "consent_unavailable"},
+		{fmt.Errorf("the answer was not delivered: %w", interactions.ErrRevoked), http.StatusConflict, "access_revoked"},
+		{interactions.ErrConflict, http.StatusConflict, "invalid_state"},
+	} {
+		if status, code := ErrorCode(testCase.err); status != testCase.status || code != testCase.code {
+			t.Errorf("%v = %d %s, want %d %s", testCase.err, status, code, testCase.status, testCase.code)
+		}
 	}
 }

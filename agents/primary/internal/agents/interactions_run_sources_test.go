@@ -67,7 +67,7 @@ func TestTheRespondToolTellsTheLedgerWhatTheRunReaches(t *testing.T) {
 		"the knowledge":               {[]string{KnowledgeToolboxName}, []string{KnowledgeToolboxName}},
 		"the apps and the knowledge":  {[]string{AppsToolboxName, KnowledgeToolboxName}, []string{AppsToolboxName, KnowledgeToolboxName}},
 		"nothing private":             {[]string{}, []string{}},
-		"nothing recorded, as before": {nil, []string{SourcesUnreadable}},
+		"nothing recorded, as before": {nil, []string{SourcesUnrecorded}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			service := &sourcesInteractions{}
@@ -87,8 +87,8 @@ func TestOnlyARecordedStringIsARecordOfWhatTheRunReaches(t *testing.T) {
 	state[deliverySourcesKey] = []any{"knowledge"}
 	service := &sourcesInteractions{}
 	answering(t, service, state)
-	if len(service.sources) != 1 || !slices.Equal(service.sources[0], []string{SourcesUnreadable}) {
-		t.Fatalf("the ledger was given %v, want %v", service.sources, []string{SourcesUnreadable})
+	if len(service.sources) != 1 || !slices.Equal(service.sources[0], []string{SourcesUnrecorded}) {
+		t.Fatalf("the ledger was given %v, want %v", service.sources, []string{SourcesUnrecorded})
 	}
 }
 

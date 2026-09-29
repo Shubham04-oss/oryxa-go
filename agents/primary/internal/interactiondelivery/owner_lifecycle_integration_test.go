@@ -90,6 +90,8 @@ func newOwnerApprovalWorld(t *testing.T) *ownerApprovalWorld {
 	t.Cleanup(func() {
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.interaction_deliveries WHERE organization_id=$1`, organizationID)
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.interaction_delivery_threads WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.interaction_leases WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.interaction_asks WHERE organization_id=$1`, organizationID)
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.agent_interactions WHERE organization_id=$1`, organizationID)
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.agents_outbox WHERE detail->>'organization_id'=$1`, organizationID)
 	})

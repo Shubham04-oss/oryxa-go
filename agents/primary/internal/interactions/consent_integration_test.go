@@ -470,3 +470,41 @@ func TestAChoiceOfAccessFailsWhenThePolicyCannotBeRead(t *testing.T) {
 		t.Fatalf("a summary needs no policy: %+v, %v", result, err)
 	}
 }
+
+// A request that asks for consent is approved with the consent it grants, on
+// the plain decision route as on the consent one, so that no approval leaves how
+// far the answer may go to be guessed; what it grants there is recorded as the
+// consent it is, decided on the web, with no lease, since a lease is what the
+// choice of access gives.
+func TestAnApprovalOfARequestThatAsksForConsentGrantsSome(t *testing.T) {
+	ledger := newSlackLedger(t)
+	ctx := context.Background()
+	result := ledger.ask("1790000000.000100", raya, maya)
+	request := requestTo(t, result, raya)
+	for name, input := range map[string]agents.InteractionDecisionInput{
+		"nothing granted":         {Decision: DecisionApproved, Message: "Go ahead.", AllowedTools: []string{"knowledge"}},
+		"an unasked permission":   {Decision: DecisionApproved, Message: "Go ahead.", GrantedPermissions: []string{"read:everything"}},
+		"a tool nobody asked for": {Decision: DecisionApproved, Message: "Go ahead.", AllowedTools: []string{"apps"}, GrantedPermissions: []string{PermissionConsentSummary}},
+	} {
+		if _, err := ledger.service.DecideAsOwner(ctx, ledger.owner(raya), "member-token", request.ID, input); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v, want ErrInvalid", name, err)
+		}
+	}
+	if ledger.read(request.ID).Status != StatusPending {
+		t.Fatal("a refused approval decided the request")
+	}
+	decided, err := ledger.service.DecideAsOwner(ctx, ledger.owner(raya), "member-token", request.ID, agents.InteractionDecisionInput{
+		Decision: DecisionApproved, Message: "Excerpts are fine.", AllowedTools: []string{"knowledge"},
+		GrantedPermissions: []string{PermissionConsentAccess},
+	})
+	if err != nil || decided.Decision.Consent != ConsentAccess ||
+		*decided.Decision.DecidedBy != (agents.InteractionDecider{Kind: DecidedByMember, UserID: raya, Surface: SurfaceWeb}) || ledger.leases() != 0 {
+		t.Fatalf("approved = %+v, %v; want access, on the web, with no lease", decided.Decision, err)
+	}
+	// A rejection needs to grant nothing.
+	rejected, err := ledger.service.DecideAsOwner(ctx, ledger.owner(maya), "member-token", requestTo(t, result, maya).ID,
+		agents.InteractionDecisionInput{Decision: DecisionRejected, Message: "No."})
+	if err != nil || rejected.Status != StatusRejected || rejected.Decision.Consent != "" {
+		t.Fatalf("rejected = %+v, %v", rejected, err)
+	}
+}

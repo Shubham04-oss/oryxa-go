@@ -192,36 +192,58 @@ func TestRevokingALeaseThatRanOutIsNotNews(t *testing.T) {
 	}
 }
 
-// TestAnotherAccessRenewsTheLeaseInsteadOfMakingAnother: two accesses in one
-// thread are one lease, which the second renews, keeping its id; revoking it
-// ends the access of both.
+// TestAnotherAccessRenewsTheLeaseInsteadOfMakingAnother: two accesses given in
+// one thread are one lease, which the second renews, keeping its id; a lease in
+// another thread is another; and revoking the one takes back the access of both
+// requests that were approved with it.
 func TestAnotherAccessRenewsTheLeaseInsteadOfMakingAnother(t *testing.T) {
 	ledger := newSlackLedger(t)
-	lease, _ := ledger.givenAccess(raya)
+	ctx := context.Background()
+	// Two asks in one thread, both made before any lease, so both wait.
+	first := requestTo(t, ledger.ask("1790000000.000100", raya), raya)
+	second := requestTo(t, ledger.ask("1790000050.000150", raya), raya)
+	elsewhere := requestTo(t, ledger.askIn(inAnotherThread("1790000900.000100"), raya), raya)
+	if first.Status != StatusPending || second.Status != StatusPending || elsewhere.Status != StatusPending {
+		t.Fatalf("requests = %s %s %s, want them all waiting", first.Status, second.Status, elsewhere.Status)
+	}
+
+	given := ledger.decide(raya, first, ChoiceAccess)
 	ledger.clock.Advance(20 * time.Minute)
-	// A second ask in the thread, made where the lease was not yet consulted:
-	// it is made while a lease lives, so it is approved by it, never asked. A
-	// renewal is the owner choosing access on a request made before, so file
-	// it before the lease exists in another thread, then use the same thread.
-	second := requestTo(t, ledger.askIn(inAnotherThread("1790000900.000100"), raya), raya)
-	if second.Status != StatusPending {
-		t.Fatalf("second = %+v", second)
-	}
 	renewed := ledger.decide(raya, second, ChoiceAccess)
-	if renewed.Lease == nil || renewed.Lease.ID == lease.ID || ledger.leases() != 2 {
-		t.Fatalf("a lease in another thread = %+v, %d leases; want a lease of its own", renewed.Lease, ledger.leases())
+	if given.Lease == nil || renewed.Lease == nil || renewed.Lease.ID != given.Lease.ID || ledger.leases() != 1 ||
+		!renewed.Lease.ExpiresAt.Equal(ledger.clock.Now().Add(time.Hour)) || renewed.Lease.RequestID != second.ID {
+		t.Fatalf("lease = %+v then %+v with %d leases; want the same lease, renewed to an hour from now", given.Lease, renewed.Lease, ledger.leases())
 	}
-	// Renewal: a pending request in the lease's own thread, filed while none
-	// lived, is chosen once the lease has run out.
+	// A lease in another thread is a lease of its own.
+	other := ledger.decide(raya, elsewhere, ChoiceAccess)
+	if other.Lease == nil || other.Lease.ID == given.Lease.ID || ledger.leases() != 2 {
+		t.Fatalf("a lease in another thread = %+v with %d leases; want one of its own", other.Lease, ledger.leases())
+	}
+
+	// Revoking the one lease takes back what both of its requests were given, and
+	// leaves the other thread's alone.
+	if _, err := ledger.service.RevokeLease(ctx, ledger.owner(raya), given.Lease.ID); err != nil {
+		t.Fatal(err)
+	}
+	for name, request := range map[string]agents.Interaction{"the first": given.Request, "the second": renewed.Request} {
+		if _, err := ledger.answer(request); !errors.Is(err, ErrRevoked) {
+			t.Errorf("%s request answered after its lease was revoked: %v, want ErrRevoked", name, err)
+		}
+	}
+	if answered, err := ledger.answer(other.Request); err != nil || answered.Status != StatusCompleted {
+		t.Errorf("the other thread's request = %+v, %v; want it delivered", answered, err)
+	}
+
+	// Chosen again once it has run out, an access renews the same lease: it is
+	// the pair's lease in that thread, not one for each choice.
 	ledger.clock.Advance(2 * time.Hour)
-	pending := requestTo(t, ledger.ask("1790001000.000100", raya), raya)
-	if pending.Status != StatusPending {
-		t.Fatalf("a request after the lease ran out = %+v", pending)
+	later := requestTo(t, ledger.ask("1790001000.000100", raya), raya)
+	if later.Status != StatusPending {
+		t.Fatalf("a request after the lease ran out = %+v", later)
 	}
-	renewedAgain := ledger.decide(raya, pending, ChoiceAccess)
-	if renewedAgain.Lease == nil || renewedAgain.Lease.ID != lease.ID || !renewedAgain.Lease.ExpiresAt.Equal(ledger.clock.Now().Add(time.Hour)) ||
-		renewedAgain.Lease.RequestID != pending.ID || ledger.leases() != 2 {
-		t.Fatalf("renewed lease = %+v, %d leases; want the same lease, an hour from now", renewedAgain.Lease, ledger.leases())
+	again := ledger.decide(raya, later, ChoiceAccess)
+	if again.Lease == nil || again.Lease.ID == given.Lease.ID || again.Lease.RevokedAt != nil || ledger.leases() != 3 {
+		t.Fatalf("access after a revoke = %+v with %d leases; want a new lease, as the revoked one is over", again.Lease, ledger.leases())
 	}
 }
 
@@ -301,5 +323,30 @@ func TestRevokingOneLeaseLeavesAnotherAskersAlone(t *testing.T) {
 	// The other asker's request rode on their own lease.
 	if answered, err := ledger.answer(otherResult.Request); err != nil || answered.Status != StatusCompleted {
 		t.Fatalf("the other asker's answer = %+v, %v; want it delivered", answered, err)
+	}
+}
+
+// An ask to two owners, one of whom has a lease that covers it, is approved for
+// that owner alone: the other still has to be asked, and is closed, saying who
+// answered, when the first to answer does.
+func TestAnAskToTwoOwnersIsApprovedOnlyWhereALeaseCoversIt(t *testing.T) {
+	ledger := newSlackLedger(t)
+	lease, _ := ledger.givenAccess(raya)
+	result := ledger.ask("1790000100.000200", raya, maya)
+	forRaya, forMaya := requestTo(t, result, raya), requestTo(t, result, maya)
+	if forRaya.Status != StatusApproved || forRaya.Decision.DecidedBy.Reason != lease.ID || forMaya.Status != StatusPending {
+		t.Fatalf("Raya's request = %+v, Maya's = %+v", forRaya, forMaya)
+	}
+	if answered, err := ledger.answer(forRaya); err != nil || answered.Status != StatusCompleted {
+		t.Fatalf("Raya's answer = %+v, %v", answered, err)
+	}
+	closed := ledger.read(forMaya.ID)
+	if closed.Status != StatusRejected || closed.Decision.Message != "Answered by Name of "+raya || closed.Decision.DecidedBy.Kind != DecidedBySystem {
+		t.Fatalf("Maya's request = %+v, decision %+v", closed, closed.Decision)
+	}
+	// This ask is settled; the first one, whose approved request nobody has
+	// answered, is still open.
+	if open, err := ledger.service.CountOpenAsks(context.Background(), ledger.org, asker); err != nil || open != 1 {
+		t.Fatalf("open asks = %d, %v", open, err)
 	}
 }
