@@ -20,6 +20,9 @@ const (
 	// or been shown private things: a member's own run on a thread a wake-up
 	// already wrote to answers with all of it in view. No tool reads it back,
 	// so the caller says so when a run started with such a history.
+	// This also includes earlier shared side-conversation context: those
+	// words can carry private facts beyond the current question and should
+	// not silently reach a wider teamspace in a first-run publication.
 	ThreadHistory = "thread_history"
 )
 

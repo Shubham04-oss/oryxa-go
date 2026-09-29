@@ -3,14 +3,26 @@ package teamspaces
 import (
 	"context"
 	"errors"
+	"iter"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"google.golang.org/adk/v2/artifact"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
 
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardpolicy"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/relevance"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
 type publicationJudge struct {
@@ -131,5 +143,111 @@ func TestAgentPublicationCannotShareAnUnjudgedMiddle(t *testing.T) {
 	})
 	if !errors.Is(err, ErrUnchecked) || len(repo.entries) != 0 {
 		t.Fatalf("an oversized answer shared an unjudged middle: err=%v entries=%d", err, len(repo.entries))
+	}
+}
+
+// One isolated run has no concurrent lease owner or persistence under test.
+type publicationRuns struct{ outcome runstore.Outcome }
+
+func (*publicationRuns) Start(context.Context, runstore.Run, time.Duration) error { return nil }
+func (*publicationRuns) Renew(context.Context, string, time.Duration) error       { return nil }
+func (runs *publicationRuns) Finish(_ context.Context, _ string, outcome runstore.Outcome, _ events.Event) error {
+	runs.outcome = outcome
+	return nil
+}
+func (*publicationRuns) Cancel(context.Context, string) error { return nil }
+
+type firstSidePublicationModel struct{ summary string }
+
+func (firstSidePublicationModel) Name() string { return "first-side-publication" }
+func (llm firstSidePublicationModel) GenerateContent(_ context.Context, input *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	var response *genai.Content
+	last := ""
+	for _, content := range input.Contents {
+		for _, part := range content.Parts {
+			if part.FunctionResponse != nil {
+				last = part.FunctionResponse.Name
+			}
+		}
+	}
+	switch last {
+	case "teamspaces_publish":
+		response = genai.NewContentFromText("Finished.", genai.RoleModel)
+	case "load_tools":
+		response = &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "publish", Name: "teamspaces_publish", Args: map[string]any{
+			"teamspace_id": "tsp_1", "kind": "result", "title": "Launch", "summary": llm.summary,
+		}}}}}
+	default:
+		response = &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "load", Name: "load_tools", Args: map[string]any{"names": []any{"teamspaces"}}}}}}
+	}
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(&model.LLMResponse{Content: response, TurnComplete: true}, nil)
+	}
+}
+
+func TestFirstSideRunJudgesSharedContextBeforePublishingToTheTeam(t *testing.T) {
+	for _, sharedContext := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fresh public-only run", true: "private fact from side context"}[sharedContext], func(t *testing.T) {
+			judge := &publicationJudge{result: relevance.Result{Judged: true, Hold: true, Extras: []relevance.Category{relevance.Health}}}
+			policy := &publicationPolicy{effective: guardpolicy.Effective{Peer: guardpolicy.LevelStrict, Relevance: guardpolicy.RelevanceHold}}
+			ledger, repo := guardedSpace(t, WithGuard(realGuard(t, &bedrockFinding{}, answerguard.WithRelevance(judge))), WithGuardPolicy(policy))
+			summary := "Launch is Friday."
+			question := &threads.PublicationRequest{Request: "Publish launch timing"}
+			if sharedContext {
+				summary += " Ada is having surgery."
+				question.Context = []string{"Bo: Ada is having surgery."}
+			}
+			box, err := primaryagents.TeamspaceToolbox(primaryagents.TeamspaceConfig{Service: ledger})
+			if err != nil {
+				t.Fatal(err)
+			}
+			llm := firstSidePublicationModel{summary: summary}
+			router, err := modelrouter.New(llm, llm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := primaryagents.Root(router, []primaryagents.Toolbox{box}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prices, _ := pricing.NewTable(nil)
+			runs := &publicationRuns{}
+			service, err := threads.New(threads.Config{AppName: "krude", Agent: root, Sessions: session.InMemoryService(), Artifacts: artifact.InMemoryService(), Runs: runs, Prices: prices})
+			if err != nil {
+				t.Fatal(err)
+			}
+			member := threads.Member{OrganizationID: ada.OrganizationID, UserID: ada.UserID, AgentID: ada.AgentID, AgentName: ada.AgentName, AgentKind: ada.AgentKind, AccessToken: "member-token"}
+			thread, err := service.CreateFrom(context.Background(), member, threads.OriginSideConversation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := service.StartRun(context.Background(), member, thread.ID, threads.RunInput{Message: strings.Join(question.Context, "\n") + "\nMember asks: " + question.Request, PublicationRequest: question, TeamspaceID: "tsp_1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			published := false
+			var steps []string
+			run.Execute(context.Background(), func(item threads.Item) error {
+				steps = append(steps, string(item.Type)+":"+item.Tool+":"+item.Error)
+				if item.Type == threads.ItemToolCall && item.Tool == "teamspaces_publish" {
+					published = true
+				}
+				return nil
+			})
+			if !published {
+				t.Fatalf("the real Root never invoked teamspaces_publish: %v (%s)", steps, runs.outcome.Error)
+			}
+			if sharedContext {
+				if len(judge.inputs) != 1 || len(repo.entries) != 0 {
+					t.Fatalf("shared private context bypassed relevance: judge calls=%d stored entries=%d", len(judge.inputs), len(repo.entries))
+				}
+				input := judge.inputs[0]
+				if input.Request != question.Request || !slices.Equal(input.Context, question.Context) || !slices.Contains(input.Sources, relevance.ThreadHistory) {
+					t.Fatalf("first-side publication input=%+v", input)
+				}
+			} else if len(judge.inputs) != 0 || len(repo.entries) != 1 {
+				t.Fatalf("fresh public-only publication changed: judge calls=%d entries=%d", len(judge.inputs), len(repo.entries))
+			}
+		})
 	}
 }

@@ -1418,7 +1418,11 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         // a run that read nothing. Go's reused thread is private history too.
         sources:
           previous?.sources ??
-          ("confirmations" in input ? [GUARD_SOURCES_UNRECORDED] : []),
+          ("confirmations" in input
+            ? [GUARD_SOURCES_UNRECORDED]
+            : transcript.length > 0
+              ? [GUARD_THREAD_HISTORY]
+              : []),
       },
     }
     this.drafts.set(seq, draft)

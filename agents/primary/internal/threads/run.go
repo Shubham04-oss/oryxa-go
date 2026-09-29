@@ -290,6 +290,11 @@ func sidePublicationGuardInput(encoded string, hasHistory bool) agents.RunGuardI
 		return input
 	}
 	input.Request, input.Context = question.Request, question.Context
+	if len(question.Context) > 0 && !hasHistory {
+		// A first side run still read earlier shared conversation, which can
+		// carry private facts beyond the question and the wider team's reach.
+		input.Sources = append(input.Sources, relevance.ThreadHistory)
+	}
 	return input
 }
 

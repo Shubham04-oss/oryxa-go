@@ -408,7 +408,10 @@ an incomplete/overflowed record adds `run_sources_unrecorded`.
 Provider reads behind `transfer_to_agent`, and `interactions_get` (which
 reads other requests outside a pinned delivery), conservatively add the same
 marker. Reusing the owner's Go thread adds `thread_history`, including a
-confirmation continuation.
+confirmation continuation. Earlier shared side transcript is a source too:
+any nonempty prompt transcript adds `thread_history` even on the first Go
+run, in both the Worker check and the Go ledger guard. This records no extra
+transcript content and distinguishes conversation data from the clean question.
 Context is the last six lines of the shared transcript snapshot the run saw,
 each at most 1,000 code points, never the owner's private Go transcript. Go's
 existing workspace/member settings and deployment ceiling decide relevance.

@@ -1060,7 +1060,9 @@ exposes it. An older side confirmation without it has no authorized Request
 and adds the unknown-source marker; the wrapped prompt is never a fallback.
 Private agent replies and tool results are never context sent to this judge;
 the side context may include peer-agent replies already shared there.
-Prior thread content adds `thread_history`; missing or
+Prior own-thread content and nonempty shared side context both add
+`thread_history`, including a first side run with no earlier ADK events.
+No additional transcript content is retained. Missing or
 overflowed provenance adds `run_sources_unrecorded`, so it cannot bypass the
 private-source gate. Tool provenance is bounded, held only for the run and
 never stored in thread state. Provider-tool reads behind an agent transfer are
