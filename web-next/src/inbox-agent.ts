@@ -18,6 +18,12 @@ import {
 } from "./lib/dms/protocol"
 import type { InboxServerMessage } from "./lib/dms/protocol"
 import type { Conversation, ConversationKind } from "./lib/dms/types"
+import { readRequestNote, requestPreview } from "./lib/dms/request-notes"
+import type {
+  RequestLineState,
+  RequestNote,
+  RequestNoteOutcome,
+} from "./lib/dms/request-notes"
 import { removalTime } from "./realtime-purge"
 import { isPurgeInstant, purgeMemoryMs } from "./realtime-registry-agent"
 import type { PurgeOutcome } from "./realtime-registry-agent"
@@ -51,6 +57,8 @@ export type NotedMessage = {
  */
 export type RestatedConversation = {
   last?: NotedMessage
+  /** The latest request between the two people that stays, if any (`RequestNote`). */
+  request?: RequestNote
   readSeq: number
   unread: number[]
 }
@@ -106,6 +114,21 @@ type ConversationRow = {
   read_seq: number
   updated_at: string
   unread: number
+  // The conversation's latest request, joined in (`inbox_requests`), or all null.
+  req_asker_id: string | null
+  req_origin: string | null
+  req_state: string | null
+  req_changed_at: string | null
+}
+
+/** The latest request a conversation holds a note of. */
+type HeldRequest = {
+  requestId: string
+  revision: number
+  askerId: string
+  origin: string
+  state: RequestLineState
+  changedAt: string
 }
 
 function send(connection: Connection, message: InboxServerMessage | string) {
@@ -118,7 +141,20 @@ function send(connection: Connection, message: InboxServerMessage | string) {
   }
 }
 
-function conversationOf(row: ConversationRow): Conversation {
+/**
+ * A row as a page is sent it, for `viewerId`, the inbox's member. The
+ * preview is the latest of what was said and the latest request between the
+ * two people, whichever is newer (both are times as the objects write them,
+ * which compare as strings): a request is said in fixed words, from the
+ * member's side, and never as its peer's own, so it carries no "You:".
+ */
+function conversationOf(row: ConversationRow, viewerId: string): Conversation {
+  const requestNewer =
+    row.req_asker_id !== null &&
+    row.req_origin !== null &&
+    row.req_state !== null &&
+    row.req_changed_at !== null &&
+    (row.last_created_at === null || row.req_changed_at > row.last_created_at)
   return {
     kind: row.kind,
     name: row.name,
@@ -127,17 +163,29 @@ function conversationOf(row: ConversationRow): Conversation {
     ...(row.teamspace_name === null
       ? {}
       : { teamspaceName: row.teamspace_name }),
-    ...(row.last_author_id === null ||
-    row.last_body === null ||
-    row.last_created_at === null
-      ? {}
-      : {
+    ...(requestNewer
+      ? {
           lastMessage: {
-            authorId: row.last_author_id,
-            body: row.last_body,
-            createdAt: row.last_created_at,
+            authorId: row.peer_id,
+            body: requestPreview(
+              row.req_asker_id === viewerId,
+              row.req_origin ?? "",
+              row.req_state as RequestLineState
+            ),
+            createdAt: row.req_changed_at ?? row.updated_at,
           },
-        }),
+        }
+      : row.last_author_id === null ||
+          row.last_body === null ||
+          row.last_created_at === null
+        ? {}
+        : {
+            lastMessage: {
+              authorId: row.last_author_id,
+              body: row.last_body,
+              createdAt: row.last_created_at,
+            },
+          }),
     unread: row.unread,
     updatedAt: row.updated_at,
   }
@@ -187,6 +235,14 @@ async function eachLimited<T>(
  * after that they have not (so a message told twice counts once, and reads
  * and messages may arrive in either order). Every change reaches the
  * member's sockets with the new unread total.
+ *
+ * A request between the member and the other person in a direct message
+ * (`noteRequest`, told by the Worker from Go's word, src/realtime-requests.ts)
+ * lists the conversation if it was not, moves it up, and, while it is the
+ * newest thing in it, is what the row's preview says, in fixed words: who
+ * asked whose agent, the origin and the state, never what was asked. It
+ * counts as no unread message. One note is kept for each conversation, for
+ * the latest request, at the highest revision it was told of.
  *
  * Its first conversation registers it with its organization's registry
  * (`RealtimeRegistryAgent`), so an organization's purge finds it; a
@@ -336,6 +392,47 @@ export class InboxAgent extends Agent<ConversationEnv> {
     this.announce(name)
   }
 
+  /**
+   * A move of a request between the member and the other person in a direct
+   * message, told by the Worker. Lists the conversation if it was not, moves
+   * it up to when the request reached its state, and keeps the note, which
+   * the row's preview says while it is the newest thing in the conversation.
+   * It counts nothing as unread.
+   *
+   * One note is kept for each conversation: the request that changed last,
+   * at the highest revision told of. A note for the request held that is no
+   * newer, or for another request that changed earlier than the one held,
+   * does nothing and resolves `repeated`, so it is safe to tell twice, and in
+   * any order. A note that is not between the member and the conversation's
+   * other person is refused with a `TypeError`, so an object can never list
+   * a request in the wrong inbox.
+   */
+  async noteRequest(
+    entry: ConversationEntry,
+    note: RequestNote
+  ): Promise<RequestNoteOutcome> {
+    this.schema()
+    const conversation = this.checkedEntry(entry)
+    const checked = this.checkedRequest(conversation, note)
+    const { name } = conversation
+    const held = this.heldRequest(name)
+    if (
+      held &&
+      (held.requestId === checked.requestId
+        ? checked.revision <= held.revision
+        : checked.changedAt <= held.changedAt)
+    ) {
+      return "repeated"
+    }
+    this.list(conversation, checked.changedAt)
+    this.keepRequest(name, checked)
+    this.sql`UPDATE inbox_conversations SET
+        updated_at = MAX(updated_at, ${checked.changedAt}) WHERE name = ${name}`
+    this.announce(name)
+    await this.register()
+    return "noted"
+  }
+
   /** Lists a conversation without a message (a side conversation as it starts), or updates what it says about itself. */
   async upsertConversation(entry: ConversationEntry): Promise<void> {
     this.schema()
@@ -389,7 +486,7 @@ export class InboxAgent extends Agent<ConversationEnv> {
     this.schema()
     const conversation = this.checkedEntry(entry)
     const { name } = conversation
-    const { last, readSeq, unread } = state as {
+    const { last, request, readSeq, unread } = state as {
       [Key in keyof RestatedConversation]?: unknown
     }
     if (
@@ -401,10 +498,15 @@ export class InboxAgent extends Agent<ConversationEnv> {
     ) {
       throw new TypeError("not a restated conversation")
     }
-    if (last === undefined) {
+    const held =
+      request === undefined
+        ? undefined
+        : this.checkedRequest(conversation, request as RequestNote)
+    if (last === undefined && held === undefined) {
       const listed = this.row(name) !== undefined
       this.sql`DELETE FROM inbox_conversations WHERE name = ${name}`
       this.sql`DELETE FROM inbox_unread WHERE name = ${name}`
+      this.sql`DELETE FROM inbox_requests WHERE name = ${name}`
       this.sql`INSERT INTO inbox_known (name, kind, peer_id)
         VALUES (${name}, ${conversation.kind}, ${conversation.peerId})
         ON CONFLICT (name) DO NOTHING`
@@ -418,21 +520,31 @@ export class InboxAgent extends Agent<ConversationEnv> {
       await this.register()
       return
     }
-    const latest = this.checkedMessage(conversation, last as NotedMessage)
-    this.list(conversation, latest.createdAt)
+    // What stays may be a message, a request, or both: the row is moved up
+    // to the later of them, and its preview says the newer.
+    const latest =
+      last === undefined
+        ? undefined
+        : this.checkedMessage(conversation, last as NotedMessage)
+    const at = [latest?.createdAt, held?.changedAt]
+      .filter((time): time is string => time !== undefined)
+      .reduce((later, time) => (time > later ? time : later))
+    this.list(conversation, at)
     this.sql`UPDATE inbox_conversations SET
-        last_seq = ${latest.seq},
-        last_author_id = ${latest.authorId},
-        last_body = ${latest.body},
-        last_created_at = ${latest.createdAt},
+        last_seq = ${latest?.seq ?? 0},
+        last_author_id = ${latest?.authorId ?? null},
+        last_body = ${latest?.body ?? null},
+        last_created_at = ${latest?.createdAt ?? null},
         read_seq = ${readSeq},
-        updated_at = ${latest.createdAt}
+        updated_at = ${at}
       WHERE name = ${name}`
     this.sql`DELETE FROM inbox_unread WHERE name = ${name}`
     for (const seq of (unread as number[]).slice(-MAX_UNREAD)) {
       this.sql`INSERT INTO inbox_unread (name, seq) VALUES (${name}, ${seq})
         ON CONFLICT DO NOTHING`
     }
+    if (held) this.keepRequest(name, held)
+    else this.sql`DELETE FROM inbox_requests WHERE name = ${name}`
     this.sql`DELETE FROM inbox_known WHERE name = ${name}`
     this.announce(name)
     await this.register()
@@ -474,6 +586,7 @@ export class InboxAgent extends Agent<ConversationEnv> {
       this.sql`DELETE FROM inbox_conversations`
       this.sql`DELETE FROM inbox_known`
       this.sql`DELETE FROM inbox_unread`
+      this.sql`DELETE FROM inbox_requests`
       this.sql`DELETE FROM inbox_meta`
       this.sql`DELETE FROM inbox_teamspace_removals`
       if (retry) await this.cancelSchedule(retry).catch(() => false)
@@ -628,6 +741,18 @@ export class InboxAgent extends Agent<ConversationEnv> {
       name TEXT NOT NULL,
       seq INTEGER NOT NULL,
       PRIMARY KEY (name, seq)
+    )`
+    // The latest request in each conversation, at the highest revision
+    // told of: what its row's preview says while it is the newest thing
+    // there.
+    this.sql`CREATE TABLE IF NOT EXISTS inbox_requests (
+      name TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      asker_id TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      state TEXT NOT NULL,
+      changed_at TEXT NOT NULL
     )`
     // Conversations the member is in that list nothing yet: only a purge
     // reads them.
@@ -801,6 +926,65 @@ export class InboxAgent extends Agent<ConversationEnv> {
     }
   }
 
+  /**
+   * A request's note checked against this inbox and a conversation of it: a
+   * well-formed note between the member and the conversation's other person,
+   * whichever of them asked, in a direct message. Throws for anything else,
+   * read as whatever arrived over RPC.
+   */
+  private checkedRequest(
+    conversation: ConversationEntry,
+    note: RequestNote
+  ): RequestNote {
+    const checked = readRequestNote(note)
+    const member = this.owner.userId
+    if (
+      !checked ||
+      conversation.kind !== "dm" ||
+      !(
+        (checked.askerId === member &&
+          checked.ownerId === conversation.peerId) ||
+        (checked.ownerId === member && checked.askerId === conversation.peerId)
+      )
+    ) {
+      throw new TypeError("not a request of this direct message")
+    }
+    return checked
+  }
+
+  /** The note a conversation holds of its latest request, if it holds one. */
+  private heldRequest(name: string): HeldRequest | undefined {
+    const row = this.sql<{
+      request_id: string
+      revision: number
+      asker_id: string
+      origin: string
+      state: RequestLineState
+      changed_at: string
+    }>`SELECT request_id, revision, asker_id, origin, state, changed_at
+      FROM inbox_requests WHERE name = ${name}`.at(0)
+    return row === undefined
+      ? undefined
+      : {
+          requestId: row.request_id,
+          revision: row.revision,
+          askerId: row.asker_id,
+          origin: row.origin,
+          state: row.state,
+          changedAt: row.changed_at,
+        }
+  }
+
+  /** Keeps `note` as a conversation's latest request, in place of any held. */
+  private keepRequest(name: string, note: RequestNote): void {
+    this
+      .sql`INSERT INTO inbox_requests (name, request_id, revision, asker_id, origin, state, changed_at)
+      VALUES (${name}, ${note.requestId}, ${note.revision}, ${note.askerId}, ${note.origin}, ${note.state}, ${note.changedAt})
+      ON CONFLICT (name) DO UPDATE SET
+        request_id = excluded.request_id, revision = excluded.revision, asker_id = excluded.asker_id,
+        origin = excluded.origin, state = excluded.state, changed_at = excluded.changed_at`
+  }
+
   /** Lists a conversation, or updates what it says about itself. */
   private list(conversation: ConversationEntry, at: string): void {
     this
@@ -833,6 +1017,7 @@ export class InboxAgent extends Agent<ConversationEnv> {
   private forgetConversation(name: string): void {
     this.sql`DELETE FROM inbox_conversations WHERE name = ${name}`
     this.sql`DELETE FROM inbox_unread WHERE name = ${name}`
+    this.sql`DELETE FROM inbox_requests WHERE name = ${name}`
     this.tell({
       type: "inbox-removed",
       name,
@@ -846,7 +1031,7 @@ export class InboxAgent extends Agent<ConversationEnv> {
     if (!row) return
     this.tell({
       type: "inbox-conversation",
-      conversation: conversationOf(row),
+      conversation: conversationOf(row, this.owner.userId),
       unreadTotal: this.unreadTotal(),
     })
   }
@@ -888,16 +1073,26 @@ export class InboxAgent extends Agent<ConversationEnv> {
   private row(name: string): ConversationRow | undefined {
     return this.sql<ConversationRow>`SELECT c.*, (
         SELECT COUNT(*) FROM inbox_unread u WHERE u.name = c.name
-      ) AS unread
-      FROM inbox_conversations c WHERE c.name = ${name}`.at(0)
+      ) AS unread,
+      r.asker_id AS req_asker_id, r.origin AS req_origin,
+      r.state AS req_state, r.changed_at AS req_changed_at
+      FROM inbox_conversations c
+      LEFT JOIN inbox_requests r ON r.name = c.name
+      WHERE c.name = ${name}`.at(0)
   }
 
   private listed(limit = -1): Conversation[] {
+    const member = this.owner.userId
     return this.sql<ConversationRow>`SELECT c.*, (
         SELECT COUNT(*) FROM inbox_unread u WHERE u.name = c.name
-      ) AS unread
+      ) AS unread,
+      r.asker_id AS req_asker_id, r.origin AS req_origin,
+      r.state AS req_state, r.changed_at AS req_changed_at
       FROM inbox_conversations c
-      ORDER BY c.updated_at DESC, c.name ASC LIMIT ${limit}`.map(conversationOf)
+      LEFT JOIN inbox_requests r ON r.name = c.name
+      ORDER BY c.updated_at DESC, c.name ASC LIMIT ${limit}`.map((row) =>
+      conversationOf(row, member)
+    )
   }
 
   private unreadIn(name: string): number {

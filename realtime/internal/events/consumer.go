@@ -1,8 +1,10 @@
 // Package events hears, on realtime's own queue, auth's word that a
 // membership or an organization ended, and agents' that a person left a
 // teamspace or it was deleted, and turns each into one purge by the Worker,
-// recorded once done as realtime.purge.completed.v1. It also puts realtime's
-// own events on the bus.
+// recorded once done as realtime.purge.completed.v1. It hears agents' word
+// that a request between two members moved too, and has the Worker note it in
+// their direct message and inboxes. It also puts realtime's own events on the
+// bus.
 package events
 
 import (
@@ -27,26 +29,44 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/purge"
+	"github.com/Shubham04-oss/oryxa-go/realtime/internal/requests"
 )
 
 // component identifies this consumer in its metrics and logs, low-cardinality
 // and fixed regardless of which queue or detail type it is handling.
 const component = "realtime"
 
+// requestDetailTypes are the agents events that move a request between two
+// members. Each carries the request's whole projection (InteractionChanged),
+// so any of them says where it stands. The lease and secret events are not
+// among them: they change no request's state, which is what a note says.
+var requestDetailTypes = []string{
+	agentseventsv1.InteractionRequestedDetailType,
+	agentseventsv1.InteractionDecidedDetailType,
+	agentseventsv1.InteractionCompletedDetailType,
+}
+
+// isRequestEvent reports whether detailType is one of requestDetailTypes.
+func isRequestEvent(detailType string) bool {
+	return slices.Contains(requestDetailTypes, detailType)
+}
+
 // Subscriptions are the events realtime consumes, by source: auth's word that
-// a membership or an organization ended, and agents' that a person left a
-// teamspace or it was deleted. The rule that delivers them to realtime's
-// queue is built from this.
+// a membership or an organization ended, agents' that a person left a
+// teamspace or it was deleted, and agents' that a request between two members
+// was made, decided or answered. The rule that delivers them to realtime's
+// queue is built from this, so a type added here reaches the queue once the
+// provisioner has run again, and not before.
 func Subscriptions() map[string][]string {
 	return map[string][]string{
 		autheventsv1.Source: {
 			autheventsv1.OrganizationDeletedDetailType,
 			autheventsv1.MemberRemovedDetailType,
 		},
-		agentseventsv1.Source: {
+		agentseventsv1.Source: slices.Concat([]string{
 			agentseventsv1.TeamspaceDeletedDetailType,
 			agentseventsv1.TeamspaceMemberRemovedDetailType,
-		},
+		}, requestDetailTypes),
 	}
 }
 
@@ -81,6 +101,12 @@ type Purger interface {
 	Purge(context.Context, purge.Request) error
 }
 
+// Noter is what a request's movement is sent through, to have the Worker note
+// it; *requests.Client is one.
+type Noter interface {
+	Note(context.Context, requests.Note) error
+}
+
 // Recorder keeps the audit trail of purges: realtime.purge.completed.v1 in
 // realtime's outbox. *postgres.Store is one. Recording one again, for the
 // same event, records nothing new.
@@ -91,9 +117,13 @@ type Recorder interface {
 // Consumer purges the realtime conversations of members who left an
 // organization, and of organizations that were deleted, and the side
 // conversations of members who left a teamspace, and of teamspaces that were
-// deleted.
+// deleted. It has the Worker note each move of a request between two members.
 type Consumer struct {
 	purger Purger
+	// noter has the Worker note a request's move. NewConsumer refuses a nil
+	// one: the queue's rule delivers those events, so a consumer without one
+	// would fail every one of them.
+	noter Noter
 	// recorder records each purge once the Worker has done it. NewConsumer
 	// refuses a nil one, so no purge goes unrecorded by omission.
 	recorder Recorder
@@ -106,16 +136,22 @@ type Consumer struct {
 	logger   *slog.Logger
 	metrics  observability.ConsumerMetrics
 	purged   *recent
+	// noted remembers the requests' moves the Worker took lately, by request
+	// and revision, as purged does the purges.
+	noted *recent
 	// queueName is set once, at the top of Poll, before Poll's single
 	// goroutine starts calling handle; it is not touched concurrently.
 	queueName string
 }
 
-// NewConsumer returns a consumer that purges through purger, and records
-// each purge done through recorder.
-func NewConsumer(purger Purger, recorder Recorder, verifier *eventauth.Verifier, logger *slog.Logger) (*Consumer, error) {
+// NewConsumer returns a consumer that purges through purger, has noter note
+// the moves of requests, and records each purge done through recorder.
+func NewConsumer(purger Purger, noter Noter, recorder Recorder, verifier *eventauth.Verifier, logger *slog.Logger) (*Consumer, error) {
 	if purger == nil {
 		return nil, errors.New("realtime needs the Worker to purge through")
+	}
+	if noter == nil {
+		return nil, errors.New("realtime needs the Worker to note requests through")
 	}
 	if recorder == nil {
 		return nil, errors.New("realtime needs somewhere to record the purges it has done")
@@ -130,7 +166,10 @@ func NewConsumer(purger Purger, recorder Recorder, verifier *eventauth.Verifier,
 	if err != nil {
 		logger.Warn("consumer metrics unavailable; handling continues without them", "error", err)
 	}
-	return &Consumer{purger: purger, recorder: recorder, verifier: verifier, logger: logger, metrics: metrics, purged: newRecent(recentSize)}, nil
+	return &Consumer{
+		purger: purger, noter: noter, recorder: recorder, verifier: verifier, logger: logger, metrics: metrics,
+		purged: newRecent(recentSize), noted: newRecent(recentSize),
+	}, nil
 }
 
 type eventBridgeEvent struct {
@@ -155,44 +194,88 @@ type receivedEnvelope struct {
 
 // Handle processes one SQS message body: an EventBridge event from auth or
 // agents. It returns nil once the message is done with: purged and the purge
-// recorded, or purged already. An error wrapping purge.ErrPermanent means the
-// Worker refused the purge for good, and one for an event whose removed_at
-// lies more than maxClockSkew ahead means no purge should be sent; Poll drops
-// the message for either. Any other error leaves it for the queue to deliver
-// again, including a purge done but not recorded.
+// recorded, or purged already; or a request's move noted, or noted already,
+// or one there is nothing to note. An error wrapping purge.ErrPermanent, or
+// requests.ErrPermanent, means the Worker refused for good, and one for an
+// event whose removed_at lies more than maxClockSkew ahead means no purge
+// should be sent; Poll drops the message for either. Any other error leaves it
+// for the queue to deliver again, including a purge done but not recorded.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 	_, err := consumer.handle(ctx, body, time.Now())
 	return err
 }
 
-// handle is Handle, answering also with the purge the event asked for, as far
-// as it got to saying, so that one given up for good can be logged whole.
-func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt time.Time) (purge.Request, error) {
+// handled is what an event asked for, as far as it got to saying, so that
+// one given up for good can be logged whole: a purge, or a request's move.
+type handled struct {
+	purge purge.Request
+	note  requests.Note
+	// isNote is set once the event is known to move a request, whether or
+	// not it could be read as one.
+	isNote bool
+}
+
+// describe names what an event that failed was about, when it got as far as
+// saying: for a purge, its organization and teamspace, and for a move of a
+// request, its organization and the request.
+func (result handled) describe() string {
+	switch {
+	case result.note.RequestID != "":
+		return " for organization " + result.note.OrganizationID + ", request " + result.note.RequestID
+	case result.isNote:
+		return ""
+	}
+	return scope(result.purge)
+}
+
+// handle is Handle, answering also with what the event asked for.
+func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt time.Time) (handled, error) {
 	var event eventBridgeEvent
 	if err := json.Unmarshal([]byte(body), &event); err != nil {
-		return purge.Request{}, fmt.Errorf("decode EventBridge event: %w", err)
+		return handled{}, fmt.Errorf("decode EventBridge event: %w", err)
 	}
 	if !slices.Contains(Subscriptions()[event.Source], event.DetailType) {
-		return purge.Request{}, fmt.Errorf("event %s: no handler for %s from %s", event.ID, event.DetailType, event.Source)
+		return handled{}, fmt.Errorf("event %s: no handler for %s from %s", event.ID, event.DetailType, event.Source)
 	}
 	var detail receivedEnvelope
 	if err := json.Unmarshal(event.Detail, &detail); err != nil {
-		return purge.Request{}, fmt.Errorf("event %s: decode detail: %w", event.ID, err)
+		return handled{}, fmt.Errorf("event %s: decode detail: %w", event.ID, err)
 	}
 	if detail.Version != 1 || detail.EventID == "" {
-		return purge.Request{}, fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, detail.Version, detail.EventID)
+		return handled{}, fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, detail.Version, detail.EventID)
 	}
 	// The signature is checked before anything in the event is used, so a
 	// message that reached the queue without the service it names as its
-	// source having sent it purges nothing, whatever it names.
+	// source having sent it purges and notes nothing, whatever it names.
 	if err := consumer.verifier.Verify(event.Source, event.DetailType, detail.EventID, detail.Version, detail.OccurredAt, detail.Data, detail.Signature); err != nil {
-		return purge.Request{}, fmt.Errorf("event %s: %w", detail.EventID, err)
+		return handled{}, fmt.Errorf("event %s: %w", detail.EventID, err)
 	}
 	occurredAt, _ := time.Parse(time.RFC3339Nano, detail.OccurredAt)
 
 	ctx, span := observability.StartConsumerSpan(ctx, detail.TraceCarrier, consumer.queueName, event.DetailType, detail.EventID)
 	started := time.Now()
-	request, err := requestFor(event.DetailType, detail.EventID, detail.Data)
+	var (
+		result handled
+		err    error
+	)
+	if isRequestEvent(event.DetailType) {
+		result.isNote = true
+		result.note, err = consumer.handleRequest(ctx, detail.Data)
+	} else {
+		result.purge, err = consumer.handlePurge(ctx, event.DetailType, detail.EventID, detail.Data, receivedAt)
+	}
+	observability.EndSpan(span, err)
+	consumer.metrics.Record(ctx, component, event.DetailType, occurredAt, receivedAt, started, err)
+	if err != nil {
+		return result, fmt.Errorf("event %s: %s%s: %w", detail.EventID, event.DetailType, result.describe(), err)
+	}
+	return result, nil
+}
+
+// handlePurge purges what an event that ended a membership, an organization or
+// a teamspace asks for, and records the purge once the Worker has done it.
+func (consumer *Consumer) handlePurge(ctx context.Context, detailType, eventID string, data json.RawMessage, receivedAt time.Time) (purge.Request, error) {
+	request, err := requestFor(detailType, eventID, data)
 	if err == nil && request.RemovedAt.After(receivedAt.Add(maxClockSkew)) {
 		err = fmt.Errorf("%w: %s is more than %s after the event was received", errFutureRemoval,
 			request.RemovedAt.UTC().Format(time.RFC3339Nano), maxClockSkew)
@@ -200,7 +283,7 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 	outcome := "realtime conversations purged"
 	switch {
 	case err != nil:
-	case consumer.purged.has(detail.EventID):
+	case consumer.purged.has(eventID):
 		outcome = "realtime purge already done"
 	default:
 		if err = consumer.purger.Purge(ctx, request); err == nil {
@@ -208,18 +291,47 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 			// whose record failed is purged again when it comes back, and
 			// recorded then.
 			if err = consumer.record(ctx, request, time.Now()); err == nil {
-				consumer.purged.add(detail.EventID)
+				consumer.purged.add(eventID)
 			}
 		}
 	}
-	observability.EndSpan(span, err)
-	consumer.metrics.Record(ctx, component, event.DetailType, occurredAt, receivedAt, started, err)
 	if err != nil {
-		return request, fmt.Errorf("event %s: %s%s: %w", detail.EventID, event.DetailType, scope(request), err)
+		return request, err
 	}
-	consumer.logger.InfoContext(ctx, outcome, "event_id", detail.EventID, "detail_type", event.DetailType,
+	consumer.logger.InfoContext(ctx, outcome, "event_id", eventID, "detail_type", detailType,
 		"organization_id", request.OrganizationID, "scope", string(request.Scope), "teamspace_id", request.TeamspaceID)
 	return request, nil
+}
+
+// handleRequest has the Worker note the move of a request an event says, once:
+// the Worker keeps a request's highest revision, so a note sent again does
+// nothing, and the consumer remembers, as it does for purges, what it has
+// sent lately, to save the call. An event with nothing to note, which is a
+// request between one member's own agents, or a status or an origin no note
+// says, is logged and done with: sending it again would say no more.
+func (consumer *Consumer) handleRequest(ctx context.Context, data json.RawMessage) (requests.Note, error) {
+	note, skipped, err := noteFor(data)
+	if err != nil {
+		return note, err
+	}
+	fields := []any{
+		"organization_id", note.OrganizationID, "request_id", note.RequestID, "revision", note.Revision, "state", string(note.State),
+	}
+	if skipped != "" {
+		consumer.logger.WarnContext(ctx, "realtime request not noted: "+skipped, fields...)
+		return note, nil
+	}
+	key := note.RequestID + ":" + strconv.FormatInt(note.Revision, 10)
+	if consumer.noted.has(key) {
+		consumer.logger.InfoContext(ctx, "realtime request already noted", fields...)
+		return note, nil
+	}
+	if err := consumer.noter.Note(ctx, note); err != nil {
+		return note, err
+	}
+	consumer.noted.add(key)
+	consumer.logger.InfoContext(ctx, "realtime request noted", fields...)
+	return note, nil
 }
 
 // recordTimeout bounds recording a purge the Worker has done. The record goes
@@ -329,6 +441,66 @@ func requestFor(detailType, eventID string, data json.RawMessage) (purge.Request
 	return purge.Request{}, fmt.Errorf("no purge for %s", detailType)
 }
 
+// The statuses of a request the ledger publishes (InteractionChanged.Status),
+// as the contract words them, and the state a note says for each. Where the
+// contract names a status that no note says, or a build publishes one this
+// build has not heard of, the request is not noted.
+var stateOfStatus = map[string]requests.State{
+	"pending":   requests.StateWaiting,
+	"approved":  requests.StateApproved,
+	"rejected":  requests.StateDeclined,
+	"completed": requests.StateAnswered,
+	"review":    requests.StateHeld,
+	"failed":    requests.StateFailed,
+	"withheld":  requests.StateWithheld,
+}
+
+// noteFor is the note an interaction event asks for: who asked and whose
+// agent was asked, where the request was made, the revision it reached and the
+// state that revision is in, and when. Nothing of what was asked or answered
+// is in the event, so none is in the note. It is empty, with skipped saying
+// why, for an event there is nothing to note for; an event it cannot read at
+// all is an error, which stays on the queue and ends in the dead-letter queue,
+// as any consumer's does.
+func noteFor(data json.RawMessage) (note requests.Note, skipped string, err error) {
+	var changed agentseventsv1.InteractionChanged
+	if err := json.Unmarshal(data, &changed); err != nil {
+		return requests.Note{}, "", fmt.Errorf("decode event data: %w", err)
+	}
+	if changed.OrganizationID == "" || changed.RequestID == "" || changed.RequesterUserID == "" ||
+		changed.TargetUserID == "" || changed.Revision < 1 || changed.ChangedAt.IsZero() {
+		return requests.Note{}, "", errors.New("interaction event has no organization_id, request_id, requester_user_id, target_user_id, revision or changed_at")
+	}
+	// An event an older build published, before the field existed, has no
+	// origin, which is an agent's request.
+	origin := changed.Origin
+	if origin == "" {
+		origin = requests.OriginAgent
+	}
+	note = requests.Note{
+		OrganizationID: changed.OrganizationID, RequestID: changed.RequestID, Revision: changed.Revision,
+		AskerUserID: changed.RequesterUserID, OwnerUserID: changed.TargetUserID, Origin: origin,
+		ChangedAt: changed.ChangedAt.UTC(),
+	}
+	state, known := stateOfStatus[changed.Status]
+	note.State = state
+	switch {
+	case changed.RequesterUserID == changed.TargetUserID:
+		// A conversation is between two people.
+		return note, "it is between one member's own agents", nil
+	case !known:
+		return note, "no note says its status " + strconv.Quote(changed.Status), nil
+	case !requests.ValidOrigin(origin):
+		return note, "its origin " + strconv.Quote(origin) + " is not a word a note carries", nil
+	case !requests.IsID(changed.OrganizationID) || !requests.IsID(changed.RequestID) ||
+		!requests.IsID(changed.RequesterUserID) || !requests.IsID(changed.TargetUserID):
+		// The Worker names the conversation after these, and would refuse
+		// what its names cannot hold.
+		return note, "an id in it cannot stand in a conversation's name", nil
+	}
+	return note, "", nil
+}
+
 type queueAPI interface {
 	ReceiveMessage(context.Context, *sqs.ReceiveMessageInput, ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
 	DeleteMessageBatch(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
@@ -388,9 +560,18 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 				// Stopping: what is left goes back to the queue.
 				break
 			}
-			request, err := consumer.handle(ctx, aws.ToString(message.Body), receivedAt)
+			result, err := consumer.handle(ctx, aws.ToString(message.Body), receivedAt)
+			request, note := result.purge, result.note
 			switch {
 			case err == nil:
+			case errors.Is(err, requests.ErrPermanent):
+				// The note whole, as the Worker was sent it, so it can be sent
+				// by hand once whatever stopped it is put right.
+				consumer.logger.ErrorContext(ctx, "realtime request note dropped: sending it again would not make it right",
+					"sqs_message_id", aws.ToString(message.MessageId), "organization_id", note.OrganizationID,
+					"request_id", note.RequestID, "revision", note.Revision, "asker_user_id", note.AskerUserID,
+					"owner_user_id", note.OwnerUserID, "origin", note.Origin, "state", string(note.State),
+					"changed_at", note.ChangedAt.UTC().Format(time.RFC3339Nano), "error", err)
 			case errors.Is(err, purge.ErrPermanent), errors.Is(err, errFutureRemoval):
 				// The purge whole, as the Worker was or would have been sent it,
 				// so it can be sent by hand once whatever stopped it is put
@@ -408,8 +589,11 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 				continue
 			default:
 				if ctx.Err() == nil {
-					consumer.logger.ErrorContext(ctx, "realtime purge failed; the queue will deliver it again",
-						"sqs_message_id", aws.ToString(message.MessageId), "error", err)
+					failed := "realtime purge failed; the queue will deliver it again"
+					if result.isNote {
+						failed = "realtime request note failed; the queue will deliver it again"
+					}
+					consumer.logger.ErrorContext(ctx, failed, "sqs_message_id", aws.ToString(message.MessageId), "error", err)
 				}
 				continue
 			}

@@ -10,12 +10,14 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/purge"
+	"github.com/Shubham04-oss/oryxa-go/realtime/internal/requests"
 )
 
-// The rule matches each source's own endings, and only from that source: an
-// agents detail type claimed by auth, or the other way round, matches
-// nothing.
-func TestEventPatternMatchesTheEndsOfMembershipsAndTeamspaces(t *testing.T) {
+// The rule matches each source's own endings and the moves of requests, and
+// only from that source: an agents detail type claimed by auth, or the other
+// way round, matches nothing. The lease and secret events of a Slack ask are
+// not in it: they change no request's state.
+func TestEventPatternMatchesTheEndsOfMembershipsAndTeamspacesAndTheMovesOfRequests(t *testing.T) {
 	pattern, err := EventPattern()
 	if err != nil {
 		t.Fatalf("EventPattern() error = %v", err)
@@ -24,7 +26,10 @@ func TestEventPatternMatchesTheEndsOfMembershipsAndTeamspaces(t *testing.T) {
 		"$or": [
 			{
 				"source": ["oryxa.agents"],
-				"detail-type": ["agents.teamspace.deleted.v1", "agents.teamspace.member.removed.v1"]
+				"detail-type": [
+					"agents.interaction.completed.v1", "agents.interaction.decided.v1", "agents.interaction.requested.v1",
+					"agents.teamspace.deleted.v1", "agents.teamspace.member.removed.v1"
+				]
 			},
 			{
 				"source": ["oryxa.auth"],
@@ -95,7 +100,7 @@ func TestFromEnvNamesTheDeploymentsQueue(t *testing.T) {
 // organization's.
 func TestTheVisibilityTimeoutOutlastsABatchTheWorkerNeverAnswers(t *testing.T) {
 	visibility := time.Duration(visibilityTimeoutSeconds) * time.Second
-	longest := max(purge.MemberTimeout, purge.OrganizationTimeout)
+	longest := max(purge.MemberTimeout, purge.OrganizationTimeout, requests.Timeout)
 	if batch := time.Duration(events.ReceiveBatch) * longest; visibility < batch {
 		t.Fatalf("visibility timeout %s < %d messages x %s", visibility, events.ReceiveBatch, longest)
 	}

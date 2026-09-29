@@ -4,18 +4,21 @@ The web app keeps direct messages and teamspace side conversations only in its W
 
 - **Purges.** When a member leaves an organization, or the organization is deleted, those conversations must go, and no Go service can delete them. So must a member's side conversations in a teamspace when they leave its team, and all of a teamspace's when it is deleted. Realtime hears the first two from auth and the last two from agents, on its own queue, and turns each into one signed call that has the Worker purge them. Each purge done is recorded as `realtime.purge.completed.v1`.
 - **Events.** The Worker tells realtime what happens in those conversations, a message posted or a conversation read, on `POST /v1/realtime/events`. Realtime publishes each on the bus as `oryxa.realtime`, so other services can react. As agents' request events do, they carry identities and lifecycle state, never what was said: no bodies, no previews, no titles.
+- **Request notes.** When an agent request between two members is made, decided or answered, agents says so on the bus. Realtime hears it on its queue and has the Worker note it, in the two people's direct message and in both their inboxes, so a page learns of it over its socket rather than at its next poll. The note is identities and a state: who asked whose agent, and whether it waits, was approved, declined, answered, or is held. The page reads the request itself from Go, as the member.
 
 Realtime is off until it is configured. Once on, it keeps its outbox, and the ids of the Worker's recent events, in PostgreSQL.
 
 ```text
 auth ──── auth.member.removed.v1, auth.organization.deleted.v1 ──────────────┐
-                                                                             ├──▶ realtime-auth-memberships rule
-agents ── agents.teamspace.member.removed.v1, agents.teamspace.deleted.v1 ───┘
+                                                                             │
+agents ── agents.teamspace.member.removed.v1, agents.teamspace.deleted.v1 ───┼──▶ realtime-auth-memberships rule
+                                                                             │
+agents ── agents.interaction.requested.v1, .decided.v1, .completed.v1 ───────┘
                                                                                              │
                                                                           realtime-events queue (dead letters: realtime-events-dlq)
                                                                                              │
-                                                                                         realtime ── POST /internal/realtime/purge ──▶ Worker
-                                                                                           ▲  │
+                                                                                         realtime ── POST /internal/realtime/purge ────────▶ Worker
+                                                                                           ▲  │   └─ POST /internal/realtime/requests ────▶ Worker
                                                                 POST /v1/realtime/events ──┘  └──▶ realtime_outbox ──▶ the bus, as oryxa.realtime
                                                                       (from the Worker)
 ```
@@ -110,7 +113,85 @@ A purge the Worker has done is recorded as `realtime.purge.completed.v1` before 
 
 Realtime remembers the last 1,024 events it purged and recorded. A message delivered again after that is then deleted without a second call. This only saves calls. It does not guarantee anything, because it forgets on restart. The Worker's idempotence is the guarantee.
 
-To consume another event: add it to `Subscriptions`, under its source, and `requestFor` in `internal/events`, and re-run the provisioner so the rule matches it.
+To consume another event: add it to `Subscriptions`, under its source, and to `requestFor` in `internal/events` (a purge) or to `requestDetailTypes` (a request note), and re-run the provisioner, after the release, so the rule matches it.
+
+## The request notes
+
+Realtime makes the call. The Worker serves it. Both sides implement exactly this:
+
+```http
+POST {REALTIME_WORKER_URL}/internal/realtime/requests
+Content-Type: application/json
+X-Oryxa-Timestamp: 1790208000
+X-Oryxa-Signature: v1=6efcec28a265a8e2c70d1a03881c12b7c43808663c62263cf23bbe8a91ad51f7
+
+{"organization_id":"org_1","request_id":"irq_golden_1","revision":1,"asker_user_id":"user-a","owner_user_id":"user-b","origin":"agent","state":"waiting","changed_at":"2026-09-24T10:00:00Z"}
+```
+
+- **Body:** compact JSON, in this order, with all eight keys always present. It is identities and a state, never what was asked or answered:
+  - `organization_id` is the organization, and `request_id` the request (agents' `irq_…`). `asker_user_id` is the member who asked, and `owner_user_id` the member whose agent was asked. They are two different people, and each id is 1 to 128 of `A-Z a-z 0-9 _ -`, the shape a conversation's name can hold: the Worker names the two people's direct message after them.
+  - `revision` is the request's own, from 1. It goes up by one each time the request changes, and never down.
+  - `origin` is where the request was made: `agent` (an agent filed it) or `slack` (the Slack app did, for the member who mentioned it). An event from before the field existed is `agent`. Another word a later build publishes is passed on as it is, if it is a short lowercase one (`[a-z][a-z0-9_-]{0,31}`); the Worker says only that a request was made.
+  - `state` is where the request stands, in the words a page shows: see the table below.
+  - `changed_at` is when the request reached this state (agents' `changed_at`, the ledger's `updated_at`), in UTC, in RFC 3339, with as many digits of a fraction of a second as the event had, up to nine. The Worker places the note in the conversation by it, so a note that waited on the queue is still where it happened.
+- **`X-Oryxa-Timestamp`:** when this attempt was signed, in Unix seconds. Every retry is signed afresh, so the Worker can refuse one signed more than five minutes from its own clock.
+- **`X-Oryxa-Signature`:** `v1=` followed by the lowercase hex HMAC-SHA256 of `requests.`, the timestamp in decimal, a `.`, and the body exactly as sent. The key is `REALTIME_PURGE_SECRET`'s characters as written, as the purge's is. The prefix keeps the three directions apart: a purge's string starts with its timestamp, which is digits, so a purge's signature never verifies here; the Worker's events to Go start with `events.`; and a signature made for a note verifies as neither.
+- **User-Agent:** `oryxa-realtime/1`. Redirects are not followed. Each call has 15 seconds.
+
+The states, from the status agents publishes:
+
+| `state` | Agents' status | What it means |
+| --- | --- | --- |
+| `waiting` | `pending` | Nobody has decided the request yet. A request approved and then held for its owner's decision is `waiting` again, at a higher revision |
+| `approved` | `approved` | Approved, and its agent is working on it |
+| `declined` | `rejected` | Rejected: by its owner, by their agent, or by Oryxa closing it |
+| `answered` | `completed` | The answer was delivered |
+| `held` | `review` | The answer waits for its owner to review it. The one who asked is told only that |
+| `failed` | `failed` | It ended without an answer |
+| `withheld` | `withheld` | Its owner, or its expiry, kept the answer back |
+
+A pending or approved request past its expiry is `expired` when Go reads it. No event says so, so a note's state is only where the request was last told to be, and a page that wants the truth reads the request from Go.
+
+## What starts a request note
+
+| Detail type | Note |
+| --- | --- |
+| `agents.interaction.requested.v1`, `agents.interaction.decided.v1`, `agents.interaction.completed.v1` | One note, whose state is the event's status. Each carries the request's whole projection (`InteractionChanged`), so any of them says where the request stands |
+
+Two agents events about a request are not consumed: `agents.interaction.lease.revoked.v1` and `agents.interaction.secret.viewed.v1`. Neither changes a request's state, which is all a note says, and the Requests view shows them itself. An event that is one of the three but has nothing to note is logged as `realtime request not noted` at warning level, and its message is deleted, since sending it again would say no more:
+
+- a request between one member's own agents, which is no conversation between two people;
+- a status no note says (`expired`, which no event carries, or one a later build adds);
+- an origin that is not a short lowercase word;
+- an id that a conversation's name cannot hold.
+
+An event realtime cannot read (not JSON, an unsupported envelope, no organization, request, people, revision or time, or a signature that does not check out under `enforce`) stays on the queue and ends in the dead-letter queue, as in every consumer, and as the purges' events do. A note is a hint the page checks against Go, so it is never worth more than that: but an operator can see what did not arrive.
+
+| The Worker answers | Realtime |
+| --- | --- |
+| `204` | Done: noted, or the Worker already had this revision or a higher one. The message is deleted |
+| `400` or `413` carrying the Worker's own refusal, `{"error":{"code":…}}` | The Worker refusing the body for good. It is logged as `realtime request note dropped`, with the status, the start of the Worker's answer and the note's fields, and the message is deleted |
+| `401` | A bad signature: the secret or the clock. Logged, and kept for the queue to deliver again, so it reaches the dead-letter queue and can be redriven once the secret is fixed |
+| Anything else, no answer in time, or no connection | Kept and retried, as the purge's are: delivered again after fifteen minutes, and after five receives moved to the dead-letter queue |
+
+**A note is idempotent.** The Worker keeps, for each request in a conversation, the highest revision it has noted, and ignores a note that is not newer. So a note sent twice, or delivered after a later one (SQS and EventBridge keep no order), does nothing, and realtime may send whatever it is unsure of. It remembers the last 1,024 revisions it sent, to save calls: like the purge's memory, that is a saving and not a guarantee, and the Worker's rule is the guarantee.
+
+### The request notes' golden vectors
+
+The Worker's verification is tested against these (`web-next/src/realtime-requests.test.ts`), and `internal/requests/requests_test.go` pins them. `openssl dgst -sha256 -hmac "$secret"` over `"requests.$timestamp.$body"` reproduces them. For each, the signatures a purge and an events request would have made of the same body are shown: neither is accepted on the requests route, and a note's is accepted on neither of theirs.
+
+| | |
+| --- | --- |
+| Secret | `5f2b8e1c9a7d4036b1e8c2f94a6d0e3b7c1f5a9d2e8b4c6f0a3d7e1b9c5f2a84` (64 characters, used as they are) |
+| Timestamp | `1790208000` (2026-09-24T00:00:00Z) |
+| A request just made | `{"organization_id":"org_1","request_id":"irq_golden_1","revision":1,"asker_user_id":"user-a","owner_user_id":"user-b","origin":"agent","state":"waiting","changed_at":"2026-09-24T10:00:00Z"}` |
+| Its signature | `v1=6efcec28a265a8e2c70d1a03881c12b7c43808663c62263cf23bbe8a91ad51f7` |
+| The purge's signature of it, refused | `v1=16be9eafa65062c650af54c73a245257e0a0fa7de9e04a9ddb72c0321dbd8b7b` |
+| The events' signature of it, refused | `v1=fdd14f29a48994bbf995dae4c418db61aa81613c296f801a447ce64950869a7c` |
+| The request approved, from Slack, within a second | `{"organization_id":"org_1","request_id":"irq_golden_1","revision":2,"asker_user_id":"user-a","owner_user_id":"user-b","origin":"slack","state":"approved","changed_at":"2026-09-24T10:00:01.123Z"}` |
+| Its signature | `v1=90d5150be5363039161c4ea3eef17f3817e4129925c3caa98aa8ba1051b7656b` |
+| The purge's signature of it, refused | `v1=5932e4b56b95ba214b3936588b1e0f724f2f03583ac9c2debc456896e37f5cc0` |
+| The events' signature of it, refused | `v1=c4879ba81942450723e44d9f58d3c1797c5db3db735cb18c122c57e87c84de81` |
 
 ## The Worker's events
 
@@ -202,6 +283,8 @@ Realtime's schema is two tables, installed through postgreskit under `realtime` 
 | `REALTIME_EVENTS_QUEUE_URL` | The queue the provisioner prints |
 | `REALTIME_EVENTS_QUEUE_NAME` | The provisioner's name for that queue: `realtime-events` unless set |
 
+The request notes use the same `REALTIME_WORKER_URL` and `REALTIME_PURGE_SECRET`, and the same queue: nothing new is set for them.
+
 Realtime runs only once the first three are set, and then needs `DATABASE_URL`, as every service that keeps anything does. Its route is served only while it runs. A process running every service says once which are missing and runs without realtime (`realtime is off`). A process given `ORYXA_SERVICES=realtime`, alone or in a list, refuses to start instead. A value that is set but malformed, such as a relative URL or a short secret, always refuses. A production start (`DEPLOYMENT_ENVIRONMENT=production`) refuses while `REALTIME_EVENTS_QUEUE_URL` is unset, as for every consumer, but only once `REALTIME_WORKER_URL` or `REALTIME_PURGE_SECRET` is set. With neither, realtime is off and hears nothing, so a release can carry it before its queue exists.
 
 ## Provision
@@ -212,7 +295,7 @@ Copy the root `.env.example` to the ignored `.env`. Its emulator block points SQ
 (set -a && . ./.env && go run ./realtime/infra/events/cmd/provision)
 ```
 
-The command is repeatable. It creates or updates the `realtime-events` queue and `realtime-events-dlq`, with a fifteen-minute visibility timeout, a redrive after five receives, 14 days' retention and SQS-managed encryption. It also creates a `realtime-auth-memberships` rule on `EVENT_BUS_NAME`, matching the four detail types above, each from its own source: an `$or` of auth's two from `oryxa.auth` and agents' two from `oryxa.agents`. The rule kept its name when agents' events were added, since the provisioner deletes no rule, and a renamed one would have left the old one delivering beside it. Re-run the command, or `deploy/scripts/provision-app.sh`, wherever the rule was made before, so it matches agents' events too. The rule's target is the queue, with the dead-letter queue for an event EventBridge cannot deliver to it, and each queue's policy admits that rule alone. Put the printed `queue_url` in `REALTIME_EVENTS_QUEUE_URL`. LocalStack forgets it all when it restarts, so re-run the command after a restart.
+The command is repeatable. It creates or updates the `realtime-events` queue and `realtime-events-dlq`, with a fifteen-minute visibility timeout, a redrive after five receives, 14 days' retention and SQS-managed encryption. It also creates a `realtime-auth-memberships` rule on `EVENT_BUS_NAME`, matching the four detail types above, each from its own source: an `$or` of auth's two from `oryxa.auth` and agents' two from `oryxa.agents`. The rule kept its name when agents' events were added, since the provisioner deletes no rule, and a renamed one would have left the old one delivering beside it. Re-run the command, or `deploy/scripts/provision-app.sh`, wherever the rule was made before, so it matches agents' events too. It matches agents' `agents.interaction.requested.v1`, `agents.interaction.decided.v1` and `agents.interaction.completed.v1` as well, for the request notes, so a release that added them needs the command run again. Run it after that release is live, never before: a rule that matches a type the running consumer does not know delivers events it refuses, which end in the dead-letter queue, whose alarm mails. Agents publishes those events already, so the rule delivers them from the moment it changes. The rule's target is the queue, with the dead-letter queue for an event EventBridge cannot deliver to it, and each queue's policy admits that rule alone. Put the printed `queue_url` in `REALTIME_EVENTS_QUEUE_URL`. LocalStack forgets it all when it restarts, so re-run the command after a restart.
 
 ## Run locally
 
@@ -235,6 +318,16 @@ curl -i http://localhost:8080/v1/realtime/events -H 'Content-Type: application/j
   -H "X-Oryxa-Timestamp: $timestamp" -H "X-Oryxa-Signature: v1=$signature" --data-binary "$body"
 ```
 
+A request note can be signed by hand the same way, over `requests.`, and sent to a Worker running locally (`REALTIME_PURGE_SECRET` in web-next's `.dev.vars` the same value). It answers `204` and, with a DM open, the page shows the line:
+
+```sh
+secret=…  # REALTIME_PURGE_SECRET, as the Worker has it
+timestamp=$(date +%s)
+body='{"organization_id":"org_1","request_id":"irq_1","revision":1,"asker_user_id":"user-a","owner_user_id":"user-b","origin":"agent","state":"waiting","changed_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
+signature=$(printf '%s' "requests.$timestamp.$body" | openssl dgst -sha256 -hmac "$secret" | awk '{print $NF}')
+curl -i http://localhost:3001/internal/realtime/requests -H "X-Oryxa-Timestamp: $timestamp" -H "X-Oryxa-Signature: v1=$signature" --data-binary "$body"
+```
+
 The storage's integration tests need a PostgreSQL they may create schemas in, each test in a schema of its own, dropped when it ends:
 
 ```sh
@@ -245,6 +338,8 @@ REALTIME_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/o
 
 Realtime deploys in the single `oryxa` image, off. Its identity needs `sqs:ReceiveMessage` and `sqs:DeleteMessage` on its queue, and `events:PutEvents` on the bus, which the task role's `PublishEvents` statement already grants every service, whatever its source. It also needs outbound HTTPS to the web app's origin, and nothing in front of the Worker may challenge a request from AWS to `/internal/realtime/purge`: a Cloudflare bot or WAF rule answering `403` would send every purge to the dead-letter queue. The same goes the other way: nothing may challenge the Worker's `POST /v1/realtime/events` on its way to the tunnel.
 
+The Worker's `POST /internal/realtime/requests` is a route of its own beside the purge's, behind the same edge, so what is said of the purge holds for it: nothing may challenge a call from AWS to it. A Worker without the route answers `404`, which realtime keeps and retries, so the Worker goes out before the rule that delivers the events (see Provision).
+
 For the Worker's events to arrive, web-next's Worker needs `ORYXA_API_ORIGIN`, the API's public origin, and the same `REALTIME_PURGE_SECRET`, and realtime must be on. Until it is, the route answers `404`, and the Worker keeps each event, retrying, for seven days, then drops it.
 
 In production it was turned on 2026-09-28, once web-next was serving `app.oryxa.in` with the purge route: the Worker's endpoint had to be live, holding the same secret, before realtime went on. Before that, `app.oryxa.in` was served by the old `web/` Worker, which has no purge route and answers `404`, so every purge would have ended in the dead-letter queue. web-next now has both the route and a production environment, `oryxa-production-web-next`, holding the secret (`wrangler secret put REALTIME_PURGE_SECRET --env production`). `realtime_purge` in `deploy/production/realtime.auto.tfvars.json` is the switch, now `true`, and `deploy/README.md` gives the order to turn it on again, or off.
@@ -254,4 +349,6 @@ In production it was turned on 2026-09-28, once web-next was serving `app.oryxa.
 - `removed_at` comes from auth's clock, or for a teamspace's purge from Teams' or agents', and the Worker's messages are stamped by Cloudflare's. The clocks agree only to within a few milliseconds, so a message written in the same instant as the removal may fall on either side of it.
 - Realtime's events have no consumer yet. They reach the bus, and its archive, and nothing else.
 - The Worker's event ids are deduplicated alone, not with their conversation, so the Worker must make them unique across every conversation.
+- A request note that could not be delivered is tried again after fifteen minutes, the queue's visibility timeout, which the purges' longest call sets. A page reads the request from Go every ten seconds anyway, so a late note is a late line in a conversation, and never a wrong answer.
+- A note that reaches the Worker after a purge took its conversation (a member left the organization, and an event about a request they were in was still on the queue) makes a note in the emptied conversation, and lists it in the other person's inbox, where opening it answers 404. The same holds for a message sent in the moment of a purge.
 - A dropped purge is gone from the queue. Its log line carries it whole, as `event_id`, `scope`, `organization_id`, `user_id`, `teamspace_id` and `removed_at`, so it can be sent again by hand. In production the bus also archives every event for a week, so one can be replayed to realtime's rule once whatever stopped it is put right.

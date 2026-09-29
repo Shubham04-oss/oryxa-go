@@ -1,8 +1,10 @@
-// Package provision creates what delivers the endings realtime purges for to
-// it, auth's of memberships and organizations and agents' of teamspace
-// memberships and teamspaces: a queue with a dead-letter queue, and an
-// EventBridge rule allowed to send to the queue, and to the dead-letter queue
-// what it cannot deliver there.
+// Package provision creates what delivers the events realtime consumes to it:
+// the endings it purges for, auth's of memberships and organizations and
+// agents' of teamspace memberships and teamspaces, and agents' word that a
+// request between two members was made, decided or answered, which it has the
+// web app note. A queue with a dead-letter queue, and an EventBridge rule
+// allowed to send to the queue, and to the dead-letter queue what it cannot
+// deliver there.
 package provision
 
 import (
@@ -34,13 +36,15 @@ const (
 	targetID = "realtime-queue"
 	// Receives before SQS moves a message realtime keeps failing on aside:
 	// with the visibility timeout below, about 75 minutes of the Worker being
-	// down, or refusing the signature, before a purge waits for a redrive.
+	// down, or refusing the signature, before a purge, or the note of a
+	// request, waits for a redrive.
 	maxReceiveCount = 5
 	// The consumer takes five messages at a time and waits on the Worker for
 	// each, one after another: up to 30 seconds for a member's purge, and 120
 	// for an organization's, which the Worker answers only once every member
-	// is purged. Fifteen minutes covers a batch of organizations the Worker
-	// never answers, and spaces the retries of one.
+	// is purged, and 15 for the note of a request. Fifteen minutes covers a
+	// batch of organizations the Worker never answers, and spaces the retries
+	// of one.
 	visibilityTimeoutSeconds = 900
 	// Fourteen days, the most SQS keeps anything, on both queues: a purge is
 	// owed however late it runs, including one waiting for realtime to be
@@ -109,7 +113,7 @@ func Run(ctx context.Context, eventBridgeClient *eventbridge.Client, sqsClient *
 
 	rule, err := eventBridgeClient.PutRule(ctx, &eventbridge.PutRuleInput{
 		Name:         aws.String(ruleName),
-		Description:  aws.String("Auth's membership and organization endings, and agents' teamspace ones, whose conversations realtime has the web app purge"),
+		Description:  aws.String("Auth's membership and organization endings, and agents' teamspace ones, whose conversations realtime has the web app purge, and agents' moves of a request between two members, which it has the web app note"),
 		EventBusName: aws.String(config.EventBusName),
 		EventPattern: aws.String(pattern),
 		State:        eventbridgetypes.RuleStateEnabled,
@@ -165,7 +169,12 @@ func Run(ctx context.Context, eventBridgeClient *eventbridge.Client, sqsClient *
 // EventPattern matches exactly the events realtime consumes, each source's
 // detail types in a branch of their own: auth's that a membership or an
 // organization ended, and agents' that a person left a teamspace or it was
-// deleted.
+// deleted, and that a request between two members was made, decided or
+// answered. A type realtime's consumer does not know is one its queue must
+// never be sent, since an event it cannot handle ends in the dead-letter
+// queue; so the rule widens only after the consumer that knows the type is
+// running, which is why deploy/scripts/provision-app.sh runs after a release
+// that adds one.
 func EventPattern() (string, error) {
 	subscriptions := events.Subscriptions()
 	var sources []map[string][]string
