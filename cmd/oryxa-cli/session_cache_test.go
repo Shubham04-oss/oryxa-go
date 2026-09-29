@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +54,7 @@ func TestMain(m *testing.M) {
 		os.Setenv(name, directory)
 	}
 	sessionStore = &fakeCredentialStore{values: map[string]string{}}
+	http.DefaultTransport = localTestTransport{http.DefaultTransport}
 	code := m.Run()
 	os.RemoveAll(directory)
 	os.Exit(code)
@@ -162,5 +166,27 @@ func TestLongApplyDoesNotReuseAlmostExpiredSession(t *testing.T) {
 	var human *humanError
 	if !errors.As(err, &human) {
 		t.Fatalf("almost expired token reused for long apply: %v", err)
+	}
+}
+
+type localTestTransport struct{ http.RoundTripper }
+
+func (transport localTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	hostname := request.URL.Hostname()
+	if ip := net.ParseIP(hostname); hostname != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return nil, fmt.Errorf("test blocked non-loopback HTTP request")
+	}
+	return transport.RoundTripper.RoundTrip(request)
+}
+func TestCLIIsHermeticWithPopulatedDefaultCache(t *testing.T) {
+	testSessionStore(t)
+	getenv := func(string) string { return "" }
+	if err := saveSession("https://api.oryxa.in", cliSession{AccessToken: "fake-cached-token", ExpiresAt: time.Now().Add(time.Minute)}, getenv); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"whoami", "--no-input", "--json"}, &stdout, &stderr, getenv)
+	if code != 1 || !strings.Contains(stdout.String(), "test blocked non-loopback HTTP request") {
+		t.Fatalf("test might reach production: exit%d %s %s", code, stdout.String(), stderr.String())
 	}
 }
