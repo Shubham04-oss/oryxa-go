@@ -21,6 +21,8 @@ type Settings struct {
 	ExpireAfter   time.Duration
 	HoldForReview bool
 	Proactive     string
+	// SearchMode is empty when the workspace has no override.
+	SearchMode string
 	// Offer is nil when all Composio toolkits are allowed. An empty list
 	// explicitly disables every toolkit for this organization.
 	Offer         *[]string
@@ -62,6 +64,9 @@ func (loader *Loader) Get(ctx context.Context, organizationID string) (Settings,
 	}
 	if document.Tools != nil {
 		settings.AutoSubscribe = document.Tools.AutoSubscribe
+	}
+	if document.Search != nil {
+		settings.SearchMode = document.Search.Mode
 	}
 	return settings, nil
 }

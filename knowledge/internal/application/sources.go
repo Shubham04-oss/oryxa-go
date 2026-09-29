@@ -82,6 +82,9 @@ func (s *Service) registerFor(ctx context.Context, credentials authclient.Creden
 // register records a source for a caller whose right to it has been decided.
 func (s *Service) register(ctx context.Context, credentials authclient.Credentials, caller domain.OrgMembership, organizationID string, input RegisterInput) (domain.Source, error) {
 	provider := strings.TrimSpace(input.Provider)
+	if err := s.allowProvider(ctx, organizationID, provider); err != nil {
+		return domain.Source{}, err
+	}
 	extractor, err := s.extractors.Extractor(provider)
 	if err != nil {
 		return domain.Source{}, err
@@ -317,6 +320,9 @@ func (s *Service) SyncSource(ctx context.Context, credentials authclient.Credent
 	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
 		// Answering not-found tells the caller nothing they did not know.
 		return domain.Source{}, domain.ErrNotFound
+	}
+	if err := s.allowProvider(ctx, organizationID, source.Provider); err != nil {
+		return domain.Source{}, err
 	}
 	switch source.Status {
 	case domain.StatusActive:

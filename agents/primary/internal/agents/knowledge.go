@@ -19,6 +19,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/knowledgeclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/ragclient"
+	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
 // The knowledge toolbox ships with its skill, carried in Krude's system
@@ -60,6 +61,10 @@ type KnowledgeSyncer interface {
 // KnowledgeConfig configures KnowledgeToolbox.
 type KnowledgeConfig struct {
 	Rag Knowledge
+	// Policy reads the last applied workspace version for every tool call.
+	Policy interface {
+		Get(context.Context, string) (workspacepolicy.Settings, error)
+	}
 	// Sources is optional when the knowledge service is not configured.
 	Sources KnowledgeSources
 	// ReadOnly excludes scheduling an extraction in unattended runs.
@@ -90,7 +95,7 @@ func KnowledgeToolbox(config KnowledgeConfig) (Toolbox, error) {
 	if config.Rag == nil {
 		return Toolbox{}, errors.New("agents: KnowledgeToolbox requires rag")
 	}
-	knowledge := knowledgeTools{rag: config.Rag, sources: config.Sources, tokens: config.Tokens, minRelevance: config.MinRelevance}
+	knowledge := knowledgeTools{rag: config.Rag, sources: config.Sources, tokens: config.Tokens, policy: config.Policy, minRelevance: config.MinRelevance}
 	collections, err := functiontool.New(functiontool.Config{
 		Name:        "knowledge_collections",
 		Description: "Lists the collections of documents the member can search: their own and their organization's, with how many documents each holds.",
@@ -136,11 +141,28 @@ func KnowledgeToolbox(config KnowledgeConfig) (Toolbox, error) {
 }
 
 type knowledgeTools struct {
-	rag          Knowledge
-	sources      KnowledgeSources
-	syncer       KnowledgeSyncer
-	tokens       memberauth.TokenSource
+	rag     Knowledge
+	sources KnowledgeSources
+	syncer  KnowledgeSyncer
+	tokens  memberauth.TokenSource
+	policy  interface {
+		Get(context.Context, string) (workspacepolicy.Settings, error)
+	}
 	minRelevance float64
+}
+
+func (knowledge knowledgeTools) allowSearch(ctx context.Context, organizationID string) error {
+	if knowledge.policy == nil {
+		return nil
+	}
+	settings, err := knowledge.policy.Get(ctx, organizationID)
+	if err != nil {
+		return fmt.Errorf("workspace search policy unavailable: %w", err)
+	}
+	if settings.SearchMode == "none" {
+		return errors.New("knowledge tools are disabled for this organization")
+	}
+	return nil
 }
 
 const maxSourcesListed = 50
@@ -179,6 +201,9 @@ func (knowledge knowledgeTools) syncSource(ctx agent.Context, args syncSourceArg
 	if err != nil {
 		return sourceStatus{}, explained(err)
 	}
+	if err := knowledge.allowSearch(ctx, member.OrganizationID); err != nil {
+		return sourceStatus{}, err
+	}
 	source, err := knowledge.syncer.SyncSource(ctx, member.OrganizationID, strings.TrimSpace(args.SourceID), token)
 	if err != nil {
 		return sourceStatus{}, explained(err)
@@ -190,6 +215,9 @@ func (knowledge knowledgeTools) sourcesStatus(ctx agent.Context, args sourcesArg
 	member, token, err := memberauth.Bearer(ctx, knowledge.tokens)
 	if err != nil {
 		return sourcesResult{}, explained(err)
+	}
+	if err := knowledge.allowSearch(ctx, member.OrganizationID); err != nil {
+		return sourcesResult{}, err
 	}
 	listed, err := knowledge.sources.Sources(ctx, member.OrganizationID, token, strings.TrimSpace(args.Provider), strings.TrimSpace(args.ConnectionID))
 	if err != nil {
@@ -228,6 +256,9 @@ func (knowledge knowledgeTools) collections(ctx agent.Context, _ collectionsArgs
 	member, token, err := memberauth.Bearer(ctx, knowledge.tokens)
 	if err != nil {
 		return collectionsResult{}, explained(err)
+	}
+	if err := knowledge.allowSearch(ctx, member.OrganizationID); err != nil {
+		return collectionsResult{}, err
 	}
 	corpora, err := knowledge.rag.Corpora(ctx, member.OrganizationID, token)
 	if err != nil {
@@ -286,6 +317,9 @@ func (knowledge knowledgeTools) search(ctx agent.Context, args searchArgs) (sear
 	member, token, err := memberauth.Bearer(ctx, knowledge.tokens)
 	if err != nil {
 		return searchResult{}, explained(err)
+	}
+	if err := knowledge.allowSearch(ctx, member.OrganizationID); err != nil {
+		return searchResult{}, err
 	}
 	collectionIDs := slices.Compact(slices.Sorted(slices.Values(args.CollectionIDs)))
 	if len(collectionIDs) == 0 {

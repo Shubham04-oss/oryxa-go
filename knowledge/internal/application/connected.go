@@ -67,6 +67,12 @@ func (s *Service) ConnectionConnected(ctx context.Context, event appsv1.Connecti
 	if _, mounted := s.extractors[provider]; !mounted {
 		return nil
 	}
+	if err := s.allowProvider(ctx, event.OrganizationID, provider); err != nil {
+		if errors.Is(err, domain.ErrForbidden) {
+			return nil
+		}
+		return err
+	}
 	logger := s.logger.With("organization_id", event.OrganizationID,
 		"connection_id", event.ConnectionID, "toolkit", event.Toolkit)
 

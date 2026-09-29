@@ -37,6 +37,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
+	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -55,6 +56,10 @@ type Options struct {
 	// token of its own. When nil, Build uses auth's agent-token exchange if
 	// Settings names both AuthURL and ServiceKeyID, and otherwise none.
 	Tokens memberauth.TokenSource
+	// Policy controls live organization search behavior.
+	Policy interface {
+		Get(context.Context, string) (workspacepolicy.Settings, error)
+	}
 	// HTTP is the client the apps toolbox's MCP calls go out on. Defaults to
 	// a fresh http.Client.
 	HTTP *http.Client
@@ -348,6 +353,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 		knowledgeToolbox, err := agents.KnowledgeToolbox(agents.KnowledgeConfig{
 			Rag:          ragclient.New(settings.RagURL, nil),
+			Policy:       options.Policy,
 			Sources:      sources,
 			Tokens:       tokens,
 			MinRelevance: settings.KnowledgeMinRelevance,
@@ -358,6 +364,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			toolboxes = append(toolboxes, knowledgeToolbox)
 			readOnlyKnowledge, err := agents.KnowledgeToolbox(agents.KnowledgeConfig{
 				Rag:          ragclient.New(settings.RagURL, nil),
+				Policy:       options.Policy,
 				Sources:      sources,
 				ReadOnly:     true,
 				Tokens:       tokens,

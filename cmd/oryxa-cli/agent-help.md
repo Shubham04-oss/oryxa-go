@@ -29,6 +29,9 @@ review the plan before applying it. Slack installation remains a manual step.
    `rules.consent.expireAfter` and `safety.guard.holdForReview`. Map the
    organization default for app update wake-ups to
    `agents.personal.proactive: on` or `off`. Do not infer these policies.
+8. If the admin chooses Oryxa's own knowledge search, set `search.mode:
+   native`; if they explicitly turn agent knowledge tools off, use
+   `search.mode: none`. Leave it out when no search decision was made.
 
 Example:
 
@@ -58,6 +61,8 @@ tools:
   provider: composio
   offer: [github, jira]
   autoSubscribe: false
+search:
+  mode: native
 ```
 
 ## Review and apply
@@ -74,8 +79,9 @@ Explicit `prune: true` under the relevant section plans removals and requires
 review. `tools.offer` is an organization allowlist: omission allows every
 Composio toolkit, while `offer: []` allows none. Research actual toolkit slugs
 before listing them; a disallowed app's existing connection cannot act or
-deliver events until it is allowed again. `tools.autoSubscribe` is the default
-for new connections. Unsupported sections fail validation before any write.
+deliver events or refresh knowledge sources until it is allowed again.
+Previously indexed documents remain. `tools.autoSubscribe` is the default for
+new connections. Unsupported sections fail validation before any write.
 The CLI does not currently configure Slack, external directory providers,
-search providers, the other governance and safety controls, retention, or the
+external search providers, the other governance and safety controls, retention, or the
 other tool settings.

@@ -44,6 +44,7 @@ func TestParseRejectsUnknownAndUnsupportedSettings(t *testing.T) {
 		{"unknown team mapping", strings.Replace(example, "name: Engineering", "name: Engineering, mystery: yes", 1), "mystery"},
 		{"unsupported section", example + "chat: {slack: {install: add_to_slack}}\n", "chat is not yet supported"},
 		{"unsupported agent policy", example + "agents: {personal: {style: concise}}\n", "style"},
+		{"unsupported external search", example + "search: {mode: external}\n", "external search is not yet supported"},
 		{"empty agent name", example + "agents: {organization: {displayName: ' '}}\n", "agents.organization.displayName"},
 		{"secret value", example + "secrets: {apiKey: plaintext}\n", "secrets is not yet supported"},
 		{"wrong domain", strings.Replace(example, "raya@acme.com", "raya@other.com", 1), "outside metadata.domains"},
@@ -57,6 +58,28 @@ func TestParseRejectsUnknownAndUnsupportedSettings(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestParseNativeSearchMode(t *testing.T) {
+	for _, mode := range []string{"native", "none"} {
+		document, err := Parse([]byte(example + "search: {mode: " + mode + "}\n"))
+		if err != nil || document.Search == nil || document.Search.Mode != mode {
+			t.Fatalf("search %s = %+v, %v", mode, document.Search, err)
+		}
+		encoded, err := document.YAML()
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := Parse(encoded)
+		if err != nil || parsed.Search == nil || parsed.Search.Mode != mode {
+			t.Fatalf("round trip %s = %+v, %v", mode, parsed.Search, err)
+		}
+	}
+	for _, invalid := range []string{"search: {}", "search: {mode: other}", "search: {mode: native, source: glean}"} {
+		if _, err := Parse([]byte(example + invalid + "\n")); err == nil {
+			t.Fatalf("accepted %s", invalid)
+		}
 	}
 }
 

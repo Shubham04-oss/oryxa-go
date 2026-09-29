@@ -345,6 +345,7 @@ func (server *Server) pull(writer http.ResponseWriter, request *http.Request) {
 		document.Rules = previous.Rules
 		document.Safety = previous.Safety
 		document.Tools = previous.Tools
+		document.Search = previous.Search
 		if previous.Agents != nil && previous.Agents.Personal != nil {
 			if document.Agents == nil {
 				document.Agents = &spec.Agents{}

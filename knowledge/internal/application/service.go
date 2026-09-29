@@ -15,11 +15,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
+	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
@@ -154,9 +156,13 @@ type Originals interface {
 }
 
 type Dependencies struct {
-	Store      Store
-	Directory  Directory
-	Apps       Apps
+	Store     Store
+	Directory Directory
+	Apps      Apps
+	// Policy reads the applied workspace version before provider operations.
+	Policy interface {
+		Get(context.Context, string) (workspacepolicy.Settings, error)
+	}
 	Grants     Grants
 	Extractors sources.Registry
 	// Originals is nil unless KNOWLEDGE_ORIGINALS_BUCKET is configured.
@@ -183,9 +189,12 @@ type Config struct {
 }
 
 type Service struct {
-	store           Store
-	directory       Directory
-	apps            Apps
+	store     Store
+	directory Directory
+	apps      Apps
+	policy    interface {
+		Get(context.Context, string) (workspacepolicy.Settings, error)
+	}
 	grants          Grants
 	extractors      sources.Registry
 	originals       Originals
@@ -201,6 +210,7 @@ func New(dependencies Dependencies, config Config) *Service {
 		store:           dependencies.Store,
 		directory:       dependencies.Directory,
 		apps:            dependencies.Apps,
+		policy:          dependencies.Policy,
 		grants:          dependencies.Grants,
 		extractors:      dependencies.Extractors,
 		originals:       dependencies.Originals,
@@ -226,6 +236,20 @@ func New(dependencies Dependencies, config Config) *Service {
 		service.config.FullSweepInterval = domain.DefaultFullSweepInterval
 	}
 	return service
+}
+
+func (s *Service) allowProvider(ctx context.Context, organizationID, provider string) error {
+	if provider == filesProvider || s.policy == nil {
+		return nil
+	}
+	settings, err := s.policy.Get(ctx, organizationID)
+	if err != nil {
+		return fmt.Errorf("read the organization's app policy: %w", domain.ErrProviderUnavailable)
+	}
+	if settings.Offer != nil && !slices.Contains(*settings.Offer, provider) {
+		return fmt.Errorf("%s is not offered by this organization: %w", provider, domain.ErrForbidden)
+	}
+	return nil
 }
 
 // Extractors is what this build can read, for a caller that reads the

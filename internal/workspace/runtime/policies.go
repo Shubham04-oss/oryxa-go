@@ -123,6 +123,24 @@ func MergePolicies(previous, submitted spec.Document, replace bool) (spec.Docume
 	if !equalBool(oldAutoSubscribe, nextAutoSubscribe) {
 		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "policy", Name: "tools.autoSubscribe"})
 	}
+	var oldSearchMode, nextSearchMode string
+	if previous.Search != nil {
+		oldSearchMode = previous.Search.Mode
+	}
+	if submitted.Search != nil {
+		nextSearchMode = submitted.Search.Mode
+	}
+	if !replace && nextSearchMode == "" {
+		nextSearchMode = oldSearchMode
+	}
+	if nextSearchMode != "" {
+		effective.Search = &spec.Search{Mode: nextSearchMode}
+	} else {
+		effective.Search = nil
+	}
+	if oldSearchMode != nextSearchMode {
+		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "policy", Name: "search.mode"})
+	}
 	return effective, plan, effective.Validate()
 }
 

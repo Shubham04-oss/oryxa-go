@@ -34,7 +34,7 @@ type Document struct {
 	Rules         *Rules        `yaml:"rules,omitempty" json:"rules,omitempty"`
 	Safety        *Safety       `yaml:"safety,omitempty" json:"safety,omitempty"`
 	Tools         *Tools        `yaml:"tools,omitempty" json:"tools,omitempty"`
-	Search        *yaml.Node    `yaml:"search,omitempty" json:"-"`
+	Search        *Search       `yaml:"search,omitempty" json:"search,omitempty"`
 	Notifications *yaml.Node    `yaml:"notifications,omitempty" json:"-"`
 	Data          *yaml.Node    `yaml:"data,omitempty" json:"-"`
 	Security      *yaml.Node    `yaml:"security,omitempty" json:"-"`
@@ -76,6 +76,12 @@ type Tools struct {
 	Provider      string    `yaml:"provider,omitempty" json:"provider,omitempty"`
 	Offer         *[]string `yaml:"offer,omitempty" json:"offer,omitempty"`
 	AutoSubscribe *bool     `yaml:"autoSubscribe,omitempty" json:"autoSubscribe,omitempty"`
+}
+
+// Search selects the knowledge path available to organization agents.
+// External providers require a separate connection and are not accepted yet.
+type Search struct {
+	Mode string `yaml:"mode" json:"mode"`
 }
 
 type People struct {
@@ -267,7 +273,7 @@ func rejectUnsupportedSections(root *yaml.Node) error {
 	for i := 0; i < len(root.Content[0].Content); i += 2 {
 		name := root.Content[0].Content[i].Value
 		switch name {
-		case "directory", "chat", "search", "notifications", "data", "security", "secrets":
+		case "directory", "chat", "notifications", "data", "security", "secrets":
 			return fmt.Errorf("%s is not yet supported by the workspace applier", name)
 		}
 	}
@@ -306,7 +312,7 @@ func (document Document) Validate() error {
 		node *yaml.Node
 	}{
 		{"directory", document.Directory},
-		{"chat", document.Chat}, {"search", document.Search},
+		{"chat", document.Chat},
 		{"notifications", document.Notifications}, {"data", document.Data},
 		{"security", document.Security},
 		{"secrets", document.Secrets},
@@ -338,6 +344,13 @@ func (document Document) Validate() error {
 				}
 				seen[toolkit] = true
 			}
+		}
+	}
+	if document.Search != nil {
+		switch document.Search.Mode {
+		case "native", "none":
+		default:
+			return fmt.Errorf("search.mode must be native or none; external search is not yet supported")
 		}
 	}
 	if document.Organization != nil && document.Organization.Timezone != nil {

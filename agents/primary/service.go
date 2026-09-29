@@ -269,6 +269,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Settings: settings, AWS: platform.AWS, Google: platform.Google, Logger: logger,
 		Directory: organizationDirectory, Context: organizationContext, AgentSystem: agentSystemBinding, Tokens: memberTokens,
 	}
+	if workspacePolicy != nil {
+		assemblyOptions.Policy = workspacePolicy
+	}
 	// interactionService and teamspaceService are concrete *Service pointers,
 	// nil when TEAMS_URL is unset. Boxed directly into these interface fields
 	// they would leave Build seeing a configured-but-nil collaborator rather
