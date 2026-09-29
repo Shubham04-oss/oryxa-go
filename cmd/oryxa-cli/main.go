@@ -440,9 +440,9 @@ func signedInClient(ctx context.Context, opts options, stdout, stderr io.Writer,
 				fmt.Fprintln(stderr, "Could not read cached CLI session:", err)
 			} else if ok {
 				if opts.json {
-					_ = json.NewEncoder(stdout).Encode(map[string]string{"step": "login", "status": "done", "source": "cache", "expires_at": session.ExpiresAt.UTC().Format(time.RFC3339)})
+					_ = json.NewEncoder(stderr).Encode(map[string]string{"step": "login", "status": "done", "source": "cache", "expires_at": session.ExpiresAt.UTC().Format(time.RFC3339)})
 				} else {
-					fmt.Fprintf(stdout, "Using saved sign-in. Access expires at %s.\n", session.ExpiresAt.Local().Format(time.RFC3339))
+					fmt.Fprintf(stderr, "Using saved sign-in. Access expires at %s.\n", session.ExpiresAt.Local().Format(time.RFC3339))
 				}
 				return runtime.NewClient(opts.api, session.AccessToken)
 			}
@@ -452,7 +452,7 @@ func signedInClient(ctx context.Context, opts options, stdout, stderr io.Writer,
 		}
 		var err error
 		var session cliSession
-		session, err = nativeLogin(ctx, opts.api, opts.noBrowser, opts.json, stdout)
+		session, err = nativeLogin(ctx, opts.api, opts.noBrowser, opts.json, stderr)
 		if err != nil {
 			return nil, err
 		}

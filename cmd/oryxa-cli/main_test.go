@@ -3,10 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/spec"
 )
@@ -51,5 +56,31 @@ func TestAgentHelpNeedsNoSession(t *testing.T) {
 	code := run(context.Background(), []string{"setup", "--agent-help"}, &stdout, &stderr, func(string) string { return "" })
 	if code != 0 || !strings.Contains(stdout.String(), "orgChart.relationships") || !strings.Contains(stdout.String(), "oryxa plan") {
 		t.Fatalf("exit=%d output=%q error=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestCachedSignInKeepsWhoamiOutputJSON(t *testing.T) {
+	testSessionStore(t)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"user":{"id":"owner"}}`) }))
+	defer api.Close()
+	getenv := func(key string) string {
+		if key == "ORYXA_API_URL" {
+			return api.URL
+		}
+		return ""
+	}
+	if err := saveSession(api.URL, cliSession{AccessToken: "access", ExpiresAt: time.Now().Add(15 * time.Minute)}, getenv); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), []string{"whoami", "--no-input"}, &stdout, &stderr, getenv); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout polluted by login: %s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "saved sign-in") {
+		t.Fatalf("missing diagnostic: %s", stderr.String())
 	}
 }
