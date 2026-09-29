@@ -53,15 +53,21 @@ jobs:
           BY_HAND: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           # A run started by hand always releases. Otherwise a release follows
-          # only a change a release ships since the one main records: docs,
-          # Markdown and the release record itself ship nothing.
+          # only a change a release ships since the one main records. Known
+          # documentation and the release record ship nothing; other Markdown
+          # can be embedded in a binary or used by tests.
           recorded=$(jq -r .image_tag deploy/production/release.auto.tfvars.json)
           if [ "$BY_HAND" = true ] || ! git cat-file -e "$recorded^{commit}" 2>/dev/null; then
             echo deploy=true >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Keep these exclusions aligned with CI's Changes step.
+          docs='^docs/|^README\.md$|^[^/]+/README\.md$'
+          docs+='|^(agents/primary|contracts/http|deploy/runner|test/cmd/chaos)/README\.md$'
+          docs+='|^web-next/src/lib/(agents|apps|threads)/README\.md$'
+          docs+='|^(tasks|notion-api-research-2026-03-11)\.md$|^knowledge/TODO\.md$|^web-next/(AGENTS|DESIGN|REALTIME|PARITY)\.md$'
           shipped=$(git diff --name-only "$recorded" HEAD |
-            grep -v -E '(^docs/|\.md$|^deploy/production/release\.auto\.tfvars\.json$)' || true)
+            grep -v -E "$docs|^deploy/production/release\.auto\.tfvars\.json$" || true)
           if [ -n "$shipped" ]; then echo deploy=true; else echo deploy=false; fi >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 

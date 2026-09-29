@@ -55,10 +55,16 @@ jobs:
             printf 'go=true\nweb=true\nweb_next=true\ntofu=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Docs and Markdown never change a build. Go covers everything that
-          # is not the two web apps or the deployment: services, contracts,
-          # infra, tests, the Dockerfile.
-          code=$(grep -v -E '(^docs/|\.md$)' <<<"$files" || true)
+          # Only known documentation paths skip builds. Other Markdown can
+          # be embedded in Go binaries or loaded by tests.
+          # Keep these exclusions aligned with Deploy's Scope step.
+          docs='^docs/|^README\.md$|^[^/]+/README\.md$'
+          docs+='|^(agents/primary|contracts/http|deploy/runner|test/cmd/chaos)/README\.md$'
+          docs+='|^web-next/src/lib/(agents|apps|threads)/README\.md$'
+          docs+='|^(tasks|notion-api-research-2026-03-11)\.md$|^knowledge/TODO\.md$|^web-next/(AGENTS|DESIGN|REALTIME|PARITY)\.md$'
+          code=$(grep -v -E "$docs" <<<"$files" || true)
+          # Go covers everything outside the web apps and deployment:
+          # services, contracts, infra, tests and the Dockerfile.
           has() { grep -q -E "$1" <<<"$code" && echo true || echo false; }
           {
             echo "go=$(grep -v -E '^(web/|web-next/|deploy/)' <<<"$code" | grep -q . && echo true || echo false)"
