@@ -320,9 +320,12 @@ func checkReaderPages(t reporter, reader integration.Reader, manifest integratio
 	}
 	request := integration.PageRequest{
 		// A page request always names its reader, and the reader's own kinds
-		// name the fields it reads by.
+		// name the fields it reads by. The limit is small on purpose: a
+		// cassette has to be able to hold a full page and a part-full one
+		// for the pass to be able to end, and fifty items of a provider's
+		// own example answers nothing a cassette with two does not.
 		Target: map[string]string{integration.TargetReader: spec.Name},
-		Limit:  50,
+		Limit:  2,
 	}
 	for kind, value := range targetFields(spec, target) {
 		request.Target[kind] = value
@@ -504,12 +507,12 @@ func checkDelivery(t reporter, pusher integration.Pusher, trigger integration.Tr
 const maxPayload = 128 << 10
 
 // deliveryHeaders reads the headers a recorded delivery would have arrived
-// with, from a file beside it, so a delivery that cannot be read without them
-// is recorded whole. The core has already verified whatever it names: Parse
-// never sees a signature, and the Authorization and Cookie headers are gone
-// before it is called.
+// with, from a file beside it with its own .headers.json name, so a delivery
+// that cannot be read without them is recorded whole. The core has already
+// verified whatever it names: Parse never sees a signature, and the
+// Authorization and Cookie headers are gone before it is called.
 func deliveryHeaders(path string) http.Header {
-	raw, err := os.ReadFile(path + ".headers.json")
+	raw, err := os.ReadFile(strings.TrimSuffix(path, ".json") + ".headers.json")
 	if err != nil {
 		return http.Header{}
 	}

@@ -1,0 +1,17 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.acme.example/issues/updates"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "cursor": "2026-09-17T12:00:00Z",
+          "events": []
+        }
+      }
+    }
+  ]
+}

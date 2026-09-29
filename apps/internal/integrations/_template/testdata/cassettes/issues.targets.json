@@ -1,0 +1,20 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.acme.example/user/repos?per_page=100"
+      },
+      "response": {
+        "status": 200,
+        "body": [
+          {
+            "full_name": "acme/api",
+            "description": "The API",
+            "archived": false
+          }
+        ]
+      }
+    }
+  ]
+}

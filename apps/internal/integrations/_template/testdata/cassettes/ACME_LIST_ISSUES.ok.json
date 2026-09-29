@@ -1,0 +1,23 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.acme.example/repos/acme/api/issues?state=open"
+      },
+      "response": {
+        "status": 200,
+        "body": [
+          {
+            "number": 7,
+            "title": "Flaky test"
+          }
+        ]
+      }
+    }
+  ],
+  "arguments": {
+    "repo": "acme/api",
+    "state": "open"
+  }
+}

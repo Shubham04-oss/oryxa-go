@@ -1,0 +1,20 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.acme.example/repos/acme/api/issues?page=3"
+      },
+      "response": {
+        "status": 200,
+        "body": [
+          {
+            "number": 7,
+            "title": "Issue 7",
+            "body": "Body of issue 7."
+          }
+        ]
+      }
+    }
+  ]
+}
