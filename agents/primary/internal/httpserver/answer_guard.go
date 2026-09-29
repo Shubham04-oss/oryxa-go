@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardpolicy"
@@ -22,6 +23,22 @@ type AnswerGuardPreferences interface {
 	// SetPreferences changes what a member chose: a nil level leaves that
 	// origin as it is, and a level that is "" clears it.
 	SetPreferences(ctx context.Context, organizationID, userID string, owner, peer *guardpolicy.Level) (guardpolicy.View, error)
+}
+
+// keptGuardPreferences is settings, or nil when it is a nil pointer, map, slice
+// or func in the interface, which would read as a service and panic when
+// asked: the way one that was never built gets past a nil check.
+func keptGuardPreferences(settings AnswerGuardPreferences) AnswerGuardPreferences {
+	if settings == nil {
+		return nil
+	}
+	switch value := reflect.ValueOf(settings); value.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		if value.IsNil() {
+			return nil
+		}
+	}
+	return settings
 }
 
 // guardPreferenceHandlers serve a member's own answer guard settings:

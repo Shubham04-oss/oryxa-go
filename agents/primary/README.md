@@ -968,6 +968,75 @@ wasn't shared. What a member publishes is their own words and is not read:
 `POST .../entries`, and a room message lifted to the ledger, go through
 `PublishEntry`, which never asks the guard.
 
+### How strictly the guard reads an answer
+
+The guard reads an answer at one of two levels, and each member chooses their
+own (`internal/guardpolicy`). `secrets` masks only what is always masked
+(`answerguard.MaskedKinds`, the list above) and leaves an email address, phone
+number or address as written; `strict` also holds those
+(`answerguard.HeldKinds`). There is no level below `secrets`: what is always
+masked is masked whatever anybody chooses.
+
+A level is chosen for each origin. `owner` is an answer the member started
+themselves and reads themselves; `peer` is an answer another member reads,
+which their agent gave. A member who chose nothing gets `secrets` for `owner`
+and `strict` for `peer`. What applies is the stricter of the organization's
+minimum for that origin and the member's choice, or the default when they made
+none. A choice below the minimum is kept, and shown, and the minimum wins; the
+choice applies again if the minimum is lowered. An organization's minimum is
+meant to come from its workspace policy, read through `guardpolicy.OrgPolicies`
+and never kept here. No source of it is wired yet
+(`guardpolicy.NoOrgPolicies`), so every organization has none, which is
+`secrets`, the lowest level there is. A source that is missing or fails is never
+a failed check: the defaults apply, and the failure is logged once for as long
+as it lasts. A level this code does not know is read as `strict`.
+
+```text
+GET /v1/organizations/{org}/answer-guard/preferences
+PUT /v1/organizations/{org}/answer-guard/preferences
+{"owner": "secrets" | "strict" | null, "peer": "secrets" | "strict" | null}
+```
+
+Both answer with what the member is told about their settings:
+
+```json
+{"owner": {"chosen": "strict", "default": "secrets", "floor": "secrets", "effective": "strict"},
+ "peer":  {"chosen": null, "default": "strict", "floor": "strict", "effective": "strict"},
+ "relevance": "hold", "regulated": false}
+```
+
+`chosen` is what the member chose, `null` for nothing; `floor` is their
+organization's minimum; `effective` is what applies. A `chosen` below `floor` is
+accepted and `effective` is `floor`, so the three differ. On a `PUT` a key left
+out leaves that setting as it is, `null` clears it back to its default, and
+`{}` changes nothing. A key that is not exactly `owner` or `peer`, a value that
+is not exactly `"secrets"`, `"strict"` or `null`, and a body that is not one
+small JSON object (4 KiB at most) are `400 invalid_request`, and nothing is
+changed. They are the member's own, as a preference is: an agent's token is
+`403 forbidden`, no credentials are `401 unauthorized`, a cookie needs an
+allowed origin to change anything, and the caller has to be a member of the
+organization. Only that member's settings are ever read or changed; nothing in
+the path or body names whose they are. A server with no settings kept answers
+`503 answer_guard_unavailable`.
+
+`relevance` is how the relevance check will treat an answer that does not
+answer what was asked: `hold`, `shadow` (run and record, never hold) or `off`.
+It is the organization's own, `hold` when it has none, held to the deployment's
+ceiling: `AGENTS_PRIMARY_GUARD_RELEVANCE_CAP`, `shadow` unless set, so the
+check holds nobody's answers until a deployment says it may, except for the
+organizations `AGENTS_PRIMARY_GUARD_HOLD_ORGS` lists, a comma-separated list of
+organization ids. The check itself is still to come. `regulated` says the
+organization runs the regulated preset, and is only carried.
+
+A member's levels are kept in `agents_primary.guard_preferences`, no row
+meaning the defaults, and every change of a level is appended, in the
+transaction that made it, to `agents_primary.guard_preference_changes`: the
+field, what it was, what it became and when. Two changes to one member's levels
+take turns, so each logs what it really replaced. Both are forgotten with the
+member, or with the organization: `guardpolicy.Service.Forget` runs beside the
+threads' and wake-ups' cleanup. If a member's own levels cannot be read, the
+level that applies to their answers is `strict`, with the error.
+
 ### Checking an answer before it is shown
 
 A side conversation shows a member what a teammate's agent answered. The web
@@ -1355,7 +1424,7 @@ fills it (`internal/inbound`):
 | `agents.interaction.requested.v1` | Persists a delivery job for the addressed target agent; one held for its owner completes without waking it |
 | `agents.interaction.decided.v1` | Wakes the target to finish approved work, or the requester to observe a rejection |
 | `agents.interaction.completed.v1` | Wakes the requester to observe a completed, failed or withheld result; an answer held for review (`review`) wakes nobody |
-| `auth.member.removed.v1` | Removes the member's threads, waiting wake-ups, agent definitions, and cross-user request content in that organization |
+| `auth.member.removed.v1` | Removes the member's threads, waiting wake-ups, agent definitions, answer guard settings, and cross-user request content in that organization |
 | `auth.organization.deleted.v1` | The same for everyone in the organization |
 | `teams.member.removed.v1` | Withdraws the person's contributions to the team's teamspace, and records `agents.teamspace.member.removed.v1` when the team has one |
 | `teams.team.deleted.v1` | Removes the team's teamspace, recording `agents.teamspace.deleted.v1` |
@@ -2026,6 +2095,8 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` | `false` | Block, rather than pass, what a failed screen could not check |
 | `AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID` | unset | Bedrock guardrail the answer guard reads every answer another member will read with (see [Answer guard](#answer-guard)); unset, no answer is checked. Set with its version or not at all |
 | `AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION` | unset | That guardrail's version, set with its ID |
+| `AGENTS_PRIMARY_GUARD_RELEVANCE_CAP` | `shadow` | The most the answer guard's relevance check may do here, whatever an organization's workspace policy asks: `hold`, `shadow` (run and record, never hold) or `off`, in any case. Anything else refuses to start (see [How strictly the guard reads an answer](#how-strictly-the-guard-reads-an-answer)) |
+| `AGENTS_PRIMARY_GUARD_HOLD_ORGS` | unset | Organization ids, comma-separated, the ceiling above does not apply to: they may hold. An id is letters, digits, `_` and `-`; anything else, a space-separated list included, refuses to start |
 | `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` | unset | Bedrock runtime endpoint override, for a development stand-in of the answer guard's guardrail |
 | `AGENTS_PRIMARY_DATABASE_MAX_CONNS` | `8` | Size of the pool the service keeps for ADK's tables, apart from the shared one |
 | `AGENTS_EVENTS_QUEUE_URL` | unset | Queue carrying batching's app batches and interaction lifecycle events; without it neither app nor cross-agent events wake persistent agents (see [Wake-ups](#wake-ups)) |

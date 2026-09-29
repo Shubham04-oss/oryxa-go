@@ -65,6 +65,7 @@ type authHarness struct {
 	orgContext   *fakeOrganizationContext
 	preferences  *fakePreferences
 	answerGuard  *fakeAnswerChecker
+	guardPolicy  *fakeAnswerGuardPreferences
 	server       *Server
 }
 
@@ -85,6 +86,7 @@ func newAuthHarness() *authHarness {
 		orgContext:   &fakeOrganizationContext{},
 		preferences:  &fakePreferences{},
 		answerGuard:  &fakeAnswerChecker{},
+		guardPolicy:  &fakeAnswerGuardPreferences{},
 	}
 	h.server = New(h.directory, h.threadsSvc, Config{
 		AllowedOrigins:      []string{"https://app.oryxa.test"},
@@ -99,6 +101,8 @@ func newAuthHarness() *authHarness {
 		OrganizationContext: h.orgContext,
 		Preferences:         h.preferences,
 		AnswerGuard:         h.answerGuard,
+
+		AnswerGuardPreferences: h.guardPolicy,
 	}, nil)
 	return h
 }
@@ -216,6 +220,13 @@ func lastAnswerCheck(h *authHarness) (string, string) {
 		return fmt.Sprintf("%d members counted, want the caller alone", len(members)), ""
 	}
 	return members[0].organizationID, members[0].userID
+}
+
+// lastGuardPreferencesCall is who the answer guard's settings were read or
+// changed for, as the fake recorded it before it did anything else.
+func lastGuardPreferencesCall(h *authHarness) (string, string) {
+	c := h.guardPolicy.calls[len(h.guardPolicy.calls)-1]
+	return c[0], c[1]
 }
 
 // authzRoutes is every non-public route the server registers. See
@@ -464,6 +475,15 @@ var authzRoutes = []authzRoute{
 		pattern: "POST /v1/organizations/{organizationID}/answer-guard/check", method: http.MethodPost,
 		path: "/v1/organizations/org_1/answer-guard/check", body: `{"texts":["Hello"]}`, malformedBody: unknownField, identity: lastAnswerCheck,
 	},
+	// -- answer guard: a member's own levels ----------------------------------
+	{
+		pattern: "GET /v1/organizations/{organizationID}/answer-guard/preferences", method: http.MethodGet,
+		path: "/v1/organizations/org_1/answer-guard/preferences", identity: lastGuardPreferencesCall,
+	},
+	{
+		pattern: "PUT /v1/organizations/{organizationID}/answer-guard/preferences", method: http.MethodPut,
+		path: "/v1/organizations/org_1/answer-guard/preferences", body: `{"owner":"strict"}`, malformedBody: unknownField, identity: lastGuardPreferencesCall,
+	},
 }
 
 // publicRoutePatterns lists every server.Patterns() entry that is
@@ -478,8 +498,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 58 {
-		t.Fatalf("authzRoutes has %d entries, want 58 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 60 {
+		t.Fatalf("authzRoutes has %d entries, want 60 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -571,8 +591,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 30 {
-		t.Fatalf("tested %d state-changing routes, want 30 - a route's method changed without updating this expectation", tested)
+	if tested != 31 {
+		t.Fatalf("tested %d state-changing routes, want 31 - a route's method changed without updating this expectation", tested)
 	}
 }
 
@@ -630,8 +650,8 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 			}
 		})
 	}
-	if tested != 34 {
-		t.Fatalf("tested %d routes for malformed input, want 34 - a route gained or lost a body/limit/version without updating this expectation", tested)
+	if tested != 35 {
+		t.Fatalf("tested %d routes for malformed input, want 35 - a route gained or lost a body/limit/version without updating this expectation", tested)
 	}
 }
 

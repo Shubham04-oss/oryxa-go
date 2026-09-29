@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"google.golang.org/genai"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardpolicy"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 )
 
@@ -74,6 +76,13 @@ type Config struct {
 	// refuses to start.
 	AnswerGuardrailIdentifier string
 	AnswerGuardrailVersion    string
+	// GuardRelevanceCap is the most the answer guard's relevance check may do
+	// in this deployment, whatever an organization's workspace policy asks:
+	// hold, shadow or off. It is shadow unless set, so the check holds nobody's
+	// answers until a deployment says it may. GuardHoldOrgs are the
+	// organizations, by id, the cap does not apply to.
+	GuardRelevanceCap guardpolicy.RelevanceMode
+	GuardHoldOrgs     map[string]bool
 	// ModelPrices overrides the price table used for run costs, as JSON of
 	// per-million USD rates by model.
 	ModelPrices string
@@ -210,6 +219,14 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if (answerGuardrailIdentifier == "") != (answerGuardrailVersion == "") {
 		return Config{}, errors.New("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID and AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION are set together or not at all: one without the other would check no answer")
 	}
+	guardRelevanceCap, err := relevanceCap(getenv, "AGENTS_PRIMARY_GUARD_RELEVANCE_CAP")
+	if err != nil {
+		return Config{}, err
+	}
+	guardHoldOrgs, err := organizationList(getenv, "AGENTS_PRIMARY_GUARD_HOLD_ORGS")
+	if err != nil {
+		return Config{}, err
+	}
 	runTimeout, err := secondsValue(getenv, "AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS", 10*time.Minute, time.Minute, time.Hour)
 	if err != nil {
 		return Config{}, err
@@ -287,6 +304,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		GuardrailFailClosed:       guardrailFailClosed,
 		AnswerGuardrailIdentifier: answerGuardrailIdentifier,
 		AnswerGuardrailVersion:    answerGuardrailVersion,
+		GuardRelevanceCap:         guardRelevanceCap,
+		GuardHoldOrgs:             guardHoldOrgs,
 		ModelPrices:               modelPrices,
 		AppsURL:                   strings.TrimSpace(getenv("APPS_URL")),
 		RagURL:                    strings.TrimSpace(getenv("RAG_URL")),
@@ -371,6 +390,45 @@ func orList(values []string) string {
 	}
 	return strings.Join(values[:len(values)-1], ", ") + " or " + values[len(values)-1]
 }
+
+// relevanceCap reads the most the answer guard's relevance check may do in
+// this deployment: hold, shadow or off, in any case. Unset is shadow, so the
+// check holds nobody's answers until a deployment says it may.
+func relevanceCap(getenv func(string) string, name string) (guardpolicy.RelevanceMode, error) {
+	value := strings.ToLower(strings.TrimSpace(getenv(name)))
+	if value == "" {
+		return guardpolicy.RelevanceShadow, nil
+	}
+	mode, err := guardpolicy.ParseRelevanceMode(value)
+	if err != nil {
+		return "", fmt.Errorf("%s must be hold, shadow or off, or unset for shadow", name)
+	}
+	return mode, nil
+}
+
+// organizationList reads a comma-separated list of organization ids. An id is
+// made of letters, digits, "_" and "-", as every id auth makes is; anything
+// else is refused, since a list separated by spaces or semicolons would
+// otherwise be one id no organization has, and exempt nobody without saying so.
+func organizationList(getenv func(string) string, name string) (map[string]bool, error) {
+	var organizations map[string]bool
+	for _, value := range strings.Split(getenv(name), ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if !organizationID.MatchString(value) {
+			return nil, fmt.Errorf("%s must list organization ids, which are letters, digits, _ and -, separated by commas", name)
+		}
+		if organizations == nil {
+			organizations = map[string]bool{}
+		}
+		organizations[value] = true
+	}
+	return organizations, nil
+}
+
+var organizationID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // originList reads a comma-separated list of absolute origins, such as
 // https://app.oryxa.ai, refusing anything else rather than silently allowing

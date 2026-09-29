@@ -99,6 +99,45 @@ func TestMountRefusesHalfAnAnswerGuard(t *testing.T) {
 	}
 }
 
+// TestMountRefusesAnAnswerGuardCeilingItDoesNotKnow: the relevance check's
+// ceiling is hold, shadow or off, and a list of exempt organizations is
+// separated by commas, or the service does not start: a typo would otherwise
+// let a check hold answers a deployment meant it not to, or exempt nobody.
+func TestMountRefusesAnAnswerGuardCeilingItDoesNotKnow(t *testing.T) {
+	for variable, value := range map[string]string{
+		"AGENTS_PRIMARY_GUARD_RELEVANCE_CAP": "strict",
+		"AGENTS_PRIMARY_GUARD_HOLD_ORGS":     "org_1 org_2",
+	} {
+		if _, err := Mount(context.Background(), platform(map[string]string{variable: value}, nil)); err == nil || !strings.Contains(err.Error(), variable) {
+			t.Errorf("Mount() with %s=%q = %v, want it refused, naming the setting", variable, value, err)
+		}
+	}
+}
+
+// TestTheHostServesTheAnswerGuardSettingsRoutes: the host sends a service the
+// paths it lists, so the settings routes have to be among them, whether or not
+// the service can run agents.
+func TestTheHostServesTheAnswerGuardSettingsRoutes(t *testing.T) {
+	service, err := Mount(context.Background(), platform(map[string]string{}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []string{
+		"GET /v1/organizations/{organizationID}/answer-guard/preferences",
+		"PUT /v1/organizations/{organizationID}/answer-guard/preferences",
+	} {
+		if !slices.Contains(service.Routes, route) {
+			t.Errorf("routes = %v, want %q among them", service.Routes, route)
+		}
+	}
+	// A server that cannot run agents answers for them all the same way.
+	recorder := httptest.NewRecorder()
+	service.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/organizations/org_1/answer-guard/preferences", nil))
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), "agents_unavailable") {
+		t.Fatalf("answer guard preferences = %d %s, want 503 agents_unavailable", recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestADeliveryReachesAsFarAsItsProfile: approved work reads what it was
 // allowed of the member's apps and knowledge, a new request only their
 // knowledge, and a report, or a delivering profile this does not know, the

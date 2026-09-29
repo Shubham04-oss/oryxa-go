@@ -408,3 +408,36 @@ func TestAFailureIsOursAndARefusedSettingIsTheCallers(t *testing.T) {
 		t.Errorf("a setting the service refused = %d %s, want 400 with its own words", response.Code, response.Body.String())
 	}
 }
+
+// *guardpolicy.Service is what the settings routes are given in production.
+var _ AnswerGuardPreferences = (*guardpolicy.Service)(nil)
+
+// TestASettingsServiceThatWasNeverBuiltIsNoSettingsAtAll: a nil pointer in the
+// Config's interface reads as a service to a nil check, and would panic when
+// asked; the server takes it for none, so the routes answer 503 as they do
+// without one.
+func TestASettingsServiceThatWasNeverBuiltIsNoSettingsAtAll(t *testing.T) {
+	var neverBuilt *fakeAnswerGuardPreferences
+	var neverOpened *guardpolicy.Service
+	for name, settings := range map[string]AnswerGuardPreferences{
+		"no settings":                     nil,
+		"a fake that was never built":     neverBuilt,
+		"a service that was never opened": neverOpened,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := New(member(), &fakeThreads{}, Config{AllowedOrigins: []string{"https://app.oryxa.test"}, AnswerGuardPreferences: settings}, nil)
+			for _, method := range []string{http.MethodGet, http.MethodPut} {
+				response := serve(server, method, guardPath, `{"owner":"strict"}`, bearer)
+				if response.Code != http.StatusServiceUnavailable || errorCode(t, response) != "answer_guard_unavailable" {
+					t.Errorf("%s = %d %s, want 503 answer_guard_unavailable", method, response.Code, response.Body.String())
+				}
+			}
+		})
+	}
+	// A settings service that was built is asked, by the routes New registers.
+	settings := &fakeAnswerGuardPreferences{}
+	server := New(member(), &fakeThreads{}, Config{AnswerGuardPreferences: settings}, nil)
+	if response := serve(server, http.MethodGet, guardPath, "", bearer); response.Code != http.StatusOK || len(settings.calls) != 1 {
+		t.Fatalf("GET = %d %s after %d calls, want 200 and one", response.Code, response.Body.String(), len(settings.calls))
+	}
+}
