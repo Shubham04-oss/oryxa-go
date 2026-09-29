@@ -314,6 +314,8 @@ describe("startRun", () => {
     expect(fetchMock.mock.calls[1][1]).toEqual({
       credentials: "include",
       method: "POST",
+      // The refresh has a timeout (lib/api/client.ts).
+      signal: expect.any(AbortSignal),
     })
   })
 
