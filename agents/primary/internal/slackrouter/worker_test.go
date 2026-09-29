@@ -392,6 +392,28 @@ func TestAJobInterruptedByShutdownIsNotAFailure(t *testing.T) {
 	}
 }
 
+// TestAPanicIsAFailureOfTheJobNotOfTheService: a delivery that trips a bug is
+// counted, retried and given up on like any other failing job.
+func TestAPanicIsAFailureOfTheJobNotOfTheService(t *testing.T) {
+	queue := newFakeQueue()
+	var calls int
+	worker := NewWorker(queue, handlerFunc(func(context.Context, Job) error {
+		calls++
+		var nothing map[string]int
+		nothing["boom"]++ // assignment to a nil map
+		return nil
+	}), WorkerConfig{}, nil)
+	_ = worker.HandleEvent(context.Background(), MessageReceivedDetailType, "evt_1", eventData("in_1"))
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		wake(t, worker)
+		queue.advance(maxRetryDelay)
+	}
+	state := queue.state("in_1")
+	if calls != maxAttempts || !state.dropped || !strings.Contains(state.reason, "panicked") {
+		t.Fatalf("calls %d, state %+v: a panicking job is a failing job", calls, state)
+	}
+}
+
 func TestAnAttemptThatRunsTooLongFailsAndIsRetried(t *testing.T) {
 	queue := newFakeQueue()
 	worker := NewWorker(queue, handlerFunc(func(ctx context.Context, job Job) error {

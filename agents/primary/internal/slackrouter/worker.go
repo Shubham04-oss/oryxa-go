@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -111,8 +112,9 @@ func NewWorker(queue jobQueue, handler jobHandler, config WorkerConfig, logger *
 // HandleEvent records the job a Slack inbound event asks for, and nudges the
 // worker when it is new. It is what agents' consumer calls for the detail
 // types Handles names. The event is at least once: recording the same inbound
-// row again does nothing, whichever event it came in, and an error here is
-// only a database that did not answer, for the queue to deliver again.
+// row again does nothing, whichever event it came in. An error is an event that
+// cannot be a job, or a database that did not answer; the queue delivers it
+// again either way.
 func (worker *Worker) HandleEvent(ctx context.Context, detailType, eventID string, data []byte) error {
 	job, err := jobFromEvent(detailType, eventID, data, worker.now().UTC())
 	if err != nil {
@@ -210,7 +212,7 @@ func (worker *Worker) claimDue(ctx context.Context) error {
 func (worker *Worker) process(ctx context.Context, job Job) {
 	logger := worker.logger.With("inbound_id", job.InboundID, "organization_id", job.OrganizationID, "kind", job.Kind)
 	attempt, cancel := context.WithTimeout(ctx, worker.timeout)
-	err := worker.handler.Handle(attempt, job)
+	err := worker.handle(attempt, job, logger)
 	cancel()
 	// Settling must survive a shutdown that interrupted the attempt.
 	settle := context.WithoutCancel(ctx)
@@ -246,4 +248,18 @@ func (worker *Worker) process(ctx context.Context, job Job) {
 				"attempts", job.Attempts+1, "retry_in", delay.String(), "error", err)
 		}
 	}
+}
+
+// handle runs the handler, and turns a panic in it into a failure of the job.
+// One delivery that trips a bug must not take the service down with it, and
+// come back after every restart to do it again: it is counted as any other
+// failure is, tried a few more times, and then given up on.
+func (worker *Worker) handle(ctx context.Context, job Job, logger *slog.Logger) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.ErrorContext(ctx, "routing a Slack job panicked", "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+			err = fmt.Errorf("slackrouter: routing panicked: %v", recovered)
+		}
+	}()
+	return worker.handler.Handle(ctx, job)
 }
