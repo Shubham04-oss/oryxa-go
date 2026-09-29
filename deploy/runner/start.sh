@@ -19,9 +19,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 
 docker build --pull --tag "$image" "$here"
 
-# The runner's state lives in a volume named after it: its registration
-# (.runner, .credentials), its work directory and its tool cache, so the Go and
-# pnpm caches survive a restart. The first mount copies the image's runner in.
+# The runner's registration, work directory and tool cache live in a volume
+# named after it and survive container recreation. Local Go module/build
+# caches under /root last only until recreation. The first mount copies the
+# image's runner in.
 if ! docker volume inspect "$name" >/dev/null 2>&1 || [ "${REREGISTER:-}" = 1 ]; then
   token=$(gh api -X POST "repos/$repository/actions/runners/registration-token" --jq .token)
   docker run --rm --user root -e RUNNER_ALLOW_RUNASROOT=1 -e TOKEN="$token" \

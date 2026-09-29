@@ -93,6 +93,9 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
+          # Skip the remote cache transfer on self-hosted runners; their local
+          # Go caches last for the lifetime of the runner container.
+          cache: ${{ !contains(vars.CI_RUNNER, 'self-hosted') }}
       - name: gofmt
         run: |
           unformatted=$(gofmt -l $(git ls-files '*.go'))
