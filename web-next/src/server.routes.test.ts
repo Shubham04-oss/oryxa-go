@@ -918,6 +918,27 @@ describe("the direct messages", () => {
     expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
   })
 
+  it("refuses the setup CLI's token: it configures the workspace, nothing else", async () => {
+    fetchMock.mockImplementation(async (url: URL | string) => {
+      const answer = String(url)
+      if (answer.endsWith("/members")) return organizationAnswer(answer)
+      return json(
+        {
+          membership: { organization_id: "org_sim", user_id: "user-ada" },
+          cli: true,
+        },
+        200
+      )
+    })
+    const response = await send(socketRequest(dm))
+    expect(response.status).toBe(403)
+    expect(await errorOf(response)).toEqual({
+      code: "forbidden",
+      message: "A setup session cannot open a member's conversations.",
+    })
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
   it("reports Go answering with something else as a bad gateway", async () => {
     for (const [membership, members] of [
       [json({ membership: {} }, 200), organizationAnswer("/members")],
@@ -1078,6 +1099,15 @@ describe("a member's inbox", () => {
   it("refuses an agent's token", async () => {
     fetchMock.mockResolvedValue(
       json({ membership: { user_id: "user-bo" }, agent: true }, 200)
+    )
+    const response = await send(socketRequest(inbox))
+    expect(response.status).toBe(403)
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("refuses the setup CLI's token", async () => {
+    fetchMock.mockResolvedValue(
+      json({ membership: { user_id: "user-bo" }, cli: true }, 200)
     )
     const response = await send(socketRequest(inbox))
     expect(response.status).toBe(403)
