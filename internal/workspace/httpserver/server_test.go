@@ -23,6 +23,19 @@ type memoryRepository struct {
 	plans    map[string]store.ReviewedPlan
 }
 
+func TestWorkspaceServerValidatesUpstreamURLAtStartup(t *testing.T) {
+	for _, url := range []string{"http://auth.internal:8080", "https://user:password@example.com", "https://example.com/api", "not-a-url", "https://example.com?token=secret"} {
+		if _, err := New(&memoryRepository{}, url); err == nil {
+			t.Fatalf("accepted unsafe or incompatible upstream URL %q", url)
+		}
+	}
+	for _, url := range []string{"https://api.example.com", "http://127.0.0.1:18080"} {
+		if _, err := New(&memoryRepository{}, url); err != nil {
+			t.Fatalf("rejected supported URL %q: %v", url, err)
+		}
+	}
+}
+
 func (repo *memoryRepository) SavePlan(_ context.Context, plan store.ReviewedPlan) error {
 	if repo.plans == nil {
 		repo.plans = map[string]store.ReviewedPlan{}

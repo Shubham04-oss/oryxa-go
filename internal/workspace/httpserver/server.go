@@ -41,8 +41,12 @@ func New(repository Repository, apiURL string) (*Server, error) {
 	if repository == nil || strings.TrimSpace(apiURL) == "" {
 		return nil, fmt.Errorf("workspace API requires a repository and API URL")
 	}
+	validated, err := runtime.NewClient(apiURL, "startup-url-validation")
+	if err != nil {
+		return nil, fmt.Errorf("workspace API URL is invalid: %w", err)
+	}
 	server := &Server{
-		repository: repository, apiURL: strings.TrimRight(apiURL, "/"),
+		repository: repository, apiURL: validated.BaseURL,
 		http: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		mux:  http.NewServeMux(),
 	}
