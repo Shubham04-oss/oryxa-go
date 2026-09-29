@@ -120,3 +120,25 @@ func TestDirectoryResolvesJoinedIDsFromAPISnapshot(t *testing.T) {
 		t.Fatalf("resolved wrong API resources: %+v", resolved)
 	}
 }
+
+func TestDeletedGroupBindingIsDetectedBeforeRecreationAndRecoversAfterCleanup(t *testing.T) {
+	document := contextDocument()
+	document.Teams.Items = []spec.Team{{Name: "Engineering"}}
+	document.Directory = &spec.Directory{Groups: []spec.ExternalGroup{{Source: "google_workspace:acme.com", ExternalID: "group1", Team: "Engineering"}}}
+	state := directoryState()
+	delete(state.Teams, "Engineering")
+	mapped := []store.ExternalMapping{{Source: "google_workspace:acme.com", Kind: "team", ExternalID: "group1", Reference: "Engineering", ResourceID: "deleted-team"}}
+	if _, _, err := MergeDirectory(document, document, state, mapped, false); err == nil || !strings.Contains(err.Error(), "deleted team") {
+		t.Fatalf("stale binding not preflighted: %v", err)
+	}
+	// The team-deleted event clears the obsolete binding. The exact same file
+	// can then plan and materialize the new API-assigned team ID.
+	if _, _, err := MergeDirectory(document, document, state, nil, false); err != nil {
+		t.Fatalf("same manifest did not recover after event cleanup: %v", err)
+	}
+	state.Teams["Engineering"] = Team{ID: "new-api-team", Name: "Engineering"}
+	resolved, err := ResolveDirectory(document, state, nil)
+	if err != nil || len(resolved) != 1 || resolved[0].ResourceID != "new-api-team" {
+		t.Fatalf("recreated target bound incorrectly: %+v %v", resolved, err)
+	}
+}

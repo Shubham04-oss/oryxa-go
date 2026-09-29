@@ -102,6 +102,18 @@ func MergeDirectory(previous, submitted spec.Document, state Snapshot, mapped []
 	boundResources := map[string]string{}
 	for key, record := range next {
 		oldBinding := bindings[key]
+		if record.kind == "team" && oldBinding.ResourceID != "" {
+			live := false
+			for _, team := range state.Teams {
+				if team.ID == oldBinding.ResourceID {
+					live = true
+					break
+				}
+			}
+			if !live {
+				return spec.Document{}, Plan{}, fmt.Errorf("directory group %q still references a deleted team; wait for deletion cleanup or review pruning this mapping before recreating %s", record.externalID, record.reference)
+			}
+		}
 		resourceID := ""
 		if record.kind == "user" {
 			if submitted.People != nil && submitted.People.Prune {
