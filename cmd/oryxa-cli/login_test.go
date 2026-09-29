@@ -264,3 +264,39 @@ func TestLoginExchangeDoesNotExposeProviderErrorBodies(t *testing.T) {
 		})
 	}
 }
+
+func TestConcurrentSignInsUseRegisteredFallbackPorts(t *testing.T) {
+	callbacks := []string{}
+	for range 2 {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		callbacks = append(callbacks, "http://"+listener.Addr().String()+"/callback")
+		listener.Close()
+	}
+	config := loginConfig{CallbackURL: callbacks[0], CallbackURLs: callbacks}
+	first, firstURL, err := listenLoginCallback(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, secondURL, err := listenLoginCallback(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if firstURL.String() == secondURL.String() {
+		t.Fatal("concurrent signins shared callback")
+	}
+	if listener, _, err := listenLoginCallback(config); err == nil {
+		listener.Close()
+		t.Fatal("occupied callbacks reused")
+	}
+	first.Close()
+	reopened, _, err := listenLoginCallback(config)
+	if err != nil {
+		t.Fatal("callback not released promptly:", err)
+	}
+	reopened.Close()
+}

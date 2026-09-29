@@ -82,6 +82,7 @@ type Config struct {
 	CLIClientID        string
 	CLIIssuer          string
 	CLICallbackURL     string
+	CLICallbackURLs    []string
 	CLISignUpURL       string
 	CLIVerifier        cliIdentityVerifier
 	CLICompleteLogin   func(context.Context, application.FederatedIdentity) (domain.User, bool, error)
@@ -241,6 +242,7 @@ func (server *Server) authConfig(writer http.ResponseWriter, _ *http.Request) {
 		config["cli_client_id"] = server.config.CLIClientID
 		config["cli_issuer"] = server.config.CLIIssuer
 		config["cli_callback_url"] = server.config.CLICallbackURL
+		config["cli_callback_urls"] = server.config.CLICallbackURLs
 		config["cognito_domain"] = server.config.CognitoDomain
 		config["cli_signup_url"] = server.config.CLISignUpURL
 	}

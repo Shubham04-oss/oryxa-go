@@ -22,11 +22,12 @@ import (
 )
 
 type loginConfig struct {
-	ClientID    string `json:"cli_client_id"`
-	CallbackURL string `json:"cli_callback_url"`
-	Domain      string `json:"cognito_domain"`
-	SignUpURL   string `json:"cli_signup_url"`
-	Issuer      string `json:"cli_issuer"`
+	ClientID     string   `json:"cli_client_id"`
+	CallbackURL  string   `json:"cli_callback_url"`
+	CallbackURLs []string `json:"cli_callback_urls"`
+	Domain       string   `json:"cognito_domain"`
+	SignUpURL    string   `json:"cli_signup_url"`
+	Issuer       string   `json:"cli_issuer"`
 }
 
 type callbackResult struct {
@@ -44,14 +45,11 @@ func nativeLogin(ctx context.Context, api string, noBrowser, asJSON bool, stdout
 	if err != nil {
 		return cliSession{}, err
 	}
-	callback, err := url.Parse(config.CallbackURL)
-	if err != nil || callback.Scheme != "http" || callback.Hostname() != "127.0.0.1" || callback.Port() == "" || callback.Path != "/callback" || callback.User != nil || callback.RawQuery != "" || callback.Fragment != "" {
-		return cliSession{}, fmt.Errorf("the server's CLI callback URL is invalid")
-	}
-	listener, err := net.Listen("tcp", callback.Host)
+	listener, callback, err := listenLoginCallback(config)
 	if err != nil {
-		return cliSession{}, fmt.Errorf("listen for browser sign-in at %s: %w", callback.Host, err)
+		return cliSession{}, err
 	}
+	config.CallbackURL = callback.String()
 	defer listener.Close()
 	flowCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
@@ -293,4 +291,27 @@ func openBrowser(target string) error {
 	default:
 		return exec.Command("xdg-open", target).Start()
 	}
+}
+
+func listenLoginCallback(config loginConfig) (net.Listener, *url.URL, error) {
+	candidates := append([]string{config.CallbackURL}, config.CallbackURLs...)
+	parsed := []*url.URL{}
+	seen := map[string]bool{}
+	for _, candidate := range candidates {
+		callback, err := url.Parse(candidate)
+		if err != nil || callback.Scheme != "http" || callback.Hostname() != "127.0.0.1" || callback.Port() == "" || callback.Port() == "0" || callback.Path != "/callback" || callback.User != nil || callback.RawQuery != "" || callback.Fragment != "" {
+			return nil, nil, fmt.Errorf("the server's CLI callback URL is invalid")
+		}
+		if !seen[candidate] {
+			parsed = append(parsed, callback)
+			seen[candidate] = true
+		}
+	}
+	for _, callback := range parsed {
+		listener, err := net.Listen("tcp", callback.Host)
+		if err == nil {
+			return listener, callback, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("all registered CLI callback ports are busy; finish another sign-in or configure registered fallback callback ports")
 }

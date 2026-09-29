@@ -21,17 +21,18 @@ type Config struct {
 	EventBridgeEndpoint string
 	// EventsQueueURL is the queue billing's entitlements arrive on. Without
 	// it no member limits are applied.
-	EventsQueueURL        string
-	SQSEndpoint           string
-	InvitationAcceptURL   string
-	EmailVerificationURL  string
-	PasswordResetURL      string
-	AllowedReturnURLs     []string
-	CookieDomain          string
-	CookieSecure          bool
-	GoogleEnabled         bool
-	CognitoCLIClientID    string
-	CognitoCLICallbackURL string
+	EventsQueueURL         string
+	SQSEndpoint            string
+	InvitationAcceptURL    string
+	EmailVerificationURL   string
+	PasswordResetURL       string
+	AllowedReturnURLs      []string
+	CookieDomain           string
+	CookieSecure           bool
+	GoogleEnabled          bool
+	CognitoCLIClientID     string
+	CognitoCLICallbackURL  string
+	CognitoCLICallbackURLs []string
 
 	// Agent grants let an agent act for a member while the member is absent.
 	// All four of the following are optional; AgentGrantsEnabled reports
@@ -64,23 +65,24 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	config := Config{
-		CognitoIssuer:         strings.TrimSpace(getenv("COGNITO_ISSUER")),
-		CognitoUserPoolID:     strings.TrimSpace(getenv("COGNITO_USER_POOL_ID")),
-		CognitoClientID:       strings.TrimSpace(getenv("COGNITO_CLIENT_ID")),
-		CognitoDomain:         strings.TrimRight(strings.TrimSpace(getenv("COGNITO_DOMAIN")), "/"),
-		CognitoCallbackURL:    strings.TrimSpace(getenv("COGNITO_CALLBACK_URL")),
-		EventBridgeEndpoint:   strings.TrimRight(strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")), "/"),
-		EventsQueueURL:        strings.TrimSpace(getenv("AUTH_EVENTS_QUEUE_URL")),
-		SQSEndpoint:           strings.TrimRight(strings.TrimSpace(getenv("SQS_ENDPOINT")), "/"),
-		InvitationAcceptURL:   strings.TrimSpace(getenv("INVITATION_ACCEPT_URL")),
-		EmailVerificationURL:  strings.TrimSpace(getenv("EMAIL_VERIFICATION_URL")),
-		PasswordResetURL:      strings.TrimSpace(getenv("PASSWORD_RESET_URL")),
-		AllowedReturnURLs:     splitList(getenv("AUTH_RETURN_URLS")),
-		CookieDomain:          strings.TrimSpace(getenv("AUTH_COOKIE_DOMAIN")),
-		CookieSecure:          cookieSecure,
-		GoogleEnabled:         googleEnabled,
-		CognitoCLIClientID:    strings.TrimSpace(getenv("COGNITO_CLI_CLIENT_ID")),
-		CognitoCLICallbackURL: strings.TrimSpace(getenv("COGNITO_CLI_CALLBACK_URL")),
+		CognitoIssuer:          strings.TrimSpace(getenv("COGNITO_ISSUER")),
+		CognitoUserPoolID:      strings.TrimSpace(getenv("COGNITO_USER_POOL_ID")),
+		CognitoClientID:        strings.TrimSpace(getenv("COGNITO_CLIENT_ID")),
+		CognitoDomain:          strings.TrimRight(strings.TrimSpace(getenv("COGNITO_DOMAIN")), "/"),
+		CognitoCallbackURL:     strings.TrimSpace(getenv("COGNITO_CALLBACK_URL")),
+		EventBridgeEndpoint:    strings.TrimRight(strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")), "/"),
+		EventsQueueURL:         strings.TrimSpace(getenv("AUTH_EVENTS_QUEUE_URL")),
+		SQSEndpoint:            strings.TrimRight(strings.TrimSpace(getenv("SQS_ENDPOINT")), "/"),
+		InvitationAcceptURL:    strings.TrimSpace(getenv("INVITATION_ACCEPT_URL")),
+		EmailVerificationURL:   strings.TrimSpace(getenv("EMAIL_VERIFICATION_URL")),
+		PasswordResetURL:       strings.TrimSpace(getenv("PASSWORD_RESET_URL")),
+		AllowedReturnURLs:      splitList(getenv("AUTH_RETURN_URLS")),
+		CookieDomain:           strings.TrimSpace(getenv("AUTH_COOKIE_DOMAIN")),
+		CookieSecure:           cookieSecure,
+		GoogleEnabled:          googleEnabled,
+		CognitoCLIClientID:     strings.TrimSpace(getenv("COGNITO_CLI_CLIENT_ID")),
+		CognitoCLICallbackURL:  strings.TrimSpace(getenv("COGNITO_CLI_CALLBACK_URL")),
+		CognitoCLICallbackURLs: splitList(getenv("COGNITO_CLI_CALLBACK_URLS")),
 
 		CognitoAgentClientID:     strings.TrimSpace(getenv("COGNITO_AGENT_CLIENT_ID")),
 		CognitoAgentClientSecret: strings.TrimSpace(getenv("COGNITO_AGENT_CLIENT_SECRET")),
@@ -94,10 +96,24 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		if config.CognitoCLIClientID == config.CognitoClientID || config.CognitoCLIClientID == config.CognitoAgentClientID {
 			return Config{}, errors.New("COGNITO_CLI_CLIENT_ID must be distinct from the web and agent app clients")
 		}
-		parsed, err := url.Parse(config.CognitoCLICallbackURL)
-		if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || parsed.Path != "/callback" || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return Config{}, errors.New("COGNITO_CLI_CALLBACK_URL must be http://127.0.0.1:<port>/callback when COGNITO_CLI_CLIENT_ID is set")
+		seen := map[string]bool{}
+		callbacks := append([]string{config.CognitoCLICallbackURL}, config.CognitoCLICallbackURLs...)
+		config.CognitoCLICallbackURLs = nil
+		for _, callback := range callbacks {
+			parsed, err := url.Parse(callback)
+			if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || parsed.User != nil || parsed.Path != "/callback" || parsed.RawQuery != "" || parsed.Fragment != "" {
+				return Config{}, errors.New("CLI callbacks must be http://127.0.0.1:<port>/callback")
+			}
+			port, err := strconv.Atoi(parsed.Port())
+			if err != nil || port < 1 || port > 65535 {
+				return Config{}, errors.New("CLI callback port must be between 1 and 65535")
+			}
+			if !seen[callback] {
+				config.CognitoCLICallbackURLs = append(config.CognitoCLICallbackURLs, callback)
+				seen[callback] = true
+			}
 		}
+
 	}
 	if config.InvitationAcceptURL == "" || config.EmailVerificationURL == "" || config.PasswordResetURL == "" || len(config.AllowedReturnURLs) == 0 {
 		return Config{}, errors.New("INVITATION_ACCEPT_URL, EMAIL_VERIFICATION_URL, PASSWORD_RESET_URL, and AUTH_RETURN_URLS are required")

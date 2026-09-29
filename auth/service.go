@@ -192,6 +192,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		CLIClientID:        config.CognitoCLIClientID,
 		CLIIssuer:          config.CognitoIssuer,
 		CLICallbackURL:     config.CognitoCLICallbackURL,
+		CLICallbackURLs:    config.CognitoCLICallbackURLs,
 		CLISignUpURL:       cliSignUpURL,
 		CLIVerifier:        verifier,
 		CLICompleteLogin:   service.CompleteLogin,
