@@ -1443,8 +1443,13 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 	if !ok {
 		return
 	}
+	// teamspace_id is optional and pins this run to one teamspace (see
+	// threads.RunInput.TeamspaceID). It is a pointer so that one sent blank is
+	// told apart from one left out: a pin the caller meant, and did not get,
+	// would leave the run free to work in any teamspace the model names.
 	var body struct {
-		Message       string `json:"message"`
+		Message       string  `json:"message"`
+		TeamspaceID   *string `json:"teamspace_id"`
 		Confirmations []struct {
 			ID        string `json:"id"`
 			Confirmed *bool  `json:"confirmed"`
@@ -1460,6 +1465,14 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		input.Confirmations = append(input.Confirmations, threads.Answer{ID: answer.ID, Confirmed: *answer.Confirmed})
+	}
+	if body.TeamspaceID != nil {
+		pinned, err := primaryagents.CleanTeamspacePin(*body.TeamspaceID)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		input.TeamspaceID = pinned
 	}
 
 	started, err := server.threads.StartRun(request.Context(), member, request.PathValue("threadID"), input)

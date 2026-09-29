@@ -17,10 +17,13 @@ import (
 type teamspaceRequests struct {
 	fakeInteractions
 	input InteractionCreateInput
+	// creates counts the requests the ledger was asked to make.
+	creates int
 }
 
 func (service *teamspaceRequests) Create(ctx context.Context, actor InteractionActor, token, key string, input InteractionCreateInput) (Interaction, error) {
 	service.input = input
+	service.creates++
 	return service.fakeInteractions.Create(ctx, actor, token, key, input)
 }
 
@@ -52,6 +55,76 @@ func TestAToolRequestCarriesTheTeamspaceTheModelNamed(t *testing.T) {
 	}, "Ask Grace's agent in the launch room")
 	if service.input.TeamspaceID != "tsp_launch" || service.input.TargetAgentID != "agt_grace" || service.actor.AgentID != "agt_a" {
 		t.Fatalf("input=%+v actor=%+v, want the teamspace the model named, asked as agt_a", service.input, service.actor)
+	}
+}
+
+// askingInTeamspace runs a turn that asks Grace's agent for something, naming
+// the teamspace the model is told to name, and says what the pinned run's
+// tool answered.
+func askingInTeamspace(t *testing.T, ctx context.Context, service InteractionService, named map[string]any) string {
+	t.Helper()
+	box, err := InteractionToolbox(InteractionConfig{Service: service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"target_agent_id": "agt_grace", "purpose": "Launch", "task": "Review the checklist."}
+	for name, value := range named {
+		args[name] = value
+	}
+	return newHarness(t, callingOnce(InteractionsToolboxName, "interactions_create", args), box).turnWith(
+		memberauth.WithAccessToken(ctx, "member-token"), "user_a", map[string]any{
+			OrganizationIDKey: "org_1", AgentIDKey: "agt_a", AgentNameKey: "Crew", AgentKindKey: "primary",
+		}, "Ask Grace's agent")
+}
+
+// TestAPinnedRunAsksInItsTeamspaceOrNotAtAll: a run pinned to one teamspace
+// files its request there. A request that names no teamspace is filed in the
+// pinned one, one that names it (however it is padded) is filed there as
+// well, and one that names another is refused — the ledger is never asked, and
+// the model is not told which teamspace the run is pinned to. A run with no
+// pin files what the model named, exactly as it always did.
+func TestAPinnedRunAsksInItsTeamspaceOrNotAtAll(t *testing.T) {
+	pinned := WithPinnedTeamspace(context.Background(), "tsp_launch")
+
+	for name, named := range map[string]map[string]any{
+		"one that names no teamspace":                nil,
+		"one that names the pinned teamspace":        {"teamspace_id": "tsp_launch"},
+		"one that names the pinned teamspace padded": {"teamspace_id": "  tsp_launch\n"},
+		"one that names only spaces":                 {"teamspace_id": "  "},
+	} {
+		service := &teamspaceRequests{}
+		answer := askingInTeamspace(t, pinned, service, named)
+		if service.creates != 1 || service.input.TeamspaceID != "tsp_launch" || service.input.TargetAgentID != "agt_grace" || !strings.Contains(answer, "irq_1") {
+			t.Errorf("%s: filed %d request(s) as %+v (answer %q), want one in tsp_launch", name, service.creates, service.input, answer)
+		}
+	}
+
+	refused := &teamspaceRequests{}
+	answer := askingInTeamspace(t, pinned, refused, map[string]any{"teamspace_id": "tsp_other"})
+	if refused.creates != 0 || refused.key != "" {
+		t.Fatalf("a request naming another teamspace was filed: %+v", refused.input)
+	}
+	if !strings.Contains(answer, "error") || !strings.Contains(answer, "one teamspace") {
+		t.Errorf("the model was told %q, want a refusal that says the conversation is about one teamspace", answer)
+	}
+	if strings.Contains(answer, "tsp_launch") {
+		t.Errorf("the refusal told the model which teamspace the run is pinned to: %q", answer)
+	}
+
+	// Without a pin nothing changes: the model's teamspace goes to the ledger
+	// as named, and none is none.
+	for name, testCase := range map[string]struct {
+		named map[string]any
+		want  string
+	}{
+		"one that names a teamspace, padded": {map[string]any{"teamspace_id": " tsp_other "}, " tsp_other "},
+		"one that names none":                {nil, ""},
+	} {
+		service := &teamspaceRequests{}
+		askingInTeamspace(t, context.Background(), service, testCase.named)
+		if service.creates != 1 || service.input.TeamspaceID != testCase.want {
+			t.Errorf("unpinned, %s: filed %d request(s) in %q, want one in %q", name, service.creates, service.input.TeamspaceID, testCase.want)
+		}
 	}
 }
 

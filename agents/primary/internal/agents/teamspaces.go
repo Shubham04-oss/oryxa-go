@@ -220,6 +220,13 @@ func (tools teamspaceTools) actor(ctx agent.Context) (TeamspaceActor, string, er
 	return actor, token, nil
 }
 
+// The four tools below work in whatever teamspace the model names, except in a
+// run pinned to one teamspace (WithPinnedTeamspace): there they list, read and
+// publish in that teamspace alone, and refuse to name another. The services
+// under them check the live seat and team as they always do.
+
+// list shows the teamspaces the agent may work in: in a pinned run, only the
+// one it is pinned to.
 func (tools teamspaceTools) list(ctx agent.Context, _ noArgs) (teamspaceListResult, error) {
 	actor, token, err := tools.actor(ctx)
 	if err != nil {
@@ -229,21 +236,28 @@ func (tools teamspaceTools) list(ctx agent.Context, _ noArgs) (teamspaceListResu
 	if err != nil {
 		return teamspaceListResult{}, teamspaceError(err)
 	}
-	return teamspaceListResult{Teamspaces: spaces}, nil
+	return teamspaceListResult{Teamspaces: onlyPinned(ctx, spaces)}, nil
 }
 
 func (tools teamspaceTools) entries(ctx agent.Context, args teamspaceEntriesArgs) (teamspaceEntriesResult, error) {
+	teamspaceID, err := pinnedTeamspaceFor(ctx, strings.TrimSpace(args.TeamspaceID))
+	if err != nil {
+		return teamspaceEntriesResult{}, err
+	}
 	actor, token, err := tools.actor(ctx)
 	if err != nil {
 		return teamspaceEntriesResult{}, err
 	}
-	entries, err := tools.service.CollaborationEntries(ctx, actor, token, strings.TrimSpace(args.TeamspaceID), args.Limit)
+	entries, err := tools.service.CollaborationEntries(ctx, actor, token, teamspaceID, args.Limit)
 	if err != nil {
 		return teamspaceEntriesResult{}, teamspaceError(err)
 	}
 	return teamspaceEntriesResult{Entries: entries}, nil
 }
 
+// context finds one teamspace and reads it. A pinned run looks only among the
+// one it is pinned to, so a query that names any other finds nothing, and one
+// that names none finds the pinned one whatever else the agent may work in.
 func (tools teamspaceTools) context(ctx agent.Context, args teamspaceContextArgs) (teamspaceContextResult, error) {
 	actor, token, err := tools.actor(ctx)
 	if err != nil {
@@ -253,8 +267,17 @@ func (tools teamspaceTools) context(ctx agent.Context, args teamspaceContextArgs
 	if err != nil {
 		return teamspaceContextResult{}, teamspaceError(err)
 	}
+	_, pinned := PinnedTeamspace(ctx)
+	if pinned {
+		if spaces = onlyPinned(ctx, spaces); len(spaces) == 0 {
+			return teamspaceContextResult{}, errors.New("the teamspace this conversation is about is not one this agent can work in")
+		}
+	}
 	space, err := selectTeamspace(spaces, args.Query)
 	if err != nil {
+		if pinned {
+			err = fmt.Errorf("%w; this conversation is about one teamspace only", err)
+		}
 		return teamspaceContextResult{}, err
 	}
 	limit := args.Limit
@@ -272,11 +295,15 @@ func (tools teamspaceTools) context(ctx agent.Context, args teamspaceContextArgs
 }
 
 func (tools teamspaceTools) publish(ctx agent.Context, args teamspacePublishArgs) (SharedEntry, error) {
+	teamspaceID, err := pinnedTeamspaceFor(ctx, strings.TrimSpace(args.TeamspaceID))
+	if err != nil {
+		return SharedEntry{}, err
+	}
 	actor, token, err := tools.actor(ctx)
 	if err != nil {
 		return SharedEntry{}, err
 	}
-	entry, err := tools.service.CollaborationPublish(ctx, actor, token, strings.TrimSpace(args.TeamspaceID), args.SharedEntryInput)
+	entry, err := tools.service.CollaborationPublish(ctx, actor, token, teamspaceID, args.SharedEntryInput)
 	if err != nil {
 		return SharedEntry{}, teamspaceError(err)
 	}
