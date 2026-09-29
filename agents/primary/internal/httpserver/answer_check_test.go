@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardpolicy"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 )
 
@@ -64,8 +66,15 @@ func (limiter *checkLimiter) members() []checkKey {
 }
 
 // checkServer is a server whose check route reads with guard, or reads
-// nothing when guard is nil.
+// nothing when guard is nil, and keeps no member's answer guard settings.
 func checkServer(guard AnswerChecker, logger *slog.Logger) (*Server, *fakeDirectory) {
+	return checkServerWith(guard, nil, logger)
+}
+
+// checkServerWith is checkServer, with settings to tell what level applies to a
+// member's answers. A nil settings keeps none; a pointer that was never built,
+// in it, is what New is to take for none.
+func checkServerWith(guard AnswerChecker, settings AnswerGuardPreferences, logger *slog.Logger) (*Server, *fakeDirectory) {
 	directory := member()
 	config := Config{
 		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute,
@@ -73,6 +82,9 @@ func checkServer(guard AnswerChecker, logger *slog.Logger) (*Server, *fakeDirect
 	}
 	if guard != nil {
 		config.AnswerGuard = guard
+	}
+	if settings != nil {
+		config.AnswerGuardPreferences = settings
 	}
 	return New(directory, &fakeThreads{}, config, logger), directory
 }
@@ -411,10 +423,12 @@ func TestTheCheckRouteReadsAnAnswerAtTheLevelOfItsOrigin(t *testing.T) {
 	}
 }
 
-// TestAnOriginChoosesHowStrictlyAnAnswerIsRead: an answer a peer will read is
-// read strictly, the member's own with only the secrets taken out, and a
-// origin nobody knows is read strictly too, so it can never be read looser.
-func TestAnOriginChoosesHowStrictlyAnAnswerIsRead(t *testing.T) {
+// TestAnOriginChoosesHowStrictlyAnAnswerIsReadWhenNobodyChose: with no
+// member's settings kept, an answer a peer will read is read strictly, the
+// member's own with only the secrets taken out, and an origin nobody knows is
+// read strictly too, so it can never be read looser: what a route has always
+// done, and what a member who chose nothing gets.
+func TestAnOriginChoosesHowStrictlyAnAnswerIsReadWhenNobodyChose(t *testing.T) {
 	for origin, want := range map[string]answerguard.Intensity{
 		originOwner: answerguard.IntensitySecrets,
 		originPeer:  answerguard.IntensityStrict,
@@ -422,8 +436,8 @@ func TestAnOriginChoosesHowStrictlyAnAnswerIsRead(t *testing.T) {
 		"Owner":     answerguard.IntensityStrict,
 		"someone":   answerguard.IntensityStrict,
 	} {
-		if got := checkLevel(origin); got != want {
-			t.Errorf("checkLevel(%q) = %q, want %q", origin, got, want)
+		if got := defaultCheckLevel(origin); got != want {
+			t.Errorf("defaultCheckLevel(%q) = %q, want %q", origin, got, want)
 		}
 	}
 }
@@ -461,9 +475,16 @@ func TestTheCheckRouteKeepsAndLogsNothingItWasAsked(t *testing.T) {
 			t.Errorf("the log holds %q:\n%s", secret, logs.String())
 		}
 	}
-	for _, said := range []string{`"organization_id":"org_1"`, `"user_id":"user_1"`, `"origin":"owner"`, `"origin":"peer"`, `"UNCHECKED"`} {
+	for _, said := range []string{`"organization_id":"org_1"`, `"user_id":"user_1"`, `"origin":"owner"`, `"origin":"peer"`, `"intensity":"secrets"`, `"intensity":"strict"`, `"UNCHECKED"`} {
 		if !strings.Contains(logs.String(), said) {
 			t.Errorf("the log does not say %s:\n%s", said, logs.String())
+		}
+	}
+	// A record has one severity: a second "level" key in the line, say for the
+	// level a check was read at, would hide it from whatever reads the line.
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if strings.Count(line, `"level":`) != 1 {
+			t.Errorf("a log line names its level %d times, want once: %s", strings.Count(line, `"level":`), line)
 		}
 	}
 }
@@ -653,5 +674,377 @@ func TestTheCheckRouteIsTheMembersOwnCall(t *testing.T) {
 	}
 	if guard.checks() != 2 {
 		t.Fatalf("the guard was asked %d times, want it still 2", guard.checks())
+	}
+}
+
+// The answers the tests below are checked on: an email address alone, and an
+// email address beside a password, which the guardrail masks.
+const (
+	contactAnswer = "Write to priya@example.com or call the office."
+	secretAnswer  = "The password is hunter2; write to priya@example.com."
+)
+
+// checkOutcome is what a check answered, in the terms the tests compare.
+type checkOutcome struct {
+	state     string
+	kinds     []string
+	shareable []string
+}
+
+// checked posts a check of texts as origin, in the organization at path, and
+// says what it answered.
+func checked(t *testing.T, server *Server, path string, origin string, texts ...string) checkOutcome {
+	t.Helper()
+	response, got := postCheck(t, server, path, `{"texts":`+jsonTextsList(texts)+`,"origin":"`+origin+`"}`)
+	if response.Code != http.StatusOK || !got.Checked {
+		t.Fatalf("check of %v as %s = %d %s, want 200 and a check made", texts, origin, response.Code, response.Body.String())
+	}
+	return checkOutcome{state: got.State, kinds: got.Kinds, shareable: got.Shareable}
+}
+
+func (outcome checkOutcome) is(state string, kinds []string, shareable ...string) bool {
+	return outcome.state == state && slices.Equal(outcome.kinds, kinds) && slices.Equal(outcome.shareable, shareable)
+}
+
+// TestAMemberWhoChoseStrictForTheirOwnAnswersHasEmailsHeldOnAnOwnerCheck: the
+// same answer, checked as the member's own, is read at the level that applies
+// to that member: strictly for one who chose it, with the email address held
+// and shared as {EMAIL}; as it always was for one who chose nothing; and as
+// loosely as secrets, for what another reads, for one who chose that.
+func TestAMemberWhoChoseStrictForTheirOwnAnswersHasEmailsHeldOnAnOwnerCheck(t *testing.T) {
+	settings := &fakeAnswerGuardPreferences{chosen: map[[2]string]guardpolicy.Choices{
+		{"org_1", "user_1"}: {Owner: guardpolicy.LevelStrict},
+		{"org_1", "user_3"}: {Peer: guardpolicy.LevelSecrets},
+	}}
+	server, directory := checkServerWith(realGuard(t), settings, nil)
+	held := func(masked string) checkOutcome {
+		return checkOutcome{"held", []string{"EMAIL"}, []string{"Fine.", masked}}
+	}
+
+	// user_1 chose strict for what they start themselves.
+	if got := checked(t, server, checkPath, "owner", "Fine.", contactAnswer); !got.is("held", []string{"EMAIL"}, "Fine.", "Write to {EMAIL} or call the office.") {
+		t.Errorf("an owner check for a member who chose strict = %+v, want the email held and masked: %+v", got, held("Write to {EMAIL} or call the office."))
+	}
+	if got := checked(t, server, checkPath, "owner", secretAnswer); !got.is("held", []string{"EMAIL"}, "The password is {PASSWORD}; write to {EMAIL}.") {
+		t.Errorf("an owner check of a password and an email for that member = %+v, want both masked, the email held", got)
+	}
+	// What another reads is still strict for them, by default.
+	if got := checked(t, server, checkPath, "peer", "Fine.", contactAnswer); !got.is("held", []string{"EMAIL"}, "Fine.", "Write to {EMAIL} or call the office.") {
+		t.Errorf("a peer check for that member = %+v, want it strict, as by default", got)
+	}
+
+	// user_2 chose nothing: what they start themselves keeps its email address.
+	directory.membership.UserID = "user_2"
+	if got := checked(t, server, checkPath, "owner", "Fine.", contactAnswer); !got.is("clear", []string{}, "Fine.", contactAnswer) {
+		t.Errorf("an owner check for a member who chose nothing = %+v, want it clear, as it always was", got)
+	}
+	if got := checked(t, server, checkPath, "owner", secretAnswer); !got.is("masked", []string{"PASSWORD"}, "The password is {PASSWORD}; write to priya@example.com.") {
+		t.Errorf("an owner check of a password and an email for that member = %+v, want the password masked and the address intact", got)
+	}
+
+	// user_3 chose secrets for what others read: their email addresses go as written.
+	directory.membership.UserID = "user_3"
+	if got := checked(t, server, checkPath, "peer", "Fine.", contactAnswer); !got.is("clear", []string{}, "Fine.", contactAnswer) {
+		t.Errorf("a peer check for a member who chose secrets = %+v, want it clear", got)
+	}
+	if got := checked(t, server, checkPath, "peer", secretAnswer); !got.is("masked", []string{"PASSWORD"}, "The password is {PASSWORD}; write to priya@example.com.") {
+		t.Errorf("a peer check of a password and an email for that member = %+v, want the password masked and the address intact", got)
+	}
+	// ... and never the password, whatever they chose, nor an answer nobody could read.
+	if got := checked(t, server, checkPath, "peer", "Fine.", "UNREADABLE "+secretAnswer); !got.is("held", []string{"UNCHECKED"}) || got.shareable != nil {
+		t.Errorf("a peer check of what could not be read = %+v, want nothing shared", got)
+	}
+}
+
+// TestAnOrganizationsMinimumOverridesAMembersChoiceOnACheck: a member who chose
+// secrets, in an organization whose policy asks for at least strict, has
+// strict; in an organization that asks nothing their own choice stands, so the
+// minimum is the organization's and no other's; and lowering it lets the
+// choice apply again.
+func TestAnOrganizationsMinimumOverridesAMembersChoiceOnACheck(t *testing.T) {
+	orgs := fakeOrgPolicies{"org_1": {MinimumOwner: guardpolicy.LevelStrict, MinimumPeer: guardpolicy.LevelStrict}}
+	settings := &fakeAnswerGuardPreferences{
+		orgs: orgs,
+		chosen: map[[2]string]guardpolicy.Choices{
+			{"org_1", "user_1"}: {Owner: guardpolicy.LevelSecrets, Peer: guardpolicy.LevelSecrets},
+			{"org_2", "user_1"}: {Owner: guardpolicy.LevelSecrets, Peer: guardpolicy.LevelSecrets},
+		},
+	}
+	server, _ := checkServerWith(realGuard(t), settings, nil)
+	const otherPath = "/v1/organizations/org_2/answer-guard/check"
+	masked := "Write to {EMAIL} or call the office."
+
+	for _, origin := range []string{"owner", "peer"} {
+		if got := checked(t, server, checkPath, origin, contactAnswer); !got.is("held", []string{"EMAIL"}, masked) {
+			t.Errorf("a %s check in the organization whose minimum is strict = %+v, want the email held whatever the member chose", origin, got)
+		}
+		if got := checked(t, server, otherPath, origin, contactAnswer); !got.is("clear", []string{}, contactAnswer) {
+			t.Errorf("a %s check in an organization with no minimum = %+v, want the member's own choice of secrets", origin, got)
+		}
+	}
+	// An organization that raises only what others read leaves the member's own answers as they chose.
+	orgs["org_1"] = guardpolicy.OrgPolicy{MinimumPeer: guardpolicy.LevelStrict}
+	if got := checked(t, server, checkPath, "owner", contactAnswer); !got.is("clear", []string{}, contactAnswer) {
+		t.Errorf("an owner check when only the peer minimum is strict = %+v, want the member's choice", got)
+	}
+	if got := checked(t, server, checkPath, "peer", contactAnswer); !got.is("held", []string{"EMAIL"}, masked) {
+		t.Errorf("a peer check when the peer minimum is strict = %+v, want the email held", got)
+	}
+	// And one that lowers its minimum lets the choice apply again.
+	delete(orgs, "org_1")
+	if got := checked(t, server, checkPath, "peer", contactAnswer); !got.is("clear", []string{}, contactAnswer) {
+		t.Errorf("a peer check once the minimum is gone = %+v, want the member's choice", got)
+	}
+}
+
+// TestWithNoSettingsKeptACheckReadsAsItAlwaysHas: with no answer guard
+// settings, or a settings service that was never built, the origin alone
+// decides: the member's own answers keep their email addresses, and what
+// another reads holds them. That is today's behaviour, and nothing is asked.
+func TestWithNoSettingsKeptACheckReadsAsItAlwaysHas(t *testing.T) {
+	var neverBuilt *fakeAnswerGuardPreferences
+	var neverOpened *guardpolicy.Service
+	for name, settings := range map[string]AnswerGuardPreferences{
+		"none":                            nil,
+		"a fake that was never built":     neverBuilt,
+		"a service that was never opened": neverOpened,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server, _ := checkServerWith(realGuard(t), settings, nil)
+			if got := checked(t, server, checkPath, "owner", "Fine.", contactAnswer); !got.is("clear", []string{}, "Fine.", contactAnswer) {
+				t.Errorf("an owner check = %+v, want the email left as written", got)
+			}
+			if got := checked(t, server, checkPath, "peer", "Fine.", contactAnswer); !got.is("held", []string{"EMAIL"}, "Fine.", "Write to {EMAIL} or call the office.") {
+				t.Errorf("a peer check = %+v, want the email held and masked", got)
+			}
+			response, got := postCheck(t, server, checkPath, `{"texts":`+jsonTextsList([]string{"Fine.", contactAnswer})+`}`)
+			if outcome := (checkOutcome{got.State, got.Kinds, got.Shareable}); response.Code != http.StatusOK ||
+				!outcome.is("held", []string{"EMAIL"}, "Fine.", "Write to {EMAIL} or call the office.") {
+				t.Errorf("a check that names no origin = %d %s, want it read as a peer's", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+// unanswering is a settings service that tells a check what it is made to,
+// and fails as it is made to: it is how a service that gives less than the
+// strictest reading with its error, or a level nobody knows, is read.
+type unanswering struct {
+	effective guardpolicy.Effective
+	err       error
+}
+
+func (unanswering) Preferences(context.Context, string, string) (guardpolicy.View, error) {
+	return guardpolicy.View{}, nil
+}
+
+func (unanswering) SetPreferences(context.Context, string, string, *guardpolicy.Level, *guardpolicy.Level) (guardpolicy.View, error) {
+	return guardpolicy.View{}, nil
+}
+
+func (settings unanswering) Effective(context.Context, string, string) (guardpolicy.Effective, error) {
+	return settings.effective, settings.err
+}
+
+// TestACheckWhoseSettingsCannotBeReadIsReadStrictlyAndSaysSo: when a member's
+// own levels cannot be read the check does not fail, and does not read looser:
+// it reads strictly, whatever the member chose, and logs a warning that names
+// who and which origin and why, and holds no text and no value. A service that
+// answers nothing beside its error, or a level nobody knows, is read strictly
+// too; and there is no level that reads nothing.
+func TestACheckWhoseSettingsCannotBeReadIsReadStrictlyAndSaysSo(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	masked := "Write to {EMAIL} or call the office."
+	strictly := func(t *testing.T, server *Server, origin string) {
+		t.Helper()
+		if got := checked(t, server, checkPath, origin, contactAnswer); !got.is("held", []string{"EMAIL"}, masked) {
+			t.Errorf("an %s check = %+v, want the email held and masked", origin, got)
+		}
+	}
+
+	// A member who chose secrets for both, whose choice cannot be read.
+	failing := &fakeAnswerGuardPreferences{
+		err:    errors.New("database down"),
+		chosen: map[[2]string]guardpolicy.Choices{{"org_1", "user_1"}: {Owner: guardpolicy.LevelSecrets, Peer: guardpolicy.LevelSecrets}},
+	}
+	server, _ := checkServerWith(realGuard(t), failing, logger)
+	strictly(t, server, "owner")
+	strictly(t, server, "peer")
+	warned := 0
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+		if record["level"] != "WARN" {
+			continue
+		}
+		warned++
+		if record["organization_id"] != "org_1" || record["user_id"] != "user_1" || !strings.Contains(record["error"].(string), "database down") ||
+			(record["origin"] != "owner" && record["origin"] != "peer") {
+			t.Errorf("warning = %v, want the organization, the member, the origin and why", record)
+		}
+	}
+	if warned != 2 {
+		t.Errorf("logged %d warnings over two checks, want one each:\n%s", warned, logs.String())
+	}
+	for _, secret := range []string{"priya@example.com", "hunter2", "Write to", "office", "The password"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Errorf("the log holds %q:\n%s", secret, logs.String())
+		}
+	}
+
+	// A service that fails with nothing to go on, or with a level nobody knows,
+	// or with the level that would read nothing, is read strictly all the same.
+	for name, settings := range map[string]unanswering{
+		"nothing beside its error":       {err: errors.New("database down")},
+		"a level nobody knows":           {effective: guardpolicy.Effective{Owner: "lenient", Peer: "lenient"}},
+		"a level of off":                 {effective: guardpolicy.Effective{Owner: "off", Peer: "off"}},
+		"no level and no error":          {},
+		"levels in capitals":             {effective: guardpolicy.Effective{Owner: "SECRETS", Peer: "SECRETS"}},
+		"a level of off beside an error": {effective: guardpolicy.Effective{Owner: "off", Peer: "off"}, err: errors.New("database down")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server, _ := checkServerWith(realGuard(t), settings, nil)
+			strictly(t, server, "owner")
+			strictly(t, server, "peer")
+		})
+	}
+	// A service that answers, without an error, is believed, and not warned
+	// about: what is read strictly is only what could not be read.
+	quiet := unanswering{effective: guardpolicy.Effective{Owner: guardpolicy.LevelSecrets, Peer: guardpolicy.LevelSecrets}}
+	logs.Reset()
+	server, _ = checkServerWith(realGuard(t), quiet, logger)
+	if got := checked(t, server, checkPath, "peer", contactAnswer); !got.is("clear", []string{}, contactAnswer) {
+		t.Errorf("a peer check at secrets = %+v, want it clear", got)
+	}
+	if strings.Contains(logs.String(), `"level":"WARN"`) {
+		t.Errorf("a check whose settings were read warned:\n%s", logs.String())
+	}
+}
+
+// TestACheckReadsTheCallersOwnSettingsAndNoOnesElse: the level a check is read
+// at is the one for the member who asked, in the organization they asked in;
+// nothing in the query, the headers or the body names whose settings they are.
+func TestACheckReadsTheCallersOwnSettingsAndNoOnesElse(t *testing.T) {
+	settings := &fakeAnswerGuardPreferences{}
+	guard := &fakeAnswerChecker{}
+	server, _ := checkServerWith(guard, settings, nil)
+	smuggled := map[string]string{"Authorization": "Bearer member-token", "X-User-Id": "user_2", "X-Organization-Id": "org_2", "X-Forwarded-User": "user_2"}
+
+	response := serve(server, http.MethodPost, checkPath+"?user_id=user_2&organization_id=org_2", `{"texts":["Hello"],"origin":"owner"}`, smuggled)
+	if response.Code != http.StatusOK {
+		t.Fatalf("check = %d %s", response.Code, response.Body.String())
+	}
+	for _, body := range []string{
+		`{"texts":["Hello"],"user_id":"user_2"}`,
+		`{"texts":["Hello"],"organization_id":"org_2"}`,
+		`{"texts":["Hello"],"level":"secrets"}`,
+		`{"texts":["Hello"],"effective":{"owner":"secrets"}}`,
+	} {
+		if response := serve(server, http.MethodPost, checkPath, body, bearer); response.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", body, response.Code)
+		}
+	}
+	if want := [][2]string{{"org_1", "user_1"}}; fmt.Sprint(settings.calls) != fmt.Sprint(want) || guard.checks() != 1 {
+		t.Fatalf("settings were read for %v with the guard asked %d times, want %v and once", settings.calls, guard.checks(), want)
+	}
+	// The organization is the path's, which the caller was proved a member of.
+	if response := serve(server, http.MethodPost, "/v1/organizations/org_9/answer-guard/check", `{"texts":["Hello"]}`, bearer); response.Code != http.StatusOK {
+		t.Fatalf("check in org_9 = %d", response.Code)
+	}
+	if want := [][2]string{{"org_1", "user_1"}, {"org_9", "user_1"}}; fmt.Sprint(settings.calls) != fmt.Sprint(want) {
+		t.Fatalf("settings were read for %v, want %v", settings.calls, want)
+	}
+}
+
+// TestSettingsAreOnlyReadForACheckThatReadsAnAnswer: a check that is refused,
+// that nobody may make, that is over the limit, or that has no guardrail to
+// read with, costs no read of anybody's settings.
+func TestSettingsAreOnlyReadForACheckThatReadsAnAnswer(t *testing.T) {
+	settings := &fakeAnswerGuardPreferences{}
+
+	// No guardrail: nothing is read, and so nothing is asked either.
+	server, _ := checkServerWith(nil, settings, nil)
+	for _, origin := range []string{"owner", "peer"} {
+		if response, got := postCheck(t, server, checkPath, `{"texts":["Hello"],"origin":"`+origin+`"}`); response.Code != http.StatusOK || got.Checked {
+			t.Fatalf("a check with no guardrail = %d %s, want it unchecked", response.Code, response.Body.String())
+		}
+	}
+	if len(settings.calls) != 0 {
+		t.Fatalf("settings were read %d times for checks that read nothing", len(settings.calls))
+	}
+
+	guard := &fakeAnswerChecker{}
+	server, directory := checkServerWith(guard, settings, nil)
+	now := time.Date(2026, 9, 29, 9, 0, 0, 0, time.UTC)
+	server.checks.now = func() time.Time { return now }
+	for _, refused := range []struct {
+		name    string
+		body    string
+		headers map[string]string
+		want    int
+	}{
+		{"a malformed check", `{"texts":[]}`, bearer, http.StatusBadRequest},
+		{"an origin nobody knows", `{"texts":["Hello"],"origin":"member"}`, bearer, http.StatusBadRequest},
+		{"no credentials", `{"texts":["Hello"]}`, nil, http.StatusUnauthorized},
+		{"another site's cookie", `{"texts":["Hello"]}`, map[string]string{"Cookie": "cookie-token", "Origin": "https://evil.test"}, http.StatusForbidden},
+	} {
+		if response := serve(server, http.MethodPost, checkPath, refused.body, refused.headers); response.Code != refused.want {
+			t.Errorf("%s = %d, want %d", refused.name, response.Code, refused.want)
+		}
+	}
+	directory.membership.Agent = true
+	if response := serve(server, http.MethodPost, checkPath, `{"texts":["Hello"]}`, bearer); response.Code != http.StatusForbidden {
+		t.Errorf("an agent's token = %d, want 403", response.Code)
+	}
+	directory.membership.Agent = false
+	if len(settings.calls) != 0 || guard.checks() != 0 {
+		t.Fatalf("refused checks read settings %d times and asked the guard %d times, want neither", len(settings.calls), guard.checks())
+	}
+
+	// A member's thirty checks each read their settings once; the thirty-first
+	// is refused before it does.
+	for count := range checksPerWindow {
+		if response := serve(server, http.MethodPost, checkPath, `{"texts":["Hello"]}`, bearer); response.Code != http.StatusOK {
+			t.Fatalf("check %d = %d", count+1, response.Code)
+		}
+	}
+	if response := serve(server, http.MethodPost, checkPath, `{"texts":["Hello"]}`, bearer); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("the thirty-first check = %d, want 429", response.Code)
+	}
+	if len(settings.calls) != checksPerWindow || guard.checks() != checksPerWindow {
+		t.Fatalf("settings were read %d times and the guard asked %d, want %d of each", len(settings.calls), guard.checks(), checksPerWindow)
+	}
+}
+
+// TestTheLevelsACheckIsReadAtAreTheGuardsOwn: guardpolicy and answerguard spell
+// the two levels alike, and a check is only ever read at one of them: any other
+// level, none at all, and the one that would read nothing, are strict.
+func TestTheLevelsACheckIsReadAtAreTheGuardsOwn(t *testing.T) {
+	if answerguard.Intensity(guardpolicy.LevelSecrets) != answerguard.IntensitySecrets || answerguard.Intensity(guardpolicy.LevelStrict) != answerguard.IntensityStrict {
+		t.Fatalf("guardpolicy spells the levels %q and %q, answerguard %q and %q", guardpolicy.LevelSecrets, guardpolicy.LevelStrict, answerguard.IntensitySecrets, answerguard.IntensityStrict)
+	}
+	if guardpolicy.Origin(originOwner) != guardpolicy.OriginOwner || guardpolicy.Origin(originPeer) != guardpolicy.OriginPeer {
+		t.Fatalf("the route spells the origins %q and %q, guardpolicy %q and %q", originOwner, originPeer, guardpolicy.OriginOwner, guardpolicy.OriginPeer)
+	}
+	for level, want := range map[guardpolicy.Level]answerguard.Intensity{
+		guardpolicy.LevelSecrets: answerguard.IntensitySecrets,
+		guardpolicy.LevelStrict:  answerguard.IntensityStrict,
+		"":                       answerguard.IntensityStrict,
+		"off":                    answerguard.IntensityStrict,
+		"SECRETS":                answerguard.IntensityStrict,
+		"everything":             answerguard.IntensityStrict,
+	} {
+		if got := intensityOf(level); got != want {
+			t.Errorf("intensityOf(%q) = %q, want %q", level, got, want)
+		}
+	}
+	// What a member who chose nothing gets is what the route always did.
+	for origin, want := range map[string]answerguard.Intensity{originOwner: answerguard.IntensitySecrets, originPeer: answerguard.IntensityStrict} {
+		if got := defaultCheckLevel(origin); got != want {
+			t.Errorf("defaultCheckLevel(%q) = %q, want %q", origin, got, want)
+		}
 	}
 }

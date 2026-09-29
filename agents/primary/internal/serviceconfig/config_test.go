@@ -7,6 +7,7 @@ import (
 
 	"google.golang.org/genai"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardpolicy"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 )
 
@@ -56,6 +57,10 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if config.DeliveryThinking != "" {
 		t.Fatalf("delivery thinking = %q, want none: every model thinks as it does by default", config.DeliveryThinking)
+	}
+	// The relevance check holds nobody's answers until a deployment says it may.
+	if config.GuardRelevanceCap != guardpolicy.RelevanceShadow || len(config.GuardHoldOrgs) != 0 {
+		t.Fatalf("answer guard config = %q, %v; want a ceiling of shadow and no organization exempt", config.GuardRelevanceCap, config.GuardHoldOrgs)
 	}
 }
 
@@ -351,5 +356,69 @@ func TestFromEnvRejectsInvalidSessionTimeout(t *testing.T) {
 	}
 	if _, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS": "later"})); err == nil {
 		t.Fatal("FromEnv() error = nil for a browser timeout that is not a number")
+	}
+}
+
+// TestFromEnvReadsTheRelevanceCap: the most the relevance check may do is
+// hold, shadow or off, in any case, and shadow when nothing is set.
+func TestFromEnvReadsTheRelevanceCap(t *testing.T) {
+	for value, want := range map[string]guardpolicy.RelevanceMode{
+		"hold":     guardpolicy.RelevanceHold,
+		" Shadow ": guardpolicy.RelevanceShadow,
+		"OFF":      guardpolicy.RelevanceOff,
+		"":         guardpolicy.RelevanceShadow,
+		"   ":      guardpolicy.RelevanceShadow,
+	} {
+		config, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_GUARD_RELEVANCE_CAP": value}))
+		if err != nil || config.GuardRelevanceCap != want {
+			t.Errorf("AGENTS_PRIMARY_GUARD_RELEVANCE_CAP=%q: %q, %v, want %q", value, config.GuardRelevanceCap, err, want)
+		}
+	}
+}
+
+// TestFromEnvRefusesARelevanceCapItDoesNotKnow: a ceiling that is not one of
+// the three modes refuses to start, rather than quietly being none: a typo
+// must not let a check hold answers that the deployment meant it not to.
+func TestFromEnvRefusesARelevanceCapItDoesNotKnow(t *testing.T) {
+	for _, value := range []string{"strict", "on", "none", "0", "shadow,hold", "shadow off", "holds"} {
+		_, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_GUARD_RELEVANCE_CAP": value}))
+		if err == nil || !strings.Contains(err.Error(), "AGENTS_PRIMARY_GUARD_RELEVANCE_CAP must be hold, shadow or off") {
+			t.Errorf("AGENTS_PRIMARY_GUARD_RELEVANCE_CAP=%q: error = %v, want one naming the modes", value, err)
+		}
+	}
+}
+
+// TestFromEnvReadsTheOrganizationsTheCapDoesNotApplyTo: a comma-separated
+// list of ids, each trimmed, with nothing between two commas kept.
+func TestFromEnvReadsTheOrganizationsTheCapDoesNotApplyTo(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_GUARD_HOLD_ORGS": " org_1, org-2 ,,org_3,org_1,"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]bool{"org_1": true, "org-2": true, "org_3": true}; len(config.GuardHoldOrgs) != len(want) || !config.GuardHoldOrgs["org_1"] || !config.GuardHoldOrgs["org-2"] || !config.GuardHoldOrgs["org_3"] {
+		t.Errorf("GuardHoldOrgs = %v, want %v", config.GuardHoldOrgs, want)
+	}
+	for _, value := range []string{"", "  ", ",", " , ,"} {
+		config, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_GUARD_HOLD_ORGS": value}))
+		if err != nil || len(config.GuardHoldOrgs) != 0 {
+			t.Errorf("AGENTS_PRIMARY_GUARD_HOLD_ORGS=%q: %v, %v, want no organization exempt", value, config.GuardHoldOrgs, err)
+		}
+	}
+}
+
+// TestFromEnvRefusesAListOfOrganizationsSeparatedByAnythingButCommas: a list
+// separated by spaces or semicolons would be one id no organization has, and
+// exempt nobody without saying so.
+func TestFromEnvRefusesAListOfOrganizationsSeparatedByAnythingButCommas(t *testing.T) {
+	for _, value := range []string{"org_1 org_2", "org_1,org_2 org_3", "org_1\torg_2", "org_1\norg_2", "org_1,or\x00g_2", "org_1;org_2", "org_1:org_2", "org_1|org_2", `"org_1"`, "org_1.org_2", "org_1,org/2"} {
+		_, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_GUARD_HOLD_ORGS": value}))
+		if err == nil || !strings.Contains(err.Error(), "AGENTS_PRIMARY_GUARD_HOLD_ORGS must list organization ids") {
+			t.Errorf("AGENTS_PRIMARY_GUARD_HOLD_ORGS=%q: error = %v, want one saying how to list them", value, err)
+		}
+	}
+	// The ids auth makes are "org_" and base64url, which this takes.
+	config, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_GUARD_HOLD_ORGS": "org_Ab-9_zQ0aBcDeFgH"}))
+	if err != nil || !config.GuardHoldOrgs["org_Ab-9_zQ0aBcDeFgH"] {
+		t.Errorf("an id as auth makes it: %v, %v, want it taken", config.GuardHoldOrgs, err)
 	}
 }

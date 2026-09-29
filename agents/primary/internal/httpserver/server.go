@@ -206,6 +206,12 @@ type Config struct {
 	// is set only when there is one; a nil *answerguard.Guard in the interface
 	// would not read as none.
 	AnswerGuard AnswerChecker
+	// AnswerGuardPreferences keeps each member's own answer guard levels, and
+	// tells what applies to their answers once their organization's minimum is
+	// counted in. Nil answers that none are kept here. It is set only when
+	// there is one; a nil pointer in the interface is read as none, but a
+	// caller should not lean on that.
+	AnswerGuardPreferences AnswerGuardPreferences
 }
 
 // Server serves the API.
@@ -221,6 +227,7 @@ type Server struct {
 	rooms               Rooms
 	organizationContext OrganizationAgentContext
 	answerGuard         AnswerChecker
+	guardPreferences    AnswerGuardPreferences
 	checks              *checkLimiter
 	allowedOrigins      map[string]struct{}
 	runTimeout          time.Duration
@@ -249,6 +256,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		rooms:               config.Rooms,
 		organizationContext: config.OrganizationContext,
 		answerGuard:         config.AnswerGuard,
+		guardPreferences:    keptGuardPreferences(config.AnswerGuardPreferences),
 		checks:              newCheckLimiter(checksPerWindow, checkWindow),
 		allowedOrigins:      map[string]struct{}{},
 		runTimeout:          config.RunTimeout,
@@ -324,6 +332,9 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/preferences", server.getPreferences)
 	server.handle("PUT /v1/organizations/{organizationID}/preferences", server.setPreferences)
 	server.handle("POST /v1/organizations/{organizationID}/answer-guard/check", server.checkAnswer)
+	guardPreferences := newGuardPreferenceHandlers(server.guardPreferences, server.member, logger)
+	server.handle("GET /v1/organizations/{organizationID}/answer-guard/preferences", guardPreferences.get)
+	server.handle("PUT /v1/organizations/{organizationID}/answer-guard/preferences", guardPreferences.put)
 	return server
 }
 

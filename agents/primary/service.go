@@ -30,6 +30,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/directoryclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardpolicy"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/inbound"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactiondelivery"
@@ -116,6 +117,9 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	if err := interactiondelivery.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return err
 	}
+	if err := guardpolicy.New(platform.Database, nil, guardpolicy.Cap{}).Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate guard policy: %w", err)
+	}
 	scoped, err := platform.Database.WithSchema(ctx, schema, "oryxa-migrate-agents", 2)
 	if err != nil {
 		return err
@@ -180,6 +184,17 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 
 	registryStore := managedagents.NewStore(platform.Database)
 	interactionStore := agentinteractions.NewStore(platform.Database)
+	// What each member chose about how strictly the answer guard reads what
+	// their agent says, apart for an answer they started themselves and one
+	// another member reads. No organization's policy can be read yet, so every
+	// organization gets the defaults: NoOrgPolicies says so without a warning,
+	// where nil would say it on the first check. The deployment's ceiling holds
+	// the relevance check to what it has earned.
+	guardSettings := guardpolicy.New(platform.Database, guardpolicy.NoOrgPolicies{}, guardpolicy.Cap{
+		Relevance: settings.GuardRelevanceCap, HoldOrgs: settings.GuardHoldOrgs,
+	}).WithLogger(logger)
+	logger.Info("the answer guard's relevance check is held to a ceiling",
+		"ceiling", settings.GuardRelevanceCap, "organizations_exempt", len(settings.GuardHoldOrgs))
 	var organizationDirectory agents.Directory
 	if settings.TeamsURL != "" {
 		organizationDirectory, err = directoryclient.New(settings.TeamsURL, &http.Client{Transport: observability.Transport(nil)}, registryStore)
@@ -500,6 +515,8 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Workflows:           workflowService,
 		OrganizationContext: organizationStore,
 		Preferences:         wakeups.NewStore(platform.Database),
+		// Always built above, so never a nil *Service in the interface.
+		AnswerGuardPreferences: guardSettings,
 	}
 	// Same reasoning as assemblyOptions above: a nil *Service must leave the
 	// interface field unset, or server.interactions/.teamspaces/.rooms would
@@ -584,16 +601,18 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			closeAll()
 			return host.Service{}, err
 		}
-		// A member's threads and memory, and their wake-ups, need no other
-		// cleanup done first and none needs them, so they run apart from the
-		// list above: Memory Bank being down cannot hold up the rest, nor the
-		// rest failing keep a member's memory from being forgotten.
+		// A member's threads and memory, their wake-ups and their answer guard
+		// settings need no other cleanup done first and none needs them, so
+		// they run apart from the list above: Memory Bank being down cannot
+		// hold up the rest, nor the rest failing keep a member's memory from
+		// being forgotten.
 		consumer.WithIndependentForgetters(
 			func(ctx context.Context, organizationID, memberID string) error {
 				_, err := service.Forget(ctx, organizationID, memberID)
 				return err
 			},
 			store.Forget,
+			guardSettings.Forget,
 		).
 			WithTeamForgetter(teamspaceStore.ForgetTeam).
 			WithTeamMemberForgetter(teamspaceStore.ForgetTeamMember).
