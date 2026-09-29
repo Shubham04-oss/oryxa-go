@@ -357,13 +357,13 @@ resource "aws_iam_role_policy" "task" {
         }
       },
       {
-        # The eight admin calls password sign-up, email verification, sign-in
-        # and password reset sign with the task role
-        # (auth/internal/passwordflow), and nothing else auth asks Cognito.
-        # InitiateAuth and GetTokensFromRefreshToken are its other two calls;
-        # Cognito authorizes those by app client and never reads IAM for
-        # them, so they need no statement. DescribeUserPoolClient, which
-        # answers with a client's secret, is left out on purpose: only
+        # The eight admin calls that password sign-up, email verification and
+        # password reset sign with the task role (auth/internal/passwordflow),
+        # and nothing else auth asks Cognito. Sign-in (InitiateAuth) and
+        # session refresh (GetTokensFromRefreshToken) are its other two calls;
+        # Cognito authorizes those by app client and never reads IAM for them,
+        # so they need no statement. DescribeUserPoolClient, which answers
+        # with a client's secret, is left out on purpose: only
         # deploy/scripts/provision-app.sh reads it, as the operator.
         Sid    = "Cognito"
         Effect = "Allow"
