@@ -293,12 +293,16 @@ func Parse(data []byte) (Document, error) {
 	if err := rejectUnsupportedSections(&root); err != nil {
 		return Document{}, err
 	}
+	if name := yamlMappingValue(yamlMappingValue(root.Content[0], "organization"), "name"); name != nil && strings.TrimSpace(name.Value) == "" {
+		return Document{}, fmt.Errorf("organization.name must be between 1 and 120 characters")
+	}
 	var document Document
 	strict := yaml.NewDecoder(bytes.NewReader(data))
 	strict.KnownFields(true)
 	if err := strict.Decode(&document); err != nil {
 		return Document{}, fmt.Errorf("decode workspace file: %w", err)
 	}
+	document = document.Normalize()
 	if err := document.Validate(); err != nil {
 		return Document{}, err
 	}
@@ -326,6 +330,17 @@ func rejectAliases(node *yaml.Node) error {
 	for _, child := range node.Content {
 		if err := rejectAliases(child); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node != nil && node.Kind == yaml.MappingNode {
+		for index := 0; index+1 < len(node.Content); index += 2 {
+			if node.Content[index].Value == key {
+				return node.Content[index+1]
+			}
 		}
 	}
 	return nil
@@ -363,6 +378,9 @@ func (document Document) Validate() error {
 		if document.People.Invite != "" && document.People.Invite != "email" && document.People.Invite != "quiet" {
 			return fmt.Errorf("people.invite must be email or quiet")
 		}
+	}
+	if document.Organization != nil && (strings.TrimSpace(document.Organization.Name) == "" || utf8.RuneCountInString(document.Organization.Name) > 120) && document.Organization.Name != "" {
+		return fmt.Errorf("organization.name must be between 1 and 120 characters")
 	}
 	if document.Rules != nil && document.Rules.Consent != nil && document.Rules.Consent.ExpireAfter != nil {
 		duration, err := ParseDuration(*document.Rules.Consent.ExpireAfter)
@@ -633,8 +651,40 @@ func validateEmail(email string, domains map[string]bool) error {
 }
 
 func (document Document) YAML() ([]byte, error) {
+	document = document.Normalize()
 	if err := document.Validate(); err != nil {
 		return nil, err
 	}
 	return yaml.Marshal(document)
+}
+
+// Normalize mirrors the public services before comparison or persistence.
+// It copies edited values so callers keep their original review document.
+func (document Document) Normalize() Document {
+	if document.Organization != nil {
+		organization := *document.Organization
+		if name := strings.TrimSpace(organization.Name); name != "" {
+			organization.Name = name
+		}
+		document.Organization = &organization
+	}
+	if document.Agents != nil && document.Agents.Organization != nil {
+		agents := *document.Agents
+		agent := *agents.Organization
+		if agent.DisplayName != nil {
+			value := strings.Join(strings.Fields(*agent.DisplayName), " ")
+			agent.DisplayName = &value
+		}
+		if agent.Description != nil {
+			value := strings.TrimSpace(*agent.Description)
+			agent.Description = &value
+		}
+		if agent.Instructions != nil {
+			value := strings.TrimSpace(*agent.Instructions)
+			agent.Instructions = &value
+		}
+		agents.Organization = &agent
+		document.Agents = &agents
+	}
+	return document
 }

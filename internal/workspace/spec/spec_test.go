@@ -254,3 +254,22 @@ func TestMetadataDomainsPreservesExplicitEmptyOnRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeServiceTextBeforePlanning(t *testing.T) {
+	for _, style := range []string{"|", ">"} {
+		input := strings.Replace(example, "name: Acme", "name: '  Acme  '", 1) + "agents:\n  organization:\n    displayName: '  Acme  Helper  '\n    description: " + style + "\n      Helpful assistant\n    instructions: " + style + "\n      Coordinate teams.\n"
+		document, err := Parse([]byte(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent := document.Agents.Organization
+		if document.Organization.Name != "Acme" || *agent.DisplayName != "Acme Helper" || *agent.Description != "Helpful assistant" || *agent.Instructions != "Coordinate teams." {
+			t.Fatalf("normalization did not mirror services: %+v %+v", document.Organization, agent)
+		}
+	}
+	for _, name := range []string{"''", "'  '", "'" + strings.Repeat("a", 121) + "'"} {
+		if _, err := Parse([]byte(strings.Replace(example, "name: Acme", "name: "+name, 1))); err == nil {
+			t.Fatalf("invalid org name accepted: %s", name)
+		}
+	}
+}
