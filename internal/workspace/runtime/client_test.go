@@ -138,3 +138,11 @@ func TestSnapshotBoundsTeamReadsAndUsesAdminDirectory(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspacePartialFailureKeepsSafeProgressWithoutCredentialText(t *testing.T) {
+	response := &http.Response{StatusCode: 502, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"status":"partial","apply_id":"apply_123","code":"upstream_rejected","error":"provider token=secret","completed":[{"method":"POST","path":"/v1/organizations/org/teams"},{"method":"POST","path":"/v1/organizations/org?token=secret"}]}`))}
+	failure := statusError(response, "PUT", "/v1/organizations/org/workspace")
+	if !failure.Partial || failure.ApplyID != "apply_123" || len(failure.Completed) != 1 || failure.Detail != "" {
+		t.Fatalf("unsafe or missing partial progress: %+v", failure)
+	}
+}

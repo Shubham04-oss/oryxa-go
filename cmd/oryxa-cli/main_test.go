@@ -186,3 +186,12 @@ func TestCachedPullUsesOnlySlugLookupAndProducesValidYAML(t *testing.T) {
 		t.Fatalf("cached pull exit%d calls%d err%v stdout%s stderr%s", code, calls, err, stdout.String(), stderr.String())
 	}
 }
+
+func TestPartialApplyJSONReportsCompletedWorkAndResumeStep(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	failure := &runtime.StatusError{Method: "PUT", Path: "/workspace", Status: 502, Code: "upstream_rejected", Partial: true, ApplyID: "apply_123", Completed: []runtime.CompletedOperation{{Method: "POST", Path: "/v1/organizations/org/teams"}}}
+	code := reportError(failure, &commandErrorOutput{Writer: &stderr, stdout: &stdout, step: "apply", json: true})
+	if code != 1 || !strings.Contains(stdout.String(), `"apply_id":"apply_123"`) || !strings.Contains(stdout.String(), `"completed":[`) || !strings.Contains(stdout.String(), "rerun apply") {
+		t.Fatalf("partial progress hidden: %d %s", code, stdout.String())
+	}
+}

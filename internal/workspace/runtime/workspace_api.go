@@ -27,10 +27,12 @@ func (client *Client) WorkspacePlan(ctx context.Context, organizationID string, 
 }
 
 type WorkspaceApplyResult struct {
-	Step      string `json:"step"`
-	Status    string `json:"status"`
-	Remaining Plan   `json:"remaining"`
-	Version   int64  `json:"version"`
+	ApplyID   string               `json:"apply_id,omitempty"`
+	Completed []CompletedOperation `json:"completed,omitempty"`
+	Step      string               `json:"step"`
+	Status    string               `json:"status"`
+	Remaining Plan                 `json:"remaining"`
+	Version   int64                `json:"version"`
 }
 
 func (client *Client) WorkspaceApply(ctx context.Context, organizationID string, document spec.Document, approved Plan) (WorkspaceApplyResult, error) {

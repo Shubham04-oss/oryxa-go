@@ -34,11 +34,19 @@ const ApplyTimeout = 3 * time.Minute
 var ErrSessionExpiring = errors.New("CLI session expires before the apply budget; sign in again before applying")
 
 type StatusError struct {
-	Method string
-	Path   string
-	Status int
-	Detail string
-	Code   string
+	Method    string
+	Path      string
+	Status    int
+	Detail    string
+	Code      string
+	ApplyID   string
+	Partial   bool
+	Completed []CompletedOperation
+}
+
+type CompletedOperation struct {
+	Method string `json:"method"`
+	Path   string `json:"path"`
 }
 
 func (err *StatusError) Error() string {
@@ -119,20 +127,30 @@ var credentialPattern = regexp.MustCompile(`(?i)(bearer|token|credential|secret|
 // Provider responses and any credential-like text are never propagated.
 func statusError(response *http.Response, method, path string) *StatusError {
 	result := &StatusError{Method: method, Path: path, Status: response.StatusCode}
-	if response.StatusCode < 400 || response.StatusCode >= 500 {
+	if response.StatusCode < 400 {
 		return result
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	setupAPI := len(parts) >= 3 && parts[0] == "v1" && parts[1] == "organizations" &&
 		(len(parts) == 3 || strings.HasPrefix(parts[3], "workspace") || parts[3] == "members" || parts[3] == "invitations" || parts[3] == "teams" || parts[3] == "organization-agent")
+	workspaceAPI := len(parts) >= 4 && parts[0] == "v1" && parts[1] == "organizations" && strings.HasPrefix(parts[3], "workspace")
+	if response.StatusCode >= 500 && !workspaceAPI {
+		return result
+	}
 	if !setupAPI || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
 		return result
 	}
 	var body struct {
-		Error string `json:"error"`
-		Code  string `json:"code"`
+		Error     string               `json:"error"`
+		Code      string               `json:"code"`
+		Status    string               `json:"status"`
+		ApplyID   string               `json:"apply_id"`
+		Completed []CompletedOperation `json:"completed"`
 	}
-	if json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&body) == nil {
+	if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&body) == nil {
+		if response.StatusCode >= 500 && !errorCodePattern.MatchString(body.Code) {
+			return result
+		}
 		detail := strings.TrimSpace(body.Error)
 		if len(detail) <= 512 && strings.IndexFunc(detail, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) < 0 && !credentialPattern.MatchString(detail) {
 			result.Detail = detail
@@ -140,9 +158,26 @@ func statusError(response *http.Response, method, path string) *StatusError {
 		if errorCodePattern.MatchString(body.Code) {
 			result.Code = body.Code
 		}
+		if workspaceAPI && body.Status == "partial" && safeApplyID.MatchString(body.ApplyID) {
+			result.Partial, result.ApplyID = true, body.ApplyID
+			for _, operation := range body.Completed {
+				if len(result.Completed) >= 1000 {
+					break
+				}
+				if operation.Method != "POST" && operation.Method != "PUT" && operation.Method != "PATCH" && operation.Method != "DELETE" {
+					continue
+				}
+				if len(operation.Path) <= 512 && safeCompletedPath.MatchString(operation.Path) && !credentialPattern.MatchString(operation.Path) {
+					result.Completed = append(result.Completed, operation)
+				}
+			}
+		}
 	}
 	return result
 }
+
+var safeApplyID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+var safeCompletedPath = regexp.MustCompile(`^/v1/organizations/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$`)
 
 var ErrOrganizationNotFound = errors.New("organization was not found")
 

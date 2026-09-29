@@ -617,12 +617,23 @@ func reportError(err error, stderr io.Writer) int {
 		}
 	}
 	if output, ok := stderr.(*commandErrorOutput); ok && output.json {
-		if report(output.stdout, true, map[string]any{"step": output.step, "status": "failed", "error": err.Error(), "code": code}) != 0 {
+		payload := map[string]any{"step": output.step, "status": "failed", "error": err.Error(), "code": code}
+		if remote != nil && remote.Partial {
+			payload["apply_id"] = remote.ApplyID
+			payload["completed"] = remote.Completed
+			payload["partial"] = true
+			payload["next"] = "review a new plan and rerun apply"
+		}
+		if report(output.stdout, true, payload) != 0 {
 			return 1
 		}
 	} else {
 		fmt.Fprintln(stderr, err)
+		if remote != nil && remote.Partial {
+			fmt.Fprintf(stderr, "Apply %s completed %d writes before stopping. Review a new plan and rerun apply.\n", remote.ApplyID, len(remote.Completed))
+		}
 	}
+
 	return exitCode
 }
 
