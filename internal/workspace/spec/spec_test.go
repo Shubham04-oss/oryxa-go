@@ -273,3 +273,31 @@ func TestNormalizeServiceTextBeforePlanning(t *testing.T) {
 		}
 	}
 }
+
+func TestAnswerGuardPoliciesValidateAndRoundTrip(t *testing.T) {
+	input := example + "safety: {guard: {pii: {minimum: {owner: secrets, peer: strict}}, relevance: off}}\n"
+	document, err := Parse([]byte(input))
+	if err != nil || document.Safety == nil || document.Safety.Guard.PII == nil || *document.Safety.Guard.PII.Minimum.Peer != "strict" || *document.Safety.Guard.Relevance != "off" {
+		t.Fatalf("guard = %+v, %v", document.Safety, err)
+	}
+	encoded, err := document.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(encoded)
+	if err != nil || again.Safety == nil || *again.Safety.Guard.PII.Minimum.Owner != "secrets" || *again.Safety.Guard.Relevance != "off" {
+		t.Fatalf("guard after a round trip = %+v, %v", again.Safety, err)
+	}
+	for _, invalid := range []string{
+		"safety: {guard: {pii: {minimum: {peer: off}}}}\n",
+		"safety: {guard: {pii: {minimum: {owner: Strict}}}}\n",
+		"safety: {guard: {pii: {minimum: {owner: ''}}}}\n",
+		"safety: {guard: {pii: {level: strict}}}\n",
+		"safety: {guard: {relevance: sometimes}}\n",
+		"safety: {guard: {relevance: ''}}\n",
+	} {
+		if _, err := Parse([]byte(example + invalid)); err == nil {
+			t.Fatalf("accepted %s", invalid)
+		}
+	}
+}

@@ -58,3 +58,43 @@ func TestRegulatedPresetHoldsCrossMemberAnswersByDefault(t *testing.T) {
 		t.Fatalf("regulated policy = %+v %+v %v", effective.Safety, plan, err)
 	}
 }
+
+func TestAnswerGuardPoliciesArePreservedReplacedAndPlanned(t *testing.T) {
+	owner, peer, relevance := "secrets", "strict", "shadow"
+	previous := contextDocument()
+	previous.Safety = &spec.Safety{Guard: &spec.GuardSafety{
+		PII: &spec.GuardPII{Minimum: &spec.GuardPIIMinimum{Owner: &owner, Peer: &peer}}, Relevance: &relevance,
+	}}
+	// A file that says nothing about them keeps them, and plans nothing.
+	effective, plan, err := MergePolicies(previous, contextDocument(), false)
+	if err != nil || len(plan.Changes) != 0 || effective.Safety == nil || effective.Safety.Guard == nil ||
+		effective.Safety.Guard.PII == nil || effective.Safety.Guard.PII.Minimum == nil ||
+		*effective.Safety.Guard.PII.Minimum.Owner != "secrets" || *effective.Safety.Guard.PII.Minimum.Peer != "strict" ||
+		effective.Safety.Guard.Relevance == nil || *effective.Safety.Guard.Relevance != "shadow" {
+		t.Fatalf("omitted answer guard policies: %+v %+v %v", effective.Safety, plan, err)
+	}
+	// A reviewed rollback replaces them exactly: with nothing.
+	effective, plan, err = MergePolicies(previous, contextDocument(), true)
+	if err != nil || effective.Safety != nil || len(plan.Changes) != 3 {
+		t.Fatalf("rolled back answer guard policies: %+v %+v %v", effective.Safety, plan, err)
+	}
+	// Changing one plans that one, and keeps the others.
+	loosened := "secrets"
+	submitted := contextDocument()
+	submitted.Safety = &spec.Safety{Guard: &spec.GuardSafety{PII: &spec.GuardPII{Minimum: &spec.GuardPIIMinimum{Peer: &loosened}}}}
+	effective, plan, err = MergePolicies(previous, submitted, false)
+	if err != nil || len(plan.Changes) != 1 || plan.Changes[0].Name != "safety.guard.pii.minimum.peer" ||
+		*effective.Safety.Guard.PII.Minimum.Peer != "secrets" || *effective.Safety.Guard.PII.Minimum.Owner != "secrets" ||
+		*effective.Safety.Guard.Relevance != "shadow" {
+		t.Fatalf("changed peer minimum: %+v %+v %v", effective.Safety, plan, err)
+	}
+	// holdForReview alongside them is still carried.
+	hold := true
+	submitted = contextDocument()
+	submitted.Safety = &spec.Safety{Guard: &spec.GuardSafety{HoldForReview: &hold}}
+	effective, plan, err = MergePolicies(previous, submitted, false)
+	if err != nil || len(plan.Changes) != 1 || plan.Changes[0].Name != "safety.guard.holdForReview" ||
+		effective.Safety.Guard.HoldForReview == nil || !*effective.Safety.Guard.HoldForReview || effective.Safety.Guard.Relevance == nil {
+		t.Fatalf("hold with the others: %+v %+v %v", effective.Safety, plan, err)
+	}
+}

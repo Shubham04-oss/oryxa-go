@@ -29,13 +29,14 @@ func MergePolicies(previous, submitted spec.Document, replace bool) (spec.Docume
 	if !equalString(oldExpiry, nextExpiry) {
 		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "policy", Name: "rules.consent.expireAfter"})
 	}
-	var oldReview, nextReview *bool
+	var oldGuard, submittedGuard spec.GuardSafety
 	if previous.Safety != nil && previous.Safety.Guard != nil {
-		oldReview = previous.Safety.Guard.HoldForReview
+		oldGuard = *previous.Safety.Guard
 	}
 	if submitted.Safety != nil && submitted.Safety.Guard != nil {
-		nextReview = submitted.Safety.Guard.HoldForReview
+		submittedGuard = *submitted.Safety.Guard
 	}
+	oldReview, nextReview := oldGuard.HoldForReview, submittedGuard.HoldForReview
 	if !replace && nextReview == nil {
 		nextReview = oldReview
 	}
@@ -43,13 +44,36 @@ func MergePolicies(previous, submitted spec.Document, replace bool) (spec.Docume
 		required := true
 		nextReview = &required
 	}
-	if nextReview != nil {
-		effective.Safety = &spec.Safety{Guard: &spec.GuardSafety{HoldForReview: nextReview}}
-	} else {
-		effective.Safety = nil
-	}
 	if !equalBool(oldReview, nextReview) {
 		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "policy", Name: "safety.guard.holdForReview"})
+	}
+	oldOwnerMinimum, oldPeerMinimum := guardMinimums(oldGuard)
+	nextOwnerMinimum, nextPeerMinimum := guardMinimums(submittedGuard)
+	oldRelevance, nextRelevance := oldGuard.Relevance, submittedGuard.Relevance
+	if !replace {
+		nextOwnerMinimum = keepString(nextOwnerMinimum, oldOwnerMinimum)
+		nextPeerMinimum = keepString(nextPeerMinimum, oldPeerMinimum)
+		nextRelevance = keepString(nextRelevance, oldRelevance)
+	}
+	if !equalString(oldOwnerMinimum, nextOwnerMinimum) {
+		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "policy", Name: "safety.guard.pii.minimum.owner"})
+	}
+	if !equalString(oldPeerMinimum, nextPeerMinimum) {
+		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "policy", Name: "safety.guard.pii.minimum.peer"})
+	}
+	if !equalString(oldRelevance, nextRelevance) {
+		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "policy", Name: "safety.guard.relevance"})
+	}
+	// The guard is rebuilt from every setting it holds, so one that is left out
+	// of this list is dropped from what is applied.
+	guard := &spec.GuardSafety{HoldForReview: nextReview, Relevance: nextRelevance}
+	if nextOwnerMinimum != nil || nextPeerMinimum != nil {
+		guard.PII = &spec.GuardPII{Minimum: &spec.GuardPIIMinimum{Owner: nextOwnerMinimum, Peer: nextPeerMinimum}}
+	}
+	if guard.HoldForReview != nil || guard.PII != nil || guard.Relevance != nil {
+		effective.Safety = &spec.Safety{Guard: guard}
+	} else {
+		effective.Safety = nil
 	}
 	var oldProactive, nextProactive *string
 	if previous.Agents != nil && previous.Agents.Personal != nil {
@@ -190,6 +214,23 @@ func MergePolicies(previous, submitted spec.Document, replace bool) (spec.Docume
 		plan.Changes = append(plan.Changes, Change{Op: "update", Kind: "policy", Name: "search.mode"})
 	}
 	return effective, plan, effective.Validate()
+}
+
+// guardMinimums are the least strict answer guard levels a guard names, for an
+// answer a member started and for one another member reads.
+func guardMinimums(guard spec.GuardSafety) (owner, peer *string) {
+	if guard.PII == nil || guard.PII.Minimum == nil {
+		return nil, nil
+	}
+	return guard.PII.Minimum.Owner, guard.PII.Minimum.Peer
+}
+
+// keepString is next, or previous when a submitted workspace leaves it out.
+func keepString(next, previous *string) *string {
+	if next == nil {
+		return previous
+	}
+	return next
 }
 
 func equalList(a, b *[]string) bool {

@@ -80,6 +80,24 @@ type Safety struct {
 
 type GuardSafety struct {
 	HoldForReview *bool `yaml:"holdForReview,omitempty" json:"holdForReview,omitempty"`
+	// PII sets the least strict level a member may choose for what the answer
+	// guard takes out of an answer.
+	PII *GuardPII `yaml:"pii,omitempty" json:"pii,omitempty"`
+	// Relevance is how the answer guard treats an answer that does not answer
+	// what was asked: hold, shadow or off.
+	Relevance *string `yaml:"relevance,omitempty" json:"relevance,omitempty"`
+}
+
+type GuardPII struct {
+	Minimum *GuardPIIMinimum `yaml:"minimum,omitempty" json:"minimum,omitempty"`
+}
+
+// GuardPIIMinimum is the least strict level, secrets or strict, a member may
+// choose. Owner is for an answer the member started themselves, and Peer for
+// one another member reads.
+type GuardPIIMinimum struct {
+	Owner *string `yaml:"owner,omitempty" json:"owner,omitempty"`
+	Peer  *string `yaml:"peer,omitempty" json:"peer,omitempty"`
 }
 
 // Tools controls which app toolkits members may connect and use.
@@ -386,6 +404,26 @@ func (document Document) Validate() error {
 		duration, err := ParseDuration(*document.Rules.Consent.ExpireAfter)
 		if err != nil || duration < 5*time.Minute || duration > 7*24*time.Hour {
 			return fmt.Errorf("rules.consent.expireAfter must be between 5m and 7d")
+		}
+	}
+	if document.Safety != nil && document.Safety.Guard != nil {
+		guard := document.Safety.Guard
+		if guard.PII != nil && guard.PII.Minimum != nil {
+			for _, minimum := range []struct {
+				name  string
+				level *string
+			}{{"owner", guard.PII.Minimum.Owner}, {"peer", guard.PII.Minimum.Peer}} {
+				if minimum.level != nil && *minimum.level != "secrets" && *minimum.level != "strict" {
+					return fmt.Errorf("safety.guard.pii.minimum.%s must be secrets or strict", minimum.name)
+				}
+			}
+		}
+		if guard.Relevance != nil {
+			switch *guard.Relevance {
+			case "hold", "shadow", "off":
+			default:
+				return fmt.Errorf("safety.guard.relevance must be hold, shadow or off")
+			}
 		}
 	}
 	if document.Tools != nil {

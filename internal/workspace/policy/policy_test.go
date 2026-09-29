@@ -31,3 +31,17 @@ func TestLoaderReadsOnlyAppliedPolicies(t *testing.T) {
 		t.Fatalf("defaults = %+v, %v", settings, err)
 	}
 }
+
+func TestLoaderReadsTheAnswerGuardPolicies(t *testing.T) {
+	loader := New(fakeRepository{document: []byte("apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\npreset: regulated\nsafety: {guard: {holdForReview: true, pii: {minimum: {owner: secrets, peer: strict}}, relevance: shadow}}\n")})
+	settings, err := loader.Get(context.Background(), "org_1")
+	if err != nil || settings.PIIMinimumOwner != "secrets" || settings.PIIMinimumPeer != "strict" || settings.GuardRelevance != "shadow" || !settings.Regulated || !settings.HoldForReview {
+		t.Fatalf("settings = %+v, %v", settings, err)
+	}
+	// Only what is named is set, and a preset that is not regulated says so.
+	loader = New(fakeRepository{document: []byte("apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\npreset: team\nsafety: {guard: {pii: {minimum: {peer: strict}}}}\n")})
+	settings, err = loader.Get(context.Background(), "org_1")
+	if err != nil || settings.PIIMinimumOwner != "" || settings.PIIMinimumPeer != "strict" || settings.GuardRelevance != "" || settings.Regulated || settings.HoldForReview {
+		t.Fatalf("settings = %+v, %v", settings, err)
+	}
+}
