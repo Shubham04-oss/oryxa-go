@@ -62,9 +62,7 @@ type KnowledgeSyncer interface {
 type KnowledgeConfig struct {
 	Rag Knowledge
 	// Policy reads the last applied workspace version for every tool call.
-	Policy interface {
-		Get(context.Context, string) (workspacepolicy.Settings, error)
-	}
+	Policy workspacepolicy.Provider
 	// Sources is optional when the knowledge service is not configured.
 	Sources KnowledgeSources
 	// ReadOnly excludes scheduling an extraction in unattended runs.
@@ -141,13 +139,11 @@ func KnowledgeToolbox(config KnowledgeConfig) (Toolbox, error) {
 }
 
 type knowledgeTools struct {
-	rag     Knowledge
-	sources KnowledgeSources
-	syncer  KnowledgeSyncer
-	tokens  memberauth.TokenSource
-	policy  interface {
-		Get(context.Context, string) (workspacepolicy.Settings, error)
-	}
+	rag          Knowledge
+	sources      KnowledgeSources
+	syncer       KnowledgeSyncer
+	tokens       memberauth.TokenSource
+	policy       workspacepolicy.Provider
 	minRelevance float64
 }
 

@@ -15,8 +15,6 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/membertoken"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
-	workspacepolicy "github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
-	workspacestore "github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/appsclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
@@ -174,9 +172,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Judge:      documentJudge,
 		Logger:     logger,
 	}
-	if platform.Getenv("WORKSPACE_URL") != "" {
-		dependencies.Policy = workspacepolicy.New(workspacestore.New(platform.Database))
-	}
+	dependencies.Policy = platform.WorkspaceSettings()
 	service, err := New(dependencies, Config{
 		AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval,
 		Services: serviceVerifier, OriginalsBucket: config.OriginalsBucket,

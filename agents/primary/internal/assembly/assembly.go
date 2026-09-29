@@ -57,9 +57,7 @@ type Options struct {
 	// Settings names both AuthURL and ServiceKeyID, and otherwise none.
 	Tokens memberauth.TokenSource
 	// Policy controls live organization search behavior.
-	Policy interface {
-		Get(context.Context, string) (workspacepolicy.Settings, error)
-	}
+	Policy workspacepolicy.Provider
 	// HTTP is the client the apps toolbox's MCP calls go out on. Defaults to
 	// a fresh http.Client.
 	HTTP *http.Client

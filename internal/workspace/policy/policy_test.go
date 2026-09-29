@@ -67,6 +67,16 @@ func TestLoaderReadsOnlyAppliedPolicies(t *testing.T) {
 	}
 }
 
+func TestNilLoaderAndNoopAreSafeDefaults(t *testing.T) {
+	var nilLoader *Loader
+	for _, provider := range []Provider{nilLoader, New(nil), Noop{}} {
+		value, err := provider.Get(context.Background(), "org_1")
+		if err != nil || value != (Settings{}) {
+			t.Fatalf("default provider = %+v %v", value, err)
+		}
+	}
+}
+
 func TestLoaderReadsTheAnswerGuardPolicies(t *testing.T) {
 	loader := New(fakeRepository{document: []byte("apiVersion: oryxa.in/v1\nkind: Workspace\nmetadata: {organization: acme}\npreset: regulated\nsafety: {guard: {holdForReview: true, pii: {minimum: {owner: secrets, peer: strict}}, relevance: shadow}}\n")})
 	settings, err := loader.Get(context.Background(), "org_1")

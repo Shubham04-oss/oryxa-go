@@ -30,10 +30,8 @@ var ErrClaimLost = errors.New("batch claim is no longer owned")
 type Store struct {
 	database  *postgreskit.Database
 	scheduler domain.AdaptiveScheduler
-	policy    interface {
-		Get(context.Context, string) (workspacepolicy.Settings, error)
-	}
-	now func() time.Time
+	policy    workspacepolicy.Provider
+	now       func() time.Time
 }
 
 func New(database *postgreskit.Database, schedulers ...domain.AdaptiveScheduler) *Store {
@@ -44,9 +42,7 @@ func New(database *postgreskit.Database, schedulers ...domain.AdaptiveScheduler)
 	return store
 }
 
-func (store *Store) WithPolicy(policy interface {
-	Get(context.Context, string) (workspacepolicy.Settings, error)
-}) *Store {
+func (store *Store) WithPolicy(policy workspacepolicy.Provider) *Store {
 	store.policy = policy
 	return store
 }

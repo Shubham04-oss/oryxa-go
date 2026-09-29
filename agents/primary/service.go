@@ -49,8 +49,6 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
-	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
-	workspacestore "github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
 )
 
 // Name is how ORYXA_SERVICES selects agents primary.
@@ -187,12 +185,8 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 
 	registryStore := managedagents.NewStore(platform.Database)
 	interactionStore := agentinteractions.NewStore(platform.Database)
-	wakeupStore := wakeups.NewStore(platform.Database)
-	var workspacePolicy *policy.Loader
-	if settings.WorkspaceURL != "" {
-		workspacePolicy = policy.New(workspacestore.New(platform.Database))
-		wakeupStore = wakeups.NewStoreWithPolicy(platform.Database, workspacePolicy)
-	}
+	workspacePolicy := platform.WorkspaceSettings()
+	wakeupStore := wakeups.NewStoreWithPolicy(platform.Database, workspacePolicy)
 	// What each member chose about how strictly the answer guard reads what
 	// their agent says, apart for an answer they started themselves and one
 	// another member reads. No organization's policy can be read yet, so every
@@ -276,9 +270,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			Repository: interactionStore, Directory: organizationDirectory, Teamspaces: teamspaceService, Tokens: memberTokens,
 			Logger: logger,
 		}
-		if settings.WorkspaceURL != "" {
-			interactionConfig.Policy = workspacePolicy
-		}
+		interactionConfig.Policy = workspacePolicy
 		if typeSafe != nil {
 			interactionConfig.Jev = typeSafe.Ask
 		}
@@ -296,9 +288,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Settings: settings, AWS: platform.AWS, Google: platform.Google, Logger: logger,
 		Directory: organizationDirectory, Context: organizationContext, AgentSystem: agentSystemBinding, Tokens: memberTokens,
 	}
-	if workspacePolicy != nil {
-		assemblyOptions.Policy = workspacePolicy
-	}
+	assemblyOptions.Policy = workspacePolicy
 	// interactionService and teamspaceService are concrete *Service pointers,
 	// nil when TEAMS_URL is unset. Boxed directly into these interface fields
 	// they would leave Build seeing a configured-but-nil collaborator rather

@@ -160,9 +160,7 @@ type Dependencies struct {
 	Directory Directory
 	Apps      Apps
 	// Policy reads the applied workspace version before provider operations.
-	Policy interface {
-		Get(context.Context, string) (workspacepolicy.Settings, error)
-	}
+	Policy     workspacepolicy.Provider
 	Grants     Grants
 	Extractors sources.Registry
 	// Originals is nil unless KNOWLEDGE_ORIGINALS_BUCKET is configured.
@@ -189,12 +187,10 @@ type Config struct {
 }
 
 type Service struct {
-	store     Store
-	directory Directory
-	apps      Apps
-	policy    interface {
-		Get(context.Context, string) (workspacepolicy.Settings, error)
-	}
+	store           Store
+	directory       Directory
+	apps            Apps
+	policy          workspacepolicy.Provider
 	grants          Grants
 	extractors      sources.Registry
 	originals       Originals

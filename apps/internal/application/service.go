@@ -60,9 +60,7 @@ type Dependencies struct {
 }
 
 // PolicySource reads the organization's last applied workspace file.
-type PolicySource interface {
-	Get(context.Context, string) (policy.Settings, error)
-}
+type PolicySource = policy.Provider
 
 type Service struct {
 	store         Store

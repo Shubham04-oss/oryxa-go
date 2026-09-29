@@ -57,9 +57,7 @@ type Rule struct {
 // Store keeps the events waiting to wake Krude.
 type Store struct {
 	database *postgreskit.Database
-	policy   interface {
-		Get(context.Context, string) (policy.Settings, error)
-	}
+	policy   policy.Provider
 }
 
 // NewStore returns the store over database. Its tables are named with their
@@ -68,9 +66,7 @@ func NewStore(database *postgreskit.Database) *Store {
 	return &Store{database: database}
 }
 
-func NewStoreWithPolicy(database *postgreskit.Database, provider interface {
-	Get(context.Context, string) (policy.Settings, error)
-}) *Store {
+func NewStoreWithPolicy(database *postgreskit.Database, provider policy.Provider) *Store {
 	return &Store{database: database, policy: provider}
 }
 

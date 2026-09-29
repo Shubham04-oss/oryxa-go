@@ -27,8 +27,6 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
-	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
-	workspacestore "github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
 )
 
 // URLVariable is how another service reaches apps, such as agents finding the
@@ -111,9 +109,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Verifier:  platform.EventAuth.Verifier(),
 		Logger:    logger,
 	}
-	if platform.Getenv("WORKSPACE_URL") != "" {
-		dependencies.Policy = policy.New(workspacestore.New(platform.Database))
-	}
+	dependencies.Policy = platform.WorkspaceSettings()
 	if oryxa != nil {
 		dependencies.Signin, dependencies.Hooks, dependencies.Integrations = oryxa.signin, oryxa.hooks, oryxa.registry
 	}

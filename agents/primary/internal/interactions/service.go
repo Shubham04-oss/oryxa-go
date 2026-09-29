@@ -159,9 +159,7 @@ type Config struct {
 	Directory  agents.Directory
 	// Policy reads the last applied organization workspace policy. Nil uses
 	// the original defaults for deployments without the workspace service.
-	Policy interface {
-		Get(context.Context, string) (policy.Settings, error)
-	}
+	Policy policy.Provider
 	// Teamspaces enables requests made inside a teamspace. Without it a
 	// request naming one is refused.
 	Teamspaces Teamspaces
@@ -197,9 +195,7 @@ type Service struct {
 	guard      Guard
 	logger     *slog.Logger
 	now        func() time.Time
-	policy     interface {
-		Get(context.Context, string) (policy.Settings, error)
-	}
+	policy     policy.Provider
 }
 
 func New(config Config) (*Service, error) {

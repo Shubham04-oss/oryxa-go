@@ -16,6 +16,16 @@ type Repository interface {
 }
 type Settings = projection.Settings
 
+// Provider is the shared operational policy boundary used by services.
+type Provider interface {
+	Get(context.Context, string) (Settings, error)
+}
+
+// Noop supplies defaults for hosts without a workspace schema.
+type Noop struct{}
+
+func (Noop) Get(context.Context, string) (Settings, error) { return Settings{}, nil }
+
 type cached struct {
 	version  int64
 	settings Settings
@@ -30,6 +40,9 @@ func New(repository Repository) *Loader {
 	return &Loader{repository: repository, cache: make(map[string]cached)}
 }
 func (loader *Loader) Get(ctx context.Context, organizationID string) (Settings, error) {
+	if loader == nil || loader.repository == nil {
+		return Settings{}, nil
+	}
 	version, data, err := loader.repository.Policy(ctx, organizationID)
 	if errors.Is(err, store.ErrVersionNotFound) {
 		return Settings{}, nil
