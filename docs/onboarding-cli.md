@@ -135,6 +135,9 @@ host supplies that URL automatically. Split deployments must share the
 workspace PostgreSQL schema for these reads. Direct directory provider fetching, the remaining
 governance and safety controls, external search providers, notifications, retention,
 security policy, other tool settings, and other personal-agent defaults remain
-unimplemented. A local
-`go test ./...` run exercises the code paths, but PostgreSQL migrations and a
-live deployment still need integration verification.
+unimplemented. A local integration run against an isolated PostgreSQL database
+verified the auth, teams, and workspace migrations and exercised CLI
+validate, plan, apply, status, pull, and mappings. It also confirmed an
+invitation can be resumed after the member joins and an external ID then binds
+to that member. A deployed environment and live provider OAuth still need
+verification.

@@ -28,10 +28,15 @@ type StatusError struct {
 	Method string
 	Path   string
 	Status int
+	Detail string
 }
 
 func (err *StatusError) Error() string {
-	return fmt.Sprintf("%s %s: API returned %d", err.Method, err.Path, err.Status)
+	message := fmt.Sprintf("%s %s: API returned %d", err.Method, err.Path, err.Status)
+	if err.Detail != "" {
+		message += ": " + err.Detail
+	}
+	return message
 }
 
 func IsStatus(err error, status int) bool {
@@ -76,7 +81,7 @@ func (client *Client) request(ctx context.Context, method, path string, input, o
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return &StatusError{Method: method, Path: path, Status: response.StatusCode}
+		return statusError(response, method, path)
 	}
 	if output == nil {
 		return nil
@@ -85,6 +90,29 @@ func (client *Client) request(ctx context.Context, method, path string, input, o
 		return fmt.Errorf("%s %s: invalid API response: %w", method, path, err)
 	}
 	return nil
+}
+
+// Only workspace client errors carry a short, structured reason back to the
+// CLI. Other API responses may contain provider data or credentials, so their
+// bodies are never included in errors.
+func statusError(response *http.Response, method, path string) *StatusError {
+	result := &StatusError{Method: method, Path: path, Status: response.StatusCode}
+	if response.StatusCode != http.StatusBadRequest && response.StatusCode != http.StatusConflict && response.StatusCode != http.StatusUnprocessableEntity {
+		return result
+	}
+	if !strings.Contains(path, "/workspace") || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
+		return result
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&body) == nil {
+		detail := strings.TrimSpace(body.Error)
+		if len(detail) <= 512 && !strings.ContainsAny(detail, "\r\n") {
+			result.Detail = detail
+		}
+	}
+	return result
 }
 
 type Organization struct {

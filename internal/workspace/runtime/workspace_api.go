@@ -68,7 +68,7 @@ func (client *Client) workspaceYAML(ctx context.Context, path string) (spec.Docu
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return spec.Document{}, &StatusError{Method: http.MethodGet, Path: path, Status: response.StatusCode}
+		return spec.Document{}, statusError(response, http.MethodGet, path)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 	if err != nil {
