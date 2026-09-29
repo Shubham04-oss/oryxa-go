@@ -6,9 +6,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/store"
 )
+
+func TestAbandonedApplyNeedsReview(t *testing.T) {
+	if got := applyProgressStatus(&store.ApplyAttempt{Status: "running", UpdatedAt: time.Now().Add(-time.Hour)}); got != "needs_human" {
+		t.Fatalf("abandoned apply status=%s", got)
+	}
+	if got := applyProgressStatus(&store.ApplyAttempt{Status: "running", UpdatedAt: time.Now()}); got != "applying" {
+		t.Fatalf("active apply status=%s", got)
+	}
+}
 
 func TestPartialApplyRecordsCompletedWritesAndResumesWithoutPublishingPolicies(t *testing.T) {
 	name, teamExists, failTeam, orgWrites := "Acme", false, true, 0
@@ -76,6 +86,18 @@ func TestPartialApplyRecordsCompletedWritesAndResumesWithoutPublishingPolicies(t
 	response.Body.Close()
 	if response.StatusCode != http.StatusConflict || partial.Status != "partial" || len(partial.Completed) != 1 || partial.Completed[0].Method != "PATCH" || repo.attempts[partial.ApplyID].Status != "partial" || len(repo.versions) != 0 {
 		t.Fatalf("partial progress or policy safety failed: status=%d %+v versions=%d", response.StatusCode, partial, len(repo.versions))
+	}
+	response = workspaceRequest(t, workspace, http.MethodGet, path+"/status", "owner-token", nil)
+	var progress struct {
+		Status    string             `json:"status"`
+		LastApply store.ApplyAttempt `json:"last_apply"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&progress); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || progress.Status != "needs_human" || progress.LastApply.ID != partial.ApplyID || progress.LastApply.CompletedCount != 1 {
+		t.Fatalf("disconnected caller cannot retrieve progress: %+v", progress)
 	}
 	failTeam = false
 	plan = reviewedPlan(t, workspace, path, document)

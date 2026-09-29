@@ -29,6 +29,7 @@ type Repository interface {
 	SavePlan(context.Context, store.ReviewedPlan) error
 	ReviewedPlan(context.Context, string, string, string) (store.ReviewedPlan, error)
 	SaveAttempt(context.Context, store.ApplyAttempt) error
+	LatestAttempt(context.Context, string) (store.ApplyAttempt, error)
 }
 
 type Server struct {
@@ -682,9 +683,21 @@ func (server *Server) status(writer http.ResponseWriter, request *http.Request) 
 	if !ok {
 		return
 	}
+	var lastApply *store.ApplyAttempt
+	attempt, err := server.repository.LatestAttempt(request.Context(), request.PathValue("organizationID"))
+	if err == nil {
+		lastApply = &attempt
+	} else if !errors.Is(err, store.ErrAttemptNotFound) {
+		writeError(writer, http.StatusInternalServerError, "workspace apply progress could not be read")
+		return
+	}
 	latest, err := server.repository.Latest(request.Context(), request.PathValue("organizationID"))
 	if errors.Is(err, store.ErrVersionNotFound) {
-		writeJSON(writer, http.StatusOK, map[string]any{"status": "not_configured", "version": 0})
+		status := "not_configured"
+		if resumeStatus := applyProgressStatus(lastApply); resumeStatus != "" {
+			status = resumeStatus
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"status": status, "version": 0, "last_apply": lastApply})
 		return
 	}
 	if err != nil {
@@ -745,11 +758,31 @@ func (server *Server) status(writer http.ResponseWriter, request *http.Request) 
 	if len(plan.Changes) > 0 {
 		status = "drift"
 	}
+	if resumeStatus := applyProgressStatus(lastApply); resumeStatus != "" {
+		status = resumeStatus
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"status": status, "version": latest.Number, "plan": plan,
-		"members": len(state.Members), "teams": len(state.Teams),
+		"last_apply": lastApply,
+		"members":    len(state.Members), "teams": len(state.Teams),
 		"pending_invitations": len(state.Invitations),
 	})
+}
+
+func applyProgressStatus(attempt *store.ApplyAttempt) string {
+	if attempt == nil {
+		return ""
+	}
+	switch attempt.Status {
+	case "partial", "incomplete":
+		return "needs_human"
+	case "running":
+		if time.Since(attempt.UpdatedAt) > runtime.ApplyTimeout+time.Minute {
+			return "needs_human"
+		}
+		return "applying"
+	}
+	return ""
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {

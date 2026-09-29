@@ -33,6 +33,23 @@ func (repo *memoryRepository) SaveAttempt(_ context.Context, attempt store.Apply
 	return nil
 }
 
+func (repo *memoryRepository) LatestAttempt(_ context.Context, organizationID string) (store.ApplyAttempt, error) {
+	var latest store.ApplyAttempt
+	for _, attempt := range repo.attempts {
+		if attempt.OrganizationID == organizationID && attempt.UpdatedAt.After(latest.UpdatedAt) {
+			latest = attempt
+		}
+	}
+	if latest.ID == "" {
+		return store.ApplyAttempt{}, store.ErrAttemptNotFound
+	}
+	latest.CompletedCount = len(latest.Completed)
+	if len(latest.Completed) > 100 {
+		latest.Completed = latest.Completed[:100]
+	}
+	return latest, nil
+}
+
 func TestWorkspaceServerValidatesUpstreamURLAtStartup(t *testing.T) {
 	for _, url := range []string{"http://auth.internal:8080", "https://user:password@example.com", "https://example.com/api", "not-a-url", "https://example.com?token=secret"} {
 		if _, err := New(&memoryRepository{}, url); err == nil {
