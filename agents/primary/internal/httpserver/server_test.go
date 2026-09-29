@@ -1120,7 +1120,6 @@ func TestARunIsRefusedBeforeItsStreamOpens(t *testing.T) {
 		code   string
 	}{
 		{`{"message":"hi","extra":1}`, nil, http.StatusBadRequest, "invalid_request"},
-		{`{"message":"hi","screen_context":{"view":"other/window","visible_items":[]}}`, nil, http.StatusBadRequest, "invalid_request"},
 		{`{"confirmations":[{"id":"c1"}]}`, nil, http.StatusBadRequest, "invalid_request"},
 		{`{"message":"hi"}`, threads.ErrRunInProgress, http.StatusConflict, "run_in_progress"},
 		{`{"message":"hi"}`, threads.ErrConfirmationPending, http.StatusConflict, "confirmation_pending"},

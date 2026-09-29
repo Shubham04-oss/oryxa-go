@@ -33,25 +33,77 @@ type ScreenContext struct {
 
 var screenViewPattern = regexp.MustCompile(`^(home|team|agents)/[a-z-]{1,60}$`)
 
-// Valid bounds client-provided screen hints. They never authorize a read or
-// mutation: every resource tool must still check the authenticated member.
+// The bounds of a snapshot's hints, in characters (runes) except the count.
+const (
+	maxScreenItems = 12
+	maxKindRunes   = 40
+	maxIDRunes     = 120
+	maxNameRunes   = 120
+)
+
+// valid reports whether the hint is one an agent may be shown: a kind and an
+// id to name it by, a name if any, each within its bounds and none holding a
+// line break, which could pass as the start of an instruction.
+func (item ScreenItem) valid() bool {
+	return item.Kind != "" && utf8.RuneCountInString(item.Kind) <= maxKindRunes &&
+		item.ID != "" && utf8.RuneCountInString(item.ID) <= maxIDRunes &&
+		utf8.RuneCountInString(item.Name) <= maxNameRunes &&
+		!strings.ContainsAny(item.Kind, "\r\n") && !strings.ContainsAny(item.ID, "\r\n") && !strings.ContainsAny(item.Name, "\r\n")
+}
+
+// Valid reports whether the whole snapshot is within bounds. Client-provided
+// screen hints never authorize a read or mutation: every resource tool must
+// still check the authenticated member.
 func (screen ScreenContext) Valid() bool {
-	if !screenViewPattern.MatchString(screen.View) || len(screen.VisibleItems) > 12 {
+	if !screenViewPattern.MatchString(screen.View) || len(screen.VisibleItems) > maxScreenItems {
 		return false
 	}
-	validItem := func(item ScreenItem) bool {
-		return item.Kind != "" && utf8.RuneCountInString(item.Kind) <= 40 && item.ID != "" && utf8.RuneCountInString(item.ID) <= 120 && utf8.RuneCountInString(item.Name) <= 120 &&
-			!strings.ContainsAny(item.Kind, "\r\n") && !strings.ContainsAny(item.ID, "\r\n") && !strings.ContainsAny(item.Name, "\r\n")
-	}
-	if screen.Selection != nil && !validItem(*screen.Selection) {
+	if screen.Selection != nil && !screen.Selection.valid() {
 		return false
 	}
 	for _, item := range screen.VisibleItems {
-		if !validItem(item) {
+		if !item.valid() {
 			return false
 		}
 	}
 	return true
+}
+
+// Sanitize keeps what is usable of a snapshot the browser sent, and counts
+// what it leaves out. It never fails: a snapshot only points the agent at
+// things on the page, so a hint that breaks a rule (an item with no kind or
+// id, an oversized one, one with a line break, one past the twelfth, a
+// selection that is none of these) is dropped alone, and the rest still
+// reach the run. A view that names no Oryxa page drops the whole snapshot,
+// and Sanitize returns nil. The result is always Valid, and screen is not
+// changed.
+func (screen *ScreenContext) Sanitize() (*ScreenContext, int) {
+	if screen == nil {
+		return nil, 0
+	}
+	hints := len(screen.VisibleItems)
+	if screen.Selection != nil {
+		hints++
+	}
+	if !screenViewPattern.MatchString(screen.View) {
+		// Everything on it went with the view, and the view itself was one.
+		return nil, hints + 1
+	}
+	cleaned := &ScreenContext{View: screen.View, VisibleItems: []ScreenItem{}}
+	if screen.Selection != nil && screen.Selection.valid() {
+		selection := *screen.Selection
+		cleaned.Selection = &selection
+	}
+	for _, item := range screen.VisibleItems {
+		if item.valid() && len(cleaned.VisibleItems) < maxScreenItems {
+			cleaned.VisibleItems = append(cleaned.VisibleItems, item)
+		}
+	}
+	kept := len(cleaned.VisibleItems)
+	if cleaned.Selection != nil {
+		kept++
+	}
+	return cleaned, hints - kept
 }
 
 // EncodedScreenContext is placed in the run's state delta. An absent context

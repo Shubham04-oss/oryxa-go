@@ -1388,6 +1388,21 @@ happens before the stream opens, so a refusal is an ordinary JSON error:
 | `confirmation_pending` | 409 | A message while a tool waits for the member's answer |
 | `agents_unavailable` | 503 | This server has no Google Cloud project to run Krude on |
 
+Either body may also carry `screen_context`, what the member had open when
+they sent it, so that Krude, or a specialist, can read "this" and "here" with
+`get_current_screen` (in the member's own runs only, never an unattended, room
+or delivery run):
+`{"view": "team/teamspace", "selection": {"kind": "teamspace", "id": "...", "name": "..."}, "visible_items": [{"kind": "...", "id": "...", "name": "..."}]}`.
+The `view` is `home`, `team` or `agents`, a slash and a section; at most twelve
+items are visible; an item's `kind` holds at most 40 characters, its `id` (its
+handle) and `name` at most 120, and none of them a line break. Hints point the
+agent at things and authorize nothing: every tool still checks the member. So a
+hint that breaks a rule is left out and the run goes on with the rest, rather
+than the member's message being refused; the log says how many were left out
+and never what they said, and a `view` that is no Oryxa page leaves the whole
+snapshot out. The snapshot is ADK temporary state (`temp:`), for that one run:
+it is not stored with the thread, and a run without one finds none.
+
 Once the run starts, the response is `text/event-stream`, with the run's ID in
 `X-Oryxa-Run`. Each event is named after the item it carries and its data is
 the item as JSON; a `: keep-alive` comment goes out every 15 seconds, so a

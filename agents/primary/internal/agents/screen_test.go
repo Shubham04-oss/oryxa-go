@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -43,6 +44,84 @@ func TestScreenContextBoundsAndEncoding(t *testing.T) {
 		if invalid.Valid() {
 			t.Fatalf("accepted invalid screen context: %+v", invalid)
 		}
+	}
+}
+
+// A snapshot only points the agent at things on the page, so a hint that
+// breaks a rule costs the run that hint and no more.
+func TestSanitizeDropsTheHintsThatBreakARuleAndKeepsTheRest(t *testing.T) {
+	good := ScreenItem{Kind: "artifact", ID: "notes.md", Name: "Notes"}
+	nameless := ScreenItem{Kind: "person", ID: "user_1"}
+	many := make([]ScreenItem, 14)
+	for i := range many {
+		many[i] = ScreenItem{Kind: "artifact", ID: strings.Repeat("f", i+1)}
+	}
+	for name, test := range map[string]struct {
+		screen  ScreenContext
+		want    *ScreenContext
+		dropped int
+	}{
+		"nothing wrong": {
+			ScreenContext{View: "home/overview", Selection: &good, VisibleItems: []ScreenItem{good, nameless}},
+			&ScreenContext{View: "home/overview", Selection: &good, VisibleItems: []ScreenItem{good, nameless}}, 0,
+		},
+		"an item with no kind": {
+			ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{{ID: "x"}, good}},
+			&ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{good}}, 1,
+		},
+		"an item with no id": {
+			ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{{Kind: "artifact"}, good}},
+			&ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{good}}, 1,
+		},
+		"a line break in any field": {
+			ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{
+				{Kind: "a\nb", ID: "x"}, {Kind: "artifact", ID: "a\rb"}, {Kind: "artifact", ID: "x", Name: "one\ntwo"}, good,
+			}},
+			&ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{good}}, 3,
+		},
+		"oversized fields": {
+			ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{
+				{Kind: strings.Repeat("k", 41), ID: "x"}, {Kind: "artifact", ID: strings.Repeat("i", 121)}, {Kind: "artifact", ID: "x", Name: strings.Repeat("n", 121)}, good,
+			}},
+			&ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{good}}, 3,
+		},
+		"fields at their limits are kept": {
+			ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{{Kind: strings.Repeat("k", 40), ID: strings.Repeat("i", 120), Name: strings.Repeat("n", 120)}}},
+			&ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{{Kind: strings.Repeat("k", 40), ID: strings.Repeat("i", 120), Name: strings.Repeat("n", 120)}}}, 0,
+		},
+		"limits count characters, not bytes": {
+			ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{{Kind: "artifact", ID: "x", Name: strings.Repeat("é", 120)}}},
+			&ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{{Kind: "artifact", ID: "x", Name: strings.Repeat("é", 120)}}}, 0,
+		},
+		"a selection that breaks a rule": {
+			ScreenContext{View: "home/overview", Selection: &ScreenItem{Kind: "artifact"}, VisibleItems: []ScreenItem{good}},
+			&ScreenContext{View: "home/overview", VisibleItems: []ScreenItem{good}}, 1,
+		},
+		"items past the twelfth": {
+			ScreenContext{View: "home/overview", VisibleItems: many},
+			&ScreenContext{View: "home/overview", VisibleItems: many[:12]}, 2,
+		},
+		"a view that is no Oryxa page": {
+			ScreenContext{View: "other/window", Selection: &good, VisibleItems: []ScreenItem{good, good}},
+			nil, 4,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before, _ := json.Marshal(test.screen)
+			got, dropped := test.screen.Sanitize()
+			if !reflect.DeepEqual(got, test.want) || dropped != test.dropped {
+				t.Fatalf("Sanitize() = %+v, %d; want %+v, %d", got, dropped, test.want, test.dropped)
+			}
+			if got != nil && !got.Valid() {
+				t.Fatalf("Sanitize() returned a snapshot that is not valid: %+v", got)
+			}
+			if after, _ := json.Marshal(test.screen); string(after) != string(before) {
+				t.Fatalf("Sanitize() changed what it was given: %s, was %s", after, before)
+			}
+		})
+	}
+	if got, dropped := (*ScreenContext)(nil).Sanitize(); got != nil || dropped != 0 {
+		t.Fatalf("Sanitize() of no snapshot = %+v, %d; want nothing", got, dropped)
 	}
 }
 

@@ -668,6 +668,19 @@ func (server *Server) deleteAgent(writer http.ResponseWriter, request *http.Requ
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+// screenHints reduces the screen snapshot a run's body carried to the hints
+// that are usable. The snapshot only points the agent at things the member had
+// open, so a hint that breaks a rule is left out, and the run goes on with the
+// rest, rather than the member's message being refused over a file name. What
+// the member had open is theirs: only how many hints were left out is logged.
+func (server *Server) screenHints(ctx context.Context, sent *primaryagents.ScreenContext) *primaryagents.ScreenContext {
+	usable, dropped := sent.Sanitize()
+	if dropped > 0 {
+		server.logger.WarnContext(ctx, "left out screen hints that break a rule", "count", dropped)
+	}
+	return usable
+}
+
 func (server *Server) runAgent(writer http.ResponseWriter, request *http.Request) {
 	member, ok := server.member(writer, request)
 	if !ok {
@@ -689,11 +702,7 @@ func (server *Server) runAgent(writer http.ResponseWriter, request *http.Request
 	if !server.decode(writer, request, &body) {
 		return
 	}
-	if body.ScreenContext != nil && !body.ScreenContext.Valid() {
-		writeError(writer, http.StatusBadRequest, "invalid_request", "screen context is invalid")
-		return
-	}
-	input := threads.RunInput{Message: body.Message, ScreenContext: body.ScreenContext}
+	input := threads.RunInput{Message: body.Message, ScreenContext: server.screenHints(request.Context(), body.ScreenContext)}
 	for _, answer := range body.Confirmations {
 		if answer.ID == "" || answer.Confirmed == nil {
 			writeError(writer, http.StatusBadRequest, "invalid_request", "every confirmation needs an id and whether it is confirmed")
@@ -1503,11 +1512,7 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 	if !server.decode(writer, request, &body) {
 		return
 	}
-	if body.ScreenContext != nil && !body.ScreenContext.Valid() {
-		writeError(writer, http.StatusBadRequest, "invalid_request", "screen context is invalid")
-		return
-	}
-	input := threads.RunInput{Message: body.Message, ScreenContext: body.ScreenContext}
+	input := threads.RunInput{Message: body.Message, ScreenContext: server.screenHints(request.Context(), body.ScreenContext)}
 	for _, answer := range body.Confirmations {
 		if answer.ID == "" || answer.Confirmed == nil {
 			writeError(writer, http.StatusBadRequest, "invalid_request", "every confirmation needs an id and whether it is confirmed")
