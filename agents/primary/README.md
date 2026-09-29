@@ -918,13 +918,21 @@ Nothing the guard found is logged or traced as a value: Bedrock's `match`
 holds the raw value by design, and neither it nor any text is ever logged,
 published or traced. ADK traces every tool call's arguments and response on
 its `execute_tool` span, whatever `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`
-says, which would put an answer the guard has yet to read, from
-`interactions_respond`'s arguments, into X-Ray. So the process's trace
-exporter redacts both attributes on every `interactions_` tool's span, and on
-a span of merged calls one of them is among
-(`observability.RedactToolCalls`). The guard logs reasons and kinds, and a failed call by
-its error code alone, since the error's message could quote what it was
-sent.
+says, and a failed call's error message on the span's status and its exception
+event. That would put an answer the guard has yet to read, from
+`interactions_respond`'s arguments, into X-Ray, and just as much the mail,
+documents and pages every other tool reads for the member. So the process's
+trace exporter redacts every tool span, not the `interactions_` tools' alone,
+the span of merged calls included (`observability.RedactToolCalls`). The
+arguments, the response, an error's message and any attribute not on a short
+allowlist of names, ids and kinds are replaced by a marker, with the size of
+the arguments and of the response beside it. A tool span keeps its tool's name,
+its status and its timing. The exporter also leaves the query string and the
+fragment out of every URL on any span, since a directory search puts the
+member's words in `?q=` and the client span of that call carries the URL: it
+exports the scheme, host and path, and `[redacted]` where a query was. The
+guard logs reasons and kinds, and a failed call by its error code alone, since
+the error's message could quote what it was sent.
 
 What an agent says in a room is read the same way before the room stores it
 (`rooms.Relay.Guard`), since the whole team reads it; what people say there is

@@ -18,6 +18,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcore"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcore/types"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/safehttp"
 )
 
 const (
@@ -106,6 +108,9 @@ type Options struct {
 	ViewportHeight    int32
 	now               func() time.Time
 	connector         automationConnector
+	// resolver looks up the host of a URL the browser is sent to, and is the
+	// system's when nil.
+	resolver safehttp.Resolver
 }
 
 // Manager owns the mapping between ADK conversations and AgentCore Browser
@@ -115,6 +120,7 @@ type Options struct {
 type Manager struct {
 	api        runtimeAPI
 	connector  automationConnector
+	resolver   safehttp.Resolver
 	identifier string
 	timeout    time.Duration
 	width      int32
@@ -189,9 +195,14 @@ func newManager(api runtimeAPI, options Options) (*Manager, error) {
 	if now == nil {
 		now = time.Now
 	}
+	resolver := options.resolver
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
 	return &Manager{
 		api:        api,
 		connector:  options.connector,
+		resolver:   resolver,
 		identifier: identifier,
 		timeout:    timeout,
 		width:      width,
@@ -203,7 +214,7 @@ func newManager(api runtimeAPI, options Options) (*Manager, error) {
 
 // Invoke runs one operation in the remote browser assigned to sessionKey.
 func (m *Manager) Invoke(ctx context.Context, sessionKey string, request Request) (Result, error) {
-	if err := request.validate(); err != nil {
+	if err := request.validate(ctx, m.resolver); err != nil {
 		return Result{}, err
 	}
 	entry, err := m.acquireSession(sessionKey, true)
@@ -403,7 +414,9 @@ func sessionName(key string) string {
 	return fmt.Sprintf("oryxa-browser-%x", digest[:8])
 }
 
-func (request Request) validate() error {
+// validate refuses a request the browser must not be sent. A navigation's host
+// is looked up with resolver, and every address it answers must be public.
+func (request Request) validate(ctx context.Context, resolver safehttp.Resolver) error {
 	switch request.Action {
 	case Navigate:
 		if len(request.URL) > maxURLBytes {
@@ -416,12 +429,8 @@ func (request Request) validate() error {
 		if parsed.User != nil {
 			return errors.New("browser URLs cannot contain credentials")
 		}
-		hostname := strings.ToLower(parsed.Hostname())
-		if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
-			return errors.New("browser URLs cannot target localhost")
-		}
-		if address := net.ParseIP(hostname); address != nil && (address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() || address.IsUnspecified()) {
-			return errors.New("browser URLs cannot target a non-public IP address")
+		if err := checkHost(ctx, resolver, parsed.Hostname()); err != nil {
+			return err
 		}
 	case Click:
 		if err := validateSelector(request.Selector); err != nil {
