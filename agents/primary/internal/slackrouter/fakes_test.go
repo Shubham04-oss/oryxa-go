@@ -325,6 +325,54 @@ func (screen *fakeScreen) calls() []ScreenInput {
 	return append([]ScreenInput(nil), screen.judged...)
 }
 
+// fakeDirectory is the organization directory as one asker sees it: the teams
+// each member is on that the asker may see, and which askers have given agents
+// standing access. Nobody is on any team unless a test says so, which is a
+// department nobody knows.
+type fakeDirectory struct {
+	mu      sync.Mutex
+	teams   map[string][]string
+	noGrant map[string]bool
+	err     error
+	reads   []directoryRead
+	// onRead, when set, is told of each read before it is answered.
+	onRead func()
+}
+
+// directoryRead is one read of the directory: who it was read as, and about whom.
+type directoryRead struct {
+	Organization, Asker string
+	UserIDs             []string
+}
+
+func (directory *fakeDirectory) Teams(_ context.Context, organizationID string, asker Person, userIDs []string) (map[string][]string, error) {
+	directory.mu.Lock()
+	defer directory.mu.Unlock()
+	if directory.onRead != nil {
+		directory.onRead()
+	}
+	directory.reads = append(directory.reads, directoryRead{organizationID, asker.UserID, append([]string(nil), userIDs...)})
+	if directory.noGrant[asker.UserID] {
+		return nil, fmt.Errorf("agent token: %w", ErrNoGrant)
+	}
+	if directory.err != nil {
+		return nil, directory.err
+	}
+	found := map[string][]string{}
+	for _, id := range userIDs {
+		if teams, ok := directory.teams[id]; ok {
+			found[id] = append([]string(nil), teams...)
+		}
+	}
+	return found, nil
+}
+
+func (directory *fakeDirectory) read() []directoryRead {
+	directory.mu.Lock()
+	defer directory.mu.Unlock()
+	return append([]directoryRead(nil), directory.reads...)
+}
+
 type fakeAsked struct {
 	mu    sync.Mutex
 	asks  map[string]string
@@ -357,6 +405,7 @@ type harness struct {
 	authority  *fakeAuthority
 	asked      *fakeAsked
 	screen     *fakeScreen
+	directory  *fakeDirectory
 	router     *Router
 	seq        int
 }
@@ -367,6 +416,7 @@ func newHarness(t *testing.T) *harness {
 		t: t, slack: newFakeSlack(), members: &fakeMembers{}, identities: &fakeIdentities{},
 		asks: &fakeAsks{open: map[string]int{}}, authority: &fakeAuthority{outranks: map[string]bool{}},
 		asked: &fakeAsked{}, screen: newFakeScreen(),
+		directory: &fakeDirectory{teams: map[string][]string{}, noGrant: map[string]bool{}},
 	}
 	h.slack.channels[testChannel] = ChannelInfo{ID: testChannel}
 	h.members.orgNames = map[string]string{testOrg: "Acme"}
@@ -378,7 +428,7 @@ func newHarness(t *testing.T) *harness {
 func (h *harness) rebuild() {
 	router, err := NewRouter(Deps{
 		Slack: h.slack, Members: h.members, Identities: h.identities, Asks: h.asks,
-		Authority: h.authority, Asked: h.asked, Screen: h.screen,
+		Authority: h.authority, Asked: h.asked, Screen: h.screen, Directory: h.directory,
 	})
 	if err != nil {
 		h.t.Fatal(err)

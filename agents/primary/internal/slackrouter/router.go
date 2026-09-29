@@ -50,6 +50,13 @@ type Deps struct {
 	// screened may not go ahead. NewJevScreen is the production one, and its
 	// Jev is the one interactions and rooms use.
 	Screen Screen
+	// Directory reads the teams of the asker and of the people they name, as the
+	// asker sees them, so the screen can judge whether a question fits each
+	// owner's department, and refuses an asker who has given agents no standing
+	// access (no_grant). Without one no department is known, no owner is left
+	// out for theirs, and no grant is asked for. NewAskerDirectory is the
+	// production one.
+	Directory Directory
 	// Authority answers whether an asker outranks an owner. Without one, nobody
 	// does, and no ask bypasses on authority.
 	Authority Authority

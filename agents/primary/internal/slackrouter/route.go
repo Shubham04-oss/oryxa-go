@@ -123,10 +123,19 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	if question == "" {
 		return Permanent(errors.New("the message holds no question"))
 	}
-	screened, err := router.screen(ctx, job, ScreenInput{
+	input := ScreenInput{
 		Question: question,
 		Asker:    ScreenAsker{OrgRole: asker.Role, Title: asker.Title},
-	})
+	}
+	// The screen is given the teams of the asker and of each owner, as the
+	// asker's own agent would read them. An asker who has given agents no
+	// standing access cannot be read as, and is told to (no_grant).
+	if reason, err := router.departments(ctx, job, asker, owners, &input); err != nil {
+		return err
+	} else if reason != "" {
+		return router.refuseAsk(ctx, job, mention, reason)
+	}
+	screened, err := router.screen(ctx, job, input)
 	if err != nil {
 		return err
 	}
@@ -209,6 +218,73 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 		}
 	}
 	return nil
+}
+
+// departments reads, as the asker, the teams of the asker and of each owner
+// who can be asked, and puts what it finds into what the screen will judge: the
+// asker's teams, and each owner whose department is known. An owner the asker
+// can see on no team is not put in, and is asked: a department that is not
+// listed is one that is not known, and a doubt about whether to ask a person
+// resolves toward asking them.
+//
+// It answers a reason when the ask as a whole is refused for what it found:
+// NoGrant for an asker who has given agents no standing access. The directory
+// is another service's, so a read that fails is tried again by the job, and on
+// the last attempt the ask is refused as one the screen could not finish, never
+// asked without the check: the screen fails closed.
+//
+// Without a Directory nothing is read; without a Screen nothing is either,
+// since the ask is refused before anything it would show.
+func (router *Router) departments(ctx context.Context, job Job, asker resolved, owners []resolved, input *ScreenInput) (consentpolicy.Reason, error) {
+	if router.deps.Directory == nil || router.deps.Screen == nil {
+		return "", nil
+	}
+	ids := []string{asker.Person.UserID}
+	for _, owner := range owners {
+		if owner.Member {
+			ids = append(ids, owner.Person.UserID)
+		}
+	}
+	teams, err := router.deps.Directory.Teams(ctx, job.OrganizationID, asker.Person, ids)
+	switch {
+	case errors.Is(err, ErrNoGrant):
+		router.logger.InfoContext(ctx, "the asker has given agents no standing access, so the directory cannot be read as them",
+			"inbound_id", job.InboundID, "organization_id", job.OrganizationID)
+		return consentpolicy.NoGrant, nil
+	case err != nil && ctx.Err() != nil:
+		return "", ctx.Err()
+	case err != nil && job.Attempts+1 < maxAttempts:
+		return "", fmt.Errorf("read the organization directory as the asker: %w", err)
+	case err != nil:
+		router.logger.WarnContext(ctx, "the directory could not be read on the last attempt, so the ask is refused",
+			"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "error", err)
+		return consentpolicy.ScreenFailed, nil
+	}
+	input.Asker.Teams = teamNames(teams[asker.Person.UserID])
+	for _, owner := range owners {
+		if !owner.Member {
+			continue
+		}
+		if names := teamNames(teams[owner.Person.UserID]); len(names) > 0 {
+			input.Owners = append(input.Owners, ScreenOwner{UserID: owner.Person.UserID, Name: owner.Name, Title: owner.Title, Teams: names})
+		}
+	}
+	router.logger.InfoContext(ctx, "the teams of an ask's people were read as the asker",
+		"inbound_id", job.InboundID, "organization_id", job.OrganizationID,
+		"asker_teams", len(input.Asker.Teams), "owners_with_teams", len(input.Owners))
+	return "", nil
+}
+
+// teamNames cleans the names of teams, which a team's own administrators
+// wrote, and leaves out what is empty once cleaned.
+func teamNames(names []string) []string {
+	var cleaned []string
+	for _, name := range names {
+		if name = cleanTeam(name); name != "" {
+			cleaned = append(cleaned, name)
+		}
+	}
+	return cleaned
 }
 
 // screen has the words of an ask judged and says what was found. It never
