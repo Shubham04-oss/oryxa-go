@@ -7,13 +7,17 @@ import (
 	"unicode/utf8"
 
 	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 )
 
-// ScreenStateKey carries a member-supplied snapshot for this run only. Every
-// subsequent run clears it unless that run sends a new snapshot.
-const ScreenStateKey = "current_screen_context"
+// ScreenStateKey carries a member-supplied snapshot for one run. It is ADK
+// temporary state: a tool reads it while the run goes on, and ADK drops it
+// before it stores the run's event or the session's state, so a snapshot never
+// outlives its run. Without the prefix it would sit in sessions.state, and in
+// the event's actions, for as long as the thread lives.
+const ScreenStateKey = session.KeyPrefixTemp + "current_screen_context"
 
 type ScreenItem struct {
 	Kind string `json:"kind"`
@@ -51,7 +55,8 @@ func (screen ScreenContext) Valid() bool {
 }
 
 // EncodedScreenContext is placed in the run's state delta. An absent context
-// becomes an empty value, preventing an earlier page from lingering.
+// becomes an empty value, so no earlier page can linger in a session service
+// that keeps temporary state past its run.
 func EncodedScreenContext(screen *ScreenContext) string {
 	if screen == nil {
 		return ""

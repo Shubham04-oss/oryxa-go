@@ -40,10 +40,13 @@ approval, so nothing reads another member's apps unapproved.
 The primary and specialist chat send a bounded `screen_context` in the run
 body when a member sends a message or answers a confirmation. It is captured
 from the current Oryxa canvas at send time (view, selection and up to twelve
-marked visible items); it is not put in the transcript. Go validates and
-replaces the run's screen state, including clearing an older snapshot when a
-run has none. `get_current_screen` reads that state, while resource tools
-continue to authorize every item independently.
+marked visible items); it is not put in the transcript. Go keeps it in ADK's
+temporary state (`temp:`), which a tool can read while that one run goes on
+and which ADK drops before anything is stored: it is never in the session's
+state or an event's actions, and a run without one finds none.
+`get_current_screen` reads it, and only in a member's own runs, never an
+unattended, room or delivery one. Resource tools continue to authorize every
+item independently.
 
 ## Specialist chats
 
