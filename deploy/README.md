@@ -511,7 +511,7 @@ aws ssm start-session --target <instance id> \
 
 ## At launch
 
-- Aurora Serverless v2 in place of the t4g.micro instance: snapshot, restore
+- Aurora Serverless v2 in place of the t4g.small instance: snapshot, restore
   into a cluster, point the `database-url` secret and Hyperdrive at it.
 - A second task and Multi-AZ.
 - A database user for Hyperdrive with only what Workers read, rather than the

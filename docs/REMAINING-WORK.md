@@ -531,7 +531,7 @@ account:
   grant with the minimum deletion window of 7 days and no `prevent_destroy`;
   the services' signing keys likewise.
 - **No single point of failure.** One Fargate task and a single-AZ
-  `db.t4g.micro` (backed up for 7 days, deletion-protected) carry everything;
+  `db.t4g.small` (backed up for 7 days, deletion-protected) carry everything;
   deploy/README.md's "At launch" names a second task and Aurora or Multi-AZ.
 - **A schema change someone reviews.** Migrations run at start, and a merge now
   releases with no approval. The ECS circuit breaker catches a task that never

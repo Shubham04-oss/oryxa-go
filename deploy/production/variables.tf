@@ -99,9 +99,9 @@ variable "task_memory" {
 }
 
 variable "database_instance_class" {
-  description = "Cheap until launch, when the database moves to Aurora Serverless v2."
+  description = "Cheap until launch, when the database moves to Aurora Serverless v2. A db.t4g.micro's 1 GiB swapped constantly, with as little as 87 MiB free (2026-09-28)."
   type        = string
-  default     = "db.t4g.micro"
+  default     = "db.t4g.small"
 }
 
 variable "alarm_email" {
