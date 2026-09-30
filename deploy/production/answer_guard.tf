@@ -200,5 +200,15 @@ locals {
   consent_guardrail_environment = {
     AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID      = aws_bedrock_guardrail.consent_answers.guardrail_id
     AGENTS_PRIMARY_CONSENT_GUARDRAIL_VERSION = aws_bedrock_guardrail_version.consent_answers.version
+    # Ground a knowledge answer only on the passages knowledge_search
+    # returned, not on its search metadata (#173). On since 2026-09-30,
+    # after a correct Slack answer was held as ungrounded.
+    AGENTS_PRIMARY_CONSENT_KNOWLEDGE_PASSAGES_ONLY = var.consent_knowledge_passages_only ? "true" : "false"
   }
+}
+
+variable "consent_knowledge_passages_only" {
+  description = "Whether the consent guard grounds knowledge answers on returned passages only (agents/primary/internal/consentguard, #173). False restores full-capture grounding."
+  type        = bool
+  default     = true
 }
