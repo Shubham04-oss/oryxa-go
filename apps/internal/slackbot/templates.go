@@ -639,10 +639,8 @@ const (
 	RefusalExternal       = "external_channel"
 	RefusalNoOwner        = "no_owner"
 	RefusalTooManyAsks    = "too_many_asks"
-	// What the screen of a question's words, and the department check, refuse
-	// for. None quotes the words. An injection and an implausible question get
-	// the plain no on purpose: saying which of the screen's questions was
-	// tripped would tell a person how to rephrase around it.
+	// The screen and department reasons give a brief private explanation,
+	// without quoting the question or exposing the screen's checks or scores.
 	RefusalScreenFailed    = "screen_failed"
 	RefusalNotWork         = "not_work"
 	RefusalInjection       = "injection"
@@ -653,6 +651,7 @@ const (
 
 type refusalParams struct {
 	Reason           string `json:"reason"`
+	Hint             string `json:"hint"`
 	OrganizationName string `json:"organization_name"`
 	// UserID or Name is the person the refusal is about, for owner_not_member.
 	UserID string `json:"user_id"`
@@ -666,6 +665,9 @@ func renderRefusal(r renderer, raw json.RawMessage) (Rendered, error) {
 	var p refusalParams
 	if err := decodeParams(raw, &p); err != nil {
 		return Rendered{}, err
+	}
+	if p.Hint != "" && !(p.Reason == RefusalNoOwner && p.Hint == "self") && !(p.Reason == RefusalTooManyAsks && p.Hint == "too_many_people") {
+		return Rendered{}, fmt.Errorf("the refusal hint does not match its reason: %w", domain.ErrInvalid)
 	}
 	var line string
 	switch p.Reason {
@@ -686,9 +688,15 @@ func renderRefusal(r renderer, raw json.RawMessage) (Rendered, error) {
 	case RefusalExternal:
 		line = "I don't answer in channels shared with other organizations."
 	case RefusalNoOwner:
-		line = "Tell me who to ask: mention the person who would know, like `@Oryxa ask @raya about the launch date`."
+		line = "Mention the person by picking them from the list."
+		if p.Hint == "self" {
+			line = "You named yourself. Pick someone else from the mention list so I can ask them."
+		}
 	case RefusalTooManyAsks:
 		line = "You have too many open questions. Wait for some to be answered."
+		if p.Hint == "too_many_people" {
+			line = "Ask up to five people at a time. Pick fewer people from the mention list."
+		}
 	case RefusalScreenFailed:
 		line = "I couldn't check that just now, so I didn't ask anyone. Try again in a moment."
 	case RefusalNotWork:
@@ -701,8 +709,10 @@ func renderRefusal(r renderer, raw json.RawMessage) (Rendered, error) {
 			return Rendered{}, err
 		}
 		line = "I didn't ask " + who + ": this looks like a question for another team."
-	case RefusalInjection, RefusalImplausible:
-		line = "I can't help with that here."
+	case RefusalInjection:
+		line = "I couldn't pass that request on safely, so I didn't ask anyone."
+	case RefusalImplausible:
+		line = "This request doesn't look appropriate for your role or team, so I didn't ask anyone."
 	default:
 		line = "I can't help with that here."
 	}

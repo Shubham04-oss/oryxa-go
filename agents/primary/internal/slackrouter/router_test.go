@@ -242,9 +242,14 @@ func TestRefusals(t *testing.T) {
 			reason: consentpolicy.NoOwner, wire: `{"reason":"no_owner"}`,
 		},
 		{
+			name:   "a plain text name is not a selected mention",
+			text:   toBot("ask @Raya for the Q3 number"),
+			reason: consentpolicy.NoOwner, wire: `{"reason":"no_owner"}`,
+		},
+		{
 			name:   "a mention that names only the asker",
 			text:   toBot("ask <@" + testAsker + "> for the Q3 numbers"),
-			reason: consentpolicy.NoOwner, wire: `{"reason":"no_owner"}`,
+			reason: consentpolicy.NoOwner, wire: `{"reason":"no_owner","hint":"self"}`,
 		},
 		{
 			name:   "a mention of a group and of everyone",
@@ -270,7 +275,7 @@ func TestRefusals(t *testing.T) {
 				}
 				return nil
 			},
-			reason: consentpolicy.TooManyAsks, wire: `{"reason":"too_many_asks"}`,
+			reason: consentpolicy.TooManyAsks, wire: `{"reason":"too_many_asks","hint":"too_many_people"}`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -436,8 +441,8 @@ func TestTheSamePersonUnderAnotherAccountIsNotAnotherOwner(t *testing.T) {
 	h2.slack.profiles["UADA2"] = Profile{UserID: "UADA2", TeamID: testTeam, Email: "ada@acme.com", EmailConfirmed: true, Name: "Ada (old account)"}
 	job := h2.mention(toBot("ask <@UADA2>"))
 	h2.mustRun(job)
-	if _, params := h2.refusal(job); params.Reason != consentpolicy.NoOwner {
-		t.Fatalf("reason = %q", params.Reason)
+	if _, params := h2.refusal(job); params.Reason != consentpolicy.NoOwner || params.Hint != "self" {
+		t.Fatalf("refusal = %+v", params)
 	}
 }
 
@@ -772,6 +777,7 @@ func TestRefusalOnTheWire(t *testing.T) {
 // the router last read it; a change in apps' templates is a change here.
 type appsRefusal struct {
 	Reason           string `json:"reason"`
+	Hint             string `json:"hint"`
 	OrganizationName string `json:"organization_name"`
 	UserID           string `json:"user_id"`
 	Name             string `json:"name"`

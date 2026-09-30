@@ -1,9 +1,9 @@
 {
-  "text": "I can't help with that here.",
+  "text": "I couldn't pass that request on safely, so I didn't ask anyone.",
   "blocks": [
     {
       "text": {
-        "text": "I can't help with that here.",
+        "text": "I couldn't pass that request on safely, so I didn't ask anyone.",
         "type": "mrkdwn"
       },
       "type": "section"

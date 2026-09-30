@@ -38,7 +38,9 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 
 	// The people named are everyone mentioned but the bot, which the message
 	// mentions to address it, and the asker, who is not asking themself.
-	named := slices.DeleteFunc(mentionedUsers(mention.Text), func(id string) bool {
+	mentioned := mentionedUsers(mention.Text)
+	selfNamed := slices.Contains(mentioned, mention.UserID)
+	named := slices.DeleteFunc(mentioned, func(id string) bool {
 		return id == mention.BotUserID || id == mention.UserID
 	})
 	// A mention that names too many is refused whatever they are, so they are
@@ -82,6 +84,7 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 			}
 			if owner.Member {
 				if seen[owner.Person.UserID] {
+					selfNamed = selfNamed || owner.Person.UserID == asker.Person.UserID
 					router.logger.InfoContext(ctx, "a named Slack user is someone already counted",
 						"inbound_id", job.InboundID, "organization_id", job.OrganizationID,
 						"slack_user_id", owner.SlackUserID)
@@ -112,6 +115,12 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	gate := facts
 	gate.OwnerMember, gate.Screen = true, consentpolicy.Cleared
 	if decision := consentpolicy.Decide(gate); decision.Outcome == consentpolicy.Deny {
+		switch {
+		case decision.Reason == consentpolicy.NoOwner && selfNamed:
+			return router.refuse(ctx, job, mention, "", RefusalParams{Reason: decision.Reason, Hint: "self"})
+		case decision.Reason == consentpolicy.TooManyAsks && ownersNamed > consentpolicy.MaxOwners:
+			return router.refuse(ctx, job, mention, "", RefusalParams{Reason: decision.Reason, Hint: "too_many_people"})
+		}
 		return router.refuseAsk(ctx, job, mention, decision.Reason)
 	}
 	if !slices.ContainsFunc(owners, func(owner resolved) bool { return owner.Member }) {
@@ -416,11 +425,12 @@ func (router *Router) refuse(ctx context.Context, job Job, mention *Mention, per
 		key += ":" + person
 	}
 	err := router.deps.Slack.Post(ctx, Post{
-		OrganizationID: job.OrganizationID,
-		IdempotencyKey: key,
-		Target:         Target{ChannelID: mention.ChannelID, ThreadTS: threadOf(mention), UserID: mention.UserID},
-		Template:       TemplateRefusal,
-		Params:         params,
+		OrganizationID:   job.OrganizationID,
+		IdempotencyKey:   key,
+		RefusalInboundID: job.InboundID,
+		Target:           Target{ChannelID: mention.ChannelID, ThreadTS: threadOf(mention), UserID: mention.UserID},
+		Template:         TemplateRefusal,
+		Params:           params,
 	})
 	if err != nil {
 		return fmt.Errorf("tell the asker why not: %w", err)

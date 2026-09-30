@@ -54,9 +54,8 @@ const (
 	TooManyAsks Reason = "too_many_asks"
 
 	// The refusals below come from the screen of the asker's words, and from
-	// what the screen needs. None of them quotes the words, and none says which
-	// question of the screen was tripped more than its own name does: apps'
-	// copy for injection and screen_failed should stay a plain no. A request
+	// what the screen needs. Their private explanations quote no words and
+	// expose no scores or individual screening checks. A request
 	// for a credential is not among them: it is asked, as a request for a
 	// secret (see Screen).
 

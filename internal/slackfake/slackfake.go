@@ -135,6 +135,11 @@ type Message struct {
 	UnfurlMedia bool
 }
 
+// Reaction is a bot reaction on an incoming or posted message.
+type Reaction struct {
+	TeamID, Channel, TS, UserID, Name string
+}
+
 // Call is one Web API call, as the fake received it.
 type Call struct {
 	Method string
@@ -161,6 +166,8 @@ type Fake struct {
 	users      map[string]User
 	channels   map[string]Channel
 	messages   []*Message
+	incoming   map[string]bool
+	reactions  []Reaction
 	calls      []Call
 	failures   map[string][]failure
 	codes      map[string]string // authorization code -> team id; "" once spent
@@ -200,6 +207,7 @@ func New(t testing.TB, options ...Option) *Fake {
 		now: time.Now, clientID: DefaultClientID, clientSecret: DefaultClientSecret, signingSecret: DefaultSigningSecret,
 		workspaces: map[string]*Workspace{}, users: map[string]User{}, channels: map[string]Channel{},
 		failures: map[string][]failure{}, codes: map[string]string{}, spent: map[string]bool{},
+		incoming: map[string]bool{},
 	}
 	for _, option := range options {
 		option(f)
@@ -343,6 +351,7 @@ func (f *Fake) Reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls, f.messages, f.failures, f.down = nil, nil, map[string][]failure{}, false
+	f.incoming, f.reactions = map[string]bool{}, nil
 }
 
 // Calls answers the recorded calls, oldest first: all of them, or only those
@@ -357,6 +366,13 @@ func (f *Fake) Calls(methods ...string) []Call {
 		}
 	}
 	return found
+}
+
+// Reactions returns the distinct bot reactions, safe to inspect during calls.
+func (f *Fake) Reactions() []Reaction {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.reactions)
 }
 
 // Messages answers what was posted, oldest first, as it stands after any
@@ -490,8 +506,36 @@ func (f *Fake) handleLocked(method, token, basicUser, basicPassword string, args
 		return f.postLocked(method == "chat.postEphemeral", args)
 	case "chat.update":
 		return f.updateLocked(args)
+	case "reactions.add":
+		return f.reactLocked(workspace, args)
 	}
 	return fail("unknown_method")
+}
+
+func (f *Fake) reactLocked(workspace *Workspace, args map[string]any) map[string]any {
+	if !slices.Contains(workspace.Scopes, "reactions:write") {
+		return fail("missing_scope")
+	}
+	channel, ts, name := str(args, "channel"), str(args, "timestamp"), str(args, "name")
+	if channel == "" || ts == "" || name == "" {
+		return fail("invalid_arguments")
+	}
+	if c, found := f.channels[channel]; found && (c.Archived || c.NotMember) {
+		return fail("no_permission")
+	}
+	found := f.incoming[workspace.TeamID+":"+channel+":"+ts]
+	for _, message := range f.messages {
+		found = found || (message.Channel == channel && message.TS == ts && !message.Ephemeral)
+	}
+	if !found {
+		return fail("message_not_found")
+	}
+	reaction := Reaction{TeamID: workspace.TeamID, Channel: channel, TS: ts, UserID: workspace.BotUserID, Name: name}
+	if slices.Contains(f.reactions, reaction) {
+		return fail("already_reacted")
+	}
+	f.reactions = append(f.reactions, reaction)
+	return map[string]any{"ok": true}
 }
 
 func (f *Fake) byTokenLocked(token string) *Workspace {
@@ -787,6 +831,9 @@ func (f *Fake) Mention(baseURL string, m Mention) *http.Request {
 	if m.EventID == "" {
 		m.EventID = f.nextID("Ev")
 	}
+	f.mu.Lock()
+	f.incoming[m.TeamID+":"+m.Channel+":"+m.TS] = true
+	f.mu.Unlock()
 	event := map[string]any{
 		"type": "app_mention", "user": m.User, "text": m.Text, "ts": m.TS, "channel": m.Channel,
 		"event_ts": m.TS,

@@ -241,6 +241,17 @@ func (c *Client) postJSON(ctx context.Context, method string, token secrets.Secr
 	return c.call(ctx, method, request)
 }
 
+// AddReaction uses the bot token. Re-adding the same bot/emoji/message
+// combination is a successful replay, as Slack keeps only one reaction.
+func (c *Client) AddReaction(ctx context.Context, token secrets.Secret, channel, timestamp, name string) error {
+	_, err := c.postJSON(ctx, "reactions.add", token, map[string]string{"channel": channel, "timestamp": timestamp, "name": name})
+	var refused *Error
+	if errors.As(err, &refused) && refused.Code == "already_reacted" {
+		return nil
+	}
+	return err
+}
+
 // get is a call whose arguments are its query, as the read methods take.
 func (c *Client) get(ctx context.Context, method string, token secrets.Secret, query url.Values) ([]byte, error) {
 	target := c.base + "/" + method

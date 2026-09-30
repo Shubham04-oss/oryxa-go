@@ -542,7 +542,7 @@ func (h *harness) refusal(job Job) (Post, RefusalParams) {
 	if params.UserID != "" {
 		wantKey += ":" + params.UserID
 	}
-	if post.OrganizationID != testOrg || post.IdempotencyKey != wantKey {
+	if post.OrganizationID != testOrg || post.IdempotencyKey != wantKey || post.RefusalInboundID != job.InboundID {
 		h.t.Fatalf("refusal = %+v, want key %q", post, wantKey)
 	}
 	return post, params

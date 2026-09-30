@@ -1,9 +1,9 @@
 {
-  "text": "Tell me who to ask: mention the person who would know, like `@Oryxa ask @raya about the launch date`.",
+  "text": "Mention the person by picking them from the list.",
   "blocks": [
     {
       "text": {
-        "text": "Tell me who to ask: mention the person who would know, like `@Oryxa ask @raya about the launch date`.",
+        "text": "Mention the person by picking them from the list.",
         "type": "mrkdwn"
       },
       "type": "section"

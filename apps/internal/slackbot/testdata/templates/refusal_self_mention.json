@@ -1,0 +1,12 @@
+{
+  "text": "You named yourself. Pick someone else from the mention list so I can ask them.",
+  "blocks": [
+    {
+      "text": {
+        "text": "You named yourself. Pick someone else from the mention list so I can ask them.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

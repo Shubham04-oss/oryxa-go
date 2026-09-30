@@ -195,9 +195,12 @@ type Post struct {
 	// IdempotencyKey makes a retry of the same message nothing: apps sends
 	// one message for one key.
 	IdempotencyKey string
-	Target         Target
-	Template       string
-	Params         any
+	// RefusalInboundID anchors a refusal's neutral bot reaction to the exact
+	// verified message. It is only used with TemplateRefusal.
+	RefusalInboundID string
+	Target           Target
+	Template         string
+	Params           any
 }
 
 // RefusalParams are the parameters of the refusal template, shown only to the
@@ -205,6 +208,9 @@ type Post struct {
 type RefusalParams struct {
 	// Reason is one of consentpolicy's refusal codes.
 	Reason consentpolicy.Reason `json:"reason"`
+	// Hint distinguishes the self-mention and owner-count cases without
+	// exposing the asker's words or changing the policy's refusal reasons.
+	Hint string `json:"hint,omitempty"`
 	// OrganizationName is the organization's name, for not_member. Left out,
 	// the message says "this organization".
 	OrganizationName string `json:"organization_name,omitempty"`
