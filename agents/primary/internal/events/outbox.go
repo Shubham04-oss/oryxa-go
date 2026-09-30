@@ -2,7 +2,10 @@ package events
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
@@ -55,12 +58,52 @@ func (outbox *Outbox) Ensure(ctx context.Context) error {
 		// traced request.
 		`ALTER TABLE ` + schema + `.agents_outbox ADD COLUMN IF NOT EXISTS trace_context text`,
 	}
+	exec := func(ctx context.Context, statement string) error {
+		_, err := outbox.database.SQLX.ExecContext(ctx, statement)
+		return err
+	}
 	for _, statement := range statements {
-		if _, err := outbox.database.SQLX.ExecContext(ctx, statement); err != nil {
+		if err := ensureStatement(ctx, exec, statement); err != nil {
 			return fmt.Errorf("ensure agents outbox: %w", err)
 		}
 	}
 	return nil
+}
+
+// ensureStatement runs one of Ensure's statements, each made idempotent by IF
+// NOT EXISTS. PostgreSQL does not make IF NOT EXISTS safe against itself: two
+// sessions that both find an object missing both create it, and the one that
+// commits second is refused by the catalog's own unique index, as a duplicate
+// schema, table, index, type or column, or as the unique violation beneath
+// them. Another replica starting, or another test package on the same
+// database, ensuring the outbox, or migrating the run store that also creates
+// it, at the same moment is such a session. The object then exists, made by
+// the other one, so the statement is run once more, and this time IF NOT
+// EXISTS finds it. Any other failure, or a second one, is returned.
+func ensureStatement(ctx context.Context, exec func(context.Context, string) error, statement string) error {
+	err := exec(ctx, statement)
+	if createdConcurrently(err) {
+		err = exec(ctx, statement)
+	}
+	return err
+}
+
+// createdConcurrently is whether err is PostgreSQL refusing to create an object
+// that another session created at the same moment.
+func createdConcurrently(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	switch pgErr.Code {
+	case "42P06", // duplicate_schema
+		"42P07", // duplicate_table, which an index is as well
+		"42710", // duplicate_object, as the table's row type
+		"42701", // duplicate_column
+		"23505": // unique_violation, on the catalog's unique index
+		return true
+	}
+	return false
 }
 
 // RecordEvents writes events in one transaction.
