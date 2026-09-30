@@ -617,7 +617,7 @@ export function readsLine(
 
 /** The words on the choices. */
 export const SHARE_ANSWER = "Share answer"
-export const ALLOW_FOR_AN_HOUR = "Allow for 1 hour"
+const ALLOW_FOR_AN_HOUR = "Allow for 1 hour"
 export const DENY = "Deny"
 
 /** A first name as a possessive ("Raya's"), and "your" for the reader. */
@@ -635,7 +635,7 @@ export function shareAnswerName(asker: string): string {
   return `${SHARE_ANSWER} to ${possessiveName(asker)} request`
 }
 
-export function allowForAnHourName(asker: string): string {
+function allowForAnHourName(asker: string): string {
   return `${ALLOW_FOR_AN_HOUR} for ${possessiveName(asker)} request`
 }
 

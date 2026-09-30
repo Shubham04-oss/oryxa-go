@@ -94,7 +94,7 @@ export function approvedRequest(
   })
 }
 
-/** An ordinary request an agent filed: no consent choices, and decided with Approve or Decline. */
+/** An ordinary request an agent filed: no consent choices, and decided with Share answer or Deny. */
 export function agentRequest(
   overrides: Partial<AgentRequest> = {}
 ): AgentRequest {
