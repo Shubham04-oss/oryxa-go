@@ -149,6 +149,8 @@ function stubApi({
   items = [] as Item[],
   pending = [] as string[],
   created = thread("th_new", ""),
+  /** Conversations Go no longer has (the list may still name them). */
+  gone = [] as string[],
 } = {}) {
   const calls: string[] = []
   vi.stubGlobal(
@@ -168,6 +170,9 @@ function stubApi({
       if (path.endsWith("/get-messages")) return json([])
       const detail = /^\/v1\/organizations\/org_1\/threads\/([^/]+)$/.exec(path)
       if (detail) {
+        if (gone.includes(detail[1])) {
+          return json({ error: { code: "not_found", message: "no" } }, 404)
+        }
         return json({
           ...thread(detail[1], ""),
           items,
@@ -830,6 +835,37 @@ describe("which conversation the chat opens", () => {
       expect(screen.queryByText("New conversation")).toBeNull()
       expect(screen.getByText("Plan the launch")).toBeTruthy()
     })
+  })
+
+  it("says so, and opens a new chat, when the conversation it opened is gone", async () => {
+    stubApi({
+      threads: [thread("th_1", "Plan the launch")],
+      gone: ["th_1"],
+    })
+    renderChat()
+    expect(
+      await screen.findByText("That conversation no longer exists.")
+    ).toBeTruthy()
+    expect(screen.getByText(blank)).toBeTruthy()
+    expect(screen.getByText("New conversation")).toBeTruthy()
+    // And a reload stays on the new chat, not the conversation that is gone.
+    expect(rememberedChoice(scope, LEO)).toBe("new")
+  })
+
+  it("puts a first message back in the composer when the conversation made for it is gone before it was sent", async () => {
+    stubApi({ threads: [], gone: ["th_new"] })
+    renderChat()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    type("Plan the launch")
+
+    expect(
+      await screen.findByText("That conversation no longer exists.")
+    ).toBeTruthy()
+    // Nothing was sent to a conversation that is not there; the words are
+    // back where the member can send them again.
+    expect(hooks.sendMessage).not.toHaveBeenCalled()
+    expect((composer() as HTMLTextAreaElement).value).toBe("Plan the launch")
+    expect(screen.getByText("New conversation")).toBeTruthy()
   })
 
   it("opens the conversation the member chose in this session, however old", async () => {

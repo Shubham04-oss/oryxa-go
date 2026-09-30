@@ -142,12 +142,20 @@ not permission to copy every incidental value into a new component.
   opens a new conversation rather than an old one: the one the member picked
   in this browser session (or the new chat they started) comes first, then
   their latest chat while it was active within the last hour, then one that
-  still waits on their confirmation. A chat left alone for an hour comes back
-  to a new conversation when its tab shows again, never while a run streams
-  or a confirmation waits, and nothing is deleted. A specialist's chat never
-  starts over by itself, since that empties its log: only its New conversation
-  button does. Switching agents keeps each one's conversation and unsent
-  message.
+  still waits on their confirmation; a conversation nothing was ever sent in
+  never counts as the latest. The member can type at once, and if choosing
+  takes over five seconds a new chat opens. A chat left alone for an hour
+  (nothing sent or heard, and no pointer or keys anywhere in the app) comes
+  back to a new conversation when its tab shows again, never while a run
+  streams, a confirmation waits or the Agent overview's viewer or editor is
+  open, and nothing is deleted. A first message, from the composer or from a
+  request elsewhere in the app (Home's box), is made a conversation of its own
+  and sent into it, in order, whatever the member does meanwhile: the chat ends
+  on the latest, no message is dropped, and a request never touches the
+  composer's text. A specialist's chat never starts over by itself, since that
+  empties its log: only its New conversation button does. Switching agents keeps
+  each one's conversation and unsent message. What the panel holds belongs to
+  the member: another member taking over the page inherits none of it.
 - People is a DM area, not teammate administration or a combined “People &
   teams” directory. Recent/started conversations belong in Team's left
   sidebar, with at most three visible there. A DM uses the same dynamic header
