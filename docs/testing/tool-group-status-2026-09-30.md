@@ -3,23 +3,41 @@
 [Finding 8](findings-2026-09-30.md) reports “12 tool calls · Failed” beside a
 good answer, with no failing tool visible in Go logs. It supplies no thread/run
 ID or captured tool-result item. The original incident's cause is **unconfirmed**.
+Claude subsequently confirmed that the test window had no WARN/ERROR tool
+errors or tool-route 4xx/5xx and requested defensive handling of blank errors
+and proven recovery.
 
 The demonstrated bug is narrower: `responseError` treated a present empty or
 whitespace-only error string as “the tool failed.” Both live SSE and restored
 history therefore marked a successful-shaped result `failed: true`. The fix
 treats those strings like an absent error. Nonempty and structured errors keep
-their failure flag and bounded explanation. No frontend status rule changes.
+their failure flag and bounded explanation.
+
+The frontend also distinguishes a recovered attempt from a final failure. It
+keeps the original failed entry and bounded error, but excludes it from the
+group's Failed summary only after a later successful call is proved to be a
+retry. The call must start after that failed result and match the same group,
+tool, known author and explicit arguments (deeply equal, independent of object
+key order). Recovered attempts appear in a muted “Recovered tool error” note
+or count, with their reasons on hover. A later failing attempt keeps the group
+red; a good final answer alone never clears a failure.
+
+Parallel duplicates, different arguments/tools/authors, and missing arguments
+cannot establish recovery. Go omits both empty and oversized tool arguments
+(`threads/items.go`, lines 409–417), so even a real retry in those cases stays
+Failed unless the same call ID's final result itself becomes successful.
 
 ## Status path and producer checks
 
 - [`threads/items.go`](../../agents/primary/internal/threads/items.go), lines
   202–220 and 382–404: canonical function responses become tool-result items;
   `responseError` controls their `failed` and `error` fields.
-- [`timeline.ts`](../../web-next/src/lib/threads/timeline.ts), lines 286–313,
+- [`timeline.ts`](../../web-next/src/lib/threads/timeline.ts), `toolRetryIdentity`
+  and its `tool_call` / `tool_result` branches,
   and [`agent-timeline.tsx`](../../web-next/src/components/agent-timeline.tsx),
-  lines 78–87 and 212–223: tool-result flags become call states; waiting,
-  running, interrupted, then failed take precedence in a group. A good final
-  answer does not erase a real tool failure.
+  `toolGroupState` and `ToolGroup`: tool-result flags become call states;
+  waiting, running, interrupted, then unrecovered failed take precedence in a
+  group. Recovery keys remain internal and never appear in markup or logs.
 - [`apps/internal/httpserver/server.go`](../../apps/internal/httpserver/server.go),
   lines 387–398: `RunView` omits an empty action error. The pinned ADK MCP adapter
   (`google.golang.org/adk/v2@v2.4.0/tool/mcptoolset/tool.go`, lines 130–154)
@@ -61,4 +79,8 @@ and runs an actual ADK recovery where a tool fails but the final answer and run
 succeed. The chat regression in
 [`agent-timeline.test.tsx`](../../web-next/src/components/agent-timeline.test.tsx)
 checks twelve-call history, live, and reconciled rendering, keeping a genuine
-failure visible beside the same good answer.
+failure visible beside the same good answer and showing a proved retry as Done
+with its recovered note. Timeline tests cover parallel duplicates, changed
+arguments (including array order), tools/authors, missing arguments, group
+boundaries, re-failure and same-call final-result replacement. Desktop and
+phone captures use the actual component and production CSS with local fixtures.

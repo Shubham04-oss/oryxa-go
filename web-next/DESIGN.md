@@ -189,7 +189,15 @@ not permission to copy every incidental value into a new component.
   full-width Markdown, labelled only when a sub-agent wrote them; each run of
   tool calls folded into one muted status row with a Thinking Orb for the
   activity state and small app marks when a call identifies an app; the row
-  never expands into a list. A request filed by the agent is a small, quiet
+  never expands into a list. A group stays Failed only for an unrecovered final
+  tool failure. A later successful retry can recover an earlier error only
+  when it starts after that failed result, in the same group, with the same
+  tool, known author and deeply equal explicit arguments. Missing arguments
+  cannot prove a retry; parallel duplicates and unrelated successes do not
+  clear failures. Keep recovered errors in a muted “Recovered tool error”
+  note (or count), with their bounded reasons available on hover. Genuine
+  failures keep the existing red status; waiting, running and interrupted
+  states keep their precedence. A request filed by the agent is a small, quiet
   request card showing its status and its published answer as it arrives;
   only the result authorized for the requester appears. Confirmations are small
   cards with Decline and Approve pills (several waiting are answered together);

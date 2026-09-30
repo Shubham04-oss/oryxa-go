@@ -63,6 +63,47 @@ export type ToolEntry = {
   state: ToolState
   /** A failed result's error. Go never sends a result's content. */
   error?: string
+  /** A matching retry started after this failure and returned successfully. */
+  recovered?: boolean
+}
+
+/** Only explicit JSON arguments and a known author can establish a retry. */
+function toolRetryIdentity(tool: ToolEntry, group: number): string | undefined {
+  if (
+    !tool.tool ||
+    !tool.author ||
+    !tool.arguments ||
+    typeof tool.arguments !== "object" ||
+    Array.isArray(tool.arguments)
+  )
+    return undefined
+  try {
+    return JSON.stringify(
+      [group, tool.tool, tool.author, tool.arguments],
+      (_key, value: unknown) => {
+        if (
+          value === undefined ||
+          typeof value === "function" ||
+          typeof value === "symbol" ||
+          (typeof value === "number" && !Number.isFinite(value))
+        )
+          throw new Error("Tool arguments must be JSON")
+        if (
+          value !== null &&
+          typeof value === "object" &&
+          !Array.isArray(value)
+        )
+          return Object.fromEntries(
+            Object.entries(value).sort(([left], [right]) =>
+              left < right ? -1 : left > right ? 1 : 0
+            )
+          )
+        return value
+      }
+    )
+  } catch {
+    return undefined
+  }
 }
 
 export type ConfirmationEntry = {
@@ -162,6 +203,12 @@ export function buildTimeline(
   const tools = new Map<string, ToolEntry>()
   // Every call, including those with no call id to find them by.
   const calls: ToolEntry[] = []
+  const attempts = new Map<
+    ToolEntry,
+    { start: number; result?: number; identity?: string }
+  >()
+  const failedAttempts = new Map<string, Set<ToolEntry>>()
+  let toolGroup = 0
   const confirmations = new Map<string, ConfirmationEntry>()
   const artifacts = new Set<string>()
   const requests = new Map<string, RequestEntry>()
@@ -248,6 +295,7 @@ export function buildTimeline(
           result: item.result,
           state: "complete",
         }
+        if (entry.role !== "agent") toolGroup += 1
         if (item.id) messages.set(item.id, entry)
         if (drafted) {
           // The finished message takes its draft's place.
@@ -279,6 +327,10 @@ export function buildTimeline(
           state: "running",
         }
         if (item.call_id) tools.set(item.call_id, entry)
+        attempts.set(entry, {
+          start: index,
+          identity: toolRetryIdentity(entry, toolGroup),
+        })
         calls.push(entry)
         entries.push(entry)
         break
@@ -307,6 +359,32 @@ export function buildTimeline(
         if (entry.state !== "declined") {
           entry.state = item.failed ? "failed" : "done"
           entry.error = item.error
+          delete entry.recovered
+          const current = attempts.get(entry)
+          if (current) current.result = index
+          if (current?.identity) {
+            const failed =
+              failedAttempts.get(current.identity) ?? new Set<ToolEntry>()
+            if (entry.state === "failed") {
+              failed.add(entry)
+              failedAttempts.set(current.identity, failed)
+            } else {
+              failed.delete(entry)
+              for (const previous of failed) {
+                const attempt = attempts.get(previous)
+                // A parallel duplicate is no proof of a retry: this call must
+                // have started after the previous call's final failed result.
+                if (
+                  attempt?.result !== undefined &&
+                  attempt.result < current.start
+                ) {
+                  previous.recovered = true
+                  failed.delete(previous)
+                }
+              }
+              if (failed.size === 0) failedAttempts.delete(current.identity)
+            }
+          }
         }
         break
       }
@@ -404,6 +482,7 @@ export function buildTimeline(
       case "run_failed":
         endRun()
         if (item.code === sessionExpiredCode) break
+        toolGroup += 1
         entries.push({
           kind: "run_failed",
           key: uniqueKey(`run_failed:${item.run_id ?? index}`),
