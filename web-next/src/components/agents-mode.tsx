@@ -10,7 +10,7 @@ import {
   SpecialistEntry,
   StatusPill,
 } from "./agents-parts"
-import { agentsErrorMessage, plural } from "./agents-format"
+import { agentsErrorMessage } from "./agents-format"
 import { openRequests } from "./requests-view-open"
 import { SpecialistFocus } from "./specialist-focus"
 import { SpecialistsSection } from "./specialists-section"
