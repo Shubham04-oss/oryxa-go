@@ -279,6 +279,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   window.sessionStorage.clear()
 })
@@ -760,6 +761,38 @@ describe("a request to open a conversation", () => {
     expect(
       screen.getByRole("log").querySelector('[data-from="member"]')?.textContent
     ).toBe("What changed today?")
+  })
+
+  it("counts a request for the conversation already open as the member being there", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    let visibility: DocumentVisibilityState = "visible"
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibility,
+    })
+    stubGo({ threads: [thread("th_1", "Plan the launch")] })
+    withQueries(panel())
+    ;(await socketOn(chatName("th_1"))).open()
+    const title = () =>
+      document.querySelector(".workspace-agent-thread-title")?.textContent
+    const comeBack = (after: number) => {
+      vi.setSystemTime(Date.now() + after)
+      visibility = "visible"
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"))
+      })
+    }
+    await waitFor(() => expect(title()).toBe("Plan the launch"))
+
+    // Nearly an hour on, Home asks for the conversation that is open.
+    vi.setSystemTime(Date.now() + 50 * 60_000)
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
+    comeBack(50 * 60_000)
+    expect(title()).toBe("Plan the launch")
+
+    // An hour after the request, it is left as any other.
+    comeBack(HOUR)
+    expect(title()).toBe("New conversation")
   })
 
   it("waits for the agents list, so what it remembers is kept under the agent's id", async () => {

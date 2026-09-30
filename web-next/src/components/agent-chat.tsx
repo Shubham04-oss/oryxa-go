@@ -362,6 +362,8 @@ export function AgentChat({
           }}
           onFileCreated={onFileCreated}
           onIdle={startNew}
+          inOverview={inOverview}
+          touched={chat.touched}
           onStateChange={(id, next) =>
             setReported({ threadId: id, state: next })
           }
@@ -524,6 +526,8 @@ function ThreadChat({
   onComposingChange,
   onFileCreated,
   onIdle,
+  inOverview,
+  touched,
   onStateChange,
 }: ComposerHandlers & {
   organizationId: string
@@ -536,6 +540,10 @@ function ThreadChat({
   onMissing: () => void
   /** The member came back to a conversation left alone for an hour: the chat moves on to a new one. */
   onIdle: () => void
+  /** The focused Agent overview is open, with its viewer or editor: the member is at work in it. */
+  inOverview: boolean
+  /** Counts what the member or the app just did here (a request, a first message), such as opening the conversation already open. */
+  touched: number
   /** What this thread is doing: a run streams, a confirmation waits on the member, or neither. */
   onStateChange: (threadId: string, state: ChatState) => void
   onFileCreated?: (file: {
@@ -784,9 +792,14 @@ function ThreadChat({
       : "idle"
   // A tab left open overnight comes back to a new chat rather than
   // yesterday's: when it shows again (its tab visible, its window focused)
-  // after an hour with nothing sent or heard, and nothing streaming or
-  // waiting on the member. Opening the conversation counts as activity, so
-  // one the member just chose is never taken from them. Nothing is deleted.
+  // after an hour with nothing done here, and nothing streaming or waiting
+  // on the member. Nothing is deleted. What counts as something done is what
+  // the member does anywhere in the app: sending, hearing an answer, opening
+  // this conversation (even when it is already open: a request for it), and
+  // pointer and keyboard in the page. A file's viewer or editor is a frame of
+  // its own that takes the pointer and the keys, and focus coming back from it
+  // is not the member returning: while the focused Agent overview is open the
+  // chat is never left, and closing it starts the hour afresh.
   // How much the conversation holds, so that a reconnect handing over the
   // same messages again is not taken for something heard.
   const said = useMemo(
@@ -796,20 +809,30 @@ function ThreadChat({
   )
   useEffect(() => {
     lastActivity.current = Date.now()
-  }, [said, running])
+  }, [said, running, touched, inOverview])
   const cameBack = useEffectEvent(() => {
     if (document.visibilityState === "hidden") return
-    if (running || actionable.size > 0) return
+    if (running || actionable.size > 0 || pending || inOverview) return
     if (Date.now() - lastActivity.current < FRESH_CONVERSATION_MS) return
     onIdle()
   })
   useEffect(() => {
     const onReturn = () => cameBack()
+    const onActivity = () => {
+      lastActivity.current = Date.now()
+    }
     document.addEventListener("visibilitychange", onReturn)
     window.addEventListener("focus", onReturn)
+    const options = { capture: true, passive: true }
+    for (const type of ["pointerdown", "keydown", "wheel"]) {
+      document.addEventListener(type, onActivity, options)
+    }
     return () => {
       document.removeEventListener("visibilitychange", onReturn)
       window.removeEventListener("focus", onReturn)
+      for (const type of ["pointerdown", "keydown", "wheel"]) {
+        document.removeEventListener(type, onActivity, options)
+      }
     }
   }, [])
 

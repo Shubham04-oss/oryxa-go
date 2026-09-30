@@ -221,6 +221,7 @@ function ChatHost({
   agent = LEO,
   viewer = scope.userId,
   initial,
+  inOverview = false,
 }: {
   remember?: boolean
   agent?: string | null
@@ -228,6 +229,8 @@ function ChatHost({
   viewer?: string
   /** What the chat holds to begin with, when it is not a fresh chat. */
   initial?: PrimaryChat
+  /** The focused Agent overview is open. */
+  inOverview?: boolean
 }) {
   const asViewer = { ...scope, userId: viewer }
   const [chat, dispatch] = useReducer(
@@ -244,6 +247,7 @@ function ChatHost({
       agentName="Leo"
       chat={chat}
       dispatch={dispatch}
+      inOverview={inOverview}
       onComposingChange={vi.fn()}
     />
   )
@@ -973,6 +977,56 @@ describe("a conversation left alone", () => {
     // The socket reconnected in the background: the same messages, again.
     updateChat({ messages: [...hooks.chat.messages] })
     comeBack(20 * 60_000)
+    expect(onNewChat()).toBe(true)
+  })
+
+  it("counts the member's pointer, keys and scrolling anywhere in the page as activity", async () => {
+    await openThread()
+    comeBack(50 * 60_000)
+    fireEvent.pointerDown(document.body)
+    comeBack(50 * 60_000)
+    expect(onNewChat()).toBe(false)
+
+    fireEvent.keyDown(document.body, { key: "a" })
+    comeBack(50 * 60_000)
+    expect(onNewChat()).toBe(false)
+
+    fireEvent.wheel(document.body)
+    comeBack(50 * 60_000)
+    expect(onNewChat()).toBe(false)
+
+    // An hour with none of it, and the chat is left.
+    comeBack(HOUR)
+    expect(onNewChat()).toBe(true)
+  })
+
+  it("is never left while the Agent overview's viewer or editor is open, and its hour starts afresh when that closes", async () => {
+    // A file's viewer or editor is a frame that keeps the pointer and the
+    // keys; focus coming back from it is not the member returning.
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    function Overview() {
+      const [viewing, setViewing] = useState(true)
+      return (
+        <>
+          <button type="button" onClick={() => setViewing(false)}>
+            Close overview
+          </button>
+          <ChatHost inOverview={viewing} />
+        </>
+      )
+    }
+    renderWithQueries(<Overview />)
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+
+    comeBack(3 * HOUR, "focus")
+    comeBack(2 * HOUR)
+    expect(onNewChat()).toBe(false)
+
+    fireEvent.click(screen.getByRole("button", { name: "Close overview" }))
+    comeBack(30 * 60_000)
+    expect(onNewChat()).toBe(false)
+    comeBack(31 * 60_000)
     expect(onNewChat()).toBe(true)
   })
 
