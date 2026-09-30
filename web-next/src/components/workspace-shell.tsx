@@ -754,6 +754,7 @@ function WorkspaceShellContent({
                   role="menuitem"
                   onClick={() => {
                     setProfileMenuOpen(false)
+                    setSettingsPage(undefined)
                     setSettingsOpen(true)
                   }}
                 >
@@ -1057,6 +1058,11 @@ function WorkspaceShellContent({
       />
       {settingsOpen && (
         <WorkspaceSettings
+          key={JSON.stringify([
+            "settings",
+            selectedOrganization?.id ?? session?.organizations[0]?.id,
+            viewerId,
+          ])}
           onClose={closeSettings}
           initialPage={settingsPage}
           identity={currentIdentity}
@@ -1070,7 +1076,7 @@ function WorkspaceShellContent({
           onOpenTools={() => {
             setActiveMode("home")
             setSectionsByMode((current) => ({ ...current, home: "tools" }))
-            setSettingsOpen(false)
+            closeSettings()
             if (isMobile) setLeftExpanded(false)
           }}
         />

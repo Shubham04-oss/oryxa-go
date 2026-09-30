@@ -367,6 +367,10 @@ not permission to copy every incidental value into a new component.
   access, email, and billing administration inside Settings, opened from the
   user menu. Keep the simple Organization tab in that single Settings surface;
   do not split account and organization into separate full-page settings apps.
+  A generic Settings entry opens Account on the member's first visit, then
+  their last section in this browser, remembered per member and workspace.
+  Unavailable or no longer permitted remembered sections fall back to Account.
+  Explicit Billing and Slack entry points still open the requested section.
 - Knowledge Bases is a Home destination. Tools is also under Home. Connected
   tools form one horizontal, logo-led row with expandable details. The browse
   catalog is categorized and uses two sleek cards per row at normal and small

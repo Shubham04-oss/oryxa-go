@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   ArrowLeft,
   Building2,
@@ -27,17 +27,13 @@ import { WorkspaceEmailSettings } from "./workspace-email-settings"
 import { SlackMark, WorkspaceSlackSettings } from "./slack-settings"
 import { WorkspaceBillingSettings } from "./workspace-billing-settings"
 import { cn } from "@/lib/utils"
+import {
+  rememberedSettingsPage,
+  rememberSettingsPage,
+} from "@/lib/settings/page-choice"
+import type { SettingsPage } from "@/lib/settings/page-choice"
 
-export type SettingsPage =
-  | "account"
-  | "organization"
-  | "people"
-  | "teams"
-  | "tools"
-  | "signin"
-  | "slack"
-  | "email"
-  | "billing"
+export type { SettingsPage } from "@/lib/settings/page-choice"
 
 const pageTitles: Record<SettingsPage, string> = {
   account: "Account",
@@ -62,7 +58,7 @@ export function WorkspaceSettings({
   signingOut,
   signOutError,
   onOpenTools,
-  initialPage = "people",
+  initialPage,
 }: {
   onClose: () => void
   identity: AvatarIdentity
@@ -76,14 +72,39 @@ export function WorkspaceSettings({
   onOpenTools: () => void
   initialPage?: SettingsPage
 }) {
-  const [page, setPage] = useState<SettingsPage>(initialPage)
   const organization = selectedOrganization || session?.organizations[0]
+  const scope =
+    !preview && session && organization
+      ? { organizationId: organization.id, userId: session.user.id }
+      : null
+  const [selectedPage, setPage] = useState<SettingsPage>(
+    () => initialPage ?? rememberedSettingsPage(scope) ?? "account"
+  )
   // Organization admins only, and only once Oryxa's own sign-in is on.
   const signinApps = useSigninAppsAvailable({
     organizationId: organization?.id,
     role: organizationRole,
     preview,
   })
+  const admin = organizationRole === "owner" || organizationRole === "admin"
+  // A remembered section must still be offered to this member. Explicit
+  // returns keep their page and its own permission/service explanation.
+  const page =
+    !initialPage &&
+    ((selectedPage === "slack" && !admin) ||
+      (selectedPage === "signin" && !signinApps))
+      ? "account"
+      : selectedPage
+  const organizationId = scope?.organizationId
+  const userId = scope?.userId
+  useEffect(() => {
+    // Do not replace a remembered Sign-in section while availability loads.
+    if (selectedPage === "signin" && !signinApps) return
+    rememberSettingsPage(
+      organizationId && userId ? { organizationId, userId } : null,
+      selectedPage
+    )
+  }, [organizationId, userId, selectedPage, signinApps])
 
   return (
     <div
