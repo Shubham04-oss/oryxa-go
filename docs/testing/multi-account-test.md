@@ -26,7 +26,7 @@ Oryxa caches Slack profiles for 24 hours, so fix any mismatch before the first a
 
 | Account | Role | Who drives it | Browser | Round 1 |
 |---|---|---|---|---|
-| O / H1 | workspace owner, holder | owner | owner's main browser | approves **Summary only** |
+| O / H1 | workspace owner, holder | owner | owner's main browser | approves **Share answer** |
 | A | plain member (not an admin) | owner | a second browser profile | asks |
 | H2 | member, holder | Claude | Claude's built-in browser | approves **Allow for 1 hour** (excerpts) |
 | H3 | member, holder | Claude | Chrome, a separate profile | **Deny** |
@@ -79,15 +79,15 @@ A posts each ask in `#oryxa-test` as its own message. One message may name up to
 
 | # | A posts | Holder does | Expected |
 |---|---|---|---|
-| 1 | `@Oryxa @H1 When does Project Falcon launch?` | Summary only | In the thread: a short answer with 14 October. |
+| 1 | `@Oryxa @H1 When does Project Falcon launch?` | Share answer | In the thread: a short answer with 14 October. |
 | 2 | `@Oryxa @H2 How many backend engineers does the Q4 hiring plan add?` | Allow for 1 hour | In the thread: an answer with three backend engineers; it may quote the note. |
 | 3 | `@Oryxa @H3 Which observability vendors are on the shortlist?` | Deny | A polite refusal. No vendor names anywhere. |
 | 4 | `@Oryxa @H4 When is the Berlin partner meeting?` | nothing | Observe: without background access, H4's agent can't read the note. It should end cleanly, with no answer and no leak. Note exactly what A and H4 see. |
-| 5 | `@Oryxa @H5 What's the staging support line and the demo key?` | Summary only | The answer is held for H5's review: "includes a phone number", with a masked preview. H5 picks **Send masked**. The key never appears in full, and the thread shows the masked answer. |
+| 5 | `@Oryxa @H5 What's the staging support line and the demo key?` | Share answer | The answer is held for H5's review: "includes a phone number", with a masked preview. H5 picks **Send masked**. The key never appears in full, and the thread shows the masked answer. |
 
 **The holder's prompt comes both ways, and the first choice wins:**
-- a bot DM with *Share AI summary only / Give access for 1 hour / Deny*;
-- a card in Agents → Requests → Inbox with *Summary only / Allow for 1 hour / Deny*.
+- a bot DM with *Share answer / Allow for 1 hour / Deny*;
+- a card in Agents → Requests → Inbox, or in Home's Needs you, with the same three.
 
 A gets a private acknowledgement. An approved answer is posted in the thread, where the whole channel sees it.
 
@@ -96,7 +96,7 @@ A gets a private acknowledgement. An approved answer is posted in the thread, wh
 A may have **at most five asks open**, and an unanswered ask stays open for 24 hours. H4's ask from round 1 is still open, so it isn't asked again:
 
 1. H4 turns on background agent access and signs in again.
-2. H4 answers their round-1 prompt with **Summary only**.
+2. H4 answers their round-1 prompt with **Share answer**.
 3. A asks asks 1, 2, 3 and 5 again, as new messages, and H1, H2, H3 and H5 each approve.
 
 **Pass: five correct answers, each built only from its holder's note.** Round 1's other asks are closed by then (answered or denied), so A never has more than five open.

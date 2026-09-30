@@ -51,7 +51,7 @@ does two jobs.
    commits, Jira assignees, SharePoint owners) Switchboard finds the person
    directly responsible.
 6. **Ask the owner privately.** The owner gets a direct message with a card and
-   three choices: **Share an AI summary only**, **Give access for 1 hour**, or
+   three choices: **Share answer**, **Allow for 1 hour**, or
    **Deny**.
 7. **One click, once.** The first click wins. The card turns into a read-only
    confirmation ("Approved by Alice at 14:02") on every device, so nothing can
@@ -102,7 +102,7 @@ The same operator works for the person it belongs to.
 - **Rules by attribute.** Policies speak in departments, roles,
   confidentiality and relationships, for example: no direct reading of
   restricted material across departments without the owner's consent.
-- **Timed access.** "Give access for 1 hour" becomes a lease: a permit whose
+- **Timed access.** "Allow for 1 hour" becomes a lease: a permit whose
   window travels in the request's context, so it stops working the moment it
   expires, with no clean-up job.
 - **Executive override.** An executive's question skips manual approval, but

@@ -519,10 +519,10 @@ provider refuses or apps does not recognize.
 
 The Slack consent loop (`docs/design/slack-implementation.md`) lets a member
 @-mention Oryxa in a channel to ask a question. Oryxa asks the person who would
-know, in a direct message with three buttons (share an AI summary only, give
-access for an hour, or deny), and their agent answers in the asker's thread only
-if they approve. When the answer is a credential, its owner types it into Oryxa
-and the member who asked opens it there, once; it never goes through Slack.
+know, in a direct message with three buttons (Share answer, Allow for 1 hour,
+or Deny), and their agent answers in the asker's thread only if they approve.
+When the answer is a credential, its owner types it into Oryxa and the member
+who asked opens it there, once; it never goes through Slack.
 
 It ships off, behind one switch: `slack_app_ready`, declared in
 `production/secrets.tf`, `false` unless `production/slack.auto.tfvars.json` says

@@ -538,7 +538,7 @@ have are 400.
 
 | Template | Goes to | Params | Says |
 | --- | --- | --- | --- |
-| `owner_notice` | a direct message | `asker_user_id` or `asker_name`; `question`; `tickets` `{summary, access, deny}` | The asker, the question, and three buttons: **Share AI summary only**, **Give access for 1 hour**, **Deny**, whose values are the tickets, passed along and never read or logged. Nothing else |
+| `owner_notice` | a direct message | `asker_user_id` or `asker_name`; `question`; `tickets` `{summary, access, deny}` | The asker, the question, and three buttons: **Share answer**, **Allow for 1 hour**, **Deny**, whose values are the tickets, passed along and never read or logged. Nothing else |
 | `notice_settled` | a direct message | asker; `question`; `decision` (`approved_summary`, `approved_access`, `denied`, `answered_by_other`, `expired`, `withdrawn`); `decided_by_user_id` or `_name`; `decided_at` | The same asker and question, no buttons, and "Approved by … at …". For `chat.update` |
 | `ask_ack` | a thread or one person in it | `owners` `[{user_id\|name}]` (1–5); `open_url` (a page of the web app, or nothing) | "Asked Raya and Maya · Open in Oryxa" |
 | `answer` | a thread or a direct message | `text`; `owner_name`; `mode` (`summary`, `access`, `lease`, `bypass`) | The text, and "From Raya's agent · approved by Raya (AI summary only)". Names the owner and never mentions them |

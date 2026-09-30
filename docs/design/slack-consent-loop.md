@@ -77,7 +77,7 @@ router ─▶ organization agent: @raya, @maya ─▶ members by verified email 
   interactions: one ask ─▶ two requests in parallel (asker's agent ─▶ Raya's, ─▶ Maya's)
 requested.v1 ─┬▶ apps ─▶ asker, ephemeral: "Asked Raya and Maya · Open in Oryxa"
               ├▶ apps ─▶ Raya, Maya, DM notice: asker, question,
-              │    [Share AI summary only] [Give access for 1 hour] [Deny]
+              │    [Share answer] [Allow for 1 hour] [Deny]
               ├▶ realtime ─▶ Worker ─▶ Oryxa DMs (asker·Raya, asker·Maya): cards, inboxes
               └▶ threads.Note ─▶ each participant's Requests thread
 Raya clicks, in Slack or on the DM card ─▶ Consent ─▶ Store.Decide row lock: first click wins
@@ -96,8 +96,8 @@ A request from Slack asks for both `consent:summary` and `consent:access`, so ei
 
 | Button | Decision | Granted | What the answer may be |
 |---|---|---|---|
-| Share AI summary only | approved | `consent:summary` | A summary: no run of 20 or more words copied from the source, and no source links. For a secret, only where it lives |
-| Give access for 1 hour | approved | both | Excerpts. For 60 minutes, an `interaction_leases` row approves the asker's follow-ups in that thread. A secret goes out as a one-time view that expires within the hour |
+| Share answer | approved | `consent:summary` | A summary: no run of 20 or more words copied from the source, and no source links. For a secret, only where it lives |
+| Allow for 1 hour | approved | both | Excerpts. For 60 minutes, an `interaction_leases` row approves the asker's follow-ups in that thread. A secret goes out as a one-time view that expires within the hour |
 | Deny | rejected | none | The asker is told, ephemerally |
 
 **Parallel owners.**
@@ -138,7 +138,7 @@ An ungrounded answer is held for the owner's review.
 
 ### Secrets
 
-Neither the thread nor a bypass ever carries a secret. With "Give access for 1 hour" or a bypass, the answer is sealed (`internal/secrets`, `service=oryxa-agents`) as a one-time view in the Oryxa DM.
+Neither the thread nor a bypass ever carries a secret. With "Allow for 1 hour" or a bypass, the answer is sealed (`internal/secrets`, `service=oryxa-agents`) as a one-time view in the Oryxa DM.
 - The owner may paste the value in themselves, so it never passes through a model.
 - The asker opens it once, in their own session. It is deleted when viewed or when it expires.
 - The owner can revoke it before then.
@@ -309,7 +309,7 @@ After that: remembered consent, N-of-M, claiming, takeover, Cedar, ownership fro
 | Decision | Recommended default |
 |---|---|
 | The shape of authority | The owner defines it; `Outranks` returns false until then |
-| What "Give access for 1 hour" grants | Excerpts, plus the same asker's follow-ups in that thread; secrets as a one-time view |
+| What "Allow for 1 hour" grants | Excerpts, plus the same asker's follow-ups in that thread; secrets as a one-time view |
 | What work that starts in Slack may read | Knowledge now; Oryxa-brokered apps later; never Composio |
 | Who sees a Deny | The asker, ephemerally |
 | How answers are attributed in the thread | "From Raya's agent · approved by Raya (AI summary only)" |
