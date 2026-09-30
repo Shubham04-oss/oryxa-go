@@ -1,0 +1,58 @@
+{
+  "text": "<@U0ASKER> is asking you a question through Oryxa.",
+  "blocks": [
+    {
+      "text": {
+        "text": "<@U0ASKER> is asking you through Oryxa:\n> When is the launch?\n> And who signs it off?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "consent",
+      "elements": [
+        {
+          "action_id": "consent_summary",
+          "text": {
+            "emoji": false,
+            "text": "Share answer",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.summary.sig"
+        },
+        {
+          "action_id": "consent_access",
+          "text": {
+            "emoji": false,
+            "text": "Allow for 1 hour",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.access.sig"
+        },
+        {
+          "action_id": "consent_deny",
+          "text": {
+            "emoji": false,
+            "text": "Deny",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.deny.sig"
+        },
+        {
+          "action_id": "reply",
+          "text": {
+            "emoji": false,
+            "text": "Reply yourself",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.reply.sig"
+        }
+      ],
+      "type": "actions"
+    }
+  ]
+}

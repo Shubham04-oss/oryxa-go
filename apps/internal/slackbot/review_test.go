@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	reviewTickets       = `"tickets":{"send":"t1.send.sig","withhold":"t1.withhold.sig"}`
-	reviewTicketsMasked = `"tickets":{"send":"t1.send.sig","send_masked":"t1.masked.sig","withhold":"t1.withhold.sig"}`
+	reviewTickets          = `"tickets":{"send":"t1.send.sig","withhold":"t1.withhold.sig"}`
+	reviewTicketsMasked    = `"tickets":{"send":"t1.send.sig","send_masked":"t1.masked.sig","withhold":"t1.withhold.sig"}`
+	reviewTicketsWithReply = `"tickets":{"send":"t1.send.sig","withhold":"t1.withhold.sig","reply":"t1.reply.sig"}`
 )
 
 // agentsReasons are the reasons agents' surfaces name for holding an answer, in

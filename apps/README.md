@@ -37,7 +37,7 @@ agents ── internal API, purpose slack ──▶ apps ── posts, updates �
 
 Beside all that, apps is the gateway of **Oryxa's Slack bot**: one Slack app
 that workspaces install, through which people ask Oryxa a question by mentioning
-it and owners answer with three buttons. It is off unless `APPS_SLACK_SURFACE`
+it and owners answer with a button, or in their own words. It is off unless `APPS_SLACK_SURFACE`
 is set, and is described in [The Slack surface](#the-slack-surface).
 
 ## Composio holds the credentials, apps holds the rules
@@ -314,10 +314,12 @@ first):
 
 One Slack app, installed by a workspace for one organization. Slack carries
 three things and nothing else: the **entry** (an @-mention of the bot), the
-**owner's notice** (a direct message with three buttons) and the **answer**.
+**owner's notice** (a direct message with four buttons, the fourth opening a
+modal for the owner's own reply) and the **answer**.
 Everything that decides anything happens in agents, which reads what arrived
 from apps and asks apps to post. Apps is the gateway and keeps four
-promises: it answers Slack inside its three seconds without calling anything;
+promises: it answers Slack inside its three seconds without calling anything
+(but Slack itself, to open the reply's modal, which Slack allows only then);
 it puts ids and nothing else on the bus; it is the only place the bot's token
 exists; and it says only what its templates let it say.
 
@@ -374,8 +376,9 @@ scheme (`X-Slack-Signature`, `v0:{timestamp}:{body}`, hex HMAC-SHA256, five
 minutes' tolerance), the signing secret from `APPS_SLACK_APP`, and answers
 Slack's `url_verification`. Only then does `slackbot` see it.
 
-- **Taken:** `app_mention`, `app_uninstalled`, `tokens_revoked`, and a click on
-  a button (`block_actions`, form-encoded with the JSON in `payload`). Anything
+- **Taken:** `app_mention`, `app_uninstalled`, `tokens_revoked`, a click on
+  a button (`block_actions`, form-encoded with the JSON in `payload`), and Send
+  on the reply's modal (`view_submission` of the callback `oryxa_reply`). Anything
   else is acknowledged and dropped, as is a delivery for a workspace with no
   active install, a mention by the bot itself, and one whose ids are not Slack's.
 - **Deduped** on the event's `event_id`, or for a click on the SHA-256 of its
@@ -386,6 +389,18 @@ Slack's `url_verification`. Only then does `slackbot` see it.
   and the database gets a **2 s deadline** (`hooks.DefaultSurfaceDeadline`).
   When it cannot record in time the answer is 503 and nothing is marked, so
   Slack's retry (at once, after a minute, after five) is handled.
+- **Reply yourself is the one exception.** Slack opens a modal only with the
+  click's `trigger_id`, once and within three seconds, so a click on it opens
+  the modal before it is answered: `views.open`, with the bot token (opened with
+  KMS when it is not cached), inside the same deadline, and nothing recorded.
+  `views.open` needs no scope. The modal says who asked what, read from the
+  clicked message's own blocks (the bot's, as Slack sends them back with the
+  click), and carries the button's ticket and the message in
+  `private_metadata`. Send is answered at once: nothing, which closes the
+  modal, or `{"response_action":"errors"}` for a reply that is empty or over
+  4000 characters (the box itself stops at Slack's 3000), which is kept
+  nowhere. A reply that is sent is recorded as an inbound of kind `reply` with
+  `apps.slack.action.received.v1`, as a click is.
 - `app_uninstalled` ends the install, and so does `tokens_revoked` when it names
   the bot's own user (a revoked user token is no concern of a bot that holds
   none). Either may arrive first; the second finds nothing to end.
@@ -454,7 +469,10 @@ For a click, `kind` is `action` and `message`'s fields are replaced by
 `action_id` (`consent_summary`, `consent_access` or `consent_deny` on a notice;
 `review_send`, `review_send_masked` or `review_withhold` on a held answer's
 review) and `action_value`, the button's opaque ticket. `message_ts` and `thread_ts` are
-the message that was clicked. `mentions` leaves the bot out; `channel_type` and
+the message that was clicked. A reply sent from the modal is `kind` `reply`:
+`action_id` `reply`, `action_value` the Reply yourself button's ticket, `text`
+the owner's words, and `message_ts` and `thread_ts` the message the button was
+on. `mentions` leaves the bot out; `channel_type` and
 `ext_shared` are there only when Slack said.
 
 `POST /v1/internal/apps/slack/profiles` — `{"organization_id","user_ids":[…]}`
@@ -539,16 +557,16 @@ have are 400.
 
 | Template | Goes to | Params | Says |
 | --- | --- | --- | --- |
-| `owner_notice` | a direct message | `asker_user_id` or `asker_name`; `question`; `tickets` `{summary, access, deny}` | The asker, the question, and three buttons: **Share answer**, **Allow for 1 hour**, **Deny**, whose values are the tickets, passed along and never read or logged. Nothing else |
-| `notice_settled` | a direct message | asker; `question`; `decision` (`approved_summary`, `approved_access`, `denied`, `answered_by_other`, `expired`, `withdrawn`); `decided_by_user_id` or `_name`; `decided_at` | The same asker and question, no buttons, and "Approved by … at …". For `chat.update` |
+| `owner_notice` | a direct message | `asker_user_id` or `asker_name`; `question`; `tickets` `{summary, access, deny, reply}` (`reply` optional) | The asker, the question, and three buttons: **Share answer**, **Allow for 1 hour**, **Deny**, and **Reply yourself** when there is a `reply` ticket, whose values are the tickets, passed along and never read or logged. Nothing else |
+| `notice_settled` | a direct message | asker; `question`; `decision` (`approved_summary`, `approved_access`, `denied`, `answered_by_other`, `expired`, `withdrawn`, `replied`); `decided_by_user_id` or `_name`; `decided_at`; `reply` (for `replied` alone, and optional) | The same asker and question, no buttons, and "Approved by … at …", or for `replied` "You replied at …" and the reply, cut to 1,500 characters. For `chat.update` |
 | `ask_ack` | a thread or one person in it | `owners` `[{user_id\|name}]` (1–5); `open_url` (a page of the web app, or nothing) | "Asked Raya and Maya · Open in Oryxa" |
-| `answer` | a thread or a direct message | `text`; `owner_name`; `mode` (`summary`, `access`, `lease`, `bypass`) | The text, and "From Raya's agent · approved by Raya (AI summary only)". Names the owner and never mentions them |
+| `answer` | a thread or a direct message | `text`; `owner_name`; `mode` (`summary`, `access`, `lease`, `bypass`, `reply`) | The text, and "From Raya's agent · approved by Raya (AI summary only)"; for `reply`, the owner's own words, "Raya replied:" and the text. Names the owner and never mentions them |
 | `status` | a thread, one person in it, or a direct message | `state` (`waiting`, `working`, `held`, `denied`, `expired`, `failed`, `answered_elsewhere`); `owner_name` | One content-free line, such as "The answer is held for Raya's review." |
 | `refusal` | a thread or one person in it | `reason` (`not_member`, `owner_not_member`, `group_dm`, `external_channel`, `no_owner`, `too_many_asks`, `screen_failed`, `not_work`, `no_grant`, `owner_department`; `injection`, `implausible` and any other are a plain no); `organization_name`; `user_id` or `name` | Fixed wording, never the question |
 | `private_note` | a thread or one person in it | none | "Answered privately." |
 | `bypass_notice` | a direct message | asker; `question`; `reason` (`priority_channel`, `org_chart`); `channel_id` | Tells an owner at once that their agent answered without asking |
-| `held_review` | a direct message | asker; `question`; `reasons` (1–20 codes: `irrelevant`, `ungrounded`, `no_sources`, `copied`, `link`, `denied_topic`, `email`, `phone`, `address`, `off_topic`, `personal_life`, `health`, `hr`, `compensation`, `others_private`, `credentials`, `unchecked`, `policy`; any other is said as "Oryxa flagged it for your review."); `preview`; `masked`; `tickets` `{send, send_masked, withhold}` (`send_masked` exactly when `masked`); or `secret` with no preview and no tickets | The one message that shows a held answer, to its owner alone: the asker, the question, why it was held in plain words, the answer (its masked version when there is one, cut to 1,500 characters), and **Send**, **Send masked**, **Don't send**. For a secret: no answer and no buttons, "Review it in Oryxa" |
-| `held_review_settled` | a direct message | asker; `question`; `outcome` (`sent`, `sent_masked`, `not_sent`, `decided_elsewhere`, `expired`, `answered_by_other`); `decided_at` | The same asker and question, no answer, no buttons: "Sent at …", "Already decided in Oryxa", "Not sent: the time to review it ran out". For `chat.update` |
+| `held_review` | a direct message | asker; `question`; `reasons` (1–20 codes: `irrelevant`, `ungrounded`, `no_sources`, `copied`, `link`, `denied_topic`, `email`, `phone`, `address`, `off_topic`, `personal_life`, `health`, `hr`, `compensation`, `others_private`, `credentials`, `unchecked`, `policy`; any other is said as "Oryxa flagged it for your review."); `preview`; `masked`; `tickets` `{send, send_masked, withhold, reply}` (`send_masked` exactly when `masked`; `reply` optional); or `secret` with no preview and no tickets | The one message that shows a held answer, to its owner alone: the asker, the question, why it was held in plain words, the answer (its masked version when there is one, cut to 1,500 characters), and **Send**, **Send masked**, **Don't send**, and **Reply yourself** when there is a `reply` ticket. For a secret: no answer and no buttons, "Review it in Oryxa" |
+| `held_review_settled` | a direct message | asker; `question`; `outcome` (`sent`, `sent_masked`, `not_sent`, `decided_elsewhere`, `expired`, `answered_by_other`, `replied`); `decided_at`; `reply` (for `replied` alone, and optional) | The same asker and question, no answer, no buttons: "Sent at …", "Already decided in Oryxa", "Not sent: the time to review it ran out", or "You replied at …" and the reply, never the held answer. For `chat.update` |
 
 ### Retention
 

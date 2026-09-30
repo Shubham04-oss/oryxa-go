@@ -1,0 +1,19 @@
+{
+  "text": "You replied at 2026-10-01 09:30 UTC",
+  "blocks": [
+    {
+      "text": {
+        "text": "<@U0ASKER> asked you through Oryxa:\n> When is the launch?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*You replied* at <!date^1790847000^{date_short_pretty} {time}|2026-10-01 09:30 UTC>:\n> It moved to the 21st.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

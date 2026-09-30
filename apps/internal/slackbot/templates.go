@@ -42,7 +42,8 @@ const (
 
 // The buttons of an owner's notice, by their action ids: what the owner is
 // asked to choose between. A button's value is its ticket, which says the
-// same thing again, signed.
+// same thing again, signed. The notice's fourth button, Reply yourself, is
+// ActionReply (reply.go), which chooses nothing and opens a modal.
 const (
 	ActionSummary = "consent_summary"
 	ActionAccess  = "consent_access"
@@ -279,19 +280,22 @@ type ownerNoticeParams struct {
 	AskerName   string `json:"asker_name"`
 	Question    string `json:"question"`
 	// Tickets are the buttons' values: one per choice, opaque to apps, which
-	// only passes them along and never reads or logs them.
+	// only passes them along and never reads or logs them. Reply is Reply
+	// yourself's, which a notice has unless it asks for a secret.
 	Tickets struct {
 		Summary string `json:"summary"`
 		Access  string `json:"access"`
 		Deny    string `json:"deny"`
+		Reply   string `json:"reply"`
 	} `json:"tickets"`
 }
 
 // renderOwnerNotice is the owner's notice, in a direct message: who is asking,
-// what, and three buttons. It says nothing else. The owner decides with what
-// they see here and on the card in Oryxa, which holds the rest. The buttons'
-// words are the card's, from web-next/src/components/request-card-format.ts
-// (Share answer, Allow for 1 hour, Deny): keep the two the same.
+// what, and three buttons, and a fourth, Reply yourself, when it has a ticket
+// for it. It says nothing else. The owner decides with what they see here and
+// on the card in Oryxa, which holds the rest. The buttons' words are the card's,
+// from web-next/src/components/request-card-format.ts (Share answer, Allow for
+// 1 hour, Deny, Reply yourself): keep the two the same.
 func renderOwnerNotice(r renderer, raw json.RawMessage) (Rendered, error) {
 	var p ownerNoticeParams
 	if err := decodeParams(raw, &p); err != nil {
@@ -309,15 +313,22 @@ func renderOwnerNotice(r renderer, raw json.RawMessage) (Rendered, error) {
 			return Rendered{}, err
 		}
 	}
+	buttons := []any{
+		button(ActionSummary, "Share answer", p.Tickets.Summary),
+		button(ActionAccess, "Allow for 1 hour", p.Tickets.Access),
+		button(ActionDeny, "Deny", p.Tickets.Deny),
+	}
+	if p.Tickets.Reply != "" {
+		if err := checkTicket("reply", p.Tickets.Reply); err != nil {
+			return Rendered{}, err
+		}
+		buttons = append(buttons, button(ActionReply, replyLabel, p.Tickets.Reply))
+	}
 	return Rendered{
 		Text: asker + " is asking you a question through Oryxa.",
 		Blocks: []any{
 			section(asker + " is asking you through Oryxa:\n" + quoted(r.shown(p.Question, maxQuestionRunes))),
-			actionsBlock("consent",
-				button(ActionSummary, "Share answer", p.Tickets.Summary),
-				button(ActionAccess, "Allow for 1 hour", p.Tickets.Access),
-				button(ActionDeny, "Deny", p.Tickets.Deny),
-			),
+			actionsBlock("consent", buttons...),
 		},
 	}, nil
 }
@@ -337,7 +348,8 @@ func checkTicket(name, ticket string) error {
 	return nil
 }
 
-// The decisions a notice can settle into.
+// The decisions a notice can settle into. DecisionReplied is the owner having
+// answered it themself, in their own words, on either surface.
 const (
 	DecisionSummary   = "approved_summary"
 	DecisionAccess    = "approved_access"
@@ -345,6 +357,7 @@ const (
 	DecisionAnswered  = "answered_by_other"
 	DecisionExpired   = "expired"
 	DecisionWithdrawn = "withdrawn"
+	DecisionReplied   = "replied"
 )
 
 type noticeSettledParams struct {
@@ -357,6 +370,10 @@ type noticeSettledParams struct {
 	DecidedByUserID string     `json:"decided_by_user_id"`
 	DecidedByName   string     `json:"decided_by_name"`
 	DecidedAt       *time.Time `json:"decided_at"`
+	// Reply is what the owner replied, for DecisionReplied, as it was sent; it
+	// is left out of a reply that is not to be shown in Slack, to a question
+	// that asked for a secret.
+	Reply string `json:"reply"`
 }
 
 // renderNoticeSettled is a notice after it was decided: the same asker and
@@ -382,9 +399,14 @@ func renderNoticeSettled(r renderer, raw json.RawMessage) (Rendered, error) {
 		outcome = "answer shared"
 	case DecisionAccess:
 		outcome = "access for 1 hour"
+	case DecisionReplied:
+		return renderReplied(r, asker, p.Question, p.Reply, p.DecidedAt)
 	case DecisionDenied, DecisionWithdrawn, DecisionExpired, DecisionAnswered:
 	default:
 		return Rendered{}, invalid("decision %q is not one a notice settles into", truncate(p.Decision, 32))
+	}
+	if p.Reply != "" {
+		return Rendered{}, invalid("reply is said of a notice the owner replied to, and no other")
 	}
 	who, err := r.mention(person{UserID: p.DecidedByUserID, Name: p.DecidedByName}, "")
 	if err != nil {
@@ -504,12 +526,14 @@ func joinNames(names []string) string {
 	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
-// The modes an answer was allowed in, which its attribution says.
+// The modes an answer was allowed in, which its attribution says. ModeReply is
+// an answer its owner wrote themself, which says whose it is and nothing else.
 const (
 	ModeSummary = "summary"
 	ModeAccess  = "access"
 	ModeLease   = "lease"
 	ModeBypass  = "bypass"
+	ModeReply   = "reply"
 )
 
 type answerParams struct {
@@ -521,7 +545,9 @@ type answerParams struct {
 // renderAnswer is an owner's agent's answer, with who it is from and what the
 // owner allowed. It is for a thread or a direct message. It names the owner
 // and never mentions them: an answer must not page the person who has already
-// been asked.
+// been asked. An answer the owner wrote themself (ModeReply) says so before
+// their words, "Raya replied:", and nothing of an agent's or of what they
+// allowed.
 func renderAnswer(r renderer, raw json.RawMessage) (Rendered, error) {
 	var p answerParams
 	if err := decodeParams(raw, &p); err != nil {
@@ -533,6 +559,15 @@ func renderAnswer(r renderer, raw json.RawMessage) (Rendered, error) {
 	owner, err := r.named(p.OwnerName, "owner_name")
 	if err != nil {
 		return Rendered{}, err
+	}
+	if p.Mode == ModeReply {
+		line := owner + " replied:"
+		body := r.shown(p.Text, maxAnswerRunes)
+		blocks := []any{contextBlock(line)}
+		for _, part := range splitSections(body, maxSectionRunes) {
+			blocks = append(blocks, section(part))
+		}
+		return Rendered{Text: plain(line) + " " + firstRunes(plain(body), 200), Blocks: blocks}, nil
 	}
 	var line string
 	switch p.Mode {

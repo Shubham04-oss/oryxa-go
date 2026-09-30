@@ -62,17 +62,28 @@ func (s *Service) Webhook() integration.Webhook {
 }
 
 // Deliver takes a verified delivery. It reads and writes the database and
-// nothing else, so hooks can answer Slack inside its three seconds. What it
-// cannot use it drops: Slack retries on an error, and a delivery that will
-// never be usable would only be sent again.
-func (s *Service) Deliver(ctx context.Context, kind, key string, _ http.Header, body []byte, receivedAt time.Time) error {
+// nothing else, so hooks can answer Slack inside its three seconds, with one
+// exception Slack itself makes: a click on Reply yourself opens its modal, which
+// only a click that fresh may do (reply.go). What it cannot use it drops: Slack
+// retries on an error, and a delivery that will never be usable would only be
+// sent again.
+func (s *Service) Deliver(ctx context.Context, kind, key string, header http.Header, body []byte, receivedAt time.Time) error {
+	_, err := s.DeliverAndAnswer(ctx, kind, key, header, body, receivedAt)
+	return err
+}
+
+// DeliverAndAnswer is Deliver, and what the response to Slack carries: nothing,
+// which is an empty 200, for everything but the submission of a reply that
+// cannot be sent as it stands, whose modal is answered with what is wrong
+// (hooks.AnsweringSurface).
+func (s *Service) DeliverAndAnswer(ctx context.Context, kind, key string, _ http.Header, body []byte, receivedAt time.Time) (json.RawMessage, error) {
 	switch kind {
 	case KindEvents:
-		return s.deliverEvent(ctx, key, body, receivedAt.UTC())
+		return nil, s.deliverEvent(ctx, key, body, receivedAt.UTC())
 	case KindInteractivity:
 		return s.deliverInteraction(ctx, key, body, receivedAt.UTC())
 	}
-	return fmt.Errorf("slackbot: no such kind of delivery: %q", kind)
+	return nil, fmt.Errorf("slackbot: no such kind of delivery: %q", kind)
 }
 
 // eventEnvelope is the Events API wrapper: what the delivery is, and which
@@ -239,8 +250,8 @@ func (s *Service) installEnded(ctx context.Context, key string, install Install,
 	return nil
 }
 
-// interaction is the JSON of a click, which arrives in the payload field of a
-// form.
+// interaction is the JSON of a click, or of a modal's submission, which arrives
+// in the payload field of a form.
 type interaction struct {
 	Type string `json:"type"`
 	User struct {
@@ -257,39 +268,55 @@ type interaction struct {
 	Channel struct {
 		ID string `json:"id"`
 	} `json:"channel"`
-	Message struct {
-		TS string `json:"ts"`
-	} `json:"message"`
-	Actions []struct {
+	// Message is the message the click was on, as Slack keeps it: for the
+	// Reply yourself button, whose first block says who asked what.
+	Message clickedMessage `json:"message"`
+	// TriggerID is what lets the click open a modal, for three seconds.
+	TriggerID string `json:"trigger_id"`
+	Actions   []struct {
 		ActionID string `json:"action_id"`
 		Value    string `json:"value"`
 		Type     string `json:"type"`
 	} `json:"actions"`
+	// View is the modal a view_submission sends (reply.go).
+	View submittedView `json:"view"`
 }
 
-func (s *Service) deliverInteraction(ctx context.Context, key string, body []byte, at time.Time) error {
+// deliverInteraction takes a click, or a modal's submission, and answers what
+// the response to Slack carries: nothing, for everything but a reply that
+// cannot be sent as it stands (reply.go).
+func (s *Service) deliverInteraction(ctx context.Context, key string, body []byte, at time.Time) (json.RawMessage, error) {
 	form, err := url.ParseQuery(string(body))
 	if err != nil || form.Get("payload") == "" {
 		s.logger.DebugContext(ctx, "a Slack interaction with no payload was dropped")
-		return nil
+		return nil, nil
 	}
 	var click interaction
 	if err := json.Unmarshal([]byte(form.Get("payload")), &click); err != nil {
 		s.logger.DebugContext(ctx, "a Slack interaction that could not be read was dropped")
-		return nil
+		return nil, nil
+	}
+	if click.Type == "view_submission" {
+		return s.submitReply(ctx, key, click, at)
 	}
 	if click.Type != "block_actions" || len(click.Actions) == 0 || click.Actions[0].Type != "button" {
-		// Modals, shortcuts and menus are not the surface's: it has buttons.
+		// Shortcuts, menus and other modals are not the surface's: it has
+		// buttons, and the one modal a button opens.
 		s.logger.DebugContext(ctx, "a Slack interaction of a kind the surface does not take was dropped", "type", truncate(click.Type, 32))
-		return nil
+		return nil, nil
 	}
 	install, found, err := s.installFor(ctx, teamsOfClick(click))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !found {
 		s.logger.InfoContext(ctx, "a Slack click for a workspace with no active install was dropped")
-		return nil
+		return nil, nil
+	}
+	if click.Actions[0].ActionID == ActionReply {
+		// Reply yourself decides nothing and is recorded nowhere: it opens the
+		// modal, now, while its trigger lasts.
+		return nil, s.openReply(ctx, install, click)
 	}
 	action := click.Actions[0]
 	channel := firstNonEmpty(click.Container.ChannelID, click.Channel.ID)
@@ -298,11 +325,11 @@ func (s *Service) deliverInteraction(ctx context.Context, key string, body []byt
 	case !channelIDPattern.MatchString(channel), !userIDPattern.MatchString(click.User.ID), !tsPattern.MatchString(ts),
 		action.ActionID == "" || len(action.ActionID) > maxActionIDBytes, len(action.Value) > maxActionValueBytes:
 		s.logger.WarnContext(ctx, "a Slack click of a shape the surface does not know was dropped", "team_id", install.TeamID)
-		return nil
+		return nil, nil
 	}
 	id, err := newID(s.random, "asi_")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// A click has no thread of its own: the message it was on is its thread.
 	inbound := Inbound{
@@ -314,17 +341,17 @@ func (s *Service) deliverInteraction(ctx context.Context, key string, body []byt
 		InboundID: id, OrganizationID: install.OrganizationID, TeamID: install.TeamID, ReceivedAt: at,
 	}, at)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	recorded, err := s.store.RecordInbound(ctx, key, at, inbound, notice)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if recorded {
 		// Not the button's value: it is a ticket.
 		s.logger.InfoContext(ctx, "slack click recorded", "inbound_id", id, "organization_id", install.OrganizationID, "team_id", install.TeamID)
 	}
-	return nil
+	return nil, nil
 }
 
 func teamsOfClick(click interaction) []string {

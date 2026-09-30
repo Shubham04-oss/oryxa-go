@@ -102,7 +102,8 @@ type InboundView struct {
 	ID             string `json:"id"`
 	OrganizationID string `json:"organization_id"`
 	TeamID         string `json:"team_id"`
-	// Kind is message for an @-mention and action for a click.
+	// Kind is message for an @-mention, action for a click, and reply for an
+	// owner's own answer sent from the modal of Reply yourself.
 	Kind       string    `json:"kind"`
 	ReceivedAt time.Time `json:"received_at"`
 	ChannelID  string    `json:"channel_id"`
@@ -124,7 +125,9 @@ type InboundView struct {
 	ExtShared   bool     `json:"ext_shared,omitempty"`
 
 	// For a click: which button, and its value, which for Oryxa's notices is
-	// an opaque ticket.
+	// an opaque ticket. A reply has the Reply yourself button and its ticket
+	// here, and its words in Text; its channel and message are the message the
+	// button was on.
 	ActionID    string `json:"action_id,omitempty"`
 	ActionValue string `json:"action_value,omitempty"`
 }
