@@ -114,6 +114,69 @@ afterEach(() => {
 })
 
 describe("WorkspaceShell navigation", () => {
+  it("preserves the same member's workspace state on refresh and resets the whole shell for another member", async () => {
+    liveBackend()
+    const props = {
+      session,
+      selectedOrganization: session.organizations[0],
+      role: "member" as const,
+      organizationRole: "member" as const,
+    }
+    const view = render(<WorkspaceShell {...props} />)
+    fireEvent.change(
+      await screen.findByRole("textbox", {
+        name: "Start a new conversation",
+      }),
+      { target: { value: "Member's unfinished Home message" } }
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
+    fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
+
+    view.rerender(
+      <WorkspaceShell
+        {...props}
+        session={{
+          ...session,
+          user: { ...session.user, display_name: "Member refreshed" },
+        }}
+      />
+    )
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
+    expect(
+      view.container
+        .querySelector(".workspace-shell")
+        ?.getAttribute("data-left")
+    ).toBe("expanded")
+    expect(
+      screen.getByDisplayValue("Member's unfinished Home message")
+    ).toBeTruthy()
+
+    view.rerender(
+      <WorkspaceShell
+        {...props}
+        session={{
+          ...session,
+          user: {
+            id: "usr_other_shell",
+            email: "other@sim.oryxa",
+            display_name: "Other member",
+          },
+        }}
+      />
+    )
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
+    const shell = view.container.querySelector(".workspace-shell")
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+    expect(shell?.getAttribute("data-right")).toBe("collapsed")
+    expect(
+      screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: "Start a new conversation",
+      }).value
+    ).toBe("")
+  })
+
   it("clears Home's private composer draft when the member changes in the same workspace", async () => {
     liveBackend()
     const props = {

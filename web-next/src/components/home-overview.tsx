@@ -140,7 +140,7 @@ export function HomeOverview({
     refetchInterval: AGENT_REQUESTS_POLL_MS,
   })
   const threads = useQuery({
-    ...privateRead(threadListQueryOptions(org), viewer),
+    ...privateRead(threadListQueryOptions(org, viewer), viewer),
     enabled,
   })
   const connections = useQuery({

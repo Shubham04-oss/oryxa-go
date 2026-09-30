@@ -128,6 +128,8 @@ not permission to copy every incidental value into a new component.
   - Scope the primary panel's retained conversation and draft to the current
     workspace and member. A scope change remounts that panel; Home must not
     treat the previous scope's activity as current.
+    A member change remounts the entire shell, clearing open dialogs, navigation
+    and drafts. Refreshing the same member's session preserves their choices.
   - At most three rows per section; All opens the relevant section.
     Hide sections that have nothing. With no decisions, tool confirmations or
     failures, keep one quiet line alongside any real recent conversations.

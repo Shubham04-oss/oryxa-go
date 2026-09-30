@@ -146,7 +146,7 @@ export function WorkspaceShell(
 ) {
   return (
     <OpenRequestProvider value={openRequest}>
-      <WorkspaceShellContent {...props} />
+      <WorkspaceShellContent key={props.session?.user.id} {...props} />
     </OpenRequestProvider>
   )
 }
@@ -177,10 +177,6 @@ function WorkspaceShellContent({
   const viewerId = session?.user.id
   // DMs are the signed-in member's, in the organization they have open.
   const dmOrganizationId = session ? selectedOrganization?.id : undefined
-  const primaryChatActivity = usePrimaryChatActivity({
-    organizationId: dmOrganizationId ?? "",
-    userId: viewerId ?? "",
-  })
   // A DM the page may open: with someone other than the member, by an id a
   // DM's name can hold.
   const openable = (peerId: string | null | undefined): string | null =>
@@ -236,6 +232,13 @@ function WorkspaceShellContent({
   // online. The DM open in the main canvas is `dmPeerId`, under People.
   const inbox = useInbox(dmOrganizationId, viewerId)
   const dmPeople = useDmPeople(dmOrganizationId, viewerId, teamspaces.spaces)
+  const directMessages = viewerId
+    ? { viewerId, inbox, people: dmPeople }
+    : undefined
+  const primaryChatActivity = usePrimaryChatActivity({
+    organizationId: dmOrganizationId ?? "",
+    userId: directMessages?.viewerId ?? "",
+  })
   const [dmPeerId, setDmPeerId] = useState<string | null>(firstDm)
   // The member opened it just now: focus goes into it.
   const [dmOpenedByMember, setDmOpenedByMember] = useState(false)
@@ -501,11 +504,14 @@ function WorkspaceShellContent({
   }
 
   function openHomeConversation(target: PrimaryChatTarget) {
-    if (!selectedOrganization || !session) return
+    if (!selectedOrganization || !directMessages) return
     closePrimaryWork()
     expandAgentPanel()
     requestPrimaryChat(
-      { organizationId: selectedOrganization.id, userId: session.user.id },
+      {
+        organizationId: selectedOrganization.id,
+        userId: directMessages.viewerId,
+      },
       target
     )
   }
@@ -1046,9 +1052,7 @@ function WorkspaceShellContent({
         getScreenContext={getScreenContext}
         chatRequest={chatRequest}
         tabRequest={tabRequest}
-        directMessages={
-          viewerId ? { viewerId, inbox, people: dmPeople } : undefined
-        }
+        directMessages={directMessages}
         teamspaceId={pageTeamspaceId}
       />
       {settingsOpen && (
