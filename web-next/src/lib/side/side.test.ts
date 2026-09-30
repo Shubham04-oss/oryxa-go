@@ -18,7 +18,6 @@ import {
   resultText,
   statusLineText,
 } from "./asking"
-import { sideConversationPath } from "./client"
 import { parseSideConversationName, sideConversationName } from "./names"
 import {
   SIDE_MAX_AGENT_TEXT,
@@ -40,9 +39,6 @@ describe("a side conversation's name", () => {
       userA: "user-a",
       userB: "user-b",
     })
-    expect(sideConversationPath("org_sim", "tsp_1", "user-b", "user-a")).toBe(
-      "/agents/side-conversation-agent/org_sim~tsp_1~user-a~user-b"
-    )
     for (const refused of [
       "org_sim~tsp_1~user-b~user-a",
       "org_sim~tsp_1~user-a~user-a",

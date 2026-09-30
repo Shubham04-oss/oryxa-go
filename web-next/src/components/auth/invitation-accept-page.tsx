@@ -133,10 +133,7 @@ export function InvitationAcceptPage({ token }: { token?: string }) {
           </AuthNotice>
         )}
       <p className="auth-footer">
-        <Link
-          to="/"
-          search={{ org: undefined, view: undefined, dm: undefined }}
-        >
+        <Link to="/" search={{ org: undefined, view: undefined }}>
           Back to workspace
         </Link>
       </p>

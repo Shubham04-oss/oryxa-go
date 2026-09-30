@@ -1432,7 +1432,7 @@ describe("the primary chat's activity", () => {
 })
 
 describe("WorkspaceAgentPanel", () => {
-  it("names the member's primary agent and hides the switcher with one agent", async () => {
+  it("names the member's primary agent in the panel's own row, with no tabs to switch", async () => {
     stubApi({ threads: [] })
     renderWithQueries(
       <WorkspaceAgentPanel
@@ -1445,9 +1445,12 @@ describe("WorkspaceAgentPanel", () => {
     expect(
       await screen.findByRole("textbox", { name: "Message Leo" })
     ).toBeTruthy()
+    expect(screen.queryByRole("tab")).toBeNull()
     expect(screen.queryByRole("group", { name: "Switch agent" })).toBeNull()
     expect(
-      within(screen.getByRole("tab", { name: "Agents" })).getByLabelText("Leo")
+      within(
+        screen.getByRole("complementary", { name: "Agent panel" })
+      ).getByLabelText("Leo")
     ).toBeTruthy()
   })
 })

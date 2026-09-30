@@ -5,10 +5,6 @@
 @import "./workspace.css";
 @import "./components/workspace-tools.css";
 @import "./components/people-management.css";
-@import "./components/people-directory.css";
-@import "./components/direct-messages.css";
-@import "./components/side-conversations.css";
-@import "./components/teamspaces.css";
 @import "./components/workspace-settings.css";
 @import "./components/knowledge-bases.css";
 @import "./components/auth/auth.css";
