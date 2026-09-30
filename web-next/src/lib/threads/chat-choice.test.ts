@@ -3,6 +3,7 @@ import { act, renderHook } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   FRESH_CONVERSATION_MS,
+  MAX_WAITING_MESSAGES,
   PRIMARY_DRAFT,
   chooseThread,
   claimPrimaryChatRequest,
@@ -218,19 +219,163 @@ describe("remembered choice", () => {
   })
 })
 
+/** Claims every request still waiting, so no test leaves one for the next. */
+function drainRequests() {
+  const { result, unmount } = renderHook(() => usePrimaryChatRequest())
+  while (result.current) {
+    const { id } = result.current
+    act(() => {
+      claimPrimaryChatRequest(id)
+    })
+  }
+  unmount()
+}
+
 describe("requestPrimaryChat", () => {
+  afterEach(drainRequests)
+
   it("hands each request to the chat with a growing id", () => {
     const { result } = renderHook(() => usePrimaryChatRequest())
     act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "t1" }))
     const first = result.current
     expect(first).toMatchObject({ kind: "thread", threadId: "t1", scope })
+    act(() => claimPrimaryChatRequest(first!.id))
     act(() => requestPrimaryChat(scope, { kind: "new", message: "Hello" }))
     expect(result.current).toMatchObject({ kind: "new", message: "Hello" })
     expect(result.current!.id).toBeGreaterThan(first!.id)
   })
+
+  it("keeps every request until it is claimed, and hands them over oldest first, each once", () => {
+    const { result } = renderHook(() => usePrimaryChatRequest())
+    act(() => {
+      requestPrimaryChat(scope, { kind: "new", message: "First" })
+      requestPrimaryChat(scope, { kind: "thread", threadId: "t1" })
+      requestPrimaryChat(scope, { kind: "new", message: "Third" })
+    })
+    // The later requests did not replace the first.
+    const handed: unknown[] = []
+    while (result.current) {
+      const request = result.current
+      handed.push(request.kind === "new" ? request.message : request.threadId)
+      const claims: boolean[] = []
+      act(() => {
+        claims.push(claimPrimaryChatRequest(request.id))
+        // Claimed, it is gone: not claimed again.
+        claims.push(claimPrimaryChatRequest(request.id))
+      })
+      expect(claims).toEqual([true, false])
+    }
+    expect(handed).toEqual(["First", "t1", "Third"])
+  })
+
+  it("does not hand a request over again once it is claimed, however often the chat reads", () => {
+    act(() => requestPrimaryChat(scope, { kind: "new", message: "Once" }))
+    const first = renderHook(() => usePrimaryChatRequest())
+    const id = first.result.current!.id
+    act(() => {
+      claimPrimaryChatRequest(id)
+    })
+    expect(first.result.current).toBeNull()
+    // A chat that mounts afterwards finds nothing to act on.
+    const later = renderHook(() => usePrimaryChatRequest())
+    expect(later.result.current).toBeNull()
+  })
+
+  it("hands over one member's requests without waiting behind another's", () => {
+    const other = { organizationId: "org-1", userId: "user-2" }
+    act(() => {
+      requestPrimaryChat(other, { kind: "new", message: "Theirs" })
+      requestPrimaryChat(scope, { kind: "new", message: "Mine" })
+    })
+    const mine = renderHook(() => usePrimaryChatRequest(scope))
+    expect(mine.result.current).toMatchObject({ message: "Mine", scope })
+    const theirs = renderHook(() => usePrimaryChatRequest(other))
+    expect(theirs.result.current).toMatchObject({ message: "Theirs" })
+    // Without a scope, whoever came first.
+    const anyone = renderHook(() => usePrimaryChatRequest())
+    expect(anyone.result.current).toMatchObject({ message: "Theirs" })
+
+    act(() => {
+      claimPrimaryChatRequest(mine.result.current!.id)
+    })
+    expect(mine.result.current).toBeNull()
+    expect(theirs.result.current).toMatchObject({ message: "Theirs" })
+  })
+
+  describe("when more messages wait than the chat may hold", () => {
+    const say = (message: string, from = scope) =>
+      act(() => requestPrimaryChat(from, { kind: "new", message }))
+    const waiting = () => {
+      const seen: NonNullable<ReturnType<typeof usePrimaryChatRequest>>[] = []
+      const { result } = renderHook(() => usePrimaryChatRequest())
+      while (result.current) {
+        const request = result.current
+        seen.push(request)
+        act(() => {
+          claimPrimaryChatRequest(request.id)
+        })
+      }
+      return seen
+    }
+
+    it("refuses the one past the limit, and pushes no older message out to make room", () => {
+      for (let count = 1; count <= MAX_WAITING_MESSAGES; count += 1) {
+        say(`Message ${count}`)
+      }
+      say("One too many")
+      const requests = waiting()
+      expect(requests).toHaveLength(MAX_WAITING_MESSAGES + 1)
+      const kept = requests.slice(0, MAX_WAITING_MESSAGES)
+      // Every message that was in is still in, in order, and none is marked.
+      expect(
+        kept.map((request) => "message" in request && request.message)
+      ).toEqual(
+        Array.from(
+          { length: MAX_WAITING_MESSAGES },
+          (_, index) => `Message ${index + 1}`
+        )
+      )
+      expect(kept.some((request) => request.refused)).toBe(false)
+      // The one after them says so, and still has its words.
+      expect(requests.at(-1)).toMatchObject({
+        message: "One too many",
+        refused: true,
+      })
+    })
+
+    it("makes room again as the chat takes messages", () => {
+      for (let count = 1; count <= MAX_WAITING_MESSAGES; count += 1) {
+        say(`Message ${count}`)
+      }
+      const { result } = renderHook(() => usePrimaryChatRequest())
+      act(() => {
+        claimPrimaryChatRequest(result.current!.id)
+      })
+      say("Room for this one")
+      expect(waiting().at(-1)).toMatchObject({ message: "Room for this one" })
+      expect(waiting()).toEqual([])
+    })
+
+    it("counts only messages, and only this member's", () => {
+      const other = { organizationId: "org-1", userId: "user-2" }
+      for (let count = 1; count <= MAX_WAITING_MESSAGES; count += 1) {
+        say(`Theirs ${count}`, other)
+      }
+      // Another member's messages take none of this member's room, and a
+      // request that only opens a conversation is never refused.
+      say("Mine")
+      act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "t1" }))
+      act(() => requestPrimaryChat(scope, { kind: "new", message: "   " }))
+      const mine = waiting().filter((request) => request.scope === scope)
+      expect(mine).toHaveLength(3)
+      expect(mine.some((request) => request.refused)).toBe(false)
+    })
+  })
 })
 
 describe("claiming a request", () => {
+  afterEach(drainRequests)
+
   it("lets a request be acted on once, however often it is asked", () => {
     const { result } = renderHook(() => usePrimaryChatRequest())
     act(() => requestPrimaryChat(scope, { kind: "new", message: "Hello" }))
@@ -494,7 +639,7 @@ describe("the primary chat's state", () => {
     expect(run([{ type: "submit", text: "  " }], typed)).toBe(typed)
   })
 
-  it("puts a message no conversation could be made for back in an empty composer, and never over one", () => {
+  it("keeps a message no conversation could be made for as not sent, and never touches the composer", () => {
     const failed = (draft: string) =>
       run(
         [
@@ -506,16 +651,20 @@ describe("the primary chat's state", () => {
         run([{ type: "decide", thread: "t_old" }])
       )
 
-    const empty = failed("")
-    expect(empty.drafts[PRIMARY_DRAFT]).toBe("From Home")
-    expect(empty.unsent).toBeNull()
-    // A blank chat, not the conversation it was on.
-    expect(states(empty)).toEqual({ thread: null, shown: null, waiting: [] })
-    expect(empty.notice).toBe("Couldn't start a conversation.")
-
-    const busy = failed("Half a thought")
-    expect(busy.drafts[PRIMARY_DRAFT]).toBe("Half a thought")
-    expect(busy.unsent).toBe("From Home")
+    for (const draft of ["", "Half a thought"]) {
+      const chat = failed(draft)
+      expect(chat.drafts[PRIMARY_DRAFT]).toBe(draft)
+      expect(chat.unsent).toEqual([
+        {
+          id: 1,
+          text: "From Home",
+          screen: undefined,
+          notice: "Couldn't start a conversation.",
+        },
+      ])
+      // A blank chat, not the conversation it was on.
+      expect(states(chat)).toEqual({ thread: null, shown: null, waiting: [] })
+    }
   })
 
   it("goes on to what waited behind a message that failed", () => {
@@ -525,7 +674,155 @@ describe("the primary chat's state", () => {
       { type: "failed", id: 1, notice: "Couldn't start a conversation." },
     ])
     expect(firstMessage(chat)).toMatchObject({ id: 2, text: "Second" })
-    expect(chat.drafts[PRIMARY_DRAFT]).toBe("First")
+    expect(chat.unsent.map((message) => message.text)).toEqual(["First"])
+    expect(chat.drafts[PRIMARY_DRAFT]).toBeUndefined()
+  })
+
+  describe("a message that was not sent", () => {
+    const failedFirst = () =>
+      run([
+        ask(1, { kind: "new", message: "First" }),
+        { type: "failed", id: 1, notice: "Couldn't start a conversation." },
+      ])
+
+    it("stays through every later request, send, move and step, until the member acts on it", () => {
+      const later = run(
+        [
+          ask(2, { kind: "new", message: "Second" }),
+          ...delivered(2, "t_b"),
+          ask(3, { kind: "thread", threadId: "t_x" }),
+          { type: "move", thread: null, notice: "Gone." },
+          { type: "submit", text: "Third" },
+          { type: "making", id: -1 },
+          { type: "failed", id: -1, notice: "Down again." },
+          { type: "draft", key: PRIMARY_DRAFT, text: "Typing" },
+        ],
+        failedFirst()
+      )
+      // Oldest first: the first message is still there, and so is the third.
+      expect(later.unsent.map((message) => message.text)).toEqual([
+        "First",
+        "Third",
+      ])
+      expect(later.unsent.map((message) => message.notice)).toEqual([
+        "Couldn't start a conversation.",
+        "Down again.",
+      ])
+    })
+
+    it("is sent again as a send of its own, last in line, from the screen it was first sent from", () => {
+      const screen = { view: "home/overview", visible_items: [] }
+      const chat = run([
+        {
+          type: "request",
+          request: { kind: "new", message: "First", id: 1, scope },
+          screen,
+        },
+        { type: "failed", id: 1, notice: "Down." },
+        ask(2, { kind: "new", message: "Second" }),
+        { type: "retry", id: 1 },
+      ])
+      expect(chat.unsent).toEqual([])
+      expect(
+        chat.tasks.map((task) => task.kind === "send" && task.text)
+      ).toEqual(["Second", "First"])
+      // Not the id it had: a step still coming for the failed one lands nowhere.
+      const retried = chat.tasks[1]
+      expect(retried.id).toBeLessThan(0)
+      expect(retried).toMatchObject({ kind: "send", screen })
+      expect(
+        primaryChatReducer(chat, { type: "made", id: 1, threadId: "t_late" })
+      ).toBe(chat)
+      expect(chat.touched).toBe(3)
+
+      // Second has its turn, then the retried message its own conversation.
+      const done = run(
+        [...delivered(2, "t_b"), ...delivered(retried.id, "t_c")],
+        chat
+      )
+      expect(states(done)).toEqual({ thread: "t_c", shown: "t_c", waiting: [] })
+    })
+
+    it("is also what a message the chat had no room for becomes: kept, and nothing sent", () => {
+      const refused = (message: string, id: number): PrimaryChatAction => ({
+        type: "refused",
+        request: { kind: "new", message, id, scope, refused: true },
+        notice: "Too many messages were waiting.",
+      })
+      const chat = run([
+        ask(1, { kind: "new", message: "First" }),
+        refused("  Extra  ", 2),
+      ])
+      expect(chat.unsent).toEqual([
+        {
+          id: 2,
+          text: "Extra",
+          screen: undefined,
+          notice: "Too many messages were waiting.",
+        },
+      ])
+      // Nothing is waiting to be sent for it, and it counts as the member's doing.
+      expect(chat.tasks.map((task) => task.id)).toEqual([1])
+      expect(chat.touched).toBe(2)
+      // Without words there is nothing to keep.
+      expect(primaryChatReducer(chat, refused("   ", 3))).toBe(chat)
+
+      // And like any other, it can be sent again.
+      const again = run([{ type: "retry", id: 2 }], chat)
+      expect(
+        again.tasks.map((task) => task.kind === "send" && task.text)
+      ).toEqual(["First", "Extra"])
+    })
+
+    it("can fail again, and is then one message again, not two", () => {
+      const again = run(
+        [
+          { type: "retry", id: 1 },
+          { type: "making", id: -1 },
+          { type: "failed", id: -1, notice: "Still down." },
+        ],
+        failedFirst()
+      )
+      expect(again.unsent).toEqual([
+        { id: -1, text: "First", screen: undefined, notice: "Still down." },
+      ])
+    })
+
+    it("goes into the composer to be changed only while the composer is empty", () => {
+      const empty = run([{ type: "edit", id: 1 }], failedFirst())
+      expect(empty.drafts[PRIMARY_DRAFT]).toBe("First")
+      expect(empty.unsent).toEqual([])
+
+      // Whitespace is nothing to protect.
+      const blank = run(
+        [
+          { type: "draft", key: PRIMARY_DRAFT, text: "  " },
+          { type: "edit", id: 1 },
+        ],
+        failedFirst()
+      )
+      expect(blank.drafts[PRIMARY_DRAFT]).toBe("First")
+
+      const busy = run(
+        [{ type: "draft", key: PRIMARY_DRAFT, text: "Half a thought" }],
+        failedFirst()
+      )
+      expect(primaryChatReducer(busy, { type: "edit", id: 1 })).toBe(busy)
+    })
+
+    it("can be let go, and a second click or a stale id changes nothing", () => {
+      const chat = failedFirst()
+      const gone = run([{ type: "dismiss", id: 1 }], chat)
+      expect(gone.unsent).toEqual([])
+      for (const stale of [
+        { type: "dismiss", id: 1 },
+        { type: "retry", id: 1 },
+        { type: "edit", id: 1 },
+      ] satisfies PrimaryChatAction[]) {
+        expect(primaryChatReducer(gone, stale)).toBe(gone)
+      }
+      expect(primaryChatReducer(chat, { type: "dismiss", id: 9 })).toBe(chat)
+    })
   })
 
   it("ignores a step for a message that is gone", () => {
@@ -593,10 +890,19 @@ describe("the primary chat's state", () => {
       { type: "submit", text: "Hello" },
     ])
     const id = firstMessage(first)!.id
-    const reset = primaryChatReducer(first, { type: "reset" })
+    const failed = run(
+      [
+        ask(7, { kind: "new", message: "Not sent" }),
+        { type: "failed", id: 7, notice: "Down." },
+      ],
+      first
+    )
+    expect(failed.unsent).toHaveLength(1)
+    const reset = primaryChatReducer(failed, { type: "reset" })
     expect(reset.thread).toBeUndefined()
     expect(reset.tasks).toEqual([])
     expect(reset.drafts).toEqual({})
+    expect(reset.unsent).toEqual([])
     expect(reset.touched).toBe(0)
 
     const next = run([{ type: "submit", text: "Hi" }], reset)

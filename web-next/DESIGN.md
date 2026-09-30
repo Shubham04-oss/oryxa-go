@@ -202,10 +202,17 @@ not permission to copy every incidental value into a new component.
   request elsewhere in the app (Home's box), is made a conversation of its own
   and sent into it, in order, whatever the member does meanwhile: the chat ends
   on the latest, no message is dropped, and a request never touches the
-  composer's text. A specialist's chat never starts over by itself, since that
-  empties its log: only its New conversation button does. Switching agents keeps
-  each one's conversation and unsent message. What the panel holds belongs to
-  the member: another member taking over the page inherits none of it.
+  composer's text. One that can't be sent stays at the end of the log, in
+  whichever conversation is open, as their bubble with "Not sent." and the
+  reason under it, and Retry (into a conversation of its own), Edit (into the
+  composer, only while that is empty) and Dismiss: nothing else clears it, and
+  it is never put in the composer by itself. A request waits until the panel
+  takes it (once the member's agents have loaded), in the order it was made;
+  past twenty messages waiting, the next is refused the same way. A
+  specialist's chat never starts over by itself, since that empties its log:
+  only its New conversation button does. Switching agents keeps each one's
+  conversation and unsent message. What the panel holds belongs to the member:
+  another member taking over the page inherits none of it.
 - People is a DM area, not teammate administration or a combined “People &
   teams” directory. Recent/started conversations belong in Team's left
   sidebar, with at most three visible there. A DM uses the same dynamic header

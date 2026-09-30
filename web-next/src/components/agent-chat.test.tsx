@@ -285,6 +285,12 @@ function renderChat() {
 
 const composer = () => screen.getByRole("textbox", { name: "Message Leo" })
 
+/** The words of every message in the log that was not sent, in order. */
+const notSentWords = () =>
+  Array.from(
+    screen.getByRole("log").querySelectorAll('[data-status="not-sent"]')
+  ).map((message) => message.textContent)
+
 function type(text: string) {
   fireEvent.change(composer(), { target: { value: text } })
   fireEvent.keyDown(composer(), { key: "Enter" })
@@ -852,19 +858,20 @@ describe("which conversation the chat opens", () => {
     expect(rememberedChoice(scope, LEO)).toBe("new")
   })
 
-  it("puts a first message back in the composer when the conversation made for it is gone before it was sent", async () => {
+  it("keeps a first message as not sent, and leaves the composer alone, when the conversation made for it is gone before it was sent", async () => {
     stubApi({ threads: [], gone: ["th_new"] })
     renderChat()
     expect(await screen.findByText(blank)).toBeTruthy()
     type("Plan the launch")
 
     expect(
-      await screen.findByText("That conversation no longer exists.")
+      await screen.findByText("Not sent. That conversation no longer exists.")
     ).toBeTruthy()
-    // Nothing was sent to a conversation that is not there; the words are
-    // back where the member can send them again.
+    // Nothing was sent to a conversation that is not there; the words wait as
+    // a message of their own, and the composer is still the member's.
     expect(hooks.sendMessage).not.toHaveBeenCalled()
-    expect((composer() as HTMLTextAreaElement).value).toBe("Plan the launch")
+    expect(notSentWords()).toEqual(["Plan the launch"])
+    expect((composer() as HTMLTextAreaElement).value).toBe("")
     expect(screen.getByText("New conversation")).toBeTruthy()
   })
 
@@ -1240,6 +1247,108 @@ describe("a conversation left alone", () => {
     comeBack(0, "focus")
     expect(onNewChat()).toBe(false)
     expect(rememberedChoice(scope, LEO)).toBe("th_1")
+  })
+})
+
+describe("a first message that was not sent", () => {
+  const blank = "Ask anything to start a conversation."
+  const down = "The agents service is down."
+  /** A chat that holds these messages as not sent, as the panel would. */
+  const holding = (...words: string[]): PrimaryChat => ({
+    ...initialPrimaryChat(),
+    unsent: words.map((text, index) => ({ id: index + 1, text, notice: down })),
+  })
+  const button = (name: string, row = 0) =>
+    screen.getAllByRole("button", { name })[row]
+
+  it("stays in view in whichever conversation is open, and in a new chat", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    renderWithQueries(<ChatHost initial={holding("Lost words")} />)
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        "org_1~th_1"
+      )
+    )
+    open("org_1~th_1")
+    expect(notSentWords()).toEqual(["Lost words"])
+    expect(screen.getByText(`Not sent. ${down}`)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(notSentWords()).toEqual(["Lost words"])
+    // The words replace the invitation, not the composer.
+    expect(screen.queryByText(blank)).toBeNull()
+    expect(composer()).toBeTruthy()
+  })
+
+  it("sends a message again into a conversation of its own, and it is no longer listed", async () => {
+    const calls = stubApi({ threads: [] })
+    renderWithQueries(<ChatHost initial={holding("Lost words")} />)
+    await screen.findByText(`Not sent. ${down}`)
+
+    fireEvent.click(button("Retry"))
+    await waitFor(() =>
+      expect(calls).toContain("POST /v1/organizations/org_1/threads")
+    )
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        "org_1~th_new"
+      )
+    )
+    expect(notSentWords()).toEqual([])
+    open("org_1~th_new")
+    expect(hooks.sendMessage).toHaveBeenCalledExactlyOnceWith({
+      text: "Lost words",
+    })
+    expect(screen.queryByText(/Not sent/)).toBeNull()
+  })
+
+  it("goes into an empty composer to be changed, and is not offered over what the member typed", async () => {
+    stubApi({ threads: [] })
+    renderWithQueries(<ChatHost initial={holding("First words", "More")} />)
+    await screen.findAllByText(`Not sent. ${down}`)
+    expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(2)
+
+    // Something typed: no Edit to press over it, and the words wait.
+    fireEvent.change(composer(), { target: { value: "Half a thought" } })
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull()
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2)
+    expect((composer() as HTMLTextAreaElement).value).toBe("Half a thought")
+    expect(notSentWords()).toEqual(["First words", "More"])
+
+    fireEvent.change(composer(), { target: { value: "" } })
+    fireEvent.click(button("Edit", 1))
+    expect((composer() as HTMLTextAreaElement).value).toBe("More")
+    expect(notSentWords()).toEqual(["First words"])
+    // The composer holds something again: the other waits.
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull()
+  })
+
+  it("is let go on request, one message at a time", async () => {
+    stubApi({ threads: [] })
+    renderWithQueries(<ChatHost initial={holding("First words", "More")} />)
+    await screen.findAllByText(`Not sent. ${down}`)
+
+    fireEvent.click(button("Dismiss"))
+    expect(notSentWords()).toEqual(["More"])
+    fireEvent.click(button("Dismiss"))
+    expect(notSentWords()).toEqual([])
+    // With nothing left, the chat invites the member to start again.
+    expect(await screen.findByText(blank)).toBeTruthy()
+  })
+
+  it("keeps the conversation that is loading company, without hiding that it loads", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    const release = holdMemberList()
+    renderWithQueries(<ChatHost initial={holding("Lost words")} />)
+    expect(await screen.findByText("Loading the conversation…")).toBeTruthy()
+    expect(notSentWords()).toEqual(["Lost words"])
+    act(() => release())
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        "org_1~th_1"
+      )
+    )
+    expect(notSentWords()).toEqual(["Lost words"])
   })
 })
 
