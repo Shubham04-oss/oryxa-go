@@ -243,7 +243,22 @@ resource "cloudflare_ruleset" "custom_rules" {
   kind        = "zone"
   phase       = "http_request_firewall_custom"
 
+  # Slack's form-encoded button payloads can trip OWASP anomaly scoring.
+  # Slack signs both delivery routes, and apps/internal/slackbot verifies the
+  # signature and timestamp at the origin before processing a delivery.
+  # Skip only managed WAF rules for these POSTs: custom blocks and rate limits
+  # still run, and no other path or host skips the managed rulesets.
   rules = [{
+    ref         = "slack_skip_managed_waf"
+    description = "Slack deliveries are signed and verified at the origin"
+    action      = "skip"
+    enabled     = true
+    expression  = "(http.host eq \"${local.api_host}\" and http.request.method eq \"POST\" and http.request.uri.path in {\"/v1/apps/slack/events\" \"/v1/apps/slack/interactivity\"})"
+    action_parameters = {
+      phases = ["http_request_firewall_managed"]
+    }
+    logging = { enabled = true }
+    }, {
     ref         = "block_v1_internal"
     description = "Service-to-service routes are not for the internet"
     action      = "block"
