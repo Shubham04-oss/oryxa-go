@@ -56,6 +56,12 @@
 // characters of source, 1,000 of query and 5,000 of response; the source keeps
 // the newest results and the answer is read in pieces.
 //
+// KnowledgePassagesOnly is an opt-in source-quality experiment, false by
+// default. It uses separately captured knowledge_search passage text, excludes
+// knowledge metadata and status results, and preserves other tools' sources.
+// Full Parts still enforce summary copying. An answer with no selected source
+// is held as NO_SOURCES; neither grounding thresholds nor holds are skipped.
+//
 // # Failing closed
 //
 // Check never fails. A grounding check that errors, times out, returns

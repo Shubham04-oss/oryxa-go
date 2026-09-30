@@ -179,7 +179,7 @@ func newConsentGuard(settings serviceconfig.Config, client consentguard.BedrockC
 	} else {
 		logger.Warn("AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID is not set: every answer to a question asked in Slack is held for its owner's review as unchecked, since nothing can ground it")
 	}
-	return consentguard.New(grounder, consentguard.Config{Logger: logger}), nil
+	return consentguard.New(grounder, consentguard.Config{Logger: logger, KnowledgePassagesOnly: settings.ConsentPassagesOnly}), nil
 }
 
 // redactCredentials is the words of an ask with every credential in them

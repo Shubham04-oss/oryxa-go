@@ -281,7 +281,7 @@ func consentLevel(request agents.Interaction) consentguard.Level {
 func consentSources(results []agents.ToolResult) []consentguard.Source {
 	sources := make([]consentguard.Source, len(results))
 	for index, result := range results {
-		sources[index] = consentguard.Source{Tool: result.Tool, Parts: result.Parts}
+		sources[index] = consentguard.Source{Tool: result.Tool, Parts: result.Parts, KnowledgePassages: result.KnowledgePassages}
 	}
 	return sources
 }

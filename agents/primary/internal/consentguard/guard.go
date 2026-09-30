@@ -59,12 +59,17 @@ const (
 
 // Source is what one tool returned to the run an answer comes from.
 type Source struct {
-	// Tool is the tool's name. It is only ever logged.
+	// Tool is the trusted tool's name. Passage-only grounding uses it to
+	// distinguish knowledge results from other supporting sources.
 	Tool string
 	// Parts are what it returned, one text for each value in the result. A run
 	// of words copied from a source is looked for within one part, since two
 	// values were never in a sentence together.
 	Parts []string
+	// KnowledgePassages are string text fields explicitly returned by
+	// knowledge_search and captured by the trusted after-tool callback, within
+	// the full Parts' limits. They are never supplied by the answering model.
+	KnowledgePassages []string
 }
 
 // Input is what Check is told about one answer.
@@ -78,8 +83,9 @@ type Input struct {
 	// Texts are the answer's texts, as they would be delivered. The result has
 	// as many, in the same order.
 	Texts []string
-	// Sources are what the run's tools returned, which the answer has to stand
-	// on. From the run's own record, never from what the answer says it read.
+	// Sources are what the run's tools returned, from the run's own record,
+	// never what the answer says it read. Full Parts enforce summary copying;
+	// KnowledgePassagesOnly selects separate passage text for grounding.
 	// With none, an answer is held (unless it says a run failed, or its owner
 	// wrote it).
 	Sources []Source
@@ -154,6 +160,11 @@ type Config struct {
 	// number outside that, is DefaultMinGrounding or DefaultMinRelevance. A
 	// Grounder's own thresholds count as well, and the higher one wins.
 	MinGrounding, MinRelevance float64
+	// KnowledgePassagesOnly uses only explicitly captured knowledge_search
+	// passage text for knowledge grounding. False preserves full Parts.
+	// Other tools keep their existing sources; summary copying always checks
+	// full Parts, and no usable grounding source still holds the answer.
+	KnowledgePassagesOnly bool
 	// Timeout bounds asking the Grounder; DefaultTimeout when zero.
 	Timeout time.Duration
 	// Logger records what was decided, by kind and by score, never by text;
@@ -165,11 +176,12 @@ type Config struct {
 // before the asker reads them there. It is built with New, holds no state and
 // is safe for concurrent use.
 type Guard struct {
-	grounder     Grounder
-	minGrounding float64
-	minRelevance float64
-	timeout      time.Duration
-	logger       *slog.Logger
+	grounder              Grounder
+	minGrounding          float64
+	minRelevance          float64
+	timeout               time.Duration
+	logger                *slog.Logger
+	knowledgePassagesOnly bool
 }
 
 // New builds a guard that asks grounder about every answer that has sources to
@@ -180,6 +192,7 @@ func New(grounder Grounder, config Config) *Guard {
 	guard := &Guard{
 		grounder: grounder, minGrounding: config.MinGrounding, minRelevance: config.MinRelevance,
 		timeout: config.Timeout, logger: config.Logger,
+		knowledgePassagesOnly: config.KnowledgePassagesOnly,
 	}
 	if isNothing(grounder) {
 		guard.grounder = nil
@@ -271,7 +284,7 @@ func summaryRule(texts []string, sources []Source) []Reason {
 // case only a missing source is added. The Grounding is nil when it was not
 // asked.
 func (guard *Guard) stand(ctx context.Context, in Input, texts []string, held bool) ([]Reason, *Grounding) {
-	sources := sourceTexts(in.Sources)
+	sources := sourceTexts(in.Sources, guard.knowledgePassagesOnly)
 	switch {
 	case len(sources) == 0:
 		return []Reason{{KindNoSources, "the run read nothing the answer could stand on"}}, nil
@@ -355,12 +368,20 @@ func nonBlank(texts []string) []string {
 	return slices.DeleteFunc(slices.Clone(texts), func(text string) bool { return strings.TrimSpace(text) == "" })
 }
 
-// sourceTexts are what the run read, one text for each result that has any: its
-// parts, a line each. A result that returned nothing is nothing to stand on.
-func sourceTexts(sources []Source) []string {
+// sourceTexts are the selected grounding text, one text for each usable result.
+// Passage-only mode excludes knowledge metadata, while other tools retain their
+// full parts. An answer with no usable source is still held by stand.
+func sourceTexts(sources []Source, knowledgePassagesOnly bool) []string {
 	var found []string
 	for _, source := range sources {
-		if text := strings.TrimSpace(strings.Join(nonBlank(source.Parts), "\n")); text != "" {
+		parts := source.Parts
+		if knowledgePassagesOnly && (source.Tool == "knowledge" || strings.HasPrefix(source.Tool, "knowledge_")) {
+			parts = nil
+			if source.Tool == "knowledge_search" {
+				parts = source.KnowledgePassages
+			}
+		}
+		if text := strings.TrimSpace(strings.Join(nonBlank(parts), "\n")); text != "" {
 			found = append(found, text)
 		}
 	}
