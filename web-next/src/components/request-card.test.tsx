@@ -655,6 +655,28 @@ describe("a request an agent filed in Oryxa, which has two choices", () => {
   })
 })
 
+describe("a request made in a teamspace", () => {
+  // Teamspaces are archived (DESIGN.md §7): a request that names one is still a
+  // request its owner can decide, with nowhere to link to.
+  it("renders like any other request, with its choices and no link into an archived screen", async () => {
+    renderCard(agentRequest({ teamspace_id: "tsp_launch" }))
+
+    const card = await screen.findByRole("article")
+    expect(within(card).getByText("Explain the service boundary.")).toBeTruthy()
+    expect(within(card).getByText("Waiting for you to approve.")).toBeTruthy()
+    expect(
+      within(card).getByRole("button", {
+        name: "Share answer to Raya's request",
+      })
+    ).toBeTruthy()
+    expect(
+      within(card).getByRole("button", { name: "Deny Raya's request" })
+    ).toBeTruthy()
+    expect(within(card).queryByRole("link")).toBeNull()
+    expect(card.textContent).not.toMatch(/teamspace/i)
+  })
+})
+
 describe("an answer held for review", () => {
   const held = (masked = true): AgentRequest =>
     approvedRequest("summary", {
