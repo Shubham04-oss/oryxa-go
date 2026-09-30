@@ -40,7 +40,7 @@ func TestTheThreeChoicesAreDecisions(t *testing.T) {
 		message     string
 		wantsALease bool
 	}{
-		{ChoiceSummary, StatusApproved, DecisionApproved, []string{PermissionConsentSummary}, ConsentSummary, "Approved: AI summary only.", false},
+		{ChoiceSummary, StatusApproved, DecisionApproved, []string{PermissionConsentSummary}, ConsentSummary, "Approved: answer shared.", false},
 		{ChoiceAccess, StatusApproved, DecisionApproved, []string{PermissionConsentSummary, PermissionConsentAccess}, ConsentAccess, "Approved: access for 1 hour.", true},
 		{ChoiceDeny, StatusRejected, DecisionRejected, nil, "", "Denied.", false},
 	} {

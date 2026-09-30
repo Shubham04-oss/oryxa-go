@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
 import { clockTime } from "./direct-message-format"
 import {
+  DENY,
+  SHARE_ANSWER,
+  consentChoicePending,
   consentChoices,
   decisionLine,
+  denyName,
   expiresPhrase,
   hiddenNote,
   heldReason,
@@ -13,6 +17,7 @@ import {
   originLabel,
   readsLine,
   requestTitle,
+  shareAnswerName,
   sideOf,
   statusOf,
   waitsOnOwner,
@@ -153,7 +158,7 @@ describe("what a card calls things", () => {
 describe("how a request was decided", () => {
   it("says where, by whom, when, and how far", () => {
     expect(decisionLine(approvedRequest("summary"), owner)).toBe(
-      `Approved in Slack by you at ${at}. Summary only.`
+      `Approved in Slack by you at ${at}. Answer shared.`
     )
     expect(decisionLine(approvedRequest("access"), asker)).toBe(
       `Approved in Slack by Ada at ${at}. Access for 1 hour.`
@@ -167,14 +172,27 @@ describe("how a request was decided", () => {
     expect(decisionLine(slackRequest(), owner)).toBeUndefined()
   })
 
-  it("says declined, not denied, of a request that never asked for consent", () => {
-    const declined = decidedBy(
+  it("says denied, as the button did, of a request that never asked for consent too", () => {
+    const denied = decidedBy(
       agentRequest(),
       { kind: "member", user_id: OWNER, surface: "web" },
       "rejected"
     )
+    expect(decisionLine(denied, owner)).toBe(`Denied in Oryxa by you at ${at}.`)
+    expect(decisionLine(denied, asker)).toBe(`Denied in Oryxa by Ada at ${at}.`)
+  })
+
+  it("keeps an agent's own decline in its own words", () => {
+    const declined = decidedBy(
+      agentRequest(),
+      { kind: "agent", agent_id: "agt" },
+      "rejected"
+    )
     expect(decisionLine(declined, owner)).toBe(
-      `Declined in Oryxa by you at ${at}.`
+      `Declined by your agent at ${at}.`
+    )
+    expect(decisionLine(declined, asker)).toBe(
+      `Declined by Ada's agent at ${at}.`
     )
   })
 
@@ -247,7 +265,7 @@ describe("how a request was decided", () => {
         request,
         owner
       )
-    ).toBe(`Approved in Slack by you at ${at}. Summary only.`)
+    ).toBe(`Approved in Slack by you at ${at}. Answer shared.`)
     expect(
       winnerLine(
         { request_id: request.id, status: "expired", revision: 2 },
@@ -467,7 +485,7 @@ describe("where a request stands", () => {
     expect(statusOf(approvedRequest("summary"), owner)).toEqual({
       tone: "working",
       text: "Krude is working on it…",
-      detail: `Approved in Slack by you at ${at}. Summary only.`,
+      detail: `Approved in Slack by you at ${at}. Answer shared.`,
     })
     expect(statusOf(approvedRequest("access"), asker).text).toBe(
       "Ada's agent is working on it…"
@@ -499,10 +517,10 @@ describe("where a request stands", () => {
     expect(statusOf(done, owner)).toEqual({
       tone: "done",
       text: "Answered.",
-      detail: `Approved in Slack by you at ${at}. Summary only. Shared with a password hidden.`,
+      detail: `Approved in Slack by you at ${at}. Answer shared. Shared with a password hidden.`,
     })
     expect(statusOf(done, asker).detail).toBe(
-      `Approved in Slack by Ada at ${at}. Summary only.`
+      `Approved in Slack by Ada at ${at}. Answer shared.`
     )
   })
 
@@ -570,7 +588,7 @@ describe("where a request stands", () => {
   })
 })
 
-describe("the owner's three choices", () => {
+describe("the owner's choices", () => {
   it("come in Slack's order, and each says what it lets the agent do", () => {
     expect(consentChoices.map((choice) => choice.choice)).toEqual([
       "summary",
@@ -578,15 +596,37 @@ describe("the owner's three choices", () => {
       "deny",
     ])
     expect(consentChoices.map((choice) => choice.label)).toEqual([
-      "Summary only",
+      "Share answer",
       "Allow for 1 hour",
       "Deny",
     ])
     expect(consentChoices[0].detail("Raya")).toMatch(/own words/)
-    expect(consentChoices[1].detail("Raya")).toMatch(/Raya's follow-up/)
-    expect(consentChoices[1].detail("Raya")).toMatch(/quote/)
+    expect(consentChoices[1].detail("Raya")).toBe(
+      "Your agent may quote what it reads. Raya's follow-ups in that thread are answered for an hour."
+    )
     expect(consentChoices[2].detail("Raya")).toBe(
       "Nothing is shared. Raya is told you said no."
     )
+  })
+
+  it("are named to a screen reader by their words and whose request they are about", () => {
+    expect(consentChoices.map((choice) => choice.name("Raya"))).toEqual([
+      "Share answer to Raya's request",
+      "Allow for 1 hour for Raya's request",
+      "Deny Raya's request",
+    ])
+    // The two choices of a request filed in Oryxa are the same words.
+    expect(shareAnswerName("Raya")).toBe(consentChoices[0].name("Raya"))
+    expect(denyName("Raya")).toBe(consentChoices[2].name("Raya"))
+    expect(SHARE_ANSWER).toBe(consentChoices[0].label)
+    expect(DENY).toBe(consentChoices[2].label)
+    // Someone who asks of themselves is "you", not "you's".
+    expect(denyName("you")).toBe("Deny your request")
+  })
+
+  it("say the pending choice in the words of its button", () => {
+    expect(
+      consentChoices.map((choice) => consentChoicePending(choice.choice))
+    ).toEqual(["Sharing…", "Allowing…", "Denying…"])
   })
 })

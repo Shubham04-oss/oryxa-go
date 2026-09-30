@@ -97,7 +97,7 @@ Runs: slice 1 after F, G, H; slice 2 after I, K; slice 3 after those; slice 4 af
 
 **Slice 1** (one owner, no secret):
 1. Mention in a channel: asker gets an ephemeral ack; owner's DM shows asker, question, three buttons, nothing else.
-2. One ask per button: summary only (no 20-word copy, no links, attribution says so); 1 hour (excerpts; notice becomes "Approved by … at …"); deny (asker told ephemerally).
+2. One ask per button: Share answer (a summary: no 20-word copy, no links, attribution says so); Allow for 1 hour (excerpts; notice becomes "Approved by … at …"); Deny (asker told ephemerally).
 3. Race: click Slack and the web card together: one decision, both settle, loser sees the winner.
 4. Altered or expired button value: no decision.
 5. Ungrounded answer, and an unrelated one (steer the agent off-topic): held in Requests; thread shows only "held"; owner sends masked or withholds.

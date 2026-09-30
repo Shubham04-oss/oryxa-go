@@ -48,8 +48,8 @@ describe("what Activity says", () => {
     expect(
       both({ ...decided, decision: "approved", consent: "summary" })
     ).toEqual({
-      owner: "You approved Raya's request in Slack. Summary only.",
-      asker: "Ada approved your request in Slack. Summary only.",
+      owner: "You approved Raya's request in Slack. Answer shared.",
+      asker: "Ada approved your request in Slack. Answer shared.",
     })
     expect(
       both({ ...decided, decision: "approved", consent: "access" }).owner

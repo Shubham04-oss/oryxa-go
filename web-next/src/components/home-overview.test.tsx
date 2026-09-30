@@ -303,19 +303,23 @@ it("uses real inline consent and held answer cards, followed by access, sent/sha
   })
   const view = renderHome()
   const needs = await screen.findByRole("region", { name: "Needs you" })
+  // The same three words as the Requests card and Slack's notice.
   expect(
     within(needs).getByRole<HTMLButtonElement>("button", {
-      name: /Summary only/,
-    })
-  ).toBeTruthy()
+      name: "Share answer to Raya's request",
+    }).textContent
+  ).toContain("Share answer")
   expect(
     within(needs).getByRole<HTMLButtonElement>("button", {
-      name: /Allow for 1 hour/,
-    })
-  ).toBeTruthy()
+      name: "Allow for 1 hour for Raya's request",
+    }).textContent
+  ).toContain("Allow for 1 hour")
   expect(
-    within(needs).getByRole<HTMLButtonElement>("button", { name: /Deny/ })
-  ).toBeTruthy()
+    within(needs).getByRole<HTMLButtonElement>("button", {
+      name: "Deny Raya's request",
+    }).textContent
+  ).toContain("Deny")
+  expect(needs.textContent).not.toMatch(/Summary only|Approve|Decline/)
   expect(within(needs).getByText("Held answer with personal data")).toBeTruthy()
   expect(
     within(needs).getByRole<HTMLButtonElement>("button", {
@@ -367,6 +371,42 @@ it("posts a Home consent choice through the existing guarded request action", as
   )
   expect(go.calls.find((call) => call.method === "POST")?.body).toEqual({
     choice: "deny",
+  })
+})
+
+it("offers a request an agent filed in Oryxa two choices, Share answer and Deny, and no approval without tools", async () => {
+  const filed = request({ id: "irq_filed" })
+  let current = filed
+  const go = stubApi({
+    [`${path}/agent-requests/inbox`]: () => json({ requests: [current] }),
+    [`${path}/agent-requests/${filed.id}/decision`]: () => {
+      current = { ...filed, status: "approved", revision: 2 }
+      return json(current)
+    },
+  })
+  renderHome()
+
+  const needs = await screen.findByRole("region", { name: "Needs you" })
+  const choices = await within(needs).findAllByRole("button", {
+    name: /Share answer|Deny|without tools|Approve|Decline/,
+  })
+  expect(choices.map((choice) => choice.textContent)).toEqual([
+    "Deny",
+    "Share answer",
+  ])
+  expect(needs.textContent).not.toMatch(/without tools|can’t look anything up/)
+  fireEvent.click(
+    within(needs).getByRole("button", {
+      name: "Share answer to Raya's request",
+    })
+  )
+  await waitFor(() =>
+    expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
+  )
+  expect(go.calls.find((call) => call.method === "POST")?.body).toEqual({
+    decision: "approved",
+    message: "Approved in Oryxa.",
+    allowed_tools: ["knowledge"],
   })
 })
 

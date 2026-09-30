@@ -424,7 +424,7 @@ func TestSlackConsentLoop(t *testing.T) {
 		before := s.count()
 		s.clickOn(raya, summary.notice, "consent_summary", summary.tickets["consent_summary"])
 		settled := s.noticeSettled(summary.notice)
-		if words := wording(settled); !strings.Contains(words, "Approved by <@"+raya.SlackID+">") || !strings.Contains(words, "AI summary only") {
+		if words := wording(settled); !strings.Contains(words, "Approved by <@"+raya.SlackID+">") || !strings.Contains(words, "answer shared") {
 			t.Errorf("the settled notice says %s", words)
 		}
 		if strings.Contains(wording(settled), "Q3 numbers") == false {
@@ -951,7 +951,7 @@ func raceOnTheCard(t *testing.T, s *stack) {
 			case "web":
 				// The web card won with a summary: its call was answered, and the click
 				// in Slack, which came too late, decided nothing.
-				if webStatus != http.StatusOK || consent != "summary" || !strings.Contains(words, "AI summary only") {
+				if webStatus != http.StatusOK || consent != "summary" || !strings.Contains(words, "answer shared") {
 					t.Errorf("after %s the web won, and its call was %d, the consent %q, the notice %s", pause, webStatus, consent, words)
 				}
 			case "slack":

@@ -850,14 +850,14 @@ Oryxa has closed it.
 
 A member @-mentions Oryxa's Slack app in a channel and names whose agents to
 ask: "@oryxa ask @raya for the Q3 numbers". Each person named is told in a
-direct message, with three buttons: share an AI summary only, give access for
-an hour, or deny. Their agent answers in the asker's thread only if they
-approve, and only after the guards below have read the answer. The request
-ledger is the one source of truth, so what Slack says, what the owner's and
-the asker's cards in Requests say, and what their Oryxa DM and agent chats say
-are all views of it: the owner may decide on either surface, and the first
-click wins. The design is `docs/design/slack-consent-loop.md`, and the plan
-these packages were built to is `docs/design/slack-implementation.md`.
+direct message, with three buttons: Share answer, Allow for 1 hour, or Deny.
+Their agent answers in the asker's thread only if they approve, and only after
+the guards below have read the answer. The request ledger is the one source of
+truth, so what Slack says, what the owner's and the asker's cards in Requests
+say, and what their Oryxa DM and agent chats say are all views of it: the owner
+may decide on either surface, and the first click wins. The design is
+`docs/design/slack-consent-loop.md`, and the plan these packages were built to
+is `docs/design/slack-implementation.md`.
 
 **It is off unless `AGENTS_PRIMARY_SLACK_CONSENT` says `on`.** Off, nothing
 below runs, though its tables are migrated, and the events it would hear are
