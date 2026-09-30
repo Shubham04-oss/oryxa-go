@@ -1059,6 +1059,7 @@ function WorkspaceShellContent({
       {settingsOpen && (
         <WorkspaceSettings
           key={JSON.stringify([
+            "settings",
             selectedOrganization?.id ?? session?.organizations[0]?.id,
             viewerId,
           ])}
