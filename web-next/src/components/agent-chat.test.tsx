@@ -575,6 +575,29 @@ describe("which conversation the chat opens", () => {
     await opensThread("th_1")
   })
 
+  it("passes over a conversation nothing was ever sent in, as an abandoned start", async () => {
+    stubApi({
+      threads: [
+        thread("th_empty", "", 30_000),
+        thread("th_1", "Plan the launch", 5 * 60_000),
+      ],
+    })
+    renderChat()
+    await opensThread("th_1")
+  })
+
+  it("opens a new chat when the only recent conversation is an abandoned start", async () => {
+    stubApi({
+      threads: [
+        thread("th_empty", "", 30_000),
+        thread("th_1", "Yesterday's plan", 25 * HOUR),
+      ],
+    })
+    renderChat()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+  })
+
   it("opens the conversation the member chose in this session, however old", async () => {
     rememberChoice(scope, LEO, "th_1")
     stubApi({

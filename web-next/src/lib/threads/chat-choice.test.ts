@@ -21,13 +21,20 @@ const scope = { organizationId: "org-1", userId: "user-1" }
 
 describe("chooseThread", () => {
   it("reopens the latest conversation while it's fresh", () => {
-    const threads = [{ id: "t2", updated_at: ago(5 * 60_000), origin: "chat" }]
+    const threads = [
+      { id: "t2", title: "Plan", updated_at: ago(5 * 60_000), origin: "chat" },
+    ]
     expect(chooseThread(threads, null, now)).toBe("t2")
   })
 
   it("opens a new chat once the latest conversation is an hour old", () => {
     const threads = [
-      { id: "t2", updated_at: ago(FRESH_CONVERSATION_MS), origin: "chat" },
+      {
+        id: "t2",
+        title: "Plan",
+        updated_at: ago(FRESH_CONVERSATION_MS),
+        origin: "chat",
+      },
     ]
     expect(chooseThread(threads, null, now)).toBeNull()
   })
@@ -35,34 +42,60 @@ describe("chooseThread", () => {
   it("opens a new chat when there's no conversation or no readable time", () => {
     expect(chooseThread([], null, now)).toBeNull()
     expect(
-      chooseThread([{ id: "t1", updated_at: "", origin: "chat" }], null, now)
+      chooseThread(
+        [{ id: "t1", title: "Plan", updated_at: "", origin: "chat" }],
+        null,
+        now
+      )
     ).toBeNull()
   })
 
   it("follows the member's choice over freshness", () => {
     const threads = [
-      { id: "t2", updated_at: ago(60_000), origin: "chat" },
-      { id: "t1", updated_at: ago(3 * FRESH_CONVERSATION_MS), origin: "chat" },
+      { id: "t2", title: "Plan", updated_at: ago(60_000), origin: "chat" },
+      {
+        id: "t1",
+        title: "Plan",
+        updated_at: ago(3 * FRESH_CONVERSATION_MS),
+        origin: "chat",
+      },
     ]
     expect(chooseThread(threads, "new", now)).toBeNull()
     expect(chooseThread(threads, "t1", now)).toBe("t1")
   })
 
   it("ignores a chosen conversation that no longer exists", () => {
-    const threads = [{ id: "t2", updated_at: ago(60_000), origin: "chat" }]
+    const threads = [
+      { id: "t2", title: "Plan", updated_at: ago(60_000), origin: "chat" },
+    ]
     expect(chooseThread(threads, "gone", now)).toBe("t2")
   })
 
   it("never picks a conversation that isn't a chat", () => {
     const threads = [
-      { id: "w1", updated_at: ago(60_000), origin: "wakeup" },
-      { id: "t1", updated_at: ago(2 * 60_000), origin: "chat" },
+      { id: "w1", title: "Plan", updated_at: ago(60_000), origin: "wakeup" },
+      { id: "t1", title: "Plan", updated_at: ago(2 * 60_000), origin: "chat" },
     ]
     expect(chooseThread(threads, null, now)).toBe("t1")
   })
 
+  it("skips a conversation with no title, which no message ever went into", () => {
+    const threads = [
+      { id: "t3", title: "", updated_at: ago(60_000), origin: "chat" },
+      { id: "t2", title: "  ", updated_at: ago(2 * 60_000), origin: "chat" },
+      { id: "t1", title: "Plan", updated_at: ago(3 * 60_000), origin: "chat" },
+    ]
+    expect(chooseThread(threads, null, now)).toBe("t1")
+    // Nothing but abandoned starts is no conversation at all.
+    expect(chooseThread(threads.slice(0, 2), null, now)).toBeNull()
+    // One the member chose is theirs to open, title or not.
+    expect(chooseThread(threads, "t3", now)).toBe("t3")
+  })
+
   it("reads a thread with no origin as a chat, as Go does", () => {
-    const threads = [{ id: "t1", updated_at: ago(60_000), origin: "" }]
+    const threads = [
+      { id: "t1", title: "Plan", updated_at: ago(60_000), origin: "" },
+    ]
     expect(chooseThread(threads, null, now)).toBe("t1")
   })
 })
@@ -70,13 +103,16 @@ describe("chooseThread", () => {
 describe("openingThread", () => {
   const old = (id: string, origin = "chat") => ({
     id,
+    title: "Plan",
     updated_at: ago(3 * FRESH_CONVERSATION_MS),
     origin,
   })
 
   it("asks nothing when the member's choice or freshness decides", async () => {
     const waiting = vi.fn(async () => true)
-    const fresh = [{ id: "t2", updated_at: ago(60_000), origin: "chat" }]
+    const fresh = [
+      { id: "t2", title: "Plan", updated_at: ago(60_000), origin: "chat" },
+    ]
     expect(
       await openingThread({ threads: fresh, choice: null, now, waiting })
     ).toBe("t2")
@@ -106,6 +142,15 @@ describe("openingThread", () => {
       await openingThread({ threads, choice: null, now, waiting: nothing })
     ).toBeNull()
     expect(nothing).toHaveBeenCalledExactlyOnceWith("t2")
+  })
+
+  it("asks about the latest titled chat, not an abandoned start", async () => {
+    const waiting = vi.fn(async () => true)
+    const threads = [{ ...old("t2"), title: "" }, old("t1")]
+    expect(await openingThread({ threads, choice: null, now, waiting })).toBe(
+      "t1"
+    )
+    expect(waiting).toHaveBeenCalledExactlyOnceWith("t1")
   })
 
   it("asks about the latest chat, not an update from the member's apps", async () => {

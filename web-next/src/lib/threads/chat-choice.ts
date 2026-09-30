@@ -73,13 +73,21 @@ export function rememberChoice(
   }
 }
 
-type ListedThread = Pick<Thread, "id" | "updated_at" | "origin">
+type ListedThread = Pick<Thread, "id" | "title" | "updated_at" | "origin">
 
-/** The newest conversation the member had with the agent: not an update from their apps, which the chat never opens. */
+/**
+ * The newest conversation the member had with the agent: not an update from
+ * their apps, which the chat never opens, and not one with no title, which
+ * no message ever went into (Go titles a thread from its first message): a
+ * start that was abandoned would otherwise count as the latest.
+ */
 function latestChatThread(
   threads: readonly ListedThread[]
 ): ListedThread | undefined {
-  return threads.find((thread) => !thread.origin || thread.origin === "chat")
+  return threads.find(
+    (thread) =>
+      (!thread.origin || thread.origin === "chat") && thread.title.trim() !== ""
+  )
 }
 
 /**
