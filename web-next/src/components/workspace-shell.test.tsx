@@ -16,6 +16,8 @@ import { WorkspaceShell } from "./workspace-shell"
 import type { Session } from "@/lib/auth/client"
 import * as primaryChat from "@/lib/threads/chat-choice"
 import { json, mockApi, orgPath, teamspace, viewerId } from "@/test/teamspaces"
+import { browserStorage } from "@/test/browser-storage"
+import { rememberSettingsPage } from "@/lib/settings/page-choice"
 
 // A signed-in shell holds the member's DM inbox open, and a teamspace its
 // room: their sockets are stand-ins (src/test/room-socket.ts).
@@ -100,6 +102,7 @@ function SignedInShell() {
 }
 
 beforeEach(() => {
+  vi.stubGlobal("localStorage", browserStorage())
   vi.stubGlobal("matchMedia", () => ({
     matches: false,
     addEventListener: vi.fn(),
@@ -109,11 +112,98 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  window.history.replaceState({}, "", "/")
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
 describe("WorkspaceShell navigation", () => {
+  it.each(["billing", "slack"] as const)(
+    "keeps the explicit %s return ahead of the remembered section",
+    (page) => {
+      liveBackend()
+      rememberSettingsPage(
+        {
+          organizationId: session.organizations[0].id,
+          userId: session.user.id,
+        },
+        "email"
+      )
+      window.history.replaceState({}, "", `/?view=${page}`)
+      render(
+        <WorkspaceShell
+          session={session}
+          selectedOrganization={session.organizations[0]}
+          organizationRole="admin"
+        />
+      )
+      expect(
+        screen.getByRole("heading", {
+          name: page === "billing" ? "Billing" : "Slack",
+          level: 2,
+        })
+      ).toBeTruthy()
+      fireEvent.click(screen.getByRole("button", { name: "Tool access" }))
+      fireEvent.click(screen.getByRole("button", { name: "Open my tools →" }))
+      expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
+      fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
+      fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
+      expect(
+        screen.getByRole("heading", { name: "Tool access", level: 2 })
+      ).toBeTruthy()
+    }
+  )
+
+  it("restores Settings for the same member and workspace without carrying a section to another scope", () => {
+    liveBackend()
+    const props = {
+      session,
+      selectedOrganization: session.organizations[0],
+      role: "member" as const,
+      organizationRole: "member" as const,
+    }
+    const view = render(<WorkspaceShell {...props} />)
+    function openSettings() {
+      fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
+      fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
+    }
+    openSettings()
+    fireEvent.click(screen.getByRole("button", { name: "Teams" }))
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }))
+    openSettings()
+    expect(
+      screen.getByRole("heading", { name: "Teams", level: 2 })
+    ).toBeTruthy()
+
+    view.rerender(
+      <WorkspaceShell
+        {...props}
+        selectedOrganization={{ id: "org_other", name: "Other", slug: "other" }}
+      />
+    )
+    expect(
+      screen.getByRole("heading", { name: "Account", level: 2 })
+    ).toBeTruthy()
+    view.rerender(<WorkspaceShell {...props} />)
+    expect(
+      screen.getByRole("heading", { name: "Teams", level: 2 })
+    ).toBeTruthy()
+
+    view.rerender(
+      <WorkspaceShell
+        {...props}
+        session={{
+          ...session,
+          user: { id: "user-other-settings", email: "other@example.com" },
+        }}
+      />
+    )
+    openSettings()
+    expect(
+      screen.getByRole("heading", { name: "Account", level: 2 })
+    ).toBeTruthy()
+  })
+
   it("preserves the same member's workspace state on refresh and resets the whole shell for another member", async () => {
     liveBackend()
     const props = {
@@ -376,6 +466,12 @@ describe("WorkspaceShell navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
     fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
+    expect(
+      screen.getByRole("heading", { name: "Account", level: 2 })
+    ).toBeTruthy()
+    fireEvent.click(
+      screen.getByRole("button", { name: "People & invitations" })
+    )
     expect(
       screen.getByRole("heading", { name: "Make room for someone new." })
     ).toBeTruthy()
