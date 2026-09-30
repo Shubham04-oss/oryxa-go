@@ -82,6 +82,11 @@ type ToolResult struct {
 	// Text values are as the tool returned them, so that a run of words the
 	// answer copies from one can be found in it.
 	Parts []string
+	// KnowledgePassages are only the explicitly returned text fields of a
+	// knowledge_search passage list. They are a bounded subset of Parts, kept
+	// separately so metadata cannot impersonate supporting text. Parts remain
+	// complete for the summary copy check and the default grounding mode.
+	KnowledgePassages []string
 }
 
 type runResultsKey struct{}
@@ -105,7 +110,7 @@ func RunResults(ctx context.Context) []ToolResult {
 func cloneResults(results []ToolResult) []ToolResult {
 	cloned := make([]ToolResult, len(results))
 	for index, result := range results {
-		cloned[index] = ToolResult{Tool: result.Tool, Parts: slices.Clone(result.Parts)}
+		cloned[index] = ToolResult{Tool: result.Tool, Parts: slices.Clone(result.Parts), KnowledgePassages: slices.Clone(result.KnowledgePassages)}
 	}
 	return cloned
 }
@@ -133,8 +138,8 @@ func recordToolResult(ctx agent.Context, called tool.Tool, _, result map[string]
 	if err != nil || called == nil || invocation == "" || notRead(called.Name()) {
 		return nil, nil
 	}
-	if parts := resultParts(result, maxRunResultChars); len(parts) > 0 {
-		deliveryResults.record(invocation, ToolResult{Tool: called.Name(), Parts: parts})
+	if captured := captureResult(called.Name(), result, maxRunResultChars); len(captured.Parts) > 0 {
+		deliveryResults.record(invocation, captured)
 	}
 	return nil, nil
 }
@@ -159,16 +164,21 @@ func runResultsOf(ctx agent.ReadonlyContext) []ToolResult {
 // names. A result that is only an error says nothing, and a result of any size
 // is read for at most limit characters and maxResultParts values.
 func resultParts(result map[string]any, limit int) []string {
+	return captureResult("", result, limit).Parts
+}
+
+func captureResult(tool string, result map[string]any, limit int) ToolResult {
 	if len(result) == 1 && result["error"] != nil {
-		return nil
+		return ToolResult{Tool: tool}
 	}
-	reader := resultReader{left: limit}
+	reader := resultReader{left: limit, knowledgeSearch: tool == "knowledge_search"}
 	reader.read("", result, 0)
-	return reader.parts
+	return ToolResult{Tool: tool, Parts: reader.parts, KnowledgePassages: reader.passages}
 }
 
 type resultReader struct {
-	parts []string
+	parts, passages []string
+	knowledgeSearch bool
 	// left is how many characters the parts may still take.
 	left int
 }
@@ -187,6 +197,9 @@ func (reader *resultReader) read(path string, value any, depth int) {
 		reader.add(path, strconv.FormatFloat(value, 'f', -1, 64))
 	case map[string]any:
 		for _, name := range slices.Sorted(maps.Keys(value)) {
+			if reader.knowledgeSearch && depth == 0 && name == "passages" && reader.readPassages(value[name]) {
+				continue
+			}
 			reader.read(joinPath(path, name), value[name], depth+1)
 		}
 	case []any:
@@ -206,6 +219,51 @@ func (reader *resultReader) read(path string, value any, depth int) {
 	}
 }
 
+// readPassages accepts the real tool's list of objects with string text
+// fields, not flattened field names or nested lookalikes. Invalid shapes keep
+// their full Parts but provide no knowledge grounding text. The real search
+// returns at most maxPassages; validation is bounded by that same limit.
+func (reader *resultReader) readPassages(value any) bool {
+	var rows []map[string]any
+	switch value := value.(type) {
+	case []any:
+		if len(value) > maxPassages {
+			return false
+		}
+		for _, item := range value {
+			row, ok := item.(map[string]any)
+			if !ok {
+				return false
+			}
+			rows = append(rows, row)
+		}
+	case []map[string]any:
+		rows = value
+	default:
+		return false
+	}
+	if len(rows) > maxPassages {
+		return false
+	}
+	for _, row := range rows {
+		if _, ok := row["text"].(string); !ok {
+			return false
+		}
+	}
+	for _, row := range rows {
+		for _, name := range slices.Sorted(maps.Keys(row)) {
+			if name == "text" {
+				if text := reader.add("passages.text", row[name].(string)); text != "" {
+					reader.passages = append(reader.passages, text)
+				}
+			} else {
+				reader.read(joinPath("passages", name), row[name], 3)
+			}
+		}
+	}
+	return true
+}
+
 func joinPath(path, name string) string {
 	if path == "" {
 		return name
@@ -214,20 +272,25 @@ func joinPath(path, name string) string {
 }
 
 // add keeps one value as a part, clipped to what is left.
-func (reader *resultReader) add(path, value string) {
+func (reader *resultReader) add(path, value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" || reader.left <= 0 || len(reader.parts) >= maxResultParts {
-		return
+		return ""
 	}
-	part := value
+	prefix := ""
 	if path != "" {
-		part = path + ": " + value
+		prefix = path + ": "
 	}
+	part := prefix + value
 	if utf8.RuneCountInString(part) > reader.left {
 		part = string([]rune(part)[:reader.left])
 	}
 	reader.left -= utf8.RuneCountInString(part)
 	reader.parts = append(reader.parts, part)
+	if len(part) <= len(prefix) {
+		return ""
+	}
+	return part[len(prefix):]
 }
 
 // resultLog is the results of the runs in flight, by invocation id.

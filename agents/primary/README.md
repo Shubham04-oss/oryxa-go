@@ -918,6 +918,15 @@ is held for its owner as unchecked, since nothing can ground it, and the service
 says so at startup. Without `AGENTS_PRIMARY_SECRETS_KMS_KEY_ID` no credential
 can be shared, and the three secret routes answer `503`.
 
+The source-quality experiment `AGENTS_PRIMARY_CONSENT_KNOWLEDGE_PASSAGES_ONLY`
+defaults to `false`. When enabled, knowledge grounding uses only the explicitly
+returned passage text captured from `knowledge_search`; collection/status
+metadata is excluded. Full capture remains available for summary copy checks,
+and other tools keep their existing sources. Empty knowledge results alone hold
+substantive answers as `NO_SOURCES`; another verified tool result can still
+support an answer. Thresholds remain unchanged. No deployment enables this flag.
+See [the experiment's examples](../../docs/testing/consent-passage-sources.md).
+
 ### Answer guard
 
 Every answer one member's agent gives another member is read, before that
@@ -2387,6 +2396,7 @@ The compose service has no secret of its own to fall back on, and binds `127.0.0
 | `AGENTS_PRIMARY_SECRETS_KMS_KEY_ID` | unset | KMS key (an ID, ARN or alias) one-time secrets are sealed under, with the encryption context `service=oryxa-agents`. Without it the three secret routes answer `503`, though the store's table is still migrated, swept and forgotten from |
 | `AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID` | unset | Bedrock guardrail the consent guard grounds every answer to a Slack question with: contextual grounding and denied topics (`deploy/production/answer_guard.tf`, not the answer guard's guardrail). Set with its version or not at all; without one, every such answer is held as unchecked |
 | `AGENTS_PRIMARY_CONSENT_GUARDRAIL_VERSION` | unset | That guardrail's version, set with its ID |
+| `AGENTS_PRIMARY_CONSENT_KNOWLEDGE_PASSAGES_ONLY` | `false` | Opt-in passage-only knowledge grounding. Excludes knowledge metadata from grounding, keeps full capture for summary copying and other tool sources, and holds substantive answers with no usable source. Does not change thresholds |
 | `AGENTS_PRIMARY_DATABASE_MAX_CONNS` | `8` | Size of the pool the service keeps for ADK's tables, apart from the shared one |
 | `AGENTS_EVENTS_QUEUE_URL` | unset | Queue carrying batching's app batches and interaction lifecycle events; without it neither app nor cross-agent events wake persistent agents (see [Wake-ups](#wake-ups)) |
 | `AWS_ENDPOINT_URL_SQS` | unset | SQS endpoint override for the LocalStack emulator |

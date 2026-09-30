@@ -109,6 +109,10 @@ type Config struct {
 	// owner's review as unchecked.
 	ConsentGuardrailIdentifier string
 	ConsentGuardrailVersion    string
+	// ConsentPassagesOnly is an opt-in source-quality experiment.
+	// It changes knowledge grounding to explicit returned passage text, keeps
+	// full capture for copying and other tools, and defaults to false.
+	ConsentPassagesOnly bool
 	// ModelPrices overrides the price table used for run costs, as JSON of
 	// per-million USD rates by model.
 	ModelPrices string
@@ -263,6 +267,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if (consentGuardrailIdentifier == "") != (consentGuardrailVersion == "") {
 		return Config{}, errors.New("AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID and AGENTS_PRIMARY_CONSENT_GUARDRAIL_VERSION are set together or not at all: one without the other would ground no answer")
 	}
+	consentKnowledgePassagesOnly, err := boolValue(getenv, "AGENTS_PRIMARY_CONSENT_KNOWLEDGE_PASSAGES_ONLY", false)
+	if err != nil {
+		return Config{}, err
+	}
 	slackConsent, slackTicketKey, err := slackConsentSettings(getenv)
 	if err != nil {
 		return Config{}, err
@@ -359,6 +367,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		SecretsKMSKeyID:            strings.TrimSpace(getenv("AGENTS_PRIMARY_SECRETS_KMS_KEY_ID")),
 		ConsentGuardrailIdentifier: consentGuardrailIdentifier,
 		ConsentGuardrailVersion:    consentGuardrailVersion,
+		ConsentPassagesOnly:        consentKnowledgePassagesOnly,
 		ModelPrices:                modelPrices,
 		AppsURL:                    strings.TrimSpace(getenv("APPS_URL")),
 		RagURL:                     strings.TrimSpace(getenv("RAG_URL")),

@@ -38,6 +38,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	if config.GuardrailIdentifier != "" || config.GuardrailVersion != "" || config.GuardrailFailClosed || config.ModelPrices != "" {
 		t.Fatalf("guardrail/pricing config = %+v", config)
 	}
+	if config.ConsentPassagesOnly {
+		t.Fatal("passage-only consent grounding must default off")
+	}
 	if config.AppsURL != "" || config.RagURL != "" || config.KnowledgeURL != "" || config.TeamsURL != "" || config.AuthURL != "" || config.ServiceKeyID != "" {
 		t.Fatalf("apps config = %+v", config)
 	}
@@ -61,6 +64,19 @@ func TestFromEnvDefaults(t *testing.T) {
 	// The relevance check holds nobody's answers until a deployment says it may.
 	if config.GuardRelevanceCap != guardpolicy.RelevanceShadow || len(config.GuardHoldOrgs) != 0 {
 		t.Fatalf("answer guard config = %q, %v; want a ceiling of shadow and no organization exempt", config.GuardRelevanceCap, config.GuardHoldOrgs)
+	}
+}
+
+func TestConsentPassagesOnlyIsAnExplicitBooleanOptIn(t *testing.T) {
+	const key = "AGENTS_PRIMARY_CONSENT_KNOWLEDGE_PASSAGES_ONLY"
+	for value, want := range map[string]bool{"": false, "false": false, "true": true} {
+		config, err := FromEnv(env(map[string]string{key: value}))
+		if err != nil || config.ConsentPassagesOnly != want {
+			t.Errorf("%q: passage-only = %v, err = %v; want %v", value, config.ConsentPassagesOnly, err, want)
+		}
+	}
+	if _, err := FromEnv(env(map[string]string{key: "sometimes"})); err == nil || !strings.Contains(err.Error(), key) {
+		t.Fatalf("invalid passage-only value: %v", err)
 	}
 }
 
