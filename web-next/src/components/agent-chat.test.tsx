@@ -781,6 +781,15 @@ describe("a conversation left alone", () => {
     expect(onNewChat()).toBe(true)
   })
 
+  it("does not take a reconnect that hands over the same conversation again for news", async () => {
+    await openThread()
+    comeBack(50 * 60_000)
+    // The socket reconnected in the background: the same messages, again.
+    updateChat({ messages: [...hooks.chat.messages] })
+    comeBack(20 * 60_000)
+    expect(onNewChat()).toBe(true)
+  })
+
   it("does not leave a run that is streaming, and starts counting when it ends", async () => {
     await openThread()
     updateChat({ status: "streaming" })

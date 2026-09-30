@@ -296,6 +296,58 @@ describe("what the agents' chats keep across a switch", () => {
   })
 })
 
+describe("a first message on its way", () => {
+  it("goes back to the composer when the member leaves before the new thread's socket takes it", async () => {
+    const go = stubGo({ threads: [] })
+    withQueries(panel())
+    await screen.findByText(blank)
+    await screen.findByRole("group", { name: "Switch agent" })
+
+    type(leoBox(), "Plan the launch")
+    fireEvent.keyDown(leoBox(), { key: "Enter" })
+    // The thread exists and its chat is waiting for the socket.
+    await socketOn(chatName("th_new"))
+    expect(go.calls).toContain(`POST /v1/organizations/${ORG}/threads`)
+
+    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
+    await screen.findByRole("textbox", { name: "Message Scout" })
+    fireEvent.click(within(switcher()).getByRole("button", { name: "Leo" }))
+
+    await waitFor(() => expect(leoBox().value).toBe("Plan the launch"))
+    expect(
+      agentChats.named(chatName("th_new")).sendMessage
+    ).not.toHaveBeenCalled()
+  })
+
+  it("is not sent into the conversation a request moved the chat to meanwhile", async () => {
+    const go = stubGo({ threads: [thread("th_b", "Somewhere else", 3 * HOUR)] })
+    withQueries(panel())
+    await screen.findByText(blank)
+    await screen.findByRole("group", { name: "Switch agent" })
+    const release = go.holdCreate()
+
+    type(leoBox(), "Plan the launch")
+    fireEvent.keyDown(leoBox(), { key: "Enter" })
+    await waitFor(() =>
+      expect(go.calls).toContain(`POST /v1/organizations/${ORG}/threads`)
+    )
+    // Home opens another conversation while the new thread is being made.
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_b" }))
+    const socket = await socketOn(chatName("th_b"))
+    act(() => release())
+    socket.open()
+
+    // The message went nowhere, and is back in the composer; the chat stays
+    // on the conversation it was asked to open.
+    await waitFor(() => expect(leoBox().value).toBe("Plan the launch"))
+    expect(
+      agentChats.named(chatName("th_b")).sendMessage
+    ).not.toHaveBeenCalled()
+    expect(roomSockets.named(chatName("th_new"))).toHaveLength(0)
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_b")
+  })
+})
+
 describe("a request to open a conversation", () => {
   it("opens the conversation it names on the primary agent, and remembers the choice", async () => {
     stubGo({

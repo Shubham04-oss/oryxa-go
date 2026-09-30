@@ -170,8 +170,20 @@ export function AgentChat({
     enabled: hydrated,
   })
   // The first message of a new conversation, until its thread's socket
-  // takes it.
-  const [pending, setPending] = useState<string | null>(null)
+  // takes it. It belongs to the blank chat it was written in and then to the
+  // thread made for it: a chat that moves elsewhere (a request, another
+  // agent) leaves it behind rather than send it into a conversation it was
+  // not written for.
+  const [held, setHeld] = useState<{ text: string; threadId?: string } | null>(
+    null
+  )
+  const pending =
+    held &&
+    (held.threadId === undefined
+      ? threadId === null
+      : held.threadId === threadId)
+      ? held.text
+      : null
   const [pendingScreen, setPendingScreen] = useState<ScreenContext>()
   const [starting, setStarting] = useState(false)
   const [notice, setNotice] = useState("")
@@ -216,8 +228,8 @@ export function AgentChat({
     }
   }, [threadId, threads.data])
 
-  // Whether this chat is still on screen, for a thread that takes a moment
-  // to create.
+  // Whether this chat is still on screen, and still on the conversation it
+  // is now, for a thread that takes a moment to create.
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -225,6 +237,22 @@ export function AgentChat({
       mounted.current = false
     }
   }, [])
+  const current = useRef(threadId)
+  useEffect(() => {
+    current.current = threadId
+  })
+  // A first message still waiting when the member leaves for another agent
+  // goes back to the composer, which the panel keeps: it was never sent.
+  const waiting = useRef(pending)
+  useEffect(() => {
+    waiting.current = pending
+  })
+  useEffect(
+    () => () => {
+      if (waiting.current) onDraftChange(waiting.current)
+    },
+    []
+  )
 
   // A message the app asked to start the conversation with goes into the new
   // chat as the composer's would, once and only once whatever the renders.
@@ -252,14 +280,16 @@ export function AgentChat({
   async function start(message: string) {
     setStarting(true)
     setNotice("")
-    setPending(message)
+    setHeld({ text: message })
     setPendingScreen(getScreenContext?.())
     onDraftChange("")
     try {
       const thread = await createThread(organizationId)
-      if (!mounted.current) {
-        // The member went to another agent meanwhile. The message goes back
-        // to the composer rather than into a chat nobody is looking at.
+      if (!mounted.current || current.current !== null) {
+        // The member went to another agent, or another conversation,
+        // meanwhile. The message goes back to the composer rather than into
+        // a chat it was not written for.
+        setHeld(null)
         onDraftChange(message)
         return
       }
@@ -273,10 +303,11 @@ export function AgentChat({
       void queryClient.invalidateQueries({
         queryKey: threadKeys.list(organizationId),
       })
+      setHeld({ text: message, threadId: thread.id })
       setThreadId(thread.id)
       if (scope) rememberChoice(scope, PRIMARY_CHAT_AGENT, thread.id)
     } catch (error) {
-      setPending(null)
+      setHeld(null)
       onDraftChange(message)
       setNotice(failureText(error, "Couldn't start a conversation. Try again."))
     } finally {
@@ -286,7 +317,7 @@ export function AgentChat({
 
   function startNew() {
     setThreadId(null)
-    setPending(null)
+    setHeld(null)
     setNotice("")
     if (scope) rememberChoice(scope, PRIMARY_CHAT_AGENT, null)
   }
@@ -309,7 +340,7 @@ export function AgentChat({
           threadId={threadId}
           agentName={agentName}
           pending={pending}
-          onPendingTaken={() => setPending(null)}
+          onPendingTaken={() => setHeld(null)}
           pendingScreen={pendingScreen}
           getScreenContext={getScreenContext}
           onMissing={() => {
@@ -717,9 +748,16 @@ function ThreadChat({
   // after an hour with nothing sent or heard, and nothing streaming or
   // waiting on the member. Opening the conversation counts as activity, so
   // one the member just chose is never taken from them. Nothing is deleted.
+  // How much the conversation holds, so that a reconnect handing over the
+  // same messages again is not taken for something heard.
+  const said = useMemo(
+    () =>
+      chat.messages.reduce((total, item) => total + 1 + item.parts.length, 0),
+    [chat.messages]
+  )
   useEffect(() => {
     lastActivity.current = Date.now()
-  }, [chat.messages, running])
+  }, [said, running])
   const cameBack = useEffectEvent(() => {
     if (document.visibilityState === "hidden") return
     if (running || actionable.size > 0) return
