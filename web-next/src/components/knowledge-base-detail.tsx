@@ -832,6 +832,7 @@ export function KnowledgeBaseDetail({
   corpusId,
   name,
   viewer,
+  initiallyAdding = false,
   answering = false,
   onClose,
   onOpenTools,
@@ -841,6 +842,8 @@ export function KnowledgeBaseDetail({
   /** The name the list showed, for the moments before the corpus loads. */
   name: string
   viewer: RagViewer
+  /** The just-created base starts with the existing Note form open. */
+  initiallyAdding?: boolean
   /** Whether this deployment can write answers (`capabilities.answering`). */
   answering?: boolean
   onClose: () => void
@@ -857,7 +860,7 @@ export function KnowledgeBaseDetail({
   const documentsQuery = useInfiniteQuery(
     documentsInfiniteQueryOptions(organizationId, corpusId)
   )
-  const [adding, setAdding] = useState(false)
+  const [adding, setAdding] = useState(initiallyAdding)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmingDocument, setConfirmingDocument] = useState<string | null>(
     null

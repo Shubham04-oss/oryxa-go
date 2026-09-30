@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { UseQueryResult } from "@tanstack/react-query"
@@ -67,6 +67,7 @@ function KnowledgeBaseList({
   corpora,
   unavailable,
   onSelect,
+  onCreated,
 }: {
   organizationId?: string
   organizationName?: string
@@ -74,6 +75,7 @@ function KnowledgeBaseList({
   corpora: UseQueryResult<Corpus[]>
   unavailable: boolean
   onSelect: (base: SelectedKnowledgeBase) => void
+  onCreated: (base: SelectedKnowledgeBase) => void
 }) {
   const queryClient = useQueryClient()
   const [query, setQuery] = useState("")
@@ -135,7 +137,7 @@ function KnowledgeBaseList({
           setDescription("")
           setScope("member")
           setQuery("")
-          onSelect({ id: created.id, name: created.name })
+          onCreated({ id: created.id, name: created.name })
         },
         onError: (error) => setFormError(createError(error)),
       }
@@ -179,9 +181,9 @@ function KnowledgeBaseList({
         >
           <div>
             <h3>New knowledge base</h3>
-            <p>Give this collection a name. You can add content next.</p>
+            <p>Name the collection, then add what your agents should know.</p>
           </div>
-          <label htmlFor="knowledge-base-name">Name</label>
+          <label htmlFor="knowledge-base-name">Short name</label>
           <Input
             id="knowledge-base-name"
             value={name}
@@ -191,12 +193,17 @@ function KnowledgeBaseList({
             }}
             aria-invalid={Boolean(nameError)}
             aria-describedby={
-              nameError ? "knowledge-base-name-error" : undefined
+              nameError
+                ? "knowledge-base-name-hint knowledge-base-name-error"
+                : "knowledge-base-name-hint"
             }
             placeholder="e.g. Engineering handbook"
             maxLength={60}
             disabled={create.isPending}
           />
+          <p className="workspace-knowledge-hint" id="knowledge-base-name-hint">
+            Short label, 2–60 characters. Add facts and notes next.
+          </p>
           {nameError && (
             <p
               className="workspace-knowledge-error"
@@ -393,6 +400,9 @@ export function KnowledgeBases({
   onSelect: (base: SelectedKnowledgeBase | null) => void
   onOpenTools?: () => void
 }) {
+  // Only the completed create action opens adding automatically. A history
+  // pick, a return to the list, or a later visit uses the normal detail view.
+  const [createdBaseId, setCreatedBaseId] = useState<string | null>(null)
   const viewer: RagViewer = { userId, role: organizationRole }
   const capabilities = useQuery({
     ...capabilitiesQueryOptions(),
@@ -407,6 +417,14 @@ export function KnowledgeBases({
   const unavailable =
     !organizationId || (corpora.isError && capabilities.isError)
 
+  useEffect(() => {
+    if (!unavailable && selected?.id === createdBaseId) {
+      // Detail has taken its initial state. Consume the handoff even when
+      // navigation later changes `selected` through the shell's Back button.
+      setCreatedBaseId(null)
+    }
+  }, [unavailable, selected?.id, createdBaseId])
+
   if (organizationId && selected && !unavailable) {
     return (
       <div className="workspace-knowledge-page">
@@ -416,8 +434,12 @@ export function KnowledgeBases({
           corpusId={selected.id}
           name={selected.name}
           viewer={viewer}
+          initiallyAdding={createdBaseId === selected.id}
           answering={capabilities.data?.answering}
-          onClose={() => onSelect(null)}
+          onClose={() => {
+            setCreatedBaseId(null)
+            onSelect(null)
+          }}
           onOpenTools={onOpenTools}
         />
       </div>
@@ -431,7 +453,14 @@ export function KnowledgeBases({
       viewer={viewer}
       corpora={corpora}
       unavailable={unavailable}
-      onSelect={onSelect}
+      onSelect={(base) => {
+        setCreatedBaseId(null)
+        onSelect(base)
+      }}
+      onCreated={(base) => {
+        setCreatedBaseId(base.id)
+        onSelect(base)
+      }}
     />
   )
 }
