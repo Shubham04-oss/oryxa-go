@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, renderHook } from "@testing-library/react"
+import { act, cleanup, renderHook } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   FRESH_CONVERSATION_MS,
@@ -31,6 +31,13 @@ import type {
 const now = Date.parse("2026-09-30T10:00:00Z")
 const ago = (ms: number) => new Date(now - ms).toISOString()
 const scope = { organizationId: "org-1", userId: "user-1" }
+
+afterEach(() => {
+  cleanup()
+  window.sessionStorage.clear()
+  vi.restoreAllMocks()
+  vi.useRealTimers()
+})
 
 describe("opening a conversation", () => {
   const threads = [
@@ -79,7 +86,7 @@ describe("opening a conversation", () => {
     ).toBeNull()
     expect(waiting).not.toHaveBeenCalled()
   })
-  it("scans every real chat and picks the newest pending, including untitled chats", async () => {
+  it("checks recent real chats and picks the newest pending, including untitled chats", async () => {
     const waiting = vi.fn(async (id: string) => id !== "newest")
     expect(
       await openingThread({
@@ -99,6 +106,38 @@ describe("opening a conversation", () => {
       "newest",
       "untitled",
       "old",
+    ])
+  })
+  it("checks at most the newest five chat conversations in a long history", async () => {
+    const history = Array.from({ length: 20 }, (_, i) => ({
+      id: `chat_${i}`,
+      title: `Chat ${i}`,
+      updated_at: ago(i * 1000),
+      origin: "chat",
+    })).reverse()
+    const waiting = vi.fn(async (id: string) => id === "chat_5")
+    expect(
+      await openingThread({
+        threads: [
+          {
+            id: "background",
+            title: "Wake",
+            origin: "wakeup",
+            updated_at: ago(0),
+          },
+          ...history,
+        ],
+        choice: null,
+        now,
+        waiting,
+      })
+    ).toBeNull()
+    expect(waiting.mock.calls.map(([id]) => id)).toEqual([
+      "chat_0",
+      "chat_1",
+      "chat_2",
+      "chat_3",
+      "chat_4",
     ])
   })
   it("opens New when every check fails or nothing waits, including a stale New choice", async () => {
@@ -941,6 +980,44 @@ describe("last viewed timestamps", () => {
       window.dispatchEvent(new Event("pagehide"))
     })
     expect(rememberedView(scope, "agent")?.leftAt).toBe(now + 1000)
+  })
+  it("throttles activity saves to once per 15 seconds but saves a page leave immediately", () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(now)
+    const writes = vi.spyOn(
+      Object.getPrototypeOf(window.sessionStorage),
+      "setItem"
+    )
+    const hook = renderHook(() =>
+      useRememberedChoice(
+        { ...initialPrimaryChat(), thread: "old" },
+        scope,
+        "agent"
+      )
+    )
+    expect(writes).toHaveBeenCalledTimes(1)
+    for (let second = 1; second < 15; second++) {
+      vi.setSystemTime(now + second * 1000)
+      act(() => {
+        document.dispatchEvent(new Event("pointerdown"))
+        document.dispatchEvent(new Event("keydown"))
+        for (let wheel = 0; wheel < 10; wheel++)
+          document.dispatchEvent(new Event("wheel"))
+      })
+    }
+    expect(writes).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(now + 15_000)
+    act(() => document.dispatchEvent(new Event("wheel")))
+    expect(writes).toHaveBeenCalledTimes(2)
+    vi.setSystemTime(now + 15_001)
+    act(() => document.dispatchEvent(new Event("keydown")))
+    expect(writes).toHaveBeenCalledTimes(2)
+    act(() => window.dispatchEvent(new Event("pagehide")))
+    expect(writes).toHaveBeenCalledTimes(3)
+    expect(rememberedView(scope, "agent")?.leftAt).toBe(now + 15_001)
+    hook.unmount()
+    expect(writes).toHaveBeenCalledTimes(3)
+    writes.mockRestore()
   })
   it("treats a legacy unbounded choice as stale", () => {
     window.sessionStorage.setItem("oryxa.chat.org-1.user-1.agent", "old")

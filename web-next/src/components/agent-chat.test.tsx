@@ -1481,6 +1481,34 @@ describe("primary chat history actions", () => {
     expect((composer() as HTMLTextAreaElement).value).toBe("Keep my draft")
     expect(notSentWords()).toEqual(["Still waiting"])
   })
+  it("renders a long history while fetching approval details for only its newest five chats", async () => {
+    const now = Date.now()
+    const history = Array.from({ length: 20 }, (_, i) => ({
+      id: `chat_${i}`,
+      title: `Chat ${i}`,
+      origin: "chat",
+      updated_at: new Date(now - i * 1000).toISOString(),
+    })).reverse()
+    const calls = stubApi({ threads: history, rememberLatest: false })
+    renderChat()
+    expect(
+      await screen.findByText("Ask anything to start a conversation.")
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "History" }))
+    expect(screen.getAllByRole("listitem")).toHaveLength(20)
+    const details = calls.filter((call) =>
+      /^GET \/v1\/organizations\/org_1\/threads\//.test(call)
+    )
+    expect(details).toHaveLength(5)
+    expect(details).toEqual(
+      expect.arrayContaining(
+        Array.from(
+          { length: 5 },
+          (_, i) => `GET /v1/organizations/org_1/threads/chat_${i}`
+        )
+      )
+    )
+  })
   it("opens New when no member was recently present even if the server chat is fresh", async () => {
     stubApi({ threads: [thread("th_1", "Fresh")], rememberLatest: false })
     renderChat()

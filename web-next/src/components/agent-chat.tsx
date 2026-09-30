@@ -29,6 +29,7 @@ import {
   rememberedView,
   recentNewView,
   chatHistory,
+  approvalCandidates,
   useRememberedView,
   shownThread,
 } from "@/lib/threads/chat-choice"
@@ -146,7 +147,10 @@ async function waitsOnMember(
   threadId: string
 ): Promise<boolean> {
   const detail = await queryClient
-    .fetchQuery(threadDetailQueryOptions(organizationId, threadId))
+    .fetchQuery({
+      ...threadDetailQueryOptions(organizationId, threadId),
+      staleTime: 10_000,
+    })
     .catch(() => undefined)
   return (detail?.pending_confirmations.length ?? 0) > 0
 }
@@ -217,8 +221,9 @@ export function AgentChat({
     chat.chosen || firstMessage(chat) !== null
   )
   const history = chatHistory(threads.data ?? [])
+  const candidates = approvalCandidates(history)
   const historyDetails = useQueries({
-    queries: history.map((thread) => ({
+    queries: candidates.map((thread) => ({
       ...threadDetailQueryOptions(organizationId, thread.id),
       staleTime: 10_000,
       refetchInterval: (query: { state: { data?: ThreadDetail } }) =>
@@ -228,12 +233,21 @@ export function AgentChat({
       enabled: hydrated && visible,
     })),
   })
+  const knownDetails = new Map(
+    candidates.map((thread, i) => [thread.id, historyDetails[i].data])
+  )
   const approvals = new Set(
     history
-      .filter(
-        (_, i) =>
-          (historyDetails[i].data?.pending_confirmations.length ?? 0) > 0
-      )
+      .filter((thread) => {
+        // Older chats may already be known from an explicit history pick;
+        // reading that cache never fans out more network requests.
+        const detail =
+          knownDetails.get(thread.id) ??
+          queryClient.getQueryData<ThreadDetail>(
+            threadKeys.detail(organizationId, thread.id)
+          )
+        return (detail?.pending_confirmations.length ?? 0) > 0
+      })
       .map((thread) => thread.id)
   )
   const first = firstMessage(chat)

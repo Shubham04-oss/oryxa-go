@@ -42,6 +42,7 @@ import {
 import type { ThreadChatMessage } from "@/lib/threads/chat-messages"
 import {
   openingThread,
+  approvalCandidates,
   rememberedView,
   recentNewView,
   useRememberedView,
@@ -446,8 +447,9 @@ function SpecialistChatSession({
     visible && decided,
     explicitNew
   )
+  const candidates = approvalCandidates(threads.data ?? [])
   const historyDetails = useQueries({
-    queries: (threads.data ?? []).map((thread) => ({
+    queries: candidates.map((thread) => ({
       ...specialistThreadQueryOptions(organizationId, specialist.id, thread.id),
       staleTime: 10_000,
       refetchInterval: (query: { state: { data?: ThreadDetail } }) =>
@@ -457,12 +459,19 @@ function SpecialistChatSession({
       enabled: visible,
     })),
   })
+  const knownDetails = new Map(
+    candidates.map((thread, i) => [thread.id, historyDetails[i].data])
+  )
   const held = new Set(
     (threads.data ?? [])
-      .filter(
-        (_, i) =>
-          (historyDetails[i].data?.pending_confirmations.length ?? 0) > 0
-      )
+      .filter((thread) => {
+        const detail =
+          knownDetails.get(thread.id) ??
+          queryClient.getQueryData<ThreadDetail>(
+            specialistKeys.thread(organizationId, specialist.id, thread.id)
+          )
+        return (detail?.pending_confirmations.length ?? 0) > 0
+      })
       .map((thread) => thread.id)
   )
   const [refusal, setRefusal] = useState<Refusal>()
@@ -680,15 +689,16 @@ function SpecialistChatSession({
     const choice = openingChoice.current
     const now = Date.now()
     void openingThread({
-      threads: threads.data.map((thread) => ({ ...thread, origin: "chat" })),
+      threads: threads.data,
       choice: choice?.choice ?? null,
       leftAt: choice?.leftAt,
       now,
       waiting: async (id) => {
         const detail = await queryClient
-          .fetchQuery(
-            specialistThreadQueryOptions(organizationId, specialist.id, id)
-          )
+          .fetchQuery({
+            ...specialistThreadQueryOptions(organizationId, specialist.id, id),
+            staleTime: 10_000,
+          })
           .catch(() => undefined)
         return (detail?.pending_confirmations.length ?? 0) > 0
       },

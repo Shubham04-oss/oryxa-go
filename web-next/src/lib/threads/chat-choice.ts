@@ -95,6 +95,13 @@ export function chatHistory(threads: readonly ListedThread[]): ListedThread[] {
     .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
 }
 
+/** Bound full-detail approval reads even when history contains many conversations. */
+export function approvalCandidates(
+  threads: readonly ListedThread[]
+): ListedThread[] {
+  return chatHistory(threads).slice(0, 5)
+}
+
 /** Only a last-viewed choice strictly younger than five minutes can reopen. */
 export function chooseThread(
   threads: readonly ListedThread[],
@@ -128,7 +135,7 @@ export function recentNewView(
   )
 }
 
-/** Recent view (including explicit New), otherwise newest pending approval, otherwise New. */
+/** Recent view (including explicit New), otherwise newest pending among five recent chats, otherwise New. */
 export async function openingThread({
   threads,
   choice,
@@ -144,7 +151,7 @@ export async function openingThread({
 }): Promise<string | null> {
   const chosen = chooseThread(threads, choice, now, leftAt)
   if (chosen || recentNewView({ choice, leftAt }, now)) return chosen
-  const history = chatHistory(threads)
+  const history = approvalCandidates(threads)
   const held = await Promise.all(
     history.map((thread) => waiting(thread.id).catch(() => false))
   )
@@ -171,21 +178,29 @@ export function useRememberedView(
       !visible
     )
       return
-    const save = () =>
-      rememberChoice({ organizationId, userId }, agentId, thread)
+    let lastSavedAt = -Infinity
+    const save = () => {
+      lastSavedAt = Date.now()
+      rememberChoice({ organizationId, userId }, agentId, thread, lastSavedAt)
+    }
     let present = document.visibilityState !== "hidden"
     const leave = () => {
       if (present) save()
       present = false
     }
     const activity = () => {
-      if (present && document.visibilityState !== "hidden") save()
+      if (
+        present &&
+        document.visibilityState !== "hidden" &&
+        Date.now() - lastSavedAt >= 15_000
+      )
+        save()
     }
     const visibility = () => {
       if (document.visibilityState === "hidden") leave()
       else {
         present = true
-        save()
+        activity()
       }
     }
     activity()

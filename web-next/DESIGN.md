@@ -209,10 +209,13 @@ not permission to copy every incidental value into a new component.
   collapse/re-expand and tab absence. On remount or reload, the conversation
   the member left **less than five minutes ago** in this tab reopens, including
   a history pick; an **explicit** New chat in that window stays new. Otherwise,
-  open the newest accessible conversation waiting on the member's tool approval,
-  including an untitled one; otherwise open New chat. Record member presence and
+  check the five newest chat conversations and open the newest one waiting on
+  the member's tool approval, including an untitled one; otherwise open New chat.
+  History still lists every conversation, and retains known approval markers
+  from cached details; it never fetches all past transcripts to mark the list. Record member presence and
   actual leave time per workspace, member and agent, never server update time.
-  A hidden panel/tab never renews that grace. An automatically opened blank
+  Activity saves at most once every 15 seconds; pagehide, hiding and unmount
+  save immediately. A hidden panel/tab never renews that grace. An automatically opened blank
   chat does not suppress a newly waiting approval. The member can type at once;
   the primary chat gives choosing five seconds before it opens New. Keep drafts
   and unsent messages, and never automatically switch a mounted conversation.

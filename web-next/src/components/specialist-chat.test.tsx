@@ -986,6 +986,47 @@ describe("specialist history and the default conversation", () => {
     chatSocket().state({ threadId: "pending" })
     expect((composer as HTMLTextAreaElement).value).toBe("Keep the draft")
   })
+  it("keeps a long history list while reading approval details for only five recent chats", async () => {
+    const now = Date.now()
+    const backend = fakeAgentsBackend({
+      agents: [primary, scout],
+      conversations: {
+        [scout.id]: Array.from({ length: 20 }, (_, i) =>
+          conversation({
+            id: `chat_${i}`,
+            title: `Chat ${i}`,
+            updated_at: new Date(now - i * 1000).toISOString(),
+          })
+        ).reverse(),
+      },
+    })
+    renderOwn(backend)
+    await chatLoaded()
+    chatSocket().open()
+    chatSocket().state({ threadId: null })
+    await waitFor(() =>
+      expect(backend.writes()).toContainEqual({
+        method: "PUT",
+        path: `/agents/specialist-chat-agent/${scoutChat}/conversation`,
+        body: { thread_id: null },
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "History" }))
+    expect(screen.getAllByRole("listitem")).toHaveLength(20)
+    const details = backend.calls.filter(
+      (call) => call.method === "GET" && /\/threads\//.test(call.path)
+    )
+    expect(details).toHaveLength(5)
+    expect(details.map((call) => call.path)).toEqual(
+      expect.arrayContaining(
+        Array.from(
+          { length: 5 },
+          (_, i) =>
+            `/v1/organizations/${ORG}/agents/${scout.id}/threads/chat_${i}`
+        )
+      )
+    )
+  })
   it("records a resumed explicit New at the member's latest real leave", async () => {
     vi.useFakeTimers({ toFake: ["Date"] })
     const now = Date.now()
