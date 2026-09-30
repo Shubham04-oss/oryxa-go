@@ -776,10 +776,19 @@ release and its digest, in a new task definition. Once it is done:
 - **Database**: Performance Insights and Enhanced Monitoring in RDS; queries
   slower than 500 ms are logged to `/aws/rds/instance/oryxa-production/postgresql`.
   That log group and `/upgrade` beside it keep 30 days, as the task's do.
-- **Cloudflare's rules on the zone** (`production/hardening.tf`): `app.` and
-  `api.` block every path under `/v1/internal`, and a client IP that POSTs to
-  `/v1/auth/password/` more than `signin_requests_per_period` (20) times in a
-  minute, counted at each Cloudflare data center, is blocked for ten minutes.
+- **Cloudflare's rules on the zone** (`production/hardening.tf`): on `api.`,
+  POSTs to exactly `/v1/apps/slack/events` and `/v1/apps/slack/interactivity`
+  skip the managed WAF phase, including the Cloudflare Managed Ruleset and
+  OWASP Core Ruleset. Slack's form-encoded button payloads can trip OWASP's
+  anomaly scoring before they reach the origin. Apps verifies Slack's signature
+  and timestamp before processing either delivery (`apps/internal/slackbot`).
+  The exception is logged and uses Cloudflare provider v5 object attributes:
+  `action_parameters = { phases = ["http_request_firewall_managed"] }` and
+  `logging = { enabled = true }`. Other hosts, methods and paths keep managed
+  WAF inspection; custom rules and rate limiting still run for Slack deliveries.
+  `app.` and `api.` block every path under `/v1/internal`, and a client IP that
+  POSTs to `/v1/auth/password/` more than `signin_requests_per_period` (20)
+  times in a minute, counted at each Cloudflare data center, is blocked for ten minutes.
   The zone is on the Enterprise plan, which allows the window, the block and
   matching on the method. Blocked requests are in the zone's Security events,
   and a blocked one gets Cloudflare's own 429 page.
