@@ -268,10 +268,11 @@ export function usePrimaryChatActivity(
 
 // What the agent panel holds for the primary chat, in one reducer: the
 // conversation it is on, the requests and first messages waiting their turn,
-// and the members' unsent messages. Keeping it in one place is what lets
-// every step be named by the request it belongs to, so a slow step of an old
-// request can't undo a newer one and no message is dropped: each first
-// message is made a conversation of its own, and sent into it, in order.
+// the first messages that could not be sent, and every agent's draft. Keeping
+// it in one place is what lets every step be named by the request it belongs
+// to, so a slow step of an old request can't undo a newer one and no message
+// is dropped: each first message is made a conversation of its own, and sent
+// into it, in order, or kept, in view, until the member deals with it.
 
 /** Where the primary chat's unsent message is kept, among each agent's (the others by the specialist's id). */
 export const PRIMARY_DRAFT = "primary"
@@ -301,6 +302,21 @@ export type ChatTask =
   | { id: number; kind: "blank" }
   | FirstMessage
 
+/**
+ * A first message that was not sent. It belongs to no conversation, so the
+ * chat keeps it in view whichever one is open, until the member sends it
+ * again, moves it to the composer or lets it go.
+ */
+export type UnsentMessage = {
+  /** The request or send it came from. */
+  id: number
+  text: string
+  /** What the member was looking at when they sent it. */
+  screen?: ScreenContext
+  /** Why it was not sent. */
+  notice: string
+}
+
 export type PrimaryChat = {
   /** The conversation the chat is on: undefined until it is decided, null for a new one. */
   thread: string | null | undefined
@@ -310,10 +326,10 @@ export type PrimaryChat = {
   tasks: ChatTask[]
   /** Every agent's unsent message, by `PRIMARY_DRAFT` or the specialist's id. */
   drafts: Partial<Record<string, string>>
-  /** Why a start didn't happen, for the blank chat to say. */
+  /** Why the chat left a conversation, for the blank chat to say. */
   notice: string
-  /** A first message no conversation could be made for, when the composer could not take it back. */
-  unsent: string | null
+  /** The first messages that were not sent, oldest first. */
+  unsent: UnsentMessage[]
   /** Counts each request and send: something the member just did here. */
   touched: number
   /** The last id given to a send from the composer (requests have their own ids, which are positive). */
@@ -333,7 +349,14 @@ export type PrimaryChatAction =
   | { type: "made"; id: number; threadId: string }
   | { type: "taken"; id: number }
   | { type: "sent"; id: number }
+  /** No conversation could be made for a first message (or the one made for it is gone): it is kept as not sent, for `notice`. */
   | { type: "failed"; id: number; notice: string }
+  /** The member sends a message that was not sent once more, into a conversation of its own. */
+  | { type: "retry"; id: number }
+  /** The member puts a message that was not sent in the composer to change it: only while the composer is empty. */
+  | { type: "edit"; id: number }
+  /** The member lets a message that was not sent go. */
+  | { type: "dismiss"; id: number }
   | { type: "draft"; key: string; text: string }
   /** Another member has the page: nothing held is theirs. */
   | { type: "reset" }
@@ -345,7 +368,7 @@ export function initialPrimaryChat(): PrimaryChat {
     tasks: [],
     drafts: {},
     notice: "",
-    unsent: null,
+    unsent: [],
     touched: 0,
     own: 0,
   }
@@ -396,7 +419,6 @@ export function primaryChatReducer(
         tasks: [...state.tasks, task],
         touched: state.touched + 1,
         notice: "",
-        unsent: null,
       })
     }
     case "submit": {
@@ -414,7 +436,6 @@ export function primaryChatReducer(
         drafts: { ...state.drafts, [PRIMARY_DRAFT]: "" },
         touched: state.touched + 1,
         notice: "",
-        unsent: null,
       })
     }
     case "decide":
@@ -435,7 +456,6 @@ export function primaryChatReducer(
         thread: action.thread,
         chosen: true,
         notice: action.notice ?? "",
-        unsent: null,
       })
     }
     case "making":
@@ -466,22 +486,69 @@ export function primaryChatReducer(
     case "failed": {
       const failed = state.tasks.find((task) => task.id === action.id)
       if (!failed || failed.kind !== "send") return state
-      // Back into the composer if it is empty, never over what is there:
-      // the words are then said in the blank chat, where nothing can hide
-      // them.
-      const restore = (state.drafts[PRIMARY_DRAFT] ?? "") === ""
+      // The words are kept as a message of their own, in view whatever the
+      // chat does next, and the composer is never touched: what is in it is
+      // the member's, and a message put there could be typed over.
+      const head = failed === state.tasks[0]
       return settle({
         ...state,
         tasks: state.tasks.filter((task) => task.id !== action.id),
-        thread: failed === state.tasks[0] ? null : state.thread,
-        chosen: failed === state.tasks[0] ? true : state.chosen,
-        drafts: restore
-          ? { ...state.drafts, [PRIMARY_DRAFT]: failed.text }
-          : state.drafts,
-        unsent: restore ? null : failed.text,
-        notice: action.notice,
+        thread: head ? null : state.thread,
+        chosen: head ? true : state.chosen,
+        unsent: [
+          ...state.unsent,
+          {
+            id: failed.id,
+            text: failed.text,
+            screen: failed.screen,
+            notice: action.notice,
+          },
+        ],
+        notice: "",
       })
     }
+    case "retry": {
+      const message = state.unsent.find((item) => item.id === action.id)
+      if (!message) return state
+      // As a send from the composer is: last in line, in a conversation of
+      // its own, with the screen it was first sent from.
+      const own = state.own + 1
+      return settle({
+        ...state,
+        own,
+        unsent: state.unsent.filter((item) => item.id !== action.id),
+        tasks: [
+          ...state.tasks,
+          {
+            id: -own,
+            kind: "send",
+            text: message.text,
+            screen: message.screen,
+          },
+        ],
+        touched: state.touched + 1,
+        notice: "",
+      })
+    }
+    case "edit": {
+      const message = state.unsent.find((item) => item.id === action.id)
+      // Never over what the composer holds.
+      if (!message || (state.drafts[PRIMARY_DRAFT] ?? "").trim() !== "") {
+        return state
+      }
+      return {
+        ...state,
+        drafts: { ...state.drafts, [PRIMARY_DRAFT]: message.text },
+        unsent: state.unsent.filter((item) => item.id !== action.id),
+      }
+    }
+    case "dismiss":
+      return state.unsent.some((item) => item.id === action.id)
+        ? {
+            ...state,
+            unsent: state.unsent.filter((item) => item.id !== action.id),
+          }
+        : state
     case "draft":
       return {
         ...state,

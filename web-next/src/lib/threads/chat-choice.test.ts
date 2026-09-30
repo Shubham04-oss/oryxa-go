@@ -494,7 +494,7 @@ describe("the primary chat's state", () => {
     expect(run([{ type: "submit", text: "  " }], typed)).toBe(typed)
   })
 
-  it("puts a message no conversation could be made for back in an empty composer, and never over one", () => {
+  it("keeps a message no conversation could be made for as not sent, and never touches the composer", () => {
     const failed = (draft: string) =>
       run(
         [
@@ -506,16 +506,20 @@ describe("the primary chat's state", () => {
         run([{ type: "decide", thread: "t_old" }])
       )
 
-    const empty = failed("")
-    expect(empty.drafts[PRIMARY_DRAFT]).toBe("From Home")
-    expect(empty.unsent).toBeNull()
-    // A blank chat, not the conversation it was on.
-    expect(states(empty)).toEqual({ thread: null, shown: null, waiting: [] })
-    expect(empty.notice).toBe("Couldn't start a conversation.")
-
-    const busy = failed("Half a thought")
-    expect(busy.drafts[PRIMARY_DRAFT]).toBe("Half a thought")
-    expect(busy.unsent).toBe("From Home")
+    for (const draft of ["", "Half a thought"]) {
+      const chat = failed(draft)
+      expect(chat.drafts[PRIMARY_DRAFT]).toBe(draft)
+      expect(chat.unsent).toEqual([
+        {
+          id: 1,
+          text: "From Home",
+          screen: undefined,
+          notice: "Couldn't start a conversation.",
+        },
+      ])
+      // A blank chat, not the conversation it was on.
+      expect(states(chat)).toEqual({ thread: null, shown: null, waiting: [] })
+    }
   })
 
   it("goes on to what waited behind a message that failed", () => {
@@ -525,7 +529,124 @@ describe("the primary chat's state", () => {
       { type: "failed", id: 1, notice: "Couldn't start a conversation." },
     ])
     expect(firstMessage(chat)).toMatchObject({ id: 2, text: "Second" })
-    expect(chat.drafts[PRIMARY_DRAFT]).toBe("First")
+    expect(chat.unsent.map((message) => message.text)).toEqual(["First"])
+    expect(chat.drafts[PRIMARY_DRAFT]).toBeUndefined()
+  })
+
+  describe("a message that was not sent", () => {
+    const failedFirst = () =>
+      run([
+        ask(1, { kind: "new", message: "First" }),
+        { type: "failed", id: 1, notice: "Couldn't start a conversation." },
+      ])
+
+    it("stays through every later request, send, move and step, until the member acts on it", () => {
+      const later = run(
+        [
+          ask(2, { kind: "new", message: "Second" }),
+          ...delivered(2, "t_b"),
+          ask(3, { kind: "thread", threadId: "t_x" }),
+          { type: "move", thread: null, notice: "Gone." },
+          { type: "submit", text: "Third" },
+          { type: "making", id: -1 },
+          { type: "failed", id: -1, notice: "Down again." },
+          { type: "draft", key: PRIMARY_DRAFT, text: "Typing" },
+        ],
+        failedFirst()
+      )
+      // Oldest first: the first message is still there, and so is the third.
+      expect(later.unsent.map((message) => message.text)).toEqual([
+        "First",
+        "Third",
+      ])
+      expect(later.unsent.map((message) => message.notice)).toEqual([
+        "Couldn't start a conversation.",
+        "Down again.",
+      ])
+    })
+
+    it("is sent again as a send of its own, last in line, from the screen it was first sent from", () => {
+      const screen = { view: "home/overview", visible_items: [] }
+      const chat = run([
+        {
+          type: "request",
+          request: { kind: "new", message: "First", id: 1, scope },
+          screen,
+        },
+        { type: "failed", id: 1, notice: "Down." },
+        ask(2, { kind: "new", message: "Second" }),
+        { type: "retry", id: 1 },
+      ])
+      expect(chat.unsent).toEqual([])
+      expect(
+        chat.tasks.map((task) => task.kind === "send" && task.text)
+      ).toEqual(["Second", "First"])
+      // Not the id it had: a step still coming for the failed one lands nowhere.
+      const retried = chat.tasks[1]
+      expect(retried.id).toBeLessThan(0)
+      expect(retried).toMatchObject({ kind: "send", screen })
+      expect(
+        primaryChatReducer(chat, { type: "made", id: 1, threadId: "t_late" })
+      ).toBe(chat)
+      expect(chat.touched).toBe(3)
+
+      // Second has its turn, then the retried message its own conversation.
+      const done = run(
+        [...delivered(2, "t_b"), ...delivered(retried.id, "t_c")],
+        chat
+      )
+      expect(states(done)).toEqual({ thread: "t_c", shown: "t_c", waiting: [] })
+    })
+
+    it("can fail again, and is then one message again, not two", () => {
+      const again = run(
+        [
+          { type: "retry", id: 1 },
+          { type: "making", id: -1 },
+          { type: "failed", id: -1, notice: "Still down." },
+        ],
+        failedFirst()
+      )
+      expect(again.unsent).toEqual([
+        { id: -1, text: "First", screen: undefined, notice: "Still down." },
+      ])
+    })
+
+    it("goes into the composer to be changed only while the composer is empty", () => {
+      const empty = run([{ type: "edit", id: 1 }], failedFirst())
+      expect(empty.drafts[PRIMARY_DRAFT]).toBe("First")
+      expect(empty.unsent).toEqual([])
+
+      // Whitespace is nothing to protect.
+      const blank = run(
+        [
+          { type: "draft", key: PRIMARY_DRAFT, text: "  " },
+          { type: "edit", id: 1 },
+        ],
+        failedFirst()
+      )
+      expect(blank.drafts[PRIMARY_DRAFT]).toBe("First")
+
+      const busy = run(
+        [{ type: "draft", key: PRIMARY_DRAFT, text: "Half a thought" }],
+        failedFirst()
+      )
+      expect(primaryChatReducer(busy, { type: "edit", id: 1 })).toBe(busy)
+    })
+
+    it("can be let go, and a second click or a stale id changes nothing", () => {
+      const chat = failedFirst()
+      const gone = run([{ type: "dismiss", id: 1 }], chat)
+      expect(gone.unsent).toEqual([])
+      for (const stale of [
+        { type: "dismiss", id: 1 },
+        { type: "retry", id: 1 },
+        { type: "edit", id: 1 },
+      ] satisfies PrimaryChatAction[]) {
+        expect(primaryChatReducer(gone, stale)).toBe(gone)
+      }
+      expect(primaryChatReducer(chat, { type: "dismiss", id: 9 })).toBe(chat)
+    })
   })
 
   it("ignores a step for a message that is gone", () => {
@@ -593,10 +714,19 @@ describe("the primary chat's state", () => {
       { type: "submit", text: "Hello" },
     ])
     const id = firstMessage(first)!.id
-    const reset = primaryChatReducer(first, { type: "reset" })
+    const failed = run(
+      [
+        ask(7, { kind: "new", message: "Not sent" }),
+        { type: "failed", id: 7, notice: "Down." },
+      ],
+      first
+    )
+    expect(failed.unsent).toHaveLength(1)
+    const reset = primaryChatReducer(failed, { type: "reset" })
     expect(reset.thread).toBeUndefined()
     expect(reset.tasks).toEqual([])
     expect(reset.drafts).toEqual({})
+    expect(reset.unsent).toEqual([])
     expect(reset.touched).toBe(0)
 
     const next = run([{ type: "submit", text: "Hi" }], reset)
