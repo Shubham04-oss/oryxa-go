@@ -60,6 +60,7 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 		// conversation between two programs.
 		return Permanent(errors.New("the message was written by a bot"))
 	}
+	router.logNotMember(ctx, job, "asker", asker)
 
 	channel, err := router.channel(ctx, job, mention)
 	if err != nil {
@@ -81,10 +82,14 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 			}
 			if owner.Member {
 				if seen[owner.Person.UserID] {
+					router.logger.InfoContext(ctx, "a named Slack user is someone already counted",
+						"inbound_id", job.InboundID, "organization_id", job.OrganizationID,
+						"slack_user_id", owner.SlackUserID)
 					continue
 				}
 				seen[owner.Person.UserID] = true
 			}
+			router.logNotMember(ctx, job, "named", owner)
 			owners = append(owners, owner)
 		}
 		ownersNamed = len(owners)
@@ -423,6 +428,19 @@ func (router *Router) refuse(ctx context.Context, job Job, mention *Mention, per
 	router.logger.InfoContext(ctx, "a mention was refused",
 		"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "reason", string(params.Reason))
 	return nil
+}
+
+// logNotMember records why a Slack user did not match a member of the
+// organization, which resolve says for a log and never for a person: a guest,
+// no email Slack will show, an email Slack has not confirmed, or an address no
+// member uses. Without it, a refusal for not_member cannot be told apart.
+func (router *Router) logNotMember(ctx context.Context, job Job, role string, person resolved) {
+	if person.Member {
+		return
+	}
+	router.logger.InfoContext(ctx, "a Slack user is not a member",
+		"inbound_id", job.InboundID, "organization_id", job.OrganizationID,
+		"role", role, "slack_user_id", person.SlackUserID, "why", person.Why)
 }
 
 // organizationName reads the name a refusal to a non-member gives their
