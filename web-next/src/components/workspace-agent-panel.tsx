@@ -252,6 +252,12 @@ export function WorkspaceAgentPanel({
     kind: "agent",
   }
 
+  // Whether the Agents tab's chat is in front of the member: the Agents tab
+  // of an expanded panel, or the conversation column of the focused Agent
+  // overview, and no side conversation over it.
+  const agentsVisible =
+    (primaryWork || (expanded && tab === "agents")) && !agentsSide
+
   // The shell follows the primary chat's conversation: Agent overview lists
   // its files.
   useEffect(() => {
@@ -547,6 +553,7 @@ export function WorkspaceAgentPanel({
                   <AgentsView
                     organizationId={organizationId}
                     scope={scope}
+                    visible={agentsVisible}
                     agents={agents.data}
                     agentId={agentId}
                     onSelectAgent={setAgentId}
@@ -740,6 +747,7 @@ function AgentsTabSide({
 function AgentsView({
   organizationId,
   scope,
+  visible,
   agents,
   agentId,
   onSelectAgent,
@@ -760,6 +768,8 @@ function AgentsView({
 }: {
   organizationId?: string
   scope?: ChatScope
+  /** Whether this view is in front of the member (see `agentsVisible`). */
+  visible: boolean
   /** The member's agents, once read. */
   agents?: ManagedAgent[]
   /** The specialist in use, or null for the primary agent. */
@@ -832,6 +842,7 @@ function AgentsView({
           organizationId={organizationId}
           specialist={inUse}
           missing={agents !== undefined && !listed}
+          visible={visible}
           draft={drafts[inUse.id] ?? ""}
           onDraftChange={(value) => onDraftChange(inUse.id, value)}
           onComposingChange={onComposingChange}
