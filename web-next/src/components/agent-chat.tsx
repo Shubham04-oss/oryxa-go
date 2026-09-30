@@ -119,6 +119,14 @@ const START_TIMEOUT_MS = 30_000
 const SENT_SETTLE_MS = 400
 
 /**
+ * How long the chat looks for the conversation to open (the lists it waits
+ * for, and Go's word on a conversation waiting on the member) before it
+ * gives up and opens a new one, so the member is never held at a chat that
+ * cannot start.
+ */
+const OPENING_FALLBACK_MS = 5000
+
+/**
  * Whether a conversation waits on the member's confirmation, from Go's
  * detail of it. One that can't be read counts as not waiting.
  */
@@ -241,6 +249,18 @@ export function AgentChat({
       stale = true
     }
   }, [threadId, threads.data, agentId])
+
+  // The choice is not worth a wait without end: the member can type at once
+  // (see `OpeningConversation`), and if it takes this long a new chat opens.
+  // What arrives later finds the chat decided, and changes nothing.
+  useEffect(() => {
+    if (threadId !== undefined) return
+    const timer = setTimeout(
+      () => dispatch({ type: "decide", thread: null }),
+      OPENING_FALLBACK_MS
+    )
+    return () => clearTimeout(timer)
+  }, [threadId])
 
   // A first message needs a conversation of its own: this makes it, once,
   // whichever chat is mounted when its turn comes. What it reports is named
@@ -453,7 +473,11 @@ export function AgentChat({
   )
 }
 
-/** The conversation while it loads: its first message if it has one, and a composer that waits. */
+/**
+ * The conversation while it loads: its first message if it has one, and a
+ * composer that takes what the member types now and sends it once there is a
+ * conversation to send to.
+ */
 function OpeningConversation({
   agentName,
   pending,
@@ -487,7 +511,7 @@ function OpeningConversation({
         placeholder={composerLabel(agentName)}
         value={draft}
         onChange={onDraftChange}
-        disabled
+        sendDisabled
         status={error ? undefined : "Connecting…"}
         onFocus={() => onComposingChange(true)}
         onBlur={() => onComposingChange(false)}
@@ -895,7 +919,8 @@ function ThreadChat({
           onDraftChange("")
           send(message)
         }}
-        disabled={connection !== "open" || actionable.size > 0}
+        disabled={actionable.size > 0}
+        sendDisabled={connection !== "open"}
         streaming={running}
         onStop={() => {
           setStopped(true)

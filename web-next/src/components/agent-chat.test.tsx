@@ -200,6 +200,27 @@ function stubApi({
   return calls
 }
 
+/** The list request, answered only when released. */
+function holdMemberList() {
+  let release = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const fetcher = vi.mocked(fetch)
+  const answer = fetcher.getMockImplementation()!
+  fetcher.mockImplementation(async (input, init) => {
+    const url = new URL(String(input), "http://localhost")
+    if (
+      url.pathname === "/v1/organizations/org_1/threads" &&
+      (init?.method ?? "GET") === "GET"
+    ) {
+      await gate
+    }
+    return answer(input, init)
+  })
+  return () => release()
+}
+
 function renderWithQueries(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -304,14 +325,19 @@ describe("AgentChat", () => {
     )
     expect(await screen.findByText("Plan the launch")).toBeTruthy()
 
-    // Waits for the socket before it takes a message.
-    expect(composer().hasAttribute("disabled")).toBe(true)
-    expect(screen.getByText("Connecting…")).toBeTruthy()
-    open("org_1~th_2")
+    // The member can type at once, but nothing goes before the socket is
+    // open.
     expect(composer().hasAttribute("disabled")).toBe(false)
-    expect(screen.queryByText("Connecting…")).toBeNull()
-
+    expect(screen.getByText("Connecting…")).toBeTruthy()
     type("  Draft the brief  ")
+    expect(hooks.sendMessage).not.toHaveBeenCalled()
+    expect((composer() as HTMLTextAreaElement).value).toBe(
+      "  Draft the brief  "
+    )
+
+    open("org_1~th_2")
+    expect(screen.queryByText("Connecting…")).toBeNull()
+    fireEvent.keyDown(composer(), { key: "Enter" })
     expect(hooks.sendMessage).toHaveBeenCalledExactlyOnceWith({
       text: "Draft the brief",
     })
@@ -332,11 +358,18 @@ describe("AgentChat", () => {
 
     act(() => socketFor("org_1~th_1").onClose?.({ code: 1006 }))
     expect(screen.getByText("Reconnecting…")).toBeTruthy()
-    expect(composer().hasAttribute("disabled")).toBe(true)
+    // Typing goes on while the socket is out; sending waits for it.
+    expect(composer().hasAttribute("disabled")).toBe(false)
+    type("While away")
+    expect(hooks.sendMessage).not.toHaveBeenCalled()
     // A dropped socket refreshes the session its reconnect will carry.
     await waitFor(() => expect(calls).toContain("GET /v1/auth/me"))
     open("org_1~th_1")
     expect(screen.queryByText("Reconnecting…")).toBeNull()
+    fireEvent.keyDown(composer(), { key: "Enter" })
+    expect(hooks.sendMessage).toHaveBeenCalledExactlyOnceWith({
+      text: "While away",
+    })
   })
 
   it("stops showing a tool call as running once its run is stopped", async () => {
@@ -724,6 +757,81 @@ describe("which conversation the chat opens", () => {
     expect(hooks.agentOptions).toHaveLength(0)
   })
 
+  it("lets the member type while the choice is being made, and keeps what they typed", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    const release = holdMemberList()
+    renderChat()
+    await screen.findByText("Loading the conversation…")
+
+    // Nothing to send to yet, but the words are not held back.
+    expect(composer().hasAttribute("disabled")).toBe(false)
+    fireEvent.change(composer(), { target: { value: "Quick question" } })
+    fireEvent.keyDown(composer(), { key: "Enter" })
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(hooks.sendMessage).not.toHaveBeenCalled()
+
+    act(() => release())
+    await opensThread("th_1")
+    expect((composer() as HTMLTextAreaElement).value).toBe("Quick question")
+    open("org_1~th_1")
+    fireEvent.keyDown(composer(), { key: "Enter" })
+    expect(hooks.sendMessage).toHaveBeenCalledExactlyOnceWith({
+      text: "Quick question",
+    })
+  })
+
+  describe("when the choice takes long", () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it("opens a new chat after five seconds, with what the member typed still in the composer, and does not go back for what arrives later", async () => {
+      const calls = stubApi({ threads: [thread("th_1", "Plan the launch")] })
+      const release = holdMemberList()
+      // The clock is the test's from the start: the chat sets its timer as it
+      // opens, and the query client's own timers move with it.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+      const later = (ms: number) =>
+        act(async () => {
+          await vi.advanceTimersByTimeAsync(ms)
+        })
+      renderChat()
+      await later(100)
+      expect(screen.getByText("Loading the conversation…")).toBeTruthy()
+      fireEvent.change(composer(), { target: { value: "Quick question" } })
+
+      await later(4700)
+      expect(screen.getByText("Loading the conversation…")).toBeTruthy()
+      await later(300)
+      expect(screen.getByText(blank)).toBeTruthy()
+      expect(screen.getByText("New conversation")).toBeTruthy()
+      expect((composer() as HTMLTextAreaElement).value).toBe("Quick question")
+
+      // The list comes in at last: the chat does not leave the new chat.
+      release()
+      await later(100)
+      expect(hooks.agentOptions).toHaveLength(0)
+      expect(screen.getByText(blank)).toBeTruthy()
+      expect(calls.some((call) => call.startsWith("POST"))).toBe(false)
+      // And it takes the message as a new chat's first.
+      fireEvent.keyDown(composer(), { key: "Enter" })
+      await later(100)
+      expect(calls).toContain("POST /v1/organizations/org_1/threads")
+    })
+
+    it("does not fall back once the choice has been made in time", async () => {
+      stubApi({ threads: [thread("th_1", "Plan the launch")] })
+      renderChat()
+      await opensThread("th_1")
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+      act(() => {
+        vi.advanceTimersByTime(30_000)
+      })
+      expect(screen.queryByText("New conversation")).toBeNull()
+      expect(screen.getByText("Plan the launch")).toBeTruthy()
+    })
+  })
+
   it("opens the conversation the member chose in this session, however old", async () => {
     rememberChoice(scope, LEO, "th_1")
     stubApi({
@@ -1100,26 +1208,6 @@ describe("a conversation left alone", () => {
 })
 
 describe("a member who takes over the page", () => {
-  /** The list request, answered only when released. */
-  function holdMemberList() {
-    let release = () => {}
-    const gate = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    const fetcher = vi.mocked(fetch)
-    const answer = fetcher.getMockImplementation()!
-    fetcher.mockImplementation(async (input, init) => {
-      const url = new URL(String(input), "http://localhost")
-      if (
-        url.pathname === "/v1/organizations/org_1/threads" &&
-        (init?.method ?? "GET") === "GET"
-      ) {
-        await gate
-      }
-      return answer(input, init)
-    })
-    return () => release()
-  }
   const theirs = { ...scope, userId: "user_b" }
 
   it("does not choose, show or publish a conversation from the last member's cached list, and waits for its own", async () => {
