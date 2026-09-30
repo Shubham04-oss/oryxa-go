@@ -27,6 +27,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -387,6 +388,74 @@ func (s *stack) review(owner person, from int) slackfake.Message {
 	return found
 }
 
+// agentAnswers is how many answers the fake model has had an agent give, with
+// interactions_respond: a reply its owner writes is not one of them.
+func (s *stack) agentAnswers() int {
+	answers := 0
+	for _, call := range s.vertex.recorded() {
+		if call == "call interactions_respond" {
+			answers++
+		}
+	}
+	return answers
+}
+
+// submit has Send pressed on the modal the fake Slack opened last, and reports
+// how Slack's delivery was answered: its status and its body, which is empty for
+// a modal that closes.
+func (s *stack) submit(submission slackfake.Submission) (int, string) {
+	s.t.Helper()
+	started := time.Now()
+	response, err := slackfake.Send(nil, s.slack.Submit(s.baseURL, submission))
+	if err != nil {
+		s.t.Fatalf("deliver a modal's submission: %v", err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if took := time.Since(started); took > 3*time.Second {
+		s.t.Errorf("a submission took %s to answer, and Slack waits three seconds", took)
+	}
+	return response.StatusCode, string(body)
+}
+
+// ownReply waits for the answer an owner wrote themself in a thread: the one
+// that is not ephemeral and says whose words they are.
+func (s *stack) ownReply(thread, owner string) slackfake.Message {
+	s.t.Helper()
+	var found slackfake.Message
+	s.eventually("the owner's own reply in the thread", 60*time.Second, func() bool {
+		for _, message := range s.inThread(thread) {
+			if !message.Ephemeral && strings.Contains(wording(message), owner+" replied:") {
+				found = message
+				return true
+			}
+		}
+		return false
+	})
+	return found
+}
+
+// answeredInOwnWords fails the test unless each person's activity marks the
+// request's answer as its owner's own words.
+func (s *stack) answeredInOwnWords(requestID string, people ...person) {
+	s.t.Helper()
+	for _, who := range people {
+		_, activity := s.api(who, http.MethodGet, "/v1/organizations/"+organizationID+"/agent-requests/activity?limit=100", nil)
+		answered := 0
+		for _, entry := range asSlice(activity["activity"]) {
+			if at(entry, "kind") == "answered" && at(entry, "request_id") == requestID {
+				answered++
+				if at(entry, "written_by_owner") != true {
+					s.t.Errorf("%s's activity reads the answer as %v, not written by its owner", who.Name, entry)
+				}
+			}
+		}
+		if answered != 1 {
+			s.t.Errorf("%s's activity has %d answers for %s, want the one", who.Name, answered, requestID)
+		}
+	}
+}
+
 // ---- The loop ----
 
 func TestSlackConsentLoop(t *testing.T) {
@@ -398,14 +467,15 @@ func TestSlackConsentLoop(t *testing.T) {
 	dm := slackfake.DMChannel(raya.SlackID)
 	var summary asked
 
-	t.Run("a mention is a notice with three ticketed buttons to the owner, and an acknowledgement to the asker alone", func(t *testing.T) {
+	t.Run("a mention is a notice with four ticketed buttons to the owner, and an acknowledgement to the asker alone", func(t *testing.T) {
 		before := s.count()
 		summary = s.ask(ada, raya, "for the Q3 numbers and the launch date", "")
 		notice := summary.notice
 
 		got := buttons(notice)
-		if len(got) != 3 || got[0].ActionID != "consent_summary" || got[1].ActionID != "consent_access" || got[2].ActionID != "consent_deny" {
-			t.Fatalf("the notice's buttons = %+v, want summary, access and deny", got)
+		if len(got) != 4 || got[0].ActionID != "consent_summary" || got[1].ActionID != "consent_access" || got[2].ActionID != "consent_deny" ||
+			got[3].ActionID != "reply" || got[3].Label != "Reply yourself" {
+			t.Fatalf("the notice's buttons = %+v, want summary, access, deny and Reply yourself", got)
 		}
 		requests := map[string]bool{}
 		for _, one := range got {
@@ -415,7 +485,11 @@ func TestSlackConsentLoop(t *testing.T) {
 			requests[requestOf(t, one.Value)] = true
 		}
 		if len(requests) != 1 {
-			t.Errorf("the three tickets name %d requests, want the one", len(requests))
+			t.Errorf("the four tickets name %d requests, want the one", len(requests))
+		}
+		// Reply yourself's ticket is of its own kind: no choice's, and no review's.
+		if claims := claimsOf(t, summary.tickets["reply"]); !strings.Contains(claims, `"k":"reply"`) {
+			t.Errorf("Reply yourself carries %s, not a reply's ticket", claims)
 		}
 		words := wording(notice)
 		for _, want := range []string{"<@" + ada.SlackID + ">", "Q3 numbers"} {
@@ -646,8 +720,8 @@ func TestSlackConsentLoop(t *testing.T) {
 		if words := wording(review); !strings.Contains(words, "Oryxa couldn't check it automatically.") || !strings.Contains(words, "Revenue grew") {
 			t.Errorf("the owner's review says %s", words)
 		}
-		if got := buttons(review); len(got) != 2 || got[0].ActionID != "review_send" || got[1].ActionID != "review_withhold" {
-			t.Errorf("the review's buttons = %+v, want Send and Don't send", got)
+		if got := buttons(review); len(got) != 3 || got[0].ActionID != "review_send" || got[1].ActionID != "review_withhold" || got[2].ActionID != "reply" {
+			t.Errorf("the review's buttons = %+v, want Send, Don't send and Reply yourself", got)
 		}
 		reviewTickets := ticketsOf(review)
 		for _, ticket := range reviewTickets {
@@ -729,13 +803,18 @@ func TestSlackConsentLoop(t *testing.T) {
 			}
 		}
 		got := buttons(review)
-		if len(got) != 2 || got[0].ActionID != "review_send" || got[0].Label != "Send" || got[1].ActionID != "review_withhold" || got[1].Label != "Don't send" {
-			t.Fatalf("the review's buttons = %+v, want Send and Don't send: an answer held for relevance has no masked version", got)
+		if len(got) != 3 || got[0].ActionID != "review_send" || got[0].Label != "Send" || got[1].ActionID != "review_withhold" || got[1].Label != "Don't send" ||
+			got[2].ActionID != "reply" || got[2].Label != "Reply yourself" {
+			t.Fatalf("the review's buttons = %+v, want Send, Don't send and Reply yourself: an answer held for relevance has no masked version", got)
 		}
 		reviewTickets := ticketsOf(review)
 		for action, ticket := range reviewTickets {
-			if requestOf(t, ticket) != held.requestID || !strings.Contains(claimsOf(t, ticket), `"k":"review"`) {
-				t.Errorf("the %s button carries %s, not a review's ticket for the request", action, claimsOf(t, ticket))
+			kind := `"k":"review"`
+			if action == "reply" {
+				kind = `"k":"reply"`
+			}
+			if requestOf(t, ticket) != held.requestID || !strings.Contains(claimsOf(t, ticket), kind) {
+				t.Errorf("the %s button carries %s, not a ticket of its kind for the request", action, claimsOf(t, ticket))
 			}
 			s.mustNotBeLogged(ticket)
 		}
@@ -798,6 +877,177 @@ func TestSlackConsentLoop(t *testing.T) {
 		if answers != 1 {
 			t.Errorf("the thread has %d answers, want the one sent", answers)
 		}
+	})
+
+	t.Run("Reply yourself opens a modal, and her own words, sent from it, answer in the thread as hers; her agent never runs", func(t *testing.T) {
+		const words = "Yes, the offsite is on Friday; I booked the room myself."
+		s.mustNotBeLogged(words)
+		own := s.ask(ada, raya, "whether the offsite is on Friday", "")
+		ticket := own.tickets["reply"]
+		if ticket == "" || requestOf(t, ticket) != own.requestID || !strings.Contains(claimsOf(t, ticket), `"k":"reply"`) {
+			t.Fatalf("the notice's Reply yourself carries %q, not a reply's ticket for the request", ticket)
+		}
+		s.quiet()
+		readers, answers, opened := len(s.rag.readers()), s.agentAnswers(), len(s.slack.Views())
+
+		// The click opens the modal, to her, before Slack is answered, and decides nothing.
+		s.clickOn(raya, own.notice, "reply", ticket)
+		views := s.slack.Views()
+		if len(views) != opened+1 {
+			t.Fatalf("the click opened %d modals, want one", len(views)-opened)
+		}
+		modal := views[len(views)-1]
+		title, _ := at(modal.View, "title", "text").(string)
+		blocks, _ := modal.View["blocks"].([]any)
+		said := blocksText(blocks)
+		if modal.User != raya.SlackID || modal.View["callback_id"] != "oryxa_reply" || title != "Reply yourself" ||
+			at(modal.View, "submit", "text") != "Send" || at(modal.View, "close", "text") != "Cancel" {
+			t.Fatalf("the modal opened = %+v", modal)
+		}
+		for _, want := range []string{"Reply to <@" + ada.SlackID + ">, who asked:", "whether the offsite is on Friday", "Your agent does not answer it."} {
+			if !strings.Contains(said, want) {
+				t.Errorf("the modal does not say %q: %s", want, said)
+			}
+		}
+		if metadata, _ := modal.View["private_metadata"].(string); !strings.Contains(metadata, ticket) {
+			t.Errorf("the modal does not carry the button's ticket: %q", metadata)
+		}
+		if request := s.request(raya, own.requestID); at(request, "status") != "pending" || s.decisions(own.requestID) != 0 {
+			t.Fatalf("opening the modal changed the request to %v", request)
+		}
+
+		// Sending nothing keeps the modal open with the reason, and records nothing.
+		status, answer := s.submit(slackfake.Submission{Values: map[string]map[string]string{"reply": {"text": "   "}}})
+		if status != http.StatusOK || !strings.Contains(answer, `"response_action":"errors"`) || !strings.Contains(answer, "Write your reply first.") {
+			t.Fatalf("an empty reply was answered %d %s, want the error in the modal", status, answer)
+		}
+		// Her words close it, and become the answer.
+		status, answer = s.submit(slackfake.Submission{Values: map[string]map[string]string{"reply": {"text": "  " + words + "\n"}}})
+		if status != http.StatusOK || answer != "" {
+			t.Fatalf("the reply was answered %d %q, want an empty 200, which closes the modal", status, answer)
+		}
+		request := s.waitForStatus(raya, own.requestID, "completed")
+		if at(request, "decision", "decision") != "approved" || at(request, "decision", "consent") != "reply" ||
+			at(request, "decision", "decided_by", "surface") != "slack" || at(request, "decision", "decided_by", "user_id") != raya.UserID ||
+			at(request, "result", "written_by_owner") != true || at(request, "result", "summary") != words {
+			t.Errorf("the request = %v", request)
+		}
+		if asker := s.request(ada, own.requestID); at(asker, "result", "written_by_owner") != true || at(asker, "result", "summary") != words {
+			t.Errorf("the asker reads the answer as %v", at(asker, "result"))
+		}
+
+		// The thread hears her words, as hers, and nothing of an agent's.
+		reply := s.ownReply(own.thread, "Raya")
+		if said := wording(reply); !strings.Contains(said, words) || strings.Contains(said, "'s agent") || strings.Contains(said, "AI summary") {
+			t.Errorf("the thread was told %s", said)
+		}
+		if reply.Channel != channelGeneral || reply.ThreadTS != own.thread || reply.Ephemeral {
+			t.Errorf("her reply went to %+v", reply)
+		}
+		// Her notice says she replied, and what.
+		if said := wording(s.noticeSettled(own.notice)); !strings.Contains(said, "You replied") || !strings.Contains(said, words) {
+			t.Errorf("the settled notice says %s", said)
+		}
+		s.quiet()
+		// Her agent never ran: nothing was searched and no model answered.
+		if len(s.rag.readers()) != readers || s.agentAnswers() != answers {
+			t.Errorf("her agent ran for a reply: %d reads and %d answers, were %d and %d", len(s.rag.readers()), s.agentAnswers(), readers, answers)
+		}
+		if got := s.decisions(own.requestID); got != 1 {
+			t.Errorf("%d decisions were published for the request, want one", got)
+		}
+		s.answeredInOwnWords(own.requestID, raya, ada)
+
+		// Afterwards a choice on the web, a reply on the web and a stale click
+		// change nothing, and the web is told what won.
+		base := "/v1/organizations/" + organizationID + "/agent-requests/" + own.requestID
+		if status, body := s.api(raya, http.MethodPost, base+"/consent", map[string]string{"choice": "access"}); status != http.StatusConflict ||
+			at(body, "error", "code") != "already_decided" || at(body, "winner", "consent") != "reply" {
+			t.Errorf("a choice on the web after her reply = %d %v, want a refusal naming the reply", status, body)
+		}
+		if status, body := s.api(raya, http.MethodPost, base+"/reply", map[string]string{"text": "Something else."}); status != http.StatusConflict ||
+			at(body, "error", "code") != "already_decided" || at(body, "winner", "consent") != "reply" {
+			t.Errorf("a second reply = %d %v, want a refusal naming the first", status, body)
+		}
+		s.clickOn(raya, own.notice, "consent_access", own.tickets["consent_access"])
+		s.quiet()
+		if request := s.request(raya, own.requestID); at(request, "decision", "consent") != "reply" || at(request, "result", "summary") != words {
+			t.Errorf("what came after her reply changed the request to %v", request)
+		}
+		if got := s.decisions(own.requestID); got != 1 {
+			t.Errorf("%d decisions were published for the request, want one", got)
+		}
+		replies := 0
+		for _, message := range s.inThread(own.thread) {
+			if !message.Ephemeral && strings.Contains(wording(message), "replied:") {
+				replies++
+			}
+		}
+		if replies != 1 {
+			t.Errorf("the thread has %d replies, want the one", replies)
+		}
+	})
+
+	t.Run("a held answer she replaces with her own words, on the web, is never sent, and her review in Slack says she replied", func(t *testing.T) {
+		const words = "The travel budget is on hold until the board meets."
+		s.mustNotBeLogged(words)
+		restore := s.aws.setGuardrail(func(call guardrailCall) guardrailAnswer {
+			if call.Grounding {
+				return failGuardrail(call)
+			}
+			return defaultGuardrail(call)
+		})
+		defer restore()
+		held := s.ask(ada, raya, "about the offsite travel budget", "")
+		before := s.count()
+		s.clickOn(raya, held.notice, "consent_summary", held.tickets["consent_summary"])
+		s.waitForStatus(raya, held.requestID, "review")
+		review := s.review(raya, before)
+		got := buttons(review)
+		if len(got) != 3 || got[2].ActionID != "reply" || got[2].Label != "Reply yourself" {
+			t.Fatalf("the review's buttons = %+v, want Reply yourself last", got)
+		}
+		reviewTickets := ticketsOf(review)
+		for _, ticket := range reviewTickets {
+			s.mustNotBeLogged(ticket)
+		}
+		if claims := claimsOf(t, reviewTickets["reply"]); !strings.Contains(claims, `"k":"reply"`) {
+			t.Errorf("the review's Reply yourself carries %s, not a reply's ticket", claims)
+		}
+
+		status, body := s.api(raya, http.MethodPost, "/v1/organizations/"+organizationID+"/agent-requests/"+held.requestID+"/reply", map[string]string{"text": "  " + words + "  "})
+		if status != http.StatusOK || at(body, "request", "status") != "completed" || at(body, "request", "review", "action") != "reply" ||
+			at(body, "request", "review", "decided_by", "surface") != "web" || at(body, "request", "result", "written_by_owner") != true ||
+			at(body, "request", "result", "summary") != words || at(body, "request", "held") != nil {
+			t.Fatalf("the reply: %d %v", status, body)
+		}
+		if asker := s.request(ada, held.requestID); at(asker, "result", "summary") != words || at(asker, "result", "written_by_owner") != true || at(asker, "held") != nil {
+			t.Errorf("the asker reads the request as %v", asker)
+		}
+
+		// The thread hears her words; the held answer is said nowhere, and her
+		// review becomes her reply, showing the held answer no more.
+		reply := s.ownReply(held.thread, "Raya")
+		if said := wording(reply); !strings.Contains(said, words) || strings.Contains(said, "Revenue grew") {
+			t.Errorf("the thread was told %s", said)
+		}
+		if _, ok := s.theAnswer(held.thread); ok {
+			t.Error("the held answer was posted in the thread")
+		}
+		settled := s.noticeSettled(review)
+		if said := wording(settled); !strings.Contains(said, "You replied") || !strings.Contains(said, words) || strings.Contains(said, "Revenue grew") {
+			t.Errorf("the settled review says %s", said)
+		}
+		s.nothingSaid(before, "Revenue grew", "an answer that was replaced")
+
+		// A Send on the stale review sends nothing.
+		s.clickOn(raya, review, "review_send", reviewTickets["review_send"])
+		s.quiet()
+		if request := s.request(raya, held.requestID); at(request, "status") != "completed" || at(request, "review", "action") != "reply" || at(request, "result", "summary") != words {
+			t.Errorf("a click after her reply changed the request to %v", request)
+		}
+		s.nothingSaid(before, "Revenue grew", "an answer that was replaced")
+		s.answeredInOwnWords(held.requestID, raya, ada)
 	})
 
 	t.Run("a mention by a guest is refused, to the guest alone, and nobody is asked", func(t *testing.T) {
@@ -948,7 +1198,7 @@ func TestSlackConsentLoop(t *testing.T) {
 		if at(request, "status") != "pending" || at(request, "decision") != nil {
 			t.Errorf("a click that should have decided nothing left the request as %v", request)
 		}
-		if message, _ := s.slack.Message(victim.notice.Channel, victim.notice.TS); message.Updates != 0 || len(buttons(message)) != 3 {
+		if message, _ := s.slack.Message(victim.notice.Channel, victim.notice.TS); message.Updates != 0 || len(buttons(message)) != 4 {
 			t.Errorf("the notice changed, though nothing was decided: %+v", message)
 		}
 		if got := s.decisions(victim.requestID); got != 0 {
@@ -1071,7 +1321,8 @@ func TestSlackConsentLoop(t *testing.T) {
 		}
 		// The log is the process's own, and does record what it did, by id: an
 		// empty one would prove nothing.
-		for _, recorded := range []string{"a mention became an ask", "an owner decided a request from Slack", "an owner reviewed a held answer from Slack", "surfaces pass done", "slack job done"} {
+		for _, recorded := range []string{"a mention became an ask", "an owner decided a request from Slack", "an owner reviewed a held answer from Slack", "surfaces pass done", "slack job done",
+			"slack reply modal opened", "slack reply recorded", "a reply was handed to the consent core", "an owner replied to a request themself"} {
 			if !strings.Contains(logged, recorded) {
 				t.Errorf("the process's log never says %q, so it may not be the log of what this test did", recorded)
 			}
