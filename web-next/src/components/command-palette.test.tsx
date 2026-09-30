@@ -542,4 +542,16 @@ describe("command palette", () => {
     })
     expect(calls).toHaveLength(1)
   })
+
+  it("stays closed when returning to a scope that had an open palette", async () => {
+    const calls = backend()
+    const view = mount({ actions: { openPerson: vi.fn() } })
+    open()
+    await screen.findByRole("option", { name: /Ada/ })
+    view.update({ organizationId: "org_2" })
+    expect(screen.queryByRole("dialog")).toBeNull()
+    view.update({ organizationId: "org_1" })
+    expect(screen.queryByRole("dialog")).toBeNull()
+    expect(calls).toHaveLength(1)
+  })
 })

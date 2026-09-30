@@ -13,6 +13,8 @@ export function useCommandPalette({
   const scope = JSON.stringify([organizationId, viewerId])
   const enabled = Boolean(organizationId && viewerId)
   const [state, setState] = useState({ scope, open: false })
+  // Forget the old choice, so returning to that scope does not reopen it.
+  if (state.scope !== scope) setState({ scope, open: false })
   // A scope change closes immediately, before effects or a new read can run.
   const open = enabled && state.scope === scope && state.open
   const onOpenChange = useCallback(
