@@ -39,6 +39,28 @@ const (
 // SurfaceSlack is what Consent is told a click came from.
 const SurfaceSlack = "slack"
 
+// The buttons of an owner's review of an answer the guards held, by their action
+// ids, which are apps' (its slackbot.ActionReview*) by value: this package does
+// not import apps. A click on one of them is a review, and goes to Review; a
+// click on any other button, the notice's three among them, is a consent, and
+// goes to Consent. The action id says only where a ticket goes: the ticket says
+// what it is for, signed, and a ticket of the other kind is refused there, so a
+// click that names the wrong button decides nothing.
+const (
+	ActionReviewSend       = "review_send"
+	ActionReviewSendMasked = "review_send_masked"
+	ActionReviewWithhold   = "review_withhold"
+)
+
+// IsReviewAction reports whether actionID is a button of an owner's review.
+func IsReviewAction(actionID string) bool {
+	switch actionID {
+	case ActionReviewSend, ActionReviewSendMasked, ActionReviewWithhold:
+		return true
+	}
+	return false
+}
+
 // The kinds of ask, which are the consent core's own (interactions.AskQuestion
 // and interactions.AskSecret), by value: this package does not import it, and
 // a test pins that the values agree, since a kind the core does not know is an
@@ -127,7 +149,8 @@ type Click struct {
 	ChannelID string
 	MessageTS string
 	ActionID  string
-	// Value is the button's opaque ticket. It goes to Consent untouched.
+	// Value is the button's opaque ticket. It goes to Consent, or for a
+	// review's button to Review, untouched.
 	Value string
 }
 
@@ -335,7 +358,7 @@ type Ask struct {
 }
 
 // Asks is the consent core's side of what the router does: file an ask,
-// count an asker's open ones, and hand a click to the decision.
+// count an asker's open ones, and hand a click to the decision or to the review.
 type Asks interface {
 	// CreateAsk files one request to each owner, from the asker's primary
 	// agent, all under one ask. It is idempotent: the same Origin and owners
@@ -349,6 +372,13 @@ type Asks interface {
 	// it names and whether the request is still waiting are its to check. A
 	// click it refuses, for any of those, is Permanent.
 	Consent(ctx context.Context, ticket, clickerUserID, surface string) error
+	// Review hands a click on a button of an owner's review of a held answer to
+	// the review, unchanged: the ticket the button carried and the member who
+	// clicked. It reviews nothing here either; whether the ticket is a genuine
+	// review ticket, whether the clicker is the person it names and whether the
+	// answer is still in review are its to check. A click it refuses, for any of
+	// those, is Permanent.
+	Review(ctx context.Context, ticket, clickerUserID string) error
 }
 
 // Authority is the one question the organization chart answers for bypass.

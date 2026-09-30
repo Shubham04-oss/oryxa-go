@@ -221,6 +221,8 @@ func (identities *fakeIdentities) get(teamID, slackUserID string) (Identity, boo
 
 type consentCall struct{ Ticket, Clicker, Surface string }
 
+type reviewCall struct{ Ticket, Clicker string }
+
 // fakeAsks is the consent core: it keeps each ask it made, and makes the same
 // one again for the same origin, as CreateAsk does.
 type fakeAsks struct {
@@ -229,10 +231,12 @@ type fakeAsks struct {
 	byKey   map[string]Ask
 	open    map[string]int
 	consent []consentCall
+	review  []reviewCall
 
 	createCalls, countCalls int
 	createErr, countErr     error
 	consentErr              error
+	reviewErr               error
 	// onCreate, when set, is told of each ask as it is filed.
 	onCreate func(AskInput)
 }
@@ -275,6 +279,13 @@ func (asks *fakeAsks) Consent(_ context.Context, ticket, clickerUserID, surface 
 	defer asks.mu.Unlock()
 	asks.consent = append(asks.consent, consentCall{ticket, clickerUserID, surface})
 	return asks.consentErr
+}
+
+func (asks *fakeAsks) Review(_ context.Context, ticket, clickerUserID string) error {
+	asks.mu.Lock()
+	defer asks.mu.Unlock()
+	asks.review = append(asks.review, reviewCall{ticket, clickerUserID})
+	return asks.reviewErr
 }
 
 // fakeAuthority answers Outranks from a table of "asker>owner", and records
@@ -488,12 +499,19 @@ func (h *harness) mention(text string, changes ...func(*Mention)) Job {
 // click records a click by a Slack user and returns its job.
 func (h *harness) click(userID, ticket string) Job {
 	h.t.Helper()
+	return h.clickAction("consent", userID, ticket)
+}
+
+// clickAction records a click on the button actionID by a Slack user and
+// returns its job.
+func (h *harness) clickAction(actionID, userID, ticket string) Job {
+	h.t.Helper()
 	h.seq++
 	id := fmt.Sprintf("in_%d", h.seq)
 	h.slack.inbound[id] = Inbound{
 		ID: id, OrganizationID: testOrg, TeamID: testTeam, Kind: KindAction,
 		ReceivedAt: time.Unix(1700000000, 0).UTC(),
-		Click:      &Click{UserID: userID, ChannelID: "D1", MessageTS: "1700000001.000001", ActionID: "consent", Value: ticket},
+		Click:      &Click{UserID: userID, ChannelID: "D1", MessageTS: "1700000001.000001", ActionID: actionID, Value: ticket},
 	}
 	return Job{
 		InboundID: id, Kind: KindAction, OrganizationID: testOrg, TeamID: testTeam,

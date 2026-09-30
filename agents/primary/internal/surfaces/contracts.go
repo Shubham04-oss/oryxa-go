@@ -15,7 +15,8 @@ import (
 // tested against fakes. The ledger reads are the unfiltered rows: the service
 // reads a request as Oryxa itself, and takes care to say nothing of what it
 // holds that the member who asked may not read (an answer held for review is
-// the one such thing).
+// the one such thing, which only its owner is shown, in their own direct
+// message).
 
 // Requests reads the ledger's requests. interactions.Store implements it.
 type Requests interface {
@@ -30,14 +31,20 @@ type Asks interface {
 	Ask(ctx context.Context, askID string) (interactions.Ask, error)
 }
 
-// Tickets makes the tickets for the buttons of an owner's notice.
-// interactions.Service implements it.
+// Tickets makes the tickets for the buttons of an owner's notice, and of their
+// review of an answer the guards held. interactions.Service implements it.
 type Tickets interface {
 	// ConsentTickets makes them for the notice noticeID of a request. The request
 	// is read in doing so: one that was decided is interactions.ErrConflict, one
 	// past its expiry interactions.ErrExpired, and one that does not ask for
 	// consent interactions.ErrInvalid.
 	ConsentTickets(ctx context.Context, requestID, noticeID string) (interactions.ConsentTickets, error)
+	// ReviewTickets makes them for the review reviewID of a request's held
+	// answer: Send and Withhold, and SendMasked only for an answer with a masked
+	// version. The request is read in doing so: one whose answer is no longer in
+	// review is interactions.ErrConflict, one past its expiry
+	// interactions.ErrExpired, and one not asked in Slack interactions.ErrInvalid.
+	ReviewTickets(ctx context.Context, requestID, reviewID string) (interactions.ReviewTickets, error)
 }
 
 // Slack is what the service asks of apps' internal Slack API.
