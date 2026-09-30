@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   cleanup,
   fireEvent,
@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
+import { resumeSessionAfterSignIn } from "@/lib/api/client"
 import type {
   AnswerGuardPreferences,
   GuardLevel,
@@ -182,6 +183,8 @@ async function answered(client: QueryClient) {
   await waitFor(() => expect(client.getQueryData(cacheKey)).toBeDefined())
   await waitFor(() => expect(client.isFetching()).toBe(0))
 }
+
+beforeEach(resumeSessionAfterSignIn)
 
 afterEach(() => {
   cleanup()
@@ -663,7 +666,7 @@ describe("What your agents share", () => {
       fireEvent.click(radio(owner, "All personal details"))
 
       expect((await screen.findByRole("alert")).textContent).toBe(
-        "Your session has ended."
+        "Your session has ended. Sign in again to continue."
       )
       expect(client.getQueryState(["auth", "session"])?.isInvalidated).toBe(
         true

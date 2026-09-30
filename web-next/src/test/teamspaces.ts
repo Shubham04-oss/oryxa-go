@@ -1,7 +1,8 @@
 // Test data shaped as the agents service answers (agents/primary/internal/
 // teamspaces and rooms), and a routed `fetch` stand-in, for the Team mode
 // tests.
-import { vi } from "vitest"
+import { beforeEach, vi } from "vitest"
+import { resumeSessionAfterSignIn } from "@/lib/api/client"
 import type { RoomMessage, RoomSeat } from "@/lib/rooms/client"
 import type {
   Teamspace,
@@ -9,6 +10,10 @@ import type {
   TeamspaceEntry,
   Whisperer,
 } from "@/lib/teamspaces/client"
+
+// Each independent scenario starts authenticated. Keep the same browser
+// session across calls inside a test, including after a terminal refresh 401.
+beforeEach(resumeSessionAfterSignIn)
 
 export const org = "org_sim"
 export const viewerId = "user-member"

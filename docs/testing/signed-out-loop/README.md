@@ -28,6 +28,11 @@ the product. The transient screenshot exercises the production error branch.
 
 ## Automated coverage
 
+The combined 18-file targeted set passes 362 tests. Each independent browser
+test starts authenticated; the shared fixture resets only at `beforeEach`, so
+terminal state persists across all calls inside a test. The Inbox refusal
+matrix uses separate cases, and expiry fixtures explicitly return refresh 401.
+
 The focused API/auth/apps/threads/request and actual-route tests cover browser
 refresh single flight, isolated SSR refresh and query caches, failed and
 successful sign-in, stale refresh/header/body/clone results, aborted private
