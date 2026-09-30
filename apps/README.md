@@ -451,8 +451,9 @@ routes. Only apps knows the bot token.
 ```
 
 For a click, `kind` is `action` and `message`'s fields are replaced by
-`action_id` (`consent_summary`, `consent_access` or `consent_deny`) and
-`action_value`, the button's opaque ticket. `message_ts` and `thread_ts` are
+`action_id` (`consent_summary`, `consent_access` or `consent_deny` on a notice;
+`review_send`, `review_send_masked` or `review_withhold` on a held answer's
+review) and `action_value`, the button's opaque ticket. `message_ts` and `thread_ts` are
 the message that was clicked. `mentions` leaves the bot out; `channel_type` and
 `ext_shared` are there only when Slack said.
 
@@ -546,6 +547,8 @@ have are 400.
 | `refusal` | a thread or one person in it | `reason` (`not_member`, `owner_not_member`, `group_dm`, `external_channel`, `no_owner`, `too_many_asks`, `screen_failed`, `not_work`, `no_grant`, `owner_department`; `injection`, `implausible` and any other are a plain no); `organization_name`; `user_id` or `name` | Fixed wording, never the question |
 | `private_note` | a thread or one person in it | none | "Answered privately." |
 | `bypass_notice` | a direct message | asker; `question`; `reason` (`priority_channel`, `org_chart`); `channel_id` | Tells an owner at once that their agent answered without asking |
+| `held_review` | a direct message | asker; `question`; `reasons` (1–20 codes: `irrelevant`, `ungrounded`, `no_sources`, `copied`, `link`, `denied_topic`, `email`, `phone`, `address`, `off_topic`, `personal_life`, `health`, `hr`, `compensation`, `others_private`, `credentials`, `unchecked`, `policy`; any other is said as "Oryxa flagged it for your review."); `preview`; `masked`; `tickets` `{send, send_masked, withhold}` (`send_masked` exactly when `masked`); or `secret` with no preview and no tickets | The one message that shows a held answer, to its owner alone: the asker, the question, why it was held in plain words, the answer (its masked version when there is one, cut to 1,500 characters), and **Send**, **Send masked**, **Don't send**. For a secret: no answer and no buttons, "Review it in Oryxa" |
+| `held_review_settled` | a direct message | asker; `question`; `outcome` (`sent`, `sent_masked`, `not_sent`, `decided_elsewhere`, `expired`, `answered_by_other`); `decided_at` | The same asker and question, no answer, no buttons: "Sent at …", "Already decided in Oryxa", "Not sent: the time to review it ran out". For `chat.update` |
 
 ### Retention
 

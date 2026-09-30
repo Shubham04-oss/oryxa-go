@@ -47,6 +47,10 @@ type fakeLedger struct {
 	ticketCalls []string
 	getFailures int
 	ticketErr   error
+	// reviewCalls are the reviews tickets were made for, and reviewErr what
+	// making them answers instead.
+	reviewCalls []string
+	reviewErr   error
 }
 
 func newFakeLedger(now func() time.Time) *fakeLedger {
@@ -99,6 +103,41 @@ func (l *fakeLedger) ConsentTickets(_ context.Context, requestID, notice string)
 	return interactions.ConsentTickets{
 		Summary: ticket("summary"), Access: ticket("access"), Deny: ticket("deny"), ExpiresAt: request.ExpiresAt,
 	}, nil
+}
+
+// ReviewTickets is the real one's contract too: only the answer of a request
+// asked in Slack, still in review and not past its expiry, has buttons, and a
+// button to send it masked only when it has a masked version.
+func (l *fakeLedger) ReviewTickets(_ context.Context, requestID, review string) (interactions.ReviewTickets, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.reviewCalls = append(l.reviewCalls, requestID+"/"+review)
+	if l.reviewErr != nil {
+		return interactions.ReviewTickets{}, l.reviewErr
+	}
+	request, ok := l.requests[requestID]
+	switch {
+	case !ok:
+		return interactions.ReviewTickets{}, interactions.ErrNotFound
+	case request.Origin != interactions.OriginSlack:
+		return interactions.ReviewTickets{}, interactions.ErrInvalid
+	case request.Status != interactions.StatusReview || request.Held == nil:
+		return interactions.ReviewTickets{}, interactions.ErrConflict
+	case !request.ExpiresAt.After(l.now()):
+		return interactions.ReviewTickets{}, interactions.ErrExpired
+	}
+	ticket := func(action string) string { return "t1.review." + action + "." + requestID + "." + review }
+	made := interactions.ReviewTickets{Send: ticket("send"), Withhold: ticket("withhold"), ExpiresAt: request.ExpiresAt}
+	if request.Held.MaskedResult != nil {
+		made.SendMasked = ticket("send_masked")
+	}
+	return made, nil
+}
+
+func (l *fakeLedger) reviews() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.reviewCalls)
 }
 
 func (l *fakeLedger) put(request agents.Interaction) {
@@ -379,6 +418,9 @@ type fakeAPI struct {
 	channels map[string]channelBehaviour
 	// forbidden are strings that no request may carry: what must never reach Slack.
 	forbidden []string
+	// outsideReview are strings that only the owner's review may carry, in a
+	// direct message: a held answer, which its owner alone is shown.
+	outsideReview []string
 	// respond, when set, may answer a post before apps would: returning true has
 	// answered it.
 	respond func(n int, body map[string]any, w http.ResponseWriter) bool
@@ -416,9 +458,17 @@ func (a *fakeAPI) ok(w http.ResponseWriter, body any) {
 
 func (a *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
-	for _, forbidden := range a.forbidden {
-		if strings.Contains(string(body), forbidden) {
-			a.t.Errorf("a request to apps carried %q, which must never reach Slack: %s", forbidden, body)
+	a.mu.Lock()
+	forbidden, outsideReview := slices.Clone(a.forbidden), slices.Clone(a.outsideReview)
+	a.mu.Unlock()
+	for _, value := range forbidden {
+		if strings.Contains(string(body), value) {
+			a.t.Errorf("a request to apps carried %q, which must never reach Slack: %s", value, body)
+		}
+	}
+	for _, value := range outsideReview {
+		if strings.Contains(string(body), value) && !isReviewPost(r.URL.Path, body) {
+			a.t.Errorf("a request to apps carried %q, which only the owner's review may show: %s", value, body)
 		}
 	}
 	if r.Header.Get("X-Oryxa-Service-Token") == "" {
@@ -575,6 +625,29 @@ func (a *fakeAPI) forbid(values ...string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.forbidden = append(a.forbidden, values...)
+}
+
+// forbidOutsideReview has values reach apps only in the owner's review of a
+// held answer, posted to a direct message: never in a thread, a status, an
+// update or any other message.
+func (a *fakeAPI) forbidOutsideReview(values ...string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.outsideReview = append(a.outsideReview, values...)
+}
+
+// isReviewPost is whether a request to apps posts the owner's review, and to a
+// direct message alone.
+func isReviewPost(path string, body []byte) bool {
+	var request struct {
+		Template string             `json:"template"`
+		Target   slackrouter.Target `json:"target"`
+	}
+	if path != "/v1/internal/apps/slack/post" || json.Unmarshal(body, &request) != nil {
+		return false
+	}
+	return request.Template == templateHeldReview && request.Target.UserID != "" &&
+		request.Target.ChannelID == "" && request.Target.ThreadTS == ""
 }
 
 func (a *fakeAPI) setChannel(id string, behaviour channelBehaviour) {

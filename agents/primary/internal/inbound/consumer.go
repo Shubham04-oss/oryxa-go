@@ -517,10 +517,12 @@ func (consumer *Consumer) interactionChanged(ctx context.Context, detailType str
 			// The member who asked hears how it ended: an answer, a
 			// failure, or an answer its addressed member withheld.
 		case "review":
-			// An answer held for its addressed member's review wakes
-			// nobody: the member reviews it in person, and their review,
-			// or its expiry, is the event that tells the member who asked.
-			consumer.logger.InfoContext(ctx, "interaction answer held for review; nobody is woken",
+			// An answer held for its addressed member's review wakes no
+			// agent: the member reviews it in person, in Oryxa or, for a
+			// request asked in Slack, in the direct message the surfaces
+			// sent them (handed this event above), and their review, or its
+			// expiry, is the event that tells the member who asked.
+			consumer.logger.InfoContext(ctx, "interaction answer held for review; no agent is woken",
 				"event_id", envelope.EventID, "request_id", changed.RequestID)
 			return nil
 		default:

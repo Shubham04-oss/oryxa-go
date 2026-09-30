@@ -154,6 +154,7 @@ func (p *pass) run(ctx context.Context) error {
 		{"the owner's notice", p.notice},
 		{"the bypass notice", p.bypassNotice},
 		{"the outcome for the asker", p.outcome},
+		{"the owner's review", p.review},
 		{"the asker's note", p.note},
 	} {
 		if err := step.do(ctx); err != nil {
@@ -171,6 +172,10 @@ func idempotencyKey(requestID, role string) string { return "surfaces:" + reques
 // noticeID is the notice's own id, which its buttons' tickets name. It is the
 // request's, so that a notice posted again carries the same tickets.
 func noticeID(requestID string) string { return "notice_" + requestID }
+
+// reviewID is the owner's review's own id, as noticeID is the notice's. A
+// request's answer is held for review once at most, so the request names it.
+func reviewID(requestID string) string { return "review_" + requestID }
 
 // member finds who a member is in Slack. A member the router never matched is
 // nobody in particular, not a failure: the notice can still be said by name,

@@ -205,7 +205,7 @@ func TestAHeldBypassAnswerIsAnnouncedWhereTheAnswerWouldGo(t *testing.T) {
 			h := newHarness(t)
 			h.api.setChannel(channelID, markedChannel())
 			h.ledger.put(heldWith(bypassed(pendingRequest(), test.reason), "held text"))
-			h.api.forbid("held text")
+			h.api.forbidOutsideReview("held text")
 			h.mustPass("irq_1")
 			statuses := h.api.sentWith("status")
 			if len(statuses) != 1 || statuses[0].Target != test.want || statuses[0].param("state") != "held" {

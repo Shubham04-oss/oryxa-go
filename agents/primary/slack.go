@@ -304,16 +304,33 @@ func (asks slackAsks) Consent(ctx context.Context, ticket, clickerUserID, surfac
 	return nil
 }
 
+// Review implements slackrouter.Asks. It hands a click on a button of an owner's
+// review of a held answer to the ledger as it is: the ticket the button carried
+// and the member who clicked. Whether the ticket is a genuine review ticket,
+// whether the clicker is who it names and whether the answer is still in review
+// are the ledger's to check, and a click it refuses, for any of them, is refused
+// for good: a second click on a review that is over, on either surface, is one.
+func (asks slackAsks) Review(ctx context.Context, ticket, clickerUserID string) error {
+	if _, err := asks.service.ReviewFromSlack(ctx, ticket, clickerUserID); err != nil {
+		if isRefusal(err) {
+			return slackrouter.Permanent(err)
+		}
+		return err
+	}
+	return nil
+}
+
 // isRefusal reports whether err is the ledger saying no to a call that the same
-// call would meet again: a ticket it did not make or that ran out, a click by
-// another member, a request already decided, expired or gone, an ask it cannot
-// take. It is not a database that did not answer.
+// call would meet again: a ticket it did not make, of the other kind or that ran
+// out, a click by another member, a request already decided or reviewed, expired,
+// closed or gone, an ask it cannot take. It is not a database that did not
+// answer.
 func isRefusal(err error) bool {
 	for _, refusal := range []error{
 		agentinteractions.ErrTicketInvalid, agentinteractions.ErrTicketExpired,
 		agentinteractions.ErrForbidden, agentinteractions.ErrAlreadyDecided, agentinteractions.ErrConflict,
 		agentinteractions.ErrExpired, agentinteractions.ErrNotFound, agentinteractions.ErrInvalid,
-		agentinteractions.ErrIdempotencyConflict, agentinteractions.ErrConsentUnavailable,
+		agentinteractions.ErrIdempotencyConflict, agentinteractions.ErrConsentUnavailable, agentinteractions.ErrClosed,
 	} {
 		if errors.Is(err, refusal) {
 			return true

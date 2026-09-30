@@ -90,6 +90,16 @@ var templateGoldens = []struct{ name, template, params string }{
 	{"private_note", TemplatePrivateNote, `{}`},
 	{"bypass_notice_priority_channel", TemplateBypassNotice, `{"asker_user_id":"U0ASKER","question":"Where are the dev keys?","reason":"priority_channel","channel_id":"G0SECRET"}`},
 	{"bypass_notice_org_chart", TemplateBypassNotice, `{"asker_name":"Dana","question":"Where are the dev keys?","reason":"org_chart"}`},
+	{"held_review", TemplateHeldReview, `{"asker_user_id":"U0ASKER","question":"When is the launch?","reasons":["irrelevant"],"preview":"Revenue grew by about a fifth in Q3.\nThe launch is set for mid October.",` + reviewTickets + `}`},
+	{"held_review_masked", TemplateHeldReview, `{"asker_name":"Alex Kim","question":"How do I reach Priya?","reasons":["email","phone"],"preview":"Write to {EMAIL} or call {PHONE}.","masked":true,` + reviewTicketsMasked + `}`},
+	{"held_review_every_reason", TemplateHeldReview, `{"asker_user_id":"U0ASKER","question":"When is the launch?","reasons":` + everyReason + `,"preview":"The launch is on the 14th.",` + reviewTickets + `}`},
+	{"held_review_secret", TemplateHeldReview, `{"asker_user_id":"U0ASKER","question":"Can you share the staging API key?","reasons":["unchecked"],"secret":true}`},
+	{"held_review_settled_sent", TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","outcome":"sent","decided_at":"2026-09-29T14:02:00Z"}`},
+	{"held_review_settled_sent_masked", TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","outcome":"sent_masked","decided_at":"2026-09-29T14:02:00Z"}`},
+	{"held_review_settled_not_sent", TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","outcome":"not_sent","decided_at":"2026-09-29T14:02:00Z"}`},
+	{"held_review_settled_decided_elsewhere", TemplateHeldReviewSettled, `{"asker_name":"Alex Kim","question":"When is the launch?","outcome":"decided_elsewhere","decided_at":"2026-09-29T14:02:00Z"}`},
+	{"held_review_settled_expired", TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","outcome":"expired"}`},
+	{"held_review_settled_answered_by_other", TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","outcome":"answered_by_other"}`},
 }
 
 func TestEveryTemplateRendersAsPinned(t *testing.T) {
@@ -376,6 +386,9 @@ func TestEachTemplateMayGoOnlyWhereItIsMeantTo(t *testing.T) {
 		TemplateRefusal:       inThread | toPerson,
 		TemplatePrivateNote:   inThread | toPerson,
 		TemplateBypassNotice:  inDM,
+		// The one message that shows a held answer shows it to its owner alone.
+		TemplateHeldReview:        inDM,
+		TemplateHeldReviewSettled: inDM,
 	}
 	if len(templates) != len(want) {
 		t.Fatalf("there are %d templates, and %d are pinned", len(templates), len(want))

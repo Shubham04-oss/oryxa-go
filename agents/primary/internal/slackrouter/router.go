@@ -17,7 +17,9 @@
 //     closed: with no Jev, or a Jev that fails or is slow, the ask is refused
 //     and nobody is asked.
 //   - A click on a button is handed, unchanged, to the consent core, with the
-//     member who clicked. The router never decides it.
+//     member who clicked: a click on a button of an owner's review of a held
+//     answer to the review, and every other click to the decision. The router
+//     never decides or reviews anything.
 //   - Everything else is dropped.
 //
 // What the router never does is decide an ask: the owner does, or a bypass the
@@ -152,7 +154,8 @@ func (router *Router) Handle(ctx context.Context, job Job) error {
 	return Permanent(fmt.Errorf("unknown inbound kind %q", inbound.Kind))
 }
 
-// click hands a click to the consent core, as the member who made it.
+// click hands a click to the consent core, as the member who made it: to the
+// review for a button of an owner's review, and to the decision for any other.
 func (router *Router) click(ctx context.Context, job Job, inbound Inbound) error {
 	click := inbound.Click
 	switch {
@@ -176,11 +179,19 @@ func (router *Router) click(ctx context.Context, job Job, inbound Inbound) error
 		return Permanent(fmt.Errorf("the click was not made by a member: %s", clicker.Why))
 	}
 	// The ticket is opaque to the router, and never logged: it is a credential
-	// for the one decision it names.
-	if err := router.deps.Asks.Consent(ctx, click.Value, clicker.Person.UserID, SurfaceSlack); err != nil {
-		// What consent says goes into logs and onto the job's row. It should not
+	// for the one decision, or review, it names. Which of the two the click is
+	// for is only where the ticket goes: the core refuses a ticket of the other
+	// kind.
+	var handed error
+	if IsReviewAction(click.ActionID) {
+		handed = router.deps.Asks.Review(ctx, click.Value, clicker.Person.UserID)
+	} else {
+		handed = router.deps.Asks.Consent(ctx, click.Value, clicker.Person.UserID, SurfaceSlack)
+	}
+	if handed != nil {
+		// What the core says goes into logs and onto the job's row. It should not
 		// quote the ticket, and if some layer of it ever does, it is not carried on.
-		return fmt.Errorf("hand the click to the consent core: %w", scrub(err, click.Value, "[ticket]"))
+		return fmt.Errorf("hand the click to the consent core: %w", scrub(handed, click.Value, "[ticket]"))
 	}
 	router.logger.InfoContext(ctx, "a click was handed to the consent core",
 		"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "action_id", click.ActionID)

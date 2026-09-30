@@ -107,12 +107,12 @@ func (service *Service) ConsentAsOwner(ctx context.Context, actor agents.Interac
 // Consent records the choice a click in Slack made. ticket is the value of
 // the button that was clicked, clickerUserID the member Slack's user was
 // matched to, and surface where the click was (SurfaceSlack; SurfaceWeb for a
-// ticket used on the web). It decides only when the ticket is one this ledger
-// made and has not run out (ErrTicketInvalid, ErrTicketExpired), the clicker
-// is the member the ticket was made for and the request is addressed to
-// (ErrForbidden), and the request is still pending: a request decided first
-// answers ErrAlreadyDecided, with the request as it stands. The choice is the
-// ticket's, never the caller's.
+// ticket used on the web). It decides only when the ticket is a consent ticket
+// this ledger made and has not run out (ErrTicketInvalid, ErrTicketExpired: a
+// review's ticket decides nothing), the clicker is the member the ticket was
+// made for and the request is addressed to (ErrForbidden), and the request is
+// still pending: a request decided first answers ErrAlreadyDecided, with the
+// request as it stands. The choice is the ticket's, never the caller's.
 func (service *Service) Consent(ctx context.Context, ticket, clickerUserID, surface string) (ConsentResult, error) {
 	if service.tickets == nil {
 		return ConsentResult{}, fmt.Errorf("%w: no ticket key is set", ErrConsentUnavailable)
@@ -120,6 +120,9 @@ func (service *Service) Consent(ctx context.Context, ticket, clickerUserID, surf
 	claims, err := service.tickets.Verify(ticket, service.now().UTC())
 	if err != nil {
 		return ConsentResult{}, err
+	}
+	if claims.Kind != TicketConsent {
+		return ConsentResult{}, fmt.Errorf("%w: it is not a consent ticket", ErrTicketInvalid)
 	}
 	if surface != SurfaceSlack && surface != SurfaceWeb {
 		return ConsentResult{}, fmt.Errorf("%w: a ticket is used in Slack or on the web", ErrInvalid)
@@ -278,7 +281,7 @@ func (service *Service) ConsentTickets(ctx context.Context, requestID, noticeID 
 	}{{ChoiceSummary, &made.Summary}, {ChoiceAccess, &made.Access}, {ChoiceDeny, &made.Deny}} {
 		ticket, err := service.tickets.Mint(TicketClaims{
 			RequestID: request.ID, OwnerUserID: request.Target.UserID, NoticeID: noticeID,
-			Choice: button.choice, ExpiresAt: request.ExpiresAt,
+			Kind: TicketConsent, Choice: button.choice, ExpiresAt: request.ExpiresAt,
 		})
 		if err != nil {
 			return ConsentTickets{}, err

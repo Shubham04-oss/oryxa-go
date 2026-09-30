@@ -84,18 +84,22 @@ func TestAnAnswersWordsAreWhatTheAgentWroteForTheAskerOrElseItsSummary(t *testin
 func TestAnAnswerHeldForReviewIsAStatusWithNoWordOfIt(t *testing.T) {
 	const heldText = "Raya's number is 555-0142 and her email is raya@acme.test"
 	h := newHarness(t)
-	h.api.forbid(heldText, "555-0142", "raya@acme.test", "held summary")
+	// Its owner is shown it, in their own review, and nobody else is.
+	h.api.forbidOutsideReview(heldText, "555-0142", "raya@acme.test", "held summary")
 	held := heldWith(memberDecided(pendingRequest(), interactions.DecisionApproved, interactions.ConsentAccess, interactions.SurfaceSlack), heldText)
 	h.ledger.put(held)
 	h.mustPass("irq_1")
 
 	sent := h.api.sent()
-	if got := templates(sent); fmt.Sprint(got) != "[status]" {
-		t.Fatalf("posted %v, want the one status", got)
+	if got := templates(sent); fmt.Sprint(got) != "[status held_review]" {
+		t.Fatalf("posted %v, want the one status, and the owner's review", got)
 	}
 	status := sent[0]
 	if status.Target != h.threadTarget() || status.param("state") != "held" || status.param("owner_name") != "Raya" || len(status.Params) != 2 {
 		t.Fatalf("status = %+v", status)
+	}
+	if review := sent[1]; review.Target != (slackrouter.Target{UserID: slackRaya}) || review.param("preview") != heldText {
+		t.Fatalf("review = %+v, want the answer shown to Raya alone", review)
 	}
 	if got := h.notes.texts(); len(got) != 2 || got[1] != "held: Asked Raya's agent in #launch · held" {
 		t.Fatalf("notes = %v", got)
@@ -107,7 +111,7 @@ func TestAnAnswerHeldForReviewIsAStatusWithNoWordOfIt(t *testing.T) {
 	sending.Held, sending.Guard = nil, nil
 	h.ledger.put(sending)
 	h.mustPass("irq_1")
-	if got := templates(h.api.sent()); fmt.Sprint(got) != "[status answer]" {
+	if got := templates(h.api.sent()); fmt.Sprint(got) != "[status held_review answer]" {
 		t.Fatalf("posted %v", got)
 	}
 	if got := h.api.sentWith("answer")[0].param("text"); got != "Here is what Raya found." {
@@ -287,14 +291,19 @@ func TestASecretIsNeverPostedToSlack(t *testing.T) {
 
 func TestASecretAskThatIsHeldOrDeclinedSaysNothingOfIt(t *testing.T) {
 	h := newHarness(t)
+	// Not even to its owner: a secret is never in Slack.
 	h.api.forbid("hunter2")
 	ask := baseAsk()
 	ask.Kind = interactions.AskSecret
 	h.ledger.putAsk(ask)
 	h.ledger.put(heldWith(memberDecided(pendingRequest(), interactions.DecisionApproved, interactions.ConsentAccess, interactions.SurfaceSlack), "password hunter2"))
 	h.mustPass("irq_1")
-	if got := templates(h.api.sent()); fmt.Sprint(got) != "[status]" {
+	if got := templates(h.api.sent()); fmt.Sprint(got) != "[status held_review]" {
 		t.Fatalf("posted %v", got)
+	}
+	review := h.api.sentWith("held_review")[0]
+	if review.Params["secret"] != true || review.param("preview") != "" || review.Params["tickets"] != nil {
+		t.Fatalf("review = %v, want the owner told to review it in Oryxa, with no answer and no buttons", review.Params)
 	}
 }
 

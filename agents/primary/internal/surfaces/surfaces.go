@@ -14,6 +14,11 @@
 //   - an answer held for its owner's review is a status with no word of the
 //     answer in it, and a refusal, or a request that ended without an answer, is
 //     said to the asker alone;
+//   - the owner of an answer held for their review is sent it in a direct
+//     message, with why it was held and three buttons (Send, Send masked where
+//     there is a masked version, Don't send) whose tickets the ledger makes
+//     (interactions.ReviewTickets), and the message is replaced with how the
+//     review ended, whichever surface the owner reviewed on;
 //   - an owner who was not asked is told that their agent answered anyway;
 //   - the asker's own agent chat gets a note without a model (threads.Note).
 //
@@ -37,7 +42,11 @@
 //   - it never posts a secret. A secret is shared as a one-time view in Oryxa
 //     and is in no ledger, event or model context; for an ask of a secret the
 //     thread is told only that the answer was given privately, whatever the
-//     answer holds. What an answer that is held, or withheld, says is never read;
+//     answer holds. What an answer that is held says is read for one message
+//     alone, the owner's review in their own direct message, and there only as
+//     the guards left it: masked, where they masked it, and never for an ask of
+//     a secret, whose owner is told to review it in Oryxa. What a withheld
+//     answer says is never read;
 //   - a bypass posts where consentpolicy.AnswerFor says, and reads the channel's
 //     mark again first: an answer goes into a thread only while the channel is
 //     still private, unshared and marked, and otherwise goes to the asker alone;
@@ -53,6 +62,9 @@ const (
 	roleBypassNotice = "bypass_notice"
 	// roleHeld is the thread's status that an answer is held for review.
 	roleHeld = "held"
+	// roleReview is the owner's review of the answer held for them, in a
+	// direct message.
+	roleReview = "review"
 	// roleAnswer is the answer itself, in the thread or the asker's direct message.
 	roleAnswer = "answer"
 	// rolePrivateNote is the thread's note that the answer went to one person.
@@ -66,10 +78,10 @@ const (
 	roleNotePrefix = "note:"
 )
 
-// What a link says. A notice says which of its states it is in; the rest say
-// only that they were sent or given up on.
+// What a link says. A notice and a review say which of their states they are
+// in; the rest say only that they were sent or given up on.
 const (
-	// statePending is a notice that still has its buttons.
+	// statePending is a notice, or a review, that still has its buttons.
 	statePending = "pending"
 	// stateSent is a message that was posted, and stateSentPrivately an answer
 	// that was posted to the asker's direct message and not to the thread.
@@ -88,4 +100,18 @@ const (
 	stateDenied          = "denied"
 	stateAnsweredByOther = "answered_by_other"
 	stateExpired         = "expired"
+)
+
+// The states a settled review says, which are the outcomes apps'
+// held_review_settled template knows. The first three are the owner's own
+// review in Slack; a review they made in Oryxa is decided elsewhere, whatever
+// it was; the last two are Oryxa's, which withholds an answer whose review ran
+// out of time, and one whose ask another owner's answer settled first.
+const (
+	reviewSent             = "sent"
+	reviewSentMasked       = "sent_masked"
+	reviewNotSent          = "not_sent"
+	reviewDecidedElsewhere = "decided_elsewhere"
+	reviewExpired          = "expired"
+	reviewAnsweredByOther  = "answered_by_other"
 )
