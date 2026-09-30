@@ -27,6 +27,7 @@ import {
   openingThread,
   publishPrimaryChatActivity,
   rememberedView,
+  recentNewView,
   chatHistory,
   useRememberedView,
   shownThread,
@@ -287,14 +288,20 @@ export function AgentChat({
     if (scope && !agentId) return
     let stale = false
     const remembered = scope && agentId ? rememberedView(scope, agentId) : null
+    const now = Date.now()
     void openingThread({
       threads: threads.data,
       choice: remembered?.choice ?? null,
       leftAt: remembered?.leftAt,
-      now: Date.now(),
+      now,
       waiting: (id) => waitsOnMember(queryClient, organizationId, id),
     }).then((chosen) => {
-      if (!stale) dispatch({ type: "decide", thread: chosen })
+      if (!stale)
+        dispatch({
+          type: "decide",
+          thread: chosen,
+          resumeNew: chosen === null && recentNewView(remembered, now),
+        })
     })
     return () => {
       stale = true

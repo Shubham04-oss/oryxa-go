@@ -13,7 +13,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
 import { SpecialistChat } from "./specialist-chat"
-import { rememberChoice } from "@/lib/threads/chat-choice"
+import { rememberChoice, rememberedView } from "@/lib/threads/chat-choice"
 import { AgentsFocus } from "./agents-mode"
 import {
   ORG,
@@ -190,6 +190,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -984,6 +985,36 @@ describe("specialist history and the default conversation", () => {
     )
     chatSocket().state({ threadId: "pending" })
     expect((composer as HTMLTextAreaElement).value).toBe("Keep the draft")
+  })
+  it("records a resumed explicit New at the member's latest real leave", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    const now = Date.now()
+    rememberChoice(chatScope, scout.id, null, now - 4 * 60_000)
+    const backend = fakeAgentsBackend({
+      agents: [primary, scout],
+      conversations: {
+        [scout.id]: [
+          conversation({ id: "pending", pending_confirmations: ["approval"] }),
+        ],
+      },
+    })
+    const view = renderOwn(backend)
+    await chatLoaded()
+    chatSocket().open()
+    chatSocket().state({ threadId: null })
+    await waitFor(() =>
+      expect(backend.writes()).toContainEqual({
+        method: "PUT",
+        path: `/agents/specialist-chat-agent/${scoutChat}/conversation`,
+        body: { thread_id: null },
+      })
+    )
+    await waitFor(() =>
+      expect(rememberedView(chatScope, scout.id)?.leftAt).toBe(now)
+    )
+    vi.setSystemTime(now + 3 * 60_000)
+    view.unmount()
+    expect(rememberedView(chatScope, scout.id)?.leftAt).toBe(now + 3 * 60_000)
   })
   it("ignores a history pick at the five-minute boundary and opens the newest pending conversation", async () => {
     rememberChoice(chatScope, scout.id, "old", Date.now() - 5 * 60_000)

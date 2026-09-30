@@ -21,6 +21,7 @@ import {
   primaryChatReducer,
   rememberChoice,
   rememberedChoice,
+  rememberedView,
   usePrimaryChatActivity,
 } from "@/lib/threads/chat-choice"
 import type { PrimaryChat } from "@/lib/threads/chat-choice"
@@ -927,6 +928,26 @@ describe("which conversation the chat opens", () => {
     first.unmount()
     cleanup()
     hooks.agentOptions.length = 0
+    renderChat()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+  })
+
+  it("records the latest real leave after a recent explicit New is restored on reload", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    const now = Date.now()
+    rememberChoice(scope, LEO, null, now - 4 * 60_000)
+    stubApi({
+      threads: [thread("pending", "Waiting")],
+      pending: ["approval"],
+      rememberLatest: false,
+    })
+    const first = renderChat()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(rememberedView(scope, LEO)?.leftAt).toBe(now)
+    vi.setSystemTime(now + 3 * 60_000)
+    first.unmount()
+    expect(rememberedView(scope, LEO)?.leftAt).toBe(now + 3 * 60_000)
     renderChat()
     expect(await screen.findByText(blank)).toBeTruthy()
     expect(hooks.agentOptions).toHaveLength(0)

@@ -43,6 +43,7 @@ import type { ThreadChatMessage } from "@/lib/threads/chat-messages"
 import {
   openingThread,
   rememberedView,
+  recentNewView,
   useRememberedView,
 } from "@/lib/threads/chat-choice"
 import type { ChatScope } from "@/lib/threads/chat-choice"
@@ -593,6 +594,7 @@ function SpecialistChatSession({
   }
 
   function send(text: string) {
+    if (threadId === null) setExplicitNew(true)
     setRunError("")
     const body = getScreenContext
       ? { screen_context: getScreenContext() }
@@ -676,11 +678,12 @@ function SpecialistChatSession({
     const lifecycle = { stale: false }
     const isCurrent = () => !lifecycle.stale
     const choice = openingChoice.current
+    const now = Date.now()
     void openingThread({
       threads: threads.data.map((thread) => ({ ...thread, origin: "chat" })),
       choice: choice?.choice ?? null,
       leftAt: choice?.leftAt,
-      now: Date.now(),
+      now,
       waiting: async (id) => {
         const detail = await queryClient
           .fetchQuery(
@@ -699,7 +702,10 @@ function SpecialistChatSession({
             failureText(error, "Couldn't open the conversation. Try again.")
           )
       }
-      if (isCurrent()) setDecided(true)
+      if (isCurrent()) {
+        if (chosen === null && recentNewView(choice, now)) setExplicitNew(true)
+        setDecided(true)
+      }
     })
     return () => {
       lifecycle.stale = true

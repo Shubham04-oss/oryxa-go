@@ -115,6 +115,19 @@ export function chooseThread(
     : null
 }
 
+/** A restored explicit New stays explicit while the member continues viewing it. */
+export function recentNewView(
+  view: { choice: string | null; leftAt?: number } | null | undefined,
+  now = Date.now()
+): boolean {
+  return (
+    view?.choice === NEW_CHAT &&
+    view.leftAt !== undefined &&
+    view.leftAt <= now &&
+    now - view.leftAt < FRESH_CONVERSATION_MS
+  )
+}
+
 /** Recent view (including explicit New), otherwise newest pending approval, otherwise New. */
 export async function openingThread({
   threads,
@@ -130,12 +143,7 @@ export async function openingThread({
   waiting: (threadId: string) => Promise<boolean>
 }): Promise<string | null> {
   const chosen = chooseThread(threads, choice, now, leftAt)
-  const recentNew =
-    choice === NEW_CHAT &&
-    leftAt !== undefined &&
-    leftAt <= now &&
-    now - leftAt < FRESH_CONVERSATION_MS
-  if (chosen || recentNew) return chosen
+  if (chosen || recentNewView({ choice, leftAt }, now)) return chosen
   const history = chatHistory(threads)
   const held = await Promise.all(
     history.map((thread) => waiting(thread.id).catch(() => false))
@@ -420,7 +428,7 @@ export type UnsentMessage = {
 export type PrimaryChat = {
   /** The conversation the chat is on: undefined until it is decided, null for a new one. */
   thread: string | null | undefined
-  /** Whether that was a choice (of the member, or of a request) rather than the rules': only a choice is remembered. */
+  /** Explicit member/request choice, including a recently restored explicit New. Automatic existing chats are recorded too. */
   chosen: boolean
   /** What waits, oldest first. An open or a blank chat is done at once; a first message stays until its conversation has it. */
   tasks: ChatTask[]
@@ -449,7 +457,7 @@ export type PrimaryChatAction =
   /** The member sent the first message of a new chat from the composer. */
   | { type: "submit"; text: string; screen?: ScreenContext }
   /** The rules chose the conversation to open. Only fills in a chat still undecided and idle. */
-  | { type: "decide"; thread: string | null }
+  | { type: "decide"; thread: string | null; resumeNew?: boolean }
   /** The member (or a conversation that is gone) moved the chat. Waits while a first message is on its way. */
   | { type: "move"; thread: string | null; notice?: string }
   | { type: "making"; id: number }
@@ -565,7 +573,7 @@ export function primaryChatReducer(
     }
     case "decide":
       return state.thread === undefined && state.tasks.length === 0
-        ? { ...state, thread: action.thread }
+        ? { ...state, thread: action.thread, chosen: action.resumeNew === true }
         : state
     case "move": {
       let tasks = state.tasks
