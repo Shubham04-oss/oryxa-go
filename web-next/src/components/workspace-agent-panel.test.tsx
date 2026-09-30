@@ -24,7 +24,6 @@ import type { DmPeople } from "./direct-message-people"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import type { Inbox } from "@/lib/dms"
 import {
-  PRIMARY_CHAT_AGENT,
   claimPrimaryChatRequest,
   rememberedChoice,
   requestPrimaryChat,
@@ -92,6 +91,7 @@ function stubGo(seed: Seed = {}) {
   const created = seed.created ?? thread("th_new", "")
   const calls: string[] = []
   let gate: Promise<void> | undefined
+  let agentsGate: Promise<void> | undefined
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -128,6 +128,7 @@ function stubGo(seed: Seed = {}) {
       ) {
         return json([])
       }
+      if (path === `/v1/organizations/${ORG}/agents`) await agentsGate
       return backend.fetch(String(input), init)
     })
   )
@@ -141,6 +142,17 @@ function stubGo(seed: Seed = {}) {
       })
       return () => {
         gate = undefined
+        release()
+      }
+    },
+    /** Keeps the agents list from answering until released. */
+    holdAgents() {
+      let release = () => {}
+      agentsGate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return () => {
+        agentsGate = undefined
         release()
       }
     },
@@ -344,7 +356,7 @@ describe("a first message on its way", () => {
       agentChats.named(chatName("th_b")).sendMessage
     ).not.toHaveBeenCalled()
     expect(roomSockets.named(chatName("th_new"))).toHaveLength(0)
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_b")
+    expect(rememberedChoice(scope, primary.id)).toBe("th_b")
   })
 })
 
@@ -370,7 +382,7 @@ describe("a request to open a conversation", () => {
     expect(
       document.querySelector(".workspace-agent-thread-title")?.textContent
     ).toBe("Older")
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_1")
+    expect(rememberedChoice(scope, primary.id)).toBe("th_1")
   })
 
   it("brings the Agents tab forward", async () => {
@@ -401,7 +413,7 @@ describe("a request to open a conversation", () => {
     await socketOn(chatName("th_1"))
     // It never opened the fresh conversation first.
     expect(roomSockets.named(chatName("th_2"))).toHaveLength(0)
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_1")
+    expect(rememberedChoice(scope, primary.id)).toBe("th_1")
   })
 
   it("applies a request made before the panel first mounted", async () => {
@@ -463,7 +475,7 @@ describe("a request to open a conversation", () => {
     })
     socket.open()
     expect(chat.sendMessage).toHaveBeenCalledOnce()
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_new")
+    expect(rememberedChoice(scope, primary.id)).toBe("th_new")
 
     // Nothing waits to be sent into the next new conversation.
     fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
@@ -473,6 +485,24 @@ describe("a request to open a conversation", () => {
     ).toHaveLength(1)
   })
 
+  it("waits for the agents list, so what it remembers is kept under the agent's id", async () => {
+    const go = stubGo({
+      threads: [thread("th_2", "Newer"), thread("th_1", "Older", 3 * HOUR)],
+    })
+    const release = go.holdAgents()
+    withQueries(panel())
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
+    // Neither the chat nor the request has chosen anything yet.
+    await act(async () => {})
+    expect(roomSockets.all).toHaveLength(0)
+    expect(window.sessionStorage.length).toBe(0)
+
+    act(() => release())
+    await socketOn(chatName("th_1"))
+    expect(roomSockets.named(chatName("th_2"))).toHaveLength(0)
+    expect(rememberedChoice(scope, primary.id)).toBe("th_1")
+  })
+
   it("opens a blank chat, and remembers it, for a request with no message", async () => {
     const go = stubGo({ threads: [thread("th_1", "Plan the launch")] })
     withQueries(panel())
@@ -480,7 +510,7 @@ describe("a request to open a conversation", () => {
 
     act(() => requestPrimaryChat(scope, { kind: "new" }))
     expect(await screen.findByText(blank)).toBeTruthy()
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("new")
+    expect(rememberedChoice(scope, primary.id)).toBe("new")
     await act(async () => {})
     expect(go.calls.some((call) => call.startsWith("POST"))).toBe(false)
   })
@@ -500,7 +530,7 @@ describe("a request to open a conversation", () => {
     )
     await act(async () => {})
     expect(roomSockets.named(chatName("th_1"))).toHaveLength(0)
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBeNull()
+    expect(rememberedChoice(scope, primary.id)).toBeNull()
   })
 })
 

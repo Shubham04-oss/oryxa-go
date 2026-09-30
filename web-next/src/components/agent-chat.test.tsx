@@ -17,7 +17,6 @@ import type { ReactElement } from "react"
 import { AgentChat } from "./agent-chat"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import {
-  PRIMARY_CHAT_AGENT,
   rememberChoice,
   rememberedChoice,
   usePrimaryChatActivity,
@@ -202,15 +201,27 @@ function renderWithQueries(ui: ReactElement) {
 }
 
 const scope = { organizationId: "org_1", userId: "user_1" }
+/** The primary agent, whose id keys the choices the chat remembers. */
+const LEO = "agt_leo"
 
-/** The chat as the panel mounts it, holding its conversation and draft. */
-function ChatHost({ remember = true }: { remember?: boolean }) {
+/**
+ * The chat as the panel mounts it, holding its conversation and draft.
+ * `agent` is the primary agent's id, or null while the agents list is out.
+ */
+function ChatHost({
+  remember = true,
+  agent = LEO,
+}: {
+  remember?: boolean
+  agent?: string | null
+}) {
   const [threadId, setThreadId] = useState<string | null | undefined>()
   const [draft, setDraft] = useState("")
   return (
     <AgentChat
       organizationId="org_1"
       scope={remember ? scope : undefined}
+      agentId={agent ?? undefined}
       agentName="Leo"
       threadId={threadId}
       setThreadId={setThreadId}
@@ -565,7 +576,7 @@ describe("which conversation the chat opens", () => {
   })
 
   it("opens the conversation the member chose in this session, however old", async () => {
-    rememberChoice(scope, PRIMARY_CHAT_AGENT, "th_1")
+    rememberChoice(scope, LEO, "th_1")
     stubApi({
       threads: [
         thread("th_2", "Fresh", 60_000),
@@ -577,14 +588,14 @@ describe("which conversation the chat opens", () => {
   })
 
   it("ignores a chosen conversation that no longer exists", async () => {
-    rememberChoice(scope, PRIMARY_CHAT_AGENT, "th_gone")
+    rememberChoice(scope, LEO, "th_gone")
     stubApi({ threads: [thread("th_1", "Fresh", 60_000)] })
     renderChat()
     await opensThread("th_1")
   })
 
   it("keeps a member's choice of a new chat over a fresh conversation, and asks Go about nothing", async () => {
-    rememberChoice(scope, PRIMARY_CHAT_AGENT, null)
+    rememberChoice(scope, LEO, null)
     const calls = stubApi({ threads: [thread("th_1", "Fresh", 60_000)] })
     renderChat()
 
@@ -599,7 +610,7 @@ describe("which conversation the chat opens", () => {
     await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
     open("org_1~th_1")
     fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("new")
+    expect(rememberedChoice(scope, LEO)).toBe("new")
 
     // The same tab, loaded again: the conversation they left is still fresh.
     first.unmount()
@@ -617,7 +628,7 @@ describe("which conversation the chat opens", () => {
     expect(await screen.findByText(blank)).toBeTruthy()
     type("Plan the launch")
     await opensThread("th_new")
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_new")
+    expect(rememberedChoice(scope, LEO)).toBe("th_new")
 
     first.unmount()
     cleanup()
@@ -665,6 +676,36 @@ describe("which conversation the chat opens", () => {
     expect(await screen.findByText(blank)).toBeTruthy()
     expect(hooks.agentOptions).toHaveLength(0)
     expect(calls.filter((call) => call === detailPath("th_1"))).toHaveLength(1)
+  })
+
+  it("waits for the primary agent's id before it chooses, so no choice is kept under a stand-in", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    function AgentArrives() {
+      const [agent, setAgent] = useState<string | null>(null)
+      return (
+        <>
+          <button type="button" onClick={() => setAgent(LEO)}>
+            Agents loaded
+          </button>
+          <ChatHost agent={agent} />
+        </>
+      )
+    }
+    renderWithQueries(<AgentArrives />)
+    // The thread list is here (it is a fetch away), but the chat holds off.
+    await screen.findByText("Loading the conversation…")
+    await act(async () => {})
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(screen.queryByText("Plan the launch")).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Agents loaded" }))
+    await opensThread("th_1")
+  })
+
+  it("does not wait for it when there is nothing to remember", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    renderWithQueries(<ChatHost remember={false} agent={null} />)
+    await opensThread("th_1")
   })
 
   it("opens a new chat when Go can't say whether the old conversation waits", async () => {
@@ -739,7 +780,7 @@ describe("a conversation left alone", () => {
 
     comeBack(HOUR)
     expect(onNewChat()).toBe(true)
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("new")
+    expect(rememberedChoice(scope, LEO)).toBe("new")
     // What they were typing goes with them, and the old conversation stays.
     expect((composer() as HTMLTextAreaElement).value).toBe("Half a thought")
     expect(calls.filter((call) => call.startsWith("DELETE"))).toEqual([])
@@ -750,14 +791,14 @@ describe("a conversation left alone", () => {
     await openThread()
     comeBack(3 * HOUR, "focus")
     expect(onNewChat()).toBe(true)
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("new")
+    expect(rememberedChoice(scope, LEO)).toBe("new")
   })
 
   it("leaves a conversation alone that was active within the hour", async () => {
     await openThread()
     comeBack(HOUR - 60_000)
     expect(onNewChat()).toBe(false)
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBeNull()
+    expect(rememberedChoice(scope, LEO)).toBeNull()
   })
 
   it("counts what the member sends, and what the agent says, as activity", async () => {
@@ -846,7 +887,7 @@ describe("a conversation left alone", () => {
   })
 
   it("never takes a conversation from the member the moment they chose it", async () => {
-    rememberChoice(scope, PRIMARY_CHAT_AGENT, "th_1")
+    rememberChoice(scope, LEO, "th_1")
     stubApi({ threads: [thread("th_1", "Chosen", 30 * HOUR)] })
     renderChat()
     await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
@@ -855,7 +896,7 @@ describe("a conversation left alone", () => {
     comeBack(0)
     comeBack(0, "focus")
     expect(onNewChat()).toBe(false)
-    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_1")
+    expect(rememberedChoice(scope, LEO)).toBe("th_1")
   })
 })
 

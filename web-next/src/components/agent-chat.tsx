@@ -21,7 +21,6 @@ import { getSession } from "@/lib/auth/client"
 import { reopenSocket } from "@/lib/threads/agent-socket"
 import {
   FRESH_CONVERSATION_MS,
-  PRIMARY_CHAT_AGENT,
   openingThread,
   publishPrimaryChatActivity,
   rememberChoice,
@@ -122,6 +121,7 @@ async function waitsOnMember(
 export function AgentChat({
   organizationId,
   scope,
+  agentId,
   agentName,
   threadId,
   setThreadId,
@@ -138,6 +138,12 @@ export function AgentChat({
   organizationId: string
   /** Whose choices the chat remembers for the session; without it none are. */
   scope?: ChatScope
+  /**
+   * The primary agent's id, which keys those choices. With a `scope`, the
+   * chat waits for it before it chooses a conversation, so a choice is never
+   * kept under a stand-in.
+   */
+  agentId?: string
   agentName?: string
   /**
    * The conversation the chat is on, kept by the panel so it outlasts a
@@ -207,15 +213,21 @@ export function AgentChat({
   }, [threadId, state])
   useEffect(() => () => publishPrimaryChatActivity(null), [])
 
+  /** Keeps the member's choice for the session: a thread, or null for a new chat. */
+  function remember(thread: string | null) {
+    if (scope && agentId) rememberChoice(scope, agentId, thread)
+  }
+
   // Once the list is here: the member's choice, else the latest conversation
   // while it is fresh, else (after asking Go) one that still waits on them.
   // Unless the member or a request moved the chat while this was asked.
   useEffect(() => {
     if (threadId !== undefined || !threads.data) return
+    if (scope && !agentId) return
     let stale = false
     void openingThread({
       threads: threads.data,
-      choice: scope ? rememberedChoice(scope, PRIMARY_CHAT_AGENT) : null,
+      choice: scope && agentId ? rememberedChoice(scope, agentId) : null,
       now: Date.now(),
       waiting: (id) => waitsOnMember(queryClient, organizationId, id),
     }).then((chosen) => {
@@ -226,7 +238,7 @@ export function AgentChat({
     return () => {
       stale = true
     }
-  }, [threadId, threads.data])
+  }, [threadId, threads.data, agentId])
 
   // Whether this chat is still on screen, and still on the conversation it
   // is now, for a thread that takes a moment to create.
@@ -305,7 +317,7 @@ export function AgentChat({
       })
       setHeld({ text: message, threadId: thread.id })
       setThreadId(thread.id)
-      if (scope) rememberChoice(scope, PRIMARY_CHAT_AGENT, thread.id)
+      remember(thread.id)
     } catch (error) {
       setHeld(null)
       onDraftChange(message)
@@ -319,7 +331,7 @@ export function AgentChat({
     setThreadId(null)
     setHeld(null)
     setNotice("")
-    if (scope) rememberChoice(scope, PRIMARY_CHAT_AGENT, null)
+    remember(null)
   }
 
   let body
@@ -345,7 +357,7 @@ export function AgentChat({
           getScreenContext={getScreenContext}
           onMissing={() => {
             setThreadId(null)
-            if (scope) rememberChoice(scope, PRIMARY_CHAT_AGENT, null)
+            remember(null)
             setNotice("That conversation no longer exists.")
             void queryClient.invalidateQueries({
               queryKey: threadKeys.list(organizationId),

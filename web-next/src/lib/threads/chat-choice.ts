@@ -30,13 +30,6 @@ export type PrimaryChatRequest = PrimaryChatTarget & {
 /** How long after its last activity a conversation still reopens on its own. */
 export const FRESH_CONVERSATION_MS = 60 * 60 * 1000
 
-/**
- * The primary chat's key in a remembered choice. A member has one primary
- * agent and its conversations are theirs, so the key doesn't wait for the
- * agents list to say the agent's id.
- */
-export const PRIMARY_CHAT_AGENT = "primary"
-
 const NEW_CHAT = "new"
 
 /** Whether two scopes are the same member's, in the same organization. */

@@ -42,7 +42,6 @@ import { isNameId, sideConversationName } from "@/lib/dms/names"
 import type { Teamspace } from "@/lib/teamspaces/client"
 import { teamspaceKeys, teamspaceQueryOptions } from "@/lib/teamspaces/queries"
 import {
-  PRIMARY_CHAT_AGENT,
   claimPrimaryChatRequest,
   rememberChoice,
   sameChatScope,
@@ -84,6 +83,9 @@ export type AgentPanelChatRequest = { agentId: string }
 
 /** Avatar seed for the primary agent until its id has loaded. */
 const PRIMARY_AGENT_SEED = "primary-agent"
+
+/** The primary chat's unsent message, among every agent's (by id). */
+const PRIMARY_DRAFT = "primary"
 
 const panelTabs: Array<{
   key: AgentPanelTab
@@ -175,8 +177,8 @@ export function WorkspaceAgentPanel({
   >({})
   // What the agents' chats hold while the member looks at another agent: the
   // primary chat's conversation (`undefined` until the chat decides it, `null`
-  // for a new one), and every agent's unsent message, by the primary chat's
-  // key or the specialist's id.
+  // for a new one), and every agent's unsent message, by `PRIMARY_DRAFT` or
+  // the specialist's id.
   const [primaryThread, setPrimaryThread] = useState<
     string | null | undefined
   >()
@@ -238,6 +240,11 @@ export function WorkspaceAgentPanel({
   const primary = agents.data ? primaryAgent(agents.data) : undefined
   const agentName = primary?.name
   const agentSeed = primary?.id ?? PRIMARY_AGENT_SEED
+  // What keys the primary chat's remembered choices: the agent's id, known
+  // once the agents list has answered (a stand-in only when it could not).
+  // Nothing is chosen or remembered before, so no choice sits under a key
+  // that changes.
+  const chatAgent = agents.isPending ? undefined : agentSeed
   // The tab's own icon always shows the primary agent's voxel avatar, with
   // "Primary agent" as an accessible-name fallback only (never shown as text).
   const tabIconLabel = agentName ?? FALLBACK_AGENT_NAME
@@ -272,7 +279,8 @@ export function WorkspaceAgentPanel({
   // still here for it, since what it asks for is held here, not in the chat.
   const request = usePrimaryChatRequest()
   useEffect(() => {
-    if (!request || !scope || !sameChatScope(request.scope, scope)) return
+    if (!request || !scope || !chatAgent) return
+    if (!sameChatScope(request.scope, scope)) return
     if (!claimPrimaryChatRequest(request.id)) return
     setTab("agents")
     setAgentId(null)
@@ -280,14 +288,14 @@ export function WorkspaceAgentPanel({
     if (request.kind === "thread") {
       setPrimaryThread(request.threadId)
       setFirstMessage(null)
-      rememberChoice(scope, PRIMARY_CHAT_AGENT, request.threadId)
+      rememberChoice(scope, chatAgent, request.threadId)
       return
     }
     setPrimaryThread(null)
-    rememberChoice(scope, PRIMARY_CHAT_AGENT, null)
+    rememberChoice(scope, chatAgent, null)
     const text = request.message?.trim()
     setFirstMessage(text ? { id: request.id, text } : null)
-  }, [request, scope])
+  }, [request, scope, chatAgent])
 
   // A first message waits only for a new chat to send it into.
   useEffect(() => {
@@ -555,6 +563,7 @@ export function WorkspaceAgentPanel({
                   <AgentsView
                     organizationId={organizationId}
                     scope={scope}
+                    chatAgent={chatAgent}
                     visible={agentsVisible}
                     agents={agents.data}
                     agentId={agentId}
@@ -747,6 +756,7 @@ function AgentsTabSide({
 function AgentsView({
   organizationId,
   scope,
+  chatAgent,
   visible,
   agents,
   agentId,
@@ -768,6 +778,8 @@ function AgentsView({
 }: {
   organizationId?: string
   scope?: ChatScope
+  /** The primary agent's id once known: what its chat's remembered choices are kept under. */
+  chatAgent?: string
   /** Whether this view is in front of the member (see `agentsVisible`). */
   visible: boolean
   /** The member's agents, once read. */
@@ -781,7 +793,7 @@ function AgentsView({
   /** What a request asked the primary chat to start a new conversation with. */
   firstMessage: FirstMessage | null
   onFirstMessageTaken: (id: number) => void
-  /** Every agent's unsent message, by the primary chat's key or a specialist's id. */
+  /** Every agent's unsent message, by `PRIMARY_DRAFT` or a specialist's id. */
   drafts: Partial<Record<string, string>>
   onDraftChange: (agent: string, value: string) => void
   agentName?: string
@@ -852,11 +864,12 @@ function AgentsView({
         <AgentChat
           organizationId={organizationId}
           scope={scope}
+          agentId={chatAgent}
           agentName={agentName}
           threadId={primaryThread}
           setThreadId={setPrimaryThread}
-          draft={drafts[PRIMARY_CHAT_AGENT] ?? ""}
-          onDraftChange={(value) => onDraftChange(PRIMARY_CHAT_AGENT, value)}
+          draft={drafts[PRIMARY_DRAFT] ?? ""}
+          onDraftChange={(value) => onDraftChange(PRIMARY_DRAFT, value)}
           firstMessage={firstMessage}
           onFirstMessageTaken={onFirstMessageTaken}
           onComposingChange={onComposingChange}
