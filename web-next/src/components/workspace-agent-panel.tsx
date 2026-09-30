@@ -254,7 +254,9 @@ export function WorkspaceAgentPanel({
 
   // Whether the Agents tab's chat is in front of the member: the Agents tab
   // of an expanded panel, or the conversation column of the focused Agent
-  // overview, and no side conversation over it.
+  // overview, and no side conversation over it. A file saved while it isn't
+  // stays a chip in the chat: opening it would close the view the member is
+  // in.
   const agentsVisible =
     (primaryWork || (expanded && tab === "agents")) && !agentsSide
 
@@ -578,9 +580,7 @@ export function WorkspaceAgentPanel({
                     inAgentOverview={primaryWork}
                     onOpenAgentOverview={onOpenAgentOverview}
                     onPrimaryFileCreated={
-                      (primaryWork || tab === "agents") &&
-                      !agentsSide &&
-                      !agentId
+                      agentsVisible && !agentId
                         ? onPrimaryFileCreated
                         : undefined
                     }

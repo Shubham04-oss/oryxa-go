@@ -30,6 +30,7 @@ import {
   requestPrimaryChat,
   usePrimaryChatRequest,
 } from "@/lib/threads/chat-choice"
+import { itemsToChatMessages } from "@/lib/threads/chat-messages"
 import type { Item, Thread, ThreadDetail } from "@/lib/threads/client"
 import { agentChats } from "@/test/agent-chat"
 import { roomSockets } from "@/test/room-socket"
@@ -448,5 +449,82 @@ describe("a request to open a conversation", () => {
     await act(async () => {})
     expect(roomSockets.named(chatName("th_1"))).toHaveLength(0)
     expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBeNull()
+  })
+})
+
+describe("a file the agent saves", () => {
+  const saved: Item[] = [
+    { type: "message", id: "ev_1", author: "member", text: "Write it up" },
+    { type: "artifact", id: "ev_f", artifact: "report.pdf", version: 2 },
+  ]
+
+  /** A run in the primary chat, on the panel as first rendered, with the file's callback watched. */
+  async function inARun(
+    props: Partial<ComponentProps<typeof WorkspaceAgentPanel>> = {}
+  ) {
+    stubGo({ threads: [thread("th_1", "Write it up")] })
+    const onFile = vi.fn()
+    const view = withQueries(panel({ onPrimaryFileCreated: onFile, ...props }))
+    ;(await socketOn(chatName("th_1"))).open()
+    const chat = agentChats.named(chatName("th_1"))
+    return {
+      view,
+      onFile,
+      /** The run writes the file and ends. */
+      finish() {
+        chat.update({ status: "streaming" })
+        chat.update({ messages: itemsToChatMessages(saved) })
+        chat.update({ status: "ready" })
+      },
+    }
+  }
+
+  it("opens in Agent overview when the chat is in front of the member", async () => {
+    const { onFile, finish } = await inARun()
+    finish()
+    expect(onFile).toHaveBeenCalledExactlyOnceWith({
+      threadId: "th_1",
+      name: "report.pdf",
+      version: 2,
+    })
+  })
+
+  it("leaves only the chip in the chat while the panel is collapsed, and does not open it on expanding", async () => {
+    const { view, onFile, finish } = await inARun()
+    view.rerender(panel({ expanded: false, onPrimaryFileCreated: onFile }))
+
+    finish()
+    expect(onFile).not.toHaveBeenCalled()
+    // The chat is still there, hidden, with the file in it.
+    expect(screen.getByText("report.pdf")).toBeTruthy()
+
+    view.rerender(panel({ expanded: true, onPrimaryFileCreated: onFile }))
+    expect(onFile).not.toHaveBeenCalled()
+    expect(screen.getByRole("link", { name: "report.pdf" })).toBeTruthy()
+  })
+
+  it("leaves only the chip when the panel is on another tab", async () => {
+    const { onFile, finish } = await inARun()
+    fireEvent.click(screen.getByRole("tab", { name: "DMs" }))
+    finish()
+    expect(onFile).not.toHaveBeenCalled()
+    expect(screen.getByText("report.pdf")).toBeTruthy()
+  })
+
+  it("opens in Agent overview from the focused overview's conversation column, whatever the panel does", async () => {
+    const { onFile, finish } = await inARun({
+      expanded: false,
+      primaryWork: true,
+    })
+    finish()
+    expect(onFile).toHaveBeenCalledOnce()
+  })
+
+  it("leaves only the chip while the member is with a specialist", async () => {
+    const { onFile, finish } = await inARun()
+    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
+    await screen.findByRole("textbox", { name: "Message Scout" })
+    finish()
+    expect(onFile).not.toHaveBeenCalled()
   })
 })
