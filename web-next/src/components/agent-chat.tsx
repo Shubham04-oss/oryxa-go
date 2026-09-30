@@ -56,6 +56,13 @@ type ComposerHandlers = {
 
 type ChatState = PrimaryChatActivity["state"]
 
+/**
+ * How long a socket has to be open, with nothing streaming, before the chat
+ * calls a run over. A run still alive resumes as soon as the socket opens,
+ * so a run that hasn't resumed by then has ended.
+ */
+const RUN_SETTLE_MS = 2000
+
 function composerLabel(agentName?: string): string {
   return agentName ? `Message ${agentName}` : "Message your agent"
 }
@@ -554,6 +561,11 @@ function ThreadChat({
   const [connection, setConnection] = useState<Connection>("connecting")
   const [runError, setRunError] = useState("")
   const [resending, setResending] = useState(false)
+  // Whether the member stopped the run, and whether the socket has been open
+  // and quiet for a while: what tells a run that ended from one that is only
+  // out of sight (see `ended`).
+  const [stopped, setStopped] = useState(false)
+  const [settled, setSettled] = useState(false)
   // Answers sent, until the run they went with ends.
   const [submitted, setSubmitted] = useState<Record<string, boolean>>({})
   // The last send, so it can go once more after the session is refreshed:
@@ -602,6 +614,7 @@ function ThreadChat({
     onError: (error) =>
       setRunError(error.message || "Your agent couldn't answer. Try again."),
     onFinish: ({ isAbort, isDisconnect, isError }) => {
+      if (isAbort) setStopped(true)
       if (lastSend.current.expired) {
         lastSend.current.expired = false
         if (!isAbort && !isDisconnect && !isError) void resendWithFreshSession()
@@ -679,6 +692,24 @@ function ThreadChat({
     chat.status === "submitted" ||
     chat.status === "streaming" ||
     chat.isServerStreaming
+
+  // Whether the run is over, as far as this chat can tell: the member
+  // stopped it, or nothing has streamed while the socket has been open a
+  // moment (a run still alive resumes by then). Until then a call still
+  // running stays as it was: a socket that drops, or a conversation opened
+  // while its run works, is not a run that ended.
+  useEffect(() => {
+    if (running) setStopped(false)
+  }, [running])
+  useEffect(() => {
+    if (connection !== "open" || running) {
+      setSettled(false)
+      return
+    }
+    const timer = setTimeout(() => setSettled(true), RUN_SETTLE_MS)
+    return () => clearTimeout(timer)
+  }, [connection, running])
+  const ended = !running && (stopped || settled)
 
   // A new conversation's first message goes once its socket is open. Not
   // on mount: useChat stops a request its effects' cleanup finds in flight,
@@ -828,6 +859,7 @@ function ThreadChat({
         <AgentTimeline
           entries={entries}
           running={running}
+          ended={ended}
           agentName={agentName}
           actionable={actionable}
           submitted={submitted}
@@ -854,7 +886,10 @@ function ThreadChat({
         }}
         disabled={connection !== "open" || actionable.size > 0}
         streaming={running}
-        onStop={() => void chat.stop()}
+        onStop={() => {
+          setStopped(true)
+          void chat.stop()
+        }}
         status={status}
         onFocus={() => onComposingChange(true)}
         onBlur={() => onComposingChange(false)}

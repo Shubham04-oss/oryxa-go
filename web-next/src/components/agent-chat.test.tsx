@@ -122,6 +122,8 @@ function json(body: unknown, status = 200): Response {
 }
 
 const HOUR = 60 * 60 * 1000
+/** As long as a socket is open and quiet before the chat calls a run over: a little over `RUN_SETTLE_MS`. */
+const RUN_SETTLE = 2000
 
 /** A conversation last active `age` ago (a minute by default: fresh). */
 const thread = (
@@ -337,6 +339,111 @@ describe("AgentChat", () => {
     updateChat({ status: "ready" })
     expect(row()?.getAttribute("data-state")).toBe("interrupted")
     expect(row()?.textContent).toContain("Interrupted")
+  })
+
+  describe("a tool call that only looks unfinished", () => {
+    const items: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Look it up" },
+      { type: "tool_call", id: "ev_2", call_id: "c1", tool: "web_search" },
+    ]
+    const row = () => document.querySelector(".workspace-agent-tools")
+    const state = () => row()?.getAttribute("data-state")
+    const settle = (ms: number) =>
+      act(() => {
+        vi.advanceTimersByTime(ms)
+      })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it("stays running through a socket that drops mid-run, and after it comes back, until the run resumes", async () => {
+      stubApi({ threads: [thread("th_1", "Look it up")], items })
+      hooks.chat.messages = itemsToChatMessages(items)
+      hooks.chat.status = "streaming"
+      renderChat()
+      await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+      open("org_1~th_1")
+      expect(state()).toBe("running")
+
+      // The transport closes the stream when the socket drops; Go goes on.
+      act(() => socketFor("org_1~th_1").onClose?.({ code: 1006 }))
+      updateChat({ status: "ready" })
+      settle(5000)
+      expect(state()).toBe("running")
+
+      // The socket is back, and the run has not resumed yet.
+      open("org_1~th_1")
+      settle(RUN_SETTLE - 500)
+      expect(state()).toBe("running")
+      updateChat({ status: "streaming" })
+      settle(5000)
+      expect(state()).toBe("running")
+    })
+
+    it("stays running while the conversation of a live run opens, and reads interrupted once the socket has been quiet a moment", async () => {
+      stubApi({ threads: [thread("th_1", "Look it up")], items })
+      hooks.chat.messages = itemsToChatMessages(items)
+      renderChat()
+      await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+      // Not connected yet: nothing says the run is over.
+      settle(10_000)
+      expect(state()).toBe("running")
+
+      open("org_1~th_1")
+      settle(RUN_SETTLE - 500)
+      expect(state()).toBe("running")
+      // Nothing resumed: the run behind this call is over.
+      settle(600)
+      expect(state()).toBe("interrupted")
+      expect(row()?.textContent).toContain("Interrupted")
+    })
+
+    it("reads a run interrupted at once when the member stops it, or the chat is aborted", async () => {
+      stubApi({ threads: [thread("th_1", "Look it up")], items })
+      hooks.chat.messages = itemsToChatMessages(items)
+      hooks.chat.status = "streaming"
+      renderChat()
+      await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+      open("org_1~th_1")
+      expect(state()).toBe("running")
+
+      updateChat({ status: "ready" })
+      act(() =>
+        hooks.chatOptions?.onFinish({
+          isAbort: true,
+          isDisconnect: false,
+          isError: false,
+        })
+      )
+      expect(state()).toBe("interrupted")
+    })
+
+    it("runs again when the member sends after a stop", async () => {
+      stubApi({ threads: [thread("th_1", "Look it up")], items })
+      hooks.chat.messages = itemsToChatMessages(items)
+      hooks.chat.status = "streaming"
+      renderChat()
+      await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+      open("org_1~th_1")
+      fireEvent.click(screen.getByRole("button", { name: "Stop response" }))
+      updateChat({ status: "ready" })
+      expect(state()).toBe("interrupted")
+
+      // The next turn streams, with a new call of its own running.
+      hooks.chat.messages = itemsToChatMessages([
+        ...items,
+        { type: "message", id: "ev_3", author: "member", text: "Again" },
+        { type: "tool_call", id: "ev_4", call_id: "c2", tool: "read_file" },
+      ])
+      updateChat({ status: "streaming" })
+      const rows = document.querySelectorAll(".workspace-agent-tools")
+      expect(rows).toHaveLength(2)
+      expect(rows[0].getAttribute("data-state")).toBe("interrupted")
+      expect(rows[1].getAttribute("data-state")).toBe("running")
+    })
   })
 
   it("starts a thread with the first message when the member has none", async () => {

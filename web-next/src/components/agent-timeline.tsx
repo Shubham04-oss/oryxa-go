@@ -78,15 +78,16 @@ export function toolGroupState(tools: readonly ToolEntry[]): ToolState {
 }
 
 /**
- * A call is only still running while its run streams. With no run streaming,
- * one still running was left behind by a run that was stopped or broke off
- * (its end marker never came), so it reads as interrupted, as a draft does.
+ * A call still running once its run has definitely ended was left behind by
+ * a run that was stopped or broke off (its end marker never came), so it
+ * reads as interrupted, as a draft does. While the run may still be alive,
+ * just not streaming here, it stays as it was.
  */
 function settledCalls(
   tools: readonly ToolEntry[],
-  running: boolean
+  ended: boolean
 ): ToolEntry[] {
-  if (running) return [...tools]
+  if (!ended) return [...tools]
   return tools.map((tool) =>
     tool.state === "running" ? { ...tool, state: "interrupted" } : tool
   )
@@ -192,13 +193,13 @@ function toolGroupLabel(tools: ToolEntry[]): string {
 
 function ToolGroup({
   tools: calls,
-  running,
+  ended,
 }: {
   tools: ToolEntry[]
-  /** Whether a run is streaming now. */
-  running: boolean
+  /** Whether the run is definitely over (see `AgentTimeline`). */
+  ended: boolean
 }) {
-  const tools = settledCalls(calls, running)
+  const tools = settledCalls(calls, ended)
   const state = toolGroupState(tools)
   const active = tools.find((tool) => tool.state === "running") || tools[0]
   const apps = [
@@ -380,11 +381,12 @@ function WorkResult({ result }: { result: SpecialistResult }) {
 
 function MessageBlock({
   entry,
-  running,
+  ended,
   agentName,
 }: {
   entry: MessageEntry
-  running: boolean
+  /** Whether the run is definitely over (see `AgentTimeline`). */
+  ended: boolean
   agentName?: string
 }) {
   if (entry.role === "member") {
@@ -395,11 +397,11 @@ function MessageBlock({
     )
   }
   if (entry.role === "apps") return <AppsUpdate entry={entry} />
-  // A draft is only still being written while its run streams; one left
-  // behind by a stopped or broken run reads as interrupted.
-  const streaming = entry.state === "streaming" && running
+  // A draft is still being written until its run has definitely ended; one
+  // left behind by a stopped or broken run reads as interrupted.
+  const streaming = entry.state === "streaming" && !ended
   const interrupted =
-    entry.state === "interrupted" || (entry.state === "streaming" && !running)
+    entry.state === "interrupted" || (entry.state === "streaming" && ended)
   // A draft with no words yet is the specialist chat's progress marker: the
   // conversation says the agent is working instead of showing an empty
   // bubble, and one cut short says only that.
@@ -662,6 +664,7 @@ function ArtifactName({ entry }: { entry: ArtifactEntry }) {
 export function AgentTimeline({
   entries,
   running,
+  ended = !running,
   agentName,
   actionable,
   submitted,
@@ -673,6 +676,14 @@ export function AgentTimeline({
   entries: readonly TimelineEntry[]
   /** Whether a run is streaming now. */
   running: boolean
+  /**
+   * Whether the run is definitely over: nothing streams and nothing can
+   * resume, so a draft or a tool call it left unfinished reads as interrupted.
+   * Without it, that is whenever nothing streams. A chat that can tell a
+   * socket that dropped, or a run about to resume, from a run that ended says
+   * so here, and those rows keep their state meanwhile.
+   */
+  ended?: boolean
   /** The primary agent's display name; anyone else's messages are labelled. */
   agentName?: string
   /** The confirmations the member can answer now, by call id. */
@@ -720,14 +731,14 @@ export function AgentTimeline({
           <MessageBlock
             key={entry.key}
             entry={entry}
-            running={running}
+            ended={ended}
             agentName={agentName}
           />
         )
         break
       case "tools":
         blocks.push(
-          <ToolGroup key={entry.key} tools={entry.tools} running={running} />
+          <ToolGroup key={entry.key} tools={entry.tools} ended={ended} />
         )
         break
       case "confirmation": {

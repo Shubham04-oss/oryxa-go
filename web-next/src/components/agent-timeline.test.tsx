@@ -37,11 +37,13 @@ function timeline(
   items: Item[],
   {
     running = false,
+    ended,
     actionable = [],
     submitted = {},
     onAnswer = vi.fn<(answers: ConfirmationAnswer[]) => void>(),
   }: {
     running?: boolean
+    ended?: boolean
     actionable?: string[]
     submitted?: Record<string, boolean>
     onAnswer?: Mock<(answers: ConfirmationAnswer[]) => void>
@@ -52,6 +54,7 @@ function timeline(
       <AgentTimeline
         entries={buildTimeline(items)}
         running={running}
+        ended={ended}
         agentName={agent}
         actionable={new Set(actionable)}
         submitted={submitted}
@@ -222,6 +225,34 @@ describe("AgentTimeline", () => {
       after.container.querySelectorAll(".workspace-agent-tools")
     ).toHaveLength(1)
     expect(row?.querySelector("summary, ol, button")).toBeNull()
+  })
+
+  it("leaves a call and a draft as they were while the run may only be out of sight", () => {
+    const items: Item[] = [
+      { type: "run_started", run_id: "run_1" },
+      { type: "tool_call", id: "ev_1", call_id: "c1", tool: "web_search" },
+      { type: "delta", author: agent, text: "Looking" },
+    ]
+    // Nothing streams here (the socket dropped, or a resume is on its way),
+    // but nothing says the run is over.
+    const alive = timeline(items, { running: false, ended: false })
+    const row = alive.container.querySelector(".workspace-agent-tools")
+    expect(row?.getAttribute("data-state")).toBe("running")
+    const draft = alive.log.querySelector('[data-from="agent"]')
+    expect(draft?.getAttribute("data-state")).toBe("streaming")
+    expect(within(alive.log).queryByText("Interrupted")).toBeNull()
+    cleanup()
+
+    // Told the run is over, the same rows read interrupted.
+    const over = timeline(items, { running: false, ended: true })
+    expect(
+      over.container
+        .querySelector(".workspace-agent-tools")
+        ?.getAttribute("data-state")
+    ).toBe("interrupted")
+    expect(within(over.log).getAllByText("Interrupted").length).toBeGreaterThan(
+      0
+    )
   })
 
   it("reads a call whose run ended without its result as interrupted, even while another run streams", () => {
