@@ -55,10 +55,10 @@ var (
 const (
 	stateTitle     = "thread_title"
 	stateCreatedAt = "thread_created_at"
-	// stateOrigin says why a thread exists: OriginChat or
-	// OriginSideConversation. A thread created before this key existed, or
-	// by other code that does not set it, has none in state and reads as
-	// OriginChat.
+	// stateOrigin says why a thread exists: OriginChat,
+	// OriginSideConversation or OriginWakeup. A thread created before this
+	// key existed, or by other code that does not set it, has none in state
+	// and reads as OriginChat.
 	stateOrigin = "thread_origin"
 	// stateWakeup is set, by the message itself, on a message that a batch
 	// of app events sent rather than the member.
@@ -68,11 +68,15 @@ const (
 // The origins a thread can have. OriginChat is a member's own conversation
 // with Krude; OriginSideConversation is a thread the web app opened to run
 // the member's own agent on an internal prompt, kept out of their chat list.
+// OriginWakeup is the thread their apps' events are reported in, which the
+// member did not start and which is kept out of their chat list as well: only
+// Oryxa's own waker makes one (CreateWakeup), and CreateFrom refuses it.
 // OriginAll is not an origin a thread can have — it only selects every
 // origin, in ListFrom.
 const (
 	OriginChat             = "chat"
 	OriginSideConversation = "side_conversation"
+	OriginWakeup           = "wakeup"
 	OriginAll              = "all"
 )
 
@@ -109,9 +113,9 @@ type Thread struct {
 	// one from the development UI.
 	CreatedAt time.Time `json:"created_at,omitzero"`
 	UpdatedAt time.Time `json:"updated_at"`
-	// Origin is OriginChat or OriginSideConversation. A thread with none in
-	// its state — every thread created before origins existed, and any
-	// other code's threads — reads as OriginChat.
+	// Origin is OriginChat, OriginSideConversation or OriginWakeup. A thread
+	// with none in its state — every thread created before origins existed,
+	// and any other code's threads — reads as OriginChat.
 	Origin string `json:"origin"`
 }
 
@@ -276,6 +280,13 @@ func (service *Service) CreateFrom(ctx context.Context, member Member, origin st
 	return service.create(ctx, member, "", origin)
 }
 
+// CreateWakeup starts the thread the member's apps' events are reported in,
+// with a title of its own. Only the waker calls it: CreateFrom, which the
+// HTTP route uses, refuses OriginWakeup, so a client cannot make one.
+func (service *Service) CreateWakeup(ctx context.Context, member Member, title string) (Thread, error) {
+	return service.create(ctx, member, title, OriginWakeup)
+}
+
 // create starts a thread carrying origin in its state, next to
 // adksession.StateOrganizationID — the same state map CreateTitled has
 // always seeded.
@@ -306,19 +317,21 @@ func (service *Service) create(ctx context.Context, member Member, title, origin
 }
 
 // List returns the member's chat threads in their organization, the most
-// recently active first. ListFrom also reaches their other origins.
+// recently active first. Their side conversations' and wake-ups' threads are
+// not among them: ListFrom reaches those.
 func (service *Service) List(ctx context.Context, member Member) ([]Thread, error) {
 	return service.ListFrom(ctx, member, OriginChat)
 }
 
-// ListFrom returns the member's threads of one origin — chat or
-// side_conversation — or, with OriginAll, every origin together, the most
-// recently active first. Anything else, including blank, is ErrInvalid.
+// ListFrom returns the member's threads of one origin — chat,
+// side_conversation or wakeup — or, with OriginAll, every origin together,
+// the most recently active first. Anything else, including blank, is
+// ErrInvalid.
 func (service *Service) ListFrom(ctx context.Context, member Member, origin string) ([]Thread, error) {
 	switch origin {
-	case OriginChat, OriginSideConversation, OriginAll:
+	case OriginChat, OriginSideConversation, OriginWakeup, OriginAll:
 	default:
-		return nil, fmt.Errorf("%w: origin must be chat, side_conversation or all", ErrInvalid)
+		return nil, fmt.Errorf("%w: origin must be chat, side_conversation, wakeup or all", ErrInvalid)
 	}
 	listed, err := service.sessions.List(ctx, &session.ListRequest{AppName: service.appName, UserID: member.UserID})
 	if err != nil {
@@ -353,6 +366,17 @@ func (service *Service) Get(ctx context.Context, member Member, threadID string)
 		Items:   displayAgent(historyItems(history), service.agent.Name(), member.AgentName),
 		Pending: nonNil(pendingConfirmations(history, service.agent.Name())),
 	}, nil
+}
+
+// Origin says why one of the member's threads exists: OriginChat,
+// OriginSideConversation or OriginWakeup. It reads the thread's state and
+// next to none of its history, so it is cheap to ask of a long thread.
+func (service *Service) Origin(ctx context.Context, member Member, threadID string) (string, error) {
+	stored, err := service.readThread(ctx, member, threadID, 1)
+	if err != nil {
+		return "", err
+	}
+	return threadOf(stored).Origin, nil
 }
 
 // Delete removes one of the member's threads, and what its runs kept.
@@ -554,11 +578,18 @@ func (service *Service) deleteArtifacts(ctx context.Context, member Member, thre
 // thread reads one of the member's threads, answering ErrNotFound for one
 // that is not theirs in this organization.
 func (service *Service) thread(ctx context.Context, member Member, threadID string) (session.Session, error) {
+	return service.readThread(ctx, member, threadID, 0)
+}
+
+// readThread is thread, reading no more than the latest recent events of the
+// thread's history, or all of it when recent is 0. What the thread's state
+// says does not depend on how much of the history comes with it.
+func (service *Service) readThread(ctx context.Context, member Member, threadID string, recent int) (session.Session, error) {
 	if strings.TrimSpace(threadID) == "" {
 		return nil, ErrNotFound
 	}
 	got, err := service.sessions.Get(ctx, &session.GetRequest{
-		AppName: service.appName, UserID: member.UserID, SessionID: threadID,
+		AppName: service.appName, UserID: member.UserID, SessionID: threadID, NumRecentEvents: recent,
 	})
 	if errors.Is(err, session.ErrNotFound) {
 		return nil, ErrNotFound
