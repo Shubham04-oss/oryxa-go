@@ -62,11 +62,13 @@ type heldReviewParams struct {
 }
 
 // reviewTicketed are the values of the review's buttons. SendMasked is there
-// only for an answer that has a masked version.
+// only for an answer that has a masked version; Reply, for Reply yourself,
+// always.
 type reviewTicketed struct {
 	Send       string `json:"send"`
 	SendMasked string `json:"send_masked,omitempty"`
 	Withhold   string `json:"withhold"`
+	Reply      string `json:"reply,omitempty"`
 }
 
 // heldReviewSettledParams are the parameters of apps' held_review_settled
@@ -77,6 +79,9 @@ type heldReviewSettledParams struct {
 	Question    string     `json:"question"`
 	Outcome     string     `json:"outcome"`
 	DecidedAt   *time.Time `json:"decided_at,omitempty"`
+	// Reply is what the owner replied instead of sending the held answer, as
+	// it was delivered; left out for an ask of a secret.
+	Reply string `json:"reply,omitempty"`
 }
 
 // The reasons a review says an answer was held for, as apps' held_review
@@ -233,6 +238,10 @@ func (p *pass) reviewState() string {
 	}
 	switch review.DecidedBy.Kind {
 	case interactions.DecidedByMember:
+		if review.Action == interactions.ReviewReply {
+			// The owner answered in their own words instead, on either surface.
+			return reviewReplied
+		}
 		if review.DecidedBy.Surface != interactions.SurfaceSlack {
 			return reviewDecidedElsewhere
 		}
@@ -318,7 +327,7 @@ func (p *pass) sendReview(ctx context.Context) error {
 			return fmt.Errorf("make the review's tickets: %w", err)
 		}
 		params.Preview, params.Masked = heldPreview(request.Held)
-		params.Tickets = &reviewTicketed{Send: tickets.Send, SendMasked: tickets.SendMasked, Withhold: tickets.Withhold}
+		params.Tickets = &reviewTicketed{Send: tickets.Send, SendMasked: tickets.SendMasked, Withhold: tickets.Withhold, Reply: tickets.Reply}
 		if params.Masked != (tickets.SendMasked != "") {
 			// Both read the one held answer, which does not change while it is in
 			// review. A message that offered what the ledger refuses, or showed the
@@ -349,6 +358,11 @@ func (p *pass) settleReview(ctx context.Context, link Link, state string) error 
 	if review := request.Review; review != nil && review.DecidedBy.Kind == interactions.DecidedByMember && !review.DecidedAt.IsZero() {
 		at := review.DecidedAt.UTC()
 		params.DecidedAt = &at
+	}
+	if state == reviewReplied {
+		// What the owner replied instead, as it was delivered. The held answer
+		// it replaced is gone, and the settled review never shows it.
+		params.Reply = p.replyShown()
 	}
 	err = p.service.deps.Slack.Update(ctx, appsclient.Update{
 		OrganizationID: request.OrganizationID, ChannelID: link.ChannelID, TS: link.TS,

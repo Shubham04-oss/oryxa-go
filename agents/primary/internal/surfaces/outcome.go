@@ -33,6 +33,9 @@ const (
 	modeAccess  = "access"
 	modeLease   = "lease"
 	modeBypass  = "bypass"
+	// modeReply is an answer its owner wrote themself, which says it is theirs
+	// ("Raya replied:") and nothing of an agent's or of what they allowed.
+	modeReply = "reply"
 
 	statusHeld   = "held"
 	statusDenied = "denied"
@@ -338,6 +341,20 @@ func (p *pass) ownerName(ctx context.Context) (string, error) {
 	return orDefault(name, "the owner"), nil
 }
 
+// replyShown is what the owner's own direct message says they replied: their
+// reply as it was delivered. It is nothing for an ask of a secret, whose answer
+// is never in Slack, and for an answer that is not theirs.
+func (p *pass) replyShown() string {
+	result := p.request.Result
+	if p.ask.Kind == interactions.AskSecret || result == nil || !result.WrittenByOwner {
+		return ""
+	}
+	if text := strings.TrimSpace(result.Content); text != "" {
+		return text
+	}
+	return strings.TrimSpace(result.Summary)
+}
+
 // answerText is the words of an answer: what the owner's agent wrote for the
 // asker, or failing that its summary. Only a delivered result is ever given to
 // it: a held one is in Held, which is not looked at.
@@ -357,8 +374,12 @@ func answerText(result *agents.InteractionResult) string {
 // answerMode is how far the answer was allowed to go, as its attribution says:
 // a lease or a bypass approved it without the owner's click, and otherwise the
 // owner's own choice did. An approval that says nothing of consent reads as the
-// narrowest.
+// narrowest. An answer the owner wrote themself is theirs, whatever let it go,
+// and says so instead.
 func answerMode(request agents.Interaction) string {
+	if request.Result != nil && request.Result.WrittenByOwner {
+		return modeReply
+	}
 	if decision := request.Decision; decision != nil {
 		if decision.DecidedBy != nil {
 			switch decision.DecidedBy.Kind {

@@ -20,6 +20,10 @@
 //     member who clicked: a click on a button of an owner's review of a held
 //     answer to the review, and every other click to the decision. The router
 //     never decides or reviews anything.
+//   - A reply an owner sent from the modal a Reply yourself button opened is
+//     handed, unchanged, to the consent core too, with the member who sent it:
+//     the ticket the button carried and what they wrote, which is the answer
+//     and is never logged.
 //   - Everything else is dropped.
 //
 // What the router never does is decide an ask: the owner does, or a bypass the
@@ -142,7 +146,7 @@ func (router *Router) Handle(ctx context.Context, job Job) error {
 	// one. A row that says otherwise is not what the event was about, and
 	// nothing is done with it.
 	if (inbound.ID != "" && inbound.ID != job.InboundID) || inbound.OrganizationID != job.OrganizationID ||
-		inbound.TeamID != job.TeamID || inbound.Kind != job.Kind {
+		inbound.TeamID != job.TeamID || !sameKind(job.Kind, inbound.Kind) {
 		return Permanent(errors.New("the inbound row is not the one its event named"))
 	}
 	switch inbound.Kind {
@@ -150,8 +154,17 @@ func (router *Router) Handle(ctx context.Context, job Job) error {
 		return router.mention(ctx, job, inbound)
 	case KindAction:
 		return router.click(ctx, job, inbound)
+	case KindReply:
+		return router.reply(ctx, job, inbound)
 	}
 	return Permanent(fmt.Errorf("unknown inbound kind %q", inbound.Kind))
+}
+
+// sameKind is whether an inbound row is of the kind its job's event named: a
+// message's event names a message, and an interaction's names a click or a
+// reply sent from a modal, which apps announces the same way.
+func sameKind(job, inbound string) bool {
+	return job == inbound || job == KindAction && inbound == KindReply
 }
 
 // click hands a click to the consent core, as the member who made it: to the
@@ -195,6 +208,50 @@ func (router *Router) click(ctx context.Context, job Job, inbound Inbound) error
 	}
 	router.logger.InfoContext(ctx, "a click was handed to the consent core",
 		"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "action_id", click.ActionID)
+	return nil
+}
+
+// minScrubbedReply is the shortest reply whose words are taken out of an error
+// that quotes them. The ledger never quotes them; a shorter one would take out
+// letters of the error's own words.
+const minScrubbedReply = 8
+
+// reply hands a reply an owner sent from Slack to the ledger, as the member who
+// sent it, as click hands a click: the router records nothing, and the ledger
+// checks the ticket, the sender and the words. Neither the ticket nor the words
+// are logged or carried on in an error.
+func (router *Router) reply(ctx context.Context, job Job, inbound Inbound) error {
+	reply := inbound.Reply
+	switch {
+	case reply == nil:
+		return Permanent(errors.New("a reply delivery carries no reply"))
+	case reply.UserID == "" || reply.Value == "":
+		return Permanent(errors.New("the reply names no user or carries no ticket"))
+	case strings.TrimSpace(reply.Text) == "":
+		return Permanent(errors.New("the reply holds no words"))
+	}
+	profiles, err := router.profiles(ctx, job, []string{reply.UserID})
+	if err != nil {
+		return err
+	}
+	sender, err := router.resolver.resolve(ctx, job.OrganizationID, job.TeamID, reply.UserID, profiles)
+	if err != nil {
+		return err
+	}
+	if !sender.Member {
+		// Nobody who is not a member of the organization can be the owner a
+		// ticket names; the modal was their own, and nothing is said to them.
+		return Permanent(fmt.Errorf("the reply was not sent by a member: %s", sender.Why))
+	}
+	if err := router.deps.Asks.Reply(ctx, reply.Value, sender.Person.UserID, reply.Text); err != nil {
+		err = scrub(err, reply.Value, "[ticket]")
+		if len(strings.TrimSpace(reply.Text)) >= minScrubbedReply {
+			err = scrub(err, strings.TrimSpace(reply.Text), "[reply]")
+		}
+		return fmt.Errorf("hand the reply to the consent core: %w", err)
+	}
+	router.logger.InfoContext(ctx, "a reply was handed to the consent core",
+		"inbound_id", job.InboundID, "organization_id", job.OrganizationID)
 	return nil
 }
 

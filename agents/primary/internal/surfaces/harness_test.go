@@ -101,7 +101,7 @@ func (l *fakeLedger) ConsentTickets(_ context.Context, requestID, notice string)
 	}
 	ticket := func(choice string) string { return "t1." + choice + "." + requestID + "." + notice }
 	return interactions.ConsentTickets{
-		Summary: ticket("summary"), Access: ticket("access"), Deny: ticket("deny"), ExpiresAt: request.ExpiresAt,
+		Summary: ticket("summary"), Access: ticket("access"), Deny: ticket("deny"), Reply: ticket("reply.pending"), ExpiresAt: request.ExpiresAt,
 	}, nil
 }
 
@@ -127,7 +127,7 @@ func (l *fakeLedger) ReviewTickets(_ context.Context, requestID, review string) 
 		return interactions.ReviewTickets{}, interactions.ErrExpired
 	}
 	ticket := func(action string) string { return "t1.review." + action + "." + requestID + "." + review }
-	made := interactions.ReviewTickets{Send: ticket("send"), Withhold: ticket("withhold"), ExpiresAt: request.ExpiresAt}
+	made := interactions.ReviewTickets{Send: ticket("send"), Withhold: ticket("withhold"), Reply: "t1.reply.review." + requestID + "." + review, ExpiresAt: request.ExpiresAt}
 	if request.Held.MaskedResult != nil {
 		made.SendMasked = ticket("send_masked")
 	}

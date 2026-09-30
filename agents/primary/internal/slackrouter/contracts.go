@@ -28,12 +28,18 @@ import (
 //     a few times. An error that has a RetryAfter() time.Duration method
 //     lengthens the delay, so a 429's Retry-After is honoured.
 
-// Inbound kinds: which bus event a job came from.
+// Inbound kinds: which bus event a job came from, and what an inbound row is.
 const (
 	// KindMessage is a message that mentioned the bot.
 	KindMessage = "message"
 	// KindAction is a click on one of the bot's buttons.
 	KindAction = "action"
+	// KindReply is a reply an owner sent from the Slack modal the Reply
+	// yourself button of their notice or review opened. It is an interaction,
+	// as a click is, and apps announces it on the bus as one
+	// (ActionReceivedDetailType): so its job is KindAction, and only its
+	// inbound row is KindReply.
+	KindReply = "reply"
 )
 
 // SurfaceSlack is what Consent is told a click came from.
@@ -105,12 +111,13 @@ type Inbound struct {
 	ID             string
 	OrganizationID string
 	TeamID         string
-	// Kind is KindMessage or KindAction, and says which of the two below is
-	// set.
+	// Kind is KindMessage, KindAction or KindReply, and says which of the
+	// three below is set.
 	Kind       string
 	ReceivedAt time.Time
 	Mention    *Mention
 	Click      *Click
+	Reply      *Reply
 }
 
 // Mention is a message that mentioned the bot.
@@ -152,6 +159,24 @@ type Click struct {
 	// Value is the button's opaque ticket. It goes to Consent, or for a
 	// review's button to Review, untouched.
 	Value string
+}
+
+// Reply is a reply an owner sent from the modal the Reply yourself button of
+// their notice or review opened: their own answer to the request, in their own
+// words.
+type Reply struct {
+	// UserID is the Slack user who sent it.
+	UserID string
+	// ChannelID and MessageTS are the message the button was on: the notice or
+	// the review, in the owner's direct message with the bot.
+	ChannelID string
+	MessageTS string
+	// Value is the ticket of the button that opened the modal, which the modal
+	// carried. It goes to Reply untouched.
+	Value string
+	// Text is what they wrote. It goes to Reply untouched, and is never logged:
+	// it is the answer.
+	Text string
 }
 
 // Profile is one Slack user as apps reads them from users.info, cached for a
@@ -379,6 +404,14 @@ type Asks interface {
 	// answer is still in review are its to check. A click it refuses, for any of
 	// those, is Permanent.
 	Review(ctx context.Context, ticket, clickerUserID string) error
+	// Reply hands a reply an owner sent from Slack to the ledger, unchanged: the
+	// ticket of the Reply yourself button that opened the modal, the member who
+	// sent it, and what they wrote. It records nothing here: whether the ticket
+	// is a genuine reply ticket, whether the sender is the person it names,
+	// whether the words are a reply and whether the request still waits for its
+	// owner are the ledger's to check. A reply it refuses, one that came after
+	// another decision among them, is Permanent.
+	Reply(ctx context.Context, ticket, senderUserID, text string) error
 }
 
 // Authority is the one question the organization chart answers for bypass.

@@ -409,6 +409,13 @@ func (c *Client) Inbound(ctx context.Context, id string) (slackrouter.Inbound, e
 		inbound.Click = &slackrouter.Click{
 			UserID: view.UserID, ChannelID: view.ChannelID, MessageTS: view.MessageTS, ActionID: view.ActionID, Value: view.ActionValue,
 		}
+	case "reply":
+		// A reply sent from the modal a Reply yourself button opened: the
+		// button's ticket, which the modal carried, and the words.
+		inbound.Kind = slackrouter.KindReply
+		inbound.Reply = &slackrouter.Reply{
+			UserID: view.UserID, ChannelID: view.ChannelID, MessageTS: view.MessageTS, Value: view.ActionValue, Text: view.Text,
+		}
 	}
 	return inbound, nil
 }
