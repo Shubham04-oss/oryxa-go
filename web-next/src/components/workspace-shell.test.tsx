@@ -385,6 +385,33 @@ describe("WorkspaceShell navigation", () => {
       { kind: "new", message: undefined }
     )
     expect(request).toHaveBeenCalledTimes(3)
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Start a new conversation" }),
+      { target: { value: "Still composing on Home" } }
+    )
+    const all = within(
+      screen.getByRole("region", { name: "Your agent" })
+    ).getByRole("button", { name: "All conversations" })
+    fireEvent.click(all)
+    const history = await screen.findByRole("button", { name: "History" })
+    await waitFor(() =>
+      expect(history.getAttribute("aria-expanded")).toBe("true")
+    )
+    fireEvent.click(history)
+    expect(history.getAttribute("aria-expanded")).toBe("false")
+    fireEvent.click(
+      screen.getByRole("button", { name: "Collapse agent panel" })
+    )
+    fireEvent.click(all)
+    await waitFor(() =>
+      expect(history.getAttribute("aria-expanded")).toBe("true")
+    )
+    expect(screen.getByDisplayValue("Still composing on Home")).toBeTruthy()
+    expect(
+      screen.getByRole("heading", { name: "Today", level: 1 })
+    ).toBeTruthy()
+    expect(shell?.getAttribute("data-primary-work")).toBeNull()
+    expect(request).toHaveBeenCalledTimes(3)
     expect(api.calls.every((call) => call.method === "GET")).toBe(true)
   })
 

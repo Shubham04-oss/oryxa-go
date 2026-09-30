@@ -31,17 +31,17 @@ import { slackKeys } from "@/lib/apps/slack"
 import { corporaQueryOptions } from "@/lib/rag/client"
 import {
   retryUnlessRefused,
-  threadDetailQueryOptions,
+  threadApprovalQueryOptions,
   threadListQueryOptions,
 } from "@/lib/threads/client"
 import { pendingConfirmationIds } from "@/lib/threads/timeline"
+import { approvalCandidates, chatHistory } from "@/lib/threads/chat-choice"
 import type { PrimaryChatActivity } from "@/lib/threads/chat-choice"
 import { getMemberSlackStatus, listActiveAgentLeases } from "@/lib/home/client"
 import { authorizedData, homeRead } from "@/lib/home/queries"
 import "./home-overview.css"
 
 const requestLimit = 100
-const confirmationChatLimit = 5
 
 /** Only owner decisions and held-answer reviews actually wait on this member. */
 function waitsOnMember(request: AgentRequest, viewerId: string, now: number) {
@@ -228,18 +228,21 @@ function HomeDesk({
     mutationFn: (leaseId: string) => revokeAgentLease(org, leaseId),
     onSuccess: async (winner) => {
       setLeaseProblem("")
-      queryClient.setQueryData<typeof leases.data>(leaseKey, (data) =>
-        data
-          ? {
-              ...data,
-              pages: data.pages.map((page) => ({
-                ...page,
-                leases: page.leases.map((lease) =>
-                  lease.id === winner.id ? { ...lease, ...winner } : lease
-                ),
-              })),
-            }
-          : data
+      queryClient.setQueryData<typeof leases.data>(
+        leaseKey,
+        (data) =>
+          data
+            ? {
+                ...data,
+                pages: data.pages.map((page) => ({
+                  ...page,
+                  leases: page.leases.map((lease) =>
+                    lease.id === winner.id ? { ...lease, ...winner } : lease
+                  ),
+                })),
+              }
+            : data,
+        { updatedAt: leases.dataUpdatedAt }
       )
       await refreshRequests(queryClient, org)
     },
@@ -261,19 +264,17 @@ function HomeDesk({
       request.status === "completed" &&
       Boolean(request.result)
   )
-  const conversations = (authorizedData(threads) ?? []).filter(
-    (thread) => !thread.origin || thread.origin === "chat"
-  )
+  const conversations = chatHistory(authorizedData(threads) ?? [])
   // ADK stores confirmations in events, not reliable session metadata. Never
   // walk all histories: check the newest five primary chats plus the open one.
-  const checkedChats = conversations.slice(0, confirmationChatLimit)
+  const checkedChats = approvalCandidates(conversations)
   const openThreadId = primaryChatActivity?.threadId
   const checkedIds = checkedChats.map((thread) => thread.id)
   if (openThreadId && !checkedIds.includes(openThreadId))
     checkedIds.push(openThreadId)
   const confirmations = useQueries({
     queries: checkedIds.map((threadId) => ({
-      ...homeRead(threadDetailQueryOptions(org, threadId), viewer),
+      ...threadApprovalQueryOptions(org, threadId, viewer),
       ...poll,
     })),
   })
@@ -558,7 +559,9 @@ function HomeDesk({
               )}
               {waitingRequests.length > 3 && (
                 <p className="home-quiet">
-                  {waitingRequests.length - 3} more requests need you. Open All
+                  {waitingRequests.length - 3} more request
+                  {waitingRequests.length === 4 ? "" : "s"} need
+                  {waitingRequests.length === 4 ? "s" : ""} you. Open All
                   requests to decide.
                 </p>
               )}

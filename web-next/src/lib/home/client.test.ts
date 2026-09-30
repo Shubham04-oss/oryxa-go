@@ -11,14 +11,12 @@ describe("Home's member-safe metadata reads", () => {
       has_more: true,
       next_cursor: "next+opaque/",
     }
-    const fetch = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify(page), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
-      )
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(page), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
     vi.stubGlobal("fetch", fetch)
     const controller = new AbortController()
     expect(

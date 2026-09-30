@@ -185,27 +185,35 @@ it("keeps composer and three titled recent chats in the agent card, opening exac
   const view = renderHome()
   const agent = screen.getByRole("region", { name: "Your agent" })
   expect(
-    within(agent).getByRole("textbox", { name: "Start a new conversation" })
+    within(agent).getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Start a new conversation",
+    })
   ).toBeTruthy()
   await within(agent).findByRole("button", { name: /First/ })
   expect(
     within(agent).getByRole("list", { name: "Recent conversations" }).children
   ).toHaveLength(3)
   expect(screen.queryByText("Fourth")).toBeNull()
-  fireEvent.click(within(agent).getByRole("button", { name: /Second/ }))
+  fireEvent.click(
+    within(agent).getByRole<HTMLButtonElement>("button", { name: /Second/ })
+  )
   expect(view.onOpenConversation).toHaveBeenCalledWith("two")
   fireEvent.click(
-    within(agent).getByRole("button", { name: "All conversations" })
+    within(agent).getByRole<HTMLButtonElement>("button", {
+      name: "All conversations",
+    })
   )
   expect(view.onOpenAgent).toHaveBeenCalledOnce()
-  fireEvent.change(within(agent).getByRole("textbox"), {
+  fireEvent.change(within(agent).getByRole<HTMLTextAreaElement>("textbox"), {
     target: { value: "  Check the launch plan  " },
   })
-  fireEvent.click(within(agent).getByRole("button", { name: "Send message" }))
+  fireEvent.click(
+    within(agent).getByRole<HTMLButtonElement>("button", {
+      name: "Send message",
+    })
+  )
   expect(view.onNewChat).toHaveBeenCalledWith("Check the launch plan")
-  expect(
-    (within(agent).getByRole("textbox") as HTMLTextAreaElement).value
-  ).toBe("")
+  expect(within(agent).getByRole<HTMLTextAreaElement>("textbox").value).toBe("")
 })
 
 it("pins a running open chat once and keeps starting chat truthful until an ID exists", async () => {
@@ -291,15 +299,23 @@ it("uses real inline consent and held answer cards, followed by access, sent/sha
   const view = renderHome()
   const needs = await screen.findByRole("region", { name: "Needs you" })
   expect(
-    within(needs).getByRole("button", { name: /Summary only/ })
+    within(needs).getByRole<HTMLButtonElement>("button", {
+      name: /Summary only/,
+    })
   ).toBeTruthy()
   expect(
-    within(needs).getByRole("button", { name: /Allow for 1 hour/ })
+    within(needs).getByRole<HTMLButtonElement>("button", {
+      name: /Allow for 1 hour/,
+    })
   ).toBeTruthy()
-  expect(within(needs).getByRole("button", { name: /Deny/ })).toBeTruthy()
+  expect(
+    within(needs).getByRole<HTMLButtonElement>("button", { name: /Deny/ })
+  ).toBeTruthy()
   expect(within(needs).getByText("Held answer with personal data")).toBeTruthy()
   expect(
-    within(needs).getByRole("button", { name: /Send .*masked/ })
+    within(needs).getByRole<HTMLButtonElement>("button", {
+      name: /Send .*masked/,
+    })
   ).toBeTruthy()
   await screen.findByText("An answer to your request")
   const sections = [...view.container.querySelectorAll(".home-card")].map(
@@ -313,11 +329,17 @@ it("uses real inline consent and held answer cards, followed by access, sent/sha
     "Finish setup",
   ])
   expect(screen.getByText("The agent shared this answer")).toBeTruthy()
-  fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+  fireEvent.click(
+    screen.getByRole<HTMLButtonElement>("button", { name: "Connect" })
+  )
   expect(view.onOpenSlack).toHaveBeenCalledOnce()
-  fireEvent.click(screen.getByRole("button", { name: "Add" }))
+  fireEvent.click(
+    screen.getByRole<HTMLButtonElement>("button", { name: "Add" })
+  )
   expect(view.onOpenKnowledge).toHaveBeenCalledOnce()
-  fireEvent.click(screen.getByRole("button", { name: "Open Account" }))
+  fireEvent.click(
+    screen.getByRole<HTMLButtonElement>("button", { name: "Open Account" })
+  )
   expect(view.onOpenAccount).toHaveBeenCalledOnce()
 })
 
@@ -375,9 +397,13 @@ it("keeps only this member's unexpired owner decisions and held reviews; bounds 
   expect(screen.queryByText("Agent handles this")).toBeNull()
   expect(screen.queryByText("Expired request")).toBeNull()
   expect(
-    screen.getByText("1 more requests need you. Open All requests to decide.")
+    screen.getByText("1 more request needs you. Open All requests to decide.")
   ).toBeTruthy()
-  fireEvent.click(within(needs).getByRole("button", { name: "All requests" }))
+  fireEvent.click(
+    within(needs).getByRole<HTMLButtonElement>("button", {
+      name: "All requests",
+    })
+  )
   expect(view.onOpenRequests).toHaveBeenCalledWith()
 })
 
@@ -394,15 +420,15 @@ it("keeps a card's decision note and composer draft mounted during a background 
   })
   const view = renderHome()
   fireEvent.click(await screen.findByRole("button", { name: "Add a note" }))
-  const note = screen.getByRole("textbox", {
+  const note = screen.getByRole<HTMLInputElement>("textbox", {
     name: /A note for Raya/,
-  }) as HTMLInputElement
+  })
   fireEvent.change(note, {
     target: { value: "Please use the public launch notes" },
   })
-  const composer = screen.getByRole("textbox", {
+  const composer = screen.getByRole<HTMLTextAreaElement>("textbox", {
     name: "Start a new conversation",
-  }) as HTMLTextAreaElement
+  })
   fireEvent.change(composer, { target: { value: "Unsent question" } })
   refreshing = true
   let refetch: Promise<void> | undefined
@@ -412,13 +438,21 @@ it("keeps a card's decision note and composer draft mounted during a background 
     })
   })
   await waitFor(() => expect(finish).toBeTypeOf("function"))
-  expect(screen.getByRole("textbox", { name: /A note for Raya/ })).toBe(note)
+  expect(
+    screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: /A note for Raya/,
+    })
+  ).toBe(note)
   expect(note.value).toBe("Please use the public launch notes")
   await act(async () => {
     finish!(json({ requests: [request()] }))
     await refetch
   })
-  expect(screen.getByRole("textbox", { name: /A note for Raya/ })).toBe(note)
+  expect(
+    screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: /A note for Raya/,
+    })
+  ).toBe(note)
   expect(composer.value).toBe("Unsent question")
 })
 
@@ -455,7 +489,9 @@ it("checks only newest five primary chats plus the distinct open chat and opens 
     ["chat-0", "chat-1", "chat-2", "chat-3", "chat-4", "chat-10"].sort()
   )
   expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
-  fireEvent.click(screen.getByRole("button", { name: /Open older chat/ }))
+  fireEvent.click(
+    screen.getByRole<HTMLButtonElement>("button", { name: /Open older chat/ })
+  )
   expect(view.onOpenConversation).toHaveBeenCalledWith("chat-10")
 })
 
@@ -511,7 +547,9 @@ it("keeps known live confirmation reachable after a refused detail refresh while
   })
   const needs = screen.getByRole("region", { name: "Needs you" })
   expect(within(needs).queryByText("Stored confirmation")).toBeNull()
-  fireEvent.click(within(needs).getByRole("button", { name: /Open chat/ }))
+  fireEvent.click(
+    within(needs).getByRole<HTMLButtonElement>("button", { name: /Open chat/ })
+  )
   expect(view.onOpenConversation).toHaveBeenCalledWith("live")
   expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
   expect(screen.queryByText("private diagnostic")).toBeNull()
@@ -613,7 +651,11 @@ it("exposes End access only on owned revocable active windows and settles the se
     within(section).getAllByRole("button", { name: "End access" })
   ).toHaveLength(1)
   expect(within(section).getAllByRole("listitem")).toHaveLength(2)
-  fireEvent.click(within(section).getByRole("button", { name: "End access" }))
+  fireEvent.click(
+    within(section).getByRole<HTMLButtonElement>("button", {
+      name: "End access",
+    })
+  )
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "End access" })).toBeNull()
   )
@@ -637,10 +679,16 @@ it("makes every live access page reachable without pretending a first page is co
   renderHome()
   const section = await screen.findByRole("region", { name: "Open access" })
   expect(within(section).getAllByRole("listitem")).toHaveLength(3)
-  fireEvent.click(within(section).getByRole("button", { name: "All access" }))
+  fireEvent.click(
+    within(section).getByRole<HTMLButtonElement>("button", {
+      name: "All access",
+    })
+  )
   expect(within(section).getAllByRole("listitem")).toHaveLength(4)
   fireEvent.click(
-    within(section).getByRole("button", { name: "Load more access" })
+    within(section).getByRole<HTMLButtonElement>("button", {
+      name: "Load more access",
+    })
   )
   await waitFor(() =>
     expect(within(section).getAllByRole("listitem")).toHaveLength(5)
@@ -750,7 +798,7 @@ it("keeps preview read-only and does not fetch private APIs", async () => {
   renderHome({ organizationId: undefined, viewerId: undefined })
   expect(screen.getByText("Sign in to start a conversation.")).toBeTruthy()
   expect(
-    (screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement)
+    screen.getByRole<HTMLButtonElement>("button", { name: "Send message" })
       .disabled
   ).toBe(true)
   await act(async () => {})
@@ -763,15 +811,15 @@ it("leaves unsupported conversation callbacks visibly disabled and drafts editab
   renderHome({ onOpenConversation: undefined, onNewChat: undefined })
   await screen.findByRole("button", { name: /one/ })
   expect(
-    (screen.getByRole("button", { name: /one/ }) as HTMLButtonElement).disabled
+    screen.getByRole<HTMLButtonElement>("button", { name: /one/ }).disabled
   ).toBe(true)
   expect(
     screen.getByText("Conversation shortcuts are unavailable.")
   ).toBeTruthy()
-  fireEvent.change(screen.getByRole("textbox"), {
+  fireEvent.change(screen.getByRole<HTMLTextAreaElement>("textbox"), {
     target: { value: "An unsent question" },
   })
-  expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox").value).toBe(
     "An unsent question"
   )
 })
@@ -834,9 +882,9 @@ it.each([
     stubApi({ [route]: () => (deny ? refused() : json(seed)) })
     const view = renderHome()
     await screen.findByText(privateText)
-    const field = screen.getByRole("textbox", {
+    const field = screen.getByRole<HTMLTextAreaElement>("textbox", {
       name: "Start a new conversation",
-    }) as HTMLTextAreaElement
+    })
     fireEvent.change(field, { target: { value: "Keep this draft" } })
     deny = true
     await act(async () => {
@@ -864,7 +912,9 @@ it("drops prior viewer work and drafts immediately and freshly authorizes all pr
   const view = renderHome()
   await screen.findByText("Old viewer private task")
   fireEvent.change(
-    screen.getByRole("textbox", { name: "Start a new conversation" }),
+    screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Start a new conversation",
+    }),
     { target: { value: "Old viewer draft" } }
   )
   const firstCalls = go.calls.length
@@ -872,11 +922,9 @@ it("drops prior viewer work and drafts immediately and freshly authorizes all pr
   view.rerenderHome({ viewerId: "new-member" })
   expect(screen.queryByText("Old viewer private task")).toBeNull()
   expect(
-    (
-      screen.getByRole("textbox", {
-        name: "Start a new conversation",
-      }) as HTMLTextAreaElement
-    ).value
+    screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Start a new conversation",
+    }).value
   ).toBe("")
   await waitFor(() => expect(go.calls.length).toBeGreaterThan(firstCalls + 7))
   await act(async () => {

@@ -1,3 +1,7 @@
+.workspace-canvas:has(> .home-overview) {
+  overflow-y: auto;
+  scrollbar-color: #555555 #1e1e1e;
+}
 .home-overview {
   width: min(760px, calc(100% - 48px));
   margin: 28px auto 40px;
@@ -74,7 +78,7 @@
   min-width: 0;
   padding: 8px 0;
 }
-.home-row > button {
+.home-row > button:not(.workspace-agent-pill) {
   display: block;
   width: 100%;
   padding: 0;
@@ -160,6 +164,8 @@
 .home-access-row > button,
 .home-setup-row > button {
   flex: none;
+  display: inline-flex;
+  width: auto;
 }
 .home-setup .home-row + .home-row,
 .home-access-row + .home-access-row {

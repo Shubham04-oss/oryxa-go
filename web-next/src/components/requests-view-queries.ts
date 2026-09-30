@@ -115,8 +115,9 @@ export type PeopleNames = {
 }
 
 /**
- * The members list, as `nameOf`. It is the list Settings and the DMs already
- * read, so it costs no more. `loading` lasts only until the list has answered
+ * The members list, as `nameOf`. The organization remains its invalidation
+ * prefix; an optional viewer scopes the authorized cache to that member.
+ * `loading` lasts only until the list has answered
  * once: a list that failed stays `error` (names fall back to what a request
  * itself holds) however often it is tried again, so a failing members route
  * never sends every card back to "loading" and forward again, and is not

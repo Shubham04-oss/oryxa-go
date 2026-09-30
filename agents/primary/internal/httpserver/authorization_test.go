@@ -545,8 +545,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 68 {
-		t.Fatalf("authzRoutes has %d entries, want 68 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 69 {
+		t.Fatalf("authzRoutes has %d entries, want 69 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
