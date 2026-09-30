@@ -4,7 +4,7 @@
 // both this component, each with its own socket to the same object, which
 // sends every socket the same conversation. It reuses the primary agent's
 // chat pieces: the timeline, the conversation log and the pill composer.
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { useAgent } from "agents/react"
@@ -30,7 +30,6 @@ import {
   specialistThreadQueryOptions,
 } from "@/lib/specialists/client"
 import { reopenSocket } from "@/lib/threads/agent-socket"
-import { FRESH_CONVERSATION_MS } from "@/lib/threads/chat-choice"
 import {
   chatMessagesToItems,
   reconcileChatMessages,
@@ -238,7 +237,6 @@ export function SpecialistChat({
   specialist,
   missing = false,
   layout,
-  visible = true,
   draft: heldDraft,
   onDraftChange: holdDraft,
   onComposingChange,
@@ -249,13 +247,6 @@ export function SpecialistChat({
   /** The member's agents no longer include it: it was deleted. */
   missing?: boolean
   layout: SpecialistChatLayout
-  /**
-   * Whether the chat is in front of the member. The agent panel keeps it
-   * mounted while collapsed or on another tab, and it starts a stale
-   * conversation over when it shows again. The focused view is always in
-   * front.
-   */
-  visible?: boolean
   /**
    * The composer's text, when the parent keeps it (the panel does, so it
    * outlasts a switch to another agent); otherwise the chat keeps its own.
@@ -289,7 +280,6 @@ export function SpecialistChat({
         specialist={specialist}
         initialMessages={transcript.messages}
         layout={layout}
-        visible={visible}
         getScreenContext={getScreenContext}
         {...composer}
       />
@@ -381,7 +371,6 @@ function SpecialistChatSession({
   specialist,
   initialMessages,
   layout,
-  visible,
   draft,
   onDraftChange,
   onComposingChange,
@@ -391,7 +380,6 @@ function SpecialistChatSession({
   specialist: ChatSpecialist
   initialMessages: ThreadChatMessage[]
   layout: SpecialistChatLayout
-  visible: boolean
   getScreenContext?: () => ScreenContext
 }) {
   const queryClient = useQueryClient()
@@ -646,79 +634,6 @@ function SpecialistChatSession({
     )
     return new Set(waiting.filter((id) => !(id in submitted)))
   }, [history, items, submitted, threadId])
-
-  // A conversation left alone for an hour starts over when the member comes
-  // back to it, as the primary chat's does: as the chat opens, and whenever
-  // it shows again (its tab visible, its window focused, its panel in front).
-  // It starts over the way the button does, so Go keeps the old one. What
-  // Go says decides, not what this page holds: the chat object is every
-  // view's, and a conversation another device is in must not be cleared from
-  // here. A specialist that can't take a message keeps its history readable.
-  const idle =
-    connection === "open" &&
-    !refusal &&
-    !blockedWords(specialist, refusal) &&
-    !running &&
-    !clearing &&
-    actionable.size === 0
-  const latest = useRef({ idle, threadId })
-  useEffect(() => {
-    latest.current = { idle, threadId }
-  })
-  const judging = useRef(false)
-  async function startOverIfStale() {
-    if (!threadId || !idle || judging.current) return
-    if (document.visibilityState === "hidden") return
-    judging.current = true
-    try {
-      const conversation = await queryClient
-        .fetchQuery({
-          ...specialistThreadQueryOptions(
-            organizationId,
-            specialist.id,
-            threadId
-          ),
-          staleTime: 10_000,
-        })
-        .catch(() => undefined)
-      if (!conversation || conversation.pending_confirmations.length > 0) {
-        return
-      }
-      const updated = Date.parse(conversation.updated_at)
-      if (
-        !Number.isFinite(updated) ||
-        Date.now() - updated < FRESH_CONVERSATION_MS
-      ) {
-        return
-      }
-      // The same conversation still, and still nothing running or waiting.
-      if (latest.current.idle && latest.current.threadId === threadId) {
-        void startOver()
-      }
-    } finally {
-      judging.current = false
-    }
-  }
-  const comeBack = useEffectEvent(() => void startOverIfStale())
-  // As it opens, once the socket and the conversation are both known.
-  const openingChecked = useRef(false)
-  useEffect(() => {
-    if (openingChecked.current || !threadId || connection !== "open") return
-    openingChecked.current = true
-    comeBack()
-  }, [threadId, connection])
-  // When it shows again.
-  useEffect(() => {
-    if (!visible) return
-    comeBack()
-    const onReturn = () => comeBack()
-    document.addEventListener("visibilitychange", onReturn)
-    window.addEventListener("focus", onReturn)
-    return () => {
-      document.removeEventListener("visibilitychange", onReturn)
-      window.removeEventListener("focus", onReturn)
-    }
-  }, [visible])
 
   const lastEntry = entries.at(-1)
   // A specialist's draft streams as a marker with no words (its deltas are

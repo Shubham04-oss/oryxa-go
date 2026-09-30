@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react"
-import type { Dispatch, SetStateAction } from "react"
+import type { Dispatch } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import { useHydrated } from "@tanstack/react-router"
@@ -21,12 +21,19 @@ import { getSession } from "@/lib/auth/client"
 import { reopenSocket } from "@/lib/threads/agent-socket"
 import {
   FRESH_CONVERSATION_MS,
+  PRIMARY_DRAFT,
+  firstMessage,
   openingThread,
   publishPrimaryChatActivity,
-  rememberChoice,
   rememberedChoice,
+  shownThread,
 } from "@/lib/threads/chat-choice"
-import type { ChatScope, PrimaryChatActivity } from "@/lib/threads/chat-choice"
+import type {
+  ChatScope,
+  PrimaryChat,
+  PrimaryChatAction,
+  PrimaryChatActivity,
+} from "@/lib/threads/chat-choice"
 import {
   chatMessagesToItems,
   reconcileChatMessages,
@@ -55,6 +62,13 @@ type ComposerHandlers = {
 }
 
 type ChatState = PrimaryChatActivity["state"]
+
+/**
+ * How long a socket has to be open, with nothing streaming, before the chat
+ * calls a run over. A run still alive resumes as soon as the socket opens,
+ * so a run that hasn't resumed by then has ended.
+ */
+const RUN_SETTLE_MS = 2000
 
 function composerLabel(agentName?: string): string {
   return agentName ? `Message ${agentName}` : "Message your agent"
@@ -89,12 +103,28 @@ async function loadTranscript(
   return reconcileChatMessages(stored, detail?.items ?? [])
 }
 
-/** A message the app asked the chat to start a new conversation with. */
-export type FirstMessage = {
-  /** The request that asked, so each is sent once. */
-  id: number
-  text: string
-}
+/**
+ * How long the chat gives a first message's conversation to be made before it
+ * says the start failed, so a request that never answers can't hold up what
+ * waits behind it.
+ */
+const START_TIMEOUT_MS = 30_000
+
+/**
+ * How long after its conversation's chat has taken a first message the chat
+ * moves on to what waits behind it. The socket writes the message a tick
+ * after the chat sends it, and a conversation unmounted before then would
+ * abort it.
+ */
+const SENT_SETTLE_MS = 400
+
+/**
+ * How long the chat looks for the conversation to open (the lists it waits
+ * for, and Go's word on a conversation waiting on the member) before it
+ * gives up and opens a new one, so the member is never held at a chat that
+ * cannot start.
+ */
+const OPENING_FALLBACK_MS = 5000
 
 /**
  * Whether a conversation waits on the member's confirmation, from Go's
@@ -117,18 +147,18 @@ async function waitsOnMember(
  * while it is fresh or still waits on them, and otherwise a new one that
  * their first message starts (chat-choice.ts). It runs through the thread's
  * Durable Object (REALTIME.md), in the browser only.
+ *
+ * What it is on, what waits to be opened or sent, and the unsent messages are
+ * the panel's (`chat`, moved by `dispatch`), so they outlast a switch to
+ * another agent and every step names the request it belongs to.
  */
 export function AgentChat({
   organizationId,
   scope,
   agentId,
   agentName,
-  threadId,
-  setThreadId,
-  draft,
-  onDraftChange,
-  firstMessage,
-  onFirstMessageTaken,
+  chat,
+  dispatch,
   onComposingChange,
   onOpenOverview,
   inOverview = false,
@@ -145,20 +175,8 @@ export function AgentChat({
    */
   agentId?: string
   agentName?: string
-  /**
-   * The conversation the chat is on, kept by the panel so it outlasts a
-   * switch to another agent: `undefined` until the rules in chat-choice.ts
-   * decide it, `null` for a conversation not started yet.
-   */
-  threadId: string | null | undefined
-  /** Where the chat's own moves go: a decision only fills in a thread still undecided, the member's moves replace it. */
-  setThreadId: Dispatch<SetStateAction<string | null | undefined>>
-  /** The composer's text, kept by the panel too. */
-  draft: string
-  onDraftChange: (value: string) => void
-  /** Sent, as the composer would send it, once the chat is on a new conversation. */
-  firstMessage?: FirstMessage | null
-  onFirstMessageTaken?: (id: number) => void
+  chat: PrimaryChat
+  dispatch: Dispatch<PrimaryChatAction>
   onComposingChange: (composing: boolean) => void
   onOpenOverview?: () => void
   inOverview?: boolean
@@ -171,28 +189,18 @@ export function AgentChat({
 }) {
   const queryClient = useQueryClient()
   const hydrated = useHydrated()
-  const threads = useQuery({
-    ...threadListQueryOptions(organizationId),
-    enabled: hydrated,
-  })
-  // The first message of a new conversation, until its thread's socket
-  // takes it. It belongs to the blank chat it was written in and then to the
-  // thread made for it: a chat that moves elsewhere (a request, another
-  // agent) leaves it behind rather than send it into a conversation it was
-  // not written for.
-  const [held, setHeld] = useState<{ text: string; threadId?: string } | null>(
-    null
-  )
-  const pending =
-    held &&
-    (held.threadId === undefined
-      ? threadId === null
-      : held.threadId === threadId)
-      ? held.text
-      : null
-  const [pendingScreen, setPendingScreen] = useState<ScreenContext>()
-  const [starting, setStarting] = useState(false)
-  const [notice, setNotice] = useState("")
+  // The list is this member's own entry in the cache: another member's
+  // (same organization, the page taken over without a reload) is never read.
+  const list = threadListQueryOptions(organizationId, scope?.userId)
+  const threads = useQuery({ ...list, enabled: hydrated })
+  // Nothing about a conversation is chosen, shown or published until this
+  // member's list has loaded.
+  const listed = threads.data !== undefined
+  const threadId = shownThread(chat)
+  const first = firstMessage(chat)
+  const draft = chat.drafts[PRIMARY_DRAFT] ?? ""
+  const onDraftChange = (text: string) =>
+    dispatch({ type: "draft", key: PRIMARY_DRAFT, text })
   // What the open thread's chat says it is doing, and of which thread.
   const [reported, setReported] = useState<{
     threadId: string
@@ -201,9 +209,9 @@ export function AgentChat({
 
   // The rest of the app (Home) hears what this chat is doing: the thread it
   // has open and whether it works, waits on the member or is idle. A first
-  // message counts as running until its thread's socket takes it.
+  // message counts as running until its conversation has taken it.
   const state: ChatState =
-    starting || pending !== null
+    first && !first.taken
       ? "running"
       : threadId && reported?.threadId === threadId
         ? reported.state
@@ -211,24 +219,20 @@ export function AgentChat({
   const scopeOrganization = scope?.organizationId
   const scopeUser = scope?.userId
   useEffect(() => {
-    if (threadId === undefined) return
+    if (threadId === undefined || !listed) return
     publishPrimaryChatActivity(
       { threadId, state },
       scopeOrganization && scopeUser
         ? { organizationId: scopeOrganization, userId: scopeUser }
         : undefined
     )
-  }, [threadId, state, scopeOrganization, scopeUser])
+  }, [threadId, listed, state, scopeOrganization, scopeUser])
   useEffect(() => () => publishPrimaryChatActivity(null), [])
-
-  /** Keeps the member's choice for the session: a thread, or null for a new chat. */
-  function remember(thread: string | null) {
-    if (scope && agentId) rememberChoice(scope, agentId, thread)
-  }
 
   // Once the list is here: the member's choice, else the latest conversation
   // while it is fresh, else (after asking Go) one that still waits on them.
-  // Unless the member or a request moved the chat while this was asked.
+  // Unless something else moved the chat while this was asked: the reducer
+  // takes a decision only for a chat still undecided.
   useEffect(() => {
     if (threadId !== undefined || !threads.data) return
     if (scope && !agentId) return
@@ -239,53 +243,88 @@ export function AgentChat({
       now: Date.now(),
       waiting: (id) => waitsOnMember(queryClient, organizationId, id),
     }).then((chosen) => {
-      if (!stale) {
-        setThreadId((current) => (current === undefined ? chosen : current))
-      }
+      if (!stale) dispatch({ type: "decide", thread: chosen })
     })
     return () => {
       stale = true
     }
   }, [threadId, threads.data, agentId])
 
-  // Whether this chat is still on screen, and still on the conversation it
-  // is now, for a thread that takes a moment to create.
-  const mounted = useRef(true)
+  // The choice is not worth a wait without end: the member can type at once
+  // (see `OpeningConversation`), and if it takes this long a new chat opens.
+  // What arrives later finds the chat decided, and changes nothing.
   useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-    }
-  }, [])
-  const current = useRef(threadId)
-  useEffect(() => {
-    current.current = threadId
-  })
-  // A first message still waiting when the member leaves for another agent
-  // goes back to the composer, which the panel keeps: it was never sent.
-  const waiting = useRef(pending)
-  useEffect(() => {
-    waiting.current = pending
-  })
-  useEffect(
-    () => () => {
-      if (waiting.current) onDraftChange(waiting.current)
-    },
-    []
-  )
+    if (threadId !== undefined) return
+    const timer = setTimeout(
+      () => dispatch({ type: "decide", thread: null }),
+      OPENING_FALLBACK_MS
+    )
+    return () => clearTimeout(timer)
+  }, [threadId])
 
-  // A message the app asked to start the conversation with goes into the new
-  // chat as the composer's would, once and only once whatever the renders.
-  const firstTaken = useRef<number>(undefined)
+  // A first message needs a conversation of its own: this makes it, once,
+  // whichever chat is mounted when its turn comes. What it reports is named
+  // by the message's id, so it lands where it belongs even if this chat has
+  // gone by then (the panel keeps the rest), and nothing it says can change
+  // a message that is not the one it made a conversation for.
+  const started = useRef<number>(undefined)
   useEffect(() => {
-    if (!firstMessage || threadId !== null || starting || pending !== null) {
-      return
-    }
-    if (firstTaken.current === firstMessage.id) return
-    firstTaken.current = firstMessage.id
-    onFirstMessageTaken?.(firstMessage.id)
-    void start(firstMessage.text)
+    if (!first || first.threadId || first.making) return
+    if (started.current === first.id) return
+    started.current = first.id
+    const id = first.id
+    dispatch({ type: "making", id })
+    let gaveUp = false
+    const timer = setTimeout(() => {
+      gaveUp = true
+      dispatch({
+        type: "failed",
+        id,
+        notice: "Couldn't start a conversation. Try again.",
+      })
+    }, START_TIMEOUT_MS)
+    createThread(organizationId).then(
+      (thread) => {
+        clearTimeout(timer)
+        // Gave up on it: the thread stays empty, and no title says so.
+        if (gaveUp) return
+        queryClient.setQueryData<Thread[]>(list.queryKey, (held) => [
+          thread,
+          ...(held ?? []).filter((item) => item.id !== thread.id),
+        ])
+        void queryClient.invalidateQueries({
+          queryKey: threadKeys.list(organizationId),
+        })
+        dispatch({ type: "made", id, threadId: thread.id })
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        if (gaveUp) return
+        dispatch({
+          type: "failed",
+          id,
+          notice: failureText(
+            error,
+            "Couldn't start a conversation. Try again."
+          ),
+        })
+      }
+    )
   })
+
+  // Once its conversation has taken a first message, a moment later the chat
+  // moves on to whatever waits behind it (see `SENT_SETTLE_MS`). Whichever
+  // chat is mounted then sets the moment going: one that unmounted before
+  // its end leaves the message taken, and the next one starts it again.
+  useEffect(() => {
+    if (!first?.taken) return
+    const id = first.id
+    const timer = setTimeout(
+      () => dispatch({ type: "sent", id }),
+      SENT_SETTLE_MS
+    )
+    return () => clearTimeout(timer)
+  }, [first?.id, first?.taken])
 
   const composer: ComposerHandlers = {
     draft,
@@ -297,59 +336,22 @@ export function AgentChat({
       threads.data?.find((thread) => thread.id === threadId)?.title) ||
     "New conversation"
 
-  async function start(message: string) {
-    setStarting(true)
-    setNotice("")
-    setHeld({ text: message })
-    setPendingScreen(getScreenContext?.())
-    onDraftChange("")
-    try {
-      const thread = await createThread(organizationId)
-      if (!mounted.current || current.current !== null) {
-        // The member went to another agent, or another conversation,
-        // meanwhile. The message goes back to the composer rather than into
-        // a chat it was not written for.
-        setHeld(null)
-        onDraftChange(message)
-        return
-      }
-      queryClient.setQueryData<Thread[]>(
-        threadKeys.list(organizationId),
-        (list) => [
-          thread,
-          ...(list ?? []).filter((item) => item.id !== thread.id),
-        ]
-      )
-      void queryClient.invalidateQueries({
-        queryKey: threadKeys.list(organizationId),
-      })
-      setHeld({ text: message, threadId: thread.id })
-      setThreadId(thread.id)
-      remember(thread.id)
-    } catch (error) {
-      setHeld(null)
-      onDraftChange(message)
-      setNotice(failureText(error, "Couldn't start a conversation. Try again."))
-    } finally {
-      setStarting(false)
-    }
+  function startNew() {
+    dispatch({ type: "move", thread: null })
   }
 
-  function startNew() {
-    setThreadId(null)
-    setHeld(null)
-    setNotice("")
-    remember(null)
-  }
+  // The message its conversation's chat has yet to take.
+  const waiting =
+    first && first.threadId === threadId && !first.taken ? first.text : null
 
   let body
-  if (threadId) {
+  if (threadId && listed) {
     body = (
       <Suspense
         fallback={
           <OpeningConversation
             agentName={agentName}
-            pending={pending}
+            pending={waiting}
             {...composer}
           />
         }
@@ -359,20 +361,29 @@ export function AgentChat({
           organizationId={organizationId}
           threadId={threadId}
           agentName={agentName}
-          pending={pending}
-          onPendingTaken={() => setHeld(null)}
-          pendingScreen={pendingScreen}
+          pending={waiting}
+          onPendingTaken={() => {
+            if (first) dispatch({ type: "taken", id: first.id })
+          }}
+          pendingScreen={first?.screen}
           getScreenContext={getScreenContext}
           onMissing={() => {
-            setThreadId(null)
-            remember(null)
-            setNotice("That conversation no longer exists.")
+            const notice = "That conversation no longer exists."
+            if (first && first.threadId === threadId && !first.taken) {
+              // Made for a message that never got in: it goes back to the
+              // composer.
+              dispatch({ type: "failed", id: first.id, notice })
+            } else {
+              dispatch({ type: "move", thread: null, notice })
+            }
             void queryClient.invalidateQueries({
               queryKey: threadKeys.list(organizationId),
             })
           }}
           onFileCreated={onFileCreated}
           onIdle={startNew}
+          inOverview={inOverview}
+          touched={chat.touched}
           onStateChange={(id, next) =>
             setReported({ threadId: id, state: next })
           }
@@ -385,12 +396,12 @@ export function AgentChat({
       <>
         <AgentConversation
           agentName={agentName}
-          state={pending ? "ready" : "empty"}
-          error={notice}
+          state={first || chat.unsent ? "ready" : "empty"}
+          error={chat.notice}
         >
-          {pending && (
+          {(first?.text ?? chat.unsent) && (
             <p className="workspace-agent-message" data-from="member">
-              {pending}
+              {first?.text ?? chat.unsent}
             </p>
           )}
         </AgentConversation>
@@ -399,9 +410,15 @@ export function AgentChat({
           placeholder={composerLabel(agentName)}
           value={draft}
           onChange={onDraftChange}
-          onSubmit={(message) => void start(message)}
-          disabled={starting}
-          status={starting ? "Connecting…" : undefined}
+          onSubmit={(message) =>
+            dispatch({
+              type: "submit",
+              text: message,
+              screen: getScreenContext?.(),
+            })
+          }
+          disabled={first !== null}
+          status={first ? "Connecting…" : undefined}
           onFocus={() => onComposingChange(true)}
           onBlur={() => onComposingChange(false)}
         />
@@ -445,7 +462,7 @@ export function AgentChat({
           type="button"
           aria-label="New conversation"
           title="New conversation"
-          disabled={!threadId || starting}
+          disabled={!threadId || first !== null}
           onClick={startNew}
         >
           <SquarePen size={15} strokeWidth={1.7} />
@@ -456,7 +473,11 @@ export function AgentChat({
   )
 }
 
-/** The conversation while it loads: its first message if it has one, and a composer that waits. */
+/**
+ * The conversation while it loads: its first message if it has one, and a
+ * composer that takes what the member types now and sends it once there is a
+ * conversation to send to.
+ */
 function OpeningConversation({
   agentName,
   pending,
@@ -490,7 +511,7 @@ function OpeningConversation({
         placeholder={composerLabel(agentName)}
         value={draft}
         onChange={onDraftChange}
-        disabled
+        sendDisabled
         status={error ? undefined : "Connecting…"}
         onFocus={() => onComposingChange(true)}
         onBlur={() => onComposingChange(false)}
@@ -529,6 +550,8 @@ function ThreadChat({
   onComposingChange,
   onFileCreated,
   onIdle,
+  inOverview,
+  touched,
   onStateChange,
 }: ComposerHandlers & {
   organizationId: string
@@ -541,6 +564,10 @@ function ThreadChat({
   onMissing: () => void
   /** The member came back to a conversation left alone for an hour: the chat moves on to a new one. */
   onIdle: () => void
+  /** The focused Agent overview is open, with its viewer or editor: the member is at work in it. */
+  inOverview: boolean
+  /** Counts what the member or the app just did here (a request, a first message), such as opening the conversation already open. */
+  touched: number
   /** What this thread is doing: a run streams, a confirmation waits on the member, or neither. */
   onStateChange: (threadId: string, state: ChatState) => void
   onFileCreated?: (file: {
@@ -554,6 +581,11 @@ function ThreadChat({
   const [connection, setConnection] = useState<Connection>("connecting")
   const [runError, setRunError] = useState("")
   const [resending, setResending] = useState(false)
+  // Whether the member stopped the run, and whether the socket has been open
+  // and quiet for a while: what tells a run that ended from one that is only
+  // out of sight (see `ended`).
+  const [stopped, setStopped] = useState(false)
+  const [settled, setSettled] = useState(false)
   // Answers sent, until the run they went with ends.
   const [submitted, setSubmitted] = useState<Record<string, boolean>>({})
   // The last send, so it can go once more after the session is refreshed:
@@ -602,6 +634,7 @@ function ThreadChat({
     onError: (error) =>
       setRunError(error.message || "Your agent couldn't answer. Try again."),
     onFinish: ({ isAbort, isDisconnect, isError }) => {
+      if (isAbort) setStopped(true)
       if (lastSend.current.expired) {
         lastSend.current.expired = false
         if (!isAbort && !isDisconnect && !isError) void resendWithFreshSession()
@@ -679,6 +712,24 @@ function ThreadChat({
     chat.status === "submitted" ||
     chat.status === "streaming" ||
     chat.isServerStreaming
+
+  // Whether the run is over, as far as this chat can tell: the member
+  // stopped it, or nothing has streamed while the socket has been open a
+  // moment (a run still alive resumes by then). Until then a call still
+  // running stays as it was: a socket that drops, or a conversation opened
+  // while its run works, is not a run that ended.
+  useEffect(() => {
+    if (running) setStopped(false)
+  }, [running])
+  useEffect(() => {
+    if (connection !== "open" || running) {
+      setSettled(false)
+      return
+    }
+    const timer = setTimeout(() => setSettled(true), RUN_SETTLE_MS)
+    return () => clearTimeout(timer)
+  }, [connection, running])
+  const ended = !running && (stopped || settled)
 
   // A new conversation's first message goes once its socket is open. Not
   // on mount: useChat stops a request its effects' cleanup finds in flight,
@@ -765,9 +816,14 @@ function ThreadChat({
       : "idle"
   // A tab left open overnight comes back to a new chat rather than
   // yesterday's: when it shows again (its tab visible, its window focused)
-  // after an hour with nothing sent or heard, and nothing streaming or
-  // waiting on the member. Opening the conversation counts as activity, so
-  // one the member just chose is never taken from them. Nothing is deleted.
+  // after an hour with nothing done here, and nothing streaming or waiting
+  // on the member. Nothing is deleted. What counts as something done is what
+  // the member does anywhere in the app: sending, hearing an answer, opening
+  // this conversation (even when it is already open: a request for it), and
+  // pointer and keyboard in the page. A file's viewer or editor is a frame of
+  // its own that takes the pointer and the keys, and focus coming back from it
+  // is not the member returning: while the focused Agent overview is open the
+  // chat is never left, and closing it starts the hour afresh.
   // How much the conversation holds, so that a reconnect handing over the
   // same messages again is not taken for something heard.
   const said = useMemo(
@@ -777,20 +833,30 @@ function ThreadChat({
   )
   useEffect(() => {
     lastActivity.current = Date.now()
-  }, [said, running])
+  }, [said, running, touched, inOverview])
   const cameBack = useEffectEvent(() => {
     if (document.visibilityState === "hidden") return
-    if (running || actionable.size > 0) return
+    if (running || actionable.size > 0 || pending || inOverview) return
     if (Date.now() - lastActivity.current < FRESH_CONVERSATION_MS) return
     onIdle()
   })
   useEffect(() => {
     const onReturn = () => cameBack()
+    const onActivity = () => {
+      lastActivity.current = Date.now()
+    }
     document.addEventListener("visibilitychange", onReturn)
     window.addEventListener("focus", onReturn)
+    const options = { capture: true, passive: true }
+    for (const type of ["pointerdown", "keydown", "wheel"]) {
+      document.addEventListener(type, onActivity, options)
+    }
     return () => {
       document.removeEventListener("visibilitychange", onReturn)
       window.removeEventListener("focus", onReturn)
+      for (const type of ["pointerdown", "keydown", "wheel"]) {
+        document.removeEventListener(type, onActivity, options)
+      }
     }
   }, [])
 
@@ -828,6 +894,7 @@ function ThreadChat({
         <AgentTimeline
           entries={entries}
           running={running}
+          ended={ended}
           agentName={agentName}
           actionable={actionable}
           submitted={submitted}
@@ -852,9 +919,13 @@ function ThreadChat({
           onDraftChange("")
           send(message)
         }}
-        disabled={connection !== "open" || actionable.size > 0}
+        disabled={actionable.size > 0}
+        sendDisabled={connection !== "open"}
         streaming={running}
-        onStop={() => void chat.stop()}
+        onStop={() => {
+          setStopped(true)
+          void chat.stop()
+        }}
         status={status}
         onFocus={() => onComposingChange(true)}
         onBlur={() => onComposingChange(false)}

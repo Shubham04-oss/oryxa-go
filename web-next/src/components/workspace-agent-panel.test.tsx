@@ -12,6 +12,7 @@ import {
   within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { StrictMode } from "react"
 import type { ComponentProps, ReactElement } from "react"
 import {
   ORG,
@@ -27,6 +28,7 @@ import {
   claimPrimaryChatRequest,
   rememberedChoice,
   requestPrimaryChat,
+  usePrimaryChatActivity,
   usePrimaryChatRequest,
 } from "@/lib/threads/chat-choice"
 import { itemsToChatMessages } from "@/lib/threads/chat-messages"
@@ -74,24 +76,33 @@ function json(body: unknown, status = 200): Response {
 
 type Seed = {
   threads?: Thread[]
+  /** Each member's own conversations, by user id, for a page more than one member uses in turn. */
+  lists?: Record<string, Thread[]>
   /** What each thread holds in Go. */
   items?: Record<string, Item[]>
   pending?: Record<string, string[]>
+  /** The first thread made; later ones are `th_new_2`, `th_new_3` and so on. */
   created?: Thread
 }
+
+/** A call that starts a conversation. */
+const START = `POST /v1/organizations/${ORG}/threads`
 
 /**
  * Go for the primary chat's routes (its threads), and the agents service for
  * everything else. `holdCreate` keeps the next thread from being made until
- * it is released.
+ * it is released; `failNextCreate` makes the next start fail.
  */
 function stubGo(seed: Seed = {}) {
   const backend = fakeAgentsBackend({ agents: [primary, scout] })
   let threads = seed.threads ?? []
-  const created = seed.created ?? thread("th_new", "")
+  let made = 0
+  let failing = 0
+  let viewer = VIEWER
   const calls: string[] = []
   let gate: Promise<void> | undefined
   let agentsGate: Promise<void> | undefined
+  let listGate: Promise<void> | undefined
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -102,16 +113,36 @@ function stubGo(seed: Seed = {}) {
       if (path === `/v1/organizations/${ORG}/threads`) {
         if (method === "POST") {
           await gate
+          if (failing > 0) {
+            failing -= 1
+            return json(
+              {
+                error: {
+                  code: "unavailable",
+                  message: "The agents service is down.",
+                },
+              },
+              503
+            )
+          }
+          made += 1
+          const created =
+            made === 1 && seed.created
+              ? seed.created
+              : thread(made === 1 ? "th_new" : `th_new_${made}`, "")
           threads = [created, ...threads]
           return json(created, 201)
         }
-        return json({ threads })
+        await listGate
+        return json({ threads: seed.lists?.[viewer] ?? threads })
       }
       const detail = new RegExp(`^/v1/organizations/${ORG}/threads/([^/]+)$`)
       const found = detail.exec(path)
       if (found) {
         const id = decodeURIComponent(found[1])
-        const listed = threads.find((item) => item.id === id)
+        const listed = (seed.lists?.[viewer] ?? threads).find(
+          (item) => item.id === id
+        )
         if (!listed) {
           return json({ error: { code: "not_found", message: "no" } }, 404)
         }
@@ -142,6 +173,25 @@ function stubGo(seed: Seed = {}) {
       })
       return () => {
         gate = undefined
+        release()
+      }
+    },
+    /** The next conversation to be started fails. */
+    failNextCreate() {
+      failing += 1
+    },
+    /** From now on the requests are another member's (their own conversations answer). */
+    as(userId: string) {
+      viewer = userId
+    },
+    /** Keeps the conversation list from answering until released. */
+    holdList() {
+      let release = () => {}
+      listGate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return () => {
+        listGate = undefined
         release()
       }
     },
@@ -229,6 +279,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   window.sessionStorage.clear()
 })
@@ -283,7 +334,7 @@ describe("what the agents' chats keep across a switch", () => {
     expect(roomSockets.named(chatName("th_1"))).toHaveLength(sockets)
   })
 
-  it("puts a first message back in the composer when the member left before its thread was made", async () => {
+  it("sends a first message into its own conversation though the member went to another agent and back before it was made, and leaves every draft alone", async () => {
     const go = stubGo({ threads: [] })
     withQueries(panel())
     await screen.findByText(blank)
@@ -292,24 +343,37 @@ describe("what the agents' chats keep across a switch", () => {
 
     type(leoBox(), "Plan the launch")
     fireEvent.keyDown(leoBox(), { key: "Enter" })
-    await waitFor(() =>
-      expect(go.calls).toContain(`POST /v1/organizations/${ORG}/threads`)
-    )
+    await waitFor(() => expect(go.calls).toContain(START))
     fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
     await screen.findByRole("textbox", { name: "Message Scout" })
-    act(() => release())
+    type(scoutBox(), "For Scout")
 
+    // Back with Leo while the conversation is still being made: the message
+    // is still on its way, in view, and the composer does not take a second
+    // one over it.
     fireEvent.click(within(switcher()).getByRole("button", { name: "Leo" }))
-    // Back on the new conversation with the words they sent, and nothing
-    // was sent to a chat nobody was looking at.
-    expect(await screen.findByText(blank)).toBeTruthy()
-    await waitFor(() => expect(leoBox().value).toBe("Plan the launch"))
-    expect(roomSockets.named(chatName("th_new"))).toHaveLength(0)
+    expect(
+      screen.getByRole("log").querySelector('[data-from="member"]')?.textContent
+    ).toBe("Plan the launch")
+    expect(leoBox().hasAttribute("disabled")).toBe(true)
+
+    // Once it exists, the message goes into it: nothing was put back into a
+    // composer, or sent astray.
+    act(() => release())
+    const socket = await socketOn(chatName("th_new"))
+    socket.open()
+    expect(
+      agentChats.named(chatName("th_new")).sendMessage
+    ).toHaveBeenCalledExactlyOnceWith({ text: "Plan the launch" })
+    expect(leoBox().value).toBe("")
+    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
+    await screen.findByRole("textbox", { name: "Message Scout" })
+    expect(scoutBox().value).toBe("For Scout")
   })
 })
 
 describe("a first message on its way", () => {
-  it("goes back to the composer when the member leaves before the new thread's socket takes it", async () => {
+  it("still goes into its own conversation when the member leaves before its socket takes it", async () => {
     const go = stubGo({ threads: [] })
     withQueries(panel())
     await screen.findByText(blank)
@@ -319,44 +383,164 @@ describe("a first message on its way", () => {
     fireEvent.keyDown(leoBox(), { key: "Enter" })
     // The thread exists and its chat is waiting for the socket.
     await socketOn(chatName("th_new"))
-    expect(go.calls).toContain(`POST /v1/organizations/${ORG}/threads`)
+    expect(go.calls).toContain(START)
 
     fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
     await screen.findByRole("textbox", { name: "Message Scout" })
     fireEvent.click(within(switcher()).getByRole("button", { name: "Leo" }))
 
-    await waitFor(() => expect(leoBox().value).toBe("Plan the launch"))
+    // Back on the same conversation, its message still waiting in it.
+    await waitFor(() =>
+      expect(roomSockets.named(chatName("th_new")).length).toBeGreaterThan(1)
+    )
+    roomSockets.named(chatName("th_new")).at(-1)!.open()
     expect(
       agentChats.named(chatName("th_new")).sendMessage
-    ).not.toHaveBeenCalled()
+    ).toHaveBeenCalledExactlyOnceWith({ text: "Plan the launch" })
+    expect(leoBox().value).toBe("")
+    expect(go.calls.filter((call) => call === START)).toHaveLength(1)
   })
 
-  it("is not sent into the conversation a request moved the chat to meanwhile", async () => {
-    const go = stubGo({ threads: [thread("th_b", "Somewhere else", 3 * HOUR)] })
+  it("holds a request behind it, then opens what the request asked for", async () => {
+    stubGo({ threads: [thread("th_b", "Somewhere else", 3 * HOUR)] })
     withQueries(panel())
     await screen.findByText(blank)
     await screen.findByRole("group", { name: "Switch agent" })
-    const release = go.holdCreate()
 
     type(leoBox(), "Plan the launch")
     fireEvent.keyDown(leoBox(), { key: "Enter" })
-    await waitFor(() =>
-      expect(go.calls).toContain(`POST /v1/organizations/${ORG}/threads`)
-    )
-    // Home opens another conversation while the new thread is being made.
-    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_b" }))
-    const socket = await socketOn(chatName("th_b"))
-    act(() => release())
-    socket.open()
+    const socket = await socketOn(chatName("th_new"))
 
-    // The message went nowhere, and is back in the composer; the chat stays
-    // on the conversation it was asked to open.
-    await waitFor(() => expect(leoBox().value).toBe("Plan the launch"))
+    // Home opens another conversation while the message waits for it.
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_b" }))
+    await act(async () => {})
+    expect(roomSockets.named(chatName("th_b"))).toHaveLength(0)
+
+    // The message goes where it was written; then the request has its turn.
+    socket.open()
+    expect(
+      agentChats.named(chatName("th_new")).sendMessage
+    ).toHaveBeenCalledExactlyOnceWith({ text: "Plan the launch" })
+    await socketOn(chatName("th_b"))
     expect(
       agentChats.named(chatName("th_b")).sendMessage
     ).not.toHaveBeenCalled()
-    expect(roomSockets.named(chatName("th_new"))).toHaveLength(0)
+    expect(leoBox().value).toBe("")
     expect(rememberedChoice(scope, primary.id)).toBe("th_b")
+  })
+
+  it("keeps the member from starting another conversation over it, until its conversation has it", async () => {
+    stubGo({ threads: [] })
+    withQueries(panel())
+    await screen.findByText(blank)
+    await screen.findByRole("group", { name: "Switch agent" })
+    type(leoBox(), "Plan the launch")
+    fireEvent.keyDown(leoBox(), { key: "Enter" })
+    const socket = await socketOn(chatName("th_new"))
+
+    const button = () =>
+      screen.getByRole("button", { name: "New conversation" })
+    expect(button().hasAttribute("disabled")).toBe(true)
+    fireEvent.click(button())
+    socket.open()
+    expect(
+      agentChats.named(chatName("th_new")).sendMessage
+    ).toHaveBeenCalledExactlyOnceWith({ text: "Plan the launch" })
+    await waitFor(() => expect(button().hasAttribute("disabled")).toBe(false))
+  })
+})
+
+describe("a member who takes over the page", () => {
+  const other = "user-other"
+  const otherScope = { organizationId: ORG, userId: other }
+
+  it("gets nothing of the last member's chat: not their conversation, draft, agents or files", async () => {
+    const go = stubGo({
+      lists: {
+        [VIEWER]: [thread("th_a", "Their plan")],
+        [other]: [thread("th_b", "Your plan")],
+      },
+    })
+    const reported = vi.fn()
+    const view = withQueries(panel({ onPrimaryThreadChange: reported }))
+    ;(await socketOn(chatName("th_a"))).open()
+    await screen.findByRole("group", { name: "Switch agent" })
+    type(leoBox(), "Their draft")
+    expect(reported).toHaveBeenLastCalledWith("th_a")
+    const sockets = roomSockets.all.length
+    const seen = renderHook(() => usePrimaryChatActivity(otherScope))
+
+    // Another tab signed in as someone else, and this one read the session
+    // again: same page, same cache, same organization.
+    go.as(other)
+    const releaseList = go.holdList()
+    const releaseAgents = go.holdAgents()
+    view.rerender(
+      panel({
+        onPrimaryThreadChange: reported,
+        directMessages: { viewerId: other, inbox, people },
+      })
+    )
+    await act(async () => {})
+    // Not their agents (Scout is theirs), their conversation or their files,
+    // and nothing for this member to hear of theirs.
+    expect(screen.queryByRole("group", { name: "Switch agent" })).toBeNull()
+    expect(screen.queryByText("Their plan")).toBeNull()
+    expect(reported).toHaveBeenLastCalledWith(null)
+    expect(seen.result.current).toBeNull()
+    expect(roomSockets.all).toHaveLength(sockets)
+    expect(screen.queryByDisplayValue("Their draft")).toBeNull()
+
+    // Their own list decides, once it has loaded.
+    act(() => {
+      releaseAgents()
+      releaseList()
+    })
+    ;(await socketOn(chatName("th_b"))).open()
+    expect(roomSockets.named(chatName("th_a"))).toHaveLength(
+      roomSockets.all.filter(
+        (socket) => socket.options.name === chatName("th_a")
+      ).length
+    )
+    expect(roomSockets.all.length).toBe(sockets + 1)
+    expect(leoBox().value).toBe("")
+    expect(reported).toHaveBeenLastCalledWith("th_b")
+    await waitFor(() =>
+      expect(seen.result.current).toEqual({ threadId: "th_b", state: "idle" })
+    )
+    // The last member's remembered choice stays theirs.
+    expect(rememberedChoice(otherScope, primary.id)).toBeNull()
+  })
+
+  it("does not carry the specialist they had open, or their direct messages' drafts", async () => {
+    const go = stubGo({ threads: [thread("th_a", "Their plan")] })
+    const view = withQueries(panel())
+    ;(await socketOn(chatName("th_a"))).open()
+    fireEvent.click(await screen.findByRole("button", { name: "Scout" }))
+    await screen.findByRole("textbox", { name: "Message Scout" })
+
+    go.as(other)
+    view.rerender(panel({ directMessages: { viewerId: other, inbox, people } }))
+    // Back to their own primary agent, not the last member's specialist.
+    expect(screen.queryByRole("textbox", { name: "Message Scout" })).toBeNull()
+    expect(
+      await screen.findByRole("textbox", { name: "Message Leo" })
+    ).toBeTruthy()
+  })
+
+  it("keeps a member's chat through a moment the session couldn't be read", async () => {
+    stubGo({ threads: [thread("th_a", "Their plan")] })
+    const view = withQueries(panel())
+    ;(await socketOn(chatName("th_a"))).open()
+    await screen.findByRole("group", { name: "Switch agent" })
+    type(leoBox(), "Still here")
+
+    // The session could not be read for a moment, then it was, unchanged.
+    view.rerender(
+      panel({ organizationId: undefined, directMessages: undefined })
+    )
+    view.rerender(panel())
+    expect(leoBox().value).toBe("Still here")
   })
 })
 
@@ -485,6 +669,132 @@ describe("a request to open a conversation", () => {
     ).toHaveLength(1)
   })
 
+  it("leaves what the member had typed alone when a request brings a message", async () => {
+    stubGo({ threads: [] })
+    withQueries(panel())
+    await screen.findByText(blank)
+    await screen.findByRole("group", { name: "Switch agent" })
+    type(leoBox(), "Half a thought")
+
+    act(() =>
+      requestPrimaryChat(scope, { kind: "new", message: "What changed today?" })
+    )
+    const socket = await socketOn(chatName("th_new"))
+    socket.open()
+    expect(
+      agentChats.named(chatName("th_new")).sendMessage
+    ).toHaveBeenCalledExactlyOnceWith({ text: "What changed today?" })
+    expect(leoBox().value).toBe("Half a thought")
+  })
+
+  it("makes each of two quick requests' messages a conversation of its own, sends both, and ends on the second's", async () => {
+    const go = stubGo({ threads: [thread("th_old", "Old", 5 * HOUR)] })
+    withQueries(panel())
+    await screen.findByRole("group", { name: "Switch agent" })
+    const release = go.holdCreate()
+
+    // The second arrives while the first's conversation is still being made.
+    act(() =>
+      requestPrimaryChat(scope, { kind: "new", message: "First question" })
+    )
+    await waitFor(() =>
+      expect(go.calls.filter((call) => call === START)).toHaveLength(1)
+    )
+    act(() =>
+      requestPrimaryChat(scope, { kind: "new", message: "Second question" })
+    )
+    await act(async () => {})
+    expect(go.calls.filter((call) => call === START)).toHaveLength(1)
+
+    // The first is made a conversation and sent into it.
+    act(() => release())
+    ;(await socketOn(chatName("th_new"))).open()
+    expect(
+      agentChats.named(chatName("th_new")).sendMessage
+    ).toHaveBeenCalledExactlyOnceWith({ text: "First question" })
+
+    // Then the second has its own, and the chat ends on it.
+    ;(await socketOn(chatName("th_new_2"))).open()
+    expect(
+      agentChats.named(chatName("th_new_2")).sendMessage
+    ).toHaveBeenCalledExactlyOnceWith({ text: "Second question" })
+    expect(go.calls.filter((call) => call === START)).toHaveLength(2)
+    expect(roomSockets.all.at(-1)?.options.name).toBe(chatName("th_new_2"))
+    await waitFor(() =>
+      expect(rememberedChoice(scope, primary.id)).toBe("th_new_2")
+    )
+    // Neither message went into the other's conversation.
+    expect(
+      agentChats.named(chatName("th_new")).sendMessage
+    ).toHaveBeenCalledOnce()
+  })
+
+  it("puts a request's words back in an empty composer when its conversation can't be made", async () => {
+    const go = stubGo({ threads: [] })
+    go.failNextCreate()
+    withQueries(panel())
+    await screen.findByText(blank)
+    await screen.findByRole("group", { name: "Switch agent" })
+
+    act(() =>
+      requestPrimaryChat(scope, { kind: "new", message: "What changed today?" })
+    )
+    expect(await screen.findByText("The agents service is down.")).toBeTruthy()
+    expect(leoBox().value).toBe("What changed today?")
+    expect(roomSockets.all).toHaveLength(0)
+  })
+
+  it("says a request's words, and leaves the composer alone, when the composer holds something", async () => {
+    const go = stubGo({ threads: [] })
+    go.failNextCreate()
+    withQueries(panel())
+    await screen.findByText(blank)
+    await screen.findByRole("group", { name: "Switch agent" })
+    type(leoBox(), "Half a thought")
+
+    act(() =>
+      requestPrimaryChat(scope, { kind: "new", message: "What changed today?" })
+    )
+    expect(await screen.findByText("The agents service is down.")).toBeTruthy()
+    expect(leoBox().value).toBe("Half a thought")
+    // Nothing hides what could not be sent.
+    expect(
+      screen.getByRole("log").querySelector('[data-from="member"]')?.textContent
+    ).toBe("What changed today?")
+  })
+
+  it("counts a request for the conversation already open as the member being there", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    let visibility: DocumentVisibilityState = "visible"
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibility,
+    })
+    stubGo({ threads: [thread("th_1", "Plan the launch")] })
+    withQueries(panel())
+    ;(await socketOn(chatName("th_1"))).open()
+    const title = () =>
+      document.querySelector(".workspace-agent-thread-title")?.textContent
+    const comeBack = (after: number) => {
+      vi.setSystemTime(Date.now() + after)
+      visibility = "visible"
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"))
+      })
+    }
+    await waitFor(() => expect(title()).toBe("Plan the launch"))
+
+    // Nearly an hour on, Home asks for the conversation that is open.
+    vi.setSystemTime(Date.now() + 50 * 60_000)
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
+    comeBack(50 * 60_000)
+    expect(title()).toBe("Plan the launch")
+
+    // An hour after the request, it is left as any other.
+    comeBack(HOUR)
+    expect(title()).toBe("New conversation")
+  })
+
   it("waits for the agents list, so what it remembers is kept under the agent's id", async () => {
     const go = stubGo({
       threads: [thread("th_2", "Newer"), thread("th_1", "Older", 3 * HOUR)],
@@ -531,6 +841,60 @@ describe("a request to open a conversation", () => {
     await act(async () => {})
     expect(roomSockets.named(chatName("th_1"))).toHaveLength(0)
     expect(rememberedChoice(scope, primary.id)).toBeNull()
+  })
+})
+
+describe("in StrictMode, as the dev server runs the app", () => {
+  function strict(ui: ReactElement) {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    return render(
+      <StrictMode>
+        <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+      </StrictMode>
+    )
+  }
+
+  it("sends a message a request brought before the panel mounted, once, into one conversation", async () => {
+    const go = stubGo({ threads: [thread("th_1", "Old", 5 * HOUR)] })
+    act(() =>
+      requestPrimaryChat(scope, { kind: "new", message: "What changed today?" })
+    )
+    strict(panel())
+    ;(await socketOn(chatName("th_new"))).open()
+    await act(async () => {})
+    expect(go.calls.filter((call) => call === START)).toHaveLength(1)
+    expect(
+      agentChats.named(chatName("th_new")).sendMessage
+    ).toHaveBeenCalledOnce()
+  })
+
+  it("opens a conversation a request named before the panel mounted, once", async () => {
+    stubGo({
+      threads: [thread("th_2", "Newer"), thread("th_1", "Older", 3 * HOUR)],
+    })
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
+    strict(panel())
+    await socketOn(chatName("th_1"))
+    await act(async () => {})
+    expect(roomSockets.named(chatName("th_2"))).toHaveLength(0)
+    expect(rememberedChoice(scope, primary.id)).toBe("th_1")
+  })
+
+  it("sends a typed first message once", async () => {
+    const go = stubGo({ threads: [] })
+    strict(panel())
+    await screen.findByText(blank)
+    await screen.findByRole("group", { name: "Switch agent" })
+    type(leoBox(), "Plan the launch")
+    fireEvent.keyDown(leoBox(), { key: "Enter" })
+    ;(await socketOn(chatName("th_new"))).open()
+    await act(async () => {})
+    expect(go.calls.filter((call) => call === START)).toHaveLength(1)
+    expect(
+      agentChats.named(chatName("th_new")).sendMessage
+    ).toHaveBeenCalledOnce()
   })
 })
 
