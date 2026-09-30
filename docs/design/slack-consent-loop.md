@@ -126,7 +126,7 @@ It holds no stored policies, so PR #109's bypass class (a forbid that errors and
 **First click wins.**
 - `Store.Decide`'s existing row lock decides between surfaces, and every surface updates from `decided.v1`.
 - Each button carries a ticket: an HMAC that agents mints for the request, the owner and the notice. A leaked signing secret therefore decides nothing.
-- A Slack click counts as the owner's own decision only with a valid ticket and a clicker mapped to the request's target. It can consent, never review.
+- A Slack click counts as the owner's own decision only with a valid ticket and a clicker mapped to the request's target. A consent ticket only consents, and a review ticket (on the owner's review of a held answer, below) only reviews: the kind is signed into the ticket.
 
 **The guard** (`answerguard`) gains four checks:
 - Bedrock's contextual grounding check, against the work run's own tool results. The respond tool reads them from its session. Bedrock takes up to 100,000 characters of source and 5,000 of answer.
@@ -135,6 +135,8 @@ It holds no stored policies, so PR #109's bypass class (a forbid that errors and
 - A pass over everything bound for Slack that strips credentials: Bedrock's masked kinds plus fixed key patterns.
 
 An ungrounded answer is held for the owner's review.
+
+**Reviewing a held answer in Slack** (2026-09-30). The thread is told only that the answer is held. The owner gets a direct message: who asked what, why it was held in plain words (from the guard's kinds), the answer (its masked version when the guard made one), and **Send**, **Send masked** (only with a masked version) and **Don't send**. Each button carries a review ticket; `interactions.ReviewFromSlack` checks it as `Consent` checks a consent ticket and records the same review the web card does, with `decided_by.surface: slack`. `Store.Review`'s row lock makes the first review win across both surfaces. The message is replaced with how the review ended ("Sent", "Sent masked", "Not sent", "Already decided in Oryxa"), which removes the answer from Slack. A secret's review shows no answer and has no buttons.
 
 ### Secrets
 
@@ -283,7 +285,7 @@ After that: remembered consent, N-of-M, claiming, takeover, Cedar, ownership fro
   - Mitigations: a per-organization token bucket, honouring `Retry-After`, and at most 5 open asks per asker.
 - **Privacy.**
   - Slack keeps what we post under the workspace's own retention and exports: the notice (the asker and their question, which were already in the channel) and the answer.
-  - Sources, context, held answers and secrets never go to Slack.
+  - Sources, context and secrets never go to Slack. A held answer goes only to its owner's own direct message, masked where the guard masked it, and only until they review it.
   - Link unfurling is off.
 - **Secrets through models.** A secret the owner's agent finds passes through Vertex and Bedrock. Prefer pointing to where it lives, or letting the owner paste the value in.
 - **Trust.**
