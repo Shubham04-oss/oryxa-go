@@ -851,7 +851,8 @@
 .workspace-agent-tools { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; min-height: 23px; color: #9b9b9b; font-size: 12px; line-height: 1.4; white-space: nowrap; }
 .workspace-agent-tools canvas { flex: none; }
 .workspace-agent-tools[data-state="done"] canvas,
-.workspace-agent-tools[data-state="declined"] canvas { opacity: .68; }
+.workspace-agent-tools[data-state="declined"] canvas,
+.workspace-agent-tools[data-state="interrupted"] canvas { opacity: .68; }
 .workspace-agent-tools-names { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-agent-tools-status { flex: none; color: #777; font-size: 11px; }
 .workspace-agent-tools[data-state="failed"] .workspace-agent-tools-status { color: #d8a6a2; }
