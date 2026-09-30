@@ -1,0 +1,18 @@
+---
+title: "Your first agent conversation"
+description: "Start a chat with your primary agent and manage Background agent access."
+---
+
+## Start a conversation
+
+From a signed-in workspace, open **Agents** in the right-side panel. The **Agents** tab opens with your primary agent selected. In an empty chat, the page says “Ask anything to start a conversation.” Enter a message in **Message your agent** (the field may show the agent’s name instead) and choose **Send message**. Your first message starts a conversation.
+
+While you are present in a chat, the agent uses your signed-in session; **Background agent access** is not needed for a conversation you are watching. If the chat connection drops, the page reconnects and can resume a response that is still streaming. Reopening a conversation loads its transcript.
+
+## Allow agent work while you’re away
+
+This setting controls whether agents can act for you while you’re away, such as when a trigger or schedule runs. In the workspace, open your profile menu, choose **Settings**, then choose **Account**. Under **What your agents may do**, find **Background agent access** and select **Turn on**. Complete the authorization flow; Oryxa returns you to the account settings. When enabled, the status reads “Your agents can act for you while you’re away.”
+
+To turn it off later, select **Revoke**, then **Revoke access**. If the row says “Not available on this server,” background access is not enabled on that server.
+
+**Source and verification:** This guide is based on released source at [`611233f541a3980c3b38490abe665116e567a0e7`](https://github.com/Shubham04-oss/oryxa-go/tree/611233f541a3980c3b38490abe665116e567a0e7): the [Agents tab and primary selection](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/src/components/workspace-agent-panel.tsx#L72-L123), [primary chat and first message](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/src/components/agent-chat.tsx#L39-L143), [empty-chat text](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/src/components/agent-conversation.tsx#L70-L77), [composer send control](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/src/components/agent-composer.tsx#L92-L145), [Worker reconnect behavior](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/README.md#L45-L58), [Settings and Account navigation](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/src/components/workspace-shell.tsx#L547-L563) and [Account tab](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/src/components/workspace-settings.tsx#L98-L115), [grant controls](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/src/components/workspace-account-settings.tsx#L168-L231), and [grant behavior and configuration](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/auth/README.md#L160-L176). Availability depends on server configuration; live authorization for an account has not been verified.
