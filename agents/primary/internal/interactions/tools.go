@@ -9,7 +9,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 )
 
-// A request made in a teamspace that names no requested_tools has Jev judge
+// A request made in a teamspace that omits requested_tools has Jev judge
 // which of its target's toolboxes answering it needs, so its owner's
 // approval can show what would be read and allow it. Jev is asked one Choice
 // over the requester's own words, the task and its context, and never
@@ -21,13 +21,13 @@ import (
 // ToolsJudgedBy).
 const (
 	// ToolsJudgedByRequester is a requester who named requested_tools, which
-	// the request keeps as they were given.
+	// the request keeps as they were given, including an explicit empty list.
 	ToolsJudgedByRequester = "requester"
 	// ToolsJudgedByJev is Jev judging, surely enough, what a request made in
-	// a teamspace that named none needs; it may have judged it needs none.
+	// a teamspace that omitted them needs; it may have judged it needs none.
 	ToolsJudgedByJev = "jev"
 	// ToolsJudgedByNone is nobody choosing, so the request asks for none: it
-	// was made outside a teamspace naming none, or Jev is not configured,
+	// was made outside a teamspace omitting them, or Jev is not configured,
 	// did not answer in time, failed, or was not sure enough.
 	ToolsJudgedByNone = "none"
 )
@@ -66,9 +66,9 @@ var toolsOf = map[string][]string{
 
 // requestedTools is what a new request asks for, and who chose it: the
 // requester's own tools as they gave them; for one made in a teamspace that
-// names none, what Jev judges it needs; and otherwise none.
+// omits them, what Jev judges it needs; and otherwise none.
 func (service *Service) requestedTools(ctx context.Context, input agents.InteractionCreateInput) ([]string, string) {
-	if len(input.RequestedTools) > 0 {
+	if input.RequestedTools != nil {
 		return input.RequestedTools, ToolsJudgedByRequester
 	}
 	if input.TeamspaceID == "" {

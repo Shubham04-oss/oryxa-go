@@ -154,6 +154,36 @@ func TestARequesterKeepsTheToolsTheyNamed(t *testing.T) {
 	}
 }
 
+func TestExplicitlyToolFreeRequestsSkipJev(t *testing.T) {
+	for _, teamspaceID := range []string{"", "tsp_1"} {
+		t.Run("teamspace="+teamspaceID, func(t *testing.T) {
+			judge := &fakeJev{choice: "apps_and_knowledge", confidence: 0.99}
+			service, repo := jevService(t, judge.Ask, time.Second)
+			input := askInTeamspace("agt_b")
+			input.TeamspaceID = teamspaceID
+			input.RequestedTools = []string{}
+			created, err := service.Create(context.Background(), requester, "member-token", "key", input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created.RequestedTools == nil || len(created.RequestedTools) != 0 || created.ToolsJudgedBy != ToolsJudgedByRequester || len(judge.asked) != 0 {
+				t.Fatalf("requested_tools=%#v judged by %q after %d questions, want explicit [] and Jev unasked", created.RequestedTools, created.ToolsJudgedBy, len(judge.asked))
+			}
+			if stored := repo.requests[created.ID]; stored.RequestedTools == nil || len(stored.RequestedTools) != 0 || stored.ToolsJudgedBy != ToolsJudgedByRequester {
+				t.Fatalf("stored request = %+v, want explicit [] judged by requester", stored)
+			}
+			again, err := service.Create(context.Background(), requester, "member-token", "key", input)
+			if err != nil || again.ID != created.ID || len(judge.asked) != 0 {
+				t.Fatalf("explicit [] retry = %+v, %v after %d Jev questions", again, err, len(judge.asked))
+			}
+			input.RequestedTools = nil
+			if _, err := service.Create(context.Background(), requester, "member-token", "key", input); !errors.Is(err, ErrIdempotencyConflict) {
+				t.Fatalf("retry changing explicit [] to omitted: %v, want ErrIdempotencyConflict", err)
+			}
+		})
+	}
+}
+
 // TestJevIsAskedOnlyAboutARequestMadeInATeamspace: a request made outside
 // any teamspace that names no tools asks for none, and Jev is not asked.
 func TestJevIsAskedOnlyAboutARequestMadeInATeamspace(t *testing.T) {
@@ -224,6 +254,11 @@ func TestARetryOfARequestJevJudgedIsTheSameRequest(t *testing.T) {
 	}
 	if len(judge.asked) != 1 {
 		t.Fatalf("Jev was asked %d times, want once", len(judge.asked))
+	}
+	bare := askInTeamspace("agt_b")
+	bare.RequestedTools = []string{}
+	if _, err := service.Create(context.Background(), requester, "member-token", "key", bare); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("the key sent again with explicit []: error=%v, want ErrIdempotencyConflict", err)
 	}
 	named := askInTeamspace("agt_b")
 	named.RequestedTools = []string{agents.AppsToolboxName}
