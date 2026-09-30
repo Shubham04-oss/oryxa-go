@@ -56,7 +56,7 @@ function withThread(ui: ReactElement) {
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
 }
 
-describe("which conversation's files the overview shows", () => {
+describe("which conversation's files Files shows", () => {
   it("shows none for a new chat, without looking for the latest conversation", () => {
     const fetcher = vi.fn()
     vi.stubGlobal("fetch", fetcher)
@@ -101,8 +101,8 @@ describe("which conversation's files the overview shows", () => {
   })
 })
 
-describe("primary agent work files", () => {
-  it("opens a selected file in the work viewer with its thread and version", async () => {
+describe("a conversation's files", () => {
+  it("opens a selected file in the viewer with its thread and version", async () => {
     const onOpenFile = vi.fn()
     withThread(
       <PrimaryAgentFiles
@@ -119,7 +119,7 @@ describe("primary agent work files", () => {
     })
   })
 
-  it("uses the whole panel to preview the newest file and returns to overview", async () => {
+  it("previews the newest file in place of the conversation and returns to it", async () => {
     fetchArtifactEditorSession.mockRejectedValue(
       new ApiError("Not configured", 503, "document_editor_unavailable")
     )
@@ -148,7 +148,7 @@ describe("primary agent work files", () => {
     expect(fetchArtifactEditorSession).not.toHaveBeenCalled()
     expect(screen.queryByRole("button", { name: "Edit draft.txt" })).toBeNull()
     fireEvent.click(
-      screen.getByRole("button", { name: "Back to Agent overview" })
+      screen.getByRole("button", { name: "Back to conversation" })
     )
     expect(onBack).toHaveBeenCalledOnce()
   })

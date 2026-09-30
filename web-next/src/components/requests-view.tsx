@@ -1,10 +1,10 @@
-// Agents → Requests (DESIGN.md §2, §3): what waits on the member and what
-// they asked. Inbox holds the requests addressed to them, those waiting on
-// them first; Sent holds theirs; Activity is what happened to their Slack
-// asks. A filter narrows the two lists to where a request was made. The lists
-// are re-read on focus and on a timer while open, so a request decided
-// elsewhere, in Slack or on another device, settles here. A request a link or
-// a note named opens first, above the lists.
+// Requests (DESIGN.md §2, §3), a screen of the center the sidebar opens:
+// what waits on the member and what they asked. Inbox holds the requests
+// addressed to them, those waiting on them first; Sent holds theirs; Activity
+// is what happened to their Slack asks. A filter narrows the two lists to
+// where a request was made. The lists are re-read on focus and on a timer
+// while open, so a request decided elsewhere, in Slack or on another device,
+// settles here. A request a link or a note named opens first, above the lists.
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { KeyboardEvent } from "react"
 import { useQuery } from "@tanstack/react-query"
@@ -414,7 +414,7 @@ export function RequestsView({
 /**
  * The Requests page as the workspace shell shows it: for a signed-in member
  * of an organization, and, without one (the dev-only layout preview), a
- * notice like the other Agents pages give.
+ * notice that there is nothing to show.
  */
 export function RequestsCanvas({
   organizationId,

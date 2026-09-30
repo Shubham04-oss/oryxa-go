@@ -7,14 +7,12 @@ import {
   useRef,
   useState,
 } from "react"
-import type { Dispatch, ReactElement } from "react"
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { Dispatch, ReactElement, ReactNode } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import { useHydrated } from "@tanstack/react-router"
 import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { useAgent } from "agents/react"
-import { Expand, SquarePen } from "lucide-react"
-import { AgentChatHistory } from "./agent-chat-history"
 import { AgentComposer } from "./agent-composer"
 import { AgentActivity, AgentTimeline } from "./agent-timeline"
 import { AgentConversation } from "./agent-conversation"
@@ -28,8 +26,7 @@ import {
   publishPrimaryChatActivity,
   rememberedView,
   recentNewView,
-  chatHistory,
-  approvalCandidates,
+  reopensConversation,
   useRememberedView,
   shownThread,
 } from "@/lib/threads/chat-choice"
@@ -49,18 +46,13 @@ import {
 import type { ThreadChatMessage } from "@/lib/threads/chat-messages"
 import {
   createThread,
-  deleteThreadChat,
   getThreadChatMessages,
   threadApprovalQueryOptions,
   threadDetailQueryOptions,
   threadKeys,
   threadListQueryOptions,
 } from "@/lib/threads/client"
-import type {
-  ConfirmationAnswer,
-  Thread,
-  ThreadDetail,
-} from "@/lib/threads/client"
+import type { ConfirmationAnswer, Thread } from "@/lib/threads/client"
 import { buildTimeline, pendingConfirmationIds } from "@/lib/threads/timeline"
 import type { ArtifactEntry } from "@/lib/threads/timeline"
 import { socketProtocol } from "@/lib/socket-protocol"
@@ -71,6 +63,20 @@ type ComposerHandlers = {
   draft: string
   onDraftChange: (value: string) => void
   onComposingChange: (composing: boolean) => void
+}
+
+/**
+ * The chat with no conversation open, for whoever shows it (the shell's desk):
+ * a composer whose first message starts a conversation of its own, the first
+ * messages that were not sent, and why the chat left a conversation.
+ */
+export type BlankChat = ComposerHandlers & {
+  /** Sends the first message of a new conversation, with what the member is looking at. */
+  onSubmit: (message: string) => void
+  /** The first messages that were not sent, with Retry, Edit and Dismiss; none while there are none. */
+  notSent?: ReactElement
+  /** Why the chat left a conversation ("That conversation no longer exists."), or "". */
+  notice: string
 }
 
 type ChatState = PrimaryChatActivity["state"]
@@ -155,15 +161,20 @@ async function waitsOnMember(
 }
 
 /**
- * The Agents tab's chat with the member's primary agent. It opens the
- * last view in this tab for less than five minutes, then the newest one waiting
- * on their approval, otherwise a new one that their first message starts.
- * While mounted it keeps the open conversation (chat-choice.ts). It runs through the thread's
- * Durable Object (REALTIME.md), in the browser only.
+ * The member's chat with their primary agent, as the center shows it: the
+ * open conversation's log and composer, or, with none open, whatever
+ * `renderBlank` makes of the blank chat (the shell's desk). As the app opens
+ * it opens the conversation left in this tab less than five minutes ago, then
+ * the newest one waiting on the member's approval, otherwise none. While
+ * mounted it keeps the open conversation (chat-choice.ts). It runs through
+ * the thread's Durable Object (REALTIME.md), in the browser only.
  *
- * What it is on, what waits to be opened or sent, and the unsent messages are
- * the panel's (`chat`, moved by `dispatch`), so they outlast a switch to
- * another agent and every step names the request it belongs to.
+ * What it is on, what waits to be opened or sent, the draft and the unsent
+ * messages are the shell's (`chat`, moved by `dispatch`), so they outlast
+ * whatever else the center shows, and every step names the request it
+ * belongs to. The shell keeps this mounted, hidden while another screen is in
+ * the center, so a run goes on streaming and a first message on its way still
+ * reaches its conversation.
  */
 export function AgentChat({
   organizationId,
@@ -173,13 +184,9 @@ export function AgentChat({
   chat,
   dispatch,
   onComposingChange,
-  onOpenOverview,
-  inOverview = false,
   visible = true,
-  onFileCreated,
   getScreenContext,
-  openHistoryRequest,
-  onHistoryOpened,
+  renderBlank,
 }: {
   organizationId: string
   /** Whose choices the chat remembers for the session; without it none are. */
@@ -194,17 +201,14 @@ export function AgentChat({
   chat: PrimaryChat
   dispatch: Dispatch<PrimaryChatAction>
   onComposingChange: (composing: boolean) => void
-  onOpenOverview?: () => void
-  inOverview?: boolean
+  /**
+   * Whether the chat is in front of the member. Only then is their presence
+   * recorded, and only once it has been does an open conversation connect.
+   */
   visible?: boolean
-  onFileCreated?: (file: {
-    threadId: string
-    name: string
-    version?: number
-  }) => void
   getScreenContext?: () => ScreenContext
-  openHistoryRequest?: object | null
-  onHistoryOpened?: () => void
+  /** What the chat shows with no conversation open, in view; its own quiet blank chat without it. */
+  renderBlank?: (blank: BlankChat) => ReactNode
 }) {
   const queryClient = useQueryClient()
   const hydrated = useHydrated()
@@ -223,45 +227,13 @@ export function AgentChat({
     visible,
     chat.chosen || firstMessage(chat) !== null
   )
-  const history = chatHistory(threads.data ?? [])
-  const candidates = approvalCandidates(history)
-  const historyDetails = useQueries({
-    queries: candidates.map((thread) => ({
-      ...threadApprovalQueryOptions(organizationId, thread.id, scope?.userId),
-      enabled: hydrated && visible,
-    })),
-  })
-  const knownDetails = new Map(
-    candidates.map((thread, i) => [
-      thread.id,
-      historyDetails[i].isSuccess ? historyDetails[i].data : undefined,
-    ])
-  )
-  const approvals = new Set(
-    history
-      .filter((thread) => {
-        // A refused candidate must not recover its marker from retained data.
-        // Older chats may be known from this member's earlier bounded reads;
-        // reading their cache never fans out more network requests.
-        const cached = knownDetails.has(thread.id)
-          ? undefined
-          : queryClient.getQueryState<ThreadDetail>(
-              threadApprovalQueryOptions(
-                organizationId,
-                thread.id,
-                scope?.userId
-              ).queryKey
-            )
-        const detail = knownDetails.has(thread.id)
-          ? knownDetails.get(thread.id)
-          : cached?.status === "success"
-            ? cached.data
-            : undefined
-        return (detail?.pending_confirmations.length ?? 0) > 0
-      })
-      .map((thread) => thread.id)
-  )
   const first = firstMessage(chat)
+  // A conversation's socket opens once the chat has been in front of the
+  // member, or a first message needs it; from then on it stays, hidden or
+  // not, so a run goes on streaming while another screen is in the center. A
+  // link straight to another screen opens none meanwhile.
+  const [connected, setConnected] = useState(visible)
+  if (!connected && (visible || first !== null)) setConnected(true)
   const draft = chat.drafts[PRIMARY_DRAFT] ?? ""
   const onDraftChange = (text: string) =>
     dispatch({ type: "draft", key: PRIMARY_DRAFT, text })
@@ -305,7 +277,7 @@ export function AgentChat({
   useEffect(() => () => publishPrimaryChatActivity(null), [])
 
   // Once the list is here: a last view younger than five minutes, otherwise
-  // the newest pending approval, otherwise New chat.
+  // the newest pending approval, otherwise none (the desk).
   // Unless something else moved the chat while this was asked: the reducer
   // takes a decision only for a chat still undecided.
   useEffect(() => {
@@ -335,8 +307,9 @@ export function AgentChat({
   }, [threadId, threads.data, agentId])
 
   // The choice is not worth a wait without end: the member can type at once
-  // (see `OpeningConversation`), and if it takes this long a new chat opens.
-  // What arrives later finds the chat decided, and changes nothing.
+  // (see `OpeningConversation`), and if it takes this long the chat opens
+  // blank (the desk). What arrives later finds the chat decided, and changes
+  // nothing.
   useEffect(() => {
     if (threadId !== undefined) return
     const timer = setTimeout(
@@ -349,7 +322,7 @@ export function AgentChat({
   // A first message needs a conversation of its own: this makes it, once,
   // whichever chat is mounted when its turn comes. What it reports is named
   // by the message's id, so it lands where it belongs even if this chat has
-  // gone by then (the panel keeps the rest), and nothing it says can change
+  // gone by then (the shell keeps the rest), and nothing it says can change
   // a message that is not the one it made a conversation for.
   const started = useRef<number>(undefined)
   useEffect(() => {
@@ -415,22 +388,14 @@ export function AgentChat({
     onDraftChange,
     onComposingChange,
   }
-  const title =
-    (threadId &&
-      threads.data?.find((thread) => thread.id === threadId)?.title) ||
-    "New conversation"
-
-  function startNew() {
-    dispatch({ type: "move", thread: null })
-  }
 
   // The message its conversation's chat has yet to take.
   const waiting =
     first && first.threadId === threadId && !first.taken ? first.text : null
 
-  let body
+  let body: ReactNode = null
   if (threadId && listed) {
-    body = (
+    body = connected && (
       <Suspense
         fallback={
           <OpeningConversation
@@ -466,7 +431,6 @@ export function AgentChat({
               queryKey: threadKeys.list(organizationId),
             })
           }}
-          onFileCreated={onFileCreated}
           onStateChange={(id, next) =>
             setReported({ threadId: id, state: next })
           }
@@ -474,116 +438,129 @@ export function AgentChat({
         />
       </Suspense>
     )
-  } else if (threadId === null) {
+  } else if (threadId === null && first) {
+    // A first message on its way, before its conversation exists.
     body = (
       <>
-        <AgentConversation
-          agentName={agentName}
-          state={first || notSent ? "ready" : "empty"}
-          error={chat.notice}
-        >
+        <AgentConversation agentName={agentName} state="ready">
           {notSent}
-          {first && (
-            <p className="workspace-agent-message" data-from="member">
-              {first.text}
-            </p>
-          )}
+          <p className="workspace-agent-message" data-from="member">
+            {first.text}
+          </p>
         </AgentConversation>
         <AgentComposer
           label={composerLabel(agentName)}
           placeholder={composerLabel(agentName)}
           value={draft}
           onChange={onDraftChange}
-          onSubmit={(message) =>
-            dispatch({
-              type: "submit",
-              text: message,
-              screen: getScreenContext?.(),
-            })
-          }
-          disabled={first !== null}
-          status={first ? "Connecting…" : undefined}
+          disabled
+          status="Connecting…"
           onFocus={() => onComposingChange(true)}
           onBlur={() => onComposingChange(false)}
         />
       </>
     )
-  } else {
-    body = (
-      <OpeningConversation
-        agentName={agentName}
-        pending={null}
-        notSent={notSent}
-        error={
-          threads.isError
-            ? failureText(threads.error, "Couldn't load your conversations.")
-            : undefined
-        }
-        onRetry={threads.isError ? () => void threads.refetch() : undefined}
-        {...composer}
-      />
-    )
+  } else if (visible) {
+    // No conversation, a chat still choosing, or a conversation whose list
+    // is loading. With a desk to show, a chat still choosing shows it unless
+    // it is about to reopen a conversation (`chatView`).
+    const view = renderBlank
+      ? chatView(chat, scope, agentId)
+      : threadId === null
+        ? "blank"
+        : "conversation"
+    if (view === "blank") {
+      const blank: BlankChat = {
+        ...composer,
+        onSubmit: (message) =>
+          dispatch({
+            type: "submit",
+            text: message,
+            screen: getScreenContext?.(),
+          }),
+        notSent,
+        notice: chat.notice,
+      }
+      body = renderBlank ? (
+        renderBlank(blank)
+      ) : (
+        <BlankConversation agentName={agentName} {...blank} />
+      )
+    } else if (view === "conversation") {
+      body = (
+        <OpeningConversation
+          agentName={agentName}
+          pending={null}
+          notSent={notSent}
+          error={
+            threads.isError
+              ? failureText(threads.error, "Couldn't load your conversations.")
+              : undefined
+          }
+          onRetry={threads.isError ? () => void threads.refetch() : undefined}
+          {...composer}
+        />
+      )
+    }
   }
 
+  return body
+}
+
+/**
+ * What the center shows for the primary chat: a conversation (open, being
+ * made for a first message, or loading), the blank chat (the desk), or
+ * nothing yet for the moment the member's agents take to load, before which
+ * the chat can't know which it will be. A chat still choosing is blank unless
+ * it is about to reopen the conversation the member just left.
+ */
+export type ChatView = "conversation" | "blank" | "choosing"
+
+export function chatView(
+  chat: PrimaryChat,
+  scope?: ChatScope,
+  agentId?: string
+): ChatView {
+  const shown = shownThread(chat)
+  if (firstMessage(chat) !== null || typeof shown === "string") {
+    return "conversation"
+  }
+  if (shown === null) return "blank"
+  if (scope && !agentId) return "choosing"
+  return reopensConversation(scope, agentId) ? "conversation" : "blank"
+}
+
+/**
+ * The chat's own blank state, for a chat shown without a desk: an invitation
+ * to start (or the first messages that were not sent) above the composer.
+ */
+function BlankConversation({
+  agentName,
+  draft,
+  onDraftChange,
+  onComposingChange,
+  onSubmit,
+  notSent,
+  notice,
+}: BlankChat & { agentName?: string }) {
   return (
     <>
-      <div className="workspace-agent-thread-bar">
-        <p className="workspace-agent-thread-title" title={title}>
-          {title}
-        </p>
-        {onOpenOverview && !inOverview && (
-          <button
-            className="workspace-agent-new"
-            type="button"
-            aria-label="Open Agent overview"
-            title="Open Agent overview"
-            onClick={onOpenOverview}
-          >
-            <Expand size={15} strokeWidth={1.7} />
-          </button>
-        )}
-        <button
-          className="workspace-agent-new workspace-agent-new-chat"
-          type="button"
-          aria-label="New conversation"
-          title="New conversation"
-          disabled={first !== null}
-          onClick={startNew}
-        >
-          <SquarePen size={15} strokeWidth={1.7} /> New chat
-        </button>
-      </div>
-      <AgentChatHistory
-        openRequest={openHistoryRequest}
-        onOpened={onHistoryOpened}
-        threads={history}
-        selected={threadId}
-        waiting={approvals}
-        loading={threads.isPending}
-        error={
-          threads.isError
-            ? failureText(threads.error, "Couldn't load your conversations.")
-            : undefined
-        }
-        onRetry={() => void threads.refetch()}
-        disabled={first !== null || state === "running"}
-        onOpen={(id) => dispatch({ type: "move", thread: id })}
-        onDelete={async (id) => {
-          await deleteThreadChat(organizationId, id)
-          await queryClient.cancelQueries({ queryKey: list.queryKey })
-          queryClient.setQueryData<Thread[]>(list.queryKey, (old) =>
-            old?.filter((thread) => thread.id !== id)
-          )
-          queryClient.removeQueries({
-            queryKey: threadKeys.detail(organizationId, id),
-          })
-          if (threadId === id) startNew()
-          void queryClient.invalidateQueries({
-            queryKey: threadKeys.list(organizationId),
-          })
-        }}
+      <AgentConversation
+        agentName={agentName}
+        state={notSent ? "ready" : "empty"}
+        error={notice}
+      >
+        {notSent}
+      </AgentConversation>
+      <AgentComposer
+        label={composerLabel(agentName)}
+        placeholder={composerLabel(agentName)}
+        value={draft}
+        onChange={onDraftChange}
+        onSubmit={onSubmit}
+        onFocus={() => onComposingChange(true)}
+        onBlur={() => onComposingChange(false)}
       />
-      {body}
     </>
   )
 }
@@ -741,7 +718,6 @@ function ThreadChat({
   draft,
   onDraftChange,
   onComposingChange,
-  onFileCreated,
   onStateChange,
 }: ComposerHandlers & {
   organizationId: string
@@ -754,16 +730,8 @@ function ThreadChat({
   getScreenContext?: () => ScreenContext
   onPendingTaken: () => void
   onMissing: () => void
-  /** The member came back to a conversation left alone for an hour: the chat moves on to a new one. */
-  /** The focused Agent overview is open, with its viewer or editor: the member is at work in it. */
-  /** Counts what the member or the app just did here (a request, a first message), such as opening the conversation already open. */
   /** What this thread is doing: a run streams, a confirmation waits on the member, or neither. */
   onStateChange: (threadId: string, state: ChatState) => void
-  onFileCreated?: (file: {
-    threadId: string
-    name: string
-    version?: number
-  }) => void
 }) {
   const queryClient = useQueryClient()
   const detail = useQuery(threadDetailQueryOptions(organizationId, threadId))
@@ -960,6 +928,8 @@ function ThreadChat({
   const files = entries.filter(
     (entry): entry is ArtifactEntry => entry.kind === "artifact"
   )
+  // A file a run saves joins the conversation's Files at once: Go's copy of
+  // the thread is read again as it arrives, not only once the run ends.
   const fileState = useRef<{ seen: Set<string>; ran: boolean }>({
     seen: new Set(),
     ran: false,
@@ -967,25 +937,17 @@ function ThreadChat({
   useEffect(() => {
     const state = fileState.current
     if (running) state.ran = true
-    const newFile = [...files]
-      .reverse()
-      .find((file) => !state.seen.has(file.key))
+    const newFile = files.some((file) => !state.seen.has(file.key))
     files.forEach((file) => state.seen.add(file.key))
     if (state.ran && newFile) {
       void queryClient.invalidateQueries({
         queryKey: threadKeys.detail(organizationId, threadId),
-      })
-      onFileCreated?.({
-        threadId,
-        name: newFile.name,
-        version: newFile.version,
       })
     }
     if (!running) state.ran = false
   }, [
     files.map((file) => file.key).join("|"),
     running,
-    onFileCreated,
     organizationId,
     queryClient,
     threadId,

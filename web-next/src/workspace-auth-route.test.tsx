@@ -214,11 +214,11 @@ describe("workspace session expiry", () => {
     expect(api.calls.some((call) => call.path.includes("agent-leases"))).toBe(
       true
     )
-    // The member opens the agent panel on the conversation they left: its
-    // chat holds a real socket.
+    // The member opens their conversation from Recent: its chat, in the
+    // center, holds a real socket.
     const choiceScope = { organizationId: "org_sim", userId: "user-member" }
     rememberChoice(choiceScope, "agt_leo", "th_saved")
-    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Saved conversation/ }))
     // The chat gives choosing its conversation a few seconds, and opening it
     // a few renders.
     for (let round = 0; round < 6 && sockets.length === 0; round += 1) {

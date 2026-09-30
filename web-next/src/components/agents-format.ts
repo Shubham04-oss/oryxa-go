@@ -1,6 +1,6 @@
-// Small, pure helpers shared by Agents mode's views and the request views:
-// identities for the voxel avatars, status and time labels, and the copy for
-// the agents service's refusals.
+// Small, pure helpers shared by the chat, the desk and the request views:
+// identities for the voxel avatars, time labels, and the copy for the agents
+// service's refusals.
 import { ApiError } from "@/lib/api/client"
 import { isUnavailableHere } from "@/lib/agents/policy"
 import type { AvatarIdentity } from "./workspace-avatar"
@@ -17,8 +17,8 @@ function initialsOf(name: string): string {
 }
 
 /**
- * An agent's voxel avatar, seeded by its id so it survives a rename and
- * matches the one the agent panel shows for the same agent.
+ * An agent's voxel avatar, seeded by its id so it survives a rename and is
+ * the same wherever the agent is shown.
  */
 export function agentIdentity(agent: {
   id: string
@@ -30,10 +30,6 @@ export function agentIdentity(agent: {
     initials: initialsOf(agent.name),
     kind: "agent",
   }
-}
-
-export function statusLabel(status: "active" | "disabled"): string {
-  return status === "active" ? "Active" : "Paused"
 }
 
 function formatDate(iso: string): string {
