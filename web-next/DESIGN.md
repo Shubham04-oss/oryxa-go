@@ -108,7 +108,9 @@ not permission to copy every incidental value into a new component.
     the member's review, and their primary-agent tool confirmations. Reuse the
     request cards' authorized actions and race handling: Slack asks offer
     Share answer, Allow for 1 hour and Deny inline, and any other request
-    Share answer and Deny; held answers offer the existing review choices. A
+    Share answer and Deny; held answers offer the existing review choices;
+    each has Reply yourself as a quieter option, and a request that needs the
+    member's own judgment leads with it (the request card, below). A
     tool-confirmation row opens its exact chat so the member can review the
     actual confirmation cards. Count conversations once, even when they have
     several pending tool confirmations. Requests awaiting automatic agent
@@ -130,9 +132,11 @@ not permission to copy every incidental value into a new component.
     promise they ended before the server confirms it.
   - **Your requests & shared answers** follows Open access. Show what the
     member asked others, its current status and the answer actually released
-    to them, plus their agent's sharing activity. Read Inbox, Sent and Activity;
-    Activity is metadata, never an authorization to reveal a held answer or
-    private tool output. Open the exact request for its full authorized detail.
+    to them, plus their agent's sharing activity (under "Your agent shared",
+    which reads "Answers sent" once one of them is the member's own reply).
+    Read Inbox, Sent and Activity; Activity is metadata, never an
+    authorization to reveal a held answer or private tool output. Open the
+    exact request for its full authorized detail.
   - **Finish setup** comes last and contains only incomplete steps: Slack
     not connected, no knowledge content, and background access off. Use real
     Slack status, knowledge and account grant reads. Offer the action the
@@ -211,7 +215,10 @@ not permission to copy every incidental value into a new component.
   failures keep the existing red status; waiting, running and interrupted
   states keep their precedence. A request filed by the agent is a small, quiet
   request card showing its status and its published answer as it arrives;
-  only the result authorized for the requester appears. Confirmations are small
+  only the result authorized for the requester appears. An ask that needs its
+  owner's own reply says "Waiting for Ada to reply", and an answer the owner
+  wrote says "Ada replied" in place of "Answered" and shows their words as
+  they wrote them (plain text, never Markdown). Confirmations are small
   cards with Decline and Approve pills (several waiting are answered together);
   files as a thumbnail or a file chip; a failed run as one muted error line,
   and an answer cut short marked "Interrupted". A specialist's answer is its
@@ -394,6 +401,38 @@ not permission to copy every incidental value into a new component.
     waits. Access the owner gave says until when the asker's follow-ups are
     answered without asking, with an End access action while it lasts and "You
     ended Ada's access." after.
+  - **Reply yourself** lets the owner answer in their own words when an ask
+    needs their own judgment (an approval, a plan) or when the agent can't find
+    the answer. It is on the owner's card wherever they may decide a pending
+    request or review a held answer, and nowhere else. Under the choices it is
+    a quiet text button ("Reply yourself", named "Reply yourself to Raya's
+    request"); it opens an inline field in the composer's style, a pill at one
+    line that softens as its text wraps and grows to eight lines (its border is
+    the focus mark, as the composer's is), taking focus, with "Send reply" (the
+    primary action) and "Cancel". It says what it does
+    ("Raya gets your words as you write them. Your agent doesn't run."; for a
+    held answer, that they take its place), counts characters only in the last
+    500 of its 4,000, and sends with Command or Control and Enter. The agent
+    never runs: the request settles to "You replied.", where and when it was
+    sent and the words as written (plain text with its line breaks, never
+    Markdown); the asker's card says "Ada replied." in place of "Answered." and
+    shows the same words, and Requests → Activity says "You replied to Raya's
+    request in Oryxa." An empty or too long reply is refused before anything is
+    asked. A reply that failed keeps what was written, focus and the field; one
+    that lost the race shows who won, as a choice does, and words that can no
+    longer be sent (it lost, ran out, or was decided elsewhere) stay readable
+    under "Your reply wasn't sent." so they can be copied.
+  - **An ask that needs the owner's own judgment** (`answer_by: "owner"`, which
+    Jev judges when it is made; absent means the agent answers) leads with the
+    reply: nothing runs the agent until the owner chooses to let it. The
+    owner's card says "Waiting for your reply." and holds the field open from
+    the start (it takes no focus by itself, for a desk may hold several), then
+    "Send reply" as the primary action, "Let my agent answer" (for a Slack ask
+    the Share answer choice, which the card says in a line; for any other
+    request an approval with the tools it asked for) and "Deny" last, with no
+    "Allow for 1 hour" and no separate note: the reply is where the owner says
+    why. The asker's card and status say "Waiting for Ada to reply." On a phone
+    the field takes the width and the buttons stack, in that order.
   - **A secret** is never shown in Slack or in a log. When an ask is for a
     credential, its owner pastes the value into the card, which keeps it in one
     uncontrolled field, sends it once and clears it, and picks how long it waits
