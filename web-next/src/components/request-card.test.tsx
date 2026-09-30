@@ -449,7 +449,7 @@ describe("a request an agent filed in Oryxa, which has two choices", () => {
     },
   })
 
-  it("offers Share answer and Deny, and nothing between them", async () => {
+  it("offers Share answer and Deny, and nothing between them, then Reply yourself, quietly", async () => {
     renderCard(agentRequest())
 
     expect(await screen.findByText("Waiting for you to approve.")).toBeTruthy()
@@ -467,6 +467,7 @@ describe("a request an agent filed in Oryxa, which has two choices", () => {
       ["Add a note", null],
       ["Deny", "Deny Raya's request"],
       ["Share answer", "Share answer to Raya's request"],
+      ["Reply yourself", "Reply yourself to Raya's request"],
     ])
     expect(
       screen

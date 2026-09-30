@@ -3,11 +3,17 @@
 // to it, in plain words. Pure, so the card, the Requests view and their tests
 // share one set of rules. A request is data: nothing here repeats a code, an
 // id or anything Go held back from the reader.
-import { asksForConsent, originOf } from "@/lib/agents/agent-requests"
+import {
+  REPLY_MAX_CHARACTERS,
+  asksForConsent,
+  isOwnerWritten,
+  needsOwnerReply,
+  originOf,
+} from "@/lib/agents/agent-requests"
 import type {
   AgentRequest,
-  AgentRequestConsent,
   AgentRequestDecider,
+  AgentRequestDecisionConsent,
   AgentRequestGuard,
   AgentRequestWinner,
 } from "@/lib/agents/agent-requests"
@@ -141,9 +147,20 @@ export function requestTitle(request: AgentRequest, reader: Reader): string {
   return `${asker} asked ${targetAgentName(request, reader)}`
 }
 
-/** How far an approval let the answer go, as a short sentence, in the words of the choice that gave it. */
-export function consentWords(consent: AgentRequestConsent): string {
-  return consent === "access" ? "Access for 1 hour." : "Answer shared."
+/**
+ * How far an approval let the answer go, as a short sentence, in the words of
+ * the choice that gave it; for `reply`, that the owner answered in their own
+ * words.
+ */
+export function consentWords(consent: AgentRequestDecisionConsent): string {
+  switch (consent) {
+    case "access":
+      return "Access for 1 hour."
+    case "reply":
+      return "Replied in their own words."
+    case "summary":
+      return "Answer shared."
+  }
 }
 
 /** When, to follow "at": the clock today, and the day and clock otherwise. */
@@ -178,7 +195,7 @@ export function expiresPhrase(
 /** What a decision says, whoever recorded it: read from the request's own, or from the winner of a lost race. */
 type DecisionFacts = {
   decision: "approved" | "rejected"
-  consent?: AgentRequestConsent
+  consent?: AgentRequestDecisionConsent
   decidedBy?: AgentRequestDecider
   decidedAt?: string
 }
@@ -254,6 +271,8 @@ function decisionSentence(
         whoId,
         whoId === request.target.user_id ? request.target : undefined
       )
+      // An owner who answered in their own words decided by doing so.
+      if (facts.consent === "reply") return `Replied${where} by ${who}${at}.`
       const consent = facts.consent ? ` ${consentWords(facts.consent)}` : ""
       return `${verb}${where} by ${who}${at}.${consent}`
     }
@@ -500,6 +519,9 @@ export function statusOf(
   const consent = asksForConsent(request)
   const expired = isExpired(request, reader.now)
 
+  // An ask that needs its owner's own reply waits on words, not on a choice.
+  const replyAsked = needsOwnerReply(request)
+
   if (expired && request.status !== "review" && request.status !== "withheld") {
     return {
       tone: "ended",
@@ -507,7 +529,7 @@ export function statusOf(
         ? "Expired."
         : request.status === "approved" || decided
           ? "Expired before it was answered."
-          : `Expired before ${owner} decided.`,
+          : `Expired before ${owner} ${replyAsked ? "replied" : "decided"}.`,
       ...(decided ? { detail: decided } : {}),
     }
   }
@@ -517,10 +539,14 @@ export function statusOf(
       return {
         tone: "waiting",
         text: forOwner
-          ? consent
-            ? "Waiting for your choice."
-            : "Waiting for you to approve."
-          : `Waiting for ${owner} to decide.`,
+          ? replyAsked
+            ? "Waiting for your reply."
+            : consent
+              ? "Waiting for your choice."
+              : "Waiting for you to approve."
+          : replyAsked
+            ? `Waiting for ${owner} to reply.`
+            : `Waiting for ${owner} to decide.`,
       }
     case "approved":
       return {
@@ -540,6 +566,19 @@ export function statusOf(
       }
     case "completed": {
       const hidden = forOwner ? hiddenNote(request) : undefined
+      if (isOwnerWritten(request)) {
+        // Their own words: who wrote them is the status, and how and when
+        // they were sent is all the detail there is to say.
+        const sent = sentLine(request, reader, forOwner)
+        const replyDetail = [sent, hidden && `${hidden}.`]
+          .filter(Boolean)
+          .join(" ")
+        return {
+          tone: "done",
+          text: forOwner ? "You replied." : `${capitalized(owner)} replied.`,
+          ...(replyDetail ? { detail: replyDetail } : {}),
+        }
+      }
       const detail = [decided, hidden && `${hidden}.`].filter(Boolean).join(" ")
       return {
         tone: "done",
@@ -571,6 +610,34 @@ export function statusOf(
 
 function possessive(name: string): string {
   return name.endsWith("s") ? `${name}'` : `${name}'s`
+}
+
+/**
+ * Where and when an owner's own reply was sent, as a short sentence: "Sent in
+ * Oryxa at 2:02 PM." When it took the place of an answer their agent wrote and
+ * the guard held, its owner is told so ("…, in place of Krude's answer").
+ */
+function sentLine(
+  request: AgentRequest,
+  reader: Reader,
+  forOwner: boolean
+): string | undefined {
+  const replaced =
+    request.review?.action === "reply" ? request.review : undefined
+  const by = replaced ? replaced.decided_by : request.decision?.decided_by
+  const when = replaced ? replaced.decided_at : request.decision?.decided_at
+  const where =
+    by?.surface === "slack"
+      ? " in Slack"
+      : by?.surface === "web"
+        ? " in Oryxa"
+        : ""
+  const place = `${where}${whenPhrase(when, reader.now)}`
+  const instead =
+    replaced && forOwner
+      ? `${place ? "," : ""} in place of ${targetAgentName(request, reader)}'s answer`
+      : ""
+  return place || instead ? `Sent${place}${instead}.` : undefined
 }
 
 /** Go's reason for an answer withheld when its request expired in review. */
@@ -687,4 +754,60 @@ export function consentChoicePending(choice: ConsentChoiceCopy["choice"]) {
     case "deny":
       return "Denying…"
   }
+}
+
+// ---------------------------------------------------------------------------
+// Replying yourself
+// ---------------------------------------------------------------------------
+//
+// An owner may answer in their own words instead of letting their agent: for
+// a request that waits on their decision, and for an answer held for their
+// review (`POST …/reply`, the agent never runs). A request that needs their
+// own judgment (`answer_by: "owner"`) leads with it: the reply first, then
+// "Let my agent answer" (Share answer, worded for the owner who has to choose
+// to let it), then Deny.
+
+/** The words on the owner's own reply, and on the choice that lets their agent answer instead. */
+export const REPLY_YOURSELF = "Reply yourself"
+export const SEND_REPLY = "Send reply"
+export const LET_MY_AGENT_ANSWER = "Let my agent answer"
+
+/** What the reply's button is called to a screen reader: its words and whose request it answers ("Reply yourself to Raya's request"). */
+export function replyYourselfName(asker: string): string {
+  return `${REPLY_YOURSELF} to ${possessiveName(asker)} request`
+}
+
+/** What the choice that lets their agent answer is called to a screen reader, given the asker's first name. */
+export function letMyAgentAnswerName(asker: string): string {
+  return `${LET_MY_AGENT_ANSWER} ${possessiveName(asker)} request`
+}
+
+/** What letting their agent answer a Slack ask lets it do, in a line: the summary choice's limits, in the owner's words. */
+export const LET_MY_AGENT_ANSWER_DETAIL = `${LET_MY_AGENT_ANSWER}: it replies in its own words, without copying passages from your documents or sharing links.`
+
+/** The reply's button while it is on its way. */
+export const SENDING_REPLY = "Sending…"
+
+/** The choice that lets their agent answer, as its button says it while it is on its way. */
+export const ASKING_AGENT = "Asking your agent…"
+
+/** From how many characters a reply shows its count: the last 500 of the limit. */
+export const REPLY_COUNTER_FROM = REPLY_MAX_CHARACTERS - 500
+
+/** How many characters a reply is, as Go counts them: what is left once trimmed, in code points. */
+export function replyLength(text: string): number {
+  return [...text.trim()].length
+}
+
+/**
+ * Why a reply cannot be sent yet, in a sentence, or nothing when it can:
+ * Go takes 1 to `REPLY_MAX_CHARACTERS` characters of trimmed text.
+ */
+export function replyProblem(text: string): string | undefined {
+  const length = replyLength(text)
+  if (length === 0) return "Write your reply first."
+  if (length > REPLY_MAX_CHARACTERS) {
+    return "That is too long: a reply holds at most 4,000 characters."
+  }
+  return undefined
 }
