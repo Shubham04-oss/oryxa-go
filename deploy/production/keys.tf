@@ -1,7 +1,9 @@
 # Auth seals agent grants with envelope encryption; agents, knowledge and rag
 # each prove which service is calling with an ES256 signature over its own key
 # (internal/serviceauth), which the service it calls checks with the public
-# half.
+# half. Apps seals what it holds for Oryxa's own sign-in and the Slack bot under
+# a key of its own, and agents seals the one-time secrets its members share
+# under another.
 #
 # No apply should be able to lose one quietly. A destroyed auth key leaves
 # every member's stored agent grant unreadable, to be given again; a destroyed
@@ -57,6 +59,16 @@ locals {
   knowledge_service_callers = jsonencode([
     { service = "rag", key_id = aws_kms_alias.service["rag"].name, purposes = ["documents"] },
   ])
+  # Which services apps admits on its internal routes, and for what
+  # (APPS_SERVICE_CALLERS, apps/README.md, "The internal API"): agents, for the
+  # purpose slack. It reads what Slack sent, and has the bot post back, through
+  # those routes, signing each call with its own key above. The purpose is the
+  # only one granted: a token for another is refused there, and the deployment's
+  # own webhook endpoints (purpose hooks) stay served to no one. compute.tf sets
+  # it only with slack_app_ready, since it is the Slack bot's alone.
+  apps_service_callers = jsonencode([
+    { service = "agents", key_id = aws_kms_alias.service["agents-primary"].name, purposes = ["slack"] },
+  ])
 }
 
 # Oryxa's own sign-in (docs/design/integrations-plan.md, work package 1F):
@@ -81,4 +93,33 @@ resource "aws_kms_key" "apps_signin" {
 resource "aws_kms_alias" "apps_signin" {
   name          = "alias/${local.name}-apps-signin"
   target_key_id = aws_kms_key.apps_signin.key_id
+}
+
+# One-time secrets (agents/primary/internal/secretshares). When the answer to a
+# Slack request is a credential, its owner types it into Oryxa and the member
+# who asked opens it once; it waits in between, for an hour at most, sealed
+# under this key with envelope encryption. Each secret gets a data key of its
+# own, bound to the request it was shared for: the encryption context is
+# service=oryxa-agents, resource_type=secret_share and resource_id=<request>
+# (internal/secrets.Envelope), so a sealed value opens for its own request
+# alone. The value is never in Slack, an event, the database in the clear or a
+# log line.
+#
+# Nothing sealed under it outlives its hour, so losing it would cost only the
+# secrets waiting at that moment, which their owners share again. It is kept as
+# the keys above are all the same: a 30-day deletion window, the longest AWS
+# allows, and no ordinary apply can destroy it.
+resource "aws_kms_key" "agents_secrets" {
+  description             = "${local.name} agents: envelope encryption of one-time secrets shared between members"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_kms_alias" "agents_secrets" {
+  name          = "alias/${local.name}-agents-secrets"
+  target_key_id = aws_kms_key.agents_secrets.key_id
 }

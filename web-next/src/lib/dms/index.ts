@@ -11,3 +11,12 @@ export type {
 } from "./use-direct-messages"
 export { useInbox } from "./use-inbox"
 export type { Inbox, InboxStatus } from "./use-inbox"
+// A request between the two people, as a DM's log says it (REALTIME.md,
+// "Request notes"); the shell wraps what shows a DM in OpenRequestProvider.
+export { OpenRequestProvider, useOpenRequest } from "./request-navigation"
+export type { OpenRequest } from "./request-navigation"
+export type {
+  DmRequestNote,
+  RequestLineState,
+  RequestNoteState,
+} from "./request-notes"

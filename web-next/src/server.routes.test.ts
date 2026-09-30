@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { encodeRoster } from "./lib/side/protocol"
 import { signPurge } from "./realtime-purge"
+import { signRequests } from "./realtime-requests"
 import worker from "./server"
 import type { Env } from "./server"
 
@@ -1177,6 +1178,133 @@ describe("the purge", () => {
   it("leaves every other internal path to the app", async () => {
     const response = await send(
       new Request(`${purgePath}/more`, { method: "POST" })
+    )
+    expect(await response.text()).toBe("the app")
+  })
+})
+
+describe("the request notes", () => {
+  const notesPath = `${app}/internal/realtime/requests`
+  const body = () =>
+    JSON.stringify({
+      organization_id: "org_sim",
+      request_id: "irq_1",
+      revision: 2,
+      asker_user_id: "user-ada",
+      owner_user_id: "user-bo",
+      origin: "slack",
+      state: "approved",
+      changed_at: new Date(Date.now() - 1_000).toISOString(),
+    })
+  const noteRequest = vi.fn()
+
+  beforeEach(() => {
+    noteRequest.mockReset()
+    noteRequest.mockResolvedValue("noted")
+    sdk.getAgentByName.mockResolvedValue({ noteRequest })
+  })
+
+  async function signed(
+    text = body(),
+    timestamp = Math.floor(Date.now() / 1000),
+    sign: typeof signRequests = signRequests
+  ) {
+    return new Request(notesPath, {
+      method: "POST",
+      headers: {
+        "X-Oryxa-Timestamp": String(timestamp),
+        "X-Oryxa-Signature": await sign(purgeSecret, String(timestamp), text),
+      },
+      body: text,
+    })
+  }
+
+  it("takes a signed note without a cookie, and tells the two people's direct message and both their inboxes", async () => {
+    const response = await send(await signed())
+    expect(response.status).toBe(204)
+    expect(sdk.getAgentByName.mock.calls).toEqual([
+      [env.DirectMessageAgent, "org_sim~user-ada~user-bo"],
+      [env.InboxAgent, "org_sim~user-ada"],
+      [env.InboxAgent, "org_sim~user-bo"],
+    ])
+    const told = noteRequest.mock.calls.map((call) => call as unknown[])
+    expect(told).toHaveLength(3)
+    expect(told[0][0]).toMatchObject({
+      requestId: "irq_1",
+      revision: 2,
+      askerId: "user-ada",
+      ownerId: "user-bo",
+      origin: "slack",
+      state: "approved",
+    })
+    expect(told[1][0]).toEqual({
+      kind: "dm",
+      name: "org_sim~user-ada~user-bo",
+      peerId: "user-bo",
+    })
+    expect(told[2][0]).toEqual({
+      kind: "dm",
+      name: "org_sim~user-ada~user-bo",
+      peerId: "user-ada",
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(sdk.startFetch).not.toHaveBeenCalled()
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("refuses one that is not signed, one signed as a purge or as an events request, a stale one, and anything but a POST", async () => {
+    const unsigned = await send(
+      new Request(notesPath, {
+        method: "POST",
+        body: body(),
+        headers: { Cookie: cookie },
+      })
+    )
+    expect(unsigned.status).toBe(401)
+    const asPurge = await send(await signed(body(), undefined, signPurge))
+    expect(asPurge.status).toBe(401)
+    const stale = await send(
+      await signed(body(), Math.floor(Date.now() / 1000) - 600)
+    )
+    expect(stale.status).toBe(401)
+    const get = await send(new Request(notesPath))
+    expect(get.status).toBe(405)
+    expect(sdk.getAgentByName).not.toHaveBeenCalled()
+  })
+
+  it("refuses a purge's route the note's signature, and a note's route the purge's", async () => {
+    const text = JSON.stringify({
+      event_id: "evt_1",
+      organization_id: "org_sim",
+      scope: "member",
+      user_id: "user-ada",
+      removed_at: "2026-09-24T10:00:00.123456789Z",
+    })
+    const timestamp = String(Math.floor(Date.now() / 1000))
+    const asNote = await send(
+      new Request(`${app}/internal/realtime/purge`, {
+        method: "POST",
+        headers: {
+          "X-Oryxa-Timestamp": timestamp,
+          "X-Oryxa-Signature": await signRequests(purgeSecret, timestamp, text),
+        },
+        body: text,
+      })
+    )
+    expect(asNote.status).toBe(401)
+    expect(sdk.getAgentByName).not.toHaveBeenCalled()
+  })
+
+  it("answers 503 when an object could not be told, so Go sends the note again", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+    noteRequest.mockRejectedValueOnce(new Error("the object was reset"))
+    const response = await send(await signed())
+    expect(response.status).toBe(503)
+  })
+
+  it("leaves every other internal path to the app", async () => {
+    const response = await send(
+      new Request(`${notesPath}/more`, { method: "POST" })
     )
     expect(await response.text()).toBe("the app")
   })

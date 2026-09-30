@@ -257,21 +257,24 @@ func TestAMemberWhoseChoicesCannotBeReadIsReadAsStrictly(t *testing.T) {
 	}
 }
 
-func TestAnOrganizationPolicyThatFailsMeansTheDefaultsAndIsLoggedOnceWhileItLasts(t *testing.T) {
+func TestAnUnreadableOrganizationPolicyIsConservativeUntilRecoveryAndLogsEachOutageOnce(t *testing.T) {
 	ctx := context.Background()
 	orgs := &fakeOrgs{err: errors.New("workspace store down")}
 	service, store, log := testService(orgs, Cap{Relevance: RelevanceShadow})
-	store.choices[[2]string{"org_1", "user_1"}] = Choices{Peer: LevelSecrets}
+	store.choices[[2]string{"org_1", "user_1"}] = Choices{Owner: LevelSecrets, Peer: LevelSecrets}
 
-	defaults := Effective{Owner: LevelSecrets, Peer: LevelSecrets, Relevance: RelevanceShadow}
+	fallback := Effective{Owner: LevelStrict, Peer: LevelStrict, Relevance: RelevanceShadow, Regulated: true}
 	for range 3 {
 		effective, err := service.Effective(ctx, "org_1", "user_1")
-		if err != nil || effective != defaults {
-			t.Fatalf("Effective() with the policy down = %+v, %v; want the member's choices under the defaults %+v", effective, err, defaults)
+		if err != nil || effective != fallback {
+			t.Fatalf("Effective() with the policy down = %+v, %v; want the capped conservative fallback %+v", effective, err, fallback)
 		}
 	}
-	if view, err := service.Preferences(ctx, "org_1", "user_1"); err != nil || view.Peer.Floor != LevelSecrets || view.Relevance != RelevanceShadow {
-		t.Fatalf("Preferences() with the policy down = %+v, %v; want no minimum and the capped default", view, err)
+	if view, err := service.Preferences(ctx, "org_1", "user_1"); err != nil || view.Owner.Floor != LevelStrict || view.Peer.Floor != LevelStrict || view.Peer.Chosen != LevelSecrets || view.Effective() != fallback {
+		t.Fatalf("Preferences() with the policy down = %+v, %v; want strict floors, retained choices and the capped fallback", view, err)
+	}
+	if view, err := service.SetPreferences(ctx, "org_1", "user_1", levelPointer(LevelSecrets), levelPointer(LevelSecrets)); err != nil || view.Owner.Chosen != LevelSecrets || view.Peer.Chosen != LevelSecrets || view.Effective() != fallback {
+		t.Fatalf("SetPreferences() with the policy down = %+v, %v; want saved choices under strict floors", view, err)
 	}
 	warnings := log.warnings()
 	if len(warnings) != 1 {
@@ -298,10 +301,10 @@ func TestAnOrganizationPolicyThatFailsMeansTheDefaultsAndIsLoggedOnceWhileItLast
 	}
 
 	// Once it can be read, it is used; the next time it fails is reported again.
-	orgs.set(OrgPolicy{MinimumPeer: LevelStrict}, nil)
+	orgs.set(OrgPolicy{}, nil)
 	effective, err := service.Effective(ctx, "org_1", "user_1")
-	if err != nil || effective.Peer != LevelStrict {
-		t.Fatalf("Effective() once the policy is back = %+v, %v; want its strict minimum", effective, err)
+	if want := (Effective{Owner: LevelSecrets, Peer: LevelSecrets, Relevance: RelevanceShadow}); err != nil || effective != want {
+		t.Fatalf("Effective() once the policy is back = %+v, %v; want saved choices to resume %+v", effective, err, want)
 	}
 	orgs.set(OrgPolicy{}, errors.New("workspace store down again"))
 	for range 2 {
@@ -327,12 +330,13 @@ func TestAnOrganizationPolicyThatFailsMeansTheDefaultsAndIsLoggedOnceWhileItLast
 
 func TestACallerThatWentAwayIsNotAWorkspaceServiceThatFailed(t *testing.T) {
 	orgs := &fakeOrgs{err: context.Canceled}
-	service, _, log := testService(orgs, Cap{})
+	service, store, log := testService(orgs, Cap{})
+	store.choices[[2]string{"org_1", "user_1"}] = Choices{Owner: LevelSecrets, Peer: LevelSecrets}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	effective, err := service.Effective(ctx, "org_1", "user_1")
-	if err != nil || effective.Owner != LevelSecrets || effective.Peer != LevelStrict {
-		t.Fatalf("Effective() = %+v, %v; want the defaults", effective, err)
+	if want := (Effective{Owner: LevelStrict, Peer: LevelStrict, Relevance: RelevanceHold, Regulated: true}); err != nil || effective != want {
+		t.Fatalf("Effective() = %+v, %v; want a conservative result even if the member store returns after cancellation", effective, err)
 	}
 	if log.count() != 0 {
 		t.Errorf("a cancelled request logged %d records, want none", log.count())
@@ -344,6 +348,39 @@ func TestACallerThatWentAwayIsNotAWorkspaceServiceThatFailed(t *testing.T) {
 	}
 	if len(log.warnings()) != 1 {
 		t.Errorf("logged %d warnings for a real failure after a cancelled request, want 1", len(log.warnings()))
+	}
+	// A cancelled request during that outage must not reset its suppression.
+	if _, err := service.Effective(ctx, "org_1", "user_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Effective(context.Background(), "org_1", "user_1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(log.warnings()) != 1 {
+		t.Errorf("a cancelled request reset outage suppression: %d warnings, want 1", len(log.warnings()))
+	}
+}
+
+func TestUnreadablePolicyStillHonorsTheDeploymentRelevanceCeiling(t *testing.T) {
+	for name, test := range map[string]struct {
+		cap  Cap
+		want RelevanceMode
+	}{
+		"hold":        {Cap{}, RelevanceHold},
+		"shadow":      {Cap{Relevance: RelevanceShadow}, RelevanceShadow},
+		"off":         {Cap{Relevance: RelevanceOff}, RelevanceOff},
+		"unknown cap": {Cap{Relevance: "future"}, RelevanceShadow},
+		"hold org":    {Cap{Relevance: RelevanceOff, HoldOrgs: map[string]bool{"org_1": true}}, RelevanceHold},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, store, _ := testService(&fakeOrgs{err: errors.New("workspace down")}, test.cap)
+			store.choices[[2]string{"org_1", "user_1"}] = Choices{Owner: LevelSecrets, Peer: LevelSecrets}
+			effective, err := service.Effective(context.Background(), "org_1", "user_1")
+			want := Effective{Owner: LevelStrict, Peer: LevelStrict, Relevance: test.want, Regulated: true}
+			if err != nil || effective != want {
+				t.Fatalf("Effective() = %+v, %v; want %+v", effective, err, want)
+			}
+		})
 	}
 }
 

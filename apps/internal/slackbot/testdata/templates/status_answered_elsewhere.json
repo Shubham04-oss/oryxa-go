@@ -1,0 +1,14 @@
+{
+  "text": "Someone else answered.",
+  "blocks": [
+    {
+      "elements": [
+        {
+          "text": "Someone else answered.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}

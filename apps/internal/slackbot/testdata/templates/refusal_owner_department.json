@@ -1,0 +1,12 @@
+{
+  "text": "I didn't ask <@U0MAYA>: this looks like a question for another team.",
+  "blocks": [
+    {
+      "text": {
+        "text": "I didn't ask <@U0MAYA>: this looks like a question for another team.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

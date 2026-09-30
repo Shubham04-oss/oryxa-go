@@ -49,14 +49,14 @@ func newService(store store, orgs OrgPolicies, deployment Cap) *Service {
 	return &Service{store: store, orgs: orgs, ceiling: deployment}
 }
 
-// isNil says whether orgs is nothing, or a nil pointer, map, slice or func
+// isNil says whether source is nothing, or a nil pointer, map, slice or func
 // boxed in the interface: the way a source that was never built ends up
 // non-nil, and panics when it is asked.
-func isNil(orgs OrgPolicies) bool {
-	if orgs == nil {
+func isNil(source any) bool {
+	if source == nil {
 		return true
 	}
-	switch value := reflect.ValueOf(orgs); value.Kind() {
+	switch value := reflect.ValueOf(source); value.Kind() {
 	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
 		return value.IsNil()
 	}
@@ -89,8 +89,9 @@ func (service *Service) Migrate(ctx context.Context) error {
 //
 // It fails only when the member's own choices cannot be read, and then the
 // Effective it returns is the strictest there is, so a caller that cannot do
-// better than use it fails closed. A missing or failing organization policy is
-// never a failure: the defaults apply.
+// better than use it fails closed. A missing organization policy means the
+// defaults; a policy source that fails means strict floors and regulated
+// handling, with relevance still under the deployment's ceiling.
 func (service *Service) Effective(ctx context.Context, organizationID, userID string) (Effective, error) {
 	if err := needMember(organizationID, userID); err != nil {
 		return strictest(organizationID, OrgPolicy{}, service.ceiling), err
@@ -176,10 +177,10 @@ func needMember(organizationID, userID string) error {
 	return nil
 }
 
-// organization is what an organization's policy asks, or nothing when it
-// cannot be read: a check never fails for want of the workspace service. A
-// policy that fails is reported once, when it starts to, and again only after
-// it has been read in between.
+// organization is what an organization's policy asks, or a conservative
+// fallback when it cannot be read: a check never fails for want of the
+// workspace service. A policy that fails is reported once, when it starts to,
+// and again only after it has been read in between.
 func (service *Service) organization(ctx context.Context, organizationID string) OrgPolicy {
 	if service.orgs == nil {
 		service.unset.Do(func() {
@@ -191,14 +192,18 @@ func (service *Service) organization(ctx context.Context, organizationID string)
 	if err != nil {
 		// A caller that has gone away is not a workspace service that has.
 		if ctx.Err() != nil {
-			return OrgPolicy{}
+			return unreadablePolicy()
 		}
 		if _, already := service.failing.LoadOrStore(organizationID, struct{}{}); !already {
-			service.log().WarnContext(ctx, "an organization's workspace policy could not be read, so the answer guard uses the defaults for it until it can",
+			service.log().WarnContext(ctx, "an organization's workspace policy could not be read, so the answer guard uses strict floors and regulated handling until it can",
 				"organization_id", organizationID, "error", err)
 		}
-		return OrgPolicy{}
+		return unreadablePolicy()
 	}
 	service.failing.Delete(organizationID)
 	return policy
+}
+
+func unreadablePolicy() OrgPolicy {
+	return OrgPolicy{MinimumOwner: LevelStrict, MinimumPeer: LevelStrict, Relevance: RelevanceHold, Regulated: true}
 }

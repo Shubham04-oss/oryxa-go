@@ -23,6 +23,16 @@ locals {
       # deploy/README.md, "Oryxa's own sign-in".
       APPS_DEFAULT_OAUTH_CLIENTS = "apps-default-oauth-clients"
       APPS_HOOK_SECRETS          = "apps-hook-secrets"
+      # Oryxa's Slack bot (docs/design/slack-implementation.md; deploy/README.md,
+      # "The Slack bot"). APPS_SLACK_APP is the Slack app's Client ID, Client
+      # Secret and Signing Secret as one JSON value, {"client_id",
+      # "client_secret", "signing_secret"}; AGENTS_PRIMARY_SLACK_TICKET_KEY is the
+      # key agents signs its notices' buttons with, 64 hex characters, which
+      # put-secrets.sh makes when there is none. Both containers exist whatever
+      # slack_app_ready says, so put-secrets.sh can fill them in before the task
+      # ever names them.
+      APPS_SLACK_APP                  = "slack-app"
+      AGENTS_PRIMARY_SLACK_TICKET_KEY = "slack-ticket-key"
     },
     # Only when Jev judges: the tasks cannot start while a secret they name
     # holds no value, so it exists only once there is one to put in it.
@@ -39,6 +49,10 @@ locals {
     REALTIME_PURGE_SECRET      = var.realtime_purge
     APPS_DEFAULT_OAUTH_CLIENTS = var.apps_signin_secrets_ready
     APPS_HOOK_SECRETS          = var.apps_signin_secrets_ready
+    # Both of the Slack bot's, and everything else of it in compute.tf, wait for
+    # the one switch.
+    APPS_SLACK_APP                  = var.slack_app_ready
+    AGENTS_PRIMARY_SLACK_TICKET_KEY = var.slack_app_ready
   }
 
   task_secrets = { for variable, slug in local.external_secrets : variable => slug if lookup(local.secret_gates, variable, true) }
@@ -50,6 +64,19 @@ locals {
 # deploy/README.md, "Oryxa's own sign-in".
 variable "apps_signin_secrets_ready" {
   description = "Whether APPS_DEFAULT_OAUTH_CLIENTS and APPS_HOOK_SECRETS hold real values yet. False keeps them out of the task definition, since ECS refuses to start a task whose definition names a secret with no value."
+  type        = bool
+  default     = false
+}
+
+# Declared here too, beside the secrets it gates. It is the one switch of the
+# Slack consent loop: with it false the task names neither Slack secret, apps
+# serves no Slack surface (APPS_SLACK_SURFACE), agents asks no one for consent in
+# Slack (AGENTS_PRIMARY_SLACK_CONSENT) and apps admits no internal caller
+# (APPS_SERVICE_CALLERS), so the task is what it is without any of it. Create the
+# Slack app, put its values in Secrets Manager (deploy/scripts/put-secrets.sh),
+# then turn this on and apply; deploy/README.md, "The Slack bot", gives the order.
+variable "slack_app_ready" {
+  description = "Whether the Slack app's secrets (APPS_SLACK_APP and AGENTS_PRIMARY_SLACK_TICKET_KEY) hold real values yet, which turns the Slack consent loop on. False keeps both out of the task definition, since ECS refuses to start a task whose definition names a secret with no value, and keeps the whole loop off: no Slack surface in apps, no consent asked in Slack by agents, no internal caller for apps. Set in slack.auto.tfvars.json, so every checkout applies the same."
   type        = bool
   default     = false
 }

@@ -36,6 +36,11 @@ const (
 	// ItemArtifact is a file a run kept, such as a browser screenshot or a
 	// file the sandbox saved, readable through the thread's artifact route.
 	ItemArtifact = "artifact"
+	// ItemRequest is a line Oryxa wrote in the thread about an agent request,
+	// with no model (Service.Note): it names the request, and the client shows
+	// the request's card from it. It is only ever in a Requests thread's
+	// history, never in a run's stream.
+	ItemRequest = "request"
 	// ItemRunStarted, ItemRunCompleted and ItemRunFailed bracket a run.
 	ItemRunStarted   = "run_started"
 	ItemRunCompleted = "run_completed"
@@ -94,9 +99,12 @@ type Item struct {
 	Arguments map[string]any `json:"arguments,omitempty"`
 	// Failed marks a tool result that ended in an error.
 	Failed bool `json:"failed,omitempty"`
-	// Hint and Status describe a confirmation.
+	// Hint and Status describe a confirmation. On a request item, Status says
+	// how the request stood when the line was written (the Note constants).
 	Hint   string `json:"hint,omitempty"`
 	Status string `json:"status,omitempty"`
+	// RequestID is the agent request a request item is about.
+	RequestID string `json:"request_id,omitempty"`
 	// Artifact and Version name a file a run kept.
 	Artifact string `json:"artifact,omitempty"`
 	Version  int64  `json:"version,omitempty"`
@@ -154,6 +162,14 @@ func displayAgent(items []Item, machineName, displayName string) []Item {
 // came in. Confirmations take their status from answers; a confirmation
 // answers does not hold is pending.
 func eventItems(event *session.Event, answers map[string]bool) []Item {
+	// A note is an event of metadata alone. It is read before anything else,
+	// and a message a model or a member wrote never carries one.
+	if note, ok := noteOf(event); ok && event.Content == nil {
+		return []Item{{
+			Type: ItemRequest, ID: event.ID, At: at(event), Author: event.Author,
+			Text: note.Text, Status: note.State, RequestID: note.RequestID,
+		}}
+	}
 	author := authorOf(event)
 	var items []Item
 	message := -1

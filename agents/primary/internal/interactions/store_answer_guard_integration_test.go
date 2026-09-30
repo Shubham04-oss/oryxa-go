@@ -32,6 +32,7 @@ func heldAnswer() Answer {
 var eventFields = []string{
 	"request_id", "organization_id", "requester_user_id", "requester_agent_id", "target_user_id", "target_agent_id",
 	"status", "revision", "changed_at", "teamspace_id", "approval", "decided_by",
+	"ask_id", "origin", "consent",
 }
 
 // eventsCarryNothingOfTheAnswer fails when any event the outbox holds for a

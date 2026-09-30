@@ -126,6 +126,77 @@ describe("what the objects say", () => {
   })
 })
 
+describe("the requests a DM notes", () => {
+  const note = {
+    requestId: "irq_1",
+    revision: 2,
+    askerId: "user-a",
+    ownerId: "user-b",
+    origin: "slack",
+    state: "approved",
+    changedAt: "2026-09-24T10:00:01.123Z",
+    at: "2026-09-24T10:00:00.000Z",
+  }
+  const snapshot = {
+    type: "dm-snapshot",
+    conversation: "dmc_1",
+    messages: [],
+    hasOlder: false,
+    reads: [],
+    online: [],
+    typing: [],
+  }
+
+  it("takes a request's frame only as a whole note, with where its line stands", () => {
+    expect(
+      parseDmServerMessage(
+        JSON.stringify({ type: "dm-request", request: note })
+      )
+    ).toEqual({ type: "dm-request", request: note })
+    // Only the note's own fields are kept.
+    expect(
+      parseDmServerMessage(
+        JSON.stringify({
+          type: "dm-request",
+          request: { ...note, task: "what was asked" },
+        })
+      )
+    ).toEqual({ type: "dm-request", request: note })
+    for (const request of [
+      undefined,
+      {},
+      { ...note, at: undefined },
+      { ...note, at: "yesterday" },
+      { ...note, state: "expired" },
+      { ...note, revision: 0 },
+      { ...note, ownerId: note.askerId },
+      { ...note, requestId: "irq~1" },
+    ]) {
+      expect(
+        parseDmServerMessage(JSON.stringify({ type: "dm-request", request }))
+      ).toBeUndefined()
+    }
+  })
+
+  it("has a snapshot carry the requests it holds, and none that are not notes", () => {
+    expect(parseDmServerMessage(JSON.stringify(snapshot))).toEqual(snapshot)
+    expect(
+      parseDmServerMessage(
+        JSON.stringify({
+          ...snapshot,
+          requests: [note, { ...note, revision: 0 }, "x"],
+        })
+      )
+    ).toEqual({ ...snapshot, requests: [note] })
+    expect(
+      parseDmServerMessage(JSON.stringify({ ...snapshot, requests: "none" }))
+    ).toEqual(snapshot)
+    expect(
+      parseDmServerMessage(JSON.stringify({ ...snapshot, requests: [] }))
+    ).toEqual(snapshot)
+  })
+})
+
 describe("counting and previews", () => {
   it("counts code points, and previews one line of at most PREVIEW_LENGTH", () => {
     expect(codePoints("🙂🙂")).toBe(2)

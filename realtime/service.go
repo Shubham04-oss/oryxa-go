@@ -6,6 +6,9 @@
 // teamspace, or the teamspace is deleted, from agents, and has the Worker
 // purge what they kept, recording each purge done as
 // realtime.purge.completed.v1.
+// It hears from agents, too, that a request between two members was made,
+// decided or answered, and has the Worker note it in their direct message and
+// inboxes (POST {worker}/internal/realtime/requests, ids and a state only).
 // And the Worker tells it what happens in those conversations, on
 // POST /v1/realtime/events, which it publishes as oryxa.realtime, so the rest
 // of the platform can react.
@@ -28,6 +31,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/purge"
+	"github.com/Shubham04-oss/oryxa-go/realtime/internal/requests"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/serviceconfig"
 )
 
@@ -90,6 +94,11 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	if err != nil {
 		return host.Service{}, err
 	}
+	// The same Worker, and the same secret, at a route of its own.
+	noter, err := requests.New(requests.Config{WorkerURL: config.WorkerURL, Secret: config.PurgeSecret})
+	if err != nil {
+		return host.Service{}, err
+	}
 	store := postgres.New(platform.Database)
 	signer, err := platform.EventAuth.Signer(Name)
 	if err != nil {
@@ -104,7 +113,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		return host.Service{}, err
 	}
 	dispatcher := outbox.NewDispatcher(table, publisher, logger)
-	consumer, err := events.NewConsumer(client, store, verifier(platform.EventAuth), logger)
+	consumer, err := events.NewConsumer(client, noter, store, verifier(platform.EventAuth), logger)
 	if err != nil {
 		return host.Service{}, err
 	}
@@ -114,7 +123,8 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	}
 	queue := sqs.NewFromConfig(platform.AWS)
 	logger.Info("realtime mounted: a member leaving an organization or a teamspace, or either deleted, purges their "+
-		"conversations through the Worker, and the Worker's events are published", "worker_url", config.WorkerURL, "route", httpserver.Path)
+		"conversations through the Worker, a request between two members that moves is noted through it, and the "+
+		"Worker's events are published", "worker_url", config.WorkerURL, "route", httpserver.Path)
 	return host.Service{
 		Handler:  server,
 		Routes:   server.Patterns(),

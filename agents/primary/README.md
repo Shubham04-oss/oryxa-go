@@ -785,21 +785,26 @@ and a decision made here is the member's own:
 | Route | What it does |
 | --- | --- |
 | `POST /v1/organizations/{org}/agent-requests` | Creates a request, in a teamspace when the body names `teamspace_id`; accepts `Idempotency-Key` for caller retries (below) |
-| `GET /v1/organizations/{org}/agent-requests` | Lists, newest first, the requests the member's agents sent and were sent |
+| `GET /v1/organizations/{org}/agent-requests` | Lists, newest first, the requests the member's agents sent and were sent; `?box=inbox`, `sent` or `all` (the default) says which side |
 | `GET /v1/organizations/{org}/agent-requests/inbox` | Lists requests addressed to the member's agents |
 | `GET /v1/organizations/{org}/agent-requests/sent` | Lists requests sent by the member's agents |
+| `GET /v1/organizations/{org}/agent-requests/activity` | What happened to the member's Slack asks, newest first: asks made and received, how each was decided and where, bypasses, leases, answers and secrets opened. Names, states and times, never a question or an answer (`?limit=`) |
 | `GET /v1/organizations/{org}/agent-requests/{request}` | Reads one request visible to the member |
 | `POST /v1/organizations/{org}/agent-requests/{request}/decision` | The member approves or rejects, in their own session, with narrowed tools and permissions; the only way a request held for its owner is decided. Approving one made in a teamspace reads it again first, with the member's own token |
 | `POST /v1/organizations/{org}/agent-requests/{request}/response` | Completes an approved request with the strict result envelope |
 | `POST /v1/organizations/{org}/agent-requests/{request}/review` | The member sends, sends masked, or withholds an answer the answer guard held for them, in their own session (see [Answer guard](#answer-guard)) |
+| `POST /v1/organizations/{org}/agent-requests/{request}/consent` | The owner's choice of a request that came from Slack, in their own session: `{"choice": "summary" \| "access" \| "deny"}`. `409 already_decided` carries the winner when the button in Slack was clicked first (see [The Slack consent loop](#the-slack-consent-loop)) |
+| `PUT` `GET` `DELETE /v1/organizations/{org}/agent-requests/{request}/secret` | The owner shares a credential the asker asked for (`{"value", "ttl_seconds"}`, 60 to 3600, an hour by default); the member who asked opens it once (a second view is `410 secret_gone`); the owner revokes it. `503 secrets_unavailable` without a store that can seal one |
+| `DELETE /v1/organizations/{org}/agent-leases/{lease}` | The owner ends the access they gave an asker in one Slack thread before it runs out; the asker's follow-ups there ask again |
 
 A request's JSON carries `teamspace_id` (absent outside a teamspace) and
 `approval` (`agent` or `owner`, see
 [Agent interactions toolbox](#agent-interactions-toolbox)) beside its parties,
 status, decision and result; a decision carries `decided_by`. All three
-listings take `?limit=` and two optional filters: `?teamspace_id=` keeps the
-requests made in that teamspace, and `?with_user=` those whose other party is
-that member. `GET .../agent-requests?teamspace_id=T&with_user=U` is how a side
+listings take `?limit=` and four optional filters: `?teamspace_id=` keeps the
+requests made in that teamspace, `?with_user=` those whose other party is
+that member, `?origin=` (`agent` or `slack`) those made there, and `?ask_id=`
+the requests of one Slack message. `GET .../agent-requests?teamspace_id=T&with_user=U` is how a side
 conversation reads what two teammates asked each other in teamspace T, in both
 directions: either of them gets the same list, polling as themself, and a
 listing only ever holds requests its caller is a party to. `with_user` naming
@@ -830,6 +835,78 @@ caller is not a party to is `404 not_found`), one past its expiry
 no longer stands in its teamspace `409 request_closed`, with the reason:
 Oryxa has closed it.
 
+### The Slack consent loop
+
+A member @-mentions Oryxa's Slack app in a channel and names whose agents to
+ask: "@oryxa ask @raya for the Q3 numbers". Each person named is told in a
+direct message, with three buttons: share an AI summary only, give access for
+an hour, or deny. Their agent answers in the asker's thread only if they
+approve, and only after the guards below have read the answer. The request
+ledger is the one source of truth, so what Slack says, what the owner's and
+the asker's cards in Requests say, and what their Oryxa DM and agent chats say
+are all views of it: the owner may decide on either surface, and the first
+click wins. The design is `docs/design/slack-consent-loop.md`, and the plan
+these packages were built to is `docs/design/slack-implementation.md`.
+
+**It is off unless `AGENTS_PRIMARY_SLACK_CONSENT` says `on`.** Off, nothing
+below runs, though its tables are migrated, and the events it would hear are
+acknowledged and dropped. On, the service refuses to start without
+`AGENTS_PRIMARY_SLACK_TICKET_KEY`, `AGENTS_PRIMARY_SERVICE_KEY_ID`, `APPS_URL`
+and `TEAMS_URL`, each named in the message. apps' side is
+`APPS_SLACK_SURFACE` (`apps/README.md`); the deployment order is
+`deploy/README.md`, "The Slack bot".
+
+What happens, in order, and where each step is:
+
+| Step | Where |
+| --- | --- |
+| apps verifies a delivery from Slack, keeps it for seven days and says so on the bus with ids alone: `apps.slack.message.received.v1` for a mention, `apps.slack.action.received.v1` for a click | apps; `internal/inbound` hands each to the router's queue of jobs |
+| The router reads the delivery back from apps with a service token, matches the asker and each owner to members by a *confirmed* Slack email, and refuses what it must, telling only the asker: `not_member`, `owner_not_member`, `group_dm`, `external_channel`, `no_owner`, `too_many_asks` (an asker who already has 5 asks open, or a mention that names more than 5 people) | `internal/slackrouter` |
+| The words are screened before anyone is asked: credentials in them are masked first (`consentguard.Strip`), then one Jev request judges work, injection, plausibility for this asker, credential request, and whether each owner's department fits. It fails closed: no `TYPESAFE_API_KEY`, or a Jev that fails or is slow, refuses every mention as `screen_failed`. An asker who has given agents no standing grant is told to (`no_grant`). Words that ask for a credential are filed as an ask of kind `secret` | `slackrouter.NewJevScreen`, `NewAskerDirectory` |
+| `consentpolicy.Decide` says allow, needs consent or deny for each owner (a bypass needs a channel an administrator marked high priority, or the asker above the owner in the chart) and `CreateAsk` files one request per owner, from the asker's primary agent to theirs, held for the owner. The asker is told, alone, who was asked, with a link to Requests | `internal/interactions` |
+| `agents.interaction.requested.v1` reaches the surfaces worker: the owner gets a notice with three buttons, each carrying a ticket (an HMAC of the request, the owner, the notice and the choice), and a note lands in the asker's agent chat | `internal/surfaces`, `threads.Note` |
+| The owner decides: a click reaches the router as a job and becomes `interactions.Consent(ticket, clicker, "slack")`, which decides only for a genuine, unexpired ticket, made for the member who clicked, on a request still pending; the card's `POST .../consent` is the same decision. The ledger's row lock picks the winner, and the loser sees who won. `decided.v1` has the notice updated in place, whichever surface decided | `interactions.Consent`, `surfaces` |
+| The owner's agent is woken to do the approved work, and answers with `interactions_respond`, alone and after its reads (see [Agent interactions toolbox](#agent-interactions-toolbox)) | `internal/interactiondelivery` |
+| The answer is read twice before its asker does: by the answer guard, at the owner's level, and then by the consent guard (`internal/consentguard`), which masks credentials at every level, holds a copy of 20 or more words of what the run read and any link when only a summary was allowed, and holds an answer that does not stand on what the run's tools returned, is not relevant, is about a denied topic, or could not be checked. Held, it waits in Requests for its owner, and the thread says only that it is held | `interactions.answer` |
+| The first delivered answer settles the ask, and the requests that did not answer are closed, their notices saying who did. The answer is posted in the thread with "From Raya's agent, approved by Raya" and how far, or, for a bypass, where the decision's reason says | `interactions`, `surfaces` |
+| A choice of "access" leaves a lease: the same asker's follow-ups in that thread for an hour, or less where the organization expires consent sooner, are approved with no click, though the screen and both guards still read them. The owner may revoke it | `interaction_leases` |
+| A credential is never posted to Slack. For an ask of kind `secret`, the owner types the value into Oryxa, sealed under `AGENTS_PRIMARY_SECRETS_KMS_KEY_ID`; the asker opens it once, and the thread is told only "Answered privately" | `internal/secretshares` |
+
+A failed request says so, and one that ran out of time says that: the
+surfaces post `failed` or `expired`, apps' words, and never why.
+
+What it adds to the service:
+
+- **Workers:** the router's, the surfaces', and the secret store's sweeper,
+  which runs whatever is configured, so no secret outlives its hour.
+- **Tables** in `agents_primary`, migrated whatever the switch says:
+  `interaction_asks` and `interaction_leases`, and columns on
+  `agent_interactions` (`ask_id`, `origin`, `consent`, `decided_via`,
+  `decided_reason`; migrations 013 to 015 under the ledger's lock);
+  `slack_jobs` and `slack_identities` (the router's, lock 7263510719);
+  `surface_jobs` and `surface_links` (the surfaces', lock 7263510720); and
+  `secret_shares` (lock 7263510721). None holds a message's text: jobs and
+  links are ids, an identity is a match, and the ledger holds the words.
+- **Forgetting:** a departed member's, or a deleted organization's, jobs,
+  matches, links and secrets go with them. A workspace's install ending
+  (`apps.slack.install.changed.v1`, state `ended`) has the router's matches and
+  jobs and the surfaces' links for it removed. What was said in Slack stays
+  there, in the workspace's own hands.
+- **One apps client**, signed as `agents` with `AGENTS_PRIMARY_SERVICE_KEY_ID`
+  for the audience `apps` and the purpose `slack`, shared by the router and the
+  surfaces. Production must allow it: `APPS_SERVICE_CALLERS` names agents' key
+  with that purpose, and `/v1/internal` stays blocked at the edge.
+- **The acknowledgement's link** is the web app's address for Requests, on the
+  first of `AGENTS_ALLOWED_ORIGINS`, which apps must also list in
+  `APPS_ALLOWED_ORIGINS`: `/?org=…&view=requests&request=…` for an ask to one
+  person, and without `request` for an ask to several. With no origin there is
+  no link.
+
+Without `AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID` every answer to a Slack question
+is held for its owner as unchecked, since nothing can ground it, and the service
+says so at startup. Without `AGENTS_PRIMARY_SECRETS_KMS_KEY_ID` no credential
+can be shared, and the three secret routes answer `503`.
+
 ### Answer guard
 
 Every answer one member's agent gives another member is read, before that
@@ -846,6 +923,16 @@ call of its own and all within 5 seconds: `summary`, `content`, and the
 `artifacts` references. `tools_used` is not read: it can only name what the
 approval allowed, the requester's own vocabulary. Nor is the decision's
 `message`, which is written when a request is decided, not answered.
+
+How strictly it reads a request's answer, and whether its relevance check runs
+and what it does, follow the settings of the member who gives the answer: what
+they chose for answers another member reads, the organization's minimum and the
+deployment's ceiling (`interactions.Config.GuardPolicy`, wired to the same
+settings the check route reads with; see [How strictly the guard reads an
+answer](#how-strictly-the-guard-reads-an-answer)). A member who chose `secrets`
+for those has an email address in an answer delivered as written. An answer to a
+request made in Slack is read a second time, by the consent guard, before its
+asker reads it there (see [The Slack consent loop](#the-slack-consent-loop)).
 
 What it found is read from each finding in the assessments, never from the
 response's top-level action: the held kinds are detect-only, so an answer
@@ -956,6 +1043,40 @@ not be checked is not said at all, a fixed line saying so in its place.
 What an agent publishes to a teamspace's ledger is read the same way before
 the team reads it (`teamspaces.Service.CollaborationPublish`, which
 `teamspaces_publish` calls; the guard is given with `teamspaces.WithGuard`).
+It uses `CheckWith`, under the member's peer level and the same effective
+workspace relevance/regulated settings and deployment ceiling as the check
+route (`WithGuardPolicy`). Actual attempted tool names are recorded before
+execution on the run's context, never from `tools_used` in the model's
+publication. A chat uses the actual user message (the original textual
+request when resuming confirmations), with at most six earlier member
+messages as context. A side run's prompt also holds shared, untrusted words,
+so the Worker sends its clean question and bounded shared context separately
+as `publication_request`. Go accepts that content only on a fresh owned
+side-origin run, validates its bounds, and keeps it as a serialized string
+under `publication_guard_request` in the existing private ADK session state.
+Confirmations restore that original value and cannot supply a replacement.
+This is metadata, not a table/schema migration, and thread detail never
+exposes it. An older side confirmation without it has no authorized Request
+and adds the unknown-source marker; the wrapped prompt is never a fallback.
+Private agent replies and tool results are never context sent to this judge;
+the side context may include peer-agent replies already shared there.
+Prior own-thread content and nonempty shared side context both add
+`thread_history`, including a first side run with no earlier ADK events.
+No additional transcript content is retained. Missing or
+overflowed provenance adds `run_sources_unrecorded`, so it cannot bypass the
+private-source gate. Tool provenance is bounded, held only for the run and
+never stored in thread state. Provider-tool reads behind an agent transfer are
+conservatively marked unrecorded. `interactions_get`, whose harmless
+classification assumes a pinned delivery, is conservatively marked too:
+general owner runs may read other requests. A relevance hold or failed judge
+stores no entry. When private sources require judging, the ledger also
+requires a nonempty request within the judge's 10,000-rune cap and all six
+publication texts together within its 24,000-rune answer cap: it never stores
+an omitted middle as though the judge read it. Missing or oversized input is
+unchecked without a model call, holds under `hold`, records would-hold under
+`shadow`, and leaves `off` unchanged. Rooms still use their existing masking
+check without relevance, and
+direct member/room-lifted publications still bypass this agent-only path.
 It reads the publication as the ledger would store it, so one the ledger would
 refuse for what it is (no title, an unsafe artifact location) is refused
 before a check is spent on it: the title and the summary, and the artifacts'
@@ -989,13 +1110,17 @@ which their agent gave. A member who chose nothing gets `secrets` for `owner`
 and `strict` for `peer`. What applies is the stricter of the organization's
 minimum for that origin and the member's choice, or the default when they made
 none. A choice below the minimum is kept, and shown, and the minimum wins; the
-choice applies again if the minimum is lowered. An organization's minimum is
-meant to come from its workspace policy, read through `guardpolicy.OrgPolicies`
-and never kept here. No source of it is wired yet
-(`guardpolicy.NoOrgPolicies`), so every organization has none, which is
-`secrets`, the lowest level there is. A source that is missing or fails is never
-a failed check: the defaults apply, and the failure is logged once for as long
-as it lasts. A level this code does not know is read as `strict`.
+choice applies again if the minimum is lowered. The organization's minimums,
+relevance mode and regulated status come from the host's workspace policy
+provider through `guardpolicy.NewWorkspacePolicies`, and are never kept here.
+A host without the workspace schema uses `policy.Noop`; a successful empty
+policy also supplies defaults, with no extra minimum. A policy read failure
+instead applies `strict` floors for both origins and regulated handling, with
+relevance still under the deployment's ceiling. It is logged once for each
+organization's outage; a cancelled caller is not logged as an outage. Saved
+choices resume when the policy can be read again. These settings also apply to
+agent-request answers while the Slack consent loop is off. A level this code
+does not know is read as `strict`.
 
 ```text
 GET /v1/organizations/{org}/answer-guard/preferences
@@ -1057,9 +1182,11 @@ its question did not ask for, such as the reason for a no when only a yes or no
 was asked, takes reading the question and the answer together, and is the
 relevance judge's (`internal/relevance`, which documents how it decides and how
 it is measured). The answer guard runs it after the personal data read, from
-`Guard.CheckWith`, for the answers a caller asks it to: today the check route
-below. `Guard.Check`, which every other place that reads an answer calls,
-never runs it.
+`Guard.CheckWith`, for the answers a caller asks it to: the check route below,
+and the answers the request ledger records (`interactions.answer`, told the
+request in its asker's words and the toolboxes the run could read, and run in
+the mode the answer's owner's settings say). `Guard.Check`, which every other
+place that reads an answer calls, never runs it.
 
 - **The gate.** A judge runs only for an answer whose `sources`, the tools the
   run called from what the run recorded, may have read something private
@@ -1519,13 +1646,28 @@ fills it (`internal/inbound`):
 | Detail type | What agents does |
 | --- | --- |
 | `batching.trigger-batch.ready.v1` | Keeps the batch's triggers, all at once, to wake Krude for its member (see [Wake-ups](#wake-ups)) |
-| `agents.interaction.requested.v1` | Persists a delivery job for the addressed target agent; one held for its owner completes without waking it |
-| `agents.interaction.decided.v1` | Wakes the target to finish approved work, or the requester to observe a rejection |
-| `agents.interaction.completed.v1` | Wakes the requester to observe a completed, failed or withheld result; an answer held for review (`review`) wakes nobody |
+| `agents.interaction.requested.v1` | Persists a delivery job for the addressed target agent; one held for its owner completes without waking it. For a request asked in Slack it also wakes the surfaces worker, which says what the ledger says of it in Slack |
+| `agents.interaction.decided.v1` | Wakes the target to finish approved work, or the requester to observe a rejection; the surfaces worker settles the owner's notice |
+| `agents.interaction.completed.v1` | Wakes the requester to observe a completed, failed or withheld result; an answer held for review (`review`) wakes nobody, and the surfaces worker still says in the thread that it is held |
+| `apps.slack.message.received.v1`, `apps.slack.action.received.v1` | Each is a job for the Slack router: a mention that asks, and a click on a button. They carry ids alone, and the delivery is read back from apps |
+| `apps.slack.install.changed.v1` | Only when its state is `ended`: forgets the workspace (see [The Slack consent loop](#the-slack-consent-loop)) |
 | `auth.member.removed.v1` | Removes the member's threads, waiting wake-ups, agent definitions, answer guard settings, and cross-user request content in that organization |
 | `auth.organization.deleted.v1` | The same for everyone in the organization |
 | `teams.member.removed.v1` | Withdraws the person's contributions to the team's teamspace, and records `agents.teamspace.member.removed.v1` when the team has one |
 | `teams.team.deleted.v1` | Removes the team's teamspace, recording `agents.teamspace.deleted.v1` |
+
+The three `apps.slack.*` events are subscribed to whether the loop is on or
+not, since the rule that delivers them is provisioned apart from any one
+process's switches. With `AGENTS_PRIMARY_SLACK_CONSENT` off a process
+acknowledges and drops them. **Provision the rule only after the release that
+knows them**, with `go run ./agents/primary/infra/events/cmd/provision` or
+`deploy/scripts/provision-app.sh`: a consumer that did not know one fails it,
+and the queue moves it to the dead-letter queue after five receives. Until the
+rule is widened the events are simply not delivered, and nothing fails.
+`agents.interaction.lease.revoked.v1` and `agents.interaction.secret.viewed.v1`
+are published for whoever wants them, and no service subscribes: a revoked lease
+says nothing in Slack until the asker asks again, and a secret is opened only in
+Oryxa.
 
 A conversation, agent definition, or interaction payload should not outlive
 the place it belonged to, so both of auth's events remove them there. Runs'
@@ -1978,6 +2120,8 @@ Contracts live in `/contracts/events/agents/v1`:
 | `agents.interaction.requested.v1` | A durable request is ready to route to its target agent |
 | `agents.interaction.decided.v1` | The target approved or rejected a request |
 | `agents.interaction.completed.v1` | The target completed or failed an approved request; its answer was held for review (`review`); or that review ended it: `completed` or `failed` once sent, `withheld` when withheld |
+| `agents.interaction.lease.revoked.v1` | An owner ended, before it ran out, the access they gave an asker in one Slack thread: identities and the thread's ids, never a question or an answer |
+| `agents.interaction.secret.viewed.v1` | The member who asked opened the one-time secret shared for their request: who and when, never what it held |
 | `agents.teamspace.room.message.posted.v1` | A teamspace's room stored a message, a person's or an agent's answer, without its body ([A teamspace is a room](#a-teamspace-is-a-room)) |
 | `agents.teamspace.member.removed.v1` | A person left a teamspace: Teams removed them from the team it is bound to, whether or not they had contributed agents to it |
 
@@ -1999,9 +2143,12 @@ made and who decides it: `teamspace_id`, left out for a request made outside
 a teamspace; `approval`, `agent` or `owner`, always there, since every request
 has one (the column is `NOT NULL DEFAULT 'agent'`, so a request stored before
 approvals were recorded has `agent`); and `decided_by`, as the API's
-`decision.decided_by` shows it (`{"kind": "member" | "agent" | "system",
-"user_id"?, "agent_id"?}`), once the request is decided, left out before, and
-for a decision an older build recorded without its decider. An approval
+`decision.decided_by` shows it (`{"kind": "member" | "agent" | "system" |
+"lease" | "bypass", "user_id"?, "agent_id"?, "surface"?, "reason"?}`), once the
+request is decided, left out before, and for a decision an older build recorded
+without its decider. A request made from Slack also carries `ask_id` (the ask
+its message made), `origin` (`slack`; `agent` for every other, and left out of
+an older build's), and, once approved, `consent` (`summary` or `access`). An approval
 withdrawn when its owner takes deciding back takes `decided_by` with it. They
 stay `v1`, since consumers ignore fields they do not know. Never the purpose,
 task, context, decision's message or result.
@@ -2206,15 +2353,15 @@ The compose service has no secret of its own to fall back on, and binds `127.0.0
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | ADC credential file; locally `gcloud auth application-default login` supplies ADC |
 | `GOOGLE_WORKLOAD_IDENTITY_PROVIDER` | unset | On AWS: the workload identity pool provider's audience that admits the process's role. Set with `GOOGLE_SERVICE_ACCOUNT`, it replaces ADC |
 | `GOOGLE_SERVICE_ACCOUNT` | unset | On AWS: the service account the federated role acts as, which holds the Vertex AI roles |
-| `APPS_URL` | unset | The apps service's own URL; when set, Krude gets the apps toolbox (see Acting for a member) |
+| `APPS_URL` | unset | The apps service's own URL; when set, Krude gets the apps toolbox (see Acting for a member), and the Slack consent loop posts through its internal Slack API. In the binary it defaults to this process when it runs apps, which is the loopback address the loop needs; it must be HTTPS or loopback HTTP |
 | `RAG_URL` | unset | Rag's own URL; when set, Krude gets the knowledge toolbox (see Knowledge toolbox). In the binary it defaults to this process when it runs rag |
 | `KNOWLEDGE_URL` | unset | Knowledge's own URL; with `RAG_URL`, enables source coverage/freshness and confirmed refresh of existing sources. In the binary it defaults to this process when it runs knowledge |
 | `AGENTS_PRIMARY_KNOWLEDGE_MIN_RELEVANCE` | `0` (off) | Reranker relevance below which a knowledge passage is left out, so a question the documents cannot answer comes back empty. On the scale of the reranker rag runs: 0.2 was measured for Google's `semantic-ranker-default`; calibrate before using it with another. No effect without a reranker |
 | `AUTH_URL` | unset | Auth's own URL; where a member-absent run exchanges the member's standing grant for an agent token |
-| `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf |
-| `AGENTS_ALLOWED_ORIGINS` | unset | Origins, comma-separated, whose cookie-authenticated requests may start runs and change threads; the web app's |
+| `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf, and to call apps' Slack API. Required with the Slack consent loop on |
+| `AGENTS_ALLOWED_ORIGINS` | unset | Origins, comma-separated, whose cookie-authenticated requests may start runs and change threads; the web app's. The first is also the origin the Slack acknowledgement links to |
 | `AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS` | `600` | Longest one run may take; 60–3600 seconds |
-| `TYPESAFE_API_KEY` | unset | TypeSafe's key, for Jev: a room's judgment of every message, and what a request made in a teamspace that names no tools needs (see [Agent interactions toolbox](#agent-interactions-toolbox)). Unset, rooms fall back to rules and such a request asks for none |
+| `TYPESAFE_API_KEY` | unset | TypeSafe's key, for Jev: a room's judgment of every message, what a request made in a teamspace that names no tools needs (see [Agent interactions toolbox](#agent-interactions-toolbox)), and the screen of what people ask in Slack. Unset, rooms fall back to rules, such a request asks for none, and with the Slack consent loop on every mention is refused and nobody is asked |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | TypeSafe's API: HTTPS, or plain HTTP to this machine |
 | `AGENTS_PRIMARY_GUARDRAIL_ID` | unset | Bedrock guardrail that screens the member's conversation; unset turns screening off |
 | `AGENTS_PRIMARY_GUARDRAIL_VERSION` | unset | The guardrail's numbered version, required with its ID; never `DRAFT` |
@@ -2223,7 +2370,12 @@ The compose service has no secret of its own to fall back on, and binds `127.0.0
 | `AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION` | unset | That guardrail's version, set with its ID |
 | `AGENTS_PRIMARY_GUARD_RELEVANCE_CAP` | `shadow` | The most the answer guard's relevance check may do here, whatever an organization's workspace policy asks: `hold`, `shadow` (run and record, never hold) or `off`, in any case. Anything else refuses to start (see [How strictly the guard reads an answer](#how-strictly-the-guard-reads-an-answer)) |
 | `AGENTS_PRIMARY_GUARD_HOLD_ORGS` | unset | Organization ids, comma-separated, the ceiling above does not apply to: they may hold. An id is letters, digits, `_` and `-`; anything else, a space-separated list included, refuses to start |
-| `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` | unset | Bedrock runtime endpoint override, for a development stand-in of the answer guard's guardrail |
+| `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` | unset | Bedrock runtime endpoint override, for a development stand-in of the answer guard's and the consent guard's guardrails |
+| `AGENTS_PRIMARY_SLACK_CONSENT` | `off` | `on` or `off`: the Slack consent loop, that is the router, the surfaces worker, the tickets on an owner's buttons and the client for apps' Slack API (see [The Slack consent loop](#the-slack-consent-loop)). On, the ticket key, `AGENTS_PRIMARY_SERVICE_KEY_ID`, `APPS_URL` and `TEAMS_URL` are required, or the service refuses to start. Anything but `on` or `off` refuses to start |
+| `AGENTS_PRIMARY_SLACK_TICKET_KEY` | unset | Signs the buttons on an owner's Slack notice: 64 hexadecimal characters, 32 bytes (`openssl rand -hex 32`). Read only with the loop on. Changing it makes every button already posted refuse its click; its owner decides on the request's card instead. Never logged, and never quoted in an error |
+| `AGENTS_PRIMARY_SECRETS_KMS_KEY_ID` | unset | KMS key (an ID, ARN or alias) one-time secrets are sealed under, with the encryption context `service=oryxa-agents`. Without it the three secret routes answer `503`, though the store's table is still migrated, swept and forgotten from |
+| `AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID` | unset | Bedrock guardrail the consent guard grounds every answer to a Slack question with: contextual grounding and denied topics (`deploy/production/answer_guard.tf`, not the answer guard's guardrail). Set with its version or not at all; without one, every such answer is held as unchecked |
+| `AGENTS_PRIMARY_CONSENT_GUARDRAIL_VERSION` | unset | That guardrail's version, set with its ID |
 | `AGENTS_PRIMARY_DATABASE_MAX_CONNS` | `8` | Size of the pool the service keeps for ADK's tables, apart from the shared one |
 | `AGENTS_EVENTS_QUEUE_URL` | unset | Queue carrying batching's app batches and interaction lifecycle events; without it neither app nor cross-agent events wake persistent agents (see [Wake-ups](#wake-ups)) |
 | `AWS_ENDPOINT_URL_SQS` | unset | SQS endpoint override for the LocalStack emulator |

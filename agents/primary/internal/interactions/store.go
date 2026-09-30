@@ -11,9 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
-	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
@@ -31,6 +29,31 @@ func (store *Store) Migrate(ctx context.Context) error {
 }
 
 func (store *Store) Create(ctx context.Context, request agents.Interaction, idempotencyKey string) (agents.Interaction, error) {
+	request, err := preparedRequest(request)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	var created agents.Interaction
+	err = pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		stored, inserted, err := insertRequest(ctx, tx, request, idempotencyKey)
+		if err != nil {
+			return err
+		}
+		created = stored
+		if !inserted {
+			return nil
+		}
+		return recordEvent(ctx, tx, agentsv1.InteractionRequestedDetailType, created)
+	})
+	if err != nil {
+		return agents.Interaction{}, fmt.Errorf("create agent request: %w", err)
+	}
+	return created, nil
+}
+
+// preparedRequest is a request as it is stored: naming its approval and its
+// origin.
+func preparedRequest(request agents.Interaction) (agents.Interaction, error) {
 	// A request that names no approval is stored as "agent", as every request
 	// made before teamspaces was — but only outside a teamspace, where
 	// HeldForOwner holds it for its member whatever it names. One made in a
@@ -43,46 +66,62 @@ func (store *Store) Create(ctx context.Context, request agents.Interaction, idem
 		}
 		request.Approval = ApprovalAgent
 	}
+	if request.Origin == "" {
+		request.Origin = OriginAgent
+	}
+	return request, nil
+}
+
+// insertRequest stores a new request under an idempotency key and reports
+// whether it stored one. Under a key already used it stores nothing and
+// returns the request stored there, which the service compares with what it
+// was asked to create.
+func insertRequest(ctx context.Context, tx pgx.Tx, request agents.Interaction, idempotencyKey string) (agents.Interaction, bool, error) {
+	request, err := preparedRequest(request)
+	if err != nil {
+		return agents.Interaction{}, false, err
+	}
 	contextJSON, err := json.Marshal(request.Context)
 	if err != nil {
-		return agents.Interaction{}, err
+		return agents.Interaction{}, false, err
 	}
 	toolsJSON, err := json.Marshal(request.RequestedTools)
 	if err != nil {
-		return agents.Interaction{}, err
+		return agents.Interaction{}, false, err
 	}
 	permissionsJSON, err := json.Marshal(request.RequestedPermissions)
 	if err != nil {
-		return agents.Interaction{}, err
+		return agents.Interaction{}, false, err
 	}
-	err = pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
-		row := tx.QueryRow(ctx, `
-			INSERT INTO agents_primary.agent_interactions
-				(id, organization_id, requester_user_id, requester_agent_id, requester_agent_name,
-				 target_user_id, target_agent_id, target_agent_name, target_user_email, target_user_display_name,
-				 purpose, task, context, requested_tools, requested_permissions, status, idempotency_key,
-				 revision, expires_at, created_at, updated_at, teamspace_id, approval, tools_judged_by)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22,$23)
-			ON CONFLICT (organization_id, requester_agent_id, idempotency_key) DO NOTHING
-			RETURNING `+selectColumns,
-			request.ID, request.OrganizationID, request.Requester.UserID, request.Requester.AgentID, request.Requester.AgentName,
-			request.Target.UserID, request.Target.AgentID, request.Target.AgentName, request.Target.UserEmail, request.Target.UserDisplayName,
-			request.Purpose, request.Task, contextJSON, toolsJSON, permissionsJSON, request.Status, idempotencyKey,
-			request.Revision, request.ExpiresAt, request.CreatedAt, request.TeamspaceID, request.Approval, request.ToolsJudgedBy)
-		if err := scanInteraction(row, &request); errors.Is(err, pgx.ErrNoRows) {
-			// The key is taken: return what it names, which the service
-			// compares with what it was asked to create.
-			return scanInteraction(tx.QueryRow(ctx, byKeyStatement,
-				request.OrganizationID, request.Requester.AgentID, idempotencyKey), &request)
-		} else if err != nil {
-			return err
+	var stored agents.Interaction
+	row := tx.QueryRow(ctx, `
+		INSERT INTO agents_primary.agent_interactions
+			(id, organization_id, requester_user_id, requester_agent_id, requester_agent_name,
+			 target_user_id, target_agent_id, target_agent_name, target_user_email, target_user_display_name,
+			 purpose, task, context, requested_tools, requested_permissions, status, idempotency_key,
+			 revision, expires_at, created_at, updated_at, teamspace_id, approval, tools_judged_by,
+			 origin, ask_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22,$23,$24,$25)
+		ON CONFLICT (organization_id, requester_agent_id, idempotency_key) DO NOTHING
+		RETURNING `+selectColumns,
+		request.ID, request.OrganizationID, request.Requester.UserID, request.Requester.AgentID, request.Requester.AgentName,
+		request.Target.UserID, request.Target.AgentID, request.Target.AgentName, request.Target.UserEmail, request.Target.UserDisplayName,
+		request.Purpose, request.Task, contextJSON, toolsJSON, permissionsJSON, request.Status, idempotencyKey,
+		request.Revision, request.ExpiresAt, request.CreatedAt, request.TeamspaceID, request.Approval, request.ToolsJudgedBy,
+		request.Origin, request.AskID)
+	switch err := scanInteraction(row, &stored); {
+	case errors.Is(err, pgx.ErrNoRows):
+		// The key is taken: return what it names.
+		var existing agents.Interaction
+		if err := scanInteraction(tx.QueryRow(ctx, byKeyStatement,
+			request.OrganizationID, request.Requester.AgentID, idempotencyKey), &existing); err != nil {
+			return agents.Interaction{}, false, err
 		}
-		return recordEvent(ctx, tx, agentsv1.InteractionRequestedDetailType, request)
-	})
-	if err != nil {
-		return agents.Interaction{}, fmt.Errorf("create agent request: %w", err)
+		return existing, false, nil
+	case err != nil:
+		return agents.Interaction{}, false, err
 	}
-	return request, nil
+	return stored, true, nil
 }
 
 const byKeyStatement = `SELECT ` + selectColumns + ` FROM agents_primary.agent_interactions
@@ -182,6 +221,17 @@ func listStatement(organizationID, userID string, query Query) (string, []any, e
 		args = append(args, query.TeamspaceID)
 		teamspace = fmt.Sprintf(` AND teamspace_id <> '' AND teamspace_id=$%d`, len(args))
 	}
+	// Where a request was made and the ask it belongs to narrow a listing the
+	// same way, by a filter on what each side's index already found.
+	var narrowed string
+	if query.Origin != "" {
+		args = append(args, query.Origin)
+		narrowed += fmt.Sprintf(` AND origin=$%d`, len(args))
+	}
+	if query.AskID != "" {
+		args = append(args, query.AskID)
+		narrowed += fmt.Sprintf(` AND ask_id=$%d`, len(args))
+	}
 	args = append(args, clamp(query.Limit))
 	limit := fmt.Sprintf("$%d", len(args))
 	side := func(column, otherColumn string) string {
@@ -190,7 +240,7 @@ func listStatement(organizationID, userID string, query Query) (string, []any, e
 			where += ` AND ` + otherColumn + `=` + with
 		}
 		return `SELECT ` + selectColumns + ` FROM agents_primary.agent_interactions
-			WHERE ` + where + teamspace + ` ORDER BY updated_at DESC, id DESC LIMIT ` + limit
+			WHERE ` + where + teamspace + narrowed + ` ORDER BY updated_at DESC, id DESC LIMIT ` + limit
 	}
 	asTarget, asRequester := side("target_user_id", "requester_user_id"), side("requester_user_id", "target_user_id")
 	switch query.Box {
@@ -219,32 +269,44 @@ func (store *Store) Decide(ctx context.Context, id string, input agents.Interact
 		if !current.ExpiresAt.After(at) {
 			return ErrExpired
 		}
-		decision := agents.InteractionDecision{
-			Decision: input.Decision, Message: input.Message,
-			AllowedTools: nonNilStrings(input.AllowedTools), GrantedPermissions: nonNilStrings(input.GrantedPermissions), DecidedAt: at,
-		}
-		decisionJSON, err := json.Marshal(decision)
-		if err != nil {
-			return err
-		}
-		status := StatusRejected
-		if input.Decision == DecisionApproved {
-			status = StatusApproved
-		}
-		err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
-			SET status=$2, decision=$3, revision=revision+1, updated_at=$4,
-				decided_by_kind=$5, decided_by_user_id=$6, decided_by_agent_id=$7
-			WHERE id=$1 RETURNING `+selectColumns,
-			id, status, decisionJSON, at, decider.Kind, decider.UserID, decider.AgentID), &result)
-		if err != nil {
-			return err
-		}
-		return recordEvent(ctx, tx, agentsv1.InteractionDecidedDetailType, result)
+		result, err = decideLocked(ctx, tx, current, input, decider, at)
+		return err
 	})
 	if err != nil {
 		return agents.Interaction{}, err
 	}
 	return result, nil
+}
+
+// decideLocked records the decision of a pending, unexpired request the caller
+// holds locked, and the decided event. It records who decided, where and why,
+// and how far the approval lets the answer go (ConsentFor), each in a column of
+// its own beside the decision.
+func decideLocked(ctx context.Context, tx pgx.Tx, current agents.Interaction, input agents.InteractionDecisionInput, decider agents.InteractionDecider, at time.Time) (agents.Interaction, error) {
+	decision := agents.InteractionDecision{
+		Decision: input.Decision, Message: input.Message,
+		AllowedTools: nonNilStrings(input.AllowedTools), GrantedPermissions: nonNilStrings(input.GrantedPermissions), DecidedAt: at,
+	}
+	decisionJSON, err := json.Marshal(decision)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	status := StatusRejected
+	if input.Decision == DecisionApproved {
+		status = StatusApproved
+	}
+	var result agents.Interaction
+	err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
+		SET status=$2, decision=$3, revision=revision+1, updated_at=$4,
+			decided_by_kind=$5, decided_by_user_id=$6, decided_by_agent_id=$7,
+			decided_via=$8, decided_reason=$9, consent=$10
+		WHERE id=$1 RETURNING `+selectColumns,
+		current.ID, status, decisionJSON, at, decider.Kind, decider.UserID, decider.AgentID,
+		decider.Surface, decider.Reason, ConsentFor(input.Decision, input.GrantedPermissions)), &result)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	return result, recordEvent(ctx, tx, agentsv1.InteractionDecidedDetailType, result)
 }
 
 // Respond records an approved request's answer as the guard left it: a
@@ -253,6 +315,17 @@ func (store *Store) Decide(ctx context.Context, id string, input agents.Interact
 // review with no result. Either is recorded as the completed event, which
 // carries the new status and nothing of the answer or of what the guard
 // found.
+//
+// A request of an ask (a Slack message put to several owners) is answered
+// under the ask's lock, taken before any of its requests', so the first
+// answer delivered settles the ask: a completed answer that is not held wins
+// it, and every other request of the ask that is still waiting is closed, in
+// the same transaction, saying who answered (settleAsk). An answer that is
+// held, or failed, wins nothing. The answer of an owner who revoked the
+// access they gave, after approving this request and before it was answered,
+// is not delivered: the request is closed instead, and the caller told
+// (ErrRevoked). So is an answer that comes after the ask was won
+// (ErrAnsweredElsewhere), which closing the siblings makes unlikely.
 func (store *Store) Respond(ctx context.Context, id string, answer Answer, at time.Time) (agents.Interaction, error) {
 	status, err := answer.status()
 	if err != nil {
@@ -285,8 +358,17 @@ func (store *Store) Respond(ctx context.Context, id string, answer Answer, at ti
 	if err != nil {
 		return agents.Interaction{}, err
 	}
+	askID, err := store.askOf(ctx, id)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
 	var result agents.Interaction
+	var refused error
 	err = pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		winner, err := lockAsk(ctx, tx, askID)
+		if err != nil {
+			return err
+		}
 		current, err := getForUpdate(ctx, tx, id)
 		if err != nil {
 			return err
@@ -297,6 +379,22 @@ func (store *Store) Respond(ctx context.Context, id string, answer Answer, at ti
 		if !current.ExpiresAt.After(at) {
 			return ErrExpired
 		}
+		switch {
+		case winner != "" && winner != current.ID:
+			refused = ErrAnsweredElsewhere
+			result, err = failApproved(ctx, tx, current.ID, answeredBy(ctx, tx, winner), at)
+			return err
+		case current.AskID != "" && consentOf(current) == ConsentAccess:
+			revoked, err := accessRevoked(ctx, tx, current)
+			if err != nil {
+				return err
+			}
+			if revoked {
+				refused = ErrRevoked
+				result, err = failApproved(ctx, tx, current.ID, accessRevokedReason, at)
+				return err
+			}
+		}
 		err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
 			SET status=$2, result=$3, held_result=$4, guard=$5, revision=revision+1, updated_at=$6,
 			    expires_at=CASE WHEN $2='review' THEN $7 ELSE expires_at END
@@ -305,12 +403,36 @@ func (store *Store) Respond(ctx context.Context, id string, answer Answer, at ti
 		if err != nil {
 			return err
 		}
-		return recordEvent(ctx, tx, agentsv1.InteractionCompletedDetailType, result)
+		if err := recordEvent(ctx, tx, agentsv1.InteractionCompletedDetailType, result); err != nil {
+			return err
+		}
+		if delivers(result) {
+			return settleAsk(ctx, tx, result, at)
+		}
+		return nil
 	})
 	if err != nil {
 		return agents.Interaction{}, err
 	}
+	if refused != nil {
+		return result, refused
+	}
 	return result, nil
+}
+
+// delivers is whether a request's answer reached the member who asked as an
+// answer: completed, and not held or failed. It is what wins an ask.
+func delivers(request agents.Interaction) bool {
+	return request.Status == StatusCompleted && request.Result != nil
+}
+
+// consentOf is how far a request's approval let the answer go: none while it
+// is undecided, rejected, or granted no consent.
+func consentOf(request agents.Interaction) string {
+	if request.Decision == nil {
+		return ""
+	}
+	return request.Decision.Consent
 }
 
 // Review records a review of an answer held for its addressed member,
@@ -321,9 +443,18 @@ func (store *Store) Respond(ctx context.Context, id string, answer Answer, at ti
 // with who made it, the member or Oryxa, and any reason. It is the completed event, carrying the new status and
 // nothing else, that tells the member who asked. A request not in review is
 // ErrConflict, and so is sending masked an answer that has no masked version.
+// Sending a held answer delivers it, so it settles the request's ask, if it
+// has one, as an answer delivered outright does (Respond).
 func (store *Store) Review(ctx context.Context, id string, review agents.InteractionReview, at time.Time) (agents.Interaction, error) {
+	askID, err := store.askOf(ctx, id)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
 	var result agents.Interaction
-	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		if _, err := lockAsk(ctx, tx, askID); err != nil {
+			return err
+		}
 		current, err := getForUpdate(ctx, tx, id)
 		if err != nil {
 			return err
@@ -349,7 +480,15 @@ func (store *Store) Review(ctx context.Context, id string, review agents.Interac
 		}
 		review.DecidedAt = at
 		result, err = settleReview(ctx, tx, id, delivered, review, at)
-		return err
+		if err != nil {
+			return err
+		}
+		// A held answer the owner sends is delivered by them, and is the ask's
+		// first if none was: it settles the ask as one answered outright does.
+		if delivers(result) {
+			return settleAsk(ctx, tx, result, at)
+		}
+		return nil
 	})
 	if err != nil {
 		return agents.Interaction{}, err
@@ -467,6 +606,7 @@ func (store *Store) Hold(ctx context.Context, id string, at time.Time) (agents.I
 			err := scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
 				SET status='pending', approval='owner', decision=NULL,
 					decided_by_kind='', decided_by_user_id='', decided_by_agent_id='',
+					decided_via='', decided_reason='', consent='',
 					revision=revision+1, updated_at=$2
 				WHERE id=$1 RETURNING `+selectColumns, id, at), &result)
 			if err != nil {
@@ -499,33 +639,42 @@ func (store *Store) Close(ctx context.Context, id, reason string, at time.Time) 
 		if !current.ExpiresAt.After(at) {
 			return ErrExpired
 		}
-		switch current.Status {
-		case StatusPending:
-			decisionJSON, err := json.Marshal(agents.InteractionDecision{
-				Decision: DecisionRejected, Message: reason, AllowedTools: []string{}, GrantedPermissions: []string{}, DecidedAt: at,
-			})
-			if err != nil {
-				return err
-			}
-			err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
-				SET status='rejected', decision=$2, decided_by_kind='system', decided_by_user_id='', decided_by_agent_id='',
-					revision=revision+1, updated_at=$3
-				WHERE id=$1 RETURNING `+selectColumns, id, decisionJSON, at), &result)
-			if err != nil {
-				return err
-			}
-			return recordEvent(ctx, tx, agentsv1.InteractionDecidedDetailType, result)
-		case StatusApproved:
-			result, err = failApproved(ctx, tx, id, reason, at)
-			return err
-		default:
-			return ErrConflict
-		}
+		result, err = closeLocked(ctx, tx, current, reason, "", at)
+		return err
 	})
 	if err != nil {
 		return agents.Interaction{}, err
 	}
 	return result, nil
+}
+
+// closeLocked ends a pending or approved request the caller holds locked, as
+// Oryxa and saying why (Close); code, when there is one, is the short reason
+// recorded beside it, which the bus carries.
+func closeLocked(ctx context.Context, tx pgx.Tx, current agents.Interaction, reason, code string, at time.Time) (agents.Interaction, error) {
+	switch current.Status {
+	case StatusPending:
+		decisionJSON, err := json.Marshal(agents.InteractionDecision{
+			Decision: DecisionRejected, Message: reason, AllowedTools: []string{}, GrantedPermissions: []string{}, DecidedAt: at,
+		})
+		if err != nil {
+			return agents.Interaction{}, err
+		}
+		var result agents.Interaction
+		err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
+			SET status='rejected', decision=$2, decided_by_kind='system', decided_by_user_id='', decided_by_agent_id='',
+				decided_via='', decided_reason=$4, consent='',
+				revision=revision+1, updated_at=$3
+			WHERE id=$1 RETURNING `+selectColumns, current.ID, decisionJSON, at, code), &result)
+		if err != nil {
+			return agents.Interaction{}, err
+		}
+		return result, recordEvent(ctx, tx, agentsv1.InteractionDecidedDetailType, result)
+	case StatusApproved:
+		return failApproved(ctx, tx, current.ID, reason, at)
+	default:
+		return agents.Interaction{}, ErrConflict
+	}
 }
 
 // CloseApproved ends, as Oryxa and saying why, an approved request whose work
@@ -608,16 +757,36 @@ func failApproved(ctx context.Context, tx pgx.Tx, id, reason string, at time.Tim
 
 // Forget removes request content when a member leaves or an organization is
 // deleted. Published routing events contain IDs and parties only, never task
-// content, so no second content store survives this cleanup.
+// content, so no second content store survives this cleanup. The asks and
+// leases a member was part of go with them: they hold no words, but they name
+// the member and the Slack thread. An ask left with no request goes too, and
+// the ones the member asked with the requests they made.
 func (store *Store) Forget(ctx context.Context, organizationID, userID string) error {
-	query := `DELETE FROM agents_primary.agent_interactions WHERE organization_id=$1`
-	args := []any{organizationID}
-	if userID != "" {
-		query += ` AND (requester_user_id=$2 OR target_user_id=$2)`
-		args = append(args, userID)
-	}
-	_, err := store.database.Pool.Exec(ctx, query, args...)
-	return err
+	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		if userID == "" {
+			for _, table := range []string{"interaction_asks", "interaction_leases", "agent_interactions"} {
+				if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.`+table+` WHERE organization_id=$1`, organizationID); err != nil {
+					return fmt.Errorf("forget %s: %w", table, err)
+				}
+			}
+			return nil
+		}
+		for _, forget := range []struct {
+			statement string
+			args      []any
+		}{
+			{`DELETE FROM agents_primary.interaction_leases WHERE organization_id=$1 AND (asker_user_id=$2 OR owner_user_id=$2)`, []any{organizationID, userID}},
+			{`DELETE FROM agents_primary.interaction_asks WHERE organization_id=$1 AND asker_user_id=$2`, []any{organizationID, userID}},
+			{`DELETE FROM agents_primary.agent_interactions WHERE organization_id=$1 AND (requester_user_id=$2 OR target_user_id=$2)`, []any{organizationID, userID}},
+			{`DELETE FROM agents_primary.interaction_asks ask WHERE ask.organization_id=$1
+				AND NOT EXISTS (SELECT 1 FROM agents_primary.agent_interactions request WHERE request.ask_id=ask.id)`, []any{organizationID}},
+		} {
+			if _, err := tx.Exec(ctx, forget.statement, forget.args...); err != nil {
+				return fmt.Errorf("forget a member's requests: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 const selectColumns = `
@@ -627,7 +796,8 @@ const selectColumns = `
 	purpose, task, context, requested_tools, requested_permissions,
 	status, decision, result, revision, expires_at, created_at, updated_at,
 	teamspace_id, approval, decided_by_kind, decided_by_user_id, decided_by_agent_id,
-	tools_judged_by, guard, held_result, review`
+	tools_judged_by, guard, held_result, review,
+	ask_id, origin, decided_via, decided_reason, consent, secret_viewed_at`
 
 type scanner interface{ Scan(...any) error }
 
@@ -635,6 +805,7 @@ func scanInteraction(row scanner, target *agents.Interaction) error {
 	var contextJSON, toolsJSON, permissionsJSON []byte
 	var decisionJSON, resultJSON, guardJSON, heldJSON, reviewJSON []byte
 	var decider agents.InteractionDecider
+	var consent string
 	err := row.Scan(
 		&target.ID, &target.OrganizationID,
 		&target.Requester.UserID, &target.Requester.AgentID, &target.Requester.AgentName,
@@ -643,6 +814,7 @@ func scanInteraction(row scanner, target *agents.Interaction) error {
 		&target.Status, &decisionJSON, &resultJSON, &target.Revision, &target.ExpiresAt, &target.CreatedAt, &target.UpdatedAt,
 		&target.TeamspaceID, &target.Approval, &decider.Kind, &decider.UserID, &decider.AgentID,
 		&target.ToolsJudgedBy, &guardJSON, &heldJSON, &reviewJSON,
+		&target.AskID, &target.Origin, &decider.Surface, &decider.Reason, &consent, &target.SecretViewedAt,
 	)
 	if err != nil {
 		return err
@@ -670,12 +842,14 @@ func scanInteraction(row scanner, target *agents.Interaction) error {
 		if err := json.Unmarshal(decisionJSON, target.Decision); err != nil {
 			return err
 		}
-		// Who decided is kept in columns of its own, which the database
-		// checks, never in the decision's JSON.
+		// Who decided, where and why, and how far the answer may go, are kept in
+		// columns of their own, which the database checks, never in the
+		// decision's JSON.
 		target.Decision.DecidedBy = nil
 		if decider.Kind != "" {
 			target.Decision.DecidedBy = &decider
 		}
+		target.Decision.Consent = consent
 	}
 	if len(resultJSON) > 0 {
 		target.Result = &agents.InteractionResult{}
@@ -708,21 +882,13 @@ func getForUpdate(ctx context.Context, tx pgx.Tx, id string) (agents.Interaction
 }
 
 func recordEvent(ctx context.Context, tx pgx.Tx, detailType string, request agents.Interaction) error {
-	at := request.UpdatedAt
-	event, err := events.NewEvent(detailType, changed(request), at)
-	if err != nil {
-		return err
-	}
-	trace := observability.CaptureTraceCarrier(ctx).Encode()
-	_, err = tx.Exec(ctx, `INSERT INTO agents_primary.agents_outbox
-		(id, detail_type, detail, occurred_at, trace_context) VALUES ($1,$2,$3,$4,NULLIF($5,''))`,
-		event.ID, event.DetailType, event.Data, event.OccurredAt, trace)
-	return err
+	return recordRawEvent(ctx, tx, detailType, changed(request), request.UpdatedAt)
 }
 
 // changed is what the bus is told about request: who it is between, where
-// it was made, who decides it and who did, and its state, but none of what
-// it asks or answers. Who decided is the stored decider, as the API shows it,
+// it was made and which ask it belongs to, who decides it and who did, where
+// and how far the answer may go, and its state, but none of what it asks or
+// answers. Who decided is the stored decider, as the API shows it,
 // whatever event the change is. When it changed is written in UTC, as the
 // envelope's occurred_at is: a time read back from PostgreSQL comes in this
 // process's local zone, which is no business of the bus's.
@@ -733,10 +899,13 @@ func changed(request agents.Interaction) agentsv1.InteractionChanged {
 		TargetUserID: request.Target.UserID, TargetAgentID: request.Target.AgentID,
 		Status: request.Status, Revision: request.Revision, ChangedAt: request.UpdatedAt.UTC(),
 		TeamspaceID: request.TeamspaceID, Approval: request.Approval,
+		AskID: request.AskID, Origin: request.Origin, Consent: consentOf(request),
 	}
 	if request.Decision != nil && request.Decision.DecidedBy != nil {
 		decider := request.Decision.DecidedBy
-		event.DecidedBy = &agentsv1.InteractionDecider{Kind: decider.Kind, UserID: decider.UserID, AgentID: decider.AgentID}
+		event.DecidedBy = &agentsv1.InteractionDecider{
+			Kind: decider.Kind, UserID: decider.UserID, AgentID: decider.AgentID, Surface: decider.Surface, Reason: decider.Reason,
+		}
 	}
 	return event
 }

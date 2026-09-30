@@ -1,0 +1,12 @@
+{
+  "text": "Give Oryxa's agent access to act for you in Settings, then ask again.",
+  "blocks": [
+    {
+      "text": {
+        "text": "Give Oryxa's agent access to act for you in Settings, then ask again.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

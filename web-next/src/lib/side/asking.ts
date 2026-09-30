@@ -197,6 +197,44 @@ export function agentRequestBody(input: {
  */
 export const GUARD_MAX_TEXT = 25_000
 
+export const GUARD_MAX_SOURCES = 64
+export const GUARD_MAX_SOURCE_NAME = 128
+export const GUARD_CONTEXT_LINES = 6
+export const GUARD_CONTEXT_LINE_LENGTH = 1_000
+export const GUARD_SOURCES_UNRECORDED = "run_sources_unrecorded"
+export const GUARD_THREAD_HISTORY = "thread_history"
+
+/** Trusted Worker metadata: never accepted from a browser or an agent's prose. */
+export type GuardRunInput = {
+  request: string
+  sources: string[]
+  context: string[]
+}
+
+/** Bound actual tool names without letting missing or overflow names skip judging. */
+export function guardSources(sources: readonly string[]): string[] {
+  const kept: string[] = []
+  for (const value of sources) {
+    let source = value.trim()
+    if (!source || codePoints(source) > GUARD_MAX_SOURCE_NAME) {
+      source = GUARD_SOURCES_UNRECORDED
+    }
+    if (kept.includes(source)) continue
+    if (kept.length >= GUARD_MAX_SOURCES - 1) source = GUARD_SOURCES_UNRECORDED
+    if (!kept.includes(source)) kept.push(source)
+  }
+  return kept
+}
+
+/** The same shared transcript snapshot the run sees, bounded for Go's judge. */
+export function guardContext(transcript: readonly TranscriptLine[]): string[] {
+  return transcript
+    .slice(-GUARD_CONTEXT_LINES)
+    .map(({ speaker, text }) =>
+      oneParagraph(`${speaker}: ${text}`, GUARD_CONTEXT_LINE_LENGTH)
+    )
+}
+
 /**
  * An answer's check as Go takes it (`POST …/answer-guard/check`), with only
  * its known fields: the answer's text (Go takes up to eight; a side
@@ -210,14 +248,24 @@ export type GuardCheckBody = {
   texts: string[]
   origin: "owner"
   request: string
+  sources: string[]
+  context: string[]
 }
 
 /** The check of an own agent's answer `text` to the owner's `request`, each cut to what Go takes. */
-export function guardCheckBody(text: string, request: string): GuardCheckBody {
+export function guardCheckBody(
+  text: string,
+  request: string,
+  run: Pick<GuardRunInput, "sources" | "context"> = { sources: [], context: [] }
+): GuardCheckBody {
   return {
     texts: [clip(text, GUARD_MAX_TEXT)],
     origin: "owner",
     request: clip(request, GUARD_MAX_TEXT),
+    sources: guardSources(run.sources),
+    context: run.context
+      .slice(-GUARD_CONTEXT_LINES)
+      .map((line) => clip(line, GUARD_CONTEXT_LINE_LENGTH)),
   }
 }
 

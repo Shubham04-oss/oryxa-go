@@ -22,6 +22,7 @@ import type {
   DmWireMessage,
 } from "./protocol"
 import { socketProtocol } from "@/lib/socket-protocol"
+import type { DmRequestNote } from "./request-notes"
 import type { DmMessage } from "./types"
 
 /** Where the viewer stands with the DM. */
@@ -47,6 +48,14 @@ export type DirectMessagesStatus =
  */
 export type DirectMessages = {
   messages: DmMessage[]
+  /**
+   * The agent requests between the two people that the object has been told
+   * of (REALTIME.md, "Request notes"), oldest line first, one for each
+   * request, at its latest revision. Identities and a state, never what was
+   * asked: the page reads the request from Go. A view puts each where its
+   * `at` falls among the messages.
+   */
+  requests: DmRequestNote[]
   hasOlder: boolean
   /** Loads the page before the oldest message held; resolves once it arrives, or the socket closed first. */
   loadOlder: () => Promise<void>
@@ -87,6 +96,8 @@ type Live = {
   conversation?: string
   /** The object's messages, by seq. */
   messages: DmWireMessage[]
+  /** The requests noted, by request. */
+  requests: ReadonlyMap<string, DmRequestNote>
   hasOlder: boolean
   reads: ReadonlyMap<string, number>
   online: ReadonlySet<string>
@@ -111,6 +122,7 @@ function initialLive(name: string): Live {
   return {
     name,
     messages: [],
+    requests: new Map(),
     hasOlder: false,
     reads: new Map(),
     online: new Set(),
@@ -193,6 +205,10 @@ class DirectMessagesView {
   private typedAt = 0
   private readSent = 0
   private shown?: { live: Live; messages: DmMessage[] }
+  private shownRequests?: {
+    held: ReadonlyMap<string, DmRequestNote>
+    requests: DmRequestNote[]
+  }
   private shownPeer?: DirectMessages["peer"]
 
   constructor(private readonly render: () => void) {}
@@ -243,6 +259,19 @@ class DirectMessagesView {
     ]
     this.shown = { live: this.live, messages: shown }
     return shown
+  }
+
+  /** The requests as the view renders them, oldest line first, kept while nothing changed. */
+  requests(): DmRequestNote[] {
+    const held = this.live.requests
+    if (this.shownRequests?.held === held) return this.shownRequests.requests
+    const requests = [...held.values()].sort(
+      (left, right) =>
+        left.at.localeCompare(right.at) ||
+        left.requestId.localeCompare(right.requestId)
+    )
+    this.shownRequests = { held, requests }
+    return requests
   }
 
   /** The other person as the view renders them, kept while nothing about them changed. */
@@ -435,6 +464,18 @@ class DirectMessagesView {
         if (arrived.clientId !== undefined) this.confirmed(arrived.clientId)
         return
       }
+      case "dm-request": {
+        // Only a note newer than the one held for the request is news. The
+        // object sends each move once, and a snapshot's notes replace what
+        // was held, so this only keeps a line's state from going back if a
+        // frame is ever heard twice or out of turn.
+        const held = this.live.requests.get(message.request.requestId)
+        if (held && held.revision >= message.request.revision) return
+        const requests = new Map(this.live.requests)
+        requests.set(message.request.requestId, message.request)
+        this.change({ requests })
+        return
+      }
       case "dm-send-failed":
         this.failed(message.clientId)
         return
@@ -510,6 +551,10 @@ class DirectMessagesView {
     this.change({
       conversation: message.conversation,
       messages,
+      // The object sends every request it keeps: they replace what was held.
+      requests: new Map(
+        (message.requests ?? []).map((note) => [note.requestId, note])
+      ),
       hasOlder,
       reads: new Map(message.reads.map((read) => [read.userId, read.seq])),
       online: new Set(message.online),
@@ -741,6 +786,7 @@ export function useDirectMessages(
 
   return {
     messages: view.messages(),
+    requests: view.requests(),
     hasOlder: view.live.hasOlder,
     loadOlder: view.loadOlder,
     send: view.send,

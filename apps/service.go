@@ -28,6 +28,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/mcpserver"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/signin"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/slackbot"
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
@@ -68,7 +69,11 @@ type Dependencies struct {
 	// Services verifies the service tokens apps' internal routes take.
 	// Without it there are no internal routes.
 	Services httpserver.ServiceVerifier
-	Logger   *slog.Logger
+	// Slack is the Slack surface, when it is switched on. It rides on Hooks,
+	// which serves its two static URLs, and needs Services for the routes
+	// other services post through.
+	Slack  *slackbot.Service
+	Logger *slog.Logger
 }
 
 // Config is what a host tells apps about itself.
@@ -105,6 +110,8 @@ type Service struct {
 	consumer   *events.Consumer
 	// oryxa says Oryxa's own sign-in is configured, so its upkeep runs.
 	oryxa bool
+	// slack is the Slack surface, whose upkeep runs when it is on.
+	slack *slackbot.Service
 }
 
 // New assembles the service. It does not touch the database, start anything,
@@ -153,16 +160,31 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	if dependencies.Hooks != nil {
 		ingress = dependencies.Hooks.Handler()
 	}
+	var slackRoutes *httpserver.Slack
+	if dependencies.Slack != nil {
+		switch {
+		case dependencies.Hooks == nil:
+			return nil, errors.New("apps: the Slack surface is served through the webhook ingress, which is not configured")
+		case dependencies.Services == nil:
+			return nil, errors.New("apps: the Slack surface needs the services allowed to call apps, whose internal routes it is used through")
+		}
+		slackRoutes = &httpserver.Slack{
+			Service:       dependencies.Slack,
+			Events:        dependencies.Hooks.Alias(slackbot.Toolkit, slackbot.KindEvents),
+			Interactivity: dependencies.Hooks.Alias(slackbot.Toolkit, slackbot.KindInteractivity),
+		}
+	}
 	service := &Service{
 		app:   app,
 		store: dependencies.Store,
 		mcp:   mcp,
 		handler: httpserver.New(app, httpserver.Config{
 			AllowedOrigins: config.AllowedOrigins, MCP: mcp,
-			Oryxa: app, Hooks: ingress, Services: dependencies.Services,
+			Oryxa: app, Hooks: ingress, Services: dependencies.Services, Slack: slackRoutes,
 		}, logger),
 		consumer: consumer,
 		oryxa:    oryxa != nil,
+		slack:    dependencies.Slack,
 	}
 	if dependencies.Sink != nil {
 		// A trigger's payload is the app's own data — an email's body, an
@@ -207,7 +229,8 @@ const WebhookPath = "/v1/apps/webhooks/composio"
 // Workers is the background work apps needs running. A host starts each one
 // and waits for it on the way down. Where Oryxa's own sign-in is configured,
 // its upkeep is one of them: sign-ins never finished, the daily health
-// checks, revocations to try again, and lapsed webhook endpoints.
+// checks, revocations to try again, and lapsed webhook endpoints. Where the
+// Slack surface is on, so is what it forgets on schedule.
 func (service *Service) Workers() []Worker {
 	workers := []Worker{service.app.RunMaintenance, service.app.RunAutoSubscribe}
 	if service.dispatcher != nil {
@@ -215,6 +238,9 @@ func (service *Service) Workers() []Worker {
 	}
 	if service.oryxa {
 		workers = append(workers, service.app.RunOryxa)
+	}
+	if service.slack != nil {
+		workers = append(workers, service.slack.RunMaintenance)
 	}
 	return workers
 }

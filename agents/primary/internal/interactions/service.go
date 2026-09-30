@@ -59,6 +59,13 @@ const (
 	DecidedByMember = "member"
 	DecidedByAgent  = "agent"
 	DecidedBySystem = "system"
+	// DecidedByLease is Oryxa approving a follow-up in a Slack thread under a
+	// lease its owner gave: their decision, named, and made ahead of time.
+	DecidedByLease = "lease"
+	// DecidedByBypass is Oryxa approving a request that needs no owner's
+	// click. Nobody is named: it is a rule that decided, and its reason says
+	// which.
+	DecidedByBypass = "bypass"
 
 	// ApprovalAgent lets the addressed agent, or its member's primary agent,
 	// decide: a request made in a teamspace to a specialist its owner
@@ -103,7 +110,11 @@ type Query struct {
 	TeamspaceID string
 	// WithUserID keeps only the requests whose other party is that member.
 	WithUserID string
-	Limit      int
+	// Origin keeps only the requests made there: OriginAgent or OriginSlack.
+	Origin string
+	// AskID keeps only the requests of that ask.
+	AskID string
+	Limit int
 }
 
 // Repository is the transactional interaction ledger. Store implements it.
@@ -179,6 +190,31 @@ type Config struct {
 	// it: *answerguard.Guard, when AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID names
 	// one. Without it answers are delivered as given.
 	Guard Guard
+	// GuardPolicy says how strictly Guard reads an answer for its owner, and
+	// whether and how its relevance check runs: *guardpolicy.Service. Without
+	// it answers are read as strictly as can be and the relevance check does
+	// not run, since nothing says how the organization wants an off-topic
+	// answer treated.
+	GuardPolicy GuardPolicy
+	// ConsentGuard reads the answer to a request made from Slack once Guard
+	// has: *consentguard.Guard. It holds what goes further than its owner
+	// allowed, does not stand on what the run read, is about a denied topic, or
+	// has a credential in it. Without it such an answer is read by Guard alone,
+	// as every other answer is.
+	ConsentGuard ConsentGuard
+	// Consents is the Slack consent loop's side of the ledger: asks, leases and
+	// the owner's choices. Store implements it, and is used when Repository is
+	// one and this is nil. Without either, the ask, consent and lease methods
+	// answer ErrConsentUnavailable.
+	Consents Consents
+	// Agents finds a member's primary agent, which CreateAsk files its
+	// requests between: managedagents.Service, which needs no member's token.
+	// Without it CreateAsk answers ErrConsentUnavailable.
+	Agents PrimaryAgents
+	// TicketKey signs the tickets on the buttons of an owner's Slack notice
+	// (AGENTS_PRIMARY_SLACK_TICKET_KEY), at least 32 bytes. Without one no
+	// ticket is made or accepted: an owner's click in Slack decides nothing.
+	TicketKey []byte
 	// Logger records what Jev judged and what the guard found, by kind;
 	// discarded when nil.
 	Logger *slog.Logger
@@ -196,6 +232,12 @@ type Service struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	policy     policy.Provider
+
+	guardPolicy  GuardPolicy
+	consentGuard ConsentGuard
+	consents     Consents
+	primaries    PrimaryAgents
+	tickets      *Tickets
 }
 
 func New(config Config) (*Service, error) {
@@ -217,9 +259,27 @@ func New(config Config) (*Service, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	consentGuard := config.ConsentGuard
+	if isNoConsentGuard(consentGuard) {
+		consentGuard = nil
+	}
+	consents := config.Consents
+	if consents == nil {
+		if store, ok := config.Repository.(Consents); ok {
+			consents = store
+		}
+	}
+	var tickets *Tickets
+	if len(config.TicketKey) > 0 {
+		var err error
+		if tickets, err = NewTickets(config.TicketKey); err != nil {
+			return nil, fmt.Errorf("interactions: %w", err)
+		}
+	}
 	return &Service{
 		repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens, policy: config.Policy,
 		jev: config.Jev, jevTimeout: jevTimeout, guard: config.Guard, logger: logger, now: now,
+		guardPolicy: config.GuardPolicy, consentGuard: consentGuard, consents: consents, primaries: config.Agents, tickets: tickets,
 	}, nil
 }
 
@@ -311,6 +371,7 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 		Purpose: input.Purpose, Task: input.Task, Context: nonNilContext(input.Context),
 		RequestedTools: nonNilStrings(tools), ToolsJudgedBy: toolsJudgedBy, RequestedPermissions: nonNilStrings(input.RequestedPermissions),
 		Status: StatusPending, Revision: 1, ExpiresAt: now.Add(expires), CreatedAt: now, UpdatedAt: now,
+		Origin: OriginAgent,
 	}
 	if idempotencyKey == "" {
 		idempotencyKey = id
@@ -528,7 +589,7 @@ func (service *Service) decide(ctx context.Context, actor agents.InteractionActo
 			}
 		}
 	}
-	decider := agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID}
+	decider := agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID, Surface: SurfaceWeb}
 	if !asOwner {
 		decider = agents.InteractionDecider{Kind: DecidedByAgent, UserID: actor.UserID, AgentID: actor.AgentID}
 		input.Message = AgentApproved
@@ -571,7 +632,7 @@ func (service *Service) Respond(ctx context.Context, actor agents.InteractionAct
 	}
 	// Another member reads what is recorded here, so the guard reads it
 	// first, outside the ledger's transaction.
-	answer := service.answer(ctx, request, input)
+	answer := service.answer(ctx, actor, request, input)
 	if settings.HoldForReview && request.Requester.UserID != request.Target.UserID && answer.Result != nil {
 		answer.Held = &agents.InteractionHeld{Result: *answer.Result}
 		answer.Result = nil
@@ -693,6 +754,12 @@ func validateDecision(request agents.Interaction, input agents.InteractionDecisi
 	if !isToolSubset(input.AllowedTools, request.RequestedTools) || !isSubset(input.GrantedPermissions, request.RequestedPermissions) {
 		return fmt.Errorf("%w: approved tools and permissions must be requested subsets", ErrInvalid)
 	}
+	// A request that asks for consent is approved with the consent it grants,
+	// so that how far its answer may go is never left to be guessed: an approval
+	// that grants neither is no approval of it.
+	if input.Decision == DecisionApproved && asksConsent(request) && ConsentFor(input.Decision, input.GrantedPermissions) == "" {
+		return fmt.Errorf("%w: a request that asks for consent is approved granting consent:summary or consent:access", ErrInvalid)
+	}
 	return nil
 }
 
@@ -792,6 +859,9 @@ func listed(actor agents.InteractionActor, query Query, request agents.Interacti
 	with := func(other agents.InteractionParty) bool {
 		return query.WithUserID == "" || other.UserID == query.WithUserID
 	}
+	if query.Origin != "" && originOf(request) != query.Origin || query.AskID != "" && request.AskID != query.AskID {
+		return false
+	}
 	asTarget := actsFor(actor, request.Target) && with(request.Requester)
 	asRequester := actsFor(actor, request.Requester) && with(request.Target)
 	switch query.Box {
@@ -808,7 +878,18 @@ func cleanQuery(query Query) Query {
 	query.Box = strings.ToLower(strings.TrimSpace(query.Box))
 	query.TeamspaceID = strings.TrimSpace(query.TeamspaceID)
 	query.WithUserID = strings.TrimSpace(query.WithUserID)
+	query.Origin = strings.ToLower(strings.TrimSpace(query.Origin))
+	query.AskID = strings.TrimSpace(query.AskID)
 	return query
+}
+
+// originOf is where a request was made: OriginAgent for one that names none,
+// as a request stored before Slack asks does not.
+func originOf(request agents.Interaction) string {
+	if request.Origin == "" {
+		return OriginAgent
+	}
+	return request.Origin
 }
 
 func validateQuery(actor agents.InteractionActor, query Query) error {
@@ -821,6 +902,10 @@ func validateQuery(actor agents.InteractionActor, query Query) error {
 		return fmt.Errorf("%w: with_user must be a member id of at most 128 characters", ErrInvalid)
 	case query.WithUserID != "" && query.WithUserID == actor.UserID:
 		return fmt.Errorf("%w: with_user must name another member, since a request is always between two", ErrInvalid)
+	case query.Origin != "" && query.Origin != OriginAgent && query.Origin != OriginSlack:
+		return fmt.Errorf("%w: origin is agent or slack", ErrInvalid)
+	case !validID(query.AskID):
+		return fmt.Errorf("%w: ask_id must be an id of at most 128 characters", ErrInvalid)
 	}
 	return nil
 }

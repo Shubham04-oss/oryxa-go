@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest"
+// Load the fixture writer during module setup, outside the preview test's timer.
+import Excel from "exceljs"
 import {
   cleanup,
   fireEvent,
@@ -66,12 +68,12 @@ describe("simple document previews", () => {
     expect(view.container.querySelector("script")).toBeNull()
   })
 
-  it("renders spreadsheet cells with their sheet name", async () => {
-    const Excel = (await import("exceljs")).default
+  it("renders spreadsheet cells and switches named sheets", async () => {
     const workbook = new Excel.Workbook()
     const sheet = workbook.addWorksheet("Budget")
     sheet.addRow(["Item", "Cost"])
     sheet.addRow(["Design", 42])
+    workbook.addWorksheet("Notes").addRow(["Reviewed"])
     const bytes = await workbook.xlsx.writeBuffer()
     vi.stubGlobal(
       "fetch",
@@ -85,6 +87,17 @@ describe("simple document previews", () => {
       />
     )
     expect(await screen.findByText("Design")).toBeTruthy()
+    expect(screen.getByText("42")).toBeTruthy()
+    const budget = screen.getByRole("tab", { name: "Budget" })
+    const notes = screen.getByRole("tab", { name: "Notes" })
+    expect(budget.getAttribute("aria-selected")).toBe("true")
+    expect(notes.getAttribute("aria-selected")).toBe("false")
+    fireEvent.click(notes)
+    expect(screen.getByText("Reviewed")).toBeTruthy()
+    expect(screen.queryByText("Design")).toBeNull()
+    expect(notes.getAttribute("aria-selected")).toBe("true")
+    fireEvent.click(budget)
+    expect(screen.getByText("Design")).toBeTruthy()
     expect(screen.getByText("42")).toBeTruthy()
   })
 })

@@ -42,8 +42,9 @@ type ServiceVerifier interface {
 	Verify(ctx context.Context, token string) (serviceauth.Claims, error)
 }
 
-// InternalPurpose is the one purpose apps' internal routes take, whatever
-// else a calling service may be configured for.
+// InternalPurpose is the purpose the deployment-endpoint routes take, whatever
+// else a calling service may be configured for. The Slack surface's internal
+// routes take SlackPurpose, and only that.
 const InternalPurpose = "hooks"
 
 const (
@@ -332,7 +333,7 @@ func (server *Server) revealVerificationToken(writer http.ResponseWriter, reques
 // deploymentHook answers the deployment's own endpoint for a toolkit, making
 // it the first time, to a service: never to a member.
 func (server *Server) deploymentHook(writer http.ResponseWriter, request *http.Request) {
-	if !server.internalCaller(writer, request) {
+	if !server.internalCaller(writer, request, InternalPurpose) {
 		return
 	}
 	if server.oryxa == nil {
@@ -350,7 +351,7 @@ func (server *Server) deploymentHook(writer http.ResponseWriter, request *http.R
 // revealDeploymentVerificationToken shows, once, the token an app sent the
 // deployment's own endpoint, to a service: never to a member.
 func (server *Server) revealDeploymentVerificationToken(writer http.ResponseWriter, request *http.Request) {
-	if !server.internalCaller(writer, request) {
+	if !server.internalCaller(writer, request, InternalPurpose) {
 		return
 	}
 	if server.oryxa == nil {
@@ -367,9 +368,10 @@ func (server *Server) revealDeploymentVerificationToken(writer http.ResponseWrit
 }
 
 // internalCaller checks an internal route's service token, answering the
-// caller itself when it does not pass. A member's own credentials are never
-// looked at.
-func (server *Server) internalCaller(writer http.ResponseWriter, request *http.Request) bool {
+// caller itself when it does not pass. The token must name the purpose the
+// route takes: a service allowed one purpose may not use another's routes. A
+// member's own credentials are never looked at.
+func (server *Server) internalCaller(writer http.ResponseWriter, request *http.Request, purpose string) bool {
 	token := request.Header.Get(serviceauth.Header)
 	if token == "" {
 		writeError(writer, http.StatusUnauthorized, "unauthorized", "a service token is required")
@@ -387,7 +389,7 @@ func (server *Server) internalCaller(writer http.ResponseWriter, request *http.R
 		server.logger.ErrorContext(request.Context(), "check an internal caller", "error", err)
 		writeError(writer, http.StatusServiceUnavailable, "unavailable", "service identity could not be checked; retry")
 		return false
-	case claims.Purpose != InternalPurpose:
+	case claims.Purpose != purpose:
 		writeError(writer, http.StatusForbidden, "forbidden", "the service may not use this purpose")
 		return false
 	}

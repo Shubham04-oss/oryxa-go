@@ -10,6 +10,7 @@ import {
   conversationGoneCloseCode,
 } from "./protocol"
 import type { DmServerMessage, DmWireMessage } from "./protocol"
+import type { DmRequestNote } from "./request-notes"
 import { seenMessageId } from "@/components/direct-message-format"
 import { roomSockets } from "@/test/room-socket"
 import type { FakeRoomSocket } from "@/test/room-socket"
@@ -729,5 +730,127 @@ describe("useDirectMessages: refusals", () => {
     await waitFor(() => expect(socket.reconnects).toBe(1))
     // (The stand-in's reconnect reports one more close, which asks again.)
     expect(api.calls.map((call) => call.path)).toContain(path)
+  })
+})
+
+describe("useDirectMessages: requests", () => {
+  /** A request the viewer made of the peer's agent, less what `overrides` change. */
+  function request(overrides: Partial<DmRequestNote> = {}): DmRequestNote {
+    return {
+      requestId: "irq_1",
+      revision: 1,
+      askerId: viewer,
+      ownerId: peer,
+      origin: "agent",
+      state: "waiting",
+      changedAt: "2026-09-24T09:00:10.000Z",
+      at: "2026-09-24T09:00:10.000Z",
+      ...overrides,
+    }
+  }
+
+  it("holds the requests its object sends with the conversation, oldest line first, and none before", () => {
+    const { result } = setup()
+    expect(result.current.requests).toEqual([])
+    const socket = roomSockets.latest
+    socket.open()
+    expect(result.current.requests).toEqual([])
+    socket.says(
+      snapshot([wire(1)], {
+        requests: [
+          request({ requestId: "irq_b", at: "2026-09-24T09:05:00.000Z" }),
+          request({ requestId: "irq_a", at: "2026-09-24T09:01:00.000Z" }),
+        ],
+      })
+    )
+    expect(result.current.requests.map((held) => held.requestId)).toEqual([
+      "irq_a",
+      "irq_b",
+    ])
+    // A snapshot with none says the object holds none.
+    socket.says(snapshot([wire(1)]))
+    expect(result.current.requests).toEqual([])
+  })
+
+  it("moves a line's state in place as its request goes on, keeping its place, and ignores a move that is no newer", () => {
+    const { result } = setup()
+    const socket = open([wire(1)], { requests: [request()] })
+    const [first] = result.current.requests
+    socket.says({ type: "dm-request", request: request() })
+    expect(result.current.requests[0]).toBe(first)
+
+    socket.says({
+      type: "dm-request",
+      request: request({
+        revision: 2,
+        state: "approved",
+        changedAt: "2026-09-24T09:01:00.000Z",
+      }),
+    })
+    expect(result.current.requests).toEqual([
+      request({
+        revision: 2,
+        state: "approved",
+        changedAt: "2026-09-24T09:01:00.000Z",
+      }),
+    ])
+    // Not newer: the line stays as it is.
+    socket.says({
+      type: "dm-request",
+      request: request({ revision: 2, state: "held" }),
+    })
+    socket.says({ type: "dm-request", request: request({ revision: 1 }) })
+    expect(result.current.requests[0].state).toBe("approved")
+    // Another request is another line.
+    socket.says({
+      type: "dm-request",
+      request: request({
+        requestId: "irq_2",
+        origin: "slack",
+        at: "2026-09-24T09:02:00.000Z",
+      }),
+    })
+    expect(result.current.requests.map((held) => held.requestId)).toEqual([
+      "irq_1",
+      "irq_2",
+    ])
+  })
+
+  it("replaces them with each snapshot, and starts over for another DM", () => {
+    const { result, rerender } = setup()
+    const socket = open([wire(1)], { requests: [request()] })
+    socket.says({
+      type: "dm-request",
+      request: request({ requestId: "irq_2", at: "2026-09-24T09:02:00.000Z" }),
+    })
+    expect(result.current.requests).toHaveLength(2)
+
+    // The socket drops and opens again: the object says what it holds now.
+    socket.drop()
+    socket.open()
+    socket.says(
+      snapshot([wire(1)], {
+        requests: [request({ revision: 3, state: "answered" })],
+      })
+    )
+    expect(result.current.requests).toEqual([
+      request({ revision: 3, state: "answered" }),
+    ])
+
+    rerender({ current: [org, viewer, "user-owner"] })
+    expect(result.current.requests).toEqual([])
+  })
+
+  it("hands the view the same array while nothing about the requests changed", () => {
+    const { result } = setup()
+    const socket = open([wire(1)], { requests: [request()] })
+    const before = result.current.requests
+    socket.says({ type: "dm-message", message: wire(2) })
+    expect(result.current.requests).toBe(before)
+    socket.says({
+      type: "dm-request",
+      request: request({ revision: 2, state: "answered" }),
+    })
+    expect(result.current.requests).not.toBe(before)
   })
 })

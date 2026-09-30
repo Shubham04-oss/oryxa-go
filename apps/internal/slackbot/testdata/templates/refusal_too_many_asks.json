@@ -1,0 +1,12 @@
+{
+  "text": "You have too many open questions. Wait for some to be answered.",
+  "blocks": [
+    {
+      "text": {
+        "text": "You have too many open questions. Wait for some to be answered.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}
