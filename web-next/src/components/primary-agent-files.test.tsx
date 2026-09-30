@@ -32,6 +32,7 @@ vi.mock("./document-preview", () => ({
 
 afterEach(() => {
   cleanup()
+  vi.unstubAllGlobals()
   fetchArtifactLink.mockReset()
   fetchArtifactEditorSession.mockReset()
   delete window.DocsAPI
@@ -54,6 +55,51 @@ function withThread(ui: ReactElement) {
   client.setQueryData(threadKeys.detail("org-1", "thread-1"), detail)
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
 }
+
+describe("which conversation's files the overview shows", () => {
+  it("shows none for a new chat, without looking for the latest conversation", () => {
+    const fetcher = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    withThread(<PrimaryAgentFiles organizationId="org-1" threadId={null} />)
+    const message = screen.getByText(
+      "Start a conversation to see its files here."
+    )
+    // Nothing is loading, so nothing is announced as loading.
+    expect(message.getAttribute("role")).toBeNull()
+    expect(screen.queryByRole("button", { name: "draft.txt" })).toBeNull()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it("shows none until the chat has chosen one, and does not guess from the list", () => {
+    const fetcher = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    withThread(<PrimaryAgentFiles organizationId="org-1" />)
+    expect(
+      screen.getByText("Start a conversation to see its files here.")
+    ).toBeTruthy()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it("lists the files of the thread the chat is on", async () => {
+    withThread(<PrimaryAgentFiles organizationId="org-1" threadId="thread-1" />)
+    expect(
+      await screen.findByRole("button", { name: "draft.txt" })
+    ).toBeTruthy()
+    expect(screen.getByRole("button", { name: "notes.txt" })).toBeTruthy()
+  })
+
+  it("has no file to preview for a new chat", () => {
+    withThread(
+      <PrimaryAgentFileViewer
+        organizationId="org-1"
+        threadId={null}
+        onBack={vi.fn()}
+      />
+    )
+    expect(screen.getByText("The agent has no file to show yet.")).toBeTruthy()
+    expect(fetchArtifactLink).not.toHaveBeenCalled()
+  })
+})
 
 describe("primary agent work files", () => {
   it("opens a selected file in the work viewer with its thread and version", async () => {

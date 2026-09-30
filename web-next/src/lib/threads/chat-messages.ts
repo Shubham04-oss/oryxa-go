@@ -131,6 +131,21 @@ export function itemsToChatMessages(
 }
 
 /**
+ * What the member said in a stored message, trimmed as Go stores it: nothing
+ * for the placeholder that carried confirmation answers, or for an empty one.
+ */
+function memberText(message: ThreadChatMessage): string | undefined {
+  if (message.role !== "user" || message.metadata?.oryxaConfirmation) {
+    return undefined
+  }
+  const text = message.parts
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("")
+    .trim()
+  return text || undefined
+}
+
+/**
  * A stored transcript back as items, for `buildTimeline`. The member's
  * messages become `message` items with the chat message's id (not a Go event
  * id) and trimmed text, as Go stores it; the placeholder that carried
@@ -145,13 +160,10 @@ export function chatMessagesToItems(
   const confirmationIndex = new Map<string, number>()
   for (const message of messages) {
     if (message.role === "user") {
-      if (message.metadata?.oryxaConfirmation) continue
-      const text = message.parts
-        .flatMap((part) => (part.type === "text" ? [part.text] : []))
-        .join("")
-        .trim()
-      if (!text) continue
-      items.push({ type: "message", id: message.id, author: "member", text })
+      const text = memberText(message)
+      if (text) {
+        items.push({ type: "message", id: message.id, author: "member", text })
+      }
       continue
     }
     for (const part of message.parts) {
@@ -181,14 +193,62 @@ function storedItemKey(item: Item): string {
   ].join("\u0000")
 }
 
+/** When an item happened, in ms, or nothing when it says nothing readable. */
+function itemTime(item: Item): number | undefined {
+  if (!item.at) return undefined
+  const time = Date.parse(item.at)
+  return Number.isFinite(time) ? time : undefined
+}
+
+/**
+ * When each stored message happened, for placing what is missing among them.
+ * An answer's time is its first item's. The member's messages carry none in
+ * the transcript, so they take the time Go stored the same words at (matched
+ * by their trimmed text, in order, as the missing ones are found); a message
+ * still without a time takes the one before it, and none goes back in time.
+ */
+function storedTimes(
+  stored: readonly ThreadChatMessage[],
+  backendItems: readonly Item[]
+): number[] {
+  const memberTimes = new Map<string, Array<number | undefined>>()
+  for (const item of backendItems) {
+    if (item.type !== "message" || item.author !== "member") continue
+    const text = (item.text ?? "").trim()
+    const times = memberTimes.get(text) ?? []
+    times.push(itemTime(item))
+    memberTimes.set(text, times)
+  }
+  let latest = Number.NEGATIVE_INFINITY
+  return stored.map((message) => {
+    let time: number | undefined
+    if (message.role === "user") {
+      const text = memberText(message)
+      if (text !== undefined) time = memberTimes.get(text)?.shift()
+    } else {
+      for (const part of message.parts) {
+        const item = partItem(part)
+        const at = item && itemTime(item)
+        if (at !== undefined && (time === undefined || at < time)) time = at
+      }
+    }
+    latest = Math.max(latest, time ?? latest)
+    return latest
+  })
+}
+
 /**
  * The stored transcript with whatever Go's history has that it lacks: runs
  * started outside the socket (updates from the member's apps, a team or a
  * workflow), and confirmations answered elsewhere. The member's own messages
  * are matched by their trimmed text, since the transcript's copies carry chat
  * message ids rather than Go's; everything else by its stored event. What is
- * missing goes at the end, in Go's order. Returns `stored` itself when
- * nothing is missing, so a caller can compare by reference.
+ * missing goes in by the time it happened (`at`), after what happened at the
+ * same moment, so an update that landed overnight sits between the day's
+ * conversations rather than below the latest message. What says nothing
+ * readable of its time goes last, and what Go lists in an order keeps it.
+ * Returns `stored` itself when nothing is missing, so a caller can compare by
+ * reference.
  */
 export function reconcileChatMessages(
   stored: ThreadChatMessage[],
@@ -223,14 +283,38 @@ export function reconcileChatMessages(
       item.type === "confirmation" &&
       existing.status !== item.status
     ) {
+      // Its answer, for the card that asked. It sorts by the card's time,
+      // after the message that holds the card.
       missing.push({
         type: "confirmation",
         call_id: item.call_id,
         status: item.status,
+        ...(item.at ? { at: item.at } : {}),
       })
     }
   }
-  return missing.length > 0
-    ? [...stored, ...itemsToChatMessages(missing)]
-    : stored
+  if (missing.length === 0) return stored
+
+  // Each missing item goes before the first stored message that happened
+  // after it, and never before the missing item ahead of it.
+  const times = storedTimes(stored, backendItems)
+  const slots: Item[][] = stored.map(() => [])
+  slots.push([])
+  let floor = 0
+  for (const item of missing) {
+    const time = itemTime(item)
+    let slot = stored.length
+    if (time !== undefined) {
+      const after = times.findIndex((happened) => happened > time)
+      slot = Math.max(after === -1 ? stored.length : after, floor)
+      floor = slot
+    }
+    slots[slot].push(item)
+  }
+  const merged: ThreadChatMessage[] = []
+  slots.forEach((items, index) => {
+    if (items.length > 0) merged.push(...itemsToChatMessages(items))
+    if (index < stored.length) merged.push(stored[index])
+  })
+  return merged
 }
