@@ -38,12 +38,14 @@ function timeline(
   {
     running = false,
     ended,
+    live = [],
     actionable = [],
     submitted = {},
     onAnswer = vi.fn<(answers: ConfirmationAnswer[]) => void>(),
   }: {
     running?: boolean
     ended?: boolean
+    live?: Item[]
     actionable?: string[]
     submitted?: Record<string, boolean>
     onAnswer?: Mock<(answers: ConfirmationAnswer[]) => void>
@@ -52,7 +54,7 @@ function timeline(
   const result = render(
     <div role="log">
       <AgentTimeline
-        entries={buildTimeline(items)}
+        entries={buildTimeline(items, live)}
         running={running}
         ended={ended}
         agentName={agent}
@@ -192,6 +194,202 @@ describe("AgentTimeline", () => {
         ?.getAttribute("title")
     ).toBe("mailbox full")
   })
+
+  it.each([1, 2])(
+    "shows %i recovered errors as a muted note while a matching retry leaves the group Done",
+    (count) => {
+      const items: Item[] = []
+      for (let index = 0; index <= count; index += 1) {
+        items.push(
+          {
+            type: "tool_call",
+            call_id: `c${index}`,
+            tool: "knowledge_search",
+            author: agent,
+            arguments: { query: "launch" },
+          },
+          {
+            type: "tool_result",
+            call_id: `c${index}`,
+            tool: "knowledge_search",
+            failed: index < count,
+            error: index < count ? "search timed out" : undefined,
+          }
+        )
+      }
+      const entries = buildTimeline(items)
+      expect(
+        entries.filter(
+          (entry) => entry.kind === "tool" && entry.state === "failed"
+        )
+      ).toHaveLength(count)
+      const { container, log } = timeline(items, { ended: true })
+      const row = container.querySelector(".workspace-agent-tools")
+      expect(row?.getAttribute("data-state")).toBe("done")
+      expect(
+        row?.querySelector(".workspace-agent-tools-status")?.textContent
+      ).toBe("Done")
+      expect(within(log).queryByText("Failed")).toBeNull()
+      const note = within(log).getByText(
+        count === 1 ? "Recovered tool error" : "2 recovered tool errors"
+      )
+      expect(note.className).toBe("workspace-agent-tools-recovered")
+      expect(note.getAttribute("title")).toContain("search timed out")
+      expect(row?.getAttribute("aria-label")).toContain("Recovered tool error")
+      expect(row?.querySelector("summary, ol, button")).toBeNull()
+    }
+  )
+
+  it.each(["history", "live", "reconciled"] as const)(
+    "shows a proven retry in a twelve-call %s group as Done with its recovered note",
+    (source) => {
+      const items: Item[] = Array.from({ length: 12 }, (_, index) => [
+        {
+          type: "tool_call" as const,
+          id: `call_${index}`,
+          call_id: `c${index}`,
+          author: agent,
+          tool: "knowledge_search",
+          arguments: { query: index < 2 ? "launch" : `task ${index}` },
+        },
+        {
+          type: "tool_result" as const,
+          id: `result_${index}`,
+          call_id: `c${index}`,
+          tool: "knowledge_search",
+          failed: index === 0,
+          error: index === 0 ? "search timed out" : undefined,
+        },
+      ]).flat()
+      const history =
+        source === "live"
+          ? []
+          : source === "reconciled"
+            ? items.slice(0, 2)
+            : items
+      const live = source === "history" ? [] : items
+      const { container, log } = timeline(history, { live, ended: true })
+      const rows = container.querySelectorAll(".workspace-agent-tools")
+      expect(rows).toHaveLength(1)
+      expect(rows[0].getAttribute("data-state")).toBe("done")
+      expect(rows[0].textContent).toContain("12 tool calls")
+      expect(
+        within(log).getByText("Recovered tool error").getAttribute("title")
+      ).toBe("search timed out")
+      expect(within(log).queryByText("Failed")).toBeNull()
+    }
+  )
+
+  it("keeps an unrecovered failure red beside a recovered note and a good answer", () => {
+    const items: Item[] = [
+      {
+        type: "tool_call",
+        call_id: "c1",
+        tool: "knowledge_search",
+        author: agent,
+        arguments: { query: "launch" },
+      },
+      {
+        type: "tool_result",
+        call_id: "c1",
+        failed: true,
+        error: "search timed out",
+      },
+      {
+        type: "tool_call",
+        call_id: "c2",
+        tool: "knowledge_search",
+        author: agent,
+        arguments: { query: "launch" },
+      },
+      { type: "tool_result", call_id: "c2" },
+      {
+        type: "tool_call",
+        call_id: "c3",
+        tool: "knowledge_search",
+        author: agent,
+        arguments: { query: "another task" },
+      },
+      {
+        type: "tool_result",
+        call_id: "c3",
+        failed: true,
+        error: "access refused",
+      },
+      { type: "message", author: agent, text: "The launch is 14 October." },
+    ]
+    const { container, log } = timeline(items, { ended: true })
+    const row = container.querySelector(".workspace-agent-tools")
+    expect(row?.getAttribute("data-state")).toBe("failed")
+    expect(within(log).getByText("Recovered tool error")).toBeTruthy()
+    expect(
+      row?.querySelector(".workspace-agent-tools-status")?.textContent
+    ).toBe("Failed")
+    expect(
+      row?.querySelector(".workspace-agent-tools-status")?.getAttribute("title")
+    ).toBe("access refused")
+    expect(within(log).getByText("The launch is 14 October.")).toBeTruthy()
+  })
+
+  it.each(["history", "live", "reconciled"] as const)(
+    "keeps twelve successful calls Done in %s and preserves an actual failure beside a good answer",
+    (source) => {
+      const calls: Item[] = Array.from({ length: 12 }, (_, index) => [
+        {
+          type: "tool_call" as const,
+          id: `call_${index}`,
+          call_id: `c${index}`,
+          tool: "knowledge_search",
+        },
+        {
+          type: "tool_result" as const,
+          id: `result_${index}`,
+          call_id: `c${index}`,
+          tool: "knowledge_search",
+        },
+      ]).flat()
+      const answer: Item = {
+        type: "message",
+        id: "answer",
+        author: agent,
+        text: "The launch is 14 October.",
+      }
+      for (const failed of [false, true]) {
+        const items: Item[] = [
+          ...calls.slice(0, -1),
+          {
+            ...calls[calls.length - 1],
+            failed,
+            error: failed ? "access refused" : undefined,
+          },
+          answer,
+        ]
+        const history = source === "live" ? [] : items
+        const live = source === "history" ? [] : items
+        const { container, log } = timeline(history, { live, ended: true })
+        const rows = container.querySelectorAll(".workspace-agent-tools")
+        expect(rows).toHaveLength(1)
+        expect(rows[0].textContent).toContain("12 tool calls")
+        expect(rows[0].getAttribute("data-state")).toBe(
+          failed ? "failed" : "done"
+        )
+        expect(
+          rows[0].querySelector(".workspace-agent-tools-status")?.textContent
+        ).toBe(failed ? "Failed" : "Done")
+        expect(within(log).getAllByText(answer.text!)).toHaveLength(1)
+        if (failed) {
+          expect(
+            rows[0]
+              .querySelector(".workspace-agent-tools-status")
+              ?.getAttribute("title")
+          ).toBe("access refused")
+        } else {
+          expect(within(log).queryByText("Failed")).toBeNull()
+        }
+        cleanup()
+      }
+    }
+  )
 
   it("reads a call a stopped run left behind as interrupted, with no moving orb", () => {
     // Stopped mid-call: the run's end marker never came.
@@ -539,6 +737,19 @@ describe("toolGroupState", () => {
     ).toBe("waiting_approval")
     expect(toolGroupState([call("done"), call("failed")])).toBe("failed")
   })
+
+  it.each(["waiting_approval", "running", "interrupted"] as const)(
+    "keeps %s ahead of a recovered error",
+    (state) => {
+      expect(
+        toolGroupState([
+          { ...call("failed"), recovered: true },
+          call("done"),
+          call(state),
+        ])
+      ).toBe(state)
+    }
+  )
 })
 
 describe("confirmations", () => {

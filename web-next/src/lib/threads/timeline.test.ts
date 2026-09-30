@@ -17,6 +17,171 @@ function toolOf(items: Item[]): ToolEntry | undefined {
   )
 }
 
+const retryArguments = {
+  query: "launch",
+  filters: { team: "product", tags: ["current", "approved"] },
+}
+const retryCall = (callId: string, overrides: Partial<Item> = {}): Item => ({
+  type: "tool_call",
+  call_id: callId,
+  tool: "knowledge_search",
+  author: "Leo",
+  arguments: retryArguments,
+  ...overrides,
+})
+const retryResult = (callId: string, failed = false): Item => ({
+  type: "tool_result",
+  call_id: callId,
+  tool: "knowledge_search",
+  failed,
+  error: failed ? "search timed out" : undefined,
+})
+
+describe("tool recovery", () => {
+  const toolsOf = (items: Item[]) =>
+    buildTimeline(items).filter(
+      (entry): entry is ToolEntry => entry.kind === "tool"
+    )
+
+  it("preserves the failed attempt and proves a later matching retry, regardless of object key order", () => {
+    const tools = toolsOf([
+      retryCall("failed"),
+      retryResult("failed", true),
+      retryCall("retry", {
+        arguments: {
+          filters: { tags: ["current", "approved"], team: "product" },
+          query: "launch",
+        },
+      }),
+      retryResult("retry"),
+    ])
+    expect(tools[0]).toMatchObject({
+      state: "failed",
+      error: "search timed out",
+      recovered: true,
+    })
+    expect(tools[1]).toMatchObject({ state: "done" })
+  })
+
+  it.each([
+    ["different tool", { tool: "read_file" }],
+    ["different author", { author: "researcher" }],
+    ["unknown author", { author: undefined }],
+    [
+      "different arguments",
+      {
+        arguments: { query: "another launch", filters: retryArguments.filters },
+      },
+    ],
+    [
+      "different array order",
+      {
+        arguments: {
+          query: "launch",
+          filters: { team: "product", tags: ["approved", "current"] },
+        },
+      },
+    ],
+    ["missing arguments", { arguments: undefined }],
+    ["explicit empty arguments", { arguments: {} }],
+  ] satisfies [string, Partial<Item>][])(
+    "does not infer recovery from %s",
+    (_name, overrides) => {
+      const tools = toolsOf([
+        retryCall("failed"),
+        retryResult("failed", true),
+        retryCall("later", overrides),
+        retryResult("later"),
+        { type: "message", author: "Leo", text: "The launch is 14 October." },
+      ])
+      expect(tools[0]).toMatchObject({
+        state: "failed",
+        error: "search timed out",
+      })
+      expect(tools[0].recovered).toBeUndefined()
+    }
+  )
+
+  it("does not infer recovery when both calls omit arguments", () => {
+    const tools = toolsOf([
+      retryCall("failed", { arguments: undefined }),
+      retryResult("failed", true),
+      retryCall("later", { arguments: undefined }),
+      retryResult("later"),
+    ])
+    expect(tools[0].recovered).toBeUndefined()
+  })
+
+  it("keeps a parallel duplicate's failure even if the other call finishes later", () => {
+    const tools = toolsOf([
+      retryCall("failed"),
+      retryCall("parallel"),
+      retryResult("failed", true),
+      retryResult("parallel"),
+    ])
+    expect(tools[0]).toMatchObject({ state: "failed" })
+    expect(tools[0].recovered).toBeUndefined()
+  })
+
+  it("requires the retry to start after the final failed outcome", () => {
+    const tools = toolsOf([
+      retryCall("failed"),
+      retryResult("failed", true),
+      retryCall("retry"),
+      retryResult("failed", true),
+      retryResult("retry"),
+    ])
+    expect(tools[0].recovered).toBeUndefined()
+  })
+
+  it.each([
+    { type: "message", author: "member", text: "Try another task." },
+    { type: "message", author: "apps", text: "New events." },
+    { type: "run_failed", error: "The run stopped." },
+  ] satisfies Item[])(
+    "does not recover across a $type group boundary",
+    (boundary) => {
+      const tools = toolsOf([
+        retryCall("failed"),
+        retryResult("failed", true),
+        boundary,
+        retryCall("later"),
+        retryResult("later"),
+      ])
+      expect(tools[0].recovered).toBeUndefined()
+    }
+  )
+
+  it("keeps a later failed matching attempt as an unrecovered failure", () => {
+    const tools = toolsOf([
+      retryCall("first"),
+      retryResult("first", true),
+      retryCall("recovery"),
+      retryResult("recovery"),
+      retryCall("latest"),
+      retryResult("latest", true),
+    ])
+    expect(tools[0].recovered).toBe(true)
+    expect(tools[2]).toMatchObject({
+      state: "failed",
+      error: "search timed out",
+    })
+    expect(tools[2].recovered).toBeUndefined()
+  })
+
+  it("uses the final result for the same call ID", () => {
+    const tools = toolsOf([
+      retryCall("same"),
+      retryResult("same", true),
+      retryResult("same"),
+    ])
+    expect(tools).toHaveLength(1)
+    expect(tools[0].state).toBe("done")
+    expect(tools[0].error).toBeUndefined()
+    expect(tools[0].recovered).toBeUndefined()
+  })
+})
+
 describe("buildTimeline", () => {
   it("renders the member's message and the agent's finished message in order", () => {
     expect(

@@ -856,6 +856,7 @@
 .workspace-agent-tools-names { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-agent-tools-status { flex: none; color: #777; font-size: 11px; }
 .workspace-agent-tools[data-state="failed"] .workspace-agent-tools-status { color: #d8a6a2; }
+.workspace-agent-tools-recovered { margin: 2px 0 0; padding-left: 27px; color: #777; font-size: 11px; line-height: 1.4; }
 .workspace-agent-tools-apps { display: flex; align-items: center; gap: 3px; flex: none; }
 .workspace-agent-tool-app { display: grid; flex: none; width: 16px; height: 16px; place-items: center; border-radius: 4px; background: #f5f5f5; color: #222; font-size: 9px; font-weight: 600; line-height: 1; }
 .workspace-agent-tool-app svg { width: 11px; height: 11px; }

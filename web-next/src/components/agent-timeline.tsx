@@ -82,7 +82,13 @@ export function toolGroupState(tools: readonly ToolEntry[]): ToolState {
     "interrupted",
     "failed",
   ] as const) {
-    if (tools.some((tool) => tool.state === state)) return state
+    if (
+      tools.some(
+        (tool) =>
+          tool.state === state && !(state === "failed" && tool.recovered)
+      )
+    )
+      return state
   }
   return tools.every((tool) => tool.state === "declined") ? "declined" : "done"
 }
@@ -211,60 +217,88 @@ function ToolGroup({
 }) {
   const tools = settledCalls(calls, ended)
   const state = toolGroupState(tools)
+  const recovered = tools.filter(
+    (tool) => tool.state === "failed" && tool.recovered
+  )
+  const recoveredLabel =
+    recovered.length === 1
+      ? "Recovered tool error"
+      : `${recovered.length} recovered tool errors`
   const active = tools.find((tool) => tool.state === "running") || tools[0]
   const apps = [
     ...new Set(
       tools.map(calledApp).filter((slug): slug is string => Boolean(slug))
     ),
   ]
-  const errors = tools.flatMap((tool) => (tool.error ? [tool.error] : []))
+  const errors = tools.flatMap((tool) =>
+    tool.error && !tool.recovered ? [tool.error] : []
+  )
   const details = tools
-    .map((tool) => `${toolGroupLabel([tool])} · ${toolStateWords[tool.state]}`)
+    .map(
+      (tool) =>
+        `${toolGroupLabel([tool])} · ${tool.recovered ? "Recovered tool error" : toolStateWords[tool.state]}`
+    )
     .join("\n")
   return (
-    <div
-      className="workspace-agent-tools"
-      data-state={state}
-      role="group"
-      aria-label={details.replaceAll("\n", "; ")}
-      title={details}
-    >
-      <ThinkingOrb
-        size={20}
-        theme="dark"
-        state={
-          state === "waiting_approval" ? "listening" : toolOrbState(active.tool)
-        }
-        paused={state !== "running" && state !== "waiting_approval"}
-        aria-hidden="true"
-      />
-      <span className="workspace-agent-tools-names">
-        {toolGroupLabel(tools)}
-      </span>
-      {apps.length > 0 && (
-        <span className="workspace-agent-tools-apps" aria-label="Apps used">
-          {apps.slice(0, 3).map((slug) => (
-            <AppCallIcon key={slug} slug={slug} />
-          ))}
-          {apps.length > 3 && (
-            <span className="workspace-agent-tools-more">
-              +{apps.length - 3}
-            </span>
-          )}
-        </span>
-      )}
-      <span
-        className="workspace-agent-tools-status"
-        role={errors.length > 0 ? "status" : undefined}
-        title={errors.length > 0 ? errors.join("\n") : undefined}
-        aria-label={
-          errors.length > 0
-            ? `${toolStateWords[state]}: ${errors.join("; ")}`
-            : undefined
-        }
+    <div className="workspace-agent-tool-group">
+      <div
+        className="workspace-agent-tools"
+        data-state={state}
+        role="group"
+        aria-label={details.replaceAll("\n", "; ")}
+        title={details}
       >
-        {toolStateWords[state]}
-      </span>
+        <ThinkingOrb
+          size={20}
+          theme="dark"
+          state={
+            state === "waiting_approval"
+              ? "listening"
+              : toolOrbState(active.tool)
+          }
+          paused={state !== "running" && state !== "waiting_approval"}
+          aria-hidden="true"
+        />
+        <span className="workspace-agent-tools-names">
+          {toolGroupLabel(tools)}
+        </span>
+        {apps.length > 0 && (
+          <span className="workspace-agent-tools-apps" aria-label="Apps used">
+            {apps.slice(0, 3).map((slug) => (
+              <AppCallIcon key={slug} slug={slug} />
+            ))}
+            {apps.length > 3 && (
+              <span className="workspace-agent-tools-more">
+                +{apps.length - 3}
+              </span>
+            )}
+          </span>
+        )}
+        <span
+          className="workspace-agent-tools-status"
+          role={errors.length > 0 ? "status" : undefined}
+          title={errors.length > 0 ? errors.join("\n") : undefined}
+          aria-label={
+            errors.length > 0
+              ? `${toolStateWords[state]}: ${errors.join("; ")}`
+              : undefined
+          }
+        >
+          {toolStateWords[state]}
+        </span>
+      </div>
+      {recovered.length > 0 && (
+        <p
+          className="workspace-agent-tools-recovered"
+          role="status"
+          title={recovered
+            .map((tool) => tool.error)
+            .filter(Boolean)
+            .join("\n")}
+        >
+          {recoveredLabel}
+        </p>
+      )}
     </div>
   )
 }
