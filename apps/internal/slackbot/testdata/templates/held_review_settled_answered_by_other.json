@@ -1,0 +1,21 @@
+{
+  "text": "Not sent: someone else answered first",
+  "blocks": [
+    {
+      "text": {
+        "text": "<@U0ASKER> asked you through Oryxa:\n> When is the launch?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Not sent: someone else answered first",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}

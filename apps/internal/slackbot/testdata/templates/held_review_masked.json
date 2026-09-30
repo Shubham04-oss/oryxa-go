@@ -1,0 +1,71 @@
+{
+  "text": "Your agent's answer for Alex Kim is held for your review.",
+  "blocks": [
+    {
+      "text": {
+        "text": "*Alex Kim* asked you through Oryxa:\n> How do I reach Priya?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Your agent's answer is held for your review.*\n• It includes an email address.\n• It includes a phone number.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Your agent's answer*, with what was flagged masked:\n> Write to {EMAIL} or call {PHONE}.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "*Send* shares the whole answer with them, flagged details included. *Send masked* shares it with those details masked, as here. *Don't send* tells them you chose not to share it.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "review",
+      "elements": [
+        {
+          "action_id": "review_send",
+          "text": {
+            "emoji": false,
+            "text": "Send",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.send.sig"
+        },
+        {
+          "action_id": "review_send_masked",
+          "text": {
+            "emoji": false,
+            "text": "Send masked",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.masked.sig"
+        },
+        {
+          "action_id": "review_withhold",
+          "text": {
+            "emoji": false,
+            "text": "Don't send",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.withhold.sig"
+        }
+      ],
+      "type": "actions"
+    }
+  ]
+}

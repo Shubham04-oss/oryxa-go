@@ -82,6 +82,9 @@ var templates = map[string]templateSpec{
 	TemplateRefusal:       {inThread | toPerson, renderRefusal},
 	TemplatePrivateNote:   {inThread | toPerson, renderPrivateNote},
 	TemplateBypassNotice:  {inDM, renderBypassNotice},
+	// The owner's review of a held answer (review.go), which shows it.
+	TemplateHeldReview:        {inDM, renderHeldReview},
+	TemplateHeldReviewSettled: {inDM, renderHeldReviewSettled},
 }
 
 // renderer is what rendering knows of the deployment: the pages a message may

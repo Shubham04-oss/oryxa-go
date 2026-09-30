@@ -1,0 +1,21 @@
+{
+  "text": "Already decided in Oryxa at 2026-09-29 14:02 UTC",
+  "blocks": [
+    {
+      "text": {
+        "text": "*Alex Kim* asked you through Oryxa:\n> When is the launch?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Already decided in Oryxa at <!date^1790690520^{date_short_pretty} {time}|2026-09-29 14:02 UTC>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}

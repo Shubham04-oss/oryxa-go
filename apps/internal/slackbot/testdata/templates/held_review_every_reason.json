@@ -1,0 +1,61 @@
+{
+  "text": "Your agent's answer for <@U0ASKER> is held for your review.",
+  "blocks": [
+    {
+      "text": {
+        "text": "<@U0ASKER> asked you through Oryxa:\n> When is the launch?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Your agent's answer is held for your review.*\n• The answer may not address the question.\n• The answer may not be supported by what your agent read.\n• Your agent found nothing to base the answer on.\n• It copies long passages from what your agent read, and you allowed a summary only.\n• It includes a link, and you allowed a summary only.\n• It touches a topic Oryxa doesn't share.\n• It includes an email address.\n• It includes a phone number.\n• It includes a street address.\n• It may include something the question didn't ask for.\n• It may include personal-life details.\n• It may include health details.\n• It may include HR details.\n• It may include pay details.\n• It may include someone else's private messages or data.\n• It may include secret values.\n• Oryxa couldn't check it automatically.\n• Your organization asks you to review answers before they're shared.\n• Oryxa flagged it for your review.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Your agent's answer*, which only you can see:\n> The launch is on the 14th.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "*Send* shares the whole answer with them. *Don't send* tells them you chose not to share it.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "review",
+      "elements": [
+        {
+          "action_id": "review_send",
+          "text": {
+            "emoji": false,
+            "text": "Send",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.send.sig"
+        },
+        {
+          "action_id": "review_withhold",
+          "text": {
+            "emoji": false,
+            "text": "Don't send",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.withhold.sig"
+        }
+      ],
+      "type": "actions"
+    }
+  ]
+}
