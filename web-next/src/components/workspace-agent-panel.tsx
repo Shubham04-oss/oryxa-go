@@ -38,7 +38,6 @@ import {
   claimPrimaryChatRequest,
   initialPrimaryChat,
   primaryChatReducer,
-  sameChatScope,
   shownThread,
   usePrimaryChatRequest,
   useRememberedChoice,
@@ -83,6 +82,9 @@ export type AgentPanelChatRequest = { agentId: string }
 
 /** Avatar seed for the primary agent until its id has loaded. */
 const PRIMARY_AGENT_SEED = "primary-agent"
+
+/** Why a request's message was not sent: the chat was already holding as many as it takes. */
+const TOO_MANY_WAITING = "Too many messages were waiting."
 
 const panelTabs: Array<{
   key: AgentPanelTab
@@ -316,19 +318,26 @@ export function WorkspaceAgentPanel({
   }, [shown, onPrimaryThreadChange])
 
   // The rest of the app asking the primary chat to open a conversation (Home
-  // does, then expands the panel). Each request is acted on once: claiming it
-  // outlasts this panel. What it asks for is held here, in order, not in the
-  // chat, so a request made before the chat first mounted is still applied,
-  // and one made while another's message is on its way waits its turn.
-  const request = usePrimaryChatRequest()
+  // does, then expands the panel). Its requests wait in a queue, and this
+  // takes them oldest first, one at a time, once the member's agents have
+  // loaded, however many were made meanwhile or before the panel mounted.
+  // Each is acted on once: claiming it outlasts this panel. What it asks for
+  // is held here, in order, not in the chat, so a request made before the chat
+  // first mounted is still applied, and one made while another's message is on
+  // its way waits its turn.
+  const request = usePrimaryChatRequest(scope)
   useEffect(() => {
     if (!request || !scope || !chatAgent) return
-    if (!sameChatScope(request.scope, scope)) return
     if (!claimPrimaryChatRequest(request.id)) return
     setTab("agents")
     setAgentId(null)
     setAgentsSide(null)
-    dispatch({ type: "request", request, screen: getScreenContext?.() })
+    const screen = getScreenContext?.()
+    dispatch(
+      request.refused
+        ? { type: "refused", request, notice: TOO_MANY_WAITING, screen }
+        : { type: "request", request, screen }
+    )
   }, [request, scope, chatAgent])
   useRememberedChoice(chat, scope, chatAgent)
 

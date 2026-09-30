@@ -1,12 +1,14 @@
 import {
+  Fragment,
   Suspense,
   useEffect,
   useEffectEvent,
+  useId,
   useMemo,
   useRef,
   useState,
 } from "react"
-import type { Dispatch } from "react"
+import type { Dispatch, ReactElement } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import { useHydrated } from "@tanstack/react-router"
@@ -33,6 +35,7 @@ import type {
   PrimaryChat,
   PrimaryChatAction,
   PrimaryChatActivity,
+  UnsentMessage,
 } from "@/lib/threads/chat-choice"
 import {
   chatMessagesToItems,
@@ -201,6 +204,17 @@ export function AgentChat({
   const draft = chat.drafts[PRIMARY_DRAFT] ?? ""
   const onDraftChange = (text: string) =>
     dispatch({ type: "draft", key: PRIMARY_DRAFT, text })
+  // The first messages that were not sent stay in view in whichever
+  // conversation's log is open: they belong to none. Edit takes only an empty
+  // composer, so what the member typed is never replaced.
+  const notSent =
+    chat.unsent.length > 0 ? (
+      <NotSentMessages
+        messages={chat.unsent}
+        canEdit={draft.trim() === ""}
+        dispatch={dispatch}
+      />
+    ) : undefined
   // What the open thread's chat says it is doing, and of which thread.
   const [reported, setReported] = useState<{
     threadId: string
@@ -352,6 +366,7 @@ export function AgentChat({
           <OpeningConversation
             agentName={agentName}
             pending={waiting}
+            notSent={notSent}
             {...composer}
           />
         }
@@ -362,6 +377,7 @@ export function AgentChat({
           threadId={threadId}
           agentName={agentName}
           pending={waiting}
+          notSent={notSent}
           onPendingTaken={() => {
             if (first) dispatch({ type: "taken", id: first.id })
           }}
@@ -396,12 +412,13 @@ export function AgentChat({
       <>
         <AgentConversation
           agentName={agentName}
-          state={first || chat.unsent ? "ready" : "empty"}
+          state={first || notSent ? "ready" : "empty"}
           error={chat.notice}
         >
-          {(first?.text ?? chat.unsent) && (
+          {notSent}
+          {first && (
             <p className="workspace-agent-message" data-from="member">
-              {first?.text ?? chat.unsent}
+              {first.text}
             </p>
           )}
         </AgentConversation>
@@ -429,6 +446,7 @@ export function AgentChat({
       <OpeningConversation
         agentName={agentName}
         pending={null}
+        notSent={notSent}
         error={
           threads.isError
             ? failureText(threads.error, "Couldn't load your conversations.")
@@ -474,6 +492,76 @@ export function AgentChat({
 }
 
 /**
+ * The first messages that were not sent, each in a bubble ringed as a failed
+ * message is in a DM, with what can be done about it: Retry sends it into a
+ * conversation of its own, Edit puts it in the composer (offered only while
+ * that is empty, so nothing the member typed is ever replaced), Dismiss lets
+ * it go. Its words are all it has: no conversation was ever made for it.
+ */
+function NotSentMessages({
+  messages,
+  canEdit,
+  dispatch,
+}: {
+  messages: readonly UnsentMessage[]
+  canEdit: boolean
+  dispatch: Dispatch<PrimaryChatAction>
+}) {
+  const prefix = useId()
+  return (
+    <>
+      {messages.map((message) => {
+        const textId = `${prefix}${message.id}`
+        return (
+          <Fragment key={message.id}>
+            <p
+              className="workspace-agent-message shadow-[inset_0_0_0_1px_#6b3b39]"
+              data-from="member"
+              data-status="not-sent"
+              id={textId}
+            >
+              {message.text}
+            </p>
+            <p className="workspace-agent-error" role="status">
+              Not sent. {message.notice}{" "}
+              <button
+                className="workspace-agent-text-button"
+                type="button"
+                aria-describedby={textId}
+                onClick={() => dispatch({ type: "retry", id: message.id })}
+              >
+                Retry
+              </button>{" "}
+              {canEdit && (
+                <>
+                  <button
+                    className="workspace-agent-text-button"
+                    type="button"
+                    aria-describedby={textId}
+                    title="Put it in the message box to change it"
+                    onClick={() => dispatch({ type: "edit", id: message.id })}
+                  >
+                    Edit
+                  </button>{" "}
+                </>
+              )}
+              <button
+                className="workspace-agent-text-button"
+                type="button"
+                aria-describedby={textId}
+                onClick={() => dispatch({ type: "dismiss", id: message.id })}
+              >
+                Dismiss
+              </button>
+            </p>
+          </Fragment>
+        )
+      })}
+    </>
+  )
+}
+
+/**
  * The conversation while it loads: its first message if it has one, and a
  * composer that takes what the member types now and sends it once there is a
  * conversation to send to.
@@ -481,6 +569,7 @@ export function AgentChat({
 function OpeningConversation({
   agentName,
   pending,
+  notSent,
   error,
   onRetry,
   draft,
@@ -489,6 +578,7 @@ function OpeningConversation({
 }: ComposerHandlers & {
   agentName?: string
   pending: string | null
+  notSent?: ReactElement
   error?: string
   onRetry?: () => void
 }) {
@@ -496,15 +586,20 @@ function OpeningConversation({
     <>
       <AgentConversation
         agentName={agentName}
-        state={pending ? "ready" : "loading"}
+        state={pending || notSent ? "ready" : "loading"}
         error={error}
         onRetry={onRetry}
       >
-        {pending && (
+        {pending ? (
           <p className="workspace-agent-message" data-from="member">
             {pending}
           </p>
+        ) : (
+          notSent && (
+            <p className="workspace-agent-empty">Loading the conversation…</p>
+          )
         )}
+        {notSent}
       </AgentConversation>
       <AgentComposer
         label={composerLabel(agentName)}
@@ -541,6 +636,7 @@ function ThreadChat({
   threadId,
   agentName,
   pending,
+  notSent,
   pendingScreen,
   getScreenContext,
   onPendingTaken,
@@ -558,6 +654,8 @@ function ThreadChat({
   threadId: string
   agentName?: string
   pending: string | null
+  /** The first messages that were not sent: shown at the end of the log, though none is this conversation's. */
+  notSent?: ReactElement
   pendingScreen?: ScreenContext
   getScreenContext?: () => ScreenContext
   onPendingTaken: () => void
@@ -887,7 +985,11 @@ function ThreadChat({
     <>
       <AgentConversation
         agentName={agentName}
-        state={entries.length > 0 || running || pending ? "ready" : "empty"}
+        state={
+          entries.length > 0 || running || pending || notSent
+            ? "ready"
+            : "empty"
+        }
         error={runError}
         follow={lastMemberMessage}
       >
@@ -909,6 +1011,7 @@ function ThreadChat({
           </p>
         )}
         {running && !drafting && <AgentActivity />}
+        {notSent}
       </AgentConversation>
       <AgentComposer
         label={label}
