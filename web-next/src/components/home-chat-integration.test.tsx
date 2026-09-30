@@ -345,6 +345,25 @@ describe("Home's public primary-chat integration", () => {
       ).map((message) => message.textContent)
       expect([...sent, ...drafts, ...pending]).toContain("Second Home request")
     })
+    // Every Home submission starts a new conversation: retaining/delivering
+    // B cannot be implemented by adding it to A's pending thread.
+    const firstThreadSent = agentChats.all
+      .filter((chat) => chat.name === objectName("th_created"))
+      .flatMap((chat) =>
+        chat.sendMessage.mock.calls.map(
+          ([message]) => (message as { text?: string } | undefined)?.text
+        )
+      )
+    expect(firstThreadSent).not.toContain("Second Home request")
+    const deliveredB = agentChats.all.filter((chat) =>
+      chat.sendMessage.mock.calls.some(
+        ([message]) =>
+          (message as { text?: string } | undefined)?.text ===
+          "Second Home request"
+      )
+    )
+    for (const chat of deliveredB)
+      expect(chat.name).toBe(objectName("th_created_2"))
   })
 
   it.each([
