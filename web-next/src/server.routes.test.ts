@@ -646,13 +646,15 @@ describe.each(objects)("the $segment route", (object) => {
 })
 
 describe("the thread chat's DELETE", () => {
-  it("deletes the thread in Go first, then purges the object's transcript", async () => {
-    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+  it("checks access, purges the transcript, then deletes the thread in Go", async () => {
+    fetchMock
+      .mockResolvedValueOnce(json({ id: "thread_1", items: [] }, 200))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
     const response = await send(
       deleteRequest(`${app}/agents/thread-chat-agent/org_sim~thread_1`)
     )
     expect(response.status).toBe(204)
-    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit]
+    const [url, init] = fetchMock.mock.calls[1] as [URL, RequestInit]
     expect([String(url), init.method]).toEqual([
       "http://go.test/v1/organizations/org_sim/threads/thread_1",
       "DELETE",
@@ -661,8 +663,8 @@ describe("the thread chat's DELETE", () => {
       env.ThreadChatAgent,
       "org_sim~thread_1"
     )
-    expect(fetchMock.mock.invocationCallOrder[0]).toBeLessThan(
-      sdk.purgeTranscript.mock.invocationCallOrder[0]
+    expect(sdk.purgeTranscript.mock.invocationCallOrder[0]).toBeLessThan(
+      fetchMock.mock.invocationCallOrder[1]
     )
   })
 })
@@ -1331,5 +1333,77 @@ describe("paths the table does not hold", () => {
     expect(await page.text()).toBe("the app")
     expect(fetchMock).not.toHaveBeenCalled()
     expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+})
+
+describe("specialist conversation history routes", () => {
+  const chat = `${app}/agents/specialist-chat-agent/org_sim~agt_sales`
+  const goThread =
+    "http://go.test/v1/organizations/org_sim/agents/agt_sales/threads/old"
+  const select = (thread: string | null, headers = {}) =>
+    new Request(`${chat}/conversation`, {
+      method: "PUT",
+      headers: { Cookie: cookie, Origin: app, ...headers },
+      body: JSON.stringify({ thread_id: thread }),
+    })
+  function backend() {
+    fetchMock.mockImplementation(async (_url: URL, init?: RequestInit) => {
+      if (init?.method === "DELETE") return new Response(null, { status: 204 })
+      return String(_url) === goThread
+        ? json(
+            {
+              id: "old",
+              items: [
+                { type: "message", author: "member", text: "Earlier question" },
+              ],
+            },
+            200
+          )
+        : json({ id: "agt_sales", kind: "specialist" }, 200)
+    })
+  }
+  it("checks the specialist and exact thread ownership before restoring its Go history", async () => {
+    backend()
+    const selectConversation = vi.fn(async () => true)
+    sdk.getAgentByName.mockResolvedValueOnce({ selectConversation })
+    expect((await send(select("old"))).status).toBe(204)
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "http://go.test/v1/organizations/org_sim/agents/agt_sales",
+      goThread,
+    ])
+    expect(selectConversation).toHaveBeenCalledExactlyOnceWith("old", [
+      { type: "message", author: "member", text: "Earlier question" },
+    ])
+  })
+  it("clears the matching object before deleting Go, and never deletes after a busy refusal", async () => {
+    backend()
+    const removeConversation = vi.fn(async () => true)
+    sdk.getAgentByName.mockResolvedValueOnce({ removeConversation })
+    expect((await send(deleteRequest(`${chat}/threads/old`))).status).toBe(204)
+    expect(removeConversation).toHaveBeenCalledExactlyOnceWith("old")
+    expect(removeConversation.mock.invocationCallOrder[0]).toBeLessThan(
+      fetchMock.mock.invocationCallOrder[2]
+    )
+    fetchMock.mockClear()
+    sdk.getAgentByName.mockResolvedValueOnce({
+      removeConversation: async () => false,
+    })
+    expect((await send(deleteRequest(`${chat}/threads/old`))).status).toBe(409)
+    expect(
+      fetchMock.mock.calls.every(([, init]) => init?.method !== "DELETE")
+    ).toBe(true)
+  })
+  it("refuses a cross-origin or invalid selection and an inaccessible conversation", async () => {
+    expect(
+      (await send(select("old", { Origin: "https://other.test" }))).status
+    ).toBe(403)
+    expect(fetchMock).not.toHaveBeenCalled()
+    backend()
+    expect((await send(select("../../elsewhere"))).status).toBe(400)
+    fetchMock
+      .mockResolvedValueOnce(json({ id: "agt_sales", kind: "specialist" }, 200))
+      .mockResolvedValueOnce(goError(404, "not_found", "Not yours"))
+    expect((await send(select("old"))).status).toBe(404)
+    expect(sdk.getAgentByName).not.toHaveBeenCalled()
   })
 })

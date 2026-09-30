@@ -84,6 +84,7 @@ type ManagedAgents interface {
 	Delete(context.Context, managedagents.Scope, string) error
 	ListThreads(context.Context, threads.Member, string) ([]threads.Thread, error)
 	GetThread(context.Context, threads.Member, string, string) (threads.Detail, error)
+	DeleteThread(context.Context, threads.Member, string, string) error
 	StartRun(context.Context, threads.Member, string, string, threads.RunInput) (managedagents.StartedRun, error)
 }
 
@@ -324,6 +325,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("DELETE /v1/organizations/{organizationID}/agents/{agentID}", server.deleteAgent)
 	server.handle("GET /v1/organizations/{organizationID}/agents/{agentID}/threads", server.listAgentThreads)
 	server.handle("GET /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}", server.getAgentThread)
+	server.handle("DELETE /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}", server.deleteAgentThread)
 	server.handle("POST /v1/organizations/{organizationID}/agents/{agentID}/runs", server.runAgent)
 	server.handle("GET /v1/organizations/{organizationID}/agent-teams", server.listAgentTeams)
 	server.handle("POST /v1/organizations/{organizationID}/agent-teams", server.createAgentTeam)
@@ -794,6 +796,22 @@ func (server *Server) getAgentThread(writer http.ResponseWriter, request *http.R
 		return
 	}
 	writeJSON(writer, http.StatusOK, detail)
+}
+
+func (server *Server) deleteAgentThread(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.agents == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agents_unavailable", "managed agents are not configured")
+		return
+	}
+	if err := server.agents.DeleteThread(request.Context(), member, request.PathValue("agentID"), request.PathValue("threadID")); err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
 }
 
 func (server *Server) listAgentTeams(writer http.ResponseWriter, request *http.Request) {

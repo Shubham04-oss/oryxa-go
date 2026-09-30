@@ -142,8 +142,8 @@ export async function getSpecialistChatMessages(
  * over. The Worker (src/server.ts) checks that the specialist is the member's
  * own, then clears the Durable Object's transcript and forgets its Go
  * conversation, so the next message starts a new one. Go keeps the old
- * conversation: it has no route that deletes a specialist conversation, and
- * `listSpecialistThreads` still lists it. Not a Go route; it deletes nothing
+ * conversation, and `listSpecialistThreads` still lists it. History deletion
+ * is the separate `deleteSpecialistThread` operation. Not a Go route; it deletes nothing
  * in Go.
  */
 export async function clearSpecialistChat(
@@ -153,6 +153,30 @@ export async function clearSpecialistChat(
   await apiRequest(specialistChatPath(organizationId, agentId), {
     method: "DELETE",
   })
+}
+
+/** Select a Go-owned history item in the specialist's live object; null starts New chat. */
+export async function selectSpecialistChat(
+  organizationId: string,
+  agentId: string,
+  threadId: string | null
+): Promise<void> {
+  await apiRequest(
+    `${specialistChatPath(organizationId, agentId)}/conversation`,
+    { method: "PUT", body: { thread_id: threadId } }
+  )
+}
+
+/** Clear the current object if it holds this chat, then delete the canonical Go conversation. */
+export async function deleteSpecialistThread(
+  organizationId: string,
+  agentId: string,
+  threadId: string
+): Promise<void> {
+  await apiRequest(
+    `${specialistChatPath(organizationId, agentId)}/threads/${encodeURIComponent(threadId)}`,
+    { method: "DELETE" }
+  )
 }
 
 /**

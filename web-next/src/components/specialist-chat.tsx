@@ -5,15 +5,17 @@
 // sends every socket the same conversation. It reuses the primary agent's
 // chat pieces: the timeline, the conversation log and the pill composer.
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { useAgent } from "agents/react"
 import { SquarePen } from "lucide-react"
 import { failureText, lastUserMessageId } from "./agent-chat"
+import { AgentChatHistory } from "./agent-chat-history"
 import { AgentComposer } from "./agent-composer"
 import { AgentConversation } from "./agent-conversation"
 import { AgentActivity, AgentTimeline } from "./agent-timeline"
 import { ApiError } from "@/lib/api/client"
+import type { Session } from "@/lib/auth/client"
 import { getSession } from "@/lib/auth/client"
 import { getAgent } from "@/lib/agents/managed-agents"
 import type { ManagedAgent } from "@/lib/agents/managed-agents"
@@ -24,7 +26,9 @@ import {
 } from "@/lib/specialists/chat-messages"
 import type { SpecialistChatState } from "@/lib/specialists/chat-messages"
 import {
-  clearSpecialistChat,
+  selectSpecialistChat,
+  deleteSpecialistThread,
+  specialistThreadsQueryOptions,
   getSpecialistChatMessages,
   specialistKeys,
   specialistThreadQueryOptions,
@@ -36,7 +40,15 @@ import {
   sessionExpiredCode,
 } from "@/lib/threads/chat-messages"
 import type { ThreadChatMessage } from "@/lib/threads/chat-messages"
-import type { ConfirmationAnswer } from "@/lib/threads/client"
+import {
+  openingThread,
+  approvalCandidates,
+  rememberedView,
+  recentNewView,
+  useRememberedView,
+} from "@/lib/threads/chat-choice"
+import type { ChatScope } from "@/lib/threads/chat-choice"
+import type { ConfirmationAnswer, ThreadDetail } from "@/lib/threads/client"
 import { socketProtocol } from "@/lib/socket-protocol"
 import { buildTimeline, pendingConfirmationIds } from "@/lib/threads/timeline"
 import type { ScreenContext } from "@/lib/agents/screen-context"
@@ -139,14 +151,14 @@ function ChatBar({
 }) {
   const startOver = (
     <button
-      className="workspace-agent-new"
+      className="workspace-agent-new workspace-agent-new-chat"
       type="button"
       aria-label="New conversation"
       title="New conversation"
       disabled={!canStartOver}
       onClick={onStartOver}
     >
-      <SquarePen size={15} strokeWidth={1.7} />
+      <SquarePen size={15} strokeWidth={1.7} /> New chat
     </button>
   )
   const name = (
@@ -235,6 +247,8 @@ type ComposerHandlers = {
 export function SpecialistChat({
   organizationId,
   specialist,
+  scope: givenScope,
+  visible = true,
   missing = false,
   layout,
   draft: heldDraft,
@@ -244,6 +258,8 @@ export function SpecialistChat({
 }: {
   organizationId: string
   specialist: ChatSpecialist
+  scope?: ChatScope
+  visible?: boolean
   /** The member's agents no longer include it: it was deleted. */
   missing?: boolean
   layout: SpecialistChatLayout
@@ -256,6 +272,9 @@ export function SpecialistChat({
   onComposingChange?: (composing: boolean) => void
   getScreenContext?: () => ScreenContext
 }) {
+  const queryClient = useQueryClient()
+  const userId = queryClient.getQueryData<Session>(["auth", "session"])?.user.id
+  const scope = givenScope ?? (userId ? { organizationId, userId } : undefined)
   const [attempt, setAttempt] = useState(0)
   const [ownDraft, setOwnDraft] = useState("")
   const draft = heldDraft ?? ownDraft
@@ -280,6 +299,8 @@ export function SpecialistChat({
         specialist={specialist}
         initialMessages={transcript.messages}
         layout={layout}
+        scope={scope}
+        visible={visible}
         getScreenContext={getScreenContext}
         {...composer}
       />
@@ -293,6 +314,7 @@ export function SpecialistChat({
   const failed = transcript.status === "failed" && !refusal
   return (
     <ClosedChat
+      organizationId={organizationId}
       layout={layout}
       specialist={specialist}
       refusal={refusal}
@@ -310,6 +332,7 @@ export function SpecialistChat({
 
 /** The chat before its socket opens: loading, unreadable, or gone. */
 function ClosedChat({
+  organizationId,
   layout,
   specialist,
   refusal,
@@ -320,6 +343,7 @@ function ClosedChat({
   onDraftChange,
   onComposingChange,
 }: ComposerHandlers & {
+  organizationId: string
   layout: SpecialistChatLayout
   specialist: ChatSpecialist
   refusal: Refusal | undefined
@@ -328,6 +352,10 @@ function ClosedChat({
   onRetry?: () => void
 }) {
   const blocked = blockedWords(specialist, refusal)
+  const threads = useQuery({
+    ...specialistThreadsQueryOptions(organizationId, specialist.id),
+    enabled: refusal !== "gone" && refusal !== "session_ended",
+  })
   return (
     <>
       <ChatBar
@@ -339,6 +367,19 @@ function ClosedChat({
             : presenceOf(specialist, refusal, "connecting", false)
         }
         canStartOver={false}
+      />
+      <AgentChatHistory
+        threads={threads.data ?? []}
+        loading={threads.isPending}
+        error={
+          threads.isError
+            ? failureText(threads.error, "Couldn't load your conversations.")
+            : undefined
+        }
+        onRetry={() => void threads.refetch()}
+        disabled
+        onOpen={() => {}}
+        onDelete={async () => {}}
       />
       <AgentConversation
         agentName={specialist.name}
@@ -369,6 +410,8 @@ function ClosedChat({
 function SpecialistChatSession({
   organizationId,
   specialist,
+  scope,
+  visible,
   initialMessages,
   layout,
   draft,
@@ -378,6 +421,8 @@ function SpecialistChatSession({
 }: ComposerHandlers & {
   organizationId: string
   specialist: ChatSpecialist
+  scope?: ChatScope
+  visible: boolean
   initialMessages: ThreadChatMessage[]
   layout: SpecialistChatLayout
   getScreenContext?: () => ScreenContext
@@ -387,6 +432,48 @@ function SpecialistChatSession({
   // The Go conversation the object continues: undefined until the socket
   // says, null for none (a new conversation starts with the next message).
   const [threadId, setThreadId] = useState<string | null>()
+  const [decided, setDecided] = useState(!scope)
+  const [explicitNew, setExplicitNew] = useState(false)
+  const openingChoice = useRef(
+    scope ? rememberedView(scope, specialist.id) : null
+  )
+  const threads = useQuery({
+    ...specialistThreadsQueryOptions(organizationId, specialist.id),
+  })
+  useRememberedView(
+    threadId,
+    scope,
+    specialist.id,
+    visible && decided,
+    explicitNew
+  )
+  const candidates = approvalCandidates(threads.data ?? [])
+  const historyDetails = useQueries({
+    queries: candidates.map((thread) => ({
+      ...specialistThreadQueryOptions(organizationId, specialist.id, thread.id),
+      staleTime: 10_000,
+      refetchInterval: (query: { state: { data?: ThreadDetail } }) =>
+        (query.state.data?.pending_confirmations.length ?? 0) > 0
+          ? 10_000
+          : false,
+      enabled: visible,
+    })),
+  })
+  const knownDetails = new Map(
+    candidates.map((thread, i) => [thread.id, historyDetails[i].data])
+  )
+  const held = new Set(
+    (threads.data ?? [])
+      .filter((thread) => {
+        const detail =
+          knownDetails.get(thread.id) ??
+          queryClient.getQueryData<ThreadDetail>(
+            specialistKeys.thread(organizationId, specialist.id, thread.id)
+          )
+        return (detail?.pending_confirmations.length ?? 0) > 0
+      })
+      .map((thread) => thread.id)
+  )
   const [refusal, setRefusal] = useState<Refusal>()
   const [runError, setRunError] = useState("")
   const [resending, setResending] = useState(false)
@@ -516,6 +603,7 @@ function SpecialistChatSession({
   }
 
   function send(text: string) {
+    if (threadId === null) setExplicitNew(true)
     setRunError("")
     const body = getScreenContext
       ? { screen_context: getScreenContext() }
@@ -557,10 +645,12 @@ function SpecialistChatSession({
   // conversation (Go keeps it) and sends every socket the empty chat and
   // its new state, so each view of this chat follows from its own socket.
   async function startOver() {
+    setExplicitNew(true)
+    setDecided(true)
     setClearing(true)
     setRunError("")
     try {
-      await clearSpecialistChat(organizationId, specialist.id)
+      await selectSpecialistChat(organizationId, specialist.id, null)
       setSubmitted({})
     } catch (error) {
       const refused = refusalOf(error)
@@ -580,6 +670,66 @@ function SpecialistChatSession({
     chat.status === "submitted" ||
     chat.status === "streaming" ||
     chat.isServerStreaming
+
+  useEffect(() => {
+    if (!decided && running) {
+      setDecided(true)
+      return
+    }
+    if (
+      decided ||
+      threadId === undefined ||
+      !threads.data ||
+      running ||
+      clearing
+    )
+      return
+    const lifecycle = { stale: false }
+    const isCurrent = () => !lifecycle.stale
+    const choice = openingChoice.current
+    const now = Date.now()
+    void openingThread({
+      threads: threads.data,
+      choice: choice?.choice ?? null,
+      leftAt: choice?.leftAt,
+      now,
+      waiting: async (id) => {
+        const detail = await queryClient
+          .fetchQuery({
+            ...specialistThreadQueryOptions(organizationId, specialist.id, id),
+            staleTime: 10_000,
+          })
+          .catch(() => undefined)
+        return (detail?.pending_confirmations.length ?? 0) > 0
+      },
+    }).then(async (chosen) => {
+      if (!isCurrent()) return
+      try {
+        await selectSpecialistChat(organizationId, specialist.id, chosen)
+      } catch (error) {
+        if (isCurrent())
+          setRunError(
+            failureText(error, "Couldn't open the conversation. Try again.")
+          )
+      }
+      if (isCurrent()) {
+        if (chosen === null && recentNewView(choice, now)) setExplicitNew(true)
+        setDecided(true)
+      }
+    })
+    return () => {
+      lifecycle.stale = true
+    }
+  }, [
+    decided,
+    threadId,
+    threads.data,
+    running,
+    clearing,
+    organizationId,
+    specialist.id,
+    queryClient,
+  ])
 
   const detail = useQuery({
     ...specialistThreadQueryOptions(
@@ -669,13 +819,51 @@ function SpecialistChatSession({
         layout={layout}
         title={title}
         presence={presenceOf(specialist, refusal, connection, running)}
-        canStartOver={
-          open &&
-          !running &&
-          !clearing &&
-          (chat.messages.length > 0 || Boolean(threadId))
-        }
+        canStartOver={open && !running && !clearing}
         onStartOver={() => void startOver()}
+      />
+      <AgentChatHistory
+        threads={threads.data ?? []}
+        selected={threadId}
+        waiting={held}
+        loading={threads.isPending}
+        error={
+          threads.isError
+            ? failureText(threads.error, "Couldn't load your conversations.")
+            : undefined
+        }
+        onRetry={() => void threads.refetch()}
+        disabled={running || clearing || !open || !decided}
+        onOpen={(id) => {
+          setDecided(true)
+          setClearing(true)
+          setRunError("")
+          void selectSpecialistChat(organizationId, specialist.id, id)
+            .then(() => setSubmitted({}))
+            .catch((error: unknown) =>
+              setRunError(
+                failureText(error, "Couldn't open this conversation.")
+              )
+            )
+            .finally(() => setClearing(false))
+        }}
+        onDelete={async (id) => {
+          await deleteSpecialistThread(organizationId, specialist.id, id)
+          await queryClient.cancelQueries({
+            queryKey: specialistKeys.threads(organizationId, specialist.id),
+          })
+          queryClient.setQueryData(
+            specialistKeys.threads(organizationId, specialist.id),
+            (old: typeof threads.data) =>
+              old?.filter((thread) => thread.id !== id)
+          )
+          queryClient.removeQueries({
+            queryKey: specialistKeys.thread(organizationId, specialist.id, id),
+          })
+          void queryClient.invalidateQueries({
+            queryKey: specialistKeys.threads(organizationId, specialist.id),
+          })
+        }}
       />
       <AgentConversation
         agentName={name}
@@ -705,7 +893,13 @@ function SpecialistChatSession({
           onDraftChange("")
           send(message)
         }}
-        disabled={Boolean(blocked) || !open || clearing || actionable.size > 0}
+        disabled={
+          Boolean(blocked) ||
+          !open ||
+          clearing ||
+          !decided ||
+          actionable.size > 0
+        }
         streaming={running}
         onStop={() => void chat.stop()}
         status={status}

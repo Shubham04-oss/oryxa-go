@@ -5,12 +5,10 @@ import type { ScreenContext } from "@/lib/agents/screen-context"
 // Which conversation the primary agent's chat opens, and how the rest of the
 // app (Home, for one) asks it to open a particular conversation or a new one.
 //
-// A conversation reopens only while it's fresh. The member's own choice in
-// this browser session comes first; then the latest conversation, if it was
-// active within the last hour. Anything older opens a new chat, so a
-// conversation stopped yesterday stays in the past. A conversation still
-// waiting on the member's confirmation reopens too, but the chat checks that
-// itself, since the thread list doesn't say.
+// A mounted chat stays where the member left it. On remount or reload,
+// their last view in this tab reopens for five minutes (including New chat),
+// then the newest conversation waiting on their approval, then New chat.
+// Server update times never imply the member was recently present.
 //
 // The chat also says what it is doing (`publishPrimaryChatActivity`), so a
 // page outside the panel can show that the agent is working or waiting.
@@ -31,7 +29,7 @@ export type PrimaryChatRequest = PrimaryChatTarget & {
 }
 
 /** How long after its last activity a conversation still reopens on its own. */
-export const FRESH_CONVERSATION_MS = 60 * 60 * 1000
+export const FRESH_CONVERSATION_MS = 5 * 60 * 1000
 
 const NEW_CHAT = "new"
 
@@ -44,98 +42,180 @@ function choiceKey(scope: ChatScope, agentId: string) {
   return `oryxa.chat.${scope.organizationId}.${scope.userId}.${agentId}`
 }
 
-/**
- * The member's choice for this agent in this browser session: a thread's id,
- * `"new"` for a new chat, or null when they haven't chosen. It survives a
- * reload and ends with the tab.
- */
-export function rememberedChoice(
+/** The last conversation and member-presence time in this tab, scoped by owner. */
+export function rememberedView(
   scope: ChatScope,
   agentId: string
-): string | null {
+): { choice: string; leftAt: number } | null {
   try {
-    return window.sessionStorage.getItem(choiceKey(scope, agentId))
+    const value: unknown = JSON.parse(
+      window.sessionStorage.getItem(choiceKey(scope, agentId)) ?? "null"
+    )
+    if (typeof value !== "object" || value === null) return null
+    const { choice, leftAt } = value as { choice?: unknown; leftAt?: unknown }
+    return typeof choice === "string" &&
+      typeof leftAt === "number" &&
+      Number.isFinite(leftAt)
+      ? { choice, leftAt }
+      : null
   } catch {
     return null
   }
 }
 
-/** Records the member's choice: a thread's id, or null for a new chat. */
+export function rememberedChoice(
+  scope: ChatScope,
+  agentId: string
+): string | null {
+  return rememberedView(scope, agentId)?.choice ?? null
+}
+
+/** Records the current view at a real member activity/leave, including automatic choices. */
 export function rememberChoice(
   scope: ChatScope,
   agentId: string,
-  threadId: string | null
+  threadId: string | null,
+  leftAt = Date.now()
 ) {
   try {
     window.sessionStorage.setItem(
       choiceKey(scope, agentId),
-      threadId ?? NEW_CHAT
+      JSON.stringify({ choice: threadId ?? NEW_CHAT, leftAt })
     )
   } catch {
-    // Storage can be off or full. The chat still opens by the rules below.
+    /* Storage may be unavailable; the chat still works. */
   }
 }
 
 type ListedThread = Pick<Thread, "id" | "title" | "updated_at" | "origin">
 
-/**
- * The newest conversation the member had with the agent: not an update from
- * their apps, which the chat never opens, and not one with no title, which
- * no message ever went into (Go titles a thread from its first message): a
- * start that was abandoned would otherwise count as the latest.
- */
-function latestChatThread(
-  threads: readonly ListedThread[]
-): ListedThread | undefined {
-  return threads.find(
-    (thread) =>
-      (!thread.origin || thread.origin === "chat") && thread.title.trim() !== ""
-  )
+export function chatHistory(threads: readonly ListedThread[]): ListedThread[] {
+  return threads
+    .filter((thread) => !thread.origin || thread.origin === "chat")
+    .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
 }
 
-/**
- * The conversation to open, or null for a new chat. `threads` is the list
- * Go answers, newest first; `choice` is `rememberedChoice`.
- */
+/** Bound full-detail approval reads even when history contains many conversations. */
+export function approvalCandidates(
+  threads: readonly ListedThread[]
+): ListedThread[] {
+  return chatHistory(threads).slice(0, 5)
+}
+
+/** Only a last-viewed choice strictly younger than five minutes can reopen. */
 export function chooseThread(
   threads: readonly ListedThread[],
   choice: string | null,
-  now: number
+  now: number,
+  leftAt?: number
 ): string | null {
-  if (choice === NEW_CHAT) return null
-  if (choice && threads.some((thread) => thread.id === choice)) return choice
-  const latest = latestChatThread(threads)
-  if (!latest) return null
-  const updated = Date.parse(latest.updated_at)
-  return Number.isFinite(updated) && now - updated < FRESH_CONVERSATION_MS
-    ? latest.id
+  if (
+    !choice ||
+    leftAt === undefined ||
+    leftAt > now ||
+    now - leftAt >= FRESH_CONVERSATION_MS
+  )
+    return null
+  return choice !== NEW_CHAT &&
+    chatHistory(threads).some((thread) => thread.id === choice)
+    ? choice
     : null
 }
 
-/**
- * What the chat opens: `chooseThread`'s answer, except that an old latest
- * conversation still opens while it waits on the member's confirmation. The
- * list can't say that, so `waiting` asks (Go's detail of the thread), and only
- * when neither the member's choice nor freshness decided. A check that fails
- * counts as not waiting, and the chat opens new.
- */
+/** A restored explicit New stays explicit while the member continues viewing it. */
+export function recentNewView(
+  view: { choice: string | null; leftAt?: number } | null | undefined,
+  now = Date.now()
+): boolean {
+  return (
+    view?.choice === NEW_CHAT &&
+    view.leftAt !== undefined &&
+    view.leftAt <= now &&
+    now - view.leftAt < FRESH_CONVERSATION_MS
+  )
+}
+
+/** Recent view (including explicit New), otherwise newest pending among five recent chats, otherwise New. */
 export async function openingThread({
   threads,
   choice,
   now,
+  leftAt,
   waiting,
 }: {
   threads: readonly ListedThread[]
   choice: string | null
   now: number
+  leftAt?: number
   waiting: (threadId: string) => Promise<boolean>
 }): Promise<string | null> {
-  const chosen = chooseThread(threads, choice, now)
-  if (chosen !== null || choice === NEW_CHAT) return chosen
-  const latest = latestChatThread(threads)
-  if (!latest) return null
-  const held = await waiting(latest.id).catch(() => false)
-  return held ? latest.id : null
+  const chosen = chooseThread(threads, choice, now, leftAt)
+  if (chosen || recentNewView({ choice, leftAt }, now)) return chosen
+  const history = approvalCandidates(threads)
+  const held = await Promise.all(
+    history.map((thread) => waiting(thread.id).catch(() => false))
+  )
+  return history.find((_, index) => held[index])?.id ?? null
+}
+
+/** Record leaves and activity only while this view is visible; hidden panels never extend the grace. */
+export function useRememberedView(
+  thread: string | null | undefined,
+  scope: ChatScope | undefined,
+  agentId: string | undefined,
+  visible = true,
+  rememberNew = true
+) {
+  const organizationId = scope?.organizationId
+  const userId = scope?.userId
+  useEffect(() => {
+    if (
+      thread === undefined ||
+      (thread === null && !rememberNew) ||
+      !organizationId ||
+      !userId ||
+      !agentId ||
+      !visible
+    )
+      return
+    let lastSavedAt = -Infinity
+    const save = () => {
+      lastSavedAt = Date.now()
+      rememberChoice({ organizationId, userId }, agentId, thread, lastSavedAt)
+    }
+    let present = document.visibilityState !== "hidden"
+    const leave = () => {
+      if (present) save()
+      present = false
+    }
+    const activity = () => {
+      if (
+        present &&
+        document.visibilityState !== "hidden" &&
+        Date.now() - lastSavedAt >= 15_000
+      )
+        save()
+    }
+    const visibility = () => {
+      if (document.visibilityState === "hidden") leave()
+      else {
+        present = true
+        activity()
+      }
+    }
+    activity()
+    window.addEventListener("pagehide", leave)
+    document.addEventListener("visibilitychange", visibility)
+    for (const type of ["pointerdown", "keydown", "wheel"])
+      document.addEventListener(type, activity, { passive: true })
+    return () => {
+      leave()
+      window.removeEventListener("pagehide", leave)
+      document.removeEventListener("visibilitychange", visibility)
+      for (const type of ["pointerdown", "keydown", "wheel"])
+        document.removeEventListener(type, activity)
+    }
+  }, [thread, organizationId, userId, agentId, visible, rememberNew])
 }
 
 /**
@@ -363,7 +443,7 @@ export type UnsentMessage = {
 export type PrimaryChat = {
   /** The conversation the chat is on: undefined until it is decided, null for a new one. */
   thread: string | null | undefined
-  /** Whether that was a choice (of the member, or of a request) rather than the rules': only a choice is remembered. */
+  /** Explicit member/request choice, including a recently restored explicit New. Automatic existing chats are recorded too. */
   chosen: boolean
   /** What waits, oldest first. An open or a blank chat is done at once; a first message stays until its conversation has it. */
   tasks: ChatTask[]
@@ -392,7 +472,7 @@ export type PrimaryChatAction =
   /** The member sent the first message of a new chat from the composer. */
   | { type: "submit"; text: string; screen?: ScreenContext }
   /** The rules chose the conversation to open. Only fills in a chat still undecided and idle. */
-  | { type: "decide"; thread: string | null }
+  | { type: "decide"; thread: string | null; resumeNew?: boolean }
   /** The member (or a conversation that is gone) moved the chat. Waits while a first message is on its way. */
   | { type: "move"; thread: string | null; notice?: string }
   | { type: "making"; id: number }
@@ -508,7 +588,7 @@ export function primaryChatReducer(
     }
     case "decide":
       return state.thread === undefined && state.tasks.length === 0
-        ? { ...state, thread: action.thread }
+        ? { ...state, thread: action.thread, chosen: action.resumeNew === true }
         : state
     case "move": {
       let tasks = state.tasks
@@ -645,24 +725,21 @@ export function shownThread(state: PrimaryChat): string | null | undefined {
 }
 
 /**
- * Remembers, for the browser session, the conversation the chat shows once
- * it is a choice (the member's, or a request's, never the rules': see
- * `PrimaryChat.chosen`), including the blank one a message is being made a
- * conversation for. One place for it means what is remembered is what the
- * chat ended up on, whatever order slow steps arrived in.
+ * Records real member presence/leave for the conversation actually shown.
+ * Existing automatically opened conversations count too; only explicit New
+ * is remembered as New, so an automatic blank cannot mask a pending approval.
  */
 export function useRememberedChoice(
   chat: PrimaryChat,
   scope: ChatScope | undefined,
-  agentId: string | undefined
+  agentId: string | undefined,
+  visible = true
 ) {
-  const shown = shownThread(chat)
-  const choice = chat.chosen || firstMessage(chat) !== null
-  const organizationId = scope?.organizationId
-  const userId = scope?.userId
-  useEffect(() => {
-    if (shown === undefined || !choice || !organizationId || !userId) return
-    if (!agentId) return
-    rememberChoice({ organizationId, userId }, agentId, shown)
-  }, [shown, choice, organizationId, userId, agentId])
+  useRememberedView(
+    shownThread(chat),
+    scope,
+    agentId,
+    visible,
+    chat.chosen || firstMessage(chat) !== null
+  )
 }

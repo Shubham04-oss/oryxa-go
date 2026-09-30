@@ -18,7 +18,7 @@ not permission to copy every incidental value into a new component.
 | --- | --- | --- |
 | Base surface | `#111111` | Page surround, naked sidebars, chat background, auth inset |
 | Main surface | `#1e1e1e` | Central canvas, settings content, auth page |
-| Raised surface | `#242424` | Cards and grouped content |
+| Cards and side panels | `#111111` | Compact cards and agent/navigation panels |
 | Quiet border | around `#353535` | Interior controls/cards only |
 | Primary text | around `#f2f2f2` | Titles and essential labels |
 | Muted text | around `#999999` | Secondary information |
@@ -187,27 +187,42 @@ not permission to copy every incidental value into a new component.
   full-width Markdown, labelled only when a sub-agent wrote them; each run of
   tool calls folded into one muted status row with a Thinking Orb for the
   activity state and small app marks when a call identifies an app; the row
-  never expands into a list. Confirmations are small cards with Decline and
-  Approve pills (several waiting are answered together);
+  never expands into a list. A request filed by the agent is a small, quiet
+  request card showing its status and its published answer as it arrives;
+  only the result authorized for the requester appears. Confirmations are small
+  cards with Decline and Approve pills (several waiting are answered together);
   files as a thumbnail or a file chip; a failed run as one muted error line,
   and an answer cut short marked "Interrupted". A specialist's answer is its
   work result's summary, with one muted line under it for the rest (needs
   your input or blocked, the tools it used, the files it saved, the hand-offs
   it suggests); while it works, one muted line with a Thinking Orb says so. In
-  the agent panel one muted row above it names the conversation, with a quiet icon
-  button that starts a new one; a specialist's focused view carries the same
-  in its presence row. No history list until one is designed. The primary chat
-  opens a new conversation rather than an old one: the one the member picked
-  in this browser session (or the new chat they started) comes first, then
-  their latest chat while it was active within the last hour, then one that
-  still waits on their confirmation; a conversation nothing was ever sent in
-  never counts as the latest. The member can type at once, and if choosing
-  takes over five seconds a new chat opens. A chat left alone for an hour
-  (nothing sent or heard, and no pointer or keys anywhere in the app) comes
-  back to a new conversation when its tab shows again, never while a run
-  streams, a confirmation waits or the Agent overview's viewer or editor is
-  open, and nothing is deleted. A first message, from the composer or from a
-  request elsewhere in the app (Home's box), is made a conversation of its own
+  the agent panel one muted row above it names the conversation, with a
+  clear, quiet New chat control; a specialist's focused view carries the
+  same in its presence row. Below it, a compact History disclosure lists real
+  conversations newest first, each with title, relative time, open and delete.
+  A waiting conversation says "Needs approval". Hide empty abandoned starts
+  unless currently selected or waiting on approval; an accessible untitled
+  conversation uses "Untitled chat". Deletion asks inline, clears the live chat
+  object first, then deletes its canonical Go thread. A failure stays visible
+  and retryable.
+  While the panel stays mounted, keep whatever is open, including through
+  collapse/re-expand and tab absence. On remount or reload, the conversation
+  the member left **less than five minutes ago** in this tab reopens, including
+  a history pick; an **explicit** New chat in that window stays new. Otherwise,
+  check the five newest chat conversations and open the newest one waiting on
+  the member's tool approval, including an untitled one; otherwise open New chat.
+  History still lists every conversation, and retains known approval markers
+  from cached details; it never fetches all past transcripts to mark the list. Record member presence and
+  actual leave time per workspace, member and agent, never server update time.
+  Activity saves at most once every 15 seconds; pagehide, hiding and unmount
+  save immediately. A hidden panel/tab never renews that grace. An automatically opened blank
+  chat does not suppress a newly waiting approval. The member can type at once;
+  the primary chat gives choosing five seconds before it opens New. Keep drafts
+  and unsent messages, and never automatically switch a mounted conversation.
+  A specialist uses the same history and opening rule in both its panel and
+  focused view. Its shared live object refuses a conversation change while it
+  is streaming, so another view cannot interrupt the run. A first message, from
+  the composer or from a request elsewhere in the app (Home's box), is made a conversation of its own
   and sent into it, in order, whatever the member does meanwhile: the chat ends
   on the latest, no message is dropped, and a request never touches the
   composer's text. One that can't be sent stays at the end of the log, in
@@ -217,9 +232,9 @@ not permission to copy every incidental value into a new component.
   it is never put in the composer by itself. A request waits until the panel
   takes it (once the member's agents have loaded), in the order it was made;
   past twenty messages waiting, the next is refused the same way. A
-  specialist's chat never starts over by itself, since that empties its log:
-  only its New conversation button does. Switching agents keeps each one's
-  conversation and unsent message. What the panel holds belongs to the member:
+  specialist's live log changes only through its opening rule or an explicit
+  history/New chat/delete action. Go keeps previous conversations until deleted.
+  Switching agents keeps each one's conversation and unsent message. What the panel holds belongs to the member:
   another member taking over the page inherits none of it.
 - People is a DM area, not teammate administration or a combined “People &
   teams” directory. Recent/started conversations belong in Team's left

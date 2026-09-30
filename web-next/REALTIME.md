@@ -68,12 +68,17 @@ through that object, so the object holds one conversation at a time:
   (`{ threadId }`, synced to every socket; a page's `setState` is refused),
   so the page can read Go's copy with `getSpecialistThread`.
 - Starting over clears the transcript and forgets the conversation, so the
-  next message starts a new one: the page's DELETE (the Worker checks the
-  specialist is the member's own, then purges over RPC), or useAgentChat's
-  `clearHistory()` over the socket. Go has no route that deletes a
-  specialist conversation, so nothing here deletes one: the old
-  conversation stays in Go and in `listSpecialistThreads`, readable with
-  `getSpecialistThread` but not continued by the object.
+  next message starts a new one. The old conversation stays in Go and in
+  `listSpecialistThreads`. New chat and history selection use
+  `PUT /agents/specialist-chat-agent/{org}~{agent}/conversation` with
+  `{thread_id}` (null for New). The Worker checks specialist ownership and
+  reads the exact Go thread, then restores its readable canonical messages
+  and synced thread id over RPC. The object refuses switching while a stream
+  is active. `DELETE …/{org}~{agent}/threads/{thread}` checks the same ownership,
+  clears the object only if it holds that thread, then deletes Go's
+  `…/agents/{agent}/threads/{thread}`. Another current chat stays untouched;
+  clearing failures leave Go reachable for a retry. Root DELETE purges the
+  whole live chat before the specialist itself is deleted.
 - A specialist answers with a JSON work result (`status`, `summary`,
   tools, files, suggested hand-offs), so its deltas are raw JSON. The
   object streams one progress marker per draft instead (a `delta` with no
@@ -633,8 +638,8 @@ the reads a page may GET beside the socket (`get-messages`), a name parser
 that reads the raw, undecoded path segment, the access check against Go
 with the member's cookie, the identity headers (built from what the check
 learned, when it learned who the member is), and, when the page may
-delete, either Go's DELETE (sent first; the transcript is purged only once
-Go has deleted) or, when Go has nothing to delete, the purge alone behind
+delete, either Go's DELETE (after an ownership check and the object's
+successful purge) or, when Go has nothing to delete, the purge alone behind
 the access check. Go's 401, 403, 404 and 503 pass through with Go's code;
 any other failure answers 502, and a Go it cannot reach 503.
 
@@ -667,8 +672,9 @@ are between people. The registry has no entry: no page reaches it.
   the next connect reads what Go stored. A room post cut off the same way
   is not sent again either: the page learns from its reopened socket that
   the room does not know it, and keeps the draft unless the message landed.
-- Deleting a thread deletes it in Go, then purges its `ThreadChatAgent`.
-  A specialist chat can only start over (Go keeps its conversations).
+- Deleting a thread checks Go ownership, purges its `ThreadChatAgent`, then
+  deletes it in Go. A specialist history item follows the same clear-first
+  sequence, without clearing a different current conversation.
   Deleting a specialist in Go leaves its chat's transcript behind,
   unreachable (the access check answers 404), so a page clears the chat
   before it deletes the specialist.
@@ -1274,4 +1280,5 @@ two places: its focused view's conversation column, and the Agents tab once
 the quick switch (or a team's Members tab Chat) selects it. Each is its own
 socket on the specialist's one object, so both show the same conversation:
 the object sends every socket the member's messages, the turn as it
-streams, and a start-over.
+streams, a history selection, and a start-over. Each view keeps its draft
+through a history selection; one shared object holds the selected Go thread.

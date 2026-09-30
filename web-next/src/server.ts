@@ -1,3 +1,4 @@
+import type { Item } from "./lib/threads/client"
 import handler from "@tanstack/react-start/server-entry"
 import { getAgentByName, routeAgentRequest } from "agents"
 import { conversationRequestHeaders } from "./conversation-env"
@@ -207,9 +208,9 @@ type RealtimeObject<TIds, TGrant = undefined> = {
   /** DELETE, from the app's own origin. Without it, DELETE answers 405. */
   deletion?: {
     /**
-     * Go's DELETE for what the object mirrors, sent first as the member
-     * (cookie and origin): Go decides, its answer is passed on, and a
-     * refusal leaves the transcript with what it belongs to. Leave it out
+     * Go's DELETE for what the object mirrors, sent after the purge as the member
+     * (cookie and origin): Go decides and its answer is passed on. A failed
+     * delete leaves the canonical Go history available to restore. Leave it out
      * when Go has nothing to delete: `checkAccess` then decides, and the
      * purge is the whole deletion.
      */
@@ -299,40 +300,24 @@ async function routeToObject<TIds, TGrant>(
   const ask = askGo(env, cookie)
 
   if (isDelete && deletion) {
-    if (!deletion.goPath) {
-      // Nothing in Go to delete: the member may clear the object when they
-      // may open it.
-      const access = await object.checkAccess(ids, ask)
-      if (access instanceof Response) return access
-      try {
-        await deletion.purge(env, rawName)
-      } catch (error) {
-        console.error(`${segment}: could not clear a conversation`, error)
-        return failure(503, "unavailable", object.unavailable)
-      }
-      return new Response(null, { status: 204 })
-    }
-    // Go deletes first, and decides whether the member may: a refusal
-    // leaves the transcript with what it belongs to.
-    let deleted: Response
-    try {
-      deleted = await fetch(
-        new URL(deletion.goPath(ids), env.ORYXA_API_ORIGIN),
-        { method: "DELETE", headers: { Cookie: cookie, Origin: url.origin } }
-      )
-    } catch {
-      return failure(503, "unavailable", "The agent service is unavailable.")
-    }
-    if (!deleted.ok) return deleted
-    // It is gone. A transcript left behind could no longer be opened (the
-    // access check now answers 404), and a retry could not reach it either,
-    // so a purge that fails is logged rather than reported.
+    // Clear the live object while it is still reachable, before Go removes its authorization.
+    const access = await object.checkAccess(ids, ask)
+    if (access instanceof Response) return access
     try {
       await deletion.purge(env, rawName)
     } catch (error) {
-      console.error(`${segment}: could not purge a deleted conversation`, error)
+      console.error(`${segment}: could not clear a conversation`, error)
+      return failure(503, "unavailable", object.unavailable)
     }
-    return deleted
+    if (!deletion.goPath) return new Response(null, { status: 204 })
+    try {
+      return await fetch(new URL(deletion.goPath(ids), env.ORYXA_API_ORIGIN), {
+        method: "DELETE",
+        headers: { Cookie: cookie, Origin: url.origin },
+      })
+    } catch {
+      return failure(503, "unavailable", "The agent service is unavailable.")
+    }
   }
 
   // The member may reach the object only for what Go lets them open.
@@ -625,9 +610,9 @@ const realtimeObjects = new Map(
       unavailable: "Your primary agent's conversation is unavailable.",
     }),
     // The member's chat with one of their specialists,
-    // `{organization}~{agent}`. Go has no route that deletes a specialist
-    // conversation, so DELETE only starts the chat over: the object clears
-    // its transcript and forgets its conversation, which Go keeps.
+    // `{organization}~{agent}`. Root DELETE clears the whole live chat, used
+    // before deleting the specialist itself. History selection and individual
+    // conversation deletion are routed separately below.
     realtimeObject({
       binding: "SpecialistChatAgent",
       reads: ["get-messages"],
@@ -699,6 +684,84 @@ const realtimeObjects = new Map(
   ].map((route) => [route.segment, route])
 )
 
+/** Selecting/deleting a specialist history item is always checked against Go as its owner. */
+async function specialistHistoryRequest(
+  request: Request,
+  env: Env,
+  url: URL,
+  rawName: string,
+  threadId?: string
+): Promise<Response> {
+  const ids = parseSpecialistAgentName(rawName)
+  if (!ids || (threadId !== undefined && !isNameId(threadId)))
+    return failure(400, "invalid_request", "Invalid conversation.")
+  if (request.method !== (threadId ? "DELETE" : "PUT"))
+    return failure(405, "method_not_allowed", "Method not allowed.")
+  if (request.headers.get("Origin") !== url.origin)
+    return failure(403, "forbidden", "Origin not allowed.")
+  const cookie = request.headers.get("Cookie")
+  if (!cookie)
+    return failure(401, "unauthorized", "Sign in to open this conversation.")
+  const ask = askGo(env, cookie)
+  const refused = await ask(agentPath(ids), isSpecialist)
+  if (refused) return refused
+  if (!threadId) {
+    try {
+      const body = await request.text()
+      if (body.length > 512)
+        return failure(400, "invalid_request", "Invalid conversation.")
+      const parsed = JSON.parse(body) as { thread_id?: unknown }
+      if (parsed.thread_id !== null && !isNameId(parsed.thread_id))
+        return failure(400, "invalid_request", "Invalid conversation.")
+      threadId = parsed.thread_id ?? undefined
+    } catch {
+      return failure(400, "invalid_request", "Invalid conversation.")
+    }
+  }
+  let detail: { answer: unknown } | undefined
+  const path = threadId
+    ? `${agentPath(ids)}/threads/${encodeURIComponent(threadId)}`
+    : undefined
+  if (path) {
+    const read = await ask.json(path)
+    if (read instanceof Response) return read
+    const value = read.answer as { id?: unknown; items?: unknown } | null
+    if (!value || value.id !== threadId || !Array.isArray(value.items))
+      return badGateway()
+    detail = read
+  }
+  try {
+    const object = await getAgentByName(env.SpecialistChatAgent, rawName)
+    const accepted =
+      request.method === "DELETE"
+        ? await object.removeConversation(threadId!)
+        : await object.selectConversation(
+            threadId ?? null,
+            (detail?.answer as { items?: Item[] } | undefined)?.items ?? []
+          )
+    if (!accepted)
+      return failure(
+        409,
+        "run_in_progress",
+        "The specialist is still answering. Wait before changing conversations."
+      )
+    if (request.method === "DELETE" && path) {
+      return await fetch(new URL(path, env.ORYXA_API_ORIGIN), {
+        method: "DELETE",
+        headers: { Cookie: cookie, Origin: url.origin },
+      })
+    }
+    return new Response(null, { status: 204 })
+  } catch (error) {
+    console.error("specialist history: could not change conversation", error)
+    return failure(
+      503,
+      "unavailable",
+      "Your specialist's conversation is unavailable."
+    )
+  }
+}
+
 /** `/agents/{segment}/{name}`, optionally with one more segment: a read. */
 const realtimePath = /^\/agents\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/?$/
 
@@ -708,6 +771,18 @@ async function respond(request: Request, env: Env): Promise<Response> {
   if (url.pathname === REALTIME_REQUESTS_PATH) {
     return handleRequests(request, env)
   }
+  const specialistHistory =
+    /^\/agents\/specialist-chat-agent\/([^/]+)\/(conversation|threads\/([^/]+))\/?$/.exec(
+      url.pathname
+    )
+  if (specialistHistory)
+    return specialistHistoryRequest(
+      request,
+      env,
+      url,
+      specialistHistory[1],
+      specialistHistory[3]
+    )
   const match = realtimePath.exec(url.pathname)
   const object = match ? realtimeObjects.get(match[1]) : undefined
   if (match && object) {

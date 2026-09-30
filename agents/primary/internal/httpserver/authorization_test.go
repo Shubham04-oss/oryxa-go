@@ -300,6 +300,10 @@ var authzRoutes = []authzRoute{
 		path: "/v1/organizations/org_1/agents/agt_other/threads/thread_other", identity: lastManagedMember,
 	},
 	{
+		pattern: "DELETE /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}", method: http.MethodDelete,
+		path: "/v1/organizations/org_1/agents/agt_other/threads/thread_other", identity: lastManagedMember,
+	},
+	{
 		pattern: "POST /v1/organizations/{organizationID}/agents/{agentID}/runs", method: http.MethodPost,
 		path: "/v1/organizations/org_1/agents/agt_other/runs", body: "{}", malformedBody: unknownField, identity: lastManagedMember,
 	},
@@ -537,8 +541,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 67 {
-		t.Fatalf("authzRoutes has %d entries, want 67 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 68 {
+		t.Fatalf("authzRoutes has %d entries, want 68 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -630,8 +634,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 35 {
-		t.Fatalf("tested %d state-changing routes, want 35 - a route's method changed without updating this expectation", tested)
+	if tested != 36 {
+		t.Fatalf("tested %d state-changing routes, want 36 - a route's method changed without updating this expectation", tested)
 	}
 }
 

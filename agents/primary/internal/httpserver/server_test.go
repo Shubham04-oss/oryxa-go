@@ -638,6 +638,14 @@ func (agents *fakeManagedAgents) GetThread(_ context.Context, member threads.Mem
 	agents.members = append(agents.members, member)
 	return threads.Detail{Thread: threads.Thread{ID: "agent_thread_1", Title: "Specialist work"}}, nil
 }
+func (agents *fakeManagedAgents) DeleteThread(_ context.Context, member threads.Member, agentID, threadID string) error {
+	agents.members = append(agents.members, member)
+	agents.threadID = threadID
+	if agentID != "agt_sales" || threadID != "agent_thread_1" {
+		return threads.ErrNotFound
+	}
+	return nil
+}
 func (agents *fakeManagedAgents) StartRun(_ context.Context, member threads.Member, _ string, threadID string, input threads.RunInput) (managedagents.StartedRun, error) {
 	agents.members = append(agents.members, member)
 	agents.lastInput = input
@@ -690,7 +698,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 70 {
+	if len(patterns) != 71 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -1364,5 +1372,25 @@ func TestAnInUseTeamAnswersConflictRatherThanAnInternalError(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "workflows") {
 		t.Fatalf("the answer does not say what is still using the team: %s", response.Body.String())
+	}
+}
+
+func TestDeleteAgentConversationUsesAuthenticatedOwnerAndExactIDs(t *testing.T) {
+	managed := &fakeManagedAgents{}
+	server := New(member(), &fakeThreads{}, Config{AllowedOrigins: []string{"https://app.oryxa.test"}, Agents: managed}, nil)
+	deleted := serve(server, http.MethodDelete, "/v1/organizations/org_1/agents/agt_sales/threads/agent_thread_1", "", bearer)
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", deleted.Code, deleted.Body.String())
+	}
+	if len(managed.members) != 1 || managed.members[0].UserID != "user_1" || managed.members[0].OrganizationID != "org_1" || managed.threadID != "agent_thread_1" {
+		t.Fatalf("identity = %+v, thread = %s", managed.members, managed.threadID)
+	}
+	refused := serve(server, http.MethodDelete, "/v1/organizations/org_1/agents/agt_other/threads/agent_thread_1", "", bearer)
+	if refused.Code != http.StatusNotFound {
+		t.Fatalf("other agent = %d %s", refused.Code, refused.Body.String())
+	}
+	unauthenticated := serve(server, http.MethodDelete, "/v1/organizations/org_1/agents/agt_sales/threads/agent_thread_1", "", nil)
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("no auth = %d", unauthenticated.Code)
 	}
 }

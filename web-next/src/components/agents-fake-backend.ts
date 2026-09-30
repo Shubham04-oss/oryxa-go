@@ -526,6 +526,10 @@ export function fakeAgentsBackend(seed: Seed = {}) {
       const [{ failure: answer }] = failures.splice(failure, 1)
       return refuse(answer.status, answer.code, answer.message)
     }
+    const selection =
+      /^\/agents\/specialist-chat-agent\/([^/]+)\/conversation$/.exec(path)
+    if (selection && method === "PUT")
+      return new Response(null, { status: 204 })
     const chat =
       /^\/agents\/specialist-chat-agent\/([^/]+)(\/get-messages)?$/.exec(path)
     if (chat) {
