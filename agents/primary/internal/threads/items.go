@@ -380,7 +380,7 @@ func authorOf(event *session.Event) string {
 }
 
 // responseError is the error a tool result reports, conventionally under
-// "error".
+// "error". An empty error string reports no error, just like an absent one.
 func responseError(response map[string]any) string {
 	value, ok := response["error"]
 	if !ok || value == nil {
@@ -396,7 +396,7 @@ func responseError(response map[string]any) string {
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return "the tool failed"
+		return ""
 	}
 	if utf8.RuneCountInString(text) > maxErrorRunes {
 		text = string([]rune(text)[:maxErrorRunes]) + "…"
