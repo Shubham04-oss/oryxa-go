@@ -63,6 +63,12 @@ function renderShell(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
       const path = new URL(input, "http://localhost").pathname
+      if (path === `/v1/organizations/${ORG}/agent-requests/irq_shell`) {
+        return new Response(JSON.stringify(waiting), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
       if (path === `/v1/organizations/${ORG}/agent-requests/irq_link`) {
         return new Response(
           JSON.stringify(
@@ -119,6 +125,34 @@ afterEach(() => {
 })
 
 describe("Requests in the workspace shell", () => {
+  it.each(["All", "row"])(
+    "opens Home's waiting %s in Requests, selecting only a named row",
+    async (target) => {
+      renderShell({ mode: "home" })
+      const card = await screen.findByRole("region", { name: "Waiting on you" })
+      fireEvent.click(
+        within(card).getByRole("button", {
+          name: target === "All" ? "All" : /Quarterly numbers/,
+        })
+      )
+
+      expect(
+        await screen.findByRole("heading", { name: "Requests", level: 1 })
+      ).toBeTruthy()
+      expect(await screen.findByRole("tab", { name: /Inbox/ })).toBeTruthy()
+      if (target === "row") {
+        const opened = await screen.findByRole("region", {
+          name: "Opened request",
+        })
+        await within(opened).findByText("Share the pipeline total.")
+      } else {
+        expect(
+          screen.queryByRole("region", { name: "Opened request" })
+        ).toBeNull()
+      }
+    }
+  )
+
   it("is the fourth item of Agents' navigation, and opens the page", async () => {
     renderShell()
 
@@ -166,7 +200,7 @@ describe("Requests in the workspace shell", () => {
 
   it("opens on a request when a note or a link names one, from wherever the member is", async () => {
     renderShell({ mode: "home" })
-    await screen.findByRole("heading", { name: "Home", level: 1 })
+    await screen.findByRole("heading", { name: "Today", level: 1 })
 
     act(() => openRequest("irq_link"))
 

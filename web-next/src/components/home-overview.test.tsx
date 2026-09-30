@@ -237,6 +237,8 @@ describe("HomeOverview", () => {
       within(card).getByRole("button", { name: /Legacy owner approval/ })
     )
     expect(callbacks.onOpenRequests).toHaveBeenCalledTimes(2)
+    expect(callbacks.onOpenRequests).toHaveBeenNthCalledWith(1)
+    expect(callbacks.onOpenRequests).toHaveBeenNthCalledWith(2, "legacy")
     expect(
       calls
         .find((url) => url.pathname.endsWith("/inbox"))

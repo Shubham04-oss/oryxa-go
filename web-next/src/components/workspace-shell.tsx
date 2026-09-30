@@ -512,9 +512,8 @@ function WorkspaceShellContent({
     if (isMobile) setLeftExpanded(false)
   }
 
-  // #140 replaces this count-only destination with the Requests section.
-  function openHomeRequests() {
-    navigateFromHome("agents", "agents")
+  function openHomeRequests(requestId?: string) {
+    openRequestsSection(requestId)
   }
 
   function openPrimaryFile(file?: PrimaryAgentFileTarget) {

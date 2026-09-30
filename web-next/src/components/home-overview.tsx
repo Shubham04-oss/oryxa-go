@@ -83,7 +83,7 @@ export function HomeOverview({
   viewerId?: string
   agentRunning?: boolean
   onNewChat?: (message?: string) => void
-  onOpenRequests: () => void
+  onOpenRequests: (requestId?: string) => void
   onOpenAgent: () => void
   onOpenConversation?: (threadId: string) => void
   onOpenTools: () => void
@@ -219,14 +219,17 @@ export function HomeOverview({
                   Waiting on you · {waiting.length}
                   {(inbox.data?.length ?? 0) >= requestLimit ? "+" : ""}
                 </h2>
-                <button type="button" onClick={onOpenRequests}>
+                <button type="button" onClick={() => onOpenRequests()}>
                   All
                 </button>
               </header>
               <ul>
                 {waiting.slice(0, 3).map((request) => (
                   <li key={request.id} className="home-row">
-                    <button type="button" onClick={onOpenRequests}>
+                    <button
+                      type="button"
+                      onClick={() => onOpenRequests(request.id)}
+                    >
                       <span>{request.purpose || request.task}</span>
                       <small>
                         {request.status === "review"
