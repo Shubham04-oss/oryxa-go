@@ -208,9 +208,17 @@ export function AgentChat({
       : threadId && reported?.threadId === threadId
         ? reported.state
         : "idle"
+  const scopeOrganization = scope?.organizationId
+  const scopeUser = scope?.userId
   useEffect(() => {
-    if (threadId !== undefined) publishPrimaryChatActivity({ threadId, state })
-  }, [threadId, state])
+    if (threadId === undefined) return
+    publishPrimaryChatActivity(
+      { threadId, state },
+      scopeOrganization && scopeUser
+        ? { organizationId: scopeOrganization, userId: scopeUser }
+        : undefined
+    )
+  }, [threadId, state, scopeOrganization, scopeUser])
   useEffect(() => () => publishPrimaryChatActivity(null), [])
 
   /** Keeps the member's choice for the session: a thread, or null for a new chat. */

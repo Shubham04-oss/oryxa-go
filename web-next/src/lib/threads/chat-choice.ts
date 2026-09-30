@@ -182,7 +182,19 @@ export type PrimaryChatActivity = {
 }
 
 let latestActivity: PrimaryChatActivity | null = null
+// Whose chat published it: a reader in another organization, or signed in as
+// someone else, hears nothing.
+let latestActivityScope: ChatScope | null = null
 const activityListeners = new Set<() => void>()
+
+function sameScope(a: ChatScope | null, b: ChatScope | null) {
+  return (
+    a !== null &&
+    b !== null &&
+    a.organizationId === b.organizationId &&
+    a.userId === b.userId
+  )
+}
 
 function sameActivity(
   a: PrimaryChatActivity | null,
@@ -194,17 +206,31 @@ function sameActivity(
 
 /**
  * The primary chat says what it is doing: the conversation it has open and
- * whether it works, waits on the member, or is idle. `null` says it is gone
- * (it unmounted). Only a change is passed on, so a chat may publish on every
- * render without waking whoever listens.
+ * whether it works, waits on the member, or is idle, for `scope`, the
+ * organization and member it belongs to. `null` says it is gone (it
+ * unmounted). A chat without a scope is heard by no one. Only a change is
+ * passed on, so a chat may publish on every render without waking whoever
+ * listens.
  */
 export function publishPrimaryChatActivity(
-  activity: PrimaryChatActivity | null
+  activity: PrimaryChatActivity | null,
+  scope?: ChatScope
 ) {
-  if (sameActivity(activity, latestActivity)) return
+  const nextScope = activity && scope ? scope : null
+  if (
+    sameActivity(activity, latestActivity) &&
+    (nextScope === null
+      ? latestActivityScope === null
+      : sameScope(nextScope, latestActivityScope))
+  )
+    return
   latestActivity = activity && {
     threadId: activity.threadId,
     state: activity.state,
+  }
+  latestActivityScope = nextScope && {
+    organizationId: nextScope.organizationId,
+    userId: nextScope.userId,
   }
   for (const listener of activityListeners) listener()
 }
@@ -217,13 +243,16 @@ function subscribeToActivity(listener: () => void) {
 }
 
 /**
- * What the primary chat last published: null until it has mounted in this
- * page, and again once it is gone.
+ * What the primary chat last published for `scope`: null until it has
+ * mounted in this page, once it is gone, and whenever the chat belongs to
+ * another organization or member.
  */
-export function usePrimaryChatActivity(): PrimaryChatActivity | null {
+export function usePrimaryChatActivity(
+  scope: ChatScope
+): PrimaryChatActivity | null {
   return useSyncExternalStore(
     subscribeToActivity,
-    () => latestActivity,
+    () => (sameScope(latestActivityScope, scope) ? latestActivity : null),
     () => null
   )
 }

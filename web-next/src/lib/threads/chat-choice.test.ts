@@ -206,21 +206,54 @@ describe("claiming a request", () => {
 })
 
 describe("primary chat activity", () => {
+  const other = { organizationId: "org-2", userId: "user-1" }
   afterEach(() => act(() => publishPrimaryChatActivity(null)))
 
   it("reads null until the chat publishes, follows it, and reads null again once it is gone", () => {
-    const { result } = renderHook(() => usePrimaryChatActivity())
+    const { result } = renderHook(() => usePrimaryChatActivity(scope))
     expect(result.current).toBeNull()
 
-    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "running" }))
+    act(() =>
+      publishPrimaryChatActivity({ threadId: "t1", state: "running" }, scope)
+    )
     expect(result.current).toEqual({ threadId: "t1", state: "running" })
-    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "waiting" }))
+    act(() =>
+      publishPrimaryChatActivity({ threadId: "t1", state: "waiting" }, scope)
+    )
     expect(result.current).toEqual({ threadId: "t1", state: "waiting" })
     // A new, empty chat has no thread.
-    act(() => publishPrimaryChatActivity({ threadId: null, state: "idle" }))
+    act(() =>
+      publishPrimaryChatActivity({ threadId: null, state: "idle" }, scope)
+    )
     expect(result.current).toEqual({ threadId: null, state: "idle" })
 
     act(() => publishPrimaryChatActivity(null))
+    expect(result.current).toBeNull()
+  })
+
+  it("is heard only by the organization and member it belongs to", () => {
+    const own = renderHook(() => usePrimaryChatActivity(scope))
+    const elsewhere = renderHook(() => usePrimaryChatActivity(other))
+    act(() =>
+      publishPrimaryChatActivity({ threadId: "t1", state: "running" }, scope)
+    )
+    expect(own.result.current).toEqual({ threadId: "t1", state: "running" })
+    expect(elsewhere.result.current).toBeNull()
+
+    // The same activity from another scope moves to that scope's readers.
+    act(() =>
+      publishPrimaryChatActivity({ threadId: "t1", state: "running" }, other)
+    )
+    expect(own.result.current).toBeNull()
+    expect(elsewhere.result.current).toEqual({
+      threadId: "t1",
+      state: "running",
+    })
+  })
+
+  it("is heard by no one when the chat has no scope", () => {
+    const { result } = renderHook(() => usePrimaryChatActivity(scope))
+    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "idle" }))
     expect(result.current).toBeNull()
   })
 
@@ -228,21 +261,31 @@ describe("primary chat activity", () => {
     let renders = 0
     const { result } = renderHook(() => {
       renders += 1
-      return usePrimaryChatActivity()
+      return usePrimaryChatActivity(scope)
     })
-    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "idle" }))
+    act(() =>
+      publishPrimaryChatActivity({ threadId: "t1", state: "idle" }, scope)
+    )
     const published = result.current
     const seen = renders
 
-    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "idle" }))
-    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "idle" }))
+    act(() =>
+      publishPrimaryChatActivity({ threadId: "t1", state: "idle" }, scope)
+    )
+    act(() =>
+      publishPrimaryChatActivity({ threadId: "t1", state: "idle" }, scope)
+    )
     expect(renders).toBe(seen)
     // Nothing changed, so it is the very object it was.
     expect(result.current).toBe(published)
 
-    act(() => publishPrimaryChatActivity({ threadId: "t2", state: "idle" }))
+    act(() =>
+      publishPrimaryChatActivity({ threadId: "t2", state: "idle" }, scope)
+    )
     expect(renders).toBe(seen + 1)
-    act(() => publishPrimaryChatActivity({ threadId: "t2", state: "running" }))
+    act(() =>
+      publishPrimaryChatActivity({ threadId: "t2", state: "running" }, scope)
+    )
     expect(renders).toBe(seen + 2)
 
     // Being gone is said once too.
@@ -252,16 +295,20 @@ describe("primary chat activity", () => {
   })
 
   it("keeps its own copy of what was published", () => {
-    const { result } = renderHook(() => usePrimaryChatActivity())
+    const { result } = renderHook(() => usePrimaryChatActivity(scope))
     const activity = { threadId: "t1", state: "idle" as const }
-    act(() => publishPrimaryChatActivity(activity))
+    const owner = { ...scope }
+    act(() => publishPrimaryChatActivity(activity, owner))
     activity.threadId = "t9"
+    owner.userId = "someone-else"
     expect(result.current).toEqual({ threadId: "t1", state: "idle" })
   })
 
   it("tells a listener that arrives late what the chat last said", () => {
-    act(() => publishPrimaryChatActivity({ threadId: "t1", state: "running" }))
-    const { result } = renderHook(() => usePrimaryChatActivity())
+    act(() =>
+      publishPrimaryChatActivity({ threadId: "t1", state: "running" }, scope)
+    )
+    const { result } = renderHook(() => usePrimaryChatActivity(scope))
     expect(result.current).toEqual({ threadId: "t1", state: "running" })
   })
 })

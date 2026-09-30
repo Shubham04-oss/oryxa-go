@@ -903,10 +903,26 @@ describe("a conversation left alone", () => {
 describe("the primary chat's activity", () => {
   // What the rest of the app would read: the chat's thread, and whether it
   // works, waits on the member or is idle.
-  function watchActivity() {
-    const { result } = renderHook(() => usePrimaryChatActivity())
+  function watchActivity(as = scope) {
+    const { result } = renderHook(() => usePrimaryChatActivity(as))
     return () => result.current
   }
+
+  it("is heard only in its own organization, by its own member", async () => {
+    stubApi({ threads: [thread("th_1", "Hello")] })
+    const own = watchActivity()
+    const otherOrganization = watchActivity({
+      ...scope,
+      organizationId: "org_2",
+    })
+    const otherMember = watchActivity({ ...scope, userId: "someone-else" })
+    renderChat()
+    await waitFor(() =>
+      expect(own()).toEqual({ threadId: "th_1", state: "idle" })
+    )
+    expect(otherOrganization()).toBeNull()
+    expect(otherMember()).toBeNull()
+  })
 
   it("says nothing before a conversation is chosen, then which one and what it does", async () => {
     stubApi({ threads: [thread("th_1", "Hello")] })
