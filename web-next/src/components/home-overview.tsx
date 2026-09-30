@@ -1,9 +1,16 @@
 import { useState } from "react"
 import { useQueries, useQuery } from "@tanstack/react-query"
+import type {
+  QueryFunctionContext,
+  UseQueryOptions,
+} from "@tanstack/react-query"
 import { useHydrated } from "@tanstack/react-router"
 import { AgentComposer } from "./agent-composer"
 import { ApiError } from "@/lib/api/client"
-import { agentRequestsQueryOptions } from "@/lib/agents/queries"
+import {
+  AGENT_REQUESTS_POLL_MS,
+  agentRequestsQueryOptions,
+} from "@/lib/agents/queries"
 import { isUnavailableHere } from "@/lib/agents/policy"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
 import { connectionsQueryOptions, toolkitName } from "@/lib/apps/client"
@@ -30,13 +37,14 @@ function waitsOnMember(request: AgentRequest, viewerId: string, now: number) {
 
 type ReadState = {
   isPending: boolean
+  isFetching: boolean
   isError: boolean
   error: unknown
   refetch: () => unknown
 }
 
 function ReadNotice({ name, query }: { name: string; query: ReadState }) {
-  if (query.isPending) {
+  if (query.isPending || query.isFetching) {
     return (
       <p className="home-quiet" role="status">
         Loading {name}…
@@ -57,6 +65,35 @@ function ReadNotice({ name, query }: { name: string; query: ReadState }) {
       )}
     </p>
   )
+}
+
+function currentData<T>(query: {
+  data?: T
+  isSuccess: boolean
+  isFetching: boolean
+}): T | undefined {
+  // React Query retains prior data after a refused refresh. It is not a fresh
+  // authorization to show that member's private work or offer its actions.
+  return query.isSuccess && !query.isFetching ? query.data : undefined
+}
+
+function privateRead<T, TKey extends readonly unknown[]>(
+  options: Pick<UseQueryOptions<T, unknown, T, TKey>, "queryKey" | "queryFn">,
+  viewerId: string
+) {
+  const queryFn = options.queryFn
+  return {
+    queryKey: [...options.queryKey, "home", viewerId],
+    queryFn: (context: QueryFunctionContext) => {
+      if (typeof queryFn !== "function")
+        throw new Error("No Home read configured")
+      return queryFn({ ...context, queryKey: options.queryKey })
+    },
+    retry: retryUnlessRefused,
+    staleTime: 0,
+    refetchOnMount: "always" as const,
+    refetchIntervalInBackground: false,
+  }
 }
 
 function relativeTime(timestamp: string) {
@@ -92,33 +129,33 @@ export function HomeOverview({
   const hydrated = useHydrated()
   const enabled = hydrated && Boolean(organizationId && viewerId)
   const org = organizationId ?? ""
+  const viewer = viewerId ?? ""
   const [draft, setDraft] = useState("")
+  const inboxOptions = agentRequestsQueryOptions(org, "inbox", requestLimit)
   const inbox = useQuery({
-    ...agentRequestsQueryOptions(org, "inbox", requestLimit),
+    ...privateRead(inboxOptions, viewer),
     enabled,
-    retry: retryUnlessRefused,
-    refetchIntervalInBackground: false,
+    refetchInterval: AGENT_REQUESTS_POLL_MS,
   })
-  const threads = useQuery({ ...threadListQueryOptions(org), enabled })
-  const connections = useQuery({
-    ...connectionsQueryOptions(org),
+  const threads = useQuery({
+    ...privateRead(threadListQueryOptions(org), viewer),
     enabled,
-    retry: retryUnlessRefused,
+  })
+  const connections = useQuery({
+    ...privateRead(connectionsQueryOptions(org), viewer),
+    enabled,
     refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
   })
   const corpora = useQuery({
-    ...corporaQueryOptions(org),
+    ...privateRead(corporaQueryOptions(org), viewer),
     enabled,
-    retry: retryUnlessRefused,
     refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
   })
+  const inboxRows = currentData(inbox) ?? []
+  const corpusRows = currentData(corpora) ?? []
   // No aggregate status endpoint exists. Check a fixed number of nonempty
   // bases, with a status filter so newer ready documents cannot hide a failure.
-  const nonemptyBases = (corpora.data ?? []).filter(
-    (base) => base.document_count > 0
-  )
+  const nonemptyBases = corpusRows.filter((base) => base.document_count > 0)
   const checkedBases = nonemptyBases.slice(0, basesToCheck)
   const failures = useQueries({
     queries: checkedBases.map((base) => ({
@@ -126,6 +163,7 @@ export function HomeOverview({
         ...ragKeys.documents(org, base.id),
         "home-failed",
         documentsToCheck,
+        viewer,
       ],
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         listDocuments(org, base.id, {
@@ -135,22 +173,24 @@ export function HomeOverview({
         }),
       enabled,
       retry: retryUnlessRefused,
+      staleTime: 0,
+      refetchOnMount: "always" as const,
       refetchInterval: 30_000,
       refetchIntervalInBackground: false,
     })),
   })
-  const waiting = (inbox.data ?? []).filter((request) =>
+  const waiting = inboxRows.filter((request) =>
     waitsOnMember(request, viewerId ?? "", Date.now())
   )
-  const recent = (threads.data ?? [])
+  const recent = (currentData(threads) ?? [])
     .filter((thread) => !thread.origin || thread.origin === "chat")
     .slice(0, 3)
-  const toolProblems = (connections.data ?? []).filter(
+  const toolProblems = (currentData(connections) ?? []).filter(
     (connection) =>
       connection.status === "failed" || connection.status === "expired"
   )
   const baseProblems = checkedBases.flatMap((base, index) => {
-    const page = failures[index]?.data
+    const page = currentData(failures[index])
     return page?.documents.length ? [{ base, page }] : []
   })
   const attention = [
@@ -171,22 +211,22 @@ export function HomeOverview({
     })),
   ]
   const incompleteKnowledge =
-    corpora.isPending ||
-    corpora.isError ||
+    !corpora.isSuccess ||
+    corpora.isFetching ||
     nonemptyBases.length > checkedBases.length ||
-    failures.some((query) => query.isPending || query.isError)
+    failures.some((query) => !query.isSuccess || query.isFetching)
   const settled = [inbox, threads, connections, corpora, ...failures].every(
-    (query) => !query.isPending && !query.isError
+    (query) => query.isSuccess && !query.isFetching
   )
   const needsMember = waiting.length > 0 || attention.length > 0
   // A base with no visible documents cannot contain a visible failed document.
   const checkedCount =
-    (corpora.data ?? []).length -
+    corpusRows.length -
     nonemptyBases.length +
-    failures.filter((query) => query.isSuccess).length
+    failures.filter((query) => query.isSuccess && !query.isFetching).length
   const coverage =
-    (corpora.data?.length ?? 0) > 0
-      ? `Checked ${checkedCount} of ${corpora.data!.length} knowledge bases.`
+    corpusRows.length > 0
+      ? `Checked ${checkedCount} of ${corpusRows.length} knowledge bases.`
       : ""
 
   return (
@@ -217,7 +257,7 @@ export function HomeOverview({
               <header>
                 <h2>
                   Waiting on you · {waiting.length}
-                  {(inbox.data?.length ?? 0) >= requestLimit ? "+" : ""}
+                  {inboxRows.length >= requestLimit ? "+" : ""}
                 </h2>
                 <button type="button" onClick={() => onOpenRequests()}>
                   All
@@ -241,7 +281,7 @@ export function HomeOverview({
                   </li>
                 ))}
               </ul>
-              {(inbox.data?.length ?? 0) >= requestLimit && (
+              {inboxRows.length >= requestLimit && (
                 <p className="home-quiet">
                   From the latest {requestLimit} requests.
                 </p>
@@ -330,7 +370,7 @@ export function HomeOverview({
           )}
           {needsMember && coverage && <p className="home-quiet">{coverage}</p>}
           {needsMember &&
-            (inbox.data?.length ?? 0) >= requestLimit &&
+            inboxRows.length >= requestLimit &&
             waiting.length === 0 && (
               <p className="home-quiet">
                 Only the latest {requestLimit} requests were checked.
@@ -340,7 +380,7 @@ export function HomeOverview({
             <p className="home-quiet" role="status">
               Nothing waiting in the work checked.
               {coverage ? ` ${coverage}` : ""}
-              {(inbox.data?.length ?? 0) >= requestLimit
+              {inboxRows.length >= requestLimit
                 ? ` Only the latest ${requestLimit} requests were checked.`
                 : ""}
             </p>

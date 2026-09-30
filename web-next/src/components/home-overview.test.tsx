@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   cleanup,
+  act,
   fireEvent,
   render,
   screen,
@@ -12,6 +13,10 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ComponentProps } from "react"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
+import { agentKeys } from "@/lib/agents/queries"
+import { threadKeys } from "@/lib/threads/client"
+import { connectionsQueryOptions } from "@/lib/apps/client"
+import { ragKeys } from "@/lib/rag/client"
 import type { Connection } from "@/lib/apps/client"
 import type { Corpus, CorpusDocument } from "@/lib/rag/client"
 import { HomeOverview } from "./home-overview"
@@ -541,5 +546,239 @@ describe("HomeOverview", () => {
       await screen.findByText("Nothing waiting in the work checked.")
     ).toBeTruthy()
     expect(screen.queryByRole("region", { name: "Waiting on you" })).toBeNull()
+  })
+
+  it("fresh-reads every private source after a same-workspace member change, including failed documents", async () => {
+    let nextMember = false
+    let releaseLists!: () => void
+    let releaseDocuments!: () => void
+    const listsReady = new Promise<void>((resolve) => {
+      releaseLists = resolve
+    })
+    const documentsReady = new Promise<void>((resolve) => {
+      releaseDocuments = resolve
+    })
+    const oldRows = {
+      [`${path}/agent-requests/inbox`]: {
+        requests: [request({ purpose: "Private old-member approval" })],
+      },
+      [`${path}/threads`]: {
+        threads: [
+          {
+            id: "old_thread",
+            title: "Private old-member chat",
+            updated_at: "",
+          },
+        ],
+      },
+      [`${path}/apps/connections`]: {
+        connections: [connection("Private old-member tool", "failed")],
+      },
+      [`${path}/corpora`]: {
+        corpora: [{ ...corpus("same_base"), name: "Private old-member base" }],
+      },
+    }
+    const nextRows: Record<string, unknown> = {
+      [`${path}/agent-requests/inbox`]: {
+        requests: [
+          request({
+            purpose: "New-member approval",
+            target: {
+              user_id: "next_member",
+              agent_id: "next_agent",
+              agent_name: "Next",
+            },
+          }),
+        ],
+      },
+      [`${path}/threads`]: { threads: [] },
+      [`${path}/apps/connections`]: { connections: [] },
+      [`${path}/corpora`]: {
+        corpora: [{ ...corpus("same_base"), name: "New-member base" }],
+      },
+    }
+    const calls = stubApi({
+      ...Object.fromEntries(
+        Object.entries(oldRows).map(([url, rows]) => [
+          url,
+          () =>
+            nextMember
+              ? listsReady.then(() => json(nextRows[url]))
+              : json(rows),
+        ])
+      ),
+      [`${path}/corpora/same_base/documents`]: () =>
+        nextMember
+          ? documentsReady.then(() => json({ documents: [] }))
+          : json({ documents: [failedDocument("old_failure")] }),
+    })
+    const view = renderHome()
+    await screen.findByText("Checked 1 of 1 knowledge bases.")
+    expect(screen.getByText("Private old-member chat")).toBeTruthy()
+    nextMember = true
+    view.rerenderHome({ viewerId: "next_member" })
+    expect(screen.queryByText(/Private old-member/)).toBeNull()
+    expect(screen.queryByText(/Checked/)).toBeNull()
+    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+    await waitFor(() => {
+      for (const url of Object.keys(oldRows))
+        expect(calls.filter((call) => call.pathname === url)).toHaveLength(2)
+    })
+    await act(async () => releaseLists())
+    await screen.findByText("Loading New-member base failures…")
+    expect(screen.queryByText("1 failed document")).toBeNull()
+    expect(screen.getByText("Checked 0 of 1 knowledge bases.")).toBeTruthy()
+    expect(screen.queryByRole("region", { name: "Needs attention" })).toBeNull()
+    await act(async () => releaseDocuments())
+    await screen.findByText("Checked 1 of 1 knowledge bases.")
+    expect(
+      calls.filter((call) => call.pathname.endsWith("/documents"))
+    ).toHaveLength(2)
+    expect(screen.queryByText(/Private old-member/)).toBeNull()
+  })
+
+  it.each([
+    "requests",
+    "agent work",
+    "tools",
+    "knowledge bases",
+    "Base failures",
+  ])(
+    "removes cached %s choices and counts during a refresh and after a refused read",
+    async (source) => {
+      const sources = {
+        requests: {
+          route: `${path}/agent-requests/inbox`,
+          key: agentKeys.requestBox("org_1", "inbox", 100),
+          label: "Private approval",
+        },
+        "agent work": {
+          route: `${path}/threads`,
+          key: threadKeys.list("org_1"),
+          label: "Private chat",
+        },
+        tools: {
+          route: `${path}/apps/connections`,
+          key: connectionsQueryOptions("org_1").queryKey,
+          label: "Private tool",
+        },
+        "knowledge bases": {
+          route: `${path}/corpora`,
+          key: ragKeys.corpora("org_1"),
+          label: "Base",
+        },
+        "Base failures": {
+          route: `${path}/corpora/base/documents`,
+          key: ragKeys.documents("org_1", "base"),
+          label: "Base",
+        },
+      }
+      const selected = sources[source as keyof typeof sources]
+      let refresh = false
+      let release!: () => void
+      const ready = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const rows: Record<string, unknown> = {
+        [`${path}/agent-requests/inbox`]: {
+          requests: [request({ purpose: "Private approval" })],
+        },
+        [`${path}/threads`]: {
+          threads: [
+            { id: "private_chat", title: "Private chat", updated_at: "" },
+          ],
+        },
+        [`${path}/apps/connections`]: {
+          connections: [connection("Private tool", "failed")],
+        },
+        [`${path}/corpora`]: { corpora: [{ ...corpus("base"), name: "Base" }] },
+        [`${path}/corpora/base/documents`]: {
+          documents: [failedDocument("private_failure")],
+        },
+      }
+      stubApi(
+        Object.fromEntries(
+          Object.entries(rows).map(([url, data]) => [
+            url,
+            () =>
+              refresh && url === selected.route
+                ? ready.then(() =>
+                    json(
+                      {
+                        error: {
+                          code: "forbidden",
+                          message: "Private diagnostic",
+                        },
+                      },
+                      403
+                    )
+                  )
+                : json(data),
+          ])
+        )
+      )
+      const view = renderHome()
+      await screen.findByText("Checked 1 of 1 knowledge bases.")
+      expect(
+        screen.getByRole("button", { name: new RegExp(selected.label) })
+      ).toBeTruthy()
+      refresh = true
+      let refetch!: Promise<void>
+      await act(async () => {
+        refetch = view.client.refetchQueries({ queryKey: selected.key })
+      })
+      await screen.findByText(`Loading ${source}…`)
+      expect(
+        screen.queryByRole("button", { name: new RegExp(selected.label) })
+      ).toBeNull()
+      expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+      if (source === "knowledge bases")
+        expect(screen.queryByText(/Checked/)).toBeNull()
+      if (source === "Base failures") {
+        expect(screen.queryByText("1 failed document")).toBeNull()
+        expect(screen.getByText("Checked 0 of 1 knowledge bases.")).toBeTruthy()
+      }
+      await act(async () => {
+        release()
+        await refetch
+      })
+      await screen.findByText(`Couldn’t load ${source}.`)
+      expect(
+        screen.queryByRole("button", { name: new RegExp(selected.label) })
+      ).toBeNull()
+      expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+      expect(screen.queryByText("Private diagnostic")).toBeNull()
+      if (source === "knowledge bases")
+        expect(screen.queryByText(/Checked/)).toBeNull()
+      if (source === "Base failures") {
+        expect(screen.queryByText("1 failed document")).toBeNull()
+        expect(screen.getByText("Checked 0 of 1 knowledge bases.")).toBeTruthy()
+      }
+    }
+  )
+
+  it("removes a previously readable tool after a refresh refuses access", async () => {
+    let refused = false
+    stubApi({
+      [`${path}/apps/connections`]: () =>
+        refused
+          ? json({ error: { code: "forbidden" } }, 403)
+          : json({
+              connections: [connection("Private cached tool", "failed")],
+            }),
+    })
+    const view = renderHome()
+    await screen.findByRole("button", { name: /Private cached tool/ })
+    refused = true
+    await act(async () => {
+      await view.client.refetchQueries({
+        queryKey: connectionsQueryOptions("org_1").queryKey,
+      })
+    })
+    await screen.findByText("Couldn’t load tools.")
+    expect(
+      screen.queryByRole("button", { name: /Private cached tool/ })
+    ).toBeNull()
+    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
   })
 })
