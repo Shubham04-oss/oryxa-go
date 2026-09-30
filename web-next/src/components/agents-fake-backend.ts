@@ -1,6 +1,6 @@
 // Test helper, never imported by the app: an in-memory agents service
-// behind a mocked `fetch`, so the tests of the agent overview, the agent
-// panel, Home and Requests run the real lib/agents clients. It keeps the
+// behind a mocked `fetch`, so the tests of the shell, the primary chat, the
+// desk and Requests run the real lib/agents clients. It keeps the
 // rules of agents/primary/internal/httpserver that the UI depends on: strict
 // bodies and organization-wide agent names. It answers the member's agents,
 // their request inbox, and an empty list of the primary agent's threads.
@@ -155,7 +155,7 @@ export function fakeAgentsBackend(seed: Seed = {}) {
     if (resource === "agent-requests" && method === "GET" && id === "inbox")
       return json({ requests: state.inbox })
 
-    // The primary agent's conversations, for the agent panel's thread chat.
+    // The primary agent's conversations, for its chat in the center.
     if (resource === "threads" && method === "GET" && !id)
       return json({ threads: [] })
 

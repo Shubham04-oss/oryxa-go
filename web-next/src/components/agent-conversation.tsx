@@ -5,7 +5,7 @@ import type { ReactNode, UIEvent } from "react"
 const followDistance = 48
 
 /**
- * The agent panel's conversation log. It keeps the end in view as the
+ * The primary chat's conversation log. It keeps the end in view as the
  * conversation grows, unless the member has scrolled up to read; `follow`
  * changing (such as their own new message) brings them back to the end.
  */

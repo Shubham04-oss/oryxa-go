@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react"
+import { lazy, Suspense, useEffect, useId, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { ArrowLeft, Download, FileText, Pencil } from "lucide-react"
 import { ApiError } from "@/lib/api/client"
@@ -36,12 +36,15 @@ export function isEditableDocument(name: string): boolean {
 }
 
 /**
- * Follow the chat's current thread. A new chat has none, and neither has one
- * that hasn't decided yet (`threadId` undefined, such as before the panel was
- * first expanded): which conversation it opens is the chat's to decide, not
- * something to guess from the list here.
+ * The files of the conversation the chat is on, newest first, each by its
+ * latest version. A new chat has none, and neither has one that hasn't
+ * decided yet (`threadId` undefined): which conversation it opens is the
+ * chat's to decide, not something to guess from the list here.
  */
-function useCurrentFiles(organizationId: string, threadId?: string | null) {
+export function useConversationFiles(
+  organizationId: string,
+  threadId?: string | null
+) {
   const currentThreadId = threadId ?? null
   const detail = useQuery({
     ...threadDetailQueryOptions(organizationId, currentThreadId ?? ""),
@@ -68,27 +71,33 @@ function useCurrentFiles(organizationId: string, threadId?: string | null) {
   return { currentThreadId, files, status, error, pending }
 }
 
-/** File entries on Agent overview; opening one uses its active work panel. */
+/**
+ * The open conversation's files, as its header's Files shows them inline:
+ * choosing one opens it in the viewer, in place of the conversation.
+ */
 export function PrimaryAgentFiles({
+  id,
   organizationId,
   threadId,
   onOpenFile,
 }: {
+  /** The section's id, for the button that shows it. */
+  id?: string
   organizationId: string
   threadId?: string | null
   onOpenFile?: (file: PrimaryAgentFileTarget) => void
 }) {
-  const { currentThreadId, files, status, error, pending } = useCurrentFiles(
-    organizationId,
-    threadId
-  )
+  const headingId = useId()
+  const { currentThreadId, files, status, error, pending } =
+    useConversationFiles(organizationId, threadId)
   return (
     <section
+      id={id}
       className="workspace-primary-files-section"
-      aria-labelledby="agents-overview-files"
+      aria-labelledby={headingId}
     >
-      <p className="workspace-eyebrow" id="agents-overview-files">
-        Current conversation files
+      <p className="workspace-eyebrow" id={headingId}>
+        Files in this conversation
       </p>
       {status ? (
         <p
@@ -136,7 +145,11 @@ export function PrimaryAgentFiles({
   )
 }
 
-/** The active viewer occupying the whole Agent overview work panel. */
+/**
+ * A file of the conversation, previewed in place of the conversation (the
+ * chat stays mounted behind it), with Edit for the formats the editor saves
+ * back as they were, and a download link. Back returns to the conversation.
+ */
 export function PrimaryAgentFileViewer({
   organizationId,
   threadId,
@@ -154,7 +167,7 @@ export function PrimaryAgentFileViewer({
     status,
     error: listError,
     pending,
-  } = useCurrentFiles(organizationId, threadId)
+  } = useConversationFiles(organizationId, threadId)
   const current = file ?? files.at(0)
   const editable = current ? isEditableDocument(current.name) : false
   const activeThreadId = file?.threadId ?? currentThreadId
@@ -207,7 +220,7 @@ export function PrimaryAgentFileViewer({
         <button
           type="button"
           className="workspace-icon-button"
-          aria-label="Back to Agent overview"
+          aria-label="Back to conversation"
           onClick={onBack}
         >
           <ArrowLeft size={17} strokeWidth={1.7} />

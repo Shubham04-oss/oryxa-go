@@ -49,9 +49,9 @@ export function AgentComposer({
   const [multiline, setMultiline] = useState(false)
 
   // Sized here rather than by react-textarea-autosize, which measures only
-  // when the value or the window changes: opened with the panel, it measured
-  // while the panel was still widening from its rail, wrapped the
-  // placeholder, and kept that tall height once the panel was full width.
+  // when the value or the window changes: opened in a column still
+  // widening (the old side panel, from its rail), it measured too early,
+  // wrapped the placeholder, and kept that tall height once it was full width.
   const fit = useCallback(() => {
     const textarea = textareaRef.current
     if (!textarea) return

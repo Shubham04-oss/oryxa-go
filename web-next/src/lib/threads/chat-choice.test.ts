@@ -15,6 +15,7 @@ import {
   rememberChoice,
   rememberedChoice,
   rememberedView,
+  reopensConversation,
   requestPrimaryChat,
   sameChatScope,
   shownThread,
@@ -174,6 +175,28 @@ describe("remembered choice", () => {
     expect(
       rememberedChoice({ organizationId: "org-2", userId: "user-1" }, "agent-a")
     ).toBeNull()
+  })
+
+  it("says a chat still choosing will reopen a conversation only when the member left one in this tab less than five minutes ago", () => {
+    rememberChoice(scope, "agent-a", "t1", now - FRESH_CONVERSATION_MS + 1)
+    expect(reopensConversation(scope, "agent-a", now)).toBe(true)
+    // Five minutes on, the rules look for approvals instead.
+    expect(
+      reopensConversation(scope, "agent-a", now + FRESH_CONVERSATION_MS)
+    ).toBe(false)
+    // An explicit New chat reopens no conversation.
+    rememberChoice(scope, "agent-a", null, now - 1)
+    expect(reopensConversation(scope, "agent-a", now)).toBe(false)
+    // A time from the future counts for nothing.
+    rememberChoice(scope, "agent-a", "t1", now + 1)
+    expect(reopensConversation(scope, "agent-a", now)).toBe(false)
+    // Nothing to read without a member and an agent, or for another member.
+    rememberChoice(scope, "agent-a", "t1", now - 1)
+    expect(reopensConversation(undefined, "agent-a", now)).toBe(false)
+    expect(reopensConversation(scope, undefined, now)).toBe(false)
+    expect(
+      reopensConversation({ ...scope, userId: "user-2" }, "agent-a", now)
+    ).toBe(false)
   })
 })
 

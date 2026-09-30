@@ -1,7 +1,7 @@
-/* Agents mode: the Agent overview (agents-mode.tsx), the primary agent's
-   files and their viewer, and the notices and buttons the request views
-   share. The shell, focused layout and composer come from workspace.css;
-   this file adds only what those views need on top (DESIGN.md §1, §3). */
+/* What the center's pages share beyond the shell: the scrolling page of
+   Requests, its notices and buttons, and a conversation's files with their
+   viewer (primary-agent-files.tsx, document-preview.tsx). The shell and the
+   composer come from workspace.css (DESIGN.md §1, §3). */
 
 .workspace-agents-page {
   height: 100%;
@@ -57,25 +57,8 @@
 .workspace-agents-button:disabled { cursor: not-allowed; opacity: 0.5; }
 .workspace-agents-button[data-variant="primary"] { border-color: #ddd; background: #e9e9e9; color: #202020; font-weight: 600; }
 .workspace-agents-button[data-variant="primary"]:hover:not(:disabled) { border-color: #fff; background: #fff; }
-.workspace-agents-status {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  min-height: 22px;
-  padding: 3px 9px;
-  border: 1px solid #4a4a4a;
-  border-radius: 999px;
-  background: #303030;
-  color: #aaa;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1;
-}
-.workspace-agents-status[data-status="active"] { border-color: #385c49; background: #263a2e; color: #b9e6c6; }
 
-.workspace-agents-face { display: inline-flex; flex: none; }
-
-/* Agent overview */
+/* A conversation's files, and the viewer that shows one in its place. */
 .workspace-primary-files-section { max-width: 960px; }
 .workspace-primary-files-section > .workspace-eyebrow { margin-bottom: 12px; }
 .workspace-primary-file-list { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
@@ -125,60 +108,7 @@
 .workspace-office-editor-canvas { flex: 1; min-width: 0; min-height: 0; }
 .workspace-office-editor-mount, .workspace-office-editor-canvas > iframe { width: 100%; height: 100%; border: 0; }
 @media (max-width: 800px) { .workspace-document-text, .workspace-document-prose { padding: 20px; } }
-.workspace-agents-primary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px 14px;
-  max-width: 700px;
-  padding: 16px 18px;
-  border: 1px solid #393939;
-  border-radius: 16px;
-  background: var(--workspace-raised);
-}
-.workspace-agents-primary .workspace-agents-face .workspace-avatar { width: 42px; height: 42px; }
-.workspace-agents-primary-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.workspace-agents-primary-copy span { color: #929292; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
-.workspace-agents-primary-copy strong { overflow: hidden; color: #f2f2f2; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-agents-primary-copy small { color: #a5a5a5; font-size: 12px; line-height: 1.4; }
-.workspace-agents-primary-paused {
-  display: flex;
-  grid-column: 1 / -1;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  padding-top: 12px;
-  border-top: 1px solid #333;
-}
-.workspace-agents-primary-paused p { flex: 1 1 260px; margin: 0; color: #bbb; font-size: 12px; line-height: 1.45; }
-.workspace-agents-primary-paused .workspace-agents-error { flex-basis: 100%; }
-
-.workspace-agents-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 260px));
-  gap: 10px;
-  max-width: 700px;
-  margin: 14px 0 30px;
-}
-.workspace-agents-stats > div {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  padding: 14px 15px;
-  border: 1px solid #393939;
-  border-radius: 14px;
-  background: var(--workspace-raised);
-}
-.workspace-agents-stats dt { color: #aaa; font-size: 11px; }
-.workspace-agents-stats dd { margin: 0; color: #f2f2f2; font-size: 22px; font-weight: 600; line-height: 1; }
-.workspace-agents-stats small { min-height: 14px; color: #858585; font-size: 10px; line-height: 1.35; }
 
 @media (max-width: 800px) {
   .workspace-agents-page { padding: 20px 16px 40px; }
-  .workspace-agents-stats {
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
-    gap: 8px;
-    margin-bottom: 24px;
-  }
 }

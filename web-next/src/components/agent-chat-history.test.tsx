@@ -10,6 +10,12 @@ import {
 } from "@testing-library/react"
 import { AgentChatHistory } from "./agent-chat-history"
 
+vi.mock("thinking-orbs", () => ({
+  ThinkingOrb: ({ state }: { state: string }) => (
+    <i aria-hidden="true" data-orb-state={state} />
+  ),
+}))
+
 const threads = [
   {
     id: "old",
@@ -29,27 +35,7 @@ const threads = [
 ]
 afterEach(cleanup)
 
-describe("conversation history", () => {
-  it("opens for each explicit Home request without picking a chat or overriding a later collapse", () => {
-    const props = {
-      threads,
-      onOpen: vi.fn(),
-      onDelete: vi.fn(),
-      onOpened: vi.fn(),
-    }
-    const request = {}
-    const view = render(<AgentChatHistory {...props} openRequest={request} />)
-    const toggle = screen.getByRole("button", { name: "History" })
-    expect(toggle.getAttribute("aria-expanded")).toBe("true")
-    expect(props.onOpened).toHaveBeenCalledOnce()
-    expect(props.onOpen).not.toHaveBeenCalled()
-    fireEvent.click(toggle)
-    view.rerender(<AgentChatHistory {...props} openRequest={request} />)
-    expect(toggle.getAttribute("aria-expanded")).toBe("false")
-    view.rerender(<AgentChatHistory {...props} openRequest={{}} />)
-    expect(toggle.getAttribute("aria-expanded")).toBe("true")
-    expect(props.onOpened).toHaveBeenCalledTimes(2)
-  })
+describe("the sidebar's Recent list", () => {
   it("shows newest first, titles, relative time, current selection and approval markers", () => {
     const open = vi.fn()
     render(
@@ -61,9 +47,8 @@ describe("conversation history", () => {
         onDelete={vi.fn()}
       />
     )
-    const toggle = screen.getByRole("button", { name: "History" })
-    expect(toggle.getAttribute("aria-expanded")).toBe("false")
-    fireEvent.click(toggle)
+    // Always shown: there is no disclosure to open first.
+    expect(screen.queryByRole("button", { name: "History" })).toBeNull()
     const rows = screen.getAllByRole("listitem")
     expect(rows.map((row) => row.querySelector("button")?.textContent)).toEqual(
       [
@@ -76,15 +61,33 @@ describe("conversation history", () => {
       name: /Earlier plan1 h ago/,
     })
     expect(selected.getAttribute("aria-current")).toBe("true")
+    expect(rows[2].getAttribute("data-current")).toBe("true")
     fireEvent.click(
       within(rows[0]).getByRole("button", { name: /Launch1 min ago/ })
     )
     expect(open).toHaveBeenCalledExactlyOnceWith("new")
   })
+
+  it("says the agent is working in the conversation whose chat runs, in place of its time", () => {
+    render(
+      <AgentChatHistory
+        threads={threads}
+        working="new"
+        onOpen={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+    const row = screen.getByRole("button", { name: /^Launch/ })
+    expect(row.textContent).toBe("LaunchWorking")
+    expect(row.querySelector("[data-orb-state=working]")).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: /^Earlier plan/ }).textContent
+    ).toBe("Earlier plan1 h ago")
+  })
+
   it("hides empty abandoned starts but keeps selected and pending untitled chats", () => {
     const props = { threads, onOpen: vi.fn(), onDelete: vi.fn() }
     const view = render(<AgentChatHistory {...props} />)
-    fireEvent.click(screen.getByRole("button", { name: "History" }))
     expect(screen.queryByText("Untitled chat")).toBeNull()
     view.rerender(<AgentChatHistory {...props} selected="blank" />)
     expect(screen.getByText("Untitled chat")).toBeTruthy()
@@ -92,6 +95,7 @@ describe("conversation history", () => {
     expect(screen.getByText("Untitled chat")).toBeTruthy()
     expect(screen.getByText("Needs approval ·")).toBeTruthy()
   })
+
   it("requires an inline delete confirmation and keeps a refusal actionable", async () => {
     const remove = vi.fn(async () => {
       throw new Error("Couldn't clear the chat. Try again.")
@@ -99,7 +103,6 @@ describe("conversation history", () => {
     render(
       <AgentChatHistory threads={threads} onOpen={vi.fn()} onDelete={remove} />
     )
-    fireEvent.click(screen.getByRole("button", { name: "History" }))
     fireEvent.click(screen.getByRole("button", { name: "Delete Launch" }))
     expect(remove).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
@@ -120,6 +123,23 @@ describe("conversation history", () => {
         .hasAttribute("disabled")
     ).toBe(false)
   })
+
+  it("keeps every row closed while a first message is on its way", () => {
+    const open = vi.fn()
+    render(
+      <AgentChatHistory
+        threads={threads}
+        disabled
+        onOpen={open}
+        onDelete={vi.fn()}
+      />
+    )
+    for (const button of screen.getAllByRole("button"))
+      expect(button.hasAttribute("disabled")).toBe(true)
+    fireEvent.click(screen.getByRole("button", { name: /^Launch/ }))
+    expect(open).not.toHaveBeenCalled()
+  })
+
   it("reports loading, empty and failed reads distinctly", () => {
     const props = {
       threads: [],
@@ -128,7 +148,6 @@ describe("conversation history", () => {
       onRetry: vi.fn(),
     }
     const view = render(<AgentChatHistory {...props} loading />)
-    fireEvent.click(screen.getByRole("button", { name: "History" }))
     expect(screen.getByRole("status").textContent).toBe(
       "Loading conversations…"
     )

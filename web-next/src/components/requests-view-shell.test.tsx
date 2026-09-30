@@ -12,6 +12,7 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { WorkspaceShell } from "./workspace-shell"
+import type { WorkspaceArea } from "./workspace-shell"
 import { openRequest, openRequests } from "./requests-view-open"
 import {
   ORG,
@@ -22,8 +23,8 @@ import {
 } from "./agents-fake-backend"
 import type { Role, Session } from "@/lib/auth/client"
 
-// The shell holds the primary agent's chat socket in its right panel; the
-// Agents SDK stands in (src/test/room-socket.ts, src/test/agent-chat.ts).
+// The shell hosts the primary agent's chat in its center; the Agents SDK
+// stands in (src/test/room-socket.ts, src/test/agent-chat.ts).
 vi.mock(
   "agents/react",
   async () => (await import("@/test/room-socket")).agentsReact
@@ -61,11 +62,18 @@ const shared = request({
 
 let client: QueryClient
 
+/** A conversation of the member's, to leave for Requests. */
+const conversation = {
+  id: "th_plan",
+  title: "Plan the launch",
+  origin: "chat",
+  updated_at: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+}
+
 function renderShell(
   initial: {
-    section?: "agents" | "requests"
+    area?: WorkspaceArea
     signedIn?: boolean
-    mode?: "home" | "agents"
     organizationRole?: Role
   } = {}
 ) {
@@ -73,61 +81,55 @@ function renderShell(
     agents: [primary],
     inbox: [waiting],
   })
-  // The one request a link names, and the members list, beside the backend.
+  const answer = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  // The one request a link names, the member's conversation and the members
+  // list, beside the backend.
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
       const path = new URL(input, "http://localhost").pathname
       if (path === `/v1/organizations/${ORG}/agent-requests/activity`) {
-        return new Response(
-          JSON.stringify({
-            activity: [
-              {
-                kind: "answered",
-                role: "owner",
-                request_id: shared.id,
-                status: shared.status,
-                with_user_id: shared.requester.user_id,
-                at: shared.updated_at,
-              },
-            ],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
+        return answer({
+          activity: [
+            {
+              kind: "answered",
+              role: "owner",
+              request_id: shared.id,
+              status: shared.status,
+              with_user_id: shared.requester.user_id,
+              at: shared.updated_at,
+            },
+          ],
+        })
       }
       if (path === `/v1/organizations/${ORG}/agent-requests/${shared.id}`) {
-        return new Response(JSON.stringify(shared), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
+        return answer(shared)
       }
       if (path === `/v1/organizations/${ORG}/agent-requests/irq_shell`) {
-        return new Response(JSON.stringify(waiting), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
+        return answer(waiting)
       }
       if (path === `/v1/organizations/${ORG}/agent-requests/irq_link`) {
-        return new Response(
-          JSON.stringify(
-            request({
-              id: "irq_link",
-              status: "pending",
-              task: "A linked ask.",
-            })
-          ),
-          { status: 200, headers: { "Content-Type": "application/json" } }
+        return answer(
+          request({ id: "irq_link", status: "pending", task: "A linked ask." })
         )
       }
+      if (path === `/v1/organizations/${ORG}/threads`) {
+        return answer({ threads: [conversation] })
+      }
+      if (path === `/v1/organizations/${ORG}/threads/${conversation.id}`) {
+        return answer({ ...conversation, items: [], pending_confirmations: [] })
+      }
+      if (path.endsWith("/get-messages")) return answer([])
       if (path === `/v1/organizations/${ORG}/apps/slack/install`) {
-        return new Response(
-          JSON.stringify({
-            status: "not_installed",
-            add_to_slack_url: "https://slack.com/oauth/v2/authorize?state=abc",
-            add_to_slack_expires_at: "2999-01-01T00:00:00Z",
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
+        return answer({
+          status: "not_installed",
+          add_to_slack_url: "https://slack.com/oauth/v2/authorize?state=abc",
+          add_to_slack_expires_at: "2999-01-01T00:00:00Z",
+        })
       }
       return backend.fetch(input, init)
     })
@@ -140,12 +142,13 @@ function renderShell(
         session={signedIn ? session : undefined}
         selectedOrganization={signedIn ? session.organizations[0] : undefined}
         organizationRole={initial.organizationRole}
-        initialMode={initial.mode ?? "agents"}
-        initialSection={initial.section}
+        initialArea={initial.area}
       />
     </QueryClientProvider>
   )
 }
+
+const main = () => within(screen.getByRole("navigation", { name: "Main" }))
 
 beforeEach(() => {
   vi.stubGlobal("matchMedia", () => ({
@@ -159,14 +162,15 @@ afterEach(() => {
   cleanup()
   client.clear()
   window.history.replaceState({}, "", "/")
+  window.sessionStorage.clear()
   vi.unstubAllGlobals()
 })
 
 describe("Requests in the workspace shell", () => {
   it.each(["All", "row"])(
-    "opens Home's %s shortcut in Requests, selecting only a named shared-activity row",
+    "opens the desk's %s shortcut in Requests, selecting only a named shared-activity row",
     async (target) => {
-      renderShell({ mode: "home" })
+      renderShell()
       const card = await screen.findByRole("region", {
         name:
           target === "All" ? "Needs you" : "Your requests and shared answers",
@@ -195,48 +199,31 @@ describe("Requests in the workspace shell", () => {
     }
   )
 
-  it("is the second item of Agents' navigation, and opens the page", async () => {
+  it("is the sidebar's first destination, with the Inbox count, and opens the page", async () => {
     renderShell()
 
-    const navigation = await screen.findByRole("navigation", {
-      name: "Agents navigation",
-    })
     expect(
-      within(navigation)
+      main()
         .getAllByRole("button")
-        .map((button) => button.textContent)
-    ).toEqual(["Agent overview", "Requests"])
-    fireEvent.click(
-      within(navigation).getByRole("button", { name: "Requests" })
-    )
+        .map((button) => button.textContent.replace(/\d+$/, ""))
+    ).toEqual(["Requests", "Knowledge", "Tools"])
+    const requests = await main().findByRole("button", {
+      name: "Requests, 1 waiting",
+    })
+    fireEvent.click(requests)
 
     expect(
       screen.getByRole("heading", { name: "Requests", level: 1 })
     ).toBeTruthy()
-    expect(await screen.findByRole("tab", { name: /Inbox/ })).toBeTruthy()
-    await screen.findByText("Share the pipeline total.")
     expect(
-      within(navigation)
-        .getByRole("button", { name: "Requests" })
-        .getAttribute("aria-current")
-    ).toBe("page")
-  })
-
-  it("is where the Agent overview's Requests waiting tile leads", async () => {
-    renderShell()
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "View requests" })
-    )
-
-    expect(
-      screen.getByRole("heading", { name: "Requests", level: 1 })
+      await screen.findByRole("tab", { name: "Inbox, 1 waiting" })
     ).toBeTruthy()
     await screen.findByText("Share the pipeline total.")
+    expect(requests.getAttribute("aria-current")).toBe("page")
   })
 
   it("opens on a request when a note or a link names one, from wherever the member is", async () => {
-    renderShell({ mode: "home" })
+    renderShell()
     await screen.findByRole("heading", { name: "Today", level: 1 })
 
     act(() => openRequest("irq_link"))
@@ -247,8 +234,14 @@ describe("Requests in the workspace shell", () => {
     const opened = await screen.findByRole("region", { name: "Opened request" })
     await within(opened).findByText("A linked ask.")
     expect(
-      screen.getByRole("navigation", { name: "Agents navigation" })
-    ).toBeTruthy()
+      main()
+        .getByRole("button", { name: /^Requests/ })
+        .getAttribute("aria-current")
+    ).toBe("page")
+    // The address names the request, so a reload opens it again.
+    expect(new URLSearchParams(window.location.search).get("request")).toBe(
+      "irq_link"
+    )
   })
 
   it("opens the request an address names, as the page opens", async () => {
@@ -258,35 +251,35 @@ describe("Requests in the workspace shell", () => {
       `/?org=${ORG}&view=requests&request=irq_link`
     )
 
-    renderShell({ mode: "home" })
+    renderShell()
 
     const opened = await screen.findByRole("region", { name: "Opened request" })
     await within(opened).findByText("A linked ask.")
     expect(
       screen.getByRole("heading", { name: "Requests", level: 1 })
     ).toBeTruthy()
+    expect(window.location.search).toBe(
+      `?org=${ORG}&view=requests&request=irq_link`
+    )
+
+    // Back to all requests: the address forgets the request.
+    fireEvent.click(
+      within(opened).getByRole("button", { name: "Back to all requests" })
+    )
+    expect(window.location.search).toBe(`?org=${ORG}&view=requests`)
   })
 
   it("puts a named request away once the member goes elsewhere", async () => {
-    renderShell()
-    await screen.findByRole("heading", { name: "Agent overview", level: 1 })
+    renderShell({ area: "requests" })
+    await screen.findByRole("tab", { name: /Inbox/ })
     act(() => openRequest("irq_link"))
     await screen.findByRole("region", { name: "Opened request" })
 
-    const navigation = screen.getByRole("navigation", {
-      name: "Agents navigation",
-    })
-    fireEvent.click(
-      within(navigation).getByRole("button", { name: "Agent overview" })
-    )
-    await waitFor(() =>
-      expect(
-        screen.getByRole("heading", { name: "Agent overview", level: 1 })
-      ).toBeTruthy()
-    )
-    fireEvent.click(
-      within(navigation).getByRole("button", { name: "Requests" })
-    )
+    fireEvent.click(main().getByRole("button", { name: "Knowledge" }))
+    expect(
+      screen.getByRole("heading", { name: "Knowledge bases", level: 1 })
+    ).toBeTruthy()
+    fireEvent.click(main().getByRole("button", { name: /^Requests/ }))
 
     await screen.findByRole("tab", { name: /Inbox/ })
     expect(screen.queryByRole("region", { name: "Opened request" })).toBeNull()
@@ -294,7 +287,7 @@ describe("Requests in the workspace shell", () => {
 
   it("opens Requests with no request when none is named", async () => {
     renderShell()
-    await screen.findByRole("heading", { name: "Agent overview", level: 1 })
+    await screen.findByRole("heading", { name: "Today", level: 1 })
 
     act(() => openRequests())
 
@@ -308,7 +301,7 @@ describe("Requests in the workspace shell", () => {
     { viewport: "mobile", mobile: true, linked: false },
     { viewport: "mobile", mobile: true, linked: true },
   ])(
-    "leaves focused primary work when Requests opens on $viewport (linked: $linked)",
+    "leaves an open conversation for Requests when one is opened on $viewport (linked: $linked)",
     async ({ mobile, linked }) => {
       vi.stubGlobal("matchMedia", () => ({
         matches: mobile,
@@ -316,39 +309,34 @@ describe("Requests in the workspace shell", () => {
         removeEventListener: vi.fn(),
       }))
       renderShell()
+      await screen.findByRole("heading", { name: "Today", level: 1 })
+      if (mobile)
+        fireEvent.click(screen.getByRole("button", { name: "Open navigation" }))
       fireEvent.click(
-        screen.getByRole("button", { name: "Expand agent panel" })
+        await screen.findByRole("button", { name: /^Plan the launch/ })
       )
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Open Agent overview" })
+      await waitFor(() =>
+        expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+          "Plan the launch"
+        )
       )
-      await screen.findByRole("region", { name: "Agent overview work panel" })
-      expect(
-        screen.queryByRole("complementary", { name: "Workspace navigation" })
-      ).toBeNull()
+      expect(screen.getByRole("region", { name: "Agent chat" })).toBeTruthy()
 
       act(() => (linked ? openRequest("irq_link") : openRequests()))
 
       expect(
         await screen.findByRole("heading", { name: "Requests", level: 1 })
       ).toBeTruthy()
-      expect(
-        screen.queryByRole("region", { name: "Agent overview work panel" })
-      ).toBeNull()
-      expect(
-        screen.queryByRole("button", { name: "Back to Agent overview" })
-      ).toBeNull()
+      expect(screen.queryByRole("region", { name: "Agent chat" })).toBeNull()
       if (mobile) {
-        fireEvent.click(
-          screen.getByRole("button", { name: "Expand left sidebar" })
-        )
+        expect(
+          screen.queryByRole("complementary", { name: "Workspace navigation" })
+        ).toBeNull()
+        fireEvent.click(screen.getByRole("button", { name: "Open navigation" }))
       }
-      const navigation = screen.getByRole("navigation", {
-        name: "Agents navigation",
-      })
       expect(
-        within(navigation)
-          .getByRole("button", { name: "Requests" })
+        main()
+          .getByRole("button", { name: /^Requests/ })
           .getAttribute("aria-current")
       ).toBe("page")
       if (linked) {
@@ -367,7 +355,7 @@ describe("Requests in the workspace shell", () => {
   )
 
   it("says a signed-out preview has no requests", async () => {
-    renderShell({ signedIn: false, section: "requests" })
+    renderShell({ signedIn: false, area: "requests" })
 
     expect(
       await screen.findByText(
@@ -386,7 +374,7 @@ describe("Slack's install coming back to the workspace", () => {
     )
     vi.spyOn(window.history, "replaceState").mockImplementation(() => {})
 
-    renderShell({ mode: "home", organizationRole: "admin" })
+    renderShell({ organizationRole: "admin" })
 
     const settings = await screen.findByRole("dialog", { name: "Settings" })
     expect(
@@ -400,7 +388,7 @@ describe("Slack's install coming back to the workspace", () => {
   it("tells a member who opened it that admins manage Slack", async () => {
     window.history.replaceState({}, "", `/?org=${ORG}&view=slack`)
 
-    renderShell({ mode: "home", organizationRole: "member" })
+    renderShell({ organizationRole: "member" })
 
     const settings = await screen.findByRole("dialog", { name: "Settings" })
     expect(

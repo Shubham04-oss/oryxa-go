@@ -1,7 +1,6 @@
-.workspace-canvas:has(> .home-overview) {
-  overflow-y: auto;
-  scrollbar-color: #555555 #1e1e1e;
-}
+/* The desk (home-overview.tsx): what the center shows with no conversation
+   open, in a 760px column of quiet cards (DESIGN.md §3). The shell's
+   .workspace-desk scrolls it. */
 .home-overview {
   width: min(760px, calc(100% - 48px));
   margin: 28px auto 40px;
@@ -102,11 +101,6 @@
   font-size: 11px;
   line-height: 1.45;
 }
-.home-row .home-work-status {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
 .home-row > button:not(:disabled):hover span {
   color: #fff;
 }
@@ -120,20 +114,34 @@
 .home-card > .home-quiet {
   margin-top: 8px;
 }
-.home-card .home-recents {
-  margin-top: 14px;
-  padding-top: 5px;
-  border-top: 1px solid #2c2c2c;
-}
-.home-recents .home-row > button,
-.home-recents .home-row > div {
+.home-agent-name {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 9px;
+  min-width: 0;
 }
-.home-recents small {
+.home-agent-face {
+  display: inline-flex;
   flex: none;
+}
+.home-agent-face .workspace-avatar {
+  width: 24px;
+  height: 24px;
+}
+.home-agent > .workspace-agent-paused {
+  margin-top: 12px;
+}
+/* The first messages that were not sent, under the composer, with Retry,
+   Edit and Dismiss. */
+.home-unsent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+.home-card > .home-notice {
+  margin-top: 10px;
+  color: #d8a6a2;
 }
 .home-needs > .workspace-request-card,
 .home-request-group > .workspace-request-card {
@@ -165,6 +173,7 @@
 .home-setup-row > button {
   flex: none;
   display: inline-flex;
+  align-items: center;
   width: auto;
 }
 .home-setup .home-row + .home-row,
@@ -185,10 +194,6 @@
   }
   .home-card {
     padding: 16px;
-  }
-  .home-recents .home-row > button,
-  .home-recents .home-row > div {
-    align-items: flex-start;
   }
   .home-access-row,
   .home-setup-row {

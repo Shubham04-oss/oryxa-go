@@ -6,6 +6,7 @@ import {
   cleanup,
   fireEvent,
   render as renderBase,
+  renderHook,
   screen,
   waitFor,
   within,
@@ -13,14 +14,24 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
 import { WorkspaceShell } from "./workspace-shell"
+import { primary, request } from "./agents-fake-backend"
 import type { Session } from "@/lib/auth/client"
-import * as primaryChat from "@/lib/threads/chat-choice"
+import type { AgentRequest } from "@/lib/agents/agent-requests"
+import {
+  claimPrimaryChatRequest,
+  rememberChoice,
+  usePrimaryChatRequest,
+} from "@/lib/threads/chat-choice"
+import type { Item, Thread } from "@/lib/threads/client"
 import { json, mockApi, orgPath, viewerId } from "@/test/teamspaces"
 import { browserStorage } from "@/test/browser-storage"
+import { agentChats } from "@/test/agent-chat"
+import { roomSockets } from "@/test/room-socket"
 import { rememberSettingsPage } from "@/lib/settings/page-choice"
 
-// A signed-in shell holds the primary agent's chat in its panel: its socket
-// is a stand-in (src/test/room-socket.ts).
+// The shell is one sidebar and one central screen; the center hosts the
+// primary agent's chat, whose socket is a stand-in (src/test/room-socket.ts,
+// src/test/agent-chat.ts).
 vi.mock(
   "agents/react",
   async () => (await import("@/test/room-socket")).agentsReact
@@ -29,9 +40,16 @@ vi.mock(
   "@cloudflare/ai-chat/react",
   async () => (await import("@/test/agent-chat")).aiChatReact
 )
+vi.mock("thinking-orbs", () => ({
+  ThinkingOrb: ({ state }: { state: string }) => (
+    <i aria-hidden="true" data-orb-state={state} />
+  ),
+}))
+
+let client: QueryClient
 
 function render(ui: ReactElement) {
-  const client = new QueryClient({
+  client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
   return renderBase(ui, {
@@ -41,414 +59,262 @@ function render(ui: ReactElement) {
   })
 }
 
+const organization = { id: "org_sim", name: "Simulated Org", slug: "org-sim" }
 const session: Session = {
   user: { id: viewerId, email: "member@sim.oryxa", display_name: "Member" },
-  organizations: [{ id: "org_sim", name: "Simulated Org", slug: "org-sim" }],
+  organizations: [organization],
+}
+const agentId = primary.id
+const scope = { organizationId: organization.id, userId: viewerId }
+
+function SignedIn(props: Partial<Parameters<typeof WorkspaceShell>[0]> = {}) {
+  return (
+    <WorkspaceShell
+      session={session}
+      selectedOrganization={organization}
+      role="member"
+      organizationRole="member"
+      {...props}
+    />
+  )
 }
 
-const leo = {
-  id: "agt_leo",
-  organization_id: "org_sim",
-  owner_user_id: viewerId,
-  kind: "primary",
-  name: "Leo",
-  description: "Your primary Oryxa agent.",
-  instructions: "",
-  status: "active",
-  revision: 1,
-  created_at: "2026-09-20T10:00:00Z",
-  updated_at: "2026-09-20T10:00:00Z",
+/** A conversation last active `age` ago (a minute by default). */
+function thread(id: string, title: string, age = 60_000): Thread {
+  return {
+    id,
+    title,
+    origin: "chat",
+    updated_at: new Date(Date.now() - age).toISOString(),
+  }
 }
 
-/** The agents, teams and files services, answering for `org_sim`'s member. */
-function liveBackend() {
-  return mockApi(({ url }) => {
+type Seed = {
+  threads?: Thread[]
+  items?: Record<string, Item[]>
+  pending?: Record<string, string[]>
+  inbox?: AgentRequest[]
+  agentStatus?: "active" | "disabled"
+}
+
+/** Go as the shell reads it for `org_sim`'s member: their agent, threads, requests and the desk's reads. */
+function backend(seed: Seed = {}) {
+  let threads = seed.threads ?? []
+  let made = 0
+  return mockApi(({ url, method }) => {
     const path = url.pathname
-    if (path === `${orgPath}/agents`) return json({ agents: [leo] })
-    if (path === `${orgPath}/threads`) return json({ threads: [] })
+    if (path === `${orgPath}/agents`)
+      return json({
+        agents: [
+          {
+            ...primary,
+            organization_id: organization.id,
+            owner_user_id: viewerId,
+            status: seed.agentStatus ?? "active",
+          },
+        ],
+      })
+    if (path === `${orgPath}/threads`) {
+      if (method === "POST") {
+        made += 1
+        const created = thread(made === 1 ? "th_new" : `th_new_${made}`, "", 0)
+        threads = [created, ...threads]
+        return json(created, 201)
+      }
+      return json({ threads })
+    }
+    const detail = new RegExp(`^${orgPath}/threads/([^/]+)$`).exec(path)
+    if (detail) {
+      const found = threads.find((item) => item.id === detail[1])
+      return found
+        ? json({
+            ...found,
+            items: seed.items?.[found.id] ?? [],
+            pending_confirmations: seed.pending?.[found.id] ?? [],
+          })
+        : json({ error: { code: "not_found", message: "no" } }, 404)
+    }
     if (path.endsWith("/get-messages")) return json([])
+    if (path === `${orgPath}/agent-requests/inbox`)
+      return json({ requests: seed.inbox ?? [] })
+    if (path === `${orgPath}/agent-requests/sent`) return json({ requests: [] })
+    if (path === `${orgPath}/agent-requests/activity`)
+      return json({ activity: [] })
+    if (path === `${orgPath}/agent-leases`)
+      return json({
+        leases: [],
+        observed_at: new Date().toISOString(),
+        has_more: false,
+      })
+    if (path === `${orgPath}/corpora`) return json({ corpora: [] })
+    if (path === `${orgPath}/apps/slack/status`)
+      return json({ status: "active", can_manage: false })
+    if (path === "/v1/agent-grant") return json({ granted: true })
+    if (path === `${orgPath}/members`) return json({ members: [] })
     if (path === `${orgPath}/teams`) return json({ teams: [] })
-    if (path === `${orgPath}/files`) return json({ files: [] })
     return undefined
   })
 }
 
-beforeEach(() => {
-  vi.stubGlobal("localStorage", browserStorage())
+const sidebar = () =>
+  within(screen.getByRole("complementary", { name: "Workspace navigation" }))
+const main = () => within(screen.getByRole("navigation", { name: "Main" }))
+const shellOf = (container: HTMLElement) =>
+  container.querySelector<HTMLElement>(".workspace-shell")
+const heading = () => screen.getByRole("heading", { level: 1 }).textContent
+const objectName = (id: string) => `${organization.id}~${id}`
+
+async function socketOn(id: string) {
+  await waitFor(() =>
+    expect(roomSockets.named(objectName(id)).length).toBeGreaterThan(0)
+  )
+  return roomSockets.named(objectName(id)).at(-1)!
+}
+
+function phone(matches = true) {
   vi.stubGlobal("matchMedia", () => ({
-    matches: false,
+    matches,
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   }))
+}
+
+beforeEach(() => {
+  const { result, unmount } = renderHook(() => usePrimaryChatRequest())
+  while (result.current) {
+    const { id } = result.current
+    act(() => {
+      claimPrimaryChatRequest(id)
+    })
+  }
+  unmount()
+  roomSockets.reset()
+  agentChats.reset()
+  vi.stubGlobal("localStorage", browserStorage())
+  phone(false)
 })
 
 afterEach(() => {
   cleanup()
   window.history.replaceState({}, "", "/")
+  window.sessionStorage.clear()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
-describe("WorkspaceShell navigation", () => {
-  it.each(["billing", "slack"] as const)(
-    "keeps the explicit %s return ahead of the remembered section",
-    (page) => {
-      liveBackend()
-      rememberSettingsPage(
-        {
-          organizationId: session.organizations[0].id,
-          userId: session.user.id,
-        },
-        "email"
-      )
-      window.history.replaceState({}, "", `/?view=${page}`)
-      render(
-        <WorkspaceShell
-          session={session}
-          selectedOrganization={session.organizations[0]}
-          organizationRole="admin"
-        />
-      )
-      expect(
-        screen.getByRole("heading", {
-          name: page === "billing" ? "Billing" : "Slack",
-          level: 2,
-        })
-      ).toBeTruthy()
-      fireEvent.click(screen.getByRole("button", { name: "Tool access" }))
-      fireEvent.click(screen.getByRole("button", { name: "Open my tools →" }))
-      expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
-      fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
-      fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
-      expect(
-        screen.getByRole("heading", { name: "Tool access", level: 2 })
-      ).toBeTruthy()
-    }
-  )
+describe("the workspace: one sidebar, one central screen", () => {
+  it("navigates from the sidebar alone: the workspace, New chat, Requests, Knowledge, Tools, Recent and the profile menu", async () => {
+    backend({ threads: [thread("th_1", "Plan the launch", 3 * 3_600_000)] })
+    render(<SignedIn />)
 
-  it("restores Settings for the same member and workspace without carrying a section to another scope", () => {
-    liveBackend()
-    const props = {
-      session,
-      selectedOrganization: session.organizations[0],
-      role: "member" as const,
-      organizationRole: "member" as const,
-    }
-    const view = render(<WorkspaceShell {...props} />)
-    function openSettings() {
-      fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
-      fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
-    }
-    openSettings()
-    fireEvent.click(screen.getByRole("button", { name: "Teams" }))
-    fireEvent.click(screen.getByRole("button", { name: "Close settings" }))
-    openSettings()
+    expect(sidebar().getByText("Simulated Org")).toBeTruthy()
+    expect(sidebar().getByRole("button", { name: "New chat" })).toBeTruthy()
     expect(
-      screen.getByRole("heading", { name: "Teams", level: 2 })
+      main()
+        .getAllByRole("button")
+        .map((button) => button.textContent)
+    ).toEqual(["Requests", "Knowledge", "Tools"])
+    expect(sidebar().getByRole("region", { name: "Recent" })).toBeTruthy()
+    expect(
+      await sidebar().findByRole("button", { name: /^Plan the launch/ })
+    ).toBeTruthy()
+    expect(
+      sidebar().getByRole("button", { name: "Open user menu" })
     ).toBeTruthy()
 
-    view.rerender(
-      <WorkspaceShell
-        {...props}
-        selectedOrganization={{ id: "org_other", name: "Other", slug: "other" }}
-      />
-    )
-    expect(
-      screen.getByRole("heading", { name: "Account", level: 2 })
-    ).toBeTruthy()
-    view.rerender(<WorkspaceShell {...props} />)
-    expect(
-      screen.getByRole("heading", { name: "Teams", level: 2 })
-    ).toBeTruthy()
-
-    view.rerender(
-      <WorkspaceShell
-        {...props}
-        session={{
-          ...session,
-          user: { id: "user-other-settings", email: "other@example.com" },
-        }}
-      />
-    )
-    openSettings()
-    expect(
-      screen.getByRole("heading", { name: "Account", level: 2 })
-    ).toBeTruthy()
-  })
-
-  it("preserves the same member's workspace state on refresh and resets the whole shell for another member", async () => {
-    liveBackend()
-    const props = {
-      session,
-      selectedOrganization: session.organizations[0],
-      role: "member" as const,
-      organizationRole: "member" as const,
-    }
-    const view = render(<WorkspaceShell {...props} />)
-    fireEvent.change(
-      await screen.findByRole("textbox", {
-        name: "Start a new conversation",
-      }),
-      { target: { value: "Member's unfinished Home message" } }
-    )
-    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
-    fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
-    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
-
-    view.rerender(
-      <WorkspaceShell
-        {...props}
-        session={{
-          ...session,
-          user: { ...session.user, display_name: "Member refreshed" },
-        }}
-      />
-    )
-    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
-    expect(
-      view.container
-        .querySelector(".workspace-shell")
-        ?.getAttribute("data-left")
-    ).toBe("expanded")
-    expect(
-      screen.getByDisplayValue("Member's unfinished Home message")
-    ).toBeTruthy()
-
-    view.rerender(
-      <WorkspaceShell
-        {...props}
-        session={{
-          ...session,
-          user: {
-            id: "usr_other_shell",
-            email: "other@sim.oryxa",
-            display_name: "Other member",
-          },
-        }}
-      />
-    )
-    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
-    const shell = view.container.querySelector(".workspace-shell")
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    expect(shell?.getAttribute("data-right")).toBe("collapsed")
-    expect(
-      screen.getByRole<HTMLTextAreaElement>("textbox", {
-        name: "Start a new conversation",
-      }).value
-    ).toBe("")
-  })
-
-  it("clears Home's private composer draft when the member changes in the same workspace", async () => {
-    liveBackend()
-    const props = {
-      session,
-      selectedOrganization: session.organizations[0],
-      role: "member" as const,
-      organizationRole: "member" as const,
-    }
-    const view = render(<WorkspaceShell {...props} />)
-    const composer = await screen.findByRole<HTMLTextAreaElement>("textbox", {
-      name: "Start a new conversation",
-    })
-    fireEvent.change(composer, { target: { value: "Member's private draft" } })
-    expect(composer.value).toBe("Member's private draft")
-
-    view.rerender(
-      <WorkspaceShell
-        {...props}
-        session={{
-          ...session,
-          user: {
-            id: "usr_other_home",
-            email: "other@sim.oryxa",
-            display_name: "Other member",
-          },
-        }}
-      />
-    )
-    expect(
-      screen.getByRole<HTMLTextAreaElement>("textbox", {
-        name: "Start a new conversation",
-      }).value
-    ).toBe("")
-  })
-
-  it("opens the panel and emits workspace-scoped Home targets through the public contract without claiming delivery", async () => {
-    const request = vi
-      .spyOn(primaryChat, "requestPrimaryChat")
-      .mockImplementation(() => {})
-    const api = mockApi(({ url }) => {
-      if (url.pathname === `${orgPath}/threads`)
-        return json({
-          threads: [
-            {
-              id: "th_recent",
-              title: "Specific recent conversation",
-              origin: "chat",
-              updated_at: new Date().toISOString(),
-            },
-          ],
-        })
-      if (url.pathname.endsWith("/threads/th_recent"))
-        return json({
-          id: "th_recent",
-          title: "Specific recent conversation",
-          items: [],
-          pending_confirmations: [],
-        })
-      if (url.pathname.endsWith("/get-messages")) return json([])
-      if (url.pathname.endsWith("/agents")) return json({ agents: [] })
-      if (url.pathname.endsWith("/corpora")) return json({ corpora: [] })
-      if (url.pathname.endsWith("/apps/connections"))
-        return json({ connections: [] })
-      if (url.pathname.endsWith("/agent-requests/inbox"))
-        return json({ requests: [] })
-      return undefined
-    })
-    const { container } = render(
-      <WorkspaceShell
-        session={session}
-        selectedOrganization={session.organizations[0]}
-        role="member"
-        organizationRole="member"
-      />
-    )
-    const shell = container.querySelector(".workspace-shell")
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: /Specific recent conversation/,
-      })
-    )
-    expect(request).toHaveBeenLastCalledWith(
-      { organizationId: "org_sim", userId: viewerId },
-      { kind: "thread", threadId: "th_recent" }
-    )
-    expect(shell?.getAttribute("data-right")).toBe("expanded")
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    expect(
-      screen.getByRole("heading", { name: "Today", level: 1 })
-    ).toBeTruthy()
-    expect(shell?.getAttribute("data-primary-work")).toBeNull()
-
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Start a new conversation" }),
-      { target: { value: "  Start from Home  " } }
-    )
-    fireEvent.click(
-      within(screen.getByRole("main", { name: "Today canvas" })).getByRole(
-        "button",
-        { name: "Send message" }
-      )
-    )
-    expect(request).toHaveBeenLastCalledWith(
-      { organizationId: "org_sim", userId: viewerId },
-      { kind: "new", message: "Start from Home" }
-    )
-    fireEvent.click(
-      within(screen.getByRole("region", { name: "Your agent" })).getByRole(
-        "button",
-        { name: "New chat" }
-      )
-    )
-    expect(request).toHaveBeenLastCalledWith(
-      { organizationId: "org_sim", userId: viewerId },
-      { kind: "new", message: undefined }
-    )
-    expect(request).toHaveBeenCalledTimes(3)
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Start a new conversation" }),
-      { target: { value: "Still composing on Home" } }
-    )
-    const all = within(
-      screen.getByRole("region", { name: "Your agent" })
-    ).getByRole("button", { name: "All conversations" })
-    fireEvent.click(all)
-    const history = await screen.findByRole("button", { name: "History" })
-    await waitFor(() =>
-      expect(history.getAttribute("aria-expanded")).toBe("true")
-    )
-    fireEvent.click(history)
-    expect(history.getAttribute("aria-expanded")).toBe("false")
-    fireEvent.click(
-      screen.getByRole("button", { name: "Collapse agent panel" })
-    )
-    fireEvent.click(all)
-    await waitFor(() =>
-      expect(history.getAttribute("aria-expanded")).toBe("true")
-    )
-    expect(screen.getByDisplayValue("Still composing on Home")).toBeTruthy()
-    expect(
-      screen.getByRole("heading", { name: "Today", level: 1 })
-    ).toBeTruthy()
-    expect(shell?.getAttribute("data-primary-work")).toBeNull()
-    expect(request).toHaveBeenCalledTimes(3)
-    expect(api.calls.every((call) => call.method === "GET")).toBe(true)
-  })
-
-  it("starts Home on collapsed rails, preserves explicit toggle choices and has no fake saved views", () => {
-    const { container } = render(<WorkspaceShell />)
-    const shell = container.querySelector(".workspace-shell")
-    expect(
-      screen.getByRole("heading", { name: "Today", level: 1 })
-    ).toBeTruthy()
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    expect(shell?.getAttribute("data-right")).toBe("collapsed")
-    for (const label of [
-      "Saved views",
-      "Launch plan",
-      "At-risk accounts",
-      "Q4 pipeline",
+    // No modes and no mode-specific navigation; no right panel or its rail.
+    for (const gone of [
+      /^Home$/,
+      /^Agents$/,
+      "Agent overview",
+      "Today",
+      "Expand agent panel",
+      "Open agent chat",
     ])
-      expect(screen.queryByText(label)).toBeNull()
+      expect(screen.queryByRole("button", { name: gone })).toBeNull()
+    expect(
+      screen.queryByRole("complementary", { name: "Agent panel" })
+    ).toBeNull()
+    expect(screen.queryByRole("group", { name: "Main areas" })).toBeNull()
+    expect(screen.queryByRole("tablist")).toBeNull()
+    // What was archived is reachable from nowhere.
+    for (const archived of [
+      "Team",
+      "Teamspaces",
+      "People",
+      "Multi-agent teams",
+      "Specialists",
+      "Workflows",
+    ])
+      expect(screen.queryByRole("button", { name: archived })).toBeNull()
 
-    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Agents$/ }))
-    fireEvent.click(screen.getByRole("button", { name: /^Home$/ }))
-    expect(shell?.getAttribute("data-left")).toBe("expanded")
-    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    expect(shell?.getAttribute("data-right")).toBe("expanded")
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
-    fireEvent.click(screen.getByRole("button", { name: "Today" }))
-    expect(shell?.getAttribute("data-right")).toBe("expanded")
-    fireEvent.click(
-      screen.getByRole("button", { name: "Collapse agent panel" })
-    )
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    expect(shell?.getAttribute("data-right")).toBe("collapsed")
+    // With no conversation to reopen, the center is the desk.
+    expect(
+      await screen.findByRole("heading", { name: "Today", level: 1 })
+    ).toBeTruthy()
+    expect(screen.getByRole("main", { name: "Today canvas" })).toBeTruthy()
   })
 
-  it("uses the header title without repeating page introductions", () => {
-    render(<WorkspaceShell />)
+  it("shows exactly one screen in the center, named in the header, and marks where the member is", async () => {
+    backend()
+    render(<SignedIn />)
+    await screen.findByRole("heading", { name: "Today", level: 1 })
 
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
-    expect(
-      screen.getByRole("heading", { name: "Knowledge bases", level: 1 })
-    ).toBeTruthy()
-    expect(screen.queryByText("Knowledge your team can build on.")).toBeNull()
+    for (const [item, title] of [
+      ["Requests", "Requests"],
+      ["Knowledge", "Knowledge bases"],
+      ["Tools", "Tools"],
+    ] as const) {
+      fireEvent.click(main().getByRole("button", { name: item }))
+      expect(heading()).toBe(title)
+      expect(screen.getAllByRole("main")).toHaveLength(1)
+      expect(
+        main().getByRole("button", { name: item }).getAttribute("aria-current")
+      ).toBe("page")
+      expect(
+        main()
+          .getAllByRole("button")
+          .filter((button) => button.getAttribute("aria-current"))
+      ).toHaveLength(1)
+    }
+    // The desk and the chat are hidden, not gone, while another screen shows.
+    expect(screen.queryByRole("region", { name: "Your agent" })).toBeNull()
 
-    fireEvent.click(screen.getByRole("button", { name: "Tools" }))
+    fireEvent.click(sidebar().getByRole("button", { name: "New chat" }))
     expect(
-      screen.getByRole("heading", { name: "Tools", level: 1 })
+      await screen.findByRole("heading", { name: "Today", level: 1 })
     ).toBeTruthy()
-    expect(screen.queryByText("Connected to your work.")).toBeNull()
-
-    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Agents$/ }))
     expect(
-      screen.getByRole("heading", { name: "Agent overview", level: 1 })
-    ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Requests" }))
-    expect(
-      screen.getByRole("heading", { name: "Requests", level: 1 })
-    ).toBeTruthy()
+      main()
+        .getAllByRole("button")
+        .some((button) => button.getAttribute("aria-current"))
+    ).toBe(false)
+    expect(screen.getByRole("region", { name: "Your agent" })).toBeTruthy()
   })
 
-  it("keeps workspace invitations and people in Settings", () => {
+  it("counts on Requests the Inbox requests waiting on the member", async () => {
+    backend({
+      inbox: [
+        request({ id: "req_open", status: "pending" }),
+        request({ id: "req_review", status: "review" }),
+        request({ id: "req_done", status: "completed" }),
+        request({
+          id: "req_lapsed",
+          status: "pending",
+          expires_at: "2000-01-01T00:00:00Z",
+        }),
+      ],
+    })
+    render(<SignedIn />)
+    const requests = await main().findByRole("button", {
+      name: "Requests, 2 waiting",
+    })
+    expect(requests.textContent).toBe("Requests2")
+  })
+
+  it("keeps workspace invitations and people in Settings, from the profile menu", () => {
     render(<WorkspaceShell preview />)
 
-    // There is no Team area: people are reached from Settings alone.
     expect(screen.queryByRole("button", { name: /^Team$/ })).toBeNull()
     expect(screen.queryByRole("heading", { name: "People" })).toBeNull()
     expect(screen.queryByText("Preview")).toBeNull()
@@ -470,22 +336,6 @@ describe("WorkspaceShell navigation", () => {
         .getByRole("button", { name: "Send invite" })
         .hasAttribute("disabled")
     ).toBe(true)
-
-    fireEvent.click(screen.getByRole("button", { name: "Account" }))
-    expect(screen.getByRole("heading", { name: "Account" })).toBeTruthy()
-    expect(
-      screen
-        .getByRole("button", { name: "Send reset link" })
-        .hasAttribute("disabled")
-    ).toBe(true)
-    fireEvent.click(screen.getByRole("button", { name: "Organisation" }))
-    expect(screen.getByRole("heading", { name: "Organisation" })).toBeTruthy()
-    expect(
-      screen.getByRole("textbox", { name: "Name" }).hasAttribute("disabled")
-    ).toBe(true)
-    expect(
-      screen.getByRole("textbox", { name: "Handle" }).hasAttribute("disabled")
-    ).toBe(true)
     for (const section of ["Teams", "Tool access", "Email", "Billing"]) {
       fireEvent.click(screen.getByRole("button", { name: section }))
       expect(
@@ -494,202 +344,24 @@ describe("WorkspaceShell navigation", () => {
     }
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }))
     expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
-    expect(
-      screen.getByRole("heading", { name: "Today", level: 1 })
-    ).toBeTruthy()
+    expect(heading()).toBe("Today")
   })
 
-  it("offers Home and Agents as the main areas, and in each only what remains", () => {
+  it("shows no example knowledge bases without a workspace", () => {
     render(<WorkspaceShell />)
-    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-
-    const areas = screen.getByRole("group", { name: "Main areas" })
+    fireEvent.click(main().getByRole("button", { name: "Knowledge" }))
     expect(
-      within(areas)
-        .getAllByRole("button")
-        .map((button) => button.getAttribute("aria-label"))
-    ).toEqual(["Home", "Agents"])
-    const labels = (name: string) =>
-      within(screen.getByRole("navigation", { name }))
-        .getAllByRole("button")
-        .map((button) => button.textContent)
-    expect(labels("Home navigation")).toEqual([
-      "Today",
-      "Knowledge bases",
-      "Tools",
-    ])
-
-    fireEvent.click(within(areas).getByRole("button", { name: "Agents" }))
-    expect(labels("Agents navigation")).toEqual(["Agent overview", "Requests"])
-
-    // What was archived is reachable from nowhere.
-    for (const archived of [
-      "Team",
-      "Teamspaces",
-      "People",
-      "Multi-agent teams",
-      "Specialists",
-      "Workflows",
-    ]) {
-      expect(screen.queryByRole("button", { name: archived })).toBeNull()
-    }
-    expect(screen.queryByText("Recent conversations")).toBeNull()
-  })
-
-  it("shows a different sidebar for each mode and remembers its selection", () => {
-    render(<WorkspaceShell />)
-
-    const homeNavigation = screen.getByRole("navigation", {
-      name: "Home navigation",
-    })
-    expect(
-      within(homeNavigation).getByRole("button", { name: "Today" })
+      screen.getByText(/Sign in to a workspace to see its knowledge bases/)
     ).toBeTruthy()
+    const canvas = screen.getByRole("main", { name: "Knowledge bases canvas" })
+    expect(within(canvas).queryByRole("button", { name: /^Open / })).toBeNull()
     expect(
-      within(homeNavigation).getByRole("button", { name: "Knowledge bases" })
-    ).toBeTruthy()
-    expect(screen.queryByRole("button", { name: "Agent overview" })).toBeNull()
-    fireEvent.click(
-      within(homeNavigation).getByRole("button", { name: "Knowledge bases" })
-    )
-    expect(
-      screen.getByRole("heading", { name: "Knowledge bases", level: 1 })
-    ).toBeTruthy()
-
-    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Agents$/ }))
-    const agentsNavigation = screen.getByRole("navigation", {
-      name: "Agents navigation",
-    })
-    expect(
-      within(agentsNavigation).queryByRole("button", { name: "Today" })
+      within(canvas).queryByRole("button", { name: "New knowledge base" })
     ).toBeNull()
-    fireEvent.click(
-      within(agentsNavigation).getByRole("button", { name: "Requests" })
-    )
-    expect(
-      screen.getByRole("heading", { name: "Requests", level: 1 })
-    ).toBeTruthy()
-
-    fireEvent.click(screen.getByRole("button", { name: /^Home$/ }))
-    expect(
-      screen.getByRole("heading", { name: "Knowledge bases", level: 1 })
-    ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: /^Agents$/ }))
-    expect(
-      screen.getByRole("heading", { name: "Requests", level: 1 })
-    ).toBeTruthy()
-  })
-
-  it("keeps mobile panels closed until their header controls are used", () => {
-    vi.stubGlobal("matchMedia", () => ({
-      matches: true,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    }))
-    const { container } = render(<WorkspaceShell />)
-    const shell = container.querySelector(".workspace-shell")
-
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    expect(shell?.getAttribute("data-right")).toBe("collapsed")
-
-    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    expect(shell?.getAttribute("data-left")).toBe("expanded")
-
-    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    expect(shell?.getAttribute("data-right")).toBe("expanded")
-    expect(
-      screen.getByRole("region", { name: "Agent chat" }).hasAttribute("hidden")
-    ).toBe(false)
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Collapse agent panel" })
-    )
-    expect(shell?.getAttribute("data-right")).toBe("collapsed")
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-  })
-
-  it("replaces the activity feed with the primary agent's chat alone", () => {
-    const { container } = render(<WorkspaceShell />)
-    const shell = container.querySelector(".workspace-shell")
-    const panel = screen.getByRole("complementary", { name: "Agent panel" })
-
-    for (const text of ["Activity", "Team online", "5 online"])
-      expect(within(panel).queryByText(text)).toBeNull()
-    expect(within(panel).queryByText(/launch timeline/)).toBeNull()
-    expect(within(panel).queryByRole("tablist")).toBeNull()
-
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    expect(shell?.getAttribute("data-right")).toBe("expanded")
-
-    // No tabs, no DMs, no Teams: the one agent's chat.
-    expect(within(panel).queryByRole("tab")).toBeNull()
-    for (const archived of ["DMs", "Teams", "Direct messages"])
-      expect(within(panel).queryByText(archived)).toBeNull()
-    const chat = within(panel).getByRole("region", { name: "Agent chat" })
-    // One agent: nothing to switch to, so no switch row and no empty slots.
-    expect(
-      within(chat).queryByRole("group", { name: "Switch agent" })
-    ).toBeNull()
-    expect(
-      within(chat).queryByRole("button", { name: "Empty agent slot" })
-    ).toBeNull()
-    expect(screen.queryByText("Primary agent")).toBeNull()
-    expect(
-      within(chat).getByText("Ask anything to start a conversation.")
-    ).toBeTruthy()
-    expect(
-      within(chat)
-        .getByRole("textbox", { name: "Message your agent" })
-        .hasAttribute("disabled")
-    ).toBe(true)
-    expect(
-      within(chat)
-        .getByRole("button", { name: "Send message" })
-        .hasAttribute("disabled")
-    ).toBe(true)
-    expect(within(chat).getByText("Chat isn't connected yet.")).toBeTruthy()
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Collapse agent panel" })
-    )
-    expect(shell?.getAttribute("data-right")).toBe("collapsed")
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-  })
-
-  it("opens the agent panel from its rail", () => {
-    const { container } = render(<WorkspaceShell />)
-    const shell = container.querySelector(".workspace-shell")
-    const panel = screen.getByRole("complementary", { name: "Agent panel" })
-
-    // One button, for the one agent: not a button per archived area.
-    expect(within(panel).getAllByRole("button")).toHaveLength(2)
-    fireEvent.click(screen.getByRole("button", { name: "Open agent chat" }))
-
-    expect(shell?.getAttribute("data-right")).toBe("expanded")
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "Collapse agent panel" })
-    )
-    expect(
-      within(screen.getByRole("region", { name: "Agent chat" })).getByText(
-        "Ask anything to start a conversation."
-      )
-    ).toBeTruthy()
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Collapse agent panel" })
-    )
-    expect(
-      screen.queryByRole("button", { name: "Open agent chat" })
-    ).toBeTruthy()
   })
 
   it("opens a real knowledge base and names it in the header", async () => {
-    const organization = { id: "org_1", name: "Acme", slug: "acme" }
+    const acme = { id: "org_1", name: "Acme", slug: "acme" }
     const handbook = {
       id: "cor_1",
       organization_id: "org_1",
@@ -736,6 +408,8 @@ describe("WorkspaceShell navigation", () => {
           },
         ],
       },
+      "/v1/organizations/org_1/threads": { threads: [] },
+      "/v1/organizations/org_1/agents": { agents: [] },
     }
     vi.stubGlobal(
       "fetch",
@@ -750,13 +424,13 @@ describe("WorkspaceShell navigation", () => {
       <WorkspaceShell
         session={{
           user: { id: "user-1", email: "avery@example.com" },
-          organizations: [organization],
+          organizations: [acme],
         }}
-        selectedOrganization={organization}
+        selectedOrganization={acme}
         organizationRole="member"
       />
     )
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
+    fireEvent.click(main().getByRole("button", { name: "Knowledge" }))
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Open Product handbook" })
@@ -765,133 +439,507 @@ describe("WorkspaceShell navigation", () => {
       screen.getByRole("heading", { name: "Product handbook", level: 1 })
     ).toBeTruthy()
     expect(screen.getByText("Knowledge base")).toBeTruthy()
-    expect(
-      screen.queryByRole("heading", { name: "Knowledge bases", level: 1 })
-    ).toBeNull()
     expect(await screen.findByText("Design principles")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "All knowledge bases" }))
-    expect(
-      screen.getByRole("heading", { name: "Knowledge bases", level: 1 })
-    ).toBeTruthy()
+    expect(heading()).toBe("Knowledge bases")
     expect(
       screen.getByRole("button", { name: "Open Product handbook" })
     ).toBeTruthy()
   })
+})
 
-  it("shows no example knowledge bases without a workspace", () => {
-    render(<WorkspaceShell />)
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
+describe("the sidebar on a desktop", () => {
+  it("collapses to an icon rail and back, and remembers the choice in this browser", async () => {
+    backend({ threads: [thread("th_1", "Plan the launch", 3 * 3_600_000)] })
+    const view = render(<SignedIn />)
+    const shell = shellOf(view.container)
+    await sidebar().findByRole("button", { name: /^Plan the launch/ })
+    expect(shell?.getAttribute("data-sidebar")).toBe("expanded")
+
+    fireEvent.click(sidebar().getByRole("button", { name: "Collapse sidebar" }))
+    expect(shell?.getAttribute("data-sidebar")).toBe("collapsed")
+    // Icons only, still named; no Recent list and no workspace name.
     expect(
-      screen.getByText(/Sign in to a workspace to see its knowledge bases/)
+      main()
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label"))
+    ).toEqual(["Requests", "Knowledge", "Tools"])
+    expect(sidebar().getByRole("button", { name: "New chat" })).toBeTruthy()
+    expect(sidebar().queryByRole("region", { name: "Recent" })).toBeNull()
+    expect(sidebar().queryByText("Simulated Org")).toBeNull()
+    expect(localStorage.getItem("oryxa.sidebar")).toBe("collapsed")
+
+    // The rail still navigates.
+    fireEvent.click(main().getByRole("button", { name: "Requests" }))
+    expect(heading()).toBe("Requests")
+
+    // A reload keeps it collapsed.
+    view.unmount()
+    const again = render(<SignedIn />)
+    expect(shellOf(again.container)?.getAttribute("data-sidebar")).toBe(
+      "collapsed"
+    )
+    fireEvent.click(sidebar().getByRole("button", { name: "Expand sidebar" }))
+    expect(shellOf(again.container)?.getAttribute("data-sidebar")).toBe(
+      "expanded"
+    )
+    expect(localStorage.getItem("oryxa.sidebar")).toBeNull()
+    expect(
+      await sidebar().findByRole("button", { name: /^Plan the launch/ })
     ).toBeTruthy()
-    const canvas = screen.getByRole("main", { name: "Knowledge bases canvas" })
-    expect(within(canvas).queryByRole("button", { name: /^Open / })).toBeNull()
-    expect(
-      within(canvas).queryByRole("button", { name: "New knowledge base" })
-    ).toBeNull()
   })
 })
 
-describe("the focused Agent overview", () => {
-  function SignedInShell() {
-    return (
-      <WorkspaceShell
-        session={session}
-        role="member"
-        organizationRole="member"
-        selectedOrganization={session.organizations[0]}
-      />
-    )
-  }
-
-  async function openOverview() {
-    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Open Agent overview" })
-    )
-    return screen.findByRole("region", { name: "Agent overview work panel" })
-  }
-
-  it("takes the left sidebar away, keeps the same chat beside the overview, and goes back", async () => {
-    liveBackend()
-    const { container } = render(<SignedInShell />)
-    const shell = container.querySelector(".workspace-shell")
-
-    const workPanel = await openOverview()
+describe("the sidebar on a phone", () => {
+  it("is an overlay the header's menu opens, that closes after a selection, on Escape, from its close button or outside it", async () => {
+    phone()
+    backend({ threads: [thread("th_1", "Plan the launch", 3 * 3_600_000)] })
+    const view = render(<SignedIn />)
     expect(
       screen.queryByRole("complementary", { name: "Workspace navigation" })
     ).toBeNull()
-    expect(shell?.getAttribute("data-view")).toBe("focused")
-    expect(shell?.getAttribute("data-primary-work")).toBe("true")
-    expect(
-      screen.getByRole("heading", { name: "Agent overview", level: 1 })
-    ).toBeTruthy()
-    expect(
-      await within(workPanel).findByRole("region", { name: "Primary agent" })
-    ).toBeTruthy()
+    await screen.findByRole("heading", { name: "Today", level: 1 })
+    const menu = screen.getByRole("button", { name: "Open navigation" })
+    expect(menu.getAttribute("aria-expanded")).toBe("false")
 
-    // The panel is the conversation column now, and offers nothing else: the
-    // toggle and the rail are for the collapsed panel only.
-    const panel = screen.getByRole("complementary", { name: "Agent panel" })
+    // A selection closes it, and the center takes the whole width.
+    fireEvent.click(menu)
+    expect(menu.getAttribute("aria-expanded")).toBe("true")
+    expect(document.activeElement).toBe(
+      sidebar().getByRole("button", { name: "Close navigation" })
+    )
+    fireEvent.click(main().getByRole("button", { name: "Requests" }))
     expect(
-      within(panel)
-        .getByRole("region", { name: "Agent chat" })
-        .getAttribute("data-primary-chat")
-    ).toBe("true")
-    expect(
-      within(panel).queryByRole("button", { name: /agent panel$/ })
+      screen.queryByRole("complementary", { name: "Workspace navigation" })
     ).toBeNull()
-    expect(
-      within(panel).queryByRole("button", { name: "Open agent chat" })
-    ).toBeNull()
-    expect(within(panel).queryByRole("tab")).toBeNull()
+    expect(heading()).toBe("Requests")
 
-    fireEvent.click(screen.getByRole("button", { name: "Back to workspace" }))
+    // A conversation from Recent, too.
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }))
+    fireEvent.click(
+      await sidebar().findByRole("button", { name: /^Plan the launch/ })
+    )
     expect(
-      screen.getByRole("complementary", { name: "Workspace navigation" })
-    ).toBeTruthy()
-    expect(shell?.getAttribute("data-view")).toBe("browse")
-    expect(shell?.getAttribute("data-primary-work")).toBeNull()
-    // Back is the overview in Agents, where it was opened from.
+      screen.queryByRole("complementary", { name: "Workspace navigation" })
+    ).toBeNull()
+    await waitFor(() => expect(heading()).toBe("Plan the launch"))
+
+    // Escape, the close button and a tap outside close it as well.
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }))
+    fireEvent.keyDown(window, { key: "Escape" })
     expect(
-      screen.getByRole("heading", { name: "Agent overview", level: 1 })
-    ).toBeTruthy()
+      screen.queryByRole("complementary", { name: "Workspace navigation" })
+    ).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }))
+    fireEvent.click(sidebar().getByRole("button", { name: "Close navigation" }))
     expect(
-      screen.getByRole("navigation", { name: "Agents navigation" })
-    ).toBeTruthy()
+      screen.queryByRole("complementary", { name: "Workspace navigation" })
+    ).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }))
+    fireEvent.click(view.container.querySelector(".workspace-scrim")!)
+    expect(
+      screen.queryByRole("complementary", { name: "Workspace navigation" })
+    ).toBeNull()
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Open navigation" })
+    )
   })
 
-  it("uses the visible mobile viewport for chat while composing", async () => {
-    vi.stubGlobal("matchMedia", () => ({
-      matches: true,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    }))
+  it("fits the page to the visible height while a phone's keyboard is up", async () => {
+    phone()
     const viewport = Object.assign(new EventTarget(), { height: 420 })
     vi.stubGlobal("visualViewport", viewport)
-    liveBackend()
-    const { container } = render(<SignedInShell />)
-    const shell = container.querySelector<HTMLElement>(".workspace-shell")
-
-    await openOverview()
-    const input = await screen.findByRole("textbox", { name: "Message Leo" })
-    fireEvent.focus(input)
-    expect(shell?.getAttribute("data-primary-composing")).toBe("true")
-    expect(shell?.style.getPropertyValue("--primary-visible-height")).toBe(
-      "420px"
-    )
+    backend()
+    const view = render(<SignedIn />)
+    const shell = shellOf(view.container)
+    const box = await screen.findByRole("textbox", {
+      name: "Start a new conversation",
+    })
+    fireEvent.focus(box)
+    expect(shell?.getAttribute("data-composing")).toBe("true")
+    expect(shell?.style.getPropertyValue("--visible-height")).toBe("420px")
 
     act(() => {
       viewport.height = 300
       viewport.dispatchEvent(new Event("resize"))
     })
-    expect(shell?.style.getPropertyValue("--primary-visible-height")).toBe(
-      "300px"
+    expect(shell?.style.getPropertyValue("--visible-height")).toBe("300px")
+
+    fireEvent.blur(box)
+    expect(shell?.getAttribute("data-composing")).toBeNull()
+    expect(shell?.style.getPropertyValue("--visible-height")).toBe("")
+  })
+})
+
+describe("the member's agent in the center", () => {
+  it("opens a conversation from Recent in the center, marked current, with its title and New chat, which returns to the desk", async () => {
+    backend({
+      threads: [
+        thread("th_1", "Plan the launch", 3 * 3_600_000),
+        thread("th_2", "Hiring pipeline", 4 * 3_600_000),
+      ],
+    })
+    render(<SignedIn />)
+    await screen.findByRole("heading", { name: "Today", level: 1 })
+    const row = await sidebar().findByRole("button", {
+      name: /^Plan the launch/,
+    })
+    expect(row.getAttribute("aria-current")).toBeNull()
+
+    fireEvent.click(row)
+    ;(await socketOn("th_1")).open()
+    expect(heading()).toBe("Plan the launch")
+    expect(screen.getByRole("region", { name: "Agent chat" })).toBeTruthy()
+    expect(
+      screen.getByRole("main", { name: "Conversation canvas" })
+    ).toBeTruthy()
+    expect(
+      await screen.findByRole("textbox", { name: "Message Leo" })
+    ).toBeTruthy()
+    expect(screen.queryByRole("region", { name: "Your agent" })).toBeNull()
+    expect(
+      sidebar()
+        .getByRole("button", { name: /^Plan the launch/ })
+        .getAttribute("aria-current")
+    ).toBe("true")
+
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(heading()).toBe("Today")
+    expect(screen.getByRole("region", { name: "Your agent" })).toBeTruthy()
+    expect(
+      sidebar()
+        .getByRole("button", { name: /^Plan the launch/ })
+        .getAttribute("aria-current")
+    ).toBeNull()
+  })
+
+  it("keeps the conversation, its socket and its draft, while another screen is in the center", async () => {
+    backend({ threads: [thread("th_1", "Plan the launch", 3 * 3_600_000)] })
+    render(<SignedIn />)
+    fireEvent.click(
+      await sidebar().findByRole("button", { name: /^Plan the launch/ })
+    )
+    ;(await socketOn("th_1")).open()
+    fireEvent.change(
+      await screen.findByRole("textbox", { name: "Message Leo" }),
+      { target: { value: "Half a thought" } }
     )
 
-    fireEvent.blur(input)
-    expect(shell?.getAttribute("data-primary-composing")).toBeNull()
-    expect(shell?.style.getPropertyValue("--primary-visible-height")).toBe("")
+    fireEvent.click(main().getByRole("button", { name: "Requests" }))
+    expect(heading()).toBe("Requests")
+    expect(screen.queryByRole("region", { name: "Agent chat" })).toBeNull()
+    expect(roomSockets.named(objectName("th_1"))).toHaveLength(1)
+    // Not current while another screen shows.
+    expect(
+      sidebar()
+        .getByRole("button", { name: /^Plan the launch/ })
+        .getAttribute("aria-current")
+    ).toBeNull()
+
+    fireEvent.click(sidebar().getByRole("button", { name: /^Plan the launch/ }))
+    expect(heading()).toBe("Plan the launch")
+    expect(roomSockets.named(objectName("th_1"))).toHaveLength(1)
+    expect(screen.getByDisplayValue("Half a thought")).toBeTruthy()
+  })
+
+  it("starts a conversation from the desk and shows it in the center, never a side panel", async () => {
+    const api = backend()
+    const view = render(<SignedIn />)
+    const box = await screen.findByRole("textbox", {
+      name: "Start a new conversation",
+    })
+    fireEvent.change(box, { target: { value: "  What changed today?  " } })
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Your agent" })).getByRole(
+        "button",
+        { name: "Send message" }
+      )
+    )
+    // The center is the conversation at once, the message in it.
+    expect(heading()).toBe("New conversation")
+    expect(
+      screen.getByRole("log").querySelector('[data-from="member"]')?.textContent
+    ).toBe("What changed today?")
+    ;(await socketOn("th_new")).open()
+    expect(
+      agentChats.named(objectName("th_new")).sendMessage
+    ).toHaveBeenCalledExactlyOnceWith(
+      { text: "What changed today?" },
+      {
+        body: {
+          screen_context: expect.objectContaining({ view: "home/overview" }),
+        },
+      }
+    )
+    expect(
+      api.calls.filter(
+        (call) => call.method === "POST" && call.path === `${orgPath}/threads`
+      )
+    ).toHaveLength(1)
+    expect(view.container.querySelector(".workspace-right")).toBeNull()
+    expect(
+      screen.queryByRole("complementary", { name: "Agent panel" })
+    ).toBeNull()
+  })
+
+  it("reopens, as the app opens, the conversation the member left here less than five minutes ago", async () => {
+    backend({
+      threads: [
+        thread("th_new_one", "Newest", 60_000),
+        thread("th_left", "The one they left", 2 * 3_600_000),
+      ],
+    })
+    rememberChoice(scope, agentId, "th_left", Date.now() - 60_000)
+    render(<SignedIn />)
+    await socketOn("th_left")
+    expect(heading()).toBe("The one they left")
+    expect(roomSockets.named(objectName("th_new_one"))).toHaveLength(0)
+  })
+
+  it("stays on the desk, as the app opens, after an explicit New chat less than five minutes ago", async () => {
+    backend({
+      threads: [thread("th_1", "Waiting", 60_000)],
+      pending: { th_1: ["approval"] },
+    })
+    rememberChoice(scope, agentId, null, Date.now() - 60_000)
+    render(<SignedIn />)
+    expect(
+      await screen.findByRole("heading", { name: "Today", level: 1 })
+    ).toBeTruthy()
+    await act(async () => {})
+    expect(roomSockets.all).toHaveLength(0)
+  })
+
+  it("opens, as the app opens, the newest conversation waiting on the member's approval", async () => {
+    backend({
+      threads: [
+        thread("th_quiet", "Nothing waits", 60_000),
+        thread("th_waiting", "Send the email?", 3_600_000),
+      ],
+      pending: { th_waiting: ["approval"] },
+    })
+    render(<SignedIn />)
+    await socketOn("th_waiting")
+    expect(heading()).toBe("Send the email?")
+    expect(
+      sidebar().getByRole("button", {
+        name: /^Send the email\?.*Needs approval/,
+      })
+    ).toBeTruthy()
+  })
+
+  it("opens the conversation's files inline from its header, and a file in place of the conversation", async () => {
+    const items: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Write it up" },
+      { type: "artifact", id: "ev_2", artifact: "report.txt", version: 1 },
+    ]
+    backend({
+      threads: [thread("th_1", "Write it up", 3 * 3_600_000)],
+      items: { th_1: items },
+    })
+    render(<SignedIn />)
+    fireEvent.click(
+      await sidebar().findByRole("button", { name: /^Write it up/ })
+    )
+    ;(await socketOn("th_1")).open()
+
+    const files = await screen.findByRole("button", {
+      name: "Files, 1 in this conversation",
+    })
+    expect(files.getAttribute("aria-expanded")).toBe("false")
+    fireEvent.click(files)
+    expect(files.getAttribute("aria-expanded")).toBe("true")
+    const listed = screen.getByRole("region", {
+      name: "Files in this conversation",
+    })
+    fireEvent.click(within(listed).getByRole("button", { name: "report.txt" }))
+
+    // The viewer takes the conversation's place; the chat stays mounted.
+    expect(screen.getByRole("region", { name: "File viewer" })).toBeTruthy()
+    expect(screen.queryByRole("region", { name: "Agent chat" })).toBeNull()
+    expect(roomSockets.named(objectName("th_1"))).toHaveLength(1)
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to conversation" })
+    )
+    expect(screen.queryByRole("region", { name: "File viewer" })).toBeNull()
+    expect(screen.getByRole("region", { name: "Agent chat" })).toBeTruthy()
+
+    // New chat leaves the conversation, and its files with it.
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(screen.queryByRole("button", { name: /^Files/ })).toBeNull()
+  })
+
+  it("says, on the desk and in a conversation, that the member's agent is paused, with Resume", async () => {
+    backend({
+      threads: [thread("th_1", "Plan the launch", 3 * 3_600_000)],
+      agentStatus: "disabled",
+    })
+    render(<SignedIn />)
+    const agent = await screen.findByRole("region", { name: "Your agent" })
+    expect(await within(agent).findByText("Leo is paused.")).toBeTruthy()
+    fireEvent.click(
+      await sidebar().findByRole("button", { name: /^Plan the launch/ })
+    )
+    ;(await socketOn("th_1")).open()
+    expect(screen.getByText("Leo is paused.")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Resume Leo" })).toBeTruthy()
+  })
+})
+
+describe("links into the workspace", () => {
+  it("opens the conversation `?chat=` names, and leaves the address, so a reload follows the opening rules", async () => {
+    window.history.replaceState({}, "", "/?org=org_sim&chat=th_2")
+    backend({
+      threads: [
+        thread("th_1", "Newest", 60_000),
+        thread("th_2", "Linked conversation", 5 * 3_600_000),
+      ],
+    })
+    render(<SignedIn />)
+    await socketOn("th_2")
+    await waitFor(() => expect(heading()).toBe("Linked conversation"))
+    expect(window.location.search).toBe("?org=org_sim")
+  })
+
+  it.each([
+    ["knowledge", "Knowledge bases"],
+    ["tools", "Tools"],
+    ["requests", "Requests"],
+  ])(
+    "opens `?view=%s` on its screen, and the address follows the screen after",
+    async (view, title) => {
+      window.history.replaceState({}, "", `/?org=org_sim&view=${view}`)
+      backend()
+      render(<SignedIn />)
+      expect(heading()).toBe(title)
+
+      fireEvent.click(
+        main().getByRole("button", {
+          name: view === "requests" ? "Knowledge" : "Requests",
+        })
+      )
+      expect(new URLSearchParams(window.location.search).get("view")).toBe(
+        view === "requests" ? "knowledge" : "requests"
+      )
+      // The member's agent has no view: a reload there follows the opening rules.
+      fireEvent.click(sidebar().getByRole("button", { name: "New chat" }))
+      expect(window.location.search).toBe("?org=org_sim")
+    }
+  )
+
+  it.each(["billing", "slack"] as const)(
+    "keeps the explicit %s return ahead of the remembered section",
+    (page) => {
+      backend()
+      rememberSettingsPage(scope, "email")
+      window.history.replaceState({}, "", `/?view=${page}`)
+      render(<SignedIn organizationRole="admin" />)
+      expect(
+        screen.getByRole("heading", {
+          name: page === "billing" ? "Billing" : "Slack",
+          level: 2,
+        })
+      ).toBeTruthy()
+      fireEvent.click(screen.getByRole("button", { name: "Tool access" }))
+      fireEvent.click(screen.getByRole("button", { name: "Open my tools →" }))
+      expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
+      expect(heading()).toBe("Tools")
+      fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
+      fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
+      expect(
+        screen.getByRole("heading", { name: "Tool access", level: 2 })
+      ).toBeTruthy()
+    }
+  )
+})
+
+describe("whose workspace it is", () => {
+  it("restores Settings for the same member and workspace without carrying a section to another scope", () => {
+    backend()
+    const props = {
+      session,
+      selectedOrganization: organization,
+      role: "member" as const,
+      organizationRole: "member" as const,
+    }
+    const view = render(<WorkspaceShell {...props} />)
+    function openSettings() {
+      fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
+      fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
+    }
+    openSettings()
+    fireEvent.click(screen.getByRole("button", { name: "Teams" }))
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }))
+    openSettings()
+    expect(
+      screen.getByRole("heading", { name: "Teams", level: 2 })
+    ).toBeTruthy()
+
+    view.rerender(
+      <WorkspaceShell
+        {...props}
+        selectedOrganization={{ id: "org_other", name: "Other", slug: "other" }}
+      />
+    )
+    expect(
+      screen.getByRole("heading", { name: "Account", level: 2 })
+    ).toBeTruthy()
+    view.rerender(<WorkspaceShell {...props} />)
+    expect(
+      screen.getByRole("heading", { name: "Teams", level: 2 })
+    ).toBeTruthy()
+
+    view.rerender(
+      <WorkspaceShell
+        {...props}
+        session={{
+          ...session,
+          user: { id: "user-other-settings", email: "other@example.com" },
+        }}
+      />
+    )
+    openSettings()
+    expect(
+      screen.getByRole("heading", { name: "Account", level: 2 })
+    ).toBeTruthy()
+  })
+
+  it("keeps the same member's draft, screen and Settings through a session refresh, and nothing for another member", async () => {
+    backend()
+    const view = render(<SignedIn />)
+    fireEvent.change(
+      await screen.findByRole("textbox", { name: "Start a new conversation" }),
+      { target: { value: "Member's unfinished message" } }
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
+
+    view.rerender(
+      <SignedIn
+        session={{
+          ...session,
+          user: { ...session.user, display_name: "Member refreshed" },
+        }}
+      />
+    )
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
+    expect(screen.getByDisplayValue("Member's unfinished message")).toBeTruthy()
+
+    view.rerender(
+      <SignedIn
+        session={{
+          ...session,
+          user: {
+            id: "usr_other_shell",
+            email: "other@sim.oryxa",
+            display_name: "Other member",
+          },
+        }}
+      />
+    )
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
+    expect(screen.queryByDisplayValue("Member's unfinished message")).toBeNull()
   })
 })
