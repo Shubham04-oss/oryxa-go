@@ -590,7 +590,7 @@ export function AgentChat({
 
 /**
  * The first messages that were not sent, each in a bubble ringed as a failed
- * message is in a DM, with what can be done about it: Retry sends it into a
+ * message is, with what can be done about it: Retry sends it into a
  * conversation of its own, Edit puts it in the composer (offered only while
  * that is empty, so nothing the member typed is ever replaced), Dismiss lets
  * it go. Its words are all it has: no conversation was ever made for it.

@@ -1,6 +1,6 @@
 // Opening Agents → Requests from anywhere, on a request's card when one is
-// named. A DM, a note in a conversation, an Agent overview tile and a link
-// each want "open this request" without threading a callback through the
+// named. A note in a conversation, an Agent overview tile and a link each
+// want "open this request" without threading a callback through the
 // panel and the shell, so this is one call any of them makes, and one listener
 // the shell keeps (`useRequestsEntry`). Small on purpose: it imports nothing
 // of the view, so whoever calls it does not pull the view in.

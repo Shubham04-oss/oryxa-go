@@ -7,7 +7,6 @@ import {
   avatarDataUri,
   IdentityAvatar,
   people,
-  TeamspaceAvatar,
 } from "./workspace-avatar"
 
 afterEach(cleanup)
@@ -33,29 +32,21 @@ describe("workspace avatars", () => {
     }
   })
 
-  it("uses the shadcn avatar shell and a teamspace fallback", () => {
+  it("uses the shadcn avatar shell, named for the person or agent", () => {
     const { container } = render(
       <>
         <IdentityAvatar identity={people.avery} />
-        <TeamspaceAvatar name="Product sync" />
-        <TeamspaceAvatar name="Launch planning" />
+        <IdentityAvatar identity={agents.research} />
       </>
     )
 
     const avatars = container.querySelectorAll('[data-slot="avatar"]')
-    expect(avatars).toHaveLength(3)
+    expect(avatars).toHaveLength(2)
     expect(avatars[0].getAttribute("aria-label")).toBe("Avery Morgan")
-    expect(avatars[1].getAttribute("aria-label")).toBe("Product sync teamspace")
+    expect(avatars[1].getAttribute("aria-label")).toBe("Research agent")
+    // The initials wait behind the art while it loads.
     expect(
-      avatars[1].querySelector('[data-slot="avatar-fallback"]')
-    ).toBeTruthy()
-    expect(avatars[1].querySelector('[data-slot="avatar-image"]')).toBeNull()
-    expect(avatars[1].getAttribute("data-avatar-kind")).toBe("planet")
-    expect(avatars[1].querySelector(".workspace-planet-art")).toBeTruthy()
-    expect(avatars[1].querySelectorAll("ellipse")).toHaveLength(2)
-    expect(avatars[2].querySelectorAll("ellipse")).toHaveLength(0)
-    expect(
-      avatars[1].querySelector("stop")?.getAttribute("stop-color")
-    ).not.toBe(avatars[2].querySelector("stop")?.getAttribute("stop-color"))
+      avatars[0].querySelector('[data-slot="avatar-fallback"]')?.textContent
+    ).toBe("AM")
   })
 })
