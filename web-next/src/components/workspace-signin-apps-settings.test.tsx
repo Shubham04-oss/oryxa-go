@@ -451,7 +451,7 @@ describe("Settings → Sign-in apps", () => {
     )
     expect(secretInput.getAttribute("aria-describedby")).toContain(problem.id)
     expect(secretInput.value).toBe("")
-    expect(document.activeElement).toBe(secretInput)
+    await waitFor(() => expect(document.activeElement).toBe(secretInput))
   })
 
   it("asks for a client's secret with a new client ID, and checks fields before saving", async () => {

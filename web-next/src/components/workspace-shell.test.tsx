@@ -14,6 +14,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
 import { WorkspaceShell } from "./workspace-shell"
 import type { Session } from "@/lib/auth/client"
+import * as primaryChat from "@/lib/threads/chat-choice"
 import { json, mockApi, orgPath, teamspace, viewerId } from "@/test/teamspaces"
 
 // A signed-in shell holds the member's DM inbox open, and a teamspace its
@@ -22,14 +23,20 @@ vi.mock(
   "agents/react",
   async () => (await import("@/test/room-socket")).agentsReact
 )
+vi.mock(
+  "@cloudflare/ai-chat/react",
+  async () => (await import("@/test/agent-chat")).aiChatReact
+)
 
 function render(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return renderBase(
-    <QueryClientProvider client={client}>{ui}</QueryClientProvider>
-  )
+  return renderBase(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ),
+  })
 }
 
 const session: Session = {
@@ -103,9 +110,227 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe("WorkspaceShell navigation", () => {
+  it("preserves the same member's workspace state on refresh and resets the whole shell for another member", async () => {
+    liveBackend()
+    const props = {
+      session,
+      selectedOrganization: session.organizations[0],
+      role: "member" as const,
+      organizationRole: "member" as const,
+    }
+    const view = render(<WorkspaceShell {...props} />)
+    fireEvent.change(
+      await screen.findByRole("textbox", {
+        name: "Start a new conversation",
+      }),
+      { target: { value: "Member's unfinished Home message" } }
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
+    fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
+
+    view.rerender(
+      <WorkspaceShell
+        {...props}
+        session={{
+          ...session,
+          user: { ...session.user, display_name: "Member refreshed" },
+        }}
+      />
+    )
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
+    expect(
+      view.container
+        .querySelector(".workspace-shell")
+        ?.getAttribute("data-left")
+    ).toBe("expanded")
+    expect(
+      screen.getByDisplayValue("Member's unfinished Home message")
+    ).toBeTruthy()
+
+    view.rerender(
+      <WorkspaceShell
+        {...props}
+        session={{
+          ...session,
+          user: {
+            id: "usr_other_shell",
+            email: "other@sim.oryxa",
+            display_name: "Other member",
+          },
+        }}
+      />
+    )
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
+    const shell = view.container.querySelector(".workspace-shell")
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+    expect(shell?.getAttribute("data-right")).toBe("collapsed")
+    expect(
+      screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: "Start a new conversation",
+      }).value
+    ).toBe("")
+  })
+
+  it("clears Home's private composer draft when the member changes in the same workspace", async () => {
+    liveBackend()
+    const props = {
+      session,
+      selectedOrganization: session.organizations[0],
+      role: "member" as const,
+      organizationRole: "member" as const,
+    }
+    const view = render(<WorkspaceShell {...props} />)
+    const composer = await screen.findByRole<HTMLTextAreaElement>("textbox", {
+      name: "Start a new conversation",
+    })
+    fireEvent.change(composer, { target: { value: "Member's private draft" } })
+    expect(composer.value).toBe("Member's private draft")
+
+    view.rerender(
+      <WorkspaceShell
+        {...props}
+        session={{
+          ...session,
+          user: {
+            id: "usr_other_home",
+            email: "other@sim.oryxa",
+            display_name: "Other member",
+          },
+        }}
+      />
+    )
+    expect(
+      screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: "Start a new conversation",
+      }).value
+    ).toBe("")
+  })
+
+  it("opens the panel and emits workspace-scoped Home targets through the public contract without claiming delivery", async () => {
+    const request = vi
+      .spyOn(primaryChat, "requestPrimaryChat")
+      .mockImplementation(() => {})
+    const api = mockApi(({ url }) => {
+      if (url.pathname === `${orgPath}/threads`)
+        return json({
+          threads: [
+            {
+              id: "th_recent",
+              title: "Specific recent conversation",
+              origin: "chat",
+              updated_at: new Date().toISOString(),
+            },
+          ],
+        })
+      if (url.pathname.endsWith("/threads/th_recent"))
+        return json({
+          id: "th_recent",
+          title: "Specific recent conversation",
+          items: [],
+          pending_confirmations: [],
+        })
+      if (url.pathname.endsWith("/get-messages")) return json([])
+      if (url.pathname.endsWith("/agents")) return json({ agents: [] })
+      if (url.pathname.endsWith("/teamspaces")) return json({ teamspaces: [] })
+      if (url.pathname.endsWith("/corpora")) return json({ corpora: [] })
+      if (url.pathname.endsWith("/apps/connections"))
+        return json({ connections: [] })
+      if (url.pathname.endsWith("/agent-requests/inbox"))
+        return json({ requests: [] })
+      return undefined
+    })
+    const { container } = render(
+      <WorkspaceShell
+        session={session}
+        selectedOrganization={session.organizations[0]}
+        role="member"
+        organizationRole="member"
+      />
+    )
+    const shell = container.querySelector(".workspace-shell")
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Specific recent conversation/,
+      })
+    )
+    expect(request).toHaveBeenLastCalledWith(
+      { organizationId: "org_sim", userId: viewerId },
+      { kind: "thread", threadId: "th_recent" }
+    )
+    expect(shell?.getAttribute("data-right")).toBe("expanded")
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+    expect(
+      screen.getByRole("heading", { name: "Today", level: 1 })
+    ).toBeTruthy()
+    expect(shell?.getAttribute("data-primary-work")).toBeNull()
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Start a new conversation" }),
+      { target: { value: "  Start from Home  " } }
+    )
+    fireEvent.click(
+      within(screen.getByRole("main", { name: "Today canvas" })).getByRole(
+        "button",
+        { name: "Send message" }
+      )
+    )
+    expect(request).toHaveBeenLastCalledWith(
+      { organizationId: "org_sim", userId: viewerId },
+      { kind: "new", message: "Start from Home" }
+    )
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Your agent" })).getByRole(
+        "button",
+        { name: "New chat" }
+      )
+    )
+    expect(request).toHaveBeenLastCalledWith(
+      { organizationId: "org_sim", userId: viewerId },
+      { kind: "new", message: undefined }
+    )
+    expect(request).toHaveBeenCalledTimes(3)
+    expect(api.calls.every((call) => call.method === "GET")).toBe(true)
+  })
+
+  it("starts Home on collapsed rails, preserves explicit toggle choices and has no fake saved views", () => {
+    const { container } = render(<WorkspaceShell />)
+    const shell = container.querySelector(".workspace-shell")
+    expect(
+      screen.getByRole("heading", { name: "Today", level: 1 })
+    ).toBeTruthy()
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+    expect(shell?.getAttribute("data-right")).toBe("collapsed")
+    for (const label of [
+      "Saved views",
+      "Launch plan",
+      "At-risk accounts",
+      "Q4 pipeline",
+    ])
+      expect(screen.queryByText(label)).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
+    fireEvent.click(screen.getByRole("button", { name: /^Home$/ }))
+    expect(shell?.getAttribute("data-left")).toBe("expanded")
+    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+    expect(shell?.getAttribute("data-right")).toBe("expanded")
+    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
+    fireEvent.click(screen.getByRole("button", { name: "Today" }))
+    expect(shell?.getAttribute("data-right")).toBe("expanded")
+    fireEvent.click(
+      screen.getByRole("button", { name: "Collapse agent panel" })
+    )
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+    expect(shell?.getAttribute("data-right")).toBe("collapsed")
+  })
+
   it("uses the header title without repeating page introductions", () => {
     render(<WorkspaceShell />)
 
@@ -115,6 +340,7 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
     expect(screen.queryByText("Knowledge your team can build on.")).toBeNull()
 
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
     fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
     expect(
       screen.getByRole("heading", { name: "Teamspaces", level: 1 })
@@ -194,7 +420,7 @@ describe("WorkspaceShell navigation", () => {
       name: "Home navigation",
     })
     expect(
-      within(homeNavigation).getByRole("button", { name: "Overview" })
+      within(homeNavigation).getByRole("button", { name: "Today" })
     ).toBeTruthy()
     expect(
       within(homeNavigation).getByRole("button", { name: "Knowledge bases" })
@@ -203,6 +429,7 @@ describe("WorkspaceShell navigation", () => {
       screen.queryByRole("button", { name: "Multi-agent teams" })
     ).toBeNull()
 
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
     fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
     const teamNavigation = screen.getByRole("navigation", {
       name: "Team navigation",
@@ -211,7 +438,7 @@ describe("WorkspaceShell navigation", () => {
       within(teamNavigation).getByRole("button", { name: "People" })
     ).toBeTruthy()
     expect(
-      within(teamNavigation).queryByRole("button", { name: "Overview" })
+      within(teamNavigation).queryByRole("button", { name: "Today" })
     ).toBeNull()
     fireEvent.click(
       within(teamNavigation).getByRole("button", { name: "People" })
@@ -318,7 +545,7 @@ describe("WorkspaceShell navigation", () => {
     expect(within(panel).queryByText(/launch timeline/)).toBeNull()
     expect(within(panel).queryByRole("tablist")).toBeNull()
 
-    expect(shell?.getAttribute("data-left")).toBe("expanded")
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
     fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("expanded")
@@ -449,6 +676,7 @@ describe("WorkspaceShell navigation", () => {
   it("shows no example teamspaces without a workspace to read", () => {
     const api = mockApi(() => undefined)
     render(<WorkspaceShell />)
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
     fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
 
     expect(screen.getByText("No workspace to load")).toBeTruthy()

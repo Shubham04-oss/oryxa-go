@@ -23,6 +23,7 @@ import {
 import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { FocusHeader } from "./agents-parts"
 import { PrimaryAgentFileViewer } from "./primary-agent-files"
+import { HomeOverview } from "./home-overview"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import { KnowledgeBases } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
@@ -64,6 +65,11 @@ import type { AvatarIdentity } from "./workspace-avatar"
 import { cn } from "@/lib/utils"
 import { captureScreenContext } from "@/lib/agents/screen-context"
 import type { ScreenContext, ScreenItem } from "@/lib/agents/screen-context"
+import {
+  requestPrimaryChat,
+  usePrimaryChatActivity,
+} from "@/lib/threads/chat-choice"
+import type { PrimaryChatTarget } from "@/lib/threads/chat-choice"
 
 type Section =
   | "overview"
@@ -86,7 +92,7 @@ type NavigationItem = {
 
 const navigation: Record<PrimaryMode, NavigationItem[]> = {
   home: [
-    { key: "overview", label: "Overview", icon: LayoutGrid },
+    { key: "overview", label: "Today", icon: LayoutGrid },
     { key: "knowledge", label: "Knowledge bases", icon: Sparkles },
     { key: "tools", label: "Tools", icon: Puzzle },
   ],
@@ -119,7 +125,7 @@ const defaultSections: Record<PrimaryMode, Section> = {
 }
 
 const headings: Record<Section, string> = {
-  overview: "Home",
+  overview: "Today",
   teamspaces: "Teamspaces",
   agents: "Agent overview",
   "multi-agents": "Multi-agent teams",
@@ -129,8 +135,6 @@ const headings: Record<Section, string> = {
   knowledge: "Knowledge bases",
   tools: "Tools",
 }
-
-const savedViews = ["Launch plan", "At-risk accounts", "Q4 pipeline"]
 
 /**
  * The workspace. A request named in a DM opens in Agents → Requests: what
@@ -142,7 +146,7 @@ export function WorkspaceShell(
 ) {
   return (
     <OpenRequestProvider value={openRequest}>
-      <WorkspaceShellContent {...props} />
+      <WorkspaceShellContent key={props.session?.user.id} {...props} />
     </OpenRequestProvider>
   )
 }
@@ -180,7 +184,7 @@ function WorkspaceShellContent({
   const firstDm = openable(initialDirectMessage)
   const startMode: PrimaryMode = firstDm ? "team" : initialMode
   const [isMobile, setIsMobile] = useState(false)
-  const [leftExpanded, setLeftExpanded] = useState(true)
+  const [leftExpanded, setLeftExpanded] = useState(startMode !== "home")
   const [rightExpanded, setRightExpanded] = useState(false)
   const [activeMode, setActiveMode] = useState<PrimaryMode>(startMode)
   const [sectionsByMode, setSectionsByMode] = useState<
@@ -228,6 +232,13 @@ function WorkspaceShellContent({
   // online. The DM open in the main canvas is `dmPeerId`, under People.
   const inbox = useInbox(dmOrganizationId, viewerId)
   const dmPeople = useDmPeople(dmOrganizationId, viewerId, teamspaces.spaces)
+  const directMessages = viewerId
+    ? { viewerId, inbox, people: dmPeople }
+    : undefined
+  const primaryChatActivity = usePrimaryChatActivity({
+    organizationId: dmOrganizationId ?? "",
+    userId: directMessages?.viewerId ?? "",
+  })
   const [dmPeerId, setDmPeerId] = useState<string | null>(firstDm)
   // The member opened it just now: focus goes into it.
   const [dmOpenedByMember, setDmOpenedByMember] = useState(false)
@@ -492,6 +503,32 @@ function WorkspaceShellContent({
     openPrimaryWork()
   }
 
+  function openHomeConversation(target: PrimaryChatTarget) {
+    if (!selectedOrganization || !directMessages) return
+    closePrimaryWork()
+    expandAgentPanel()
+    requestPrimaryChat(
+      {
+        organizationId: selectedOrganization.id,
+        userId: directMessages.viewerId,
+      },
+      target
+    )
+  }
+
+  function navigateFromHome(mode: PrimaryMode, next: Section) {
+    closePrimaryWork()
+    teamspaces.close()
+    agentsMode.close()
+    setActiveMode(mode)
+    setSectionsByMode((current) => ({ ...current, [mode]: next }))
+    if (isMobile) setLeftExpanded(false)
+  }
+
+  function openHomeRequests(requestId?: string) {
+    openRequestsSection(requestId)
+  }
+
   function openPrimaryFile(file?: PrimaryAgentFileTarget) {
     setPrimaryViewer("file")
     setPrimaryFile(file ?? null)
@@ -705,18 +742,6 @@ function WorkspaceShellContent({
             />
           )}
 
-          {leftExpanded && activeMode === "home" && (
-            <div className="workspace-saved-views">
-              <p className="workspace-eyebrow">Saved views</p>
-              {savedViews.map((view) => (
-                <span className="workspace-saved-view" key={view}>
-                  <span className="workspace-view-dot" />
-                  {view}
-                </span>
-              ))}
-            </div>
-          )}
-
           <div className="workspace-profile-area">
             {profileMenuOpen && (
               <div
@@ -912,6 +937,26 @@ function WorkspaceShellContent({
               className="workspace-canvas"
               aria-label={`${detailTitle || heading} canvas`}
             >
+              {section === "overview" && (
+                <HomeOverview
+                  key={JSON.stringify([selectedOrganization?.id, viewerId])}
+                  organizationId={
+                    session ? selectedOrganization?.id : undefined
+                  }
+                  viewerId={viewerId}
+                  primaryChatActivity={primaryChatActivity}
+                  onNewChat={(message) =>
+                    openHomeConversation({ kind: "new", message })
+                  }
+                  onOpenConversation={(threadId) =>
+                    openHomeConversation({ kind: "thread", threadId })
+                  }
+                  onOpenRequests={openHomeRequests}
+                  onOpenAgent={() => navigateFromHome("agents", "agents")}
+                  onOpenTools={() => navigateFromHome("home", "tools")}
+                  onOpenKnowledge={() => navigateFromHome("home", "knowledge")}
+                />
+              )}
               {section === "knowledge" && (
                 <KnowledgeBases
                   organizationId={selectedOrganization?.id}
@@ -994,6 +1039,7 @@ function WorkspaceShellContent({
       </div>
 
       <WorkspaceAgentPanel
+        key={JSON.stringify([dmOrganizationId, viewerId])}
         organizationId={session ? selectedOrganization?.id : undefined}
         expanded={rightExpanded}
         onExpand={expandAgentPanel}
@@ -1006,9 +1052,7 @@ function WorkspaceShellContent({
         getScreenContext={getScreenContext}
         chatRequest={chatRequest}
         tabRequest={tabRequest}
-        directMessages={
-          viewerId ? { viewerId, inbox, people: dmPeople } : undefined
-        }
+        directMessages={directMessages}
         teamspaceId={pageTeamspaceId}
       />
       {settingsOpen && (
