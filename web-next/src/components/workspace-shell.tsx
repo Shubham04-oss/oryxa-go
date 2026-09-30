@@ -926,7 +926,7 @@ function WorkspaceShellContent({
             >
               {section === "overview" && (
                 <HomeOverview
-                  key={selectedOrganization?.id ?? "preview"}
+                  key={JSON.stringify([selectedOrganization?.id, viewerId])}
                   organizationId={
                     session ? selectedOrganization?.id : undefined
                   }

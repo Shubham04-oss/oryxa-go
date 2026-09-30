@@ -32,9 +32,11 @@ function render(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return renderBase(
-    <QueryClientProvider client={client}>{ui}</QueryClientProvider>
-  )
+  return renderBase(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ),
+  })
 }
 
 const session: Session = {
@@ -112,6 +114,41 @@ afterEach(() => {
 })
 
 describe("WorkspaceShell navigation", () => {
+  it("clears Home's private composer draft when the member changes in the same workspace", async () => {
+    liveBackend()
+    const props = {
+      session,
+      selectedOrganization: session.organizations[0],
+      role: "member" as const,
+      organizationRole: "member" as const,
+    }
+    const view = render(<WorkspaceShell {...props} />)
+    const composer = await screen.findByRole<HTMLTextAreaElement>("textbox", {
+      name: "Start a new conversation",
+    })
+    fireEvent.change(composer, { target: { value: "Member's private draft" } })
+    expect(composer.value).toBe("Member's private draft")
+
+    view.rerender(
+      <WorkspaceShell
+        {...props}
+        session={{
+          ...session,
+          user: {
+            id: "usr_other_home",
+            email: "other@sim.oryxa",
+            display_name: "Other member",
+          },
+        }}
+      />
+    )
+    expect(
+      screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: "Start a new conversation",
+      }).value
+    ).toBe("")
+  })
+
   it("opens the panel and emits workspace-scoped Home targets through the public contract without claiming delivery", async () => {
     const request = vi
       .spyOn(primaryChat, "requestPrimaryChat")
