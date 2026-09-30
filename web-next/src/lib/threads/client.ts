@@ -25,6 +25,8 @@ export type Thread = {
   created_at?: string
   /** RFC 3339. `listThreads` answers newest first by it. */
   updated_at: string
+  /** Why the thread exists: "chat", "side_conversation" or "wakeup". Missing reads as "chat", as in Go. */
+  origin?: string
 }
 
 /** A thread and everything that happened in it (Go: `threads.Detail`). */
@@ -520,9 +522,21 @@ export function retryUnlessRefused(
   return failureCount < 1
 }
 
-export function threadListQueryOptions(organizationId: string) {
+/**
+ * The member's conversations. Given `viewerId`, the entry is that member's
+ * own (`[...threadKeys.list(organizationId), viewerId]`), so a member who takes
+ * over a page that another one used (same organization, same cache) never
+ * reads the other's list; invalidating `threadKeys.list(organizationId)`
+ * still reaches it, being its prefix.
+ */
+export function threadListQueryOptions(
+  organizationId: string,
+  viewerId?: string
+) {
   return queryOptions({
-    queryKey: threadKeys.list(organizationId),
+    queryKey: viewerId
+      ? ([...threadKeys.list(organizationId), viewerId] as const)
+      : threadKeys.list(organizationId),
     queryFn: ({ signal }) => listThreads(organizationId, { signal }),
     retry: retryUnlessRefused,
   })

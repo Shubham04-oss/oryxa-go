@@ -237,6 +237,8 @@ export function SpecialistChat({
   specialist,
   missing = false,
   layout,
+  draft: heldDraft,
+  onDraftChange: holdDraft,
   onComposingChange,
   getScreenContext,
 }: {
@@ -245,11 +247,19 @@ export function SpecialistChat({
   /** The member's agents no longer include it: it was deleted. */
   missing?: boolean
   layout: SpecialistChatLayout
+  /**
+   * The composer's text, when the parent keeps it (the panel does, so it
+   * outlasts a switch to another agent); otherwise the chat keeps its own.
+   */
+  draft?: string
+  onDraftChange?: (value: string) => void
   onComposingChange?: (composing: boolean) => void
   getScreenContext?: () => ScreenContext
 }) {
   const [attempt, setAttempt] = useState(0)
-  const [draft, setDraft] = useState("")
+  const [ownDraft, setOwnDraft] = useState("")
+  const draft = heldDraft ?? ownDraft
+  const setDraft = holdDraft ?? setOwnDraft
   const transcript = useTranscript(
     organizationId,
     specialist.id,

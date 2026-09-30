@@ -145,6 +145,198 @@ describe("Durable Object transcript", () => {
     ).toBe(stored)
   })
 
+  describe("placing what Go added by the time it happened", () => {
+    const at = (day: string, time: string) => `2026-09-${day}T${time}Z`
+    const evening = (time: string) => at("29", time)
+    const morning = (time: string) => at("30", time)
+    const texts = (messages: ThreadChatMessage[]) =>
+      chatMessagesToItems(messages).map((item) => item.text)
+    const update = (id: string, when?: string): Item => ({
+      type: "message",
+      id,
+      author: "apps",
+      text: id,
+      at: when,
+    })
+
+    /** Two exchanges, the evening's and the next morning's, as Go lists them. */
+    const history: Item[] = [
+      {
+        type: "message",
+        id: "go-u1",
+        author: "member",
+        text: "Hello",
+        at: evening("17:00:00"),
+      },
+      {
+        type: "message",
+        id: "a1",
+        author: "Krude",
+        text: "Hi",
+        at: evening("17:00:05"),
+      },
+      {
+        type: "message",
+        id: "go-u2",
+        author: "member",
+        text: "Morning",
+        at: morning("09:00:00"),
+      },
+      {
+        type: "message",
+        id: "a2",
+        author: "Krude",
+        text: "Good morning",
+        at: morning("09:00:05"),
+      },
+    ]
+    // The transcript holds the member's words under chat message ids, with
+    // no time for them.
+    const stored = itemsToChatMessages(
+      history.map((item) =>
+        item.author === "member" ? { ...item, at: undefined } : item
+      )
+    )
+
+    it("puts an update that landed overnight between the two exchanges, not below the latest message", () => {
+      const overnight = update("overnight", morning("03:00:00"))
+      const backend = [
+        history[0],
+        history[1],
+        overnight,
+        history[2],
+        history[3],
+      ]
+      const merged = reconcileChatMessages(stored, backend)
+      expect(texts(merged)).toEqual([
+        "Hello",
+        "Hi",
+        "overnight",
+        "Morning",
+        "Good morning",
+      ])
+      // Merged once: a second look finds nothing missing.
+      expect(reconcileChatMessages(merged, backend)).toBe(merged)
+    })
+
+    it("puts one that landed between a question and its answer before the answer", () => {
+      const between = update("between", evening("17:00:03"))
+      expect(
+        texts(reconcileChatMessages(stored, [...history, between]))
+      ).toEqual(["Hello", "between", "Hi", "Morning", "Good morning"])
+    })
+
+    it("puts what happened after everything at the end, and before everything at the start", () => {
+      const late = update("late", morning("23:00:00"))
+      const early = update("early", evening("08:00:00"))
+      expect(
+        texts(reconcileChatMessages(stored, [early, ...history, late]))
+      ).toEqual(["early", "Hello", "Hi", "Morning", "Good morning", "late"])
+    })
+
+    it("keeps Go's order among several updates, across the messages they fall between", () => {
+      const updates = [
+        update("a", evening("18:00:00")),
+        update("b", evening("19:00:00")),
+        update("c", morning("10:00:00")),
+      ]
+      expect(
+        texts(reconcileChatMessages(stored, [...history, ...updates]))
+      ).toEqual(["Hello", "Hi", "a", "b", "Morning", "Good morning", "c"])
+    })
+
+    it("puts what happened at the same moment after what is already there", () => {
+      const same = update("same", evening("17:00:05"))
+      expect(texts(reconcileChatMessages(stored, [...history, same]))).toEqual([
+        "Hello",
+        "Hi",
+        "same",
+        "Morning",
+        "Good morning",
+      ])
+    })
+
+    it("never reorders what Go lists, even when its times disagree", () => {
+      const first = update("first", evening("19:00:00"))
+      const second = update("second", evening("18:00:00"))
+      expect(
+        texts(reconcileChatMessages(stored, [...history, first, second]))
+      ).toEqual(["Hello", "Hi", "first", "second", "Morning", "Good morning"])
+    })
+
+    it("puts what says nothing of its time last, in Go's order", () => {
+      const untimed = [update("no time one"), update("no time two")]
+      const timed = update("timed", evening("19:00:00"))
+      expect(
+        texts(reconcileChatMessages(stored, [...history, ...untimed, timed]))
+      ).toEqual([
+        "Hello",
+        "Hi",
+        "timed",
+        "Morning",
+        "Good morning",
+        "no time one",
+        "no time two",
+      ])
+      // An unreadable time says nothing either.
+      expect(
+        texts(
+          reconcileChatMessages(stored, [
+            ...history,
+            { ...untimed[0], at: "not a time" },
+          ])
+        ).at(-1)
+      ).toBe("no time one")
+    })
+
+    it("keeps what the transcript holds in its own order, times or not", () => {
+      const untimed = itemsToChatMessages([
+        { type: "message", id: "u1", author: "member", text: "One" },
+        { type: "message", id: "a1", author: "Krude", text: "Two" },
+        { type: "message", id: "u2", author: "member", text: "Three" },
+      ])
+      const merged = reconcileChatMessages(untimed, [
+        update("new", evening("08:00:00")),
+      ])
+      expect(texts(merged)).toEqual(["One", "Two", "Three", "new"])
+    })
+
+    it("keeps an answered confirmation's status on its card, wherever the card sits", () => {
+      const card: Item = {
+        type: "confirmation",
+        id: "c1",
+        call_id: "confirm-1",
+        tool: "send_email",
+        status: "pending",
+        at: evening("17:00:03"),
+      }
+      const withCard = [history[0], card, ...history.slice(1)]
+      const storedWithCard = itemsToChatMessages(
+        withCard.map((item) =>
+          item.author === "member" ? { ...item, at: undefined } : item
+        )
+      )
+      const merged = reconcileChatMessages(
+        storedWithCard,
+        withCard.map((item) =>
+          item.id === "c1" ? { ...item, status: "approved" as const } : item
+        )
+      )
+      const items = chatMessagesToItems(merged)
+      expect(items.map((item) => item.text ?? item.type)).toEqual([
+        "Hello",
+        "confirmation",
+        "Hi",
+        "Morning",
+        "Good morning",
+      ])
+      expect(items[1]).toMatchObject({
+        call_id: "confirm-1",
+        status: "approved",
+      })
+    })
+  })
+
   it("brings in the answer to a confirmation given outside the socket", () => {
     const asked: Item = {
       type: "confirmation",

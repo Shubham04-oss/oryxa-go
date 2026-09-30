@@ -97,11 +97,14 @@ not permission to copy every incidental value into a new component.
 - Expanding the primary agent's chat uses Agent overview as focused work:
   the same mounted conversation sits on the left, and the overview occupies
   the work panel. The right rail offers only DMs and Teams in this state.
-  Files from the current conversation appear in the overview, loading the
-  latest conversation until the chat selects another. Selecting a file or
-  receiving a newly saved file turns the work panel into a clean, compact
-  viewer while the mounted chat remains on the left, even if the agent panel
-  was never opened. Markdown uses the same rendering as chat, and PDF, DOCX,
+  Files from the current conversation appear in the overview, following the
+  conversation the chat is on: a new chat has none, and neither does a chat
+  that has not opened yet. Selecting a file, or a newly saved file while the
+  chat is in view (the expanded panel's Agents tab, or this view), turns the
+  work panel into a clean, compact viewer while the mounted chat remains on
+  the left, even if the agent panel was never opened. A file saved while the
+  chat is out of view stays a chip in the chat. Markdown uses the same
+  rendering as chat, and PDF, DOCX,
   PPTX, XLSX, CSV, text and images use small in-app rendering libraries, with
   only page or sheet navigation when needed. A Word document is drawn in a
   sandboxed frame of its own, so nothing it carries (styles, links, scripts)
@@ -135,7 +138,24 @@ not permission to copy every incidental value into a new component.
   it suggests); while it works, one muted line with a Thinking Orb says so. In
   the agent panel one muted row above it names the conversation, with a quiet icon
   button that starts a new one; a specialist's focused view carries the same
-  in its presence row. No history list until one is designed.
+  in its presence row. No history list until one is designed. The primary chat
+  opens a new conversation rather than an old one: the one the member picked
+  in this browser session (or the new chat they started) comes first, then
+  their latest chat while it was active within the last hour, then one that
+  still waits on their confirmation; a conversation nothing was ever sent in
+  never counts as the latest. The member can type at once, and if choosing
+  takes over five seconds a new chat opens. A chat left alone for an hour
+  (nothing sent or heard, and no pointer or keys anywhere in the app) comes
+  back to a new conversation when its tab shows again, never while a run
+  streams, a confirmation waits or the Agent overview's viewer or editor is
+  open, and nothing is deleted. A first message, from the composer or from a
+  request elsewhere in the app (Home's box), is made a conversation of its own
+  and sent into it, in order, whatever the member does meanwhile: the chat ends
+  on the latest, no message is dropped, and a request never touches the
+  composer's text. A specialist's chat never starts over by itself, since that
+  empties its log: only its New conversation button does. Switching agents keeps
+  each one's conversation and unsent message. What the panel holds belongs to
+  the member: another member taking over the page inherits none of it.
 - People is a DM area, not teammate administration or a combined “People &
   teams” directory. Recent/started conversations belong in Team's left
   sidebar, with at most three visible there. A DM uses the same dynamic header

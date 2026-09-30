@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react"
-import type { ComponentType, KeyboardEvent, ReactNode } from "react"
+import { useEffect, useMemo, useReducer, useRef, useState } from "react"
+import type { ComponentType, Dispatch, KeyboardEvent, ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft,
@@ -34,6 +34,20 @@ import type { Inbox } from "@/lib/dms"
 import { isNameId, sideConversationName } from "@/lib/dms/names"
 import type { Teamspace } from "@/lib/teamspaces/client"
 import { teamspaceKeys, teamspaceQueryOptions } from "@/lib/teamspaces/queries"
+import {
+  claimPrimaryChatRequest,
+  initialPrimaryChat,
+  primaryChatReducer,
+  sameChatScope,
+  shownThread,
+  usePrimaryChatRequest,
+  useRememberedChoice,
+} from "@/lib/threads/chat-choice"
+import type {
+  ChatScope,
+  PrimaryChat,
+  PrimaryChatAction,
+} from "@/lib/threads/chat-choice"
 import { cn } from "@/lib/utils"
 import type { ScreenContext } from "@/lib/agents/screen-context"
 
@@ -90,6 +104,29 @@ const panelTabs: Array<{
     empty: "Team rooms will appear here.",
   },
 ]
+
+/**
+ * The member's own agents. The entry is keyed by member as well as by
+ * organization, so a member who takes over the page another one used (same
+ * organization, same cache) never reads the last one's agents: their names,
+ * their specialists, and the primary agent's id the chat keeps its choices
+ * under. The key still starts with `agentKeys.agentList`, so what invalidates
+ * that list reaches it.
+ */
+function ownAgentsQueryOptions(
+  organizationId: string,
+  viewerId: string | undefined
+) {
+  const options = agentsQueryOptions(organizationId)
+  return {
+    ...options,
+    // Its query function reads no key, so the extra part only names the entry.
+    queryKey: [
+      ...options.queryKey,
+      viewerId ?? "",
+    ] as unknown as typeof options.queryKey,
+  }
+}
 
 export function WorkspaceAgentPanel({
   expanded,
@@ -158,6 +195,14 @@ export function WorkspaceAgentPanel({
   const [sideDrafts, setSideDrafts] = useState<
     Partial<Record<string, SideDraft>>
   >({})
+  // What the primary chat holds while the member looks at another agent: the
+  // conversation it is on, what waits to be opened or sent, and every agent's
+  // unsent message (chat-choice.ts).
+  const [chat, dispatch] = useReducer(
+    primaryChatReducer,
+    undefined,
+    initialPrimaryChat
+  )
   if (chatRequest && chatRequest !== answeredRequest) {
     setAnsweredRequest(chatRequest)
     setTab("agents")
@@ -183,11 +228,42 @@ export function WorkspaceAgentPanel({
     Partial<Record<AgentPanelTab, HTMLButtonElement | null>>
   >({})
   const focusTabOnExpand = useRef(false)
+  const viewerId = directMessages?.viewerId
   const agents = useQuery({
-    ...agentsQueryOptions(organizationId ?? ""),
+    ...ownAgentsQueryOptions(organizationId ?? "", viewerId),
     enabled: Boolean(organizationId),
   })
-  const viewerId = directMessages?.viewerId
+  // Whose choices the primary chat remembers for the session: this member's,
+  // in this organization.
+  const scope = useMemo<ChatScope | undefined>(
+    () =>
+      organizationId && viewerId
+        ? { organizationId, userId: viewerId }
+        : undefined,
+    [organizationId, viewerId]
+  )
+  // Whose page this is. Another member taking it over without a reload
+  // (another tab signed in as someone else, and this one read the session
+  // again) inherits nothing the last one held here: not the chat's
+  // conversation or its drafts, the specialist they had open, nor their
+  // direct messages' drafts. It is all reset in the render that first sees
+  // the new member, so no render shows the old one's. The same member seen
+  // again after the session was briefly unreadable keeps theirs.
+  const owner = scope ? `${scope.organizationId}~${scope.userId}` : undefined
+  const [ownedBy, setOwnedBy] = useState(owner)
+  if (owner && owner !== ownedBy) {
+    setOwnedBy(owner)
+    if (ownedBy) {
+      dispatch({ type: "reset" })
+      setAgentId(null)
+      setAgentsSide(null)
+      setSidePicked(false)
+      setSideReturnTo(null)
+      setSideDrafts({})
+      setDmView(dmPanelList)
+      setDmDrafts({})
+    }
+  }
   // On a teamspace page, its teammates: read as the page reads it (one
   // query, shared with the focused view), what the list knows shown at once.
   const queryClient = useQueryClient()
@@ -203,6 +279,11 @@ export function WorkspaceAgentPanel({
   const primary = agents.data ? primaryAgent(agents.data) : undefined
   const agentName = primary?.name
   const agentSeed = primary?.id ?? PRIMARY_AGENT_SEED
+  // What keys the primary chat's remembered choices: the agent's id, known
+  // once the agents list has answered (a stand-in only when it could not).
+  // Nothing is chosen or remembered before, so no choice sits under a key
+  // that changes.
+  const chatAgent = agents.isPending ? undefined : agentSeed
   // The tab's own icon always shows the primary agent's voxel avatar, with
   // "Primary agent" as an accessible-name fallback only (never shown as text).
   const tabIconLabel = agentName ?? FALLBACK_AGENT_NAME
@@ -216,6 +297,40 @@ export function WorkspaceAgentPanel({
       .join(""),
     kind: "agent",
   }
+
+  // Whether the Agents tab's chat is in front of the member: the Agents tab
+  // of an expanded panel, or the conversation column of the focused Agent
+  // overview, and no side conversation over it. A file saved while it isn't
+  // stays a chip in the chat: opening it would close the view the member is
+  // in.
+  const agentsVisible =
+    (primaryWork || (expanded && tab === "agents")) && !agentsSide
+
+  // The shell follows the primary chat's conversation: Agent overview lists
+  // its files.
+  const shown = shownThread(chat)
+  useEffect(() => {
+    // Until the chat has a conversation it has none: the overview lists no
+    // files, and never the last member's.
+    onPrimaryThreadChange?.(shown ?? null)
+  }, [shown, onPrimaryThreadChange])
+
+  // The rest of the app asking the primary chat to open a conversation (Home
+  // does, then expands the panel). Each request is acted on once: claiming it
+  // outlasts this panel. What it asks for is held here, in order, not in the
+  // chat, so a request made before the chat first mounted is still applied,
+  // and one made while another's message is on its way waits its turn.
+  const request = usePrimaryChatRequest()
+  useEffect(() => {
+    if (!request || !scope || !chatAgent) return
+    if (!sameChatScope(request.scope, scope)) return
+    if (!claimPrimaryChatRequest(request.id)) return
+    setTab("agents")
+    setAgentId(null)
+    setAgentsSide(null)
+    dispatch({ type: "request", request, screen: getScreenContext?.() })
+  }, [request, scope, chatAgent])
+  useRememberedChoice(chat, scope, chatAgent)
 
   // A rail button unmounts as the panel opens, so its focus moves to the tab
   // it opened rather than falling back to the page.
@@ -477,9 +592,14 @@ export function WorkspaceAgentPanel({
                 >
                   <AgentsView
                     organizationId={organizationId}
+                    scope={scope}
+                    owner={owner}
+                    chatAgent={chatAgent}
                     agents={agents.data}
                     agentId={agentId}
                     onSelectAgent={setAgentId}
+                    chat={chat}
+                    dispatch={dispatch}
                     agentName={agentName}
                     agentSeed={agentSeed}
                     onComposingChange={(value) => {
@@ -488,11 +608,8 @@ export function WorkspaceAgentPanel({
                     }}
                     inAgentOverview={primaryWork}
                     onOpenAgentOverview={onOpenAgentOverview}
-                    onPrimaryThreadChange={onPrimaryThreadChange}
                     onPrimaryFileCreated={
-                      (primaryWork || tab === "agents") &&
-                      !agentsSide &&
-                      !agentId
+                      agentsVisible && !agentId
                         ? onPrimaryFileCreated
                         : undefined
                     }
@@ -658,25 +775,37 @@ function AgentsTabSide({
  */
 function AgentsView({
   organizationId,
+  scope,
+  owner,
+  chatAgent,
   agents,
   agentId,
   onSelectAgent,
+  chat,
+  dispatch,
   agentName,
   agentSeed,
   onComposingChange,
   teammates,
   inAgentOverview,
   onOpenAgentOverview,
-  onPrimaryThreadChange,
   onPrimaryFileCreated,
   getScreenContext,
 }: {
   organizationId?: string
+  scope?: ChatScope
+  /** Whose page this is (see the panel): the chat is theirs, and a new one is made for the next member. */
+  owner?: string
+  /** The primary agent's id once known: what its chat's remembered choices are kept under. */
+  chatAgent?: string
   /** The member's agents, once read. */
   agents?: ManagedAgent[]
   /** The specialist in use, or null for the primary agent. */
   agentId: string | null
   onSelectAgent: (agentId: string | null) => void
+  /** What the primary chat holds, and how it moves (chat-choice.ts). */
+  chat: PrimaryChat
+  dispatch: Dispatch<PrimaryChatAction>
   agentName?: string
   agentSeed: string
   onComposingChange: (composing: boolean) => void
@@ -684,7 +813,6 @@ function AgentsView({
   teammates?: ReactNode
   inAgentOverview?: boolean
   onOpenAgentOverview?: () => void
-  onPrimaryThreadChange?: (threadId: string | null) => void
   onPrimaryFileCreated?: (file: {
     threadId: string
     name: string
@@ -736,17 +864,25 @@ function AgentsView({
           organizationId={organizationId}
           specialist={inUse}
           missing={agents !== undefined && !listed}
+          draft={chat.drafts[inUse.id] ?? ""}
+          onDraftChange={(text) =>
+            dispatch({ type: "draft", key: inUse.id, text })
+          }
           onComposingChange={onComposingChange}
           getScreenContext={getScreenContext}
         />
       ) : organizationId ? (
         <AgentChat
+          key={owner}
           organizationId={organizationId}
+          scope={scope}
+          agentId={chatAgent}
           agentName={agentName}
+          chat={chat}
+          dispatch={dispatch}
           onComposingChange={onComposingChange}
           inOverview={inAgentOverview}
           onOpenOverview={onOpenAgentOverview}
-          onThreadChange={onPrimaryThreadChange}
           onFileCreated={onPrimaryFileCreated}
           getScreenContext={getScreenContext}
         />
