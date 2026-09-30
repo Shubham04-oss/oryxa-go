@@ -19,6 +19,7 @@ import {
   retryUnlessRefused,
   threadListQueryOptions,
 } from "@/lib/threads/client"
+import type { PrimaryChatActivity } from "@/lib/threads/chat-choice"
 import "./home-overview.css"
 
 const requestLimit = 100
@@ -108,7 +109,7 @@ function relativeTime(timestamp: string) {
 export function HomeOverview({
   organizationId,
   viewerId,
-  agentRunning = false,
+  primaryChatActivity,
   onNewChat,
   onOpenRequests,
   onOpenAgent,
@@ -118,7 +119,7 @@ export function HomeOverview({
 }: {
   organizationId?: string
   viewerId?: string
-  agentRunning?: boolean
+  primaryChatActivity?: PrimaryChatActivity | null
   onNewChat?: (message?: string) => void
   onOpenRequests: (requestId?: string) => void
   onOpenAgent: () => void
@@ -182,9 +183,39 @@ export function HomeOverview({
   const waiting = inboxRows.filter((request) =>
     waitsOnMember(request, viewerId ?? "", Date.now())
   )
-  const recent = (currentData(threads) ?? [])
-    .filter((thread) => !thread.origin || thread.origin === "chat")
-    .slice(0, 3)
+  const conversations = (currentData(threads) ?? []).filter(
+    (thread) => !thread.origin || thread.origin === "chat"
+  )
+  // Activity describes the selected primary chat, not all background work.
+  // It takes one of the three rows, even before a new thread has an ID.
+  const active =
+    primaryChatActivity && primaryChatActivity.state !== "idle"
+      ? primaryChatActivity
+      : null
+  const agentWork = [
+    ...(active
+      ? [
+          {
+            threadId: active.threadId,
+            title:
+              active.threadId === null && active.state === "running"
+                ? "Starting conversation"
+                : conversations.find((thread) => thread.id === active.threadId)
+                    ?.title || "Current conversation",
+            detail:
+              active.state === "waiting" ? "Needs confirmation" : "Working",
+          },
+        ]
+      : []),
+    ...conversations
+      .filter((thread) => thread.id !== active?.threadId)
+      .slice(0, active ? 2 : 3)
+      .map((thread) => ({
+        threadId: thread.id,
+        title: thread.title || "New conversation",
+        detail: relativeTime(thread.updated_at),
+      })),
+  ].slice(0, 3)
   const toolProblems = (currentData(connections) ?? []).filter(
     (connection) =>
       connection.status === "failed" || connection.status === "expired"
@@ -218,7 +249,8 @@ export function HomeOverview({
   const settled = [inbox, threads, connections, corpora, ...failures].every(
     (query) => query.isSuccess && !query.isFetching
   )
-  const needsMember = waiting.length > 0 || attention.length > 0
+  const needsMember =
+    waiting.length > 0 || attention.length > 0 || active?.state === "waiting"
   // A base with no visible documents cannot contain a visible failed document.
   const checkedCount =
     corpusRows.length -
@@ -289,7 +321,7 @@ export function HomeOverview({
             </section>
           )}
           <ReadNotice name="agent work" query={threads} />
-          {(agentRunning || recent.length > 0) && (
+          {agentWork.length > 0 && (
             <section className="home-card" aria-label="Your agent">
               <header>
                 <h2>Your agent</h2>
@@ -306,22 +338,25 @@ export function HomeOverview({
                   </button>
                 </div>
               </header>
-              {agentRunning && (
-                <p className="home-quiet" role="status">
-                  Your agent is working.
-                </p>
-              )}
               <ul>
-                {recent.map((thread) => (
-                  <li key={thread.id} className="home-row">
-                    <button
-                      type="button"
-                      disabled={!onOpenConversation}
-                      onClick={() => onOpenConversation?.(thread.id)}
-                    >
-                      <span>{thread.title || "New conversation"}</span>
-                      <small>{relativeTime(thread.updated_at)}</small>
-                    </button>
+                {agentWork.map((work) => (
+                  <li key={work.threadId ?? "starting"} className="home-row">
+                    {work.threadId === null ? (
+                      <div role="status">
+                        <span>{work.title}</span> <small>{work.detail}</small>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={!onOpenConversation}
+                        onClick={() => {
+                          if (work.threadId !== null)
+                            onOpenConversation?.(work.threadId)
+                        }}
+                      >
+                        <span>{work.title}</span> <small>{work.detail}</small>
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>

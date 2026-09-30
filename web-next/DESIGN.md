@@ -105,15 +105,23 @@ not permission to copy every incidental value into a new component.
   - After the composer, show Waiting on you for owner approvals and held
     answers to review, then Your agent, then Needs attention for failed or
     expired tools and failed knowledge documents.
-  - Keep up to three real recent conversations in Your agent, including when
-    nothing else needs the member. Each opens that exact
-    conversation in the right panel while staying on Home. New chat starts
-    a blank conversation, and All opens the
-    agent's work. Describe running work only from a real live signal, never
-    from a thread's update time.
+  - Your agent has one list of at most three conversations. Put the selected
+    primary chat first when its scoped live activity is running or waiting,
+    then fill the remaining rows with recent chats, without duplicating its
+    exact ID. Idle or absent activity leaves up to three real recents,
+    including when nothing else needs the member. This signal describes the
+    selected chat, not every background job; never infer work from update time.
+    A waiting chat says “Needs confirmation” and suppresses the quiet line,
+    without adding to the Inbox count. Before a running chat has an ID, show
+    a noninteractive “Starting conversation” row. Each concrete conversation
+    opens its exact ID in the right panel while staying on Home. New chat
+    starts a blank conversation, and All opens the agent's work.
+  - Scope the primary panel's retained conversation and draft to the current
+    workspace and member. A scope change remounts that panel; Home must not
+    treat the previous scope's activity as current.
   - At most three rows per section; All opens the relevant section.
-    Hide sections that have nothing. With no decisions or failures, keep one
-    quiet line alongside any real recent conversations.
+    Hide sections that have nothing. With no decisions, tool confirmations or
+    failures, keep one quiet line alongside any real recent conversations.
   - Counts must reflect the response's limits: a full bounded requests response
     is a lower bound (`N+`), not a total. Check only a fixed number of knowledge
     bases, query failed documents directly, and state coverage naturally

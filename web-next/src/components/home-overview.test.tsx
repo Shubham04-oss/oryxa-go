@@ -334,6 +334,132 @@ describe("HomeOverview", () => {
     expect(callbacks.onNewChat).toHaveBeenCalledExactlyOnceWith("Start fresh")
   })
 
+  it("pins selected live work outside the first three recents and deduplicates its exact conversation", async () => {
+    stubApi({
+      [`${path}/threads`]: {
+        threads: Array.from({ length: 5 }, (_, i) => ({
+          id: `th_${i}`,
+          title: `Conversation ${i}`,
+          updated_at: "2026-09-23T10:00:00Z",
+        })),
+      },
+    })
+    const view = renderHome({
+      primaryChatActivity: { threadId: "th_4", state: "running" },
+    })
+    const card = await screen.findByRole("region", { name: "Your agent" })
+    await within(card).findByText("Conversation 4")
+    expect(
+      within(card)
+        .getAllByRole("listitem")
+        .map((row) => row.textContent)
+    ).toEqual([
+      "Conversation 4 Working",
+      expect.stringContaining("Conversation 0"),
+      expect.stringContaining("Conversation 1"),
+    ])
+    fireEvent.click(
+      within(card).getByRole("button", { name: /Conversation 4/ })
+    )
+    expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("th_4")
+    expect(view.onNewChat).not.toHaveBeenCalled()
+
+    view.rerenderHome({
+      primaryChatActivity: { threadId: "th_1", state: "running" },
+    })
+    expect(
+      within(card)
+        .getAllByRole("listitem")
+        .map((row) => row.textContent)
+    ).toEqual([
+      "Conversation 1 Working",
+      expect.stringContaining("Conversation 0"),
+      expect.stringContaining("Conversation 2"),
+    ])
+    view.rerenderHome({
+      primaryChatActivity: { threadId: "th_1", state: "idle" },
+    })
+    expect(
+      within(card)
+        .getAllByRole("listitem")
+        .map((row) => row.textContent)
+    ).toEqual([
+      expect.stringContaining("Conversation 0"),
+      expect.stringContaining("Conversation 1"),
+      expect.stringContaining("Conversation 2"),
+    ])
+    expect(within(card).queryByText("Working")).toBeNull()
+  })
+
+  it("shows selected tool confirmation separately without inflating Inbox decisions or claiming quiet", async () => {
+    stubApi({ [`${path}/agent-requests/inbox`]: { requests: [request()] } })
+    const view = renderHome({
+      primaryChatActivity: { threadId: "th_held", state: "waiting" },
+    })
+    await screen.findByRole("heading", { name: "Waiting on you · 1" })
+    const card = screen.getByRole("region", { name: "Your agent" })
+    expect(within(card).getAllByRole("listitem")).toHaveLength(1)
+    fireEvent.click(
+      within(card).getByRole("button", {
+        name: "Current conversation Needs confirmation",
+      })
+    )
+    expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("th_held")
+    expect(view.onOpenRequests).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+
+    // A confirmation alone is actionable even when the inbox is empty.
+    await act(async () => {
+      view.client.setQueryData(
+        [...agentKeys.requestBox("org_1", "inbox", 100), "home", "member"],
+        []
+      )
+    })
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Waiting on you" })
+      ).toBeNull()
+    )
+    expect(screen.getByText("Needs confirmation")).toBeTruthy()
+    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+  })
+
+  it("counts a pending new thread as one noninteractive work row until its exact ID arrives", async () => {
+    stubApi({
+      [`${path}/threads`]: {
+        threads: Array.from({ length: 3 }, (_, i) => ({
+          id: `th_${i}`,
+          title: `Recent ${i}`,
+          updated_at: "2026-09-23T10:00:00Z",
+        })),
+      },
+    })
+    const view = renderHome({
+      primaryChatActivity: { threadId: null, state: "running" },
+    })
+    const card = await screen.findByRole("region", { name: "Your agent" })
+    await within(card).findByText("Recent 0")
+    expect(within(card).getAllByRole("listitem")).toHaveLength(3)
+    expect(
+      within(card).getAllByRole("listitem")[0].querySelector("button")
+    ).toBeNull()
+    expect(within(card).getByRole("status").textContent).toBe(
+      "Starting conversation Working"
+    )
+    expect(within(card).queryByText("Recent 2")).toBeNull()
+    expect(view.onNewChat).not.toHaveBeenCalled()
+    view.rerenderHome({
+      primaryChatActivity: { threadId: "th_created", state: "running" },
+    })
+    fireEvent.click(
+      within(card).getByRole("button", { name: "Current conversation Working" })
+    )
+    expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith(
+      "th_created"
+    )
+    expect(view.onNewChat).not.toHaveBeenCalled()
+  })
+
   it("checks failed documents in at most three nonempty bases and preserves partial coverage and cursors", async () => {
     const bases = Array.from({ length: 8 }, (_, i) =>
       corpus(`base_${i + 1}`, i === 7 ? 0 : 6)
@@ -366,7 +492,9 @@ describe("HomeOverview", () => {
         })),
       },
     })
-    const callbacks = renderHome({ agentRunning: true })
+    const callbacks = renderHome({
+      primaryChatActivity: { threadId: "th_0", state: "running" },
+    })
     expect(
       await screen.findByText("Checked 4 of 8 knowledge bases.")
     ).toBeTruthy()

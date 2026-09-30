@@ -65,7 +65,10 @@ import type { AvatarIdentity } from "./workspace-avatar"
 import { cn } from "@/lib/utils"
 import { captureScreenContext } from "@/lib/agents/screen-context"
 import type { ScreenContext, ScreenItem } from "@/lib/agents/screen-context"
-import { requestPrimaryChat } from "@/lib/threads/chat-choice"
+import {
+  requestPrimaryChat,
+  usePrimaryChatActivity,
+} from "@/lib/threads/chat-choice"
 import type { PrimaryChatTarget } from "@/lib/threads/chat-choice"
 
 type Section =
@@ -174,6 +177,10 @@ function WorkspaceShellContent({
   const viewerId = session?.user.id
   // DMs are the signed-in member's, in the organization they have open.
   const dmOrganizationId = session ? selectedOrganization?.id : undefined
+  const primaryChatActivity = usePrimaryChatActivity({
+    organizationId: dmOrganizationId ?? "",
+    userId: viewerId ?? "",
+  })
   // A DM the page may open: with someone other than the member, by an id a
   // DM's name can hold.
   const openable = (peerId: string | null | undefined): string | null =>
@@ -931,6 +938,7 @@ function WorkspaceShellContent({
                     session ? selectedOrganization?.id : undefined
                   }
                   viewerId={viewerId}
+                  primaryChatActivity={primaryChatActivity}
                   onNewChat={(message) =>
                     openHomeConversation({ kind: "new", message })
                   }
@@ -1025,6 +1033,7 @@ function WorkspaceShellContent({
       </div>
 
       <WorkspaceAgentPanel
+        key={JSON.stringify([dmOrganizationId, viewerId])}
         organizationId={session ? selectedOrganization?.id : undefined}
         expanded={rightExpanded}
         onExpand={expandAgentPanel}
