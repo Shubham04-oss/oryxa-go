@@ -1,4 +1,11 @@
-import { Suspense, useEffect, useMemo, useRef, useState } from "react"
+import {
+  Suspense,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import type { Dispatch, SetStateAction } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
@@ -13,6 +20,7 @@ import { ApiError } from "@/lib/api/client"
 import { getSession } from "@/lib/auth/client"
 import { reopenSocket } from "@/lib/threads/agent-socket"
 import {
+  FRESH_CONVERSATION_MS,
   PRIMARY_CHAT_AGENT,
   openingThread,
   publishPrimaryChatActivity,
@@ -313,6 +321,7 @@ export function AgentChat({
             })
           }}
           onFileCreated={onFileCreated}
+          onIdle={startNew}
           onStateChange={(id, next) =>
             setReported({ threadId: id, state: next })
           }
@@ -468,6 +477,7 @@ function ThreadChat({
   onDraftChange,
   onComposingChange,
   onFileCreated,
+  onIdle,
   onStateChange,
 }: ComposerHandlers & {
   organizationId: string
@@ -478,6 +488,8 @@ function ThreadChat({
   getScreenContext?: () => ScreenContext
   onPendingTaken: () => void
   onMissing: () => void
+  /** The member came back to a conversation left alone for an hour: the chat moves on to a new one. */
+  onIdle: () => void
   /** What this thread is doing: a run streams, a confirmation waits on the member, or neither. */
   onStateChange: (threadId: string, state: ChatState) => void
   onFileCreated?: (file: {
@@ -501,6 +513,8 @@ function ThreadChat({
     expired: boolean
     retried: boolean
   }>({ expired: false, retried: false })
+  // When this conversation was last opened, sent to or heard from.
+  const lastActivity = useRef(Date.now())
 
   const agent = useAgent({
     protocol: socketProtocol(),
@@ -572,6 +586,7 @@ function ThreadChat({
   }
 
   function send(text: string, screen = getScreenContext?.()) {
+    lastActivity.current = Date.now()
     setRunError("")
     const body = screen ? { screen_context: screen } : undefined
     lastSend.current = { body, expired: false, retried: false }
@@ -585,6 +600,7 @@ function ThreadChat({
   }
 
   function answer(answers: ConfirmationAnswer[]) {
+    lastActivity.current = Date.now()
     setRunError("")
     setSubmitted((current) => {
       const next = { ...current }
@@ -696,6 +712,30 @@ function ThreadChat({
     : actionable.size > 0
       ? "waiting"
       : "idle"
+  // A tab left open overnight comes back to a new chat rather than
+  // yesterday's: when it shows again (its tab visible, its window focused)
+  // after an hour with nothing sent or heard, and nothing streaming or
+  // waiting on the member. Opening the conversation counts as activity, so
+  // one the member just chose is never taken from them. Nothing is deleted.
+  useEffect(() => {
+    lastActivity.current = Date.now()
+  }, [chat.messages, running])
+  const cameBack = useEffectEvent(() => {
+    if (document.visibilityState === "hidden") return
+    if (running || actionable.size > 0) return
+    if (Date.now() - lastActivity.current < FRESH_CONVERSATION_MS) return
+    onIdle()
+  })
+  useEffect(() => {
+    const onReturn = () => cameBack()
+    document.addEventListener("visibilitychange", onReturn)
+    window.addEventListener("focus", onReturn)
+    return () => {
+      document.removeEventListener("visibilitychange", onReturn)
+      window.removeEventListener("focus", onReturn)
+    }
+  }, [])
+
   // Said as it changes, and taken back when this thread's chat goes, so a
   // later visit doesn't start from what it last said.
   useEffect(() => {

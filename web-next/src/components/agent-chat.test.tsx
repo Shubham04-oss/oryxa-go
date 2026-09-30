@@ -672,6 +672,163 @@ describe("which conversation the chat opens", () => {
   })
 })
 
+describe("a conversation left alone", () => {
+  let visibility: DocumentVisibilityState = "visible"
+
+  beforeEach(() => {
+    // Only the clock moves: the chat's own timers and promises run as usual.
+    vi.useFakeTimers({ toFake: ["Date"] })
+    visibility = "visible"
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibility,
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Time passes; then the tab shows again, or the window is focused. */
+  function comeBack(
+    after: number,
+    event: "visibilitychange" | "focus" = "visibilitychange"
+  ) {
+    vi.setSystemTime(Date.now() + after)
+    act(() => {
+      if (event === "focus") window.dispatchEvent(new Event("focus"))
+      else document.dispatchEvent(new Event("visibilitychange"))
+    })
+  }
+
+  /** A new chat is titled so; a conversation shows its own title. */
+  const onNewChat = () => screen.queryByText("New conversation") !== null
+
+  async function openThread() {
+    const calls = stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    return calls
+  }
+
+  it("gives way to a new chat when the tab shows again after an hour, and deletes nothing", async () => {
+    const calls = await openThread()
+    fireEvent.change(composer(), { target: { value: "Half a thought" } })
+
+    comeBack(HOUR)
+    expect(onNewChat()).toBe(true)
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("new")
+    // What they were typing goes with them, and the old conversation stays.
+    expect((composer() as HTMLTextAreaElement).value).toBe("Half a thought")
+    expect(calls.filter((call) => call.startsWith("DELETE"))).toEqual([])
+    expect(calls.filter((call) => call.startsWith("POST"))).toEqual([])
+  })
+
+  it("does the same when the window is focused again", async () => {
+    await openThread()
+    comeBack(3 * HOUR, "focus")
+    expect(onNewChat()).toBe(true)
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("new")
+  })
+
+  it("leaves a conversation alone that was active within the hour", async () => {
+    await openThread()
+    comeBack(HOUR - 60_000)
+    expect(onNewChat()).toBe(false)
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBeNull()
+  })
+
+  it("counts what the member sends, and what the agent says, as activity", async () => {
+    await openThread()
+    vi.setSystemTime(Date.now() + 50 * 60_000)
+    type("Still here")
+    comeBack(50 * 60_000)
+    expect(onNewChat()).toBe(false)
+
+    // Half an hour on, the agent answers.
+    vi.setSystemTime(Date.now() + 30 * 60_000)
+    updateChat({
+      messages: itemsToChatMessages([
+        { type: "message", id: "ev_2", author: "Leo", text: "Hi there" },
+      ]),
+    })
+    comeBack(45 * 60_000)
+    expect(onNewChat()).toBe(false)
+
+    comeBack(30 * 60_000)
+    expect(onNewChat()).toBe(true)
+  })
+
+  it("does not leave a run that is streaming, and starts counting when it ends", async () => {
+    await openThread()
+    updateChat({ status: "streaming" })
+    comeBack(3 * HOUR)
+    expect(onNewChat()).toBe(false)
+
+    updateChat({ status: "ready" })
+    comeBack(30 * 60_000)
+    expect(onNewChat()).toBe(false)
+    comeBack(HOUR)
+    expect(onNewChat()).toBe(true)
+  })
+
+  it("does not leave a confirmation that waits on the member", async () => {
+    const items: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Email Sam" },
+      {
+        type: "confirmation",
+        id: "ev_2",
+        call_id: "call_1",
+        tool_call_id: "tool_1",
+        tool: "send_email",
+        arguments: { to: "sam@example.com" },
+        status: "pending",
+      },
+    ]
+    stubApi({
+      threads: [thread("th_1", "Email Sam")],
+      items,
+      pending: ["call_1"],
+    })
+    hooks.chat.messages = itemsToChatMessages(items)
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    await screen.findByRole("group", { name: "Confirm Send email" })
+
+    comeBack(6 * HOUR)
+    expect(onNewChat()).toBe(false)
+    expect(
+      screen.getByRole("group", { name: "Confirm Send email" })
+    ).toBeTruthy()
+  })
+
+  it("waits for the tab to be visible", async () => {
+    await openThread()
+    visibility = "hidden"
+    comeBack(3 * HOUR)
+    expect(onNewChat()).toBe(false)
+
+    visibility = "visible"
+    comeBack(0, "focus")
+    expect(onNewChat()).toBe(true)
+  })
+
+  it("never takes a conversation from the member the moment they chose it", async () => {
+    rememberChoice(scope, PRIMARY_CHAT_AGENT, "th_1")
+    stubApi({ threads: [thread("th_1", "Chosen", 30 * HOUR)] })
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+
+    comeBack(0)
+    comeBack(0, "focus")
+    expect(onNewChat()).toBe(false)
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_1")
+  })
+})
+
 describe("the primary chat's activity", () => {
   // What the rest of the app would read: the chat's thread, and whether it
   // works, waits on the member or is idle.
