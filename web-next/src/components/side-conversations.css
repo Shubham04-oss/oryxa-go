@@ -272,13 +272,15 @@
 .workspace-side-card-note input:disabled { opacity: .6; }
 
 /* What approving a request lets its agent read, for its owner. */
-.workspace-side-card-tools {
+.workspace-side-card-tools,
+.workspace-side-card-no-tools {
   margin: -2px 0 0;
   color: #bdbdbd;
   font-size: 11.5px;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
+.workspace-side-card-no-tools { flex: 1 1 100%; margin: 0; }
 /* Three choices may not fit one row of a narrow panel. */
 .workspace-side-card .workspace-agent-confirmation-actions { flex-wrap: wrap; }
 

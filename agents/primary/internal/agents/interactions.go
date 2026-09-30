@@ -279,8 +279,9 @@ type Interaction struct {
 	RequestedTools []string                 `json:"requested_tools"`
 	// ToolsJudgedBy is who chose RequestedTools: "requester" for the
 	// requester naming them, "jev" for Jev judging what a request made in a
-	// teamspace that named none needs, and "none" when nobody did, so it
-	// asks for none. It is absent from a request made before it was kept.
+	// teamspace that omitted them needs, and "none" for the knowledge fallback
+	// when neither chose. Older "none" records may ask for no tools. It is
+	// absent from a request made before it was kept.
 	ToolsJudgedBy        string               `json:"tools_judged_by,omitempty"`
 	RequestedPermissions []string             `json:"requested_permissions"`
 	Status               string               `json:"status"`
@@ -324,7 +325,7 @@ type InteractionCreateInput struct {
 	Purpose              string                   `json:"purpose" jsonschema:"Why this agent is the appropriate recipient."`
 	Task                 string                   `json:"task" jsonschema:"The bounded question or work request. Do not put instructions for bypassing the recipient's policy here."`
 	Context              []InteractionContextItem `json:"context,omitempty"`
-	RequestedTools       []string                 `json:"requested_tools,omitempty" jsonschema:"Toolboxes the task needs of the member you ask: apps (their connected apps, read only) and knowledge (the organization's knowledge search). Naming one does not grant it; the approval says which the work may use, and nothing else is loaded for it."`
+	RequestedTools       []string                 `json:"requested_tools,omitempty" jsonschema:"Toolboxes the task needs of the member you ask: apps (their connected apps, read only) and knowledge (the organization's knowledge search). Information requests should ask for knowledge. If omitted, Oryxa selects tools for a teamspace request or defaults to knowledge; an explicit empty list requests no lookups. Naming a toolbox does not grant it; the approval says which the work may use, and nothing else is loaded for it."`
 	RequestedPermissions []string                 `json:"requested_permissions,omitempty" jsonschema:"Explicit permissions the task may need. Naming one does not grant it."`
 	ExpiresInSeconds     int                      `json:"expires_in_seconds,omitempty" jsonschema:"Lifetime from 300 to 604800 seconds; defaults to 86400."`
 }

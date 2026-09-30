@@ -92,6 +92,41 @@ func TestInteractionToolboxNeedsAService(t *testing.T) {
 	}
 }
 
+func TestInteractionCreatePreservesToolChoiceForTheLedger(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args map[string]any
+		want []string
+	}{
+		{name: "omitted", want: nil},
+		{name: "explicit empty", args: map[string]any{"requested_tools": []any{}}, want: []string{}},
+		{name: "apps", args: map[string]any{"requested_tools": []any{AppsToolboxName}}, want: []string{AppsToolboxName}},
+		{name: "both", args: map[string]any{"requested_tools": []any{AppsToolboxName, KnowledgeToolboxName}}, want: []string{AppsToolboxName, KnowledgeToolboxName}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := &fakeInteractions{}
+			box, err := InteractionToolbox(InteractionConfig{Service: service})
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := map[string]any{
+				"target_agent_id": "agt_b", "purpose": "Project information", "task": "Share details about Project Falcon.",
+			}
+			maps.Copy(args, test.args)
+			// Run a real function-tool call so omitted and [] pass through the
+			// tool's argument decoder without losing which choice was made.
+			h := newHarness(t, callingOnce(InteractionsToolboxName, "interactions_create", args), box)
+			ctx := memberauth.WithAccessToken(context.Background(), "member-token")
+			h.turnWith(ctx, "user_a", map[string]any{
+				OrganizationIDKey: "org_1", AgentIDKey: "agt_a", AgentNameKey: "Crew", AgentKindKey: "primary",
+			}, "Ask engineering")
+			if service.key == "" || (service.input.RequestedTools == nil) != (test.want == nil) || !slices.Equal(service.input.RequestedTools, test.want) {
+				t.Fatalf("requested tools = %#v, want %#v; key = %q", service.input.RequestedTools, test.want, service.key)
+			}
+		})
+	}
+}
+
 // TestADeliveringToolboxHoldsOnlyItsOneRequest: a run delivering one
 // interaction is offered, from its first model call, exactly the
 // interactions tools its purpose uses: reading and deciding its request in

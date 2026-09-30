@@ -9,33 +9,32 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 )
 
-// A request made in a teamspace that names no requested_tools has Jev judge
+// A request made in a teamspace that omits requested_tools has Jev judge
 // which of its target's toolboxes answering it needs, so its owner's
 // approval can show what would be read and allow it. Jev is asked one Choice
 // over the requester's own words, the task and its context, and never
-// anything of the member asked. Anything short of a sure answer asks for
-// none: the request is created all the same, and its owner can still approve
-// it, without tools.
+// anything of the member asked. Anything short of a sure answer requests
+// knowledge by default; its owner still chooses whether to allow it.
 
 // Who chose the toolboxes a request asks for (agents.Interaction's
 // ToolsJudgedBy).
 const (
 	// ToolsJudgedByRequester is a requester who named requested_tools, which
-	// the request keeps as they were given.
+	// the request keeps as they were given, including an explicit empty list.
 	ToolsJudgedByRequester = "requester"
 	// ToolsJudgedByJev is Jev judging, surely enough, what a request made in
-	// a teamspace that named none needs; it may have judged it needs none.
+	// a teamspace that omitted them needs; it may have judged it needs none.
 	ToolsJudgedByJev = "jev"
-	// ToolsJudgedByNone is nobody choosing, so the request asks for none: it
-	// was made outside a teamspace naming none, or Jev is not configured,
-	// did not answer in time, failed, or was not sure enough.
+	// ToolsJudgedByNone records no requester or Jev choice: omitted requests
+	// use the knowledge fallback outside a teamspace, or when Jev is absent,
+	// late, failing or unsure. Older "none" requests may ask for no tools.
 	ToolsJudgedByNone = "none"
 )
 
 const (
 	// DefaultJevTimeout bounds asking Jev, which answers in well under a
 	// second: a request is created while its requester waits, so a Jev that
-	// is slow is taken for one that is down, and the request asks for none.
+	// is slow is taken for one that is down, and the request defaults to knowledge.
 	DefaultJevTimeout = 3 * time.Second
 
 	// ToolsConfidence is the least confidence Jev's choice must carry to be
@@ -48,7 +47,7 @@ const (
 	// last word: it only proposes what the owner's approval shows, and the
 	// owner allows it, or approves without tools, in person. Below it Jev is
 	// torn, most often between one toolbox and both or none, and the request
-	// asks for none, as it did before Jev was asked.
+	// falls back to requesting knowledge, still subject to approval.
 	ToolsConfidence = 0.5
 )
 
@@ -66,23 +65,29 @@ var toolsOf = map[string][]string{
 
 // requestedTools is what a new request asks for, and who chose it: the
 // requester's own tools as they gave them; for one made in a teamspace that
-// names none, what Jev judges it needs; and otherwise none.
+// omits them, what Jev judges it needs; otherwise the knowledge fallback.
 func (service *Service) requestedTools(ctx context.Context, input agents.InteractionCreateInput) ([]string, string) {
-	if len(input.RequestedTools) > 0 {
+	if input.RequestedTools != nil {
 		return input.RequestedTools, ToolsJudgedByRequester
 	}
 	if input.TeamspaceID == "" {
-		return []string{}, ToolsJudgedByNone
+		return knowledgeFallback()
 	}
 	return service.judgeTools(ctx, input)
 }
 
+// knowledgeFallback requests knowledge without claiming a requester or
+// model chose it. It grants nothing; the recorded approval still does that.
+func knowledgeFallback() ([]string, string) {
+	return []string{agents.KnowledgeToolboxName}, ToolsJudgedByNone
+}
+
 // judgeTools asks Jev which toolboxes answering a request needs, within
-// jevTimeout, and fails closed: no Jev, no answer in time, a failure, an
-// answer naming no option offered, or one not sure enough, asks for none.
+// jevTimeout. No Jev, no answer in time, a failure, an answer naming no
+// offered option, or one not sure enough defaults to knowledge.
 func (service *Service) judgeTools(ctx context.Context, input agents.InteractionCreateInput) ([]string, string) {
 	if service.jev == nil {
-		return []string{}, ToolsJudgedByNone
+		return knowledgeFallback()
 	}
 	asking, cancel := context.WithTimeout(ctx, service.jevTimeout)
 	defer cancel()
@@ -93,19 +98,19 @@ func (service *Service) judgeTools(ctx context.Context, input agents.Interaction
 	if err != nil {
 		// Jev's errors name its status or the call's failure, never what
 		// it was sent.
-		service.logger.WarnContext(ctx, "Jev could not judge what answering a request needs, so it asks for no tools", "error", err)
-		return []string{}, ToolsJudgedByNone
+		service.logger.WarnContext(ctx, "Jev could not judge what answering a request needs, so it defaults to knowledge", "error", err)
+		return knowledgeFallback()
 	}
 	answer, answered := result.Answers[toolsQuestionID]
 	tools, known := toolsOf[answer.Choice]
 	switch {
 	case !answered || answer.Type != jev.TypeChoice || !known:
-		service.logger.WarnContext(ctx, "Jev's judgment of what answering a request needs named no option it was offered, so it asks for no tools", "model", result.Model)
-		return []string{}, ToolsJudgedByNone
+		service.logger.WarnContext(ctx, "Jev's judgment of what answering a request needs named no option it was offered, so it defaults to knowledge", "model", result.Model)
+		return knowledgeFallback()
 	case answer.Confidence < ToolsConfidence:
-		service.logger.InfoContext(ctx, "Jev was not sure what answering a request needs, so it asks for no tools",
+		service.logger.InfoContext(ctx, "Jev was not sure what answering a request needs, so it defaults to knowledge",
 			"choice", answer.Choice, "confidence", answer.Confidence, "model", result.Model)
-		return []string{}, ToolsJudgedByNone
+		return knowledgeFallback()
 	}
 	service.logger.InfoContext(ctx, "Jev judged what answering a request needs",
 		"choice", answer.Choice, "confidence", answer.Confidence, "model", result.Model)

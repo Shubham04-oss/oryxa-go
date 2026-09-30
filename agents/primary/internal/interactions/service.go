@@ -415,7 +415,9 @@ func (service *Service) replay(actor agents.InteractionActor, stored agents.Inte
 // Both sides are compared as cleaned, which is how the request was stored.
 // The tools compared are the ones its requester named: what Jev judged a
 // request that named none needs is not something the requester sent.
+// Omitted tools and an explicit empty list are different requests.
 func sameRequest(actor agents.InteractionActor, stored agents.Interaction, input agents.InteractionCreateInput) bool {
+	namedTools := namedByRequester(stored)
 	return stored.OrganizationID == actor.OrganizationID &&
 		stored.Requester.UserID == actor.UserID && stored.Requester.AgentID == actor.AgentID &&
 		stored.RequesterThreadID == actor.ThreadID &&
@@ -423,7 +425,8 @@ func sameRequest(actor agents.InteractionActor, stored agents.Interaction, input
 		stored.Target.AgentID == input.TargetAgentID && stored.TeamspaceID == input.TeamspaceID &&
 		stored.Purpose == input.Purpose && stored.Task == input.Task &&
 		slices.Equal(stored.Context, input.Context) &&
-		slices.EqualFunc(namedByRequester(stored), input.RequestedTools, strings.EqualFold) &&
+		(namedTools == nil) == (input.RequestedTools == nil) &&
+		slices.EqualFunc(namedTools, input.RequestedTools, strings.EqualFold) &&
 		slices.Equal(stored.RequestedPermissions, input.RequestedPermissions)
 }
 
@@ -692,7 +695,11 @@ func cleanCreate(input agents.InteractionCreateInput) agents.InteractionCreateIn
 	input.TeamspaceID = strings.TrimSpace(input.TeamspaceID)
 	input.Purpose = cleanText(input.Purpose)
 	input.Task = cleanText(input.Task)
-	input.RequestedTools = cleanTools(input.RequestedTools)
+	// Omitted tools may be selected for a direct teamspace request; an
+	// explicit empty list deliberately requests no lookups.
+	if input.RequestedTools != nil {
+		input.RequestedTools = cleanTools(input.RequestedTools)
+	}
 	input.RequestedPermissions = cleanList(input.RequestedPermissions)
 	for index := range input.Context {
 		input.Context[index].Label = cleanLine(input.Context[index].Label)

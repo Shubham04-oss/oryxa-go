@@ -186,9 +186,9 @@ export type AgentRequest = {
   purpose: string
   task: string
   context: AgentRequestContextItem[]
-  /** Toolbox names (`AGENT_REQUEST_TOOLBOXES`): as the requester named them, or as Jev judged them (`tools_judged_by`). */
+  /** Toolbox names (`AGENT_REQUEST_TOOLBOXES`): declared, selected by Jev, or the knowledge fallback (`tools_judged_by`). */
   requested_tools: string[]
-  /** Who chose `requested_tools`: `jev`, the `requester`, or `none` (Jev unset, unsure or failing: no tools). */
+  /** Who chose `requested_tools`: `jev`, the `requester`, or `none` (knowledge fallback; older records may request no tools). */
   tools_judged_by?: "jev" | "requester" | "none"
   requested_permissions: string[]
   status: AgentRequestStatus

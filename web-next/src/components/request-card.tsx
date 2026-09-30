@@ -193,6 +193,7 @@ export function RequestCard({
   const noteRef = useRef<HTMLInputElement>(null)
   const noteId = useId()
   const choicesId = useId()
+  const noToolsId = useId()
 
   const request = latest && latest.revision > given.revision ? latest : given
   const stillOpen =
@@ -226,6 +227,7 @@ export function RequestCard({
   const status = statusOf(request, reader)
   const origin = originLabel(request)
   const reads = open && !lostNow ? readsLine(request, reader) : undefined
+  const asksForTools = allowedTools(request).length > 0
   const expires = expiresPhrase(request, now)
   const long = isLong(request.task)
   const shared =
@@ -499,6 +501,11 @@ export function RequestCard({
               Add a note
             </button>
           )}
+          {asksForTools && (
+            <p id={noToolsId} className="workspace-request-reads">
+              Approve without tools means {agent} can’t look anything up.
+            </p>
+          )}
           <div className="workspace-request-actions">
             <button
               className="workspace-agent-pill"
@@ -513,11 +520,12 @@ export function RequestCard({
                 ? "Declining…"
                 : "Decline"}
             </button>
-            {allowedTools(request).length > 0 && (
+            {asksForTools && (
               <button
                 className="workspace-agent-pill"
                 type="button"
                 aria-label={`Approve ${agent}'s request from ${asker} without tools`}
+                aria-describedby={noToolsId}
                 disabled={busy}
                 onClick={() =>
                   decide.mutate({ decision: "approved", withTools: false })
@@ -534,7 +542,11 @@ export function RequestCard({
               className="workspace-agent-pill"
               data-primary="true"
               type="button"
-              aria-label={`Approve ${agent}'s request from ${asker}`}
+              aria-label={
+                asksForTools
+                  ? `Approve with tools for ${agent}'s request from ${asker}`
+                  : `Approve ${agent}'s request from ${asker}`
+              }
               disabled={busy}
               onClick={() =>
                 decide.mutate({ decision: "approved", withTools: true })
@@ -544,7 +556,9 @@ export function RequestCard({
               decide.variables.decision === "approved" &&
               decide.variables.withTools
                 ? "Approving…"
-                : "Approve"}
+                : asksForTools
+                  ? "Approve with tools"
+                  : "Approve"}
             </button>
           </div>
         </div>

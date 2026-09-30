@@ -85,11 +85,11 @@ func TestJevChoosesWhatARequestInATeamspaceNeeds(t *testing.T) {
 	}
 }
 
-// TestAnUnsureJevAsksForNoTools: a choice below ToolsConfidence is not
-// kept, and the request asks for none, as nobody's choice; one at it is.
-func TestAnUnsureJevAsksForNoTools(t *testing.T) {
+// TestAnUnsureJevDefaultsToKnowledge: a choice below ToolsConfidence is not
+// kept, and knowledge is requested as the fallback; one at it is kept.
+func TestAnUnsureJevDefaultsToKnowledge(t *testing.T) {
 	for confidence, want := range map[float64][]string{
-		ToolsConfidence - 0.01: {},
+		ToolsConfidence - 0.01: {agents.KnowledgeToolboxName},
 		ToolsConfidence:        {agents.AppsToolboxName},
 	} {
 		judge := &fakeJev{choice: "apps", confidence: confidence}
@@ -99,7 +99,7 @@ func TestAnUnsureJevAsksForNoTools(t *testing.T) {
 			t.Fatal(err)
 		}
 		wantJudge := ToolsJudgedByJev
-		if len(want) == 0 {
+		if confidence < ToolsConfidence {
 			wantJudge = ToolsJudgedByNone
 		}
 		if !slices.Equal(created.RequestedTools, want) || created.ToolsJudgedBy != wantJudge {
@@ -108,11 +108,11 @@ func TestAnUnsureJevAsksForNoTools(t *testing.T) {
 	}
 }
 
-// TestJevUnsetSilentOrFailingAsksForNoTools: without Jev, with a Jev that
+// TestJevUnavailableDefaultsToKnowledge: without Jev, with a Jev that
 // does not answer in time, one that fails, and one whose answer names no
-// option it was offered, the request is made all the same, asking for none,
-// as nobody's choice, and within Jev's bound.
-func TestJevUnsetSilentOrFailingAsksForNoTools(t *testing.T) {
+// option it was offered, the request is made all the same, requesting
+// knowledge as the fallback, and within Jev's bound.
+func TestJevUnavailableDefaultsToKnowledge(t *testing.T) {
 	for name, ask := range map[string]func(context.Context, jev.Request) (jev.Result, error){
 		"no Jev":             nil,
 		"a silent Jev":       (&fakeJev{silent: true}).Ask,
@@ -129,8 +129,8 @@ func TestJevUnsetSilentOrFailingAsksForNoTools(t *testing.T) {
 		if took := time.Since(started); took > 2*time.Second {
 			t.Errorf("%s: making the request took %s", name, took)
 		}
-		if created.RequestedTools == nil || len(created.RequestedTools) != 0 || created.ToolsJudgedBy != ToolsJudgedByNone || created.Status != StatusPending {
-			t.Errorf("%s: requested_tools=%v judged by %q status %s, want [] judged by none, pending", name, created.RequestedTools, created.ToolsJudgedBy, created.Status)
+		if !slices.Equal(created.RequestedTools, []string{agents.KnowledgeToolboxName}) || created.ToolsJudgedBy != ToolsJudgedByNone || created.Status != StatusPending {
+			t.Errorf("%s: requested_tools=%v judged by %q status %s, want knowledge fallback judged by none, pending", name, created.RequestedTools, created.ToolsJudgedBy, created.Status)
 		}
 		if _, ok := repo.requests[created.ID]; !ok {
 			t.Errorf("%s: the request was not stored", name)
@@ -154,9 +154,39 @@ func TestARequesterKeepsTheToolsTheyNamed(t *testing.T) {
 	}
 }
 
-// TestJevIsAskedOnlyAboutARequestMadeInATeamspace: a request made outside
-// any teamspace that names no tools asks for none, and Jev is not asked.
-func TestJevIsAskedOnlyAboutARequestMadeInATeamspace(t *testing.T) {
+func TestExplicitlyToolFreeRequestsSkipJev(t *testing.T) {
+	for _, teamspaceID := range []string{"", "tsp_1"} {
+		t.Run("teamspace="+teamspaceID, func(t *testing.T) {
+			judge := &fakeJev{choice: "apps_and_knowledge", confidence: 0.99}
+			service, repo := jevService(t, judge.Ask, time.Second)
+			input := askInTeamspace("agt_b")
+			input.TeamspaceID = teamspaceID
+			input.RequestedTools = []string{}
+			created, err := service.Create(context.Background(), requester, "member-token", "key", input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created.RequestedTools == nil || len(created.RequestedTools) != 0 || created.ToolsJudgedBy != ToolsJudgedByRequester || len(judge.asked) != 0 {
+				t.Fatalf("requested_tools=%#v judged by %q after %d questions, want explicit [] and Jev unasked", created.RequestedTools, created.ToolsJudgedBy, len(judge.asked))
+			}
+			if stored := repo.requests[created.ID]; stored.RequestedTools == nil || len(stored.RequestedTools) != 0 || stored.ToolsJudgedBy != ToolsJudgedByRequester {
+				t.Fatalf("stored request = %+v, want explicit [] judged by requester", stored)
+			}
+			again, err := service.Create(context.Background(), requester, "member-token", "key", input)
+			if err != nil || again.ID != created.ID || len(judge.asked) != 0 {
+				t.Fatalf("explicit [] retry = %+v, %v after %d Jev questions", again, err, len(judge.asked))
+			}
+			input.RequestedTools = nil
+			if _, err := service.Create(context.Background(), requester, "member-token", "key", input); !errors.Is(err, ErrIdempotencyConflict) {
+				t.Fatalf("retry changing explicit [] to omitted: %v, want ErrIdempotencyConflict", err)
+			}
+		})
+	}
+}
+
+// TestAnOmittedToolListOutsideATeamspaceDefaultsToKnowledge: a request made
+// outside any teamspace that omits tools requests knowledge, without Jev.
+func TestAnOmittedToolListOutsideATeamspaceDefaultsToKnowledge(t *testing.T) {
 	judge := &fakeJev{choice: "apps", confidence: 0.99}
 	service, _ := jevService(t, judge.Ask, time.Second)
 	created, err := service.Create(context.Background(), requester, "member-token", "key", agents.InteractionCreateInput{
@@ -165,8 +195,8 @@ func TestJevIsAskedOnlyAboutARequestMadeInATeamspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(created.RequestedTools) != 0 || created.ToolsJudgedBy != ToolsJudgedByNone || len(judge.asked) != 0 {
-		t.Fatalf("requested_tools=%v judged by %q after %d questions, want none, unasked", created.RequestedTools, created.ToolsJudgedBy, len(judge.asked))
+	if !slices.Equal(created.RequestedTools, []string{agents.KnowledgeToolboxName}) || created.ToolsJudgedBy != ToolsJudgedByNone || len(judge.asked) != 0 {
+		t.Fatalf("requested_tools=%v judged by %q after %d questions, want knowledge fallback, unasked", created.RequestedTools, created.ToolsJudgedBy, len(judge.asked))
 	}
 }
 
@@ -224,6 +254,11 @@ func TestARetryOfARequestJevJudgedIsTheSameRequest(t *testing.T) {
 	}
 	if len(judge.asked) != 1 {
 		t.Fatalf("Jev was asked %d times, want once", len(judge.asked))
+	}
+	bare := askInTeamspace("agt_b")
+	bare.RequestedTools = []string{}
+	if _, err := service.Create(context.Background(), requester, "member-token", "key", bare); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("the key sent again with explicit []: error=%v, want ErrIdempotencyConflict", err)
 	}
 	named := askInTeamspace("agt_b")
 	named.RequestedTools = []string{agents.AppsToolboxName}
