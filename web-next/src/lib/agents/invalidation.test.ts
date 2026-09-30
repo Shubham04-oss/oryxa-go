@@ -3,6 +3,7 @@ import type { QueryKey } from "@tanstack/react-query"
 import { describe, expect, it } from "vitest"
 import {
   afterDecideAgentRequest,
+  afterReplyToAgentRequest,
   afterRespondToAgentRequest,
   afterUpdateAgent,
   afterUpdateOrganizationAgent,
@@ -54,9 +55,13 @@ describe("agent mutation helpers", () => {
     expect(invalidated(queryClient)).toEqual(["agentList"])
   })
 
-  it("cache a decided or answered request and refresh both boxes", async () => {
+  it("cache a decided, answered or replied-to request and refresh both boxes", async () => {
     const request = { id: "irq_1", status: "approved" } as AgentRequest
-    for (const after of [afterDecideAgentRequest, afterRespondToAgentRequest]) {
+    for (const after of [
+      afterDecideAgentRequest,
+      afterRespondToAgentRequest,
+      afterReplyToAgentRequest,
+    ]) {
       const queryClient = seeded()
       await after(queryClient, org, request)
       expect(queryClient.getQueryData(keys.request)).toBe(request)
