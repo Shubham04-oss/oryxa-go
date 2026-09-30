@@ -191,7 +191,7 @@ describe("workflow overview", () => {
       toggle.focus()
       // jsdom caches computed styles before focus; attaching the real sheet
       // after keyboard focus lets it resolve this control's focus rule.
-      document.head.append(style)
+      document.head.appendChild(style)
       expect(document.activeElement).toBe(toggle)
       expect(toggle.matches(":focus-visible")).toBe(true)
       expect(
