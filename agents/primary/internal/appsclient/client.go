@@ -524,11 +524,12 @@ type Posted struct {
 }
 
 type postBody struct {
-	OrganizationID string             `json:"organization_id"`
-	IdempotencyKey string             `json:"idempotency_key"`
-	Target         slackrouter.Target `json:"target"`
-	Template       string             `json:"template"`
-	Params         json.RawMessage    `json:"params"`
+	OrganizationID   string             `json:"organization_id"`
+	IdempotencyKey   string             `json:"idempotency_key"`
+	RefusalInboundID string             `json:"refusal_inbound_id,omitempty"`
+	Target           slackrouter.Target `json:"target"`
+	Template         string             `json:"template"`
+	Params           json.RawMessage    `json:"params"`
 }
 
 // Send posts a templated message and says where it went. Sending the same
@@ -545,6 +546,7 @@ func (c *Client) Send(ctx context.Context, post slackrouter.Post) (Posted, error
 	body := postBody{
 		OrganizationID: post.OrganizationID, IdempotencyKey: post.IdempotencyKey,
 		Target: post.Target, Template: post.Template, Params: params,
+		RefusalInboundID: post.RefusalInboundID,
 	}
 	if err := c.do(ctx, "post", http.MethodPost, postPath, nil, body, &posted); err != nil {
 		return Posted{}, err

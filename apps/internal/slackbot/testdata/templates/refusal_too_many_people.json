@@ -1,0 +1,12 @@
+{
+  "text": "Ask up to five people at a time. Pick fewer people from the mention list.",
+  "blocks": [
+    {
+      "text": {
+        "text": "Ask up to five people at a time. Pick fewer people from the mention list.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

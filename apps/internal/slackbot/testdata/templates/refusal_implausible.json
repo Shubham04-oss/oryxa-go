@@ -1,9 +1,9 @@
 {
-  "text": "I can't help with that here.",
+  "text": "This request doesn't look appropriate for your role or team, so I didn't ask anyone.",
   "blocks": [
     {
       "text": {
-        "text": "I can't help with that here.",
+        "text": "This request doesn't look appropriate for your role or team, so I didn't ask anyone.",
         "type": "mrkdwn"
       },
       "type": "section"

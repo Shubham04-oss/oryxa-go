@@ -84,7 +84,7 @@ func TestTheManifestIsPinned(t *testing.T) {
 
 	// The scopes, in the order the file lists them.
 	wantScopes := []string{
-		"app_mentions:read", "chat:write", "im:write", "users:read", "users:read.email", "channels:read", "groups:read",
+		"app_mentions:read", "chat:write", "reactions:write", "im:write", "users:read", "users:read.email", "channels:read", "groups:read",
 	}
 	if !reflect.DeepEqual(manifest.OAuthConfig.Scopes.Bot, wantScopes) {
 		t.Errorf("bot scopes = %v, want %v", manifest.OAuthConfig.Scopes.Bot, wantScopes)

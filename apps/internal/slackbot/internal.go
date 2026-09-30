@@ -355,10 +355,13 @@ type PostRequest struct {
 	OrganizationID string `json:"organization_id"`
 	// IdempotencyKey makes the post happen once however often it is asked:
 	// the same key with the same request answers the first post.
-	IdempotencyKey string          `json:"idempotency_key"`
-	Target         Target          `json:"target"`
-	Template       string          `json:"template"`
-	Params         json.RawMessage `json:"params"`
+	IdempotencyKey string `json:"idempotency_key"`
+	// RefusalInboundID binds a refusal's neutral reaction to a verified
+	// asker's message; callers cannot choose the emoji or arbitrary timestamp.
+	RefusalInboundID string          `json:"refusal_inbound_id,omitempty"`
+	Target           Target          `json:"target"`
+	Template         string          `json:"template"`
+	Params           json.RawMessage `json:"params"`
 }
 
 // PostResult is where a post went.
@@ -408,6 +411,10 @@ func (s *Service) Post(ctx context.Context, request PostRequest) (PostResult, er
 	if err != nil {
 		return PostResult{}, err
 	}
+	refused, err := s.refusalMessage(ctx, install, request, root)
+	if err != nil {
+		return PostResult{}, err
+	}
 
 	kind := PostMessage
 	if where == toPerson {
@@ -421,7 +428,11 @@ func (s *Service) Post(ctx context.Context, request PostRequest) (PostResult, er
 		return PostResult{}, err
 	}
 	if !mine {
-		return s.replay(claim, request, root)
+		result, err := s.replay(claim, request, root)
+		if err != nil {
+			return PostResult{}, err
+		}
+		return result, s.reactToRefusal(ctx, install, refused)
 	}
 	// From here the key is held, and every way out gives it back unless the
 	// post went through.
@@ -456,8 +467,12 @@ func (s *Service) Post(ctx context.Context, request PostRequest) (PostResult, er
 	defer cancel()
 	if err := s.store.CompletePost(done, install.OrganizationID, key, channel, ts, s.now().UTC()); err != nil {
 		s.logger.ErrorContext(done, "record a Slack post that was made", "organization_id", install.OrganizationID, "error", err)
+		// Slack accepted the private message, but its completion is uncertain.
+		// Preserve the successful-send result: a reaction failure must not
+		// create a new retry that could reclaim this post and duplicate it.
+		return PostResult{ChannelID: channel, TS: ts, Ephemeral: where == toPerson}, nil
 	}
-	return PostResult{ChannelID: channel, TS: ts, Ephemeral: where == toPerson}, nil
+	return PostResult{ChannelID: channel, TS: ts, Ephemeral: where == toPerson}, s.reactToRefusal(ctx, install, refused)
 }
 
 // checkTarget holds a post to conversations people opened with the bot, and
@@ -494,9 +509,17 @@ func requestHash(request PostRequest, root string) string {
 	if json.Compact(&compact, params) == nil {
 		params = compact.Bytes()
 	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{
+	legacy, routerBound := legacyRouterRefusalParams(request)
+	if routerBound {
+		params = legacy
+	}
+	parts := []string{
 		request.Template, request.Target.ChannelID, root, request.Target.UserID, string(params),
-	}, "\x00")))
+	}
+	if request.RefusalInboundID != "" && !routerBound {
+		parts = append(parts, request.RefusalInboundID)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])
 }
 

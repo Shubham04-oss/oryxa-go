@@ -338,9 +338,13 @@ holds `slackbot.BotScopes` (which the Add to Slack link asks for) and
 `slackfake`'s default scopes to it, so they cannot drift.
 
 - **Bot scopes**, each with its reason in the file: `app_mentions:read`,
-  `chat:write`, `im:write`, `users:read`, `users:read.email`, `channels:read`,
+  `chat:write`, `reactions:write`, `im:write`, `users:read`, `users:read.email`, `channels:read`,
   `groups:read`. No user scope, no channel-history scope: the bot reads only
   messages that mention it.
+  `reactions:write` lets the bot mark a refused ask with a neutral speech bubble;
+  the reason remains private. Existing installations need the updated manifest
+  and a new scope grant before reactions work. Missing scope leaves the private
+  explanation working and logs that the installation needs updating.
 - **Events** (`bot_events`): `app_mention`, `app_uninstalled`, `tokens_revoked`.
   Interactivity on. Messages tab read-only, no Home tab. Org deploy, socket mode
   and **token rotation off**: the install refuses a token that rotates, because
@@ -480,6 +484,22 @@ first). Posts go only where people opened a conversation with the bot: the
 thread must be one a verified message or click was in, and the person one who
 wrote or was named in one, within the last 7 days (403 `forbidden` otherwise).
 Naming a thread by any message in it posts to its root.
+
+A `refusal` post may include `refusal_inbound_id`, the verified message being
+refused. Apps checks its organization, installation, sender, channel and thread
+against the private target, then adds the bot's fixed `speech_balloon` reaction
+to that message's exact timestamp. No reason or question becomes public. The
+private message is recorded first; a transient reaction failure retries through
+that post's replay without repeating the private explanation. Slack's
+`already_reacted` counts as success. Missing scope or a message that can no
+longer take reactions is logged and leaves the private explanation working.
+Router refusal keys retain their legacy claim hashes, including across the new
+bounded self/count hints; their exact inbound binding is checked before replay.
+If Slack accepts the private post but its completion write fails, apps returns
+the existing successful-send result and skips the reaction rather than creating
+a reaction retry. This retains the existing uncertain-send limitation: an
+independent retry after the stale claim lease can repeat a post whose completion
+could not be stored; there is no new cross-process exactly-once guarantee.
 
 `POST /v1/internal/apps/slack/update` —
 `{"organization_id","channel_id","ts","template","params"}` replaces a message
