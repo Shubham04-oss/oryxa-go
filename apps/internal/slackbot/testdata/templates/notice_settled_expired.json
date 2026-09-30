@@ -1,0 +1,21 @@
+{
+  "text": "Expired without an answer",
+  "blocks": [
+    {
+      "text": {
+        "text": "<@U0ASKER> asked you through Oryxa:\n> When is the launch?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Expired without an answer",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}

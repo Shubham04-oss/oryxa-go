@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest"
 import {
   GUARD_MAX_TEXT,
+  GUARD_SOURCES_UNRECORDED,
   HELD_ANSWER_FIELDS,
   PROMPT_TRANSCRIPT_LINES,
   REQUEST_CONTEXT_LINES,
   agentRequestBody,
   cardFields,
   guardCheckBody,
+  guardContext,
+  guardSources,
   guardedAnswer,
   heldAnswerOf,
   isOpen,
@@ -1052,6 +1055,8 @@ describe("checking an agent's own answer", () => {
       texts: ["Friday, 9am."],
       origin: "owner",
       request: "What time?",
+      sources: [],
+      context: [],
     })
     const long = "é".repeat(GUARD_MAX_TEXT + 5)
     const body = guardCheckBody(long, long)
@@ -1060,9 +1065,42 @@ describe("checking an agent's own answer", () => {
       expect(Array.from(text)).toHaveLength(GUARD_MAX_TEXT)
       expect(text.endsWith("…")).toBe(true)
     }
-    expect(Object.keys(body).sort()).toEqual(["origin", "request", "texts"])
+    expect(Object.keys(body).sort()).toEqual([
+      "context",
+      "origin",
+      "request",
+      "sources",
+      "texts",
+    ])
     // The longest answer an agent's message keeps fits one check as it is.
     expect(SIDE_MAX_AGENT_TEXT).toBeLessThanOrEqual(GUARD_MAX_TEXT)
+  })
+
+  it("bounds actual source names and context without making missing or overflowing provenance public", () => {
+    expect(guardSources(["directory_load", "directory_load"])).toEqual([
+      "directory_load",
+    ])
+    expect(guardSources(["", "é".repeat(129)])).includes(
+      GUARD_SOURCES_UNRECORDED
+    )
+    const sources = guardSources(
+      Array.from({ length: 100 }, (_, i) => `read_${i}`)
+    )
+    expect(sources).toHaveLength(64)
+    expect(sources).includes(GUARD_SOURCES_UNRECORDED)
+    const transcript = Array.from({ length: 10 }, (_, i) => ({
+      speaker: `speaker ${i}`,
+      text: "é".repeat(1_100),
+    }))
+    const context = guardContext(transcript)
+    expect(context).toHaveLength(6)
+    expect(context[0]).toMatch(/^speaker 4:/)
+    expect(context.every((line) => Array.from(line).length === 1_000)).toBe(
+      true
+    )
+    const body = guardCheckBody("Done.", "Question", { sources, context })
+    expect(body.sources).toEqual(sources)
+    expect(body.context).toEqual(context)
   })
 
   it("reads Go's answer as what may be shared, and nothing unless it is exactly what the contract says", () => {

@@ -1,0 +1,48 @@
+{
+  "text": "*Alex Kim* is asking you a question through Oryxa.",
+  "blocks": [
+    {
+      "text": {
+        "text": "*Alex Kim* is asking you through Oryxa:\n> Can I see the dev keys?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "consent",
+      "elements": [
+        {
+          "action_id": "consent_summary",
+          "text": {
+            "emoji": false,
+            "text": "Share AI summary only",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.summary.sig"
+        },
+        {
+          "action_id": "consent_access",
+          "text": {
+            "emoji": false,
+            "text": "Give access for 1 hour",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.access.sig"
+        },
+        {
+          "action_id": "consent_deny",
+          "text": {
+            "emoji": false,
+            "text": "Deny",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.deny.sig"
+        }
+      ],
+      "type": "actions"
+    }
+  ]
+}

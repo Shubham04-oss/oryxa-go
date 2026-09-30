@@ -1,0 +1,12 @@
+{
+  "text": "I don't answer in channels shared with other organizations.",
+  "blocks": [
+    {
+      "text": {
+        "text": "I don't answer in channels shared with other organizations.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

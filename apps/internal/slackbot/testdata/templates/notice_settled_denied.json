@@ -1,0 +1,21 @@
+{
+  "text": "Denied by <@U0RAYA> at 2026-09-29 14:02 UTC",
+  "blocks": [
+    {
+      "text": {
+        "text": "<@U0ASKER> asked you through Oryxa:\n> When is the launch?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Denied by <@U0RAYA> at <!date^1790690520^{date_short_pretty} {time}|2026-09-29 14:02 UTC>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}

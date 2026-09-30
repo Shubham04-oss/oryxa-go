@@ -18,6 +18,7 @@ import { rosterOf } from "./lib/side/roster"
 import { parseSpecialistAgentName } from "./lib/specialists/chat-messages"
 import { parseThreadAgentName } from "./lib/threads/chat-messages"
 import { REALTIME_PURGE_PATH, handlePurge } from "./realtime-purge"
+import { REALTIME_REQUESTS_PATH, handleRequests } from "./realtime-requests"
 import { RealtimeRegistryAgent } from "./realtime-registry-agent"
 import { withSecurityHeaders } from "./security-headers"
 import {
@@ -34,8 +35,10 @@ import type { ThreadChatEnv } from "./thread-chat-agent"
 
 // The Worker (wrangler.jsonc `main`). It serves the app through TanStack
 // Start, puts every realtime Durable Object (REALTIME.md) behind a check
-// with Go (one entry each in `realtimeObjects` below), and takes Go's signed
-// purges of the conversations a member leaves behind (src/realtime-purge.ts).
+// with Go (one entry each in `realtimeObjects` below), takes Go's signed
+// purges of the conversations a member leaves behind (src/realtime-purge.ts),
+// and its signed notes that an agent request between two members moved
+// (src/realtime-requests.ts).
 
 export interface Env extends ThreadChatEnv, ConversationEnv {
   ThreadChatAgent: DurableObjectNamespace<ThreadChatAgent>
@@ -702,6 +705,9 @@ const realtimePath = /^\/agents\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/?$/
 async function respond(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
   if (url.pathname === REALTIME_PURGE_PATH) return handlePurge(request, env)
+  if (url.pathname === REALTIME_REQUESTS_PATH) {
+    return handleRequests(request, env)
+  }
   const match = realtimePath.exec(url.pathname)
   const object = match ? realtimeObjects.get(match[1]) : undefined
   if (match && object) {

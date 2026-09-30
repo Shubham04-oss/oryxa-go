@@ -290,7 +290,8 @@ func (server *Server) checkAnswer(writer http.ResponseWriter, request *http.Requ
 	verdict := server.answerGuard.CheckWith(request.Context(), body.Texts, &answerguard.RelevanceInput{
 		Request: body.Request, Context: body.Context, Sources: body.Sources,
 		Regulated: settings.regulated, Mode: settings.relevance,
-		OrganizationID: member.OrganizationID, UserID: member.UserID,
+		RequireCompleteInput: true,
+		OrganizationID:       member.OrganizationID, UserID: member.UserID,
 	})
 	outcome := verdict.At(len(body.Texts), settings.intensity)
 	if outcome.State != answerguard.StateClear || outcome.Shareable == nil {

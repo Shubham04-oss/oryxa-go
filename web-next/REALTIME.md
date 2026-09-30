@@ -262,6 +262,13 @@ callable methods, and a page may not set state).
   recorded for Go in the same transaction, and sent from an outbox
   ([Conversation events](#conversation-events)): who and where, never what
   was said.
+- **Requests.** When an agent request between its two people is made,
+  decided or answered, Go tells the Worker, which tells the object
+  (`noteRequest`: [Request notes](#request-notes)). It keeps one note for each
+  request, sends every socket its line as it is new or changes
+  (`dm-request`, and `requests` in the snapshot), and takes the notes with
+  the messages in a purge. A note is no message: it has no seq, counts no
+  unread, and records no event for Go.
 
 A member's conversation list is `InboxAgent` (`src/inbox-agent.ts`), one per
 member per organization, `{org}~{user}`, read live by `useInbox(org, viewer)`
@@ -282,6 +289,12 @@ current over RPC:
 - `markRead(name, seq)`: unread is only what comes after `seq`. A
   conversation is noted before it is marked read; a read of one not listed
   does nothing.
+- `noteRequest(entry, note)`: a move of an agent request between the member
+  and the conversation's other person ([Request notes](#request-notes)).
+  Lists a direct message if it was not, moves it up to when the request
+  reached its state, and keeps the note, which the row's preview says, in
+  fixed words, while it is the newest thing in the conversation. It counts
+  nothing as unread.
 - `upsertConversation(entry)` lists one before its first message (nothing
   calls it yet); `removeConversation(name)` takes one off.
 - `knowConversation(entry)` keeps one the member is in without listing it
@@ -289,7 +302,8 @@ current over RPC:
   reads it.
 - `restateConversation(entry, state)`: after a purge that kept part of a
   conversation, its object says what the inbox keeps of it (its latest
-  message, the read, what is unread) in place of what it had.
+  message and latest request, the read, what is unread) in place of what it
+  had.
 - The inbox checks every entry against itself: a conversation of its
   organization that its member is in, with `peerId` the other person, and in
   a DM only its two people write. Anything else throws, so one object can
@@ -398,9 +412,48 @@ message, from what was shared of it.
 `waiting`, or `failed` with what it said before), the object asks Go's
 answer guard once, as the owner, with their cookie and page's origin, in
 the same keep-alive as the run: `POST …/answer-guard/check`, body `{"texts":
-[the answer], "origin": "owner", "request": what the owner asked}` (the
+[the answer], "origin": "owner", "request": what the owner asked,
+"sources": actual run tools, "context": shared conversation lines}` (the
 run's message, or for answers to confirmations the question of the message
 they continue; each at most 25,000 code points), within ten seconds.
+The Worker records only names from Go's actual `tool_call`/`tool_result`
+items, never from a browser or an agent's prose; arguments, results and files
+remain in the owner's thread. Sources are at most 64 names of 128 code points;
+an incomplete/overflowed record adds `run_sources_unrecorded`.
+Provider reads behind `transfer_to_agent`, and `interactions_get` (which
+reads other requests outside a pinned delivery), conservatively add the same
+marker. Reusing the owner's Go thread adds `thread_history`, including a
+confirmation continuation. Earlier shared side transcript is a source too:
+any nonempty prompt transcript adds `thread_history` even on the first Go
+run, in both the Worker check and the Go ledger guard. This records no extra
+transcript content and distinguishes conversation data from the clean question.
+Context is the last six lines of the shared transcript snapshot the run saw,
+each at most 1,000 code points, never the owner's private Go transcript. Go's
+existing workspace/member settings and deployment ceiling decide relevance.
+When private sources require judging, the check route requires the complete
+request and answer within the judge's caps (10,000 and 24,000 code points).
+An incomplete check is unchecked and shares no text in hold mode; shadow
+records would-hold and off remains off. This includes a maximum side body
+of 24,002 code points: it cannot share two middle runes omitted by the judge,
+and the object does not silently clip the answer to make that check pass.
+For a ledger publication during the same Go run, the fresh run body also
+has `publication_request: {request, context}` beside its wrapped `message`.
+Only the clean original question can authorize sharing; peer transcript and
+prompt framing remain context. This object contains no sources or guard
+settings. The Worker builds it from the socket question and shared transcript
+rather than accepting it from a browser, and never sends it on the wire.
+Go validates it only for a fresh owned side-origin run and keeps its bounded
+question/context in existing private session metadata for confirmations.
+A confirmation body supplies no replacement object: Go restores the original,
+including after a service restart. Older Go side sessions without it cannot
+fall back to the wrapped prompt as their Request; their ledger publications
+are unchecked when private sources require judging in hold mode.
+Only while waiting for confirmation, the existing agent-message `data` JSON
+keeps an optional bounded `guardInput` (original request, source names and
+shared context). It is never sent on the wire, put in an inbox or read into an
+agent's transcript, and is cleared when the run resumes/finishes. It survives
+a restart without a schema migration. A waiting row from an older build has
+no such metadata and conservatively adds `run_sources_unrecorded` on resume.
 `origin: "owner"` says the member started their own agent, so Go leaves the
 personal data they would say themselves (emails, phone numbers, addresses)
 as it is and still masks passwords, keys and card, bank and ID numbers. Go
@@ -891,9 +944,189 @@ who left still stops hearing it once Go stops vouching for them (above).
 `REALTIME_PURGE_SECRET` is a Worker secret (`wrangler secret put
 REALTIME_PURGE_SECRET`, the same value Go has; `.dev.vars` locally, see
 `.dev.vars.example`). It signs the other direction too: the conversation
-events the Worker sends Go. `src/realtime-purge.test.ts` pins Go's own
+events the Worker sends Go. And it signs the notes Go sends of a request
+that moved ([Request notes](#request-notes)), over a prefix of their own. `src/realtime-purge.test.ts` pins Go's own
 signing vectors: a member's purge, an organization's, a member's with a
 nanosecond `removed_at`, a member's in a teamspace and a teamspace's.
+
+## Request notes
+
+An agent request between two members (their agents' `agents.interaction.*`
+events, and a Slack ask is one) has its own screen, the Requests view. So that
+the people it is between hear of it where they already are, Go's realtime
+service has the Worker note each move of it in their direct message and in
+both their inboxes, over a signed route of its own, beside the purge's. A note
+is identities and a state: who asked whose agent, where the request was made,
+its revision, and the state it reached. It carries nothing of what was asked or
+answered, and nothing in it is shown as content: the words a page says around a
+note are fixed, and it reads the request itself from Go, as the member.
+
+`POST /internal/realtime/requests`, not under `/agents/`, with no cookie. The
+route is `src/realtime-requests.ts`; Go's side is `realtime/internal/requests`
+and its README holds the golden vectors both sides are tested against.
+
+- `X-Oryxa-Timestamp`: Unix seconds, when Go signed it. Every attempt is signed
+  afresh.
+- `X-Oryxa-Signature`: `v1=` and the lowercase hex HMAC-SHA256, keyed with
+  `REALTIME_PURGE_SECRET` (as written, less surrounding whitespace, as for a
+  purge), of `requests.`, the timestamp as sent, a `.`, and the raw body's
+  bytes. The prefix keeps the three directions apart: a purge's string starts
+  with its timestamp, which is digits, and the events the Worker sends Go start
+  with `events.`. So a purge's signature never verifies on this route, a
+  note's never verifies on the purge's, and neither is an events request's.
+- The body, at most 4 KB of compact JSON, keys in this order, all present:
+  `{"organization_id":"…","request_id":"…","revision":2,"asker_user_id":"…","owner_user_id":"…","origin":"agent","state":"approved","changed_at":"…"}`.
+  Each id is an id a name may hold (`A-Z a-z 0-9 _ -`, at most 128) and the
+  asker and the owner are two different people. `revision` is the request's
+  own, from 1, and goes up each time it changes. `origin` is a short lowercase
+  word: `agent` (an agent filed it) or `slack` (the Slack app did); another
+  word a later build publishes is kept as it is, and a page says no more of it
+  than that the request was made. `state` is one of `waiting`, `approved`,
+  `declined`, `answered`, `held`, `failed` or `withheld` (`REQUEST_NOTE_STATES`).
+  `changed_at` is RFC 3339 as a purge's `removed_at` is (0 to 9 fractional
+  digits, a real time, from 1970), read to the millisecond. Keys the contract
+  does not name are ignored, so either side can deploy first.
+
+The Worker checks, in order, as it does a purge: POST (405); its secret,
+trimmed, is set and at least 32 characters (503 `unavailable` otherwise); both
+headers (401 `unauthorized`); the timestamp within 300 s of its clock, either
+way (401 `stale_request`); the signature's form (401 `invalid_signature`); the
+body at most 4 KB (413 `too_large`); the signature itself, compared in constant
+time (401 `invalid_signature`); the body (400 `invalid_request`, which Go does
+not retry). Then it tells three objects at once: the two people's direct
+message (`DirectMessageAgent.noteRequest`) and each person's inbox
+(`InboxAgent.noteRequest`). It answers 204 with no body once every one has,
+whether or not it changed anything; 503 when any failed, and Go sends the note
+again, which the objects that did not fail take as a repeat. Only 204 is done:
+Go retries 401, 408, 429, 5xx and any other 2xx, and follows no redirect.
+
+**Idempotent per request and revision.** Each object keeps, for a request, the
+highest revision it has been told of, and a note that is no newer does nothing
+(`repeated`, and nobody is told): Go sends again whatever it is unsure of, and
+SQS and EventBridge keep no order, so revision 3 may come before 2. A request
+that is approved and then held for its owner's decision goes back to `waiting`
+at a higher revision, which is why the state alone cannot say which is newer.
+An inbox keeps one note for each conversation, the request that changed last:
+a note for another request that changed earlier than the one held does
+nothing, and one that changed later takes its place.
+
+**The time.** A note's time is never later than the Worker's clock: a request
+that reached its state "in the future" (Go's clock ahead of the Worker's) is
+noted as of now, so it cannot hold an inbox's top for good.
+
+**What each object keeps.**
+
+- The direct message keeps one row for each request (`dm_requests`: request,
+  revision, asker, owner, origin, state, `first_at` and `changed_at`), at most
+  `DM_REQUEST_LIMIT` (30), the latest by `first_at`. `first_at` is where the
+  request's line stands in the log, and does not move as its state changes.
+  Every socket is sent `dm-request` with the line as it is new or changes, and
+  a socket that opens is sent the notes it holds as `requests` in its
+  snapshot (left out when there are none), oldest first. A note is no
+  message: it has no seq, moves nobody's read, counts no unread, and records no
+  event for Go.
+- An inbox lists the conversation if it did not (a request between two people
+  who never wrote to each other still makes a row), moves it up to when the
+  request reached its state, and keeps the note (`inbox_requests`, one for
+  each conversation). The row's preview is the newer of the last message and the
+  latest request, by time. A request is said in fixed words from the member's
+  side, with no names (an inbox keeps none) and no "You:": "You asked their
+  agent · waiting", "Asked your agent in Slack · held", one word for each state
+  (`requestPreview`). It counts no unread: the Requests view is where a member
+  is told what waits for them.
+
+**Purges take the notes with the messages.** An organization's purge empties a
+direct message's notes with its messages. A member's purge takes the notes whose
+lines stand (`first_at`) at or before `removed_at`, keeps newer ones, and a
+direct message with a note left, or a socket opened since, stays as a new run:
+both inboxes are restated from it, its latest request beside its latest message
+(`RestatedConversation.request`), and one with no message left is listed by its
+request. A conversation with nothing left is emptied and leaves both inboxes,
+requests forgotten with it. A note that reaches the Worker after a purge took
+its conversation makes one again, as a message sent in the moment of a purge
+does (an inbox lists it; opening it answers 404 once the member is gone).
+
+**Nothing from the body is shown as content.** The body is ids, two enums and
+numbers, all validated, so there is no text of anyone's in it to show. What a
+page says of a note is its own fixed words (`requestLine`, `requestStateWord`),
+with the other person's name from the page's own directory.
+
+**The 10 s poll stays.** The Requests boxes re-read Go every ten seconds
+(`AGENT_REQUESTS_POLL_MS`), and a note only hurries that along: a note that
+never arrives (the queue is behind, the rule is not widened, the Worker was
+down) costs a line that shows up late in a conversation, never a wrong answer.
+
+### Request notes on the page
+
+`useDirectMessages(org, viewer, peer)` hands a view `requests`: the notes its
+object holds, oldest line first, one for each request, at its latest revision
+(`DmRequestNote`: the note and `at`, where its line stands). They come with
+the snapshot and as `dm-request` frames; a frame no newer than the note held
+leaves it alone, and each snapshot's notes replace what was held.
+
+`components/direct-message.tsx` puts each note in the log where its `at` falls
+among the messages (`withRequests`), as **one quiet centered line**, in the
+side conversations' style (`workspace-side-status`):
+
+> You asked Priya's agent · waiting `10:04` Open
+
+- **Fixed words.** Who asked whose agent, from the viewer's side ("You asked
+  Priya's agent", "Priya asked your agent"), " in Slack" when the origin is
+  `slack`, then one word for where the request stands: `waiting`, `approved`,
+  `declined`, `answered`, `held`, `failed`, `not shared` (withheld) and, from
+  Go's read alone, `expired`. All of it is `src/lib/dms/request-notes.ts`; the
+  other person's name is the page's own directory's. No word of anyone's is in
+  a note, so none is shown.
+- **The state is Go's word to the member.** Each line reads its request
+  (`GET …/agent-requests/{id}`, `useRequestStanding`, as the member's own
+  session), once for each revision, and, while the request can still move
+  (`waiting`, `approved`, `held`), once more when it is due to expire, which no
+  event says. Go's status replaces the note's; until it answers, or when it
+  cannot, the note's word stands. Go refusing the member the request (404 or
+  403) hides the line: it is not theirs to show, whatever the note says. A read
+  of a request that can no longer move is kept for ten minutes, and the two
+  views of one DM a page may hold (the canvas and the panel) share it, so a
+  conversation is read once for each request, not once for each view.
+- **It moves in place.** Its place is where the request was first noted, its
+  state changes with the note, and a request that is new or moves on while the
+  conversation is open is said aloud through the log's announcer, as an
+  approval landing in a side conversation is ("You asked Priya's agent:
+  approved"). What was there when the conversation opened is not news.
+- **A day of its own.** A line that is the first thing said on its day starts
+  the day, like a message. A conversation with no message shows the line above
+  its "Say hello" invitation. One the member may no longer open shows none.
+- **Open** takes the member to the request in the Requests view. It is shown
+  only when the shell wired it (below): without, it would open nothing.
+
+**What the shell wires.** The Requests view is a screen of its own
+(`components/requests-view`), and this lane does not import it. The shell that
+holds both wraps what shows a DM in `OpenRequestProvider`, once, with the
+function that opens the Requests view at a request:
+
+```tsx
+import { OpenRequestProvider } from "@/lib/dms"
+
+<OpenRequestProvider
+  value={(requestId) => {
+    /* select the Requests section and the request with this id */
+  }}
+>
+  {/* the shell: its canvas and the agent panel, which mount DirectMessageView */}
+</OpenRequestProvider>
+```
+
+Every view of a DM (the main canvas and the right panel's DMs tab) reads it
+from there, so nothing is passed through the panel. A view may also take
+`onOpenRequest` on `DirectMessageView` (or `DirectMessageConversation`), which
+wins over the shell's. The function receives the request's id, which is the
+id `GET …/agent-requests/{id}` takes and the Requests view is opened by.
+
+**In the inbox.** The DMs tab lists a conversation with a request as it lists
+any other, moved up to when the request reached its state, with the fixed
+preview ("Asked your agent · waiting") in place of the last message while the
+request is the newer of the two. No screen changed for that: the preview is
+`Conversation.lastMessage`, which the list already shows, and the note counts
+no unread.
 
 ## Conversation events
 
@@ -1032,6 +1265,9 @@ in the tab (`components/side-conversation.tsx` on `useSideConversation`);
 the DMs tab opens one from its list the same way, whichever page is open,
 since its object needs only the ids. Each place is its own view, with its
 own socket, mounted only while it shows, as a DM's is.
+
+A DM's log also holds a quiet line for each agent request between its two
+people ([Request notes on the page](#request-notes-on-the-page)).
 
 A specialist's chat (`components/specialist-chat.tsx`) is one component in
 two places: its focused view's conversation column, and the Agents tab once

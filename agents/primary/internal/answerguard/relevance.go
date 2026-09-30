@@ -6,6 +6,8 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/relevance"
 )
@@ -56,6 +58,12 @@ type RelevanceInput struct {
 	// RelevanceShadow or RelevanceOff. A mode this code does not know is
 	// RelevanceHold, so a mistyped one never checks less than it was asked to.
 	Mode string
+	// RequireCompleteInput refuses to call a judge on a missing request or a
+	// request/answer beyond its cap. A ledger uses this because every retained
+	// field must be checked before publication. Bounded conversation context
+	// is still context, not an authorization-bearing request. An incomplete
+	// input is unchecked in hold mode and only records would-hold in shadow.
+	RequireCompleteInput bool
 
 	// OrganizationID and UserID are the member the check is for, and are
 	// only ever logged beside what the check decided, so that a line can be
@@ -66,9 +74,10 @@ type RelevanceInput struct {
 // RelevanceOutcome is what the relevance check made of an answer. It carries
 // decisions and category names, never a text.
 type RelevanceOutcome struct {
-	// Judged is whether a judge read the answer: false when the mode was
+	// Judged is whether the relevance check ran: false when the mode was
 	// off, no judge is configured, or no source may have read anything
-	// private. It is true for a judge that was asked and could not tell.
+	// private. It is true for a judge that could not tell, and for a complete
+	// input check that refused missing/oversized text without a model call.
 	Judged bool
 	// WouldHold is whether the check holds the answer, by relevance.ShouldHold
 	// and the judge's own word: for any extra, for a judge that could not tell,
@@ -142,6 +151,9 @@ func isNothing(judge relevance.Judge) bool {
 // The judge is handed the texts as they were given, so that it judges what the
 // agent said. One decision is logged for each answer a judge read, by what was
 // decided and never by a text.
+// RequireCompleteInput also records an unchecked decision without asking the
+// judge when the request is missing or the request/answer exceeds its caps;
+// the same hold/shadow/off rules apply to that decision.
 func (guard *Guard) CheckWith(ctx context.Context, texts []string, rel *RelevanceInput) Verdict {
 	verdict := guard.Check(ctx, texts)
 	if rel == nil {
@@ -158,13 +170,18 @@ func (guard *Guard) checkRelevance(ctx context.Context, texts []string, verdict 
 		return verdict
 	}
 
-	result := guard.judge.Judge(ctx, relevance.Input{
-		Request:   rel.Request,
-		Context:   rel.Context,
-		Answer:    slices.Clone(texts),
-		Sources:   rel.Sources,
-		Regulated: rel.Regulated,
-	})
+	var result relevance.Result
+	if rel.RequireCompleteInput && incompleteRelevanceInput(rel.Request, texts) {
+		result = relevance.Result{Hold: true, Err: relevance.ErrIncompleteInput}
+	} else {
+		result = guard.judge.Judge(ctx, relevance.Input{
+			Request:   rel.Request,
+			Context:   rel.Context,
+			Answer:    slices.Clone(texts),
+			Sources:   rel.Sources,
+			Regulated: rel.Regulated,
+		})
+	}
 	failed := result.Err != nil
 	outcome.Judged = result.Judged || failed
 	// The rule is applied here as well as by the judge: a judge that came
@@ -184,6 +201,20 @@ func (guard *Guard) checkRelevance(ctx context.Context, texts []string, verdict 
 		guard.logRelevance(ctx, rel, mode, result, outcome)
 	}
 	return verdict
+}
+
+func incompleteRelevanceInput(request string, texts []string) bool {
+	if strings.TrimSpace(request) == "" || utf8.RuneCountInString(request) > relevance.MaxRequestRunes {
+		return true
+	}
+	left := relevance.MaxAnswerRunes
+	for _, text := range texts {
+		left -= utf8.RuneCountInString(text)
+		if left < 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // relevanceMode is mode as the check reads it: shadow and off as they are, and

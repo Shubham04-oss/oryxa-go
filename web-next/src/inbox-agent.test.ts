@@ -8,6 +8,7 @@ import {
   sideConversationName,
 } from "./lib/dms/names"
 import { MAX_UNREAD, conversationGoneCloseCode } from "./lib/dms/protocol"
+import type { RequestNote } from "./lib/dms/request-notes"
 import { RealtimeRegistryAgent, purgeMemoryMs } from "./realtime-registry-agent"
 import { SideConversationAgent } from "./side-conversation-agent"
 import {
@@ -1111,5 +1112,392 @@ describe("InboxAgent: a teamspace's purge", () => {
     expect(removals(inbox)).toHaveLength(1)
     expect(await inbox.purge()).toEqual({ emptied: true })
     expect(removals(inbox)).toEqual([])
+  })
+})
+
+describe("InboxAgent: requests", () => {
+  /** A request Ada made of Bo's agent at 09:30, less what `overrides` change. */
+  function note(overrides: Partial<RequestNote> = {}): RequestNote {
+    return {
+      requestId: "irq_1",
+      revision: 1,
+      askerId: ada,
+      ownerId: bo,
+      origin: "agent",
+      state: "waiting",
+      changedAt: "2026-09-24T09:30:00.000Z",
+      ...overrides,
+    }
+  }
+
+  /** The same, as Bo made it of Ada's. */
+  const asked = (overrides: Partial<RequestNote> = {}) =>
+    note({ askerId: bo, ownerId: ada, ...overrides })
+
+  it("lists a conversation a request is noted in, moved up to when it happened, and says it in fixed words from the member's side", async () => {
+    const { inbox } = await setup()
+    await inbox.noteMessage(
+      dmWith(cy),
+      message(1, cy, "older", "2026-09-24T09:10:00.000Z")
+    )
+
+    expect(await inbox.noteRequest(dmWith(bo), note())).toBe("noted")
+    expect(await inbox.listConversations()).toEqual([
+      {
+        kind: "dm",
+        name: dmWith(bo).name,
+        peerId: bo,
+        // The peer's own, so it carries no "You:"; nothing of what was asked.
+        lastMessage: {
+          authorId: bo,
+          body: "You asked their agent · waiting",
+          createdAt: "2026-09-24T09:30:00.000Z",
+        },
+        unread: 0,
+        updatedAt: "2026-09-24T09:30:00.000Z",
+      },
+      expect.objectContaining({ name: dmWith(cy).name }),
+    ])
+
+    // Bo asking Ada's agent, in Slack.
+    expect(
+      await inbox.noteRequest(
+        dmWith(cy),
+        asked({
+          ownerId: ada,
+          askerId: cy,
+          origin: "slack",
+          changedAt: "2026-09-24T09:40:00.000Z",
+        })
+      )
+    ).toBe("noted")
+    const [first] = await inbox.listConversations()
+    expect(first).toEqual(
+      expect.objectContaining({
+        name: dmWith(cy).name,
+        lastMessage: {
+          authorId: cy,
+          body: "Asked your agent in Slack · waiting",
+          createdAt: "2026-09-24T09:40:00.000Z",
+        },
+      })
+    )
+  })
+
+  it("counts a request as no unread message, and registers the inbox as a message does", async () => {
+    const { inbox } = await setup()
+    await inbox.noteMessage(dmWith(bo), message(1, bo, "Hi Ada"))
+    const socket = await openSocket(inbox, { organizationId: org, userId: ada })
+    socket.clear()
+    await inbox.noteRequest(dmWith(bo), asked())
+    expect(socket.last("inbox-conversation")?.unreadTotal).toBe(1)
+    expect((await inbox.listConversations())[0].unread).toBe(1)
+    expect(inbox.sql`SELECT COUNT(*) AS n FROM inbox_unread`).toEqual([
+      { n: 1 },
+    ])
+
+    const { inbox: fresh } = await setup()
+    await fresh.noteRequest(dmWith(bo), note())
+    expect(
+      fresh.sql`SELECT value FROM inbox_meta WHERE key = 'registered'`
+    ).toEqual([{ value: "1" }])
+  })
+
+  it("has the newer of the last message and the latest request say the row's preview", async () => {
+    const { inbox } = await setup()
+    await inbox.noteMessage(
+      dmWith(bo),
+      message(1, bo, "hello", "2026-09-24T09:00:00.000Z")
+    )
+    const preview = async () =>
+      (await inbox.listConversations())[0].lastMessage?.body
+
+    // A request after the message says its words.
+    await inbox.noteRequest(
+      dmWith(bo),
+      asked({ changedAt: "2026-09-24T09:30:00.000Z" })
+    )
+    expect(await preview()).toBe("Asked your agent · waiting")
+    // A message after the request takes the preview back.
+    await inbox.noteMessage(
+      dmWith(bo),
+      message(2, bo, "any news?", "2026-09-24T09:31:00.000Z")
+    )
+    expect(await preview()).toBe("any news?")
+    // The request moving on, after that, says so.
+    await inbox.noteRequest(
+      dmWith(bo),
+      asked({
+        revision: 2,
+        state: "answered",
+        changedAt: "2026-09-24T09:32:00.000Z",
+      })
+    )
+    expect(await preview()).toBe("Asked your agent · answered")
+    expect((await inbox.listConversations())[0].updatedAt).toBe(
+      "2026-09-24T09:32:00.000Z"
+    )
+    // A request from before the last message is held, but does not say its words.
+    const { inbox: later } = await setup()
+    await later.noteMessage(
+      dmWith(bo),
+      message(1, bo, "latest word", "2026-09-24T09:50:00.000Z")
+    )
+    await later.noteRequest(
+      dmWith(bo),
+      asked({ changedAt: "2026-09-24T09:20:00.000Z" })
+    )
+    expect((await later.listConversations())[0]).toEqual(
+      expect.objectContaining({
+        lastMessage: expect.objectContaining({
+          body: "latest word",
+        }) as unknown,
+        updatedAt: "2026-09-24T09:50:00.000Z",
+      })
+    )
+  })
+
+  it("keeps the latest request in a conversation at its highest revision, whatever the order it is told in", async () => {
+    const { inbox } = await setup()
+    const held = () =>
+      inbox.sql`SELECT request_id, revision, state FROM inbox_requests`
+    expect(
+      await inbox.noteRequest(
+        dmWith(bo),
+        asked({
+          revision: 3,
+          state: "answered",
+          changedAt: "2026-09-24T09:33:00.000Z",
+        })
+      )
+    ).toBe("noted")
+    // The same request, late, or again.
+    for (const stale of [
+      asked({
+        revision: 3,
+        state: "answered",
+        changedAt: "2026-09-24T09:33:00.000Z",
+      }),
+      asked({
+        revision: 2,
+        state: "approved",
+        changedAt: "2026-09-24T09:32:00.000Z",
+      }),
+      asked({
+        revision: 1,
+        state: "waiting",
+        changedAt: "2026-09-24T09:31:00.000Z",
+      }),
+    ]) {
+      expect(await inbox.noteRequest(dmWith(bo), stale)).toBe("repeated")
+    }
+    expect(held()).toEqual([
+      { request_id: "irq_1", revision: 3, state: "answered" },
+    ])
+
+    // Another request that changed earlier is not the latest; one that changed later is.
+    expect(
+      await inbox.noteRequest(
+        dmWith(bo),
+        asked({ requestId: "irq_0", changedAt: "2026-09-24T09:20:00.000Z" })
+      )
+    ).toBe("repeated")
+    expect(held()).toEqual([
+      { request_id: "irq_1", revision: 3, state: "answered" },
+    ])
+    expect(
+      await inbox.noteRequest(
+        dmWith(bo),
+        asked({
+          requestId: "irq_2",
+          origin: "slack",
+          changedAt: "2026-09-24T09:40:00.000Z",
+        })
+      )
+    ).toBe("noted")
+    expect(held()).toEqual([
+      { request_id: "irq_2", revision: 1, state: "waiting" },
+    ])
+    // And a request goes on from its own revision, not from another's.
+    expect(
+      await inbox.noteRequest(
+        dmWith(bo),
+        asked({
+          requestId: "irq_2",
+          revision: 2,
+          state: "held",
+          changedAt: "2026-09-24T09:41:00.000Z",
+        })
+      )
+    ).toBe("noted")
+    expect((await inbox.listConversations())[0].lastMessage?.body).toBe(
+      "Asked your agent · held"
+    )
+  })
+
+  it("sends the member's sockets the row as it changes, once for each change", async () => {
+    const { inbox } = await setup()
+    const socket = await openSocket(inbox, { organizationId: org, userId: ada })
+    socket.clear()
+    await inbox.noteRequest(dmWith(bo), note())
+    await inbox.noteRequest(dmWith(bo), note())
+    await inbox.noteRequest(
+      dmWith(bo),
+      note({
+        revision: 2,
+        state: "approved",
+        changedAt: "2026-09-24T09:31:00.000Z",
+      })
+    )
+    await inbox.noteRequest(dmWith(bo), note({ revision: 1 }))
+    expect(
+      socket
+        .of("inbox-conversation")
+        .map(
+          (frame) =>
+            (frame.conversation as { lastMessage: { body: string } })
+              .lastMessage.body
+        )
+    ).toEqual([
+      "You asked their agent · waiting",
+      "You asked their agent · approved",
+    ])
+    expect(socket.of("inbox-snapshot")).toEqual([])
+  })
+
+  it("refuses a note that is not between the member and the conversation's other person, or a conversation that is not a DM", async () => {
+    const { inbox } = await setup()
+    for (const [entry, bad] of [
+      [dmWith(bo), note({ askerId: cy })],
+      [dmWith(bo), note({ ownerId: cy })],
+      [dmWith(bo), note({ askerId: bo, ownerId: cy })],
+      [dmWith(bo), note({ ownerId: ada })],
+      [dmWith(bo), note({ revision: 0 })],
+      [dmWith(bo), note({ state: "expired" as RequestNote["state"] })],
+      [dmWith(bo), undefined as unknown as RequestNote],
+      [sideWith(bo), note()],
+      [{ ...dmWith(bo), peerId: ada }, note()],
+    ] as Array<[ConversationEntry, RequestNote]>) {
+      await expect(inbox.noteRequest(entry, bad)).rejects.toThrow(TypeError)
+    }
+    expect(await inbox.listConversations()).toEqual([])
+    expect(inbox.sql`SELECT * FROM inbox_requests`).toEqual([])
+  })
+
+  it("is restated with a request beside the last message, the row taking the later of them", async () => {
+    const { inbox } = await setup()
+    await inbox.noteMessage(dmWith(bo), message(1, bo), message(2, bo))
+    await inbox.restateConversation(dmWith(bo), {
+      last: message(5, bo, "what stays", "2026-09-24T09:30:00.000Z"),
+      request: asked({ changedAt: "2026-09-24T09:45:00.000Z" }),
+      readSeq: 3,
+      unread: [4, 5],
+    })
+    expect(await inbox.listConversations()).toEqual([
+      {
+        kind: "dm",
+        name: dmWith(bo).name,
+        peerId: bo,
+        lastMessage: {
+          authorId: bo,
+          body: "Asked your agent · waiting",
+          createdAt: "2026-09-24T09:45:00.000Z",
+        },
+        unread: 2,
+        updatedAt: "2026-09-24T09:45:00.000Z",
+      },
+    ])
+    // An older request under a newer message: the message speaks.
+    await inbox.restateConversation(dmWith(bo), {
+      last: message(6, bo, "newest", "2026-09-24T09:50:00.000Z"),
+      request: asked({ changedAt: "2026-09-24T09:45:00.000Z" }),
+      readSeq: 5,
+      unread: [6],
+    })
+    expect((await inbox.listConversations())[0]).toEqual(
+      expect.objectContaining({
+        lastMessage: expect.objectContaining({ body: "newest" }) as unknown,
+        updatedAt: "2026-09-24T09:50:00.000Z",
+      })
+    )
+    // A restatement without the request forgets it.
+    await inbox.restateConversation(dmWith(bo), {
+      last: message(6, bo, "newest", "2026-09-24T09:50:00.000Z"),
+      readSeq: 5,
+      unread: [6],
+    })
+    expect(inbox.sql`SELECT * FROM inbox_requests`).toEqual([])
+  })
+
+  it("is restated with only a request, which lists the conversation by it; with nothing it is known, not listed, and holds no request", async () => {
+    const { inbox } = await setup()
+    const socket = await openSocket(inbox, { organizationId: org, userId: ada })
+    await inbox.noteMessage(dmWith(bo), message(1, bo))
+    socket.clear()
+    await inbox.restateConversation(dmWith(bo), {
+      request: asked({ state: "held", changedAt: "2026-09-24T09:45:00.000Z" }),
+      readSeq: 1,
+      unread: [],
+    })
+    expect(await inbox.listConversations()).toEqual([
+      {
+        kind: "dm",
+        name: dmWith(bo).name,
+        peerId: bo,
+        lastMessage: {
+          authorId: bo,
+          body: "Asked your agent · held",
+          createdAt: "2026-09-24T09:45:00.000Z",
+        },
+        unread: 0,
+        updatedAt: "2026-09-24T09:45:00.000Z",
+      },
+    ])
+    expect(inbox.sql`SELECT name FROM inbox_known`).toEqual([])
+    expect(socket.last("inbox-conversation")?.unreadTotal).toBe(0)
+
+    await inbox.restateConversation(dmWith(bo), { readSeq: 1, unread: [] })
+    expect(await inbox.listConversations()).toEqual([])
+    expect(inbox.sql`SELECT * FROM inbox_requests`).toEqual([])
+    expect(inbox.sql`SELECT name FROM inbox_known`).toEqual([
+      { name: dmWith(bo).name },
+    ])
+    expect(socket.of("inbox-removed")).toHaveLength(1)
+  })
+
+  it("refuses a restated request that is not between the member and the other person", async () => {
+    const { inbox } = await setup()
+    for (const request of [
+      note({ ownerId: cy }),
+      note({ revision: 0 }),
+      "irq_1" as unknown as RequestNote,
+    ]) {
+      await expect(
+        inbox.restateConversation(dmWith(bo), {
+          request,
+          readSeq: 0,
+          unread: [],
+        })
+      ).rejects.toThrow(TypeError)
+    }
+  })
+
+  it("forgets a conversation's request with the conversation, and every one when the inbox is purged", async () => {
+    const { inbox } = await setup()
+    await inbox.noteRequest(dmWith(bo), note())
+    await inbox.noteRequest(
+      dmWith(cy),
+      note({ ownerId: cy, requestId: "irq_2" })
+    )
+    expect(inbox.sql`SELECT name FROM inbox_requests`).toHaveLength(2)
+
+    await inbox.removeConversation(dmWith(bo).name)
+    expect(inbox.sql`SELECT name FROM inbox_requests`).toEqual([
+      { name: dmWith(cy).name },
+    ])
+
+    expect(await inbox.purge()).toEqual({ emptied: true })
+    expect(inbox.sql`SELECT * FROM inbox_requests`).toEqual([])
+    expect(await inbox.listConversations()).toEqual([])
   })
 })

@@ -16,7 +16,8 @@ func TestCLISetupTokenCannotReadThreadsOrMakeOwnerDecisions(t *testing.T) {
 	defer auth.Close()
 	interactions := &fakeInteractions{}
 	threads := &fakeThreads{}
-	server := New(authclient.New(auth.URL), threads, Config{Interactions: interactions, Teamspaces: &fakeTeamspaces{}}, nil)
+	shares := &fakeSecretShares{}
+	server := New(authclient.New(auth.URL), threads, Config{Interactions: interactions, Teamspaces: &fakeTeamspaces{}, SecretShares: shares}, nil)
 	for _, route := range []struct {
 		method, path string
 		want         int
@@ -24,6 +25,12 @@ func TestCLISetupTokenCannotReadThreadsOrMakeOwnerDecisions(t *testing.T) {
 		{http.MethodGet, "/v1/organizations/org_1/threads", http.StatusForbidden},
 		{http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_1/decision", http.StatusForbidden},
 		{http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_1/review", http.StatusForbidden},
+		{http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_1/consent", http.StatusForbidden},
+		{http.MethodGet, "/v1/organizations/org_1/agent-requests/activity", http.StatusForbidden},
+		{http.MethodPut, "/v1/organizations/org_1/agent-requests/irq_1/secret", http.StatusForbidden},
+		{http.MethodGet, "/v1/organizations/org_1/agent-requests/irq_1/secret", http.StatusForbidden},
+		{http.MethodDelete, "/v1/organizations/org_1/agent-requests/irq_1/secret", http.StatusForbidden},
+		{http.MethodDelete, "/v1/organizations/org_1/agent-leases/ils_1", http.StatusForbidden},
 		{http.MethodGet, "/v1/organizations/org_1/teamspaces/space_1/messages", http.StatusForbidden},
 		{http.MethodGet, "/v1/organizations/org_1/organization-agent", http.StatusOK},
 	} {
@@ -37,5 +44,8 @@ func TestCLISetupTokenCannotReadThreadsOrMakeOwnerDecisions(t *testing.T) {
 	}
 	if len(threads.members) != 0 || interactions.ownerDecisions != 0 || interactions.reviews != 0 {
 		t.Fatal("CLI reached member data or owner decision code")
+	}
+	if len(interactions.consents) != 0 || len(interactions.revoked) != 0 || len(interactions.actors) != 0 || len(shares.shares) != 0 {
+		t.Fatal("CLI reached the consent choices, the leases or the secrets")
 	}
 }

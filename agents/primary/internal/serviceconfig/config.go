@@ -1,6 +1,7 @@
 package serviceconfig
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -83,6 +84,31 @@ type Config struct {
 	// organizations, by id, the cap does not apply to.
 	GuardRelevanceCap guardpolicy.RelevanceMode
 	GuardHoldOrgs     map[string]bool
+	// SlackConsent switches the Slack consent loop on (AGENTS_PRIMARY_SLACK_CONSENT
+	// on|off, off unless set): the router that turns a mention into an ask,
+	// the worker that says what became of it in Slack, the tickets on an
+	// owner's buttons, and the client that reaches apps' Slack API. It is off
+	// in a deployment that has not stored the Slack app's secrets, and it
+	// refuses to start on without the ticket key, agents' service key and
+	// apps' URL, rather than run half of a loop that decides nothing.
+	SlackConsent bool
+	// SlackTicketKey signs the buttons on an owner's Slack notice
+	// (AGENTS_PRIMARY_SLACK_TICKET_KEY, 64 hexadecimal characters): 32 bytes,
+	// decoded. It is read only when SlackConsent is on.
+	SlackTicketKey []byte
+	// SecretsKMSKeyID is the KMS key one-time secrets are sealed under
+	// (AGENTS_PRIMARY_SECRETS_KMS_KEY_ID: an ID, an ARN or an alias). Without
+	// it there is no secret store, and the routes that share a secret answer
+	// that there is none.
+	SecretsKMSKeyID string
+	// ConsentGuardrailIdentifier and ConsentGuardrailVersion name the Bedrock
+	// guardrail that checks whether an answer to a question asked in Slack
+	// stands on what its run read, and whether it is about a topic that is
+	// never let out (internal/consentguard). Both or neither: without them,
+	// with SlackConsent on, every answer to a Slack question is held for its
+	// owner's review as unchecked.
+	ConsentGuardrailIdentifier string
+	ConsentGuardrailVersion    string
 	// ModelPrices overrides the price table used for run costs, as JSON of
 	// per-million USD rates by model.
 	ModelPrices string
@@ -230,6 +256,17 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if (answerGuardrailIdentifier == "") != (answerGuardrailVersion == "") {
 		return Config{}, errors.New("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID and AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION are set together or not at all: one without the other would check no answer")
 	}
+	// The consent guardrail is the same: half of one would look like a check
+	// and ground nothing.
+	consentGuardrailIdentifier := strings.TrimSpace(getenv("AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID"))
+	consentGuardrailVersion := strings.TrimSpace(getenv("AGENTS_PRIMARY_CONSENT_GUARDRAIL_VERSION"))
+	if (consentGuardrailIdentifier == "") != (consentGuardrailVersion == "") {
+		return Config{}, errors.New("AGENTS_PRIMARY_CONSENT_GUARDRAIL_ID and AGENTS_PRIMARY_CONSENT_GUARDRAIL_VERSION are set together or not at all: one without the other would ground no answer")
+	}
+	slackConsent, slackTicketKey, err := slackConsentSettings(getenv)
+	if err != nil {
+		return Config{}, err
+	}
 	guardRelevanceCap, err := relevanceCap(getenv, "AGENTS_PRIMARY_GUARD_RELEVANCE_CAP")
 	if err != nil {
 		return Config{}, err
@@ -307,53 +344,99 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			getenv, "AGENTS_PRIMARY_BROWSER_ID",
 			"aws.browser.v1",
 		),
-		BrowserSessionTimeout:     browserTimeout,
-		EventBusName:              valueOrDefault(getenv, "EVENT_BUS_NAME", "default"),
-		EventBridgeEndpoint:       strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")),
-		GuardrailIdentifier:       guardrailIdentifier,
-		GuardrailVersion:          guardrailVersion,
-		GuardrailFailClosed:       guardrailFailClosed,
-		AnswerGuardrailIdentifier: answerGuardrailIdentifier,
-		AnswerGuardrailVersion:    answerGuardrailVersion,
-		GuardRelevanceCap:         guardRelevanceCap,
-		GuardHoldOrgs:             guardHoldOrgs,
-		ModelPrices:               modelPrices,
-		AppsURL:                   strings.TrimSpace(getenv("APPS_URL")),
-		RagURL:                    strings.TrimSpace(getenv("RAG_URL")),
-		KnowledgeURL:              strings.TrimRight(strings.TrimSpace(getenv("KNOWLEDGE_URL")), "/"),
-		TeamsURL:                  strings.TrimRight(strings.TrimSpace(getenv("TEAMS_URL")), "/"),
-		WorkspaceURL:              strings.TrimRight(strings.TrimSpace(getenv("WORKSPACE_URL")), "/"),
-		KnowledgeMinRelevance:     knowledgeMinRelevance,
-		MemoryAgentEngine:         strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")),
-		MemoryRecalled:            memoryRecalled,
-		MemoryLocation:            valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_LOCATION", googleCloudLocation),
-		ArtifactBucket:            strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
-		S3Endpoint:                artifactEndpoint(getenv),
-		DocumentServerURL:         strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_SERVER_URL")),
-		DocumentServerInternalURL: strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_SERVER_INTERNAL_URL")),
-		DocumentAPIURL:            strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_API_URL")),
-		DocumentJWTSecret:         strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_JWT_SECRET")),
-		DocumentTicketSecret:      strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_TICKET_SECRET")),
-		TypeSafeAPIKey:            strings.TrimSpace(getenv("TYPESAFE_API_KEY")),
-		TypeSafeBaseURL:           strings.TrimSpace(getenv("TYPESAFE_BASE_URL")),
-		AuthURL:                   strings.TrimSpace(getenv("AUTH_URL")),
-		ServiceKeyID:              strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
-		AllowedOrigins:            allowedOrigins,
-		RunTimeout:                runTimeout,
-		DatabaseMaxConns:          databaseMaxConns,
-		EventsQueueURL:            strings.TrimSpace(getenv("AGENTS_EVENTS_QUEUE_URL")),
-		SQSEndpoint:               sqsEndpoint(getenv),
-		WorkflowQueueURL:          strings.TrimSpace(getenv("AGENTS_WORKFLOW_QUEUE_URL")),
-		WorkflowStateMachineARN:   strings.TrimSpace(getenv("AGENTS_WORKFLOW_STATE_MACHINE_ARN")),
-		WorkflowSchedulerRoleARN:  strings.TrimSpace(getenv("AGENTS_WORKFLOW_SCHEDULER_ROLE_ARN")),
-		WorkflowScheduleDLQARN:    strings.TrimSpace(getenv("AGENTS_WORKFLOW_SCHEDULE_DLQ_ARN")),
-		WorkflowSchedulerGroup:    valueOrDefault(getenv, "AGENTS_WORKFLOW_SCHEDULER_GROUP", "default"),
-		StepFunctionsEndpoint:     serviceEndpoint(getenv, "AWS_ENDPOINT_URL_SFN"),
-		SchedulerEndpoint:         serviceEndpoint(getenv, "AWS_ENDPOINT_URL_SCHEDULER"),
-		WorkflowLocal:             workflowLocal,
-		WakeupBatchSize:           wakeupBatchSize,
-		WakeupMaxWait:             wakeupMaxWait,
+		BrowserSessionTimeout:      browserTimeout,
+		EventBusName:               valueOrDefault(getenv, "EVENT_BUS_NAME", "default"),
+		EventBridgeEndpoint:        strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")),
+		GuardrailIdentifier:        guardrailIdentifier,
+		GuardrailVersion:           guardrailVersion,
+		GuardrailFailClosed:        guardrailFailClosed,
+		AnswerGuardrailIdentifier:  answerGuardrailIdentifier,
+		AnswerGuardrailVersion:     answerGuardrailVersion,
+		GuardRelevanceCap:          guardRelevanceCap,
+		GuardHoldOrgs:              guardHoldOrgs,
+		SlackConsent:               slackConsent,
+		SlackTicketKey:             slackTicketKey,
+		SecretsKMSKeyID:            strings.TrimSpace(getenv("AGENTS_PRIMARY_SECRETS_KMS_KEY_ID")),
+		ConsentGuardrailIdentifier: consentGuardrailIdentifier,
+		ConsentGuardrailVersion:    consentGuardrailVersion,
+		ModelPrices:                modelPrices,
+		AppsURL:                    strings.TrimSpace(getenv("APPS_URL")),
+		RagURL:                     strings.TrimSpace(getenv("RAG_URL")),
+		KnowledgeURL:               strings.TrimRight(strings.TrimSpace(getenv("KNOWLEDGE_URL")), "/"),
+		TeamsURL:                   strings.TrimRight(strings.TrimSpace(getenv("TEAMS_URL")), "/"),
+		WorkspaceURL:               strings.TrimRight(strings.TrimSpace(getenv("WORKSPACE_URL")), "/"),
+		KnowledgeMinRelevance:      knowledgeMinRelevance,
+		MemoryAgentEngine:          strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")),
+		MemoryRecalled:             memoryRecalled,
+		MemoryLocation:             valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_LOCATION", googleCloudLocation),
+		ArtifactBucket:             strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
+		S3Endpoint:                 artifactEndpoint(getenv),
+		DocumentServerURL:          strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_SERVER_URL")),
+		DocumentServerInternalURL:  strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_SERVER_INTERNAL_URL")),
+		DocumentAPIURL:             strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_API_URL")),
+		DocumentJWTSecret:          strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_JWT_SECRET")),
+		DocumentTicketSecret:       strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_TICKET_SECRET")),
+		TypeSafeAPIKey:             strings.TrimSpace(getenv("TYPESAFE_API_KEY")),
+		TypeSafeBaseURL:            strings.TrimSpace(getenv("TYPESAFE_BASE_URL")),
+		AuthURL:                    strings.TrimSpace(getenv("AUTH_URL")),
+		ServiceKeyID:               strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
+		AllowedOrigins:             allowedOrigins,
+		RunTimeout:                 runTimeout,
+		DatabaseMaxConns:           databaseMaxConns,
+		EventsQueueURL:             strings.TrimSpace(getenv("AGENTS_EVENTS_QUEUE_URL")),
+		SQSEndpoint:                sqsEndpoint(getenv),
+		WorkflowQueueURL:           strings.TrimSpace(getenv("AGENTS_WORKFLOW_QUEUE_URL")),
+		WorkflowStateMachineARN:    strings.TrimSpace(getenv("AGENTS_WORKFLOW_STATE_MACHINE_ARN")),
+		WorkflowSchedulerRoleARN:   strings.TrimSpace(getenv("AGENTS_WORKFLOW_SCHEDULER_ROLE_ARN")),
+		WorkflowScheduleDLQARN:     strings.TrimSpace(getenv("AGENTS_WORKFLOW_SCHEDULE_DLQ_ARN")),
+		WorkflowSchedulerGroup:     valueOrDefault(getenv, "AGENTS_WORKFLOW_SCHEDULER_GROUP", "default"),
+		StepFunctionsEndpoint:      serviceEndpoint(getenv, "AWS_ENDPOINT_URL_SFN"),
+		SchedulerEndpoint:          serviceEndpoint(getenv, "AWS_ENDPOINT_URL_SCHEDULER"),
+		WorkflowLocal:              workflowLocal,
+		WakeupBatchSize:            wakeupBatchSize,
+		WakeupMaxWait:              wakeupMaxWait,
 	}, nil
+}
+
+// ticketKeyHexLength is how long the ticket key is written: 32 bytes as 64
+// hexadecimal characters, which is what `openssl rand -hex 32` makes and what
+// deploy/scripts/put-secrets.sh stores.
+const ticketKeyHexLength = 64
+
+// slackConsentSettings reads the switch of the Slack consent loop, and with it
+// on, what the loop cannot run without. Off is the default, and then nothing
+// else is read: a deployment that has not stored the Slack app's secrets names
+// none of them, and one that names them all but leaves the switch off has said
+// so. On, each of the following that is missing stops the service starting,
+// naming itself, since a loop with no ticket key would post buttons nobody's
+// click decides, and one with no way to reach apps would ask owners for
+// consent and never say so in Slack.
+func slackConsentSettings(getenv func(string) string) (bool, []byte, error) {
+	switch value := strings.ToLower(strings.TrimSpace(getenv("AGENTS_PRIMARY_SLACK_CONSENT"))); value {
+	case "", "off":
+		return false, nil, nil
+	case "on":
+	default:
+		return false, nil, errors.New("AGENTS_PRIMARY_SLACK_CONSENT must be on or off")
+	}
+	encoded := strings.TrimSpace(getenv("AGENTS_PRIMARY_SLACK_TICKET_KEY"))
+	if encoded == "" {
+		return false, nil, errors.New("AGENTS_PRIMARY_SLACK_TICKET_KEY is required when AGENTS_PRIMARY_SLACK_CONSENT is on: it signs the buttons on an owner's notice (64 hexadecimal characters, `openssl rand -hex 32`)")
+	}
+	key, err := hex.DecodeString(encoded)
+	if err != nil || len(encoded) != ticketKeyHexLength {
+		// Neither the key nor any part of it goes in the message.
+		return false, nil, fmt.Errorf("AGENTS_PRIMARY_SLACK_TICKET_KEY must be %d hexadecimal characters (32 bytes, `openssl rand -hex 32`)", ticketKeyHexLength)
+	}
+	for _, need := range []struct{ name, why string }{
+		{"AGENTS_PRIMARY_SERVICE_KEY_ID", "agents signs its calls to apps' Slack API with it"},
+		{"APPS_URL", "agents posts to Slack through apps, which is the process itself in one binary"},
+	} {
+		if strings.TrimSpace(getenv(need.name)) == "" {
+			return false, nil, fmt.Errorf("%s is required when AGENTS_PRIMARY_SLACK_CONSENT is on: %s", need.name, need.why)
+		}
+	}
+	return true, key, nil
 }
 
 // thinkingLevels are the thinking levels a setting may name: Gemini 3's, as

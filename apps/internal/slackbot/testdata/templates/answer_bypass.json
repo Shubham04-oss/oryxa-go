@@ -1,0 +1,21 @@
+{
+  "text": "From Raya's agent · shared under a priority rule, and Raya was told: The launch is on the 14th.",
+  "blocks": [
+    {
+      "text": {
+        "text": "The launch is on the 14th.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "From Raya's agent · shared under a priority rule, and Raya was told",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}
