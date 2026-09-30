@@ -22,6 +22,7 @@ import {
   activityIcon,
   activitySentence,
   openableRows,
+  repliedRequestIds,
 } from "./requests-activity-format"
 import type { ActivityIcon } from "./requests-activity-format"
 import {
@@ -151,6 +152,7 @@ export function RequestsActivity({
   const now = Date.now()
   const reader: Reader = { viewerId, nameOf: people.nameOf, now }
   const openable = openableRows(entries)
+  const replied = repliedRequestIds(entries)
 
   return (
     <div className="workspace-requests-activity">
@@ -178,7 +180,7 @@ export function RequestsActivity({
                     <EntryIcon icon={activityIcon(entry)} />
                   </span>
                   <span className="workspace-requests-activity-text">
-                    {activitySentence(entry, reader)}
+                    {activitySentence(entry, reader, replied)}
                   </span>
                   <span className="workspace-requests-activity-actions">
                     {canEnd && (

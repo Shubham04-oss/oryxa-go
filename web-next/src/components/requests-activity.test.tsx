@@ -119,6 +119,50 @@ describe("Activity", () => {
     expect(document.body.textContent).not.toContain("EU launch")
   })
 
+  it("says the member replied themselves, and that it was their reply that reached the asker", async () => {
+    renderActivity({
+      [`GET ${activityPath}`]: () => ({
+        activity: [
+          activityEntry({
+            kind: "answered",
+            at: "2026-09-29T12:31:00Z",
+            status: "completed",
+          }),
+          activityEntry({
+            kind: "decided",
+            at: "2026-09-29T12:31:00Z",
+            decision: "approved",
+            consent: "reply",
+            decided_by: { kind: "member", user_id: OWNER, surface: "web" },
+          }),
+          activityEntry({ kind: "asked", at: "2026-09-29T12:00:00Z" }),
+          // Another request, answered by the agent, is still the agent's.
+          activityEntry({
+            kind: "answered",
+            at: "2026-09-29T12:20:00Z",
+            status: "completed",
+            request_id: "irq_other",
+          }),
+        ],
+      }),
+    })
+
+    await screen.findByText("Raya asked you in Slack.")
+    const rows = within(screen.getByRole("region", { name: "Today" }))
+      .getAllByRole("listitem")
+      .map(
+        (row) =>
+          row.querySelector(".workspace-requests-activity-text")?.textContent
+      )
+    expect(rows).toEqual([
+      "Your reply reached Raya.",
+      "You replied to Raya's request in Oryxa.",
+      "Raya asked you in Slack.",
+      "Your agent answered Raya.",
+    ])
+    expect(document.body.textContent).not.toMatch(/approved|Answer shared/i)
+  })
+
   it("reads as the asker's own", async () => {
     renderActivity(
       {

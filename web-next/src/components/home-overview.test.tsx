@@ -28,6 +28,7 @@ import {
   agentRequest,
   answer,
   members,
+  repliedRequest,
   slackRequest,
 } from "./request-card-fixtures"
 
@@ -408,6 +409,137 @@ it("offers a request an agent filed in Oryxa two choices, Share answer and Deny,
     message: "Approved in Oryxa.",
     allowed_tools: ["knowledge"],
   })
+})
+
+it("lets the member reply themselves from Needs you, under the choices the card already has", async () => {
+  const pending = slackRequest({
+    expires_at: new Date(NOW + 3600_000).toISOString(),
+  })
+  let current: AgentRequest = pending
+  const go = stubApi({
+    [`${path}/agent-requests/inbox`]: () => json({ requests: [current] }),
+    [`${path}/agent-requests/${pending.id}/reply`]: () => {
+      current = repliedRequest("Yes, we are on track.")
+      return json({ request: current })
+    },
+  })
+  renderHome()
+
+  const needs = await screen.findByRole("region", { name: "Needs you" })
+  // The three choices are as they were, with Reply yourself after them.
+  expect(
+    within(needs)
+      .getAllByRole("button", { name: /Raya's request/ })
+      .map((button) => button.getAttribute("aria-label"))
+  ).toEqual([
+    "Share answer to Raya's request",
+    "Allow for 1 hour for Raya's request",
+    "Deny Raya's request",
+    "Reply yourself to Raya's request",
+  ])
+  fireEvent.click(
+    within(needs).getByRole("button", {
+      name: "Reply yourself to Raya's request",
+    })
+  )
+  fireEvent.change(
+    within(needs).getByRole("textbox", {
+      name: "Reply yourself to Raya's request",
+    }),
+    { target: { value: "Yes, we are on track." } }
+  )
+  fireEvent.click(within(needs).getByRole("button", { name: "Send reply" }))
+
+  await waitFor(() =>
+    expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
+  )
+  expect(go.calls.find((call) => call.method === "POST")?.body).toEqual({
+    text: "Yes, we are on track.",
+  })
+  // What the member replied is an answer they sent, not their agent's.
+  const shared = await screen.findByRole("region", {
+    name: "Your requests and shared answers",
+  })
+  expect(within(shared).getByText("Answers sent")).toBeTruthy()
+  expect(within(shared).queryByText("Your agent shared")).toBeNull()
+  expect(within(shared).getByText("You replied.")).toBeTruthy()
+  expect(within(shared).getByText("Yes, we are on track.")).toBeTruthy()
+})
+
+it("leads a request that needs the member's own reply with the reply, in Needs you", async () => {
+  stubApi({
+    [`${path}/agent-requests/inbox`]: {
+      requests: [
+        slackRequest({
+          answer_by: "owner",
+          expires_at: new Date(NOW + 3600_000).toISOString(),
+        }),
+      ],
+    },
+  })
+  renderHome()
+
+  const needs = await screen.findByRole("region", { name: "Needs you" })
+  expect(
+    within(needs).getByRole("textbox", {
+      name: "Reply yourself to Raya's request",
+    })
+  ).toBeTruthy()
+  expect(
+    within(needs)
+      .getAllByRole("button")
+      .map((button) => button.textContent)
+  ).toEqual(["All requests", "Send reply", "Let my agent answer", "Deny"])
+  expect(within(needs).getByText("Waiting for your reply.")).toBeTruthy()
+  expect(
+    within(needs).queryByRole("button", { name: /Share answer|Allow for 1/ })
+  ).toBeNull()
+})
+
+it("keeps a card's reply draft mounted during a background refresh", async () => {
+  let finish: ((response: Response) => void) | undefined
+  let refreshing = false
+  stubApi({
+    [`${path}/agent-requests/inbox`]: () =>
+      refreshing
+        ? new Promise<Response>((resolve) => {
+            finish = resolve
+          })
+        : json({ requests: [request()] }),
+  })
+  const view = renderHome()
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "Reply yourself to Raya's request",
+    })
+  )
+  const reply = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Reply yourself to Raya's request",
+  })
+  fireEvent.change(reply, { target: { value: "Half written" } })
+  refreshing = true
+  let refetch: Promise<void> | undefined
+  act(() => {
+    refetch = view.client.invalidateQueries({
+      queryKey: agentKeys.requestBox(ORG, "inbox"),
+    })
+  })
+  await waitFor(() => expect(finish).toBeTypeOf("function"))
+  expect(
+    screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Reply yourself to Raya's request",
+    })
+  ).toBe(reply)
+  await act(async () => {
+    finish!(json({ requests: [request()] }))
+    await refetch
+  })
+  expect(
+    screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Reply yourself to Raya's request",
+    })
+  ).toBe(reply)
+  expect(reply.value).toBe("Half written")
 })
 
 it("keeps only this member's unexpired owner decisions and held reviews; bounds cards with All requests", async () => {

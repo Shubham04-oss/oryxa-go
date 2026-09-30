@@ -202,6 +202,127 @@ describe("the asker's request card", () => {
     expect(screen.queryByText("Published answer")).toBeNull()
   })
 
+  describe("an ask that needs its owner's own reply", () => {
+    const named = (overrides: Partial<AgentRequest>): AgentRequest => ({
+      ...request("pending"),
+      target: {
+        user_id: "owner",
+        agent_id: "nia",
+        agent_name: "Nia",
+        user_display_name: "Ada Lovelace",
+        user_email: "ada@northwind.example",
+      },
+      ...overrides,
+    })
+    const reply = (
+      text: string,
+      overrides: Partial<AgentRequest> = {}
+    ): AgentRequest =>
+      named({
+        status: "completed",
+        result: {
+          status: "completed",
+          summary: text,
+          content: "",
+          tools_used: [],
+          artifacts: [],
+          completed_at: "now",
+          written_by_owner: true,
+        },
+        ...overrides,
+      })
+
+    it("says who it waits on, and that it waits for a reply", async () => {
+      read.mockResolvedValue(named({ answer_by: "owner" }))
+      setup()
+
+      expect(await screen.findByText("Waiting for Ada to reply")).toBeTruthy()
+      expect(screen.queryByText("Waiting for approval")).toBeNull()
+    })
+
+    it("names the owner by their email when that is all it knows, and as the owner when it knows nothing", async () => {
+      read.mockResolvedValue(
+        named({
+          answer_by: "owner",
+          target: {
+            user_id: "owner",
+            agent_id: "nia",
+            agent_name: "Nia",
+            user_email: "ada@northwind.example",
+          },
+        })
+      )
+      setup()
+      expect(
+        await screen.findByText("Waiting for ada@northwind.example to reply")
+      ).toBeTruthy()
+      cleanup()
+
+      read.mockResolvedValue({ ...request("pending"), answer_by: "owner" })
+      setup()
+      expect(
+        await screen.findByText("Waiting for the owner to reply")
+      ).toBeTruthy()
+    })
+
+    it("keeps the agent's words when nothing says the owner is to reply", async () => {
+      for (const answer_by of ["agent", undefined] as const) {
+        read.mockResolvedValue(named({ answer_by }))
+        setup()
+        expect(await screen.findByText("Waiting for approval")).toBeTruthy()
+        cleanup()
+      }
+    })
+
+    it("shows the owner's words as they wrote them, and who replied, in place of Answered", async () => {
+      read.mockResolvedValue(reply("Launch is **14 October**.\nLegal agreed."))
+      setup()
+
+      expect(await screen.findByText("Ada replied")).toBeTruthy()
+      expect(screen.queryByText("Answered")).toBeNull()
+      const words = screen.getByText(/Launch is/)
+      expect(words.tagName).toBe("P")
+      expect(words.className).toBe("workspace-agent-request-reply")
+      // Plain text with its line break, never read as Markdown.
+      expect(words.textContent).toBe("Launch is **14 October**.\nLegal agreed.")
+      expect(words.querySelector("strong")).toBeNull()
+    })
+
+    it("says the owner replied for an answer that took the place of a held one", async () => {
+      read.mockResolvedValue(
+        reply("Call me instead.", {
+          review: {
+            action: "reply",
+            decided_by: { kind: "member", user_id: "owner" },
+            decided_at: "now",
+          },
+        })
+      )
+      setup()
+
+      expect(await screen.findByText("Ada replied")).toBeTruthy()
+      expect(screen.getByText("Call me instead.")).toBeTruthy()
+    })
+
+    it("still reads an answer the agent wrote as Markdown, whoever was to answer", async () => {
+      const answered = named({ answer_by: "owner", status: "completed" })
+      answered.result = {
+        status: "completed",
+        summary: "Launches **14 October**",
+        content: "",
+        tools_used: [],
+        artifacts: [],
+        completed_at: "now",
+      }
+      read.mockResolvedValue(answered)
+      setup()
+
+      expect(await screen.findByText("Answered")).toBeTruthy()
+      expect(screen.getByText("14 October").tagName).toBe("STRONG")
+      expect(screen.queryByText(/replied/)).toBeNull()
+    })
+  })
+
   it.each(["withheld", "failed", "expired", "rejected"] as const)(
     "shows %s clearly and never renders a held draft",
     async (status) => {
