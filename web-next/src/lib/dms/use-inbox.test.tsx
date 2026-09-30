@@ -110,31 +110,41 @@ describe("useInbox", () => {
     expect(result.current.unreadTotal).toBe(3)
   })
 
-  it("keeps trying after a drop, ends a session that could not be refreshed, and stops when the organization is not the member's", async () => {
-    const answers = [
-      json(undefined, 204),
-      apiError(401, "unauthorized", "access token is required"),
-      apiError(404, "not_found", "resource not found"),
-    ]
-    const expected = ["error", "session_expired", "error"]
-    for (const [index, answer] of answers.entries()) {
-      roomSockets.reset()
+  it.each([
+    {
+      state: "the Worker lets it in",
+      answer: () => json(undefined, 204),
+      expected: "error",
+      enabled: true,
+    },
+    {
+      state: "the session could not be refreshed",
+      answer: () => apiError(401, "unauthorized", "access token is required"),
+      expected: "session_expired",
+      enabled: false,
+    },
+    {
+      state: "the organization is not the member's",
+      answer: () => apiError(404, "not_found", "resource not found"),
+      expected: "error",
+      enabled: false,
+    },
+  ])(
+    "after a drop, checks the session when $state",
+    async ({ answer, expected, enabled }) => {
       const api = mockApi(({ path: asked }) =>
-        asked === path || asked === "/v1/auth/refresh"
-          ? answer.clone()
-          : undefined
+        asked === path || asked === "/v1/auth/refresh" ? answer() : undefined
       )
-      const { result, unmount } = setup()
+      const { result } = setup()
       const socket = roomSockets.latest
       socket.open()
       socket.says({ type: "inbox-snapshot", conversations: [], unreadTotal: 0 })
       socket.drop()
       await waitFor(() => expect(api.calls.length).toBeGreaterThan(0))
-      await waitFor(() => expect(result.current.status).toBe(expected[index]))
-      expect(socket.options.enabled).toBe(index === 0)
-      unmount()
+      await waitFor(() => expect(result.current.status).toBe(expected))
+      expect(socket.options.enabled).toBe(enabled)
     }
-  })
+  )
 
   it("after a purge, stops for good when the Worker refuses the member", async () => {
     const api = mockApi(({ path: asked }) =>

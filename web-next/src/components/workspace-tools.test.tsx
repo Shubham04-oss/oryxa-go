@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   cleanup,
   fireEvent,
@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
+import { resumeSessionAfterSignIn } from "@/lib/api/client"
 import type { Connection } from "@/lib/apps/client"
 import type { Source } from "@/lib/knowledge/client"
 import { WorkspaceTools } from "./workspace-tools"
@@ -196,6 +197,8 @@ function stubLocation(href: string) {
   })
   return assign
 }
+
+beforeEach(resumeSessionAfterSignIn)
 
 afterEach(() => {
   cleanup()
@@ -648,7 +651,7 @@ describe("WorkspaceTools", () => {
 
   it("asks the member to sign in again when the session has lapsed, and offers nothing to connect", async () => {
     const { requests } = fakeFetch(catalog(), ({ path }) =>
-      path === `${org}/apps/connections`
+      path === `${org}/apps/connections` || path === "/v1/auth/refresh"
         ? apiError("unauthorized", "authentication failed", 401)
         : undefined
     )
@@ -667,9 +670,7 @@ describe("WorkspaceTools", () => {
     expect(
       screen.getByText("Sign in to see your connected tools.")
     ).toBeTruthy()
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Gmail details" })
-    )
+    // A terminal session also stops protected catalog and detail reads.
     expect(screen.queryByRole("button", { name: "Connect Gmail" })).toBeNull()
   })
 

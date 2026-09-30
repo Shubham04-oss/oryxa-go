@@ -4,7 +4,13 @@
 // primary agent, so the inbox holds every request addressed to any of their
 // agents. Handlers are in agents/primary/internal/httpserver/server.go; the
 // rules are in agents/primary/internal/interactions.
-import { ApiError, apiFetch, apiRequest, requestError } from "@/lib/api/client"
+import {
+  ApiError,
+  apiFetch,
+  apiRequest,
+  readApiResponse,
+  requestError,
+} from "@/lib/api/client"
 import { organizationPath, pick, withSearch } from "./http"
 import type { ReadOptions } from "./http"
 
@@ -545,21 +551,20 @@ export async function consentAgentRequest(
     requestsPath(organizationId, requestId, "consent"),
     { method: "POST", body: { choice } }
   )
-  if (response.ok) {
-    const result: ConsentAgentRequestResult = await response.json()
-    return result
-  }
-  if (response.status === 409) {
-    const body = await jsonBody(response.clone())
-    const failure = isRecord(body) && isRecord(body.error) ? body.error : {}
-    if (failure.code === "already_decided") {
-      throw new AgentRequestAlreadyDecided(
-        text(failure.message) ?? "agent request was already decided",
-        isRecord(body) ? winnerOf(body.winner) : undefined
-      )
+  return readApiResponse(response, async (current) => {
+    if (current.ok) return current.json()
+    if (current.status === 409) {
+      const body = await jsonBody(current.clone())
+      const failure = isRecord(body) && isRecord(body.error) ? body.error : {}
+      if (failure.code === "already_decided") {
+        throw new AgentRequestAlreadyDecided(
+          text(failure.message) ?? "agent request was already decided",
+          isRecord(body) ? winnerOf(body.winner) : undefined
+        )
+      }
     }
-  }
-  throw await requestError(response)
+    throw await requestError(current)
+  })
 }
 
 // ---------------------------------------------------------------------------

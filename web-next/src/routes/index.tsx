@@ -1,11 +1,17 @@
-import { createFileRoute } from "@tanstack/react-router"
-import { useEffect, useState } from "react"
+import { createFileRoute, Link } from "@tanstack/react-router"
+import { useEffect, useState, useSyncExternalStore } from "react"
 import type { FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { WorkspaceShell } from "@/components/workspace-shell"
 import { AuthField } from "@/components/auth/auth-field"
 import { AuthNotice, AuthShell } from "@/components/auth/auth-shell"
-import { ApiError } from "@/lib/api/client"
+import {
+  ApiError,
+  apiReadRetryDelay,
+  retryApiRead,
+  sessionHasEnded,
+  subscribeSessionEnded,
+} from "@/lib/api/client"
 import {
   createOrganization,
   getOrganizationRole,
@@ -33,10 +39,18 @@ export const Route = createFileRoute("/")({
 function Home() {
   const { org, dm } = Route.useSearch()
   const navigate = Route.useNavigate()
+  const queryClient = useQueryClient()
+  const sessionEnded = useSyncExternalStore(
+    subscribeSessionEnded,
+    sessionHasEnded,
+    () => false
+  )
   const session = useQuery({
     queryKey: ["auth", "session"],
     queryFn: getSession,
-    retry: false,
+    enabled: !sessionEnded,
+    retry: retryApiRead,
+    retryDelay: apiReadRetryDelay,
     staleTime: 60_000,
   })
   const selectedOrganization =
@@ -47,18 +61,43 @@ function Home() {
   const role = useQuery({
     queryKey: ["auth", "role", organizationId],
     queryFn: () => getOrganizationRole(organizationId!),
-    enabled: Boolean(organizationId),
-    retry: false,
+    enabled: Boolean(organizationId) && !sessionEnded,
+    retry: retryApiRead,
+    retryDelay: apiReadRetryDelay,
   })
 
   useEffect(() => {
+    if (sessionEnded) {
+      // Removing the authenticated shell closes its sockets and polling
+      // observers. Clearing query work cannot erase scoped chat storage.
+      void queryClient.cancelQueries()
+      queryClient.clear()
+      return
+    }
     if (!(session.error instanceof ApiError) || session.error.status !== 401)
       return
     const destination = `${window.location.pathname}${window.location.search}${window.location.hash}`
     window.location.replace(
       `/auth/sign-in?redirect=${encodeURIComponent(destination)}`
     )
-  }, [session.error])
+  }, [sessionEnded, session.error, queryClient])
+
+  if (sessionEnded) {
+    const destination = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    return (
+      <AuthShell>
+        <h1>Your session has ended.</h1>
+        <p className="auth-subtitle">Sign in again to continue your work.</p>
+        <Link
+          className="auth-submit"
+          to="/auth/sign-in"
+          search={{ redirect: destination }}
+        >
+          Sign in again
+        </Link>
+      </AuthShell>
+    )
+  }
 
   if (
     session.isPending ||

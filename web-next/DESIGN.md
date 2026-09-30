@@ -149,6 +149,17 @@ not permission to copy every incidental value into a new component.
     after an authorization refusal. A member change remounts the shell and a
     workspace/member change remounts the panel; refreshing the same member's
     session preserves their choices and drafts.
+  - If session refresh returns 401, immediately replace the authenticated
+    workspace with **Your session has ended.** and **Sign in again**, carrying
+    the current page as the return destination. Close private sockets, cancel
+    private queries and clear their cached data; later polls, focus and
+    reconnect reads make no protected HTTP requests in this document. Public
+    sign-in remains available. Only successful sign-in resumes private work;
+    opening Google sign-in or a failed password attempt does not. A fresh
+    OAuth return document verifies its session before opening the workspace.
+    Network failures, timeouts and 5xx responses keep the session recoverable
+    with bounded backoff. Do not erase scoped chat choices or queued requests;
+    drafts held only in the mounted shell are not recovered after a new sign-in.
 - A teamspace or extensive agentic task is a focused work view: no left
   sidebar, naked conversation on the base surface, compact title/back header,
   and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
