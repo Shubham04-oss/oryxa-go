@@ -4,7 +4,10 @@ import {
   apiFetch,
   apiRequest,
   apiUrl,
+  assertApiResponseCurrent,
+  readApiResponse,
   requestError,
+  retryApiRead,
 } from "@/lib/api/client"
 import type { SpecialistResult } from "@/lib/specialists/result"
 import { threadAgentName } from "./chat-messages"
@@ -373,11 +376,34 @@ export async function streamRunRequest(
     response.body?.cancel().catch(() => undefined)
     return { outcome: "aborted" }
   }
-  if (!response.ok) throw await requestError(response)
+  assertApiResponseCurrent(response)
+  if (!response.ok) {
+    try {
+      throw await readApiResponse(response, requestError)
+    } catch (error) {
+      if (signal?.aborted) return { outcome: "aborted" }
+      throw error
+    }
+  }
   const runId = response.headers.get("X-Oryxa-Run") ?? undefined
   onResponse?.(response)
-  if (!response.body) return { outcome: "incomplete", runId }
-  const result = await readItemStream(response.body, { onItem, signal })
+  if (!response.body) {
+    assertApiResponseCurrent(response)
+    return { outcome: "incomplete", runId }
+  }
+  const result = await readApiResponse(response, (current, sessionSignal) =>
+    readItemStream(current.body!, {
+      onItem: (item) => {
+        assertApiResponseCurrent(current)
+        onItem(item)
+      },
+      signal: sessionSignal
+        ? signal
+          ? AbortSignal.any([signal, sessionSignal])
+          : sessionSignal
+        : signal,
+    })
+  )
   return result.runId || !runId ? result : { ...result, runId }
 }
 
@@ -502,16 +528,18 @@ export async function fetchArtifactLink(
     artifact.version
   )
   const response = await apiFetch(path, { signal })
-  if (!response.ok) throw await requestError(response)
-  await response.body?.cancel().catch(() => undefined)
-  return {
-    url: apiUrl(path),
-    contentType:
-      response.headers.get("Content-Type") ?? "application/octet-stream",
-    inline: /^\s*inline\b/i.test(
-      response.headers.get("Content-Disposition") ?? ""
-    ),
-  }
+  return readApiResponse(response, async (current) => {
+    if (!current.ok) throw await requestError(current)
+    await current.body?.cancel().catch(() => undefined)
+    return {
+      url: apiUrl(path),
+      contentType:
+        current.headers.get("Content-Type") ?? "application/octet-stream",
+      inline: /^\s*inline\b/i.test(
+        current.headers.get("Content-Disposition") ?? ""
+      ),
+    }
+  })
 }
 
 /**
@@ -535,10 +563,7 @@ export function retryUnlessRefused(
   failureCount: number,
   error: unknown
 ): boolean {
-  if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
-    return false
-  }
-  return failureCount < 1
+  return failureCount < 1 && retryApiRead(failureCount, error)
 }
 
 /**

@@ -1,5 +1,11 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query"
-import { ApiError, apiFetch, apiRequest, requestError } from "@/lib/api/client"
+import {
+  ApiError,
+  apiFetch,
+  apiRequest,
+  readApiResponse,
+  requestError,
+} from "@/lib/api/client"
 
 // ---------------------------------------------------------------------------
 // Catalog
@@ -1035,16 +1041,17 @@ async function appsRequest<T>(
   options: Parameters<typeof apiFetch>[1] = {}
 ): Promise<T> {
   const response = await apiFetch(path, options)
-  if (!response.ok) {
-    const field = await blamedField(response.clone())
-    const error = await requestError(response)
-    throw new AppsFieldError(error.message, error.status, error.code, field)
-  }
-  if (!response.headers.get("Content-Type")?.includes("application/json")) {
-    return undefined as T
-  }
-  const data: T = await response.json()
-  return data
+  return readApiResponse(response, async (current) => {
+    if (!current.ok) {
+      const field = await blamedField(current.clone())
+      const error = await requestError(current)
+      throw new AppsFieldError(error.message, error.status, error.code, field)
+    }
+    if (!current.headers.get("Content-Type")?.includes("application/json")) {
+      return undefined as T
+    }
+    return current.json()
+  })
 }
 
 async function blamedField(response: Response): Promise<string | undefined> {

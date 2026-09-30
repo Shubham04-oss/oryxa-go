@@ -1,4 +1,9 @@
-import { ApiError, apiRequest, apiUrl } from "@/lib/api/client"
+import {
+  ApiError,
+  apiRequest,
+  apiUrl,
+  resumeSessionAfterSignIn,
+} from "@/lib/api/client"
 import type { SignInInput, SignUpInput } from "./schemas"
 
 export type Role = "owner" | "admin" | "member"
@@ -40,6 +45,7 @@ export async function signIn(input: SignInInput): Promise<void> {
     ...publicRequest,
     body: input,
   })
+  resumeSessionAfterSignIn()
 }
 
 export async function signUp(input: SignUpInput): Promise<void> {
