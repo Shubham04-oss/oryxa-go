@@ -168,7 +168,11 @@ jobs:
       - name: Types
         run: pnpm typecheck
       - name: Tests
-        run: pnpm test
+        # The Mac's runners share their CPU and memory with each other, and
+        # the second is capped at 4 GB. Vitest's default, a worker per core,
+        # thrashes there, and unrelated tests timed out at the 5 s default on
+        # a busy machine. Four workers and 20 s give them room.
+        run: pnpm test --maxWorkers=4 --testTimeout=20000
       - name: Build the production Worker
         run: pnpm build
         env:
@@ -204,7 +208,11 @@ jobs:
       - name: Types
         run: pnpm typecheck
       - name: Tests
-        run: pnpm test
+        # The Mac's runners share their CPU and memory with each other, and
+        # the second is capped at 4 GB. Vitest's default, a worker per core,
+        # thrashes there, and unrelated tests timed out at the 5 s default on
+        # a busy machine. Four workers and 20 s give them room.
+        run: pnpm test --maxWorkers=4 --testTimeout=20000
       - name: Build the production Worker
         # The build deploy.yml ships, so the size below is the one that is
         # uploaded.
