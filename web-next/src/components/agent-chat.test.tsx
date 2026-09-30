@@ -6,15 +6,27 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { useReducer, useState } from "react"
 import type { ReactElement } from "react"
 import { AgentChat } from "./agent-chat"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
+import {
+  initialPrimaryChat,
+  primaryChatReducer,
+  rememberChoice,
+  rememberedChoice,
+  usePrimaryChatActivity,
+  useRememberedChoice,
+} from "@/lib/threads/chat-choice"
+import type { PrimaryChat } from "@/lib/threads/chat-choice"
 import { itemsToChatMessages } from "@/lib/threads/chat-messages"
+import { threadListQueryOptions } from "@/lib/threads/client"
 import type { Item, Thread } from "@/lib/threads/client"
 
 // The Agents SDK's hooks stand in: `useAgent` hands back a socket the test
@@ -114,10 +126,21 @@ function json(body: unknown, status = 200): Response {
   })
 }
 
-const thread = (id: string, title: string): Thread => ({
+const HOUR = 60 * 60 * 1000
+/** As long as a socket is open and quiet before the chat calls a run over: a little over `RUN_SETTLE_MS`. */
+const RUN_SETTLE = 2000
+
+/** A conversation last active `age` ago (a minute by default: fresh). */
+const thread = (
+  id: string,
+  title: string,
+  age = 60_000,
+  origin?: string
+): Thread => ({
   id,
   title,
-  updated_at: "2026-09-23T10:00:00Z",
+  updated_at: new Date(Date.now() - age).toISOString(),
+  ...(origin ? { origin } : {}),
 })
 
 /** Go and the Worker's HTTP side, by route. */
@@ -126,6 +149,8 @@ function stubApi({
   items = [] as Item[],
   pending = [] as string[],
   created = thread("th_new", ""),
+  /** Conversations Go no longer has (the list may still name them). */
+  gone = [] as string[],
 } = {}) {
   const calls: string[] = []
   vi.stubGlobal(
@@ -145,6 +170,9 @@ function stubApi({
       if (path.endsWith("/get-messages")) return json([])
       const detail = /^\/v1\/organizations\/org_1\/threads\/([^/]+)$/.exec(path)
       if (detail) {
+        if (gone.includes(detail[1])) {
+          return json({ error: { code: "not_found", message: "no" } }, 404)
+        }
         return json({
           ...thread(detail[1], ""),
           items,
@@ -177,6 +205,27 @@ function stubApi({
   return calls
 }
 
+/** The list request, answered only when released. */
+function holdMemberList() {
+  let release = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const fetcher = vi.mocked(fetch)
+  const answer = fetcher.getMockImplementation()!
+  fetcher.mockImplementation(async (input, init) => {
+    const url = new URL(String(input), "http://localhost")
+    if (
+      url.pathname === "/v1/organizations/org_1/threads" &&
+      (init?.method ?? "GET") === "GET"
+    ) {
+      await gate
+    }
+    return answer(input, init)
+  })
+  return () => release()
+}
+
 function renderWithQueries(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -184,14 +233,54 @@ function renderWithQueries(ui: ReactElement) {
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
 }
 
-function renderChat() {
-  return renderWithQueries(
+const scope = { organizationId: "org_1", userId: "user_1" }
+/** The primary agent, whose id keys the choices the chat remembers. */
+const LEO = "agt_leo"
+
+/**
+ * The chat as the panel mounts it, holding its state in the reducer the panel
+ * uses. `agent` is the primary agent's id, or null while the agents list is
+ * out.
+ */
+function ChatHost({
+  remember = true,
+  agent = LEO,
+  viewer = scope.userId,
+  initial,
+  inOverview = false,
+}: {
+  remember?: boolean
+  agent?: string | null
+  /** The member whose chat it is (same organization). */
+  viewer?: string
+  /** What the chat holds to begin with, when it is not a fresh chat. */
+  initial?: PrimaryChat
+  /** The focused Agent overview is open. */
+  inOverview?: boolean
+}) {
+  const asViewer = { ...scope, userId: viewer }
+  const [chat, dispatch] = useReducer(
+    primaryChatReducer,
+    initial,
+    (start) => start ?? initialPrimaryChat()
+  )
+  useRememberedChoice(chat, remember ? asViewer : undefined, agent ?? undefined)
+  return (
     <AgentChat
       organizationId="org_1"
+      scope={remember ? asViewer : undefined}
+      agentId={agent ?? undefined}
       agentName="Leo"
+      chat={chat}
+      dispatch={dispatch}
+      inOverview={inOverview}
       onComposingChange={vi.fn()}
     />
   )
+}
+
+function renderChat() {
+  return renderWithQueries(<ChatHost />)
 }
 
 const composer = () => screen.getByRole("textbox", { name: "Message Leo" })
@@ -221,10 +310,11 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  window.sessionStorage.clear()
 })
 
 describe("AgentChat", () => {
-  it("opens the member's most recent conversation through its Durable Object", async () => {
+  it("opens the member's latest conversation through its Durable Object", async () => {
     stubApi({
       threads: [thread("th_2", "Plan the launch"), thread("th_1", "Older")],
     })
@@ -240,14 +330,19 @@ describe("AgentChat", () => {
     )
     expect(await screen.findByText("Plan the launch")).toBeTruthy()
 
-    // Waits for the socket before it takes a message.
-    expect(composer().hasAttribute("disabled")).toBe(true)
-    expect(screen.getByText("Connecting…")).toBeTruthy()
-    open("org_1~th_2")
+    // The member can type at once, but nothing goes before the socket is
+    // open.
     expect(composer().hasAttribute("disabled")).toBe(false)
-    expect(screen.queryByText("Connecting…")).toBeNull()
-
+    expect(screen.getByText("Connecting…")).toBeTruthy()
     type("  Draft the brief  ")
+    expect(hooks.sendMessage).not.toHaveBeenCalled()
+    expect((composer() as HTMLTextAreaElement).value).toBe(
+      "  Draft the brief  "
+    )
+
+    open("org_1~th_2")
+    expect(screen.queryByText("Connecting…")).toBeNull()
+    fireEvent.keyDown(composer(), { key: "Enter" })
     expect(hooks.sendMessage).toHaveBeenCalledExactlyOnceWith({
       text: "Draft the brief",
     })
@@ -268,11 +363,144 @@ describe("AgentChat", () => {
 
     act(() => socketFor("org_1~th_1").onClose?.({ code: 1006 }))
     expect(screen.getByText("Reconnecting…")).toBeTruthy()
-    expect(composer().hasAttribute("disabled")).toBe(true)
+    // Typing goes on while the socket is out; sending waits for it.
+    expect(composer().hasAttribute("disabled")).toBe(false)
+    type("While away")
+    expect(hooks.sendMessage).not.toHaveBeenCalled()
     // A dropped socket refreshes the session its reconnect will carry.
     await waitFor(() => expect(calls).toContain("GET /v1/auth/me"))
     open("org_1~th_1")
     expect(screen.queryByText("Reconnecting…")).toBeNull()
+    fireEvent.keyDown(composer(), { key: "Enter" })
+    expect(hooks.sendMessage).toHaveBeenCalledExactlyOnceWith({
+      text: "While away",
+    })
+  })
+
+  it("stops showing a tool call as running once its run is stopped", async () => {
+    const items: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Look it up" },
+      { type: "tool_call", id: "ev_2", call_id: "c1", tool: "web_search" },
+    ]
+    stubApi({ threads: [thread("th_1", "Look it up")], items })
+    hooks.chat.messages = itemsToChatMessages(items)
+    hooks.chat.status = "streaming"
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    const row = () => document.querySelector(".workspace-agent-tools")
+    expect(row()?.getAttribute("data-state")).toBe("running")
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop response" }))
+    expect(hooks.stop).toHaveBeenCalledOnce()
+    updateChat({ status: "ready" })
+    expect(row()?.getAttribute("data-state")).toBe("interrupted")
+    expect(row()?.textContent).toContain("Interrupted")
+  })
+
+  describe("a tool call that only looks unfinished", () => {
+    const items: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Look it up" },
+      { type: "tool_call", id: "ev_2", call_id: "c1", tool: "web_search" },
+    ]
+    const row = () => document.querySelector(".workspace-agent-tools")
+    const state = () => row()?.getAttribute("data-state")
+    const settle = (ms: number) =>
+      act(() => {
+        vi.advanceTimersByTime(ms)
+      })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it("stays running through a socket that drops mid-run, and after it comes back, until the run resumes", async () => {
+      stubApi({ threads: [thread("th_1", "Look it up")], items })
+      hooks.chat.messages = itemsToChatMessages(items)
+      hooks.chat.status = "streaming"
+      renderChat()
+      await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+      open("org_1~th_1")
+      expect(state()).toBe("running")
+
+      // The transport closes the stream when the socket drops; Go goes on.
+      act(() => socketFor("org_1~th_1").onClose?.({ code: 1006 }))
+      updateChat({ status: "ready" })
+      settle(5000)
+      expect(state()).toBe("running")
+
+      // The socket is back, and the run has not resumed yet.
+      open("org_1~th_1")
+      settle(RUN_SETTLE - 500)
+      expect(state()).toBe("running")
+      updateChat({ status: "streaming" })
+      settle(5000)
+      expect(state()).toBe("running")
+    })
+
+    it("stays running while the conversation of a live run opens, and reads interrupted once the socket has been quiet a moment", async () => {
+      stubApi({ threads: [thread("th_1", "Look it up")], items })
+      hooks.chat.messages = itemsToChatMessages(items)
+      renderChat()
+      await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+      // Not connected yet: nothing says the run is over.
+      settle(10_000)
+      expect(state()).toBe("running")
+
+      open("org_1~th_1")
+      settle(RUN_SETTLE - 500)
+      expect(state()).toBe("running")
+      // Nothing resumed: the run behind this call is over.
+      settle(600)
+      expect(state()).toBe("interrupted")
+      expect(row()?.textContent).toContain("Interrupted")
+    })
+
+    it("reads a run interrupted at once when the member stops it, or the chat is aborted", async () => {
+      stubApi({ threads: [thread("th_1", "Look it up")], items })
+      hooks.chat.messages = itemsToChatMessages(items)
+      hooks.chat.status = "streaming"
+      renderChat()
+      await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+      open("org_1~th_1")
+      expect(state()).toBe("running")
+
+      updateChat({ status: "ready" })
+      act(() =>
+        hooks.chatOptions?.onFinish({
+          isAbort: true,
+          isDisconnect: false,
+          isError: false,
+        })
+      )
+      expect(state()).toBe("interrupted")
+    })
+
+    it("runs again when the member sends after a stop", async () => {
+      stubApi({ threads: [thread("th_1", "Look it up")], items })
+      hooks.chat.messages = itemsToChatMessages(items)
+      hooks.chat.status = "streaming"
+      renderChat()
+      await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+      open("org_1~th_1")
+      fireEvent.click(screen.getByRole("button", { name: "Stop response" }))
+      updateChat({ status: "ready" })
+      expect(state()).toBe("interrupted")
+
+      // The next turn streams, with a new call of its own running.
+      hooks.chat.messages = itemsToChatMessages([
+        ...items,
+        { type: "message", id: "ev_3", author: "member", text: "Again" },
+        { type: "tool_call", id: "ev_4", call_id: "c2", tool: "read_file" },
+      ])
+      updateChat({ status: "streaming" })
+      const rows = document.querySelectorAll(".workspace-agent-tools")
+      expect(rows).toHaveLength(2)
+      expect(rows[0].getAttribute("data-state")).toBe("interrupted")
+      expect(rows[1].getAttribute("data-state")).toBe("running")
+    })
   })
 
   it("starts a thread with the first message when the member has none", async () => {
@@ -462,6 +690,785 @@ describe("AgentChat", () => {
       "user",
       "assistant",
     ])
+  })
+})
+
+describe("which conversation the chat opens", () => {
+  const blank = "Ask anything to start a conversation."
+  const detailPath = (id: string) => `GET /v1/organizations/org_1/threads/${id}`
+
+  async function opensThread(id: string) {
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        `org_1~${id}`
+      )
+    )
+    expect(
+      hooks.agentOptions.every((item) => item.name === `org_1~${id}`)
+    ).toBe(true)
+  }
+
+  it("opens a new chat once the latest conversation is an hour old", async () => {
+    stubApi({ threads: [thread("th_1", "Yesterday's plan", 25 * HOUR)] })
+    renderChat()
+
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(screen.getByText("New conversation")).toBeTruthy()
+    // No socket: nothing is opened until there is something to say.
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(composer().hasAttribute("disabled")).toBe(false)
+  })
+
+  it("reopens the latest conversation while it is fresh", async () => {
+    stubApi({
+      threads: [thread("th_2", "Plan the launch", 59 * 60_000)],
+    })
+    renderChat()
+    await opensThread("th_2")
+    expect(await screen.findByText("Plan the launch")).toBeTruthy()
+  })
+
+  it("never opens an update from the member's apps", async () => {
+    stubApi({
+      threads: [
+        thread("th_w", "From your apps", 60_000, "wakeup"),
+        thread("th_1", "Plan the launch", 5 * 60_000),
+      ],
+    })
+    renderChat()
+    await opensThread("th_1")
+  })
+
+  it("passes over a conversation nothing was ever sent in, as an abandoned start", async () => {
+    stubApi({
+      threads: [
+        thread("th_empty", "", 30_000),
+        thread("th_1", "Plan the launch", 5 * 60_000),
+      ],
+    })
+    renderChat()
+    await opensThread("th_1")
+  })
+
+  it("opens a new chat when the only recent conversation is an abandoned start", async () => {
+    stubApi({
+      threads: [
+        thread("th_empty", "", 30_000),
+        thread("th_1", "Yesterday's plan", 25 * HOUR),
+      ],
+    })
+    renderChat()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+  })
+
+  it("lets the member type while the choice is being made, and keeps what they typed", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    const release = holdMemberList()
+    renderChat()
+    await screen.findByText("Loading the conversation…")
+
+    // Nothing to send to yet, but the words are not held back.
+    expect(composer().hasAttribute("disabled")).toBe(false)
+    fireEvent.change(composer(), { target: { value: "Quick question" } })
+    fireEvent.keyDown(composer(), { key: "Enter" })
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(hooks.sendMessage).not.toHaveBeenCalled()
+
+    act(() => release())
+    await opensThread("th_1")
+    expect((composer() as HTMLTextAreaElement).value).toBe("Quick question")
+    open("org_1~th_1")
+    fireEvent.keyDown(composer(), { key: "Enter" })
+    expect(hooks.sendMessage).toHaveBeenCalledExactlyOnceWith({
+      text: "Quick question",
+    })
+  })
+
+  describe("when the choice takes long", () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it("opens a new chat after five seconds, with what the member typed still in the composer, and does not go back for what arrives later", async () => {
+      const calls = stubApi({ threads: [thread("th_1", "Plan the launch")] })
+      const release = holdMemberList()
+      // The clock is the test's from the start: the chat sets its timer as it
+      // opens, and the query client's own timers move with it.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+      const later = (ms: number) =>
+        act(async () => {
+          await vi.advanceTimersByTimeAsync(ms)
+        })
+      renderChat()
+      await later(100)
+      expect(screen.getByText("Loading the conversation…")).toBeTruthy()
+      fireEvent.change(composer(), { target: { value: "Quick question" } })
+
+      await later(4700)
+      expect(screen.getByText("Loading the conversation…")).toBeTruthy()
+      await later(300)
+      expect(screen.getByText(blank)).toBeTruthy()
+      expect(screen.getByText("New conversation")).toBeTruthy()
+      expect((composer() as HTMLTextAreaElement).value).toBe("Quick question")
+
+      // The list comes in at last: the chat does not leave the new chat.
+      release()
+      await later(100)
+      expect(hooks.agentOptions).toHaveLength(0)
+      expect(screen.getByText(blank)).toBeTruthy()
+      expect(calls.some((call) => call.startsWith("POST"))).toBe(false)
+      // And it takes the message as a new chat's first.
+      fireEvent.keyDown(composer(), { key: "Enter" })
+      await later(100)
+      expect(calls).toContain("POST /v1/organizations/org_1/threads")
+    })
+
+    it("does not fall back once the choice has been made in time", async () => {
+      stubApi({ threads: [thread("th_1", "Plan the launch")] })
+      renderChat()
+      await opensThread("th_1")
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+      act(() => {
+        vi.advanceTimersByTime(30_000)
+      })
+      expect(screen.queryByText("New conversation")).toBeNull()
+      expect(screen.getByText("Plan the launch")).toBeTruthy()
+    })
+  })
+
+  it("says so, and opens a new chat, when the conversation it opened is gone", async () => {
+    stubApi({
+      threads: [thread("th_1", "Plan the launch")],
+      gone: ["th_1"],
+    })
+    renderChat()
+    expect(
+      await screen.findByText("That conversation no longer exists.")
+    ).toBeTruthy()
+    expect(screen.getByText(blank)).toBeTruthy()
+    expect(screen.getByText("New conversation")).toBeTruthy()
+    // And a reload stays on the new chat, not the conversation that is gone.
+    expect(rememberedChoice(scope, LEO)).toBe("new")
+  })
+
+  it("puts a first message back in the composer when the conversation made for it is gone before it was sent", async () => {
+    stubApi({ threads: [], gone: ["th_new"] })
+    renderChat()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    type("Plan the launch")
+
+    expect(
+      await screen.findByText("That conversation no longer exists.")
+    ).toBeTruthy()
+    // Nothing was sent to a conversation that is not there; the words are
+    // back where the member can send them again.
+    expect(hooks.sendMessage).not.toHaveBeenCalled()
+    expect((composer() as HTMLTextAreaElement).value).toBe("Plan the launch")
+    expect(screen.getByText("New conversation")).toBeTruthy()
+  })
+
+  it("opens the conversation the member chose in this session, however old", async () => {
+    rememberChoice(scope, LEO, "th_1")
+    stubApi({
+      threads: [
+        thread("th_2", "Fresh", 60_000),
+        thread("th_1", "Chosen", 30 * HOUR),
+      ],
+    })
+    renderChat()
+    await opensThread("th_1")
+  })
+
+  it("ignores a chosen conversation that no longer exists", async () => {
+    rememberChoice(scope, LEO, "th_gone")
+    stubApi({ threads: [thread("th_1", "Fresh", 60_000)] })
+    renderChat()
+    await opensThread("th_1")
+  })
+
+  it("keeps a member's choice of a new chat over a fresh conversation, and asks Go about nothing", async () => {
+    rememberChoice(scope, LEO, null)
+    const calls = stubApi({ threads: [thread("th_1", "Fresh", 60_000)] })
+    renderChat()
+
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(calls.some((call) => call.includes("/threads/th_1"))).toBe(false)
+  })
+
+  it("stays on a new chat after a reload, when the member started one", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    const first = renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(rememberedChoice(scope, LEO)).toBe("new")
+
+    // The same tab, loaded again: the conversation they left is still fresh.
+    first.unmount()
+    cleanup()
+    hooks.agentOptions.length = 0
+    renderChat()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+  })
+
+  it("remembers the conversation a first message starts, so a reload stays in it", async () => {
+    // It is old by the time of the reload, which only the choice can outlast.
+    stubApi({ threads: [], created: thread("th_new", "", 5 * HOUR) })
+    const first = renderChat()
+    expect(await screen.findByText(blank)).toBeTruthy()
+    type("Plan the launch")
+    await opensThread("th_new")
+    expect(rememberedChoice(scope, LEO)).toBe("th_new")
+
+    first.unmount()
+    cleanup()
+    hooks.agentOptions.length = 0
+    renderChat()
+    await opensThread("th_new")
+  })
+
+  it("reopens an old conversation that still waits on the member's confirmation", async () => {
+    const items: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Email Sam" },
+      {
+        type: "confirmation",
+        id: "ev_2",
+        call_id: "call_1",
+        tool_call_id: "tool_1",
+        tool: "send_email",
+        arguments: { to: "sam@example.com" },
+        status: "pending",
+      },
+    ]
+    const calls = stubApi({
+      threads: [thread("th_1", "Email Sam", 6 * HOUR)],
+      items,
+      pending: ["call_1"],
+    })
+    hooks.chat.messages = itemsToChatMessages(items)
+    renderChat()
+
+    await opensThread("th_1")
+    expect(calls).toContain(detailPath("th_1"))
+    open("org_1~th_1")
+    expect(
+      await screen.findByRole("group", { name: "Confirm Send email" })
+    ).toBeTruthy()
+  })
+
+  it("opens a new chat when the old conversation waits on nothing, having asked Go once", async () => {
+    const calls = stubApi({
+      threads: [thread("th_1", "Done long ago", 6 * HOUR)],
+      pending: [],
+    })
+    renderChat()
+
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(calls.filter((call) => call === detailPath("th_1"))).toHaveLength(1)
+  })
+
+  it("waits for the primary agent's id before it chooses, so no choice is kept under a stand-in", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    function AgentArrives() {
+      const [agent, setAgent] = useState<string | null>(null)
+      return (
+        <>
+          <button type="button" onClick={() => setAgent(LEO)}>
+            Agents loaded
+          </button>
+          <ChatHost agent={agent} />
+        </>
+      )
+    }
+    renderWithQueries(<AgentArrives />)
+    // The thread list is here (it is a fetch away), but the chat holds off.
+    await screen.findByText("Loading the conversation…")
+    await act(async () => {})
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(screen.queryByText("Plan the launch")).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Agents loaded" }))
+    await opensThread("th_1")
+  })
+
+  it("does not wait for it when there is nothing to remember", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    renderWithQueries(<ChatHost remember={false} agent={null} />)
+    await opensThread("th_1")
+  })
+
+  it("opens a new chat when Go can't say whether the old conversation waits", async () => {
+    stubApi({ threads: [thread("th_1", "Old", 6 * HOUR)] })
+    const fetcher = vi.mocked(fetch)
+    const answer = fetcher.getMockImplementation()
+    fetcher.mockImplementation(async (input, init) =>
+      String(input).endsWith("/threads/th_1")
+        ? json({ error: { code: "unavailable", message: "down" } }, 503)
+        : answer!(input, init)
+    )
+    renderChat()
+    // A read that fails is tried once more before the chat gives up on it.
+    expect(
+      await screen.findByText(blank, undefined, { timeout: 4000 })
+    ).toBeTruthy()
+    expect(hooks.agentOptions).toHaveLength(0)
+  })
+
+  it("remembers nothing without a scope, and still applies the rules", async () => {
+    stubApi({ threads: [thread("th_1", "Old", 6 * HOUR)] })
+    renderWithQueries(<ChatHost remember={false} />)
+    expect(await screen.findByText(blank)).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(window.sessionStorage.length).toBe(0)
+  })
+})
+
+describe("a conversation left alone", () => {
+  let visibility: DocumentVisibilityState = "visible"
+
+  beforeEach(() => {
+    // Only the clock moves: the chat's own timers and promises run as usual.
+    vi.useFakeTimers({ toFake: ["Date"] })
+    visibility = "visible"
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibility,
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Time passes; then the tab shows again, or the window is focused. */
+  function comeBack(
+    after: number,
+    event: "visibilitychange" | "focus" = "visibilitychange"
+  ) {
+    vi.setSystemTime(Date.now() + after)
+    act(() => {
+      if (event === "focus") window.dispatchEvent(new Event("focus"))
+      else document.dispatchEvent(new Event("visibilitychange"))
+    })
+  }
+
+  /** A new chat is titled so; a conversation shows its own title. */
+  const onNewChat = () => screen.queryByText("New conversation") !== null
+
+  async function openThread() {
+    const calls = stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    return calls
+  }
+
+  it("gives way to a new chat when the tab shows again after an hour, and deletes nothing", async () => {
+    const calls = await openThread()
+    fireEvent.change(composer(), { target: { value: "Half a thought" } })
+
+    comeBack(HOUR)
+    expect(onNewChat()).toBe(true)
+    expect(rememberedChoice(scope, LEO)).toBe("new")
+    // What they were typing goes with them, and the old conversation stays.
+    expect((composer() as HTMLTextAreaElement).value).toBe("Half a thought")
+    expect(calls.filter((call) => call.startsWith("DELETE"))).toEqual([])
+    expect(calls.filter((call) => call.startsWith("POST"))).toEqual([])
+  })
+
+  it("does the same when the window is focused again", async () => {
+    await openThread()
+    comeBack(3 * HOUR, "focus")
+    expect(onNewChat()).toBe(true)
+    expect(rememberedChoice(scope, LEO)).toBe("new")
+  })
+
+  it("leaves a conversation alone that was active within the hour", async () => {
+    await openThread()
+    comeBack(HOUR - 60_000)
+    expect(onNewChat()).toBe(false)
+    expect(rememberedChoice(scope, LEO)).toBeNull()
+  })
+
+  it("counts what the member sends, and what the agent says, as activity", async () => {
+    await openThread()
+    vi.setSystemTime(Date.now() + 50 * 60_000)
+    type("Still here")
+    comeBack(50 * 60_000)
+    expect(onNewChat()).toBe(false)
+
+    // Half an hour on, the agent answers.
+    vi.setSystemTime(Date.now() + 30 * 60_000)
+    updateChat({
+      messages: itemsToChatMessages([
+        { type: "message", id: "ev_2", author: "Leo", text: "Hi there" },
+      ]),
+    })
+    comeBack(45 * 60_000)
+    expect(onNewChat()).toBe(false)
+
+    comeBack(30 * 60_000)
+    expect(onNewChat()).toBe(true)
+  })
+
+  it("does not take a reconnect that hands over the same conversation again for news", async () => {
+    await openThread()
+    comeBack(50 * 60_000)
+    // The socket reconnected in the background: the same messages, again.
+    updateChat({ messages: [...hooks.chat.messages] })
+    comeBack(20 * 60_000)
+    expect(onNewChat()).toBe(true)
+  })
+
+  it("counts the member's pointer, keys and scrolling anywhere in the page as activity", async () => {
+    await openThread()
+    comeBack(50 * 60_000)
+    fireEvent.pointerDown(document.body)
+    comeBack(50 * 60_000)
+    expect(onNewChat()).toBe(false)
+
+    fireEvent.keyDown(document.body, { key: "a" })
+    comeBack(50 * 60_000)
+    expect(onNewChat()).toBe(false)
+
+    fireEvent.wheel(document.body)
+    comeBack(50 * 60_000)
+    expect(onNewChat()).toBe(false)
+
+    // An hour with none of it, and the chat is left.
+    comeBack(HOUR)
+    expect(onNewChat()).toBe(true)
+  })
+
+  it("is never left while the Agent overview's viewer or editor is open, and its hour starts afresh when that closes", async () => {
+    // A file's viewer or editor is a frame that keeps the pointer and the
+    // keys; focus coming back from it is not the member returning.
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    function Overview() {
+      const [viewing, setViewing] = useState(true)
+      return (
+        <>
+          <button type="button" onClick={() => setViewing(false)}>
+            Close overview
+          </button>
+          <ChatHost inOverview={viewing} />
+        </>
+      )
+    }
+    renderWithQueries(<Overview />)
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+
+    comeBack(3 * HOUR, "focus")
+    comeBack(2 * HOUR)
+    expect(onNewChat()).toBe(false)
+
+    fireEvent.click(screen.getByRole("button", { name: "Close overview" }))
+    comeBack(30 * 60_000)
+    expect(onNewChat()).toBe(false)
+    comeBack(31 * 60_000)
+    expect(onNewChat()).toBe(true)
+  })
+
+  it("does not leave a run that is streaming, and starts counting when it ends", async () => {
+    await openThread()
+    updateChat({ status: "streaming" })
+    comeBack(3 * HOUR)
+    expect(onNewChat()).toBe(false)
+
+    updateChat({ status: "ready" })
+    comeBack(30 * 60_000)
+    expect(onNewChat()).toBe(false)
+    comeBack(HOUR)
+    expect(onNewChat()).toBe(true)
+  })
+
+  it("does not leave a confirmation that waits on the member", async () => {
+    const items: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Email Sam" },
+      {
+        type: "confirmation",
+        id: "ev_2",
+        call_id: "call_1",
+        tool_call_id: "tool_1",
+        tool: "send_email",
+        arguments: { to: "sam@example.com" },
+        status: "pending",
+      },
+    ]
+    stubApi({
+      threads: [thread("th_1", "Email Sam")],
+      items,
+      pending: ["call_1"],
+    })
+    hooks.chat.messages = itemsToChatMessages(items)
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    await screen.findByRole("group", { name: "Confirm Send email" })
+
+    comeBack(6 * HOUR)
+    expect(onNewChat()).toBe(false)
+    expect(
+      screen.getByRole("group", { name: "Confirm Send email" })
+    ).toBeTruthy()
+  })
+
+  it("waits for the tab to be visible", async () => {
+    await openThread()
+    visibility = "hidden"
+    comeBack(3 * HOUR)
+    expect(onNewChat()).toBe(false)
+
+    visibility = "visible"
+    comeBack(0, "focus")
+    expect(onNewChat()).toBe(true)
+  })
+
+  it("never takes a conversation from the member the moment they chose it", async () => {
+    rememberChoice(scope, LEO, "th_1")
+    stubApi({ threads: [thread("th_1", "Chosen", 30 * HOUR)] })
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+
+    comeBack(0)
+    comeBack(0, "focus")
+    expect(onNewChat()).toBe(false)
+    expect(rememberedChoice(scope, LEO)).toBe("th_1")
+  })
+})
+
+describe("a member who takes over the page", () => {
+  const theirs = { ...scope, userId: "user_b" }
+
+  it("does not choose, show or publish a conversation from the last member's cached list, and waits for its own", async () => {
+    stubApi({ threads: [thread("th_b", "Your plan")] })
+    // The other member's list is warm in the cache the two share.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    client.setQueryData(threadListQueryOptions("org_1", "user_1").queryKey, [
+      thread("th_a", "Their plan"),
+    ])
+    const release = holdMemberList()
+    const activity = renderHook(() => usePrimaryChatActivity(theirs))
+    render(
+      <QueryClientProvider client={client}>
+        <ChatHost viewer="user_b" />
+      </QueryClientProvider>
+    )
+
+    await act(async () => {})
+    expect(screen.queryByText("Their plan")).toBeNull()
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(activity.result.current).toBeNull()
+    expect(rememberedChoice(scope, LEO)).toBeNull()
+
+    act(() => release())
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        "org_1~th_b"
+      )
+    )
+    expect(hooks.agentOptions.every((item) => item.name === "org_1~th_b")).toBe(
+      true
+    )
+    await waitFor(() =>
+      expect(activity.result.current).toEqual({
+        threadId: "th_b",
+        state: "idle",
+      })
+    )
+  })
+
+  it("shows and publishes no conversation, whatever its state names, until the member's own list has loaded", async () => {
+    stubApi({ threads: [thread("th_b", "Your plan")] })
+    const decided = primaryChatReducer(initialPrimaryChat(), {
+      type: "decide",
+      thread: "th_a",
+    })
+    const release = holdMemberList()
+    const activity = renderHook(() => usePrimaryChatActivity(theirs))
+    renderWithQueries(<ChatHost viewer="user_b" initial={decided} />)
+
+    await act(async () => {})
+    // The list is out: the chat is still opening, and says nothing.
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(activity.result.current).toBeNull()
+    expect(screen.getByText("Loading the conversation…")).toBeTruthy()
+    release()
+  })
+
+  it("keeps the list it makes a new conversation in under the member's own entry, and refreshes it when a run ends", async () => {
+    const calls = stubApi({ threads: [] })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <ChatHost />
+      </QueryClientProvider>
+    )
+    expect(
+      await screen.findByText("Ask anything to start a conversation.")
+    ).toBeTruthy()
+    type("Plan the launch")
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        "org_1~th_new"
+      )
+    )
+    const own = threadListQueryOptions("org_1", "user_1").queryKey
+    expect(
+      client.getQueryData<Thread[]>(own)?.map((item) => item.id)
+    ).toContain("th_new")
+    // Nothing was written to an entry that is not this member's.
+    expect(
+      client.getQueryData(threadListQueryOptions("org_1").queryKey)
+    ).toBeUndefined()
+
+    // A run that ends refreshes the member's list (a prefix invalidation).
+    open("org_1~th_new")
+    const listReads = () =>
+      calls.filter((call) => call === "GET /v1/organizations/org_1/threads")
+        .length
+    const before = listReads()
+    act(() =>
+      hooks.chatOptions?.onFinish({
+        isAbort: false,
+        isDisconnect: false,
+        isError: false,
+      })
+    )
+    await waitFor(() => expect(listReads()).toBeGreaterThan(before))
+  })
+})
+
+describe("the primary chat's activity", () => {
+  // What the rest of the app would read: the chat's thread, and whether it
+  // works, waits on the member or is idle.
+  function watchActivity(as = scope) {
+    const { result } = renderHook(() => usePrimaryChatActivity(as))
+    return () => result.current
+  }
+
+  it("is heard only in its own organization, by its own member", async () => {
+    stubApi({ threads: [thread("th_1", "Hello")] })
+    const own = watchActivity()
+    const otherOrganization = watchActivity({
+      ...scope,
+      organizationId: "org_2",
+    })
+    const otherMember = watchActivity({ ...scope, userId: "someone-else" })
+    renderChat()
+    await waitFor(() =>
+      expect(own()).toEqual({ threadId: "th_1", state: "idle" })
+    )
+    expect(otherOrganization()).toBeNull()
+    expect(otherMember()).toBeNull()
+  })
+
+  it("says nothing before a conversation is chosen, then which one and what it does", async () => {
+    stubApi({ threads: [thread("th_1", "Hello")] })
+    const activity = watchActivity()
+    expect(activity()).toBeNull()
+    renderChat()
+    expect(activity()).toBeNull()
+    await waitFor(() =>
+      expect(activity()).toEqual({ threadId: "th_1", state: "idle" })
+    )
+    open("org_1~th_1")
+
+    // A run being submitted, and then streamed, is running.
+    updateChat({ status: "submitted" })
+    expect(activity()).toEqual({ threadId: "th_1", state: "running" })
+    updateChat({ status: "streaming" })
+    expect(activity()).toEqual({ threadId: "th_1", state: "running" })
+    updateChat({ status: "ready" })
+    expect(activity()).toEqual({ threadId: "th_1", state: "idle" })
+  })
+
+  it("says it waits while a confirmation waits on the member, and runs once they answer", async () => {
+    const items: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Email Sam" },
+      {
+        type: "confirmation",
+        id: "ev_2",
+        call_id: "call_1",
+        tool_call_id: "tool_1",
+        tool: "send_email",
+        arguments: { to: "sam@example.com" },
+        status: "pending",
+      },
+    ]
+    stubApi({
+      threads: [thread("th_1", "Email Sam")],
+      items,
+      pending: ["call_1"],
+    })
+    hooks.chat.messages = itemsToChatMessages(items)
+    const activity = watchActivity()
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    await waitFor(() =>
+      expect(activity()).toEqual({ threadId: "th_1", state: "waiting" })
+    )
+
+    const card = screen.getByRole("group", { name: "Confirm Send email" })
+    fireEvent.click(within(card).getByRole("button", { name: "Approve" }))
+    updateChat({ status: "streaming" })
+    expect(activity()).toEqual({ threadId: "th_1", state: "running" })
+  })
+
+  it("follows the member to a new conversation, and runs from its first message", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    const activity = watchActivity()
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(activity()).toEqual({ threadId: null, state: "idle" })
+
+    type("Something new")
+    await waitFor(() =>
+      expect(activity()).toEqual({ threadId: "th_new", state: "running" })
+    )
+    // The first message goes once the new thread's socket opens.
+    open("org_1~th_new")
+    updateChat({ status: "streaming" })
+    expect(activity()).toEqual({ threadId: "th_new", state: "running" })
+    updateChat({ status: "ready" })
+    expect(activity()).toEqual({ threadId: "th_new", state: "idle" })
+  })
+
+  it("goes idle when the member leaves a running conversation for a new one", async () => {
+    stubApi({ threads: [thread("th_1", "Plan the launch")] })
+    const activity = watchActivity()
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    updateChat({ status: "streaming" })
+    expect(activity()).toEqual({ threadId: "th_1", state: "running" })
+
+    // The member leaves for a new conversation while it still runs.
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(activity()).toEqual({ threadId: null, state: "idle" })
+  })
+
+  it("says it is gone once the chat unmounts", async () => {
+    stubApi({ threads: [thread("th_1", "Hello")] })
+    const activity = watchActivity()
+    const view = renderChat()
+    await waitFor(() => expect(activity()).not.toBeNull())
+    view.unmount()
+    expect(activity()).toBeNull()
   })
 })
 

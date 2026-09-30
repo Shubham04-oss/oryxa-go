@@ -547,6 +547,58 @@ describe("query helpers", () => {
     )
   })
 
+  it("keeps each member's list apart, under a key that invalidating the organization's lists still reaches", async () => {
+    expect(threadListQueryOptions("org_1", "user_a").queryKey).toEqual([
+      "threads",
+      "org_1",
+      "list",
+      "user_a",
+    ])
+    // Without a member it is the organization's list, as before.
+    expect(threadListQueryOptions("org_1", undefined).queryKey).toEqual(
+      threadKeys.list("org_1")
+    )
+
+    const client = new QueryClient()
+    const lists = {
+      user_a: [
+        { id: "th_a", title: "Mine", updated_at: "2026-09-30T10:00:00Z" },
+      ],
+      user_b: [],
+    }
+    for (const [viewer, threads] of Object.entries(lists)) {
+      client.setQueryData(
+        threadListQueryOptions("org_1", viewer).queryKey,
+        threads
+      )
+    }
+    // One member's list is not the other's.
+    expect(
+      client.getQueryData(threadListQueryOptions("org_1", "user_b").queryKey)
+    ).toEqual([])
+    expect(
+      client.getQueryData(threadListQueryOptions("org_1", "user_a").queryKey)
+    ).toHaveLength(1)
+    // A member with nothing cached reads nothing of the others'.
+    expect(
+      client.getQueryData(threadListQueryOptions("org_1", "user_c").queryKey)
+    ).toBeUndefined()
+    expect(
+      client.getQueryData(threadListQueryOptions("org_1").queryKey)
+    ).toBeUndefined()
+
+    // What invalidates the organization's lists reaches every member's.
+    await client.invalidateQueries({ queryKey: threadKeys.list("org_1") })
+    expect(
+      client.getQueryState(threadListQueryOptions("org_1", "user_a").queryKey)
+        ?.isInvalidated
+    ).toBe(true)
+    expect(
+      client.getQueryState(threadListQueryOptions("org_1", "user_b").queryKey)
+        ?.isInvalidated
+    ).toBe(true)
+  })
+
   it("fetches the list and a thread through the query client", async () => {
     const fetchMock = vi.fn(async (url: string) =>
       url.endsWith("/threads")

@@ -5,7 +5,6 @@ import { ApiError } from "@/lib/api/client"
 import {
   fetchArtifactLink,
   threadDetailQueryOptions,
-  threadListQueryOptions,
 } from "@/lib/threads/client"
 import type { ArtifactLink } from "@/lib/threads/client"
 import { artifactFileName, buildTimeline } from "@/lib/threads/timeline"
@@ -36,14 +35,14 @@ export function isEditableDocument(name: string): boolean {
   return dot >= 0 && editableExtensions.has(name.slice(dot + 1).toLowerCase())
 }
 
-/** Follow the chat's selected thread, or its latest thread before the panel opens. */
+/**
+ * Follow the chat's current thread. A new chat has none, and neither has one
+ * that hasn't decided yet (`threadId` undefined, such as before the panel was
+ * first expanded): which conversation it opens is the chat's to decide, not
+ * something to guess from the list here.
+ */
 function useCurrentFiles(organizationId: string, threadId?: string | null) {
-  const threads = useQuery({
-    ...threadListQueryOptions(organizationId),
-    enabled: threadId === undefined,
-  })
-  const currentThreadId =
-    threadId === undefined ? (threads.data?.[0]?.id ?? null) : threadId
+  const currentThreadId = threadId ?? null
   const detail = useQuery({
     ...threadDetailQueryOptions(organizationId, currentThreadId ?? ""),
     enabled: Boolean(currentThreadId),
@@ -57,21 +56,15 @@ function useCurrentFiles(organizationId: string, threadId?: string | null) {
     for (const entry of entries) latest.set(entry.name, entry)
     return [...latest.values()].reverse()
   }, [detail.data])
-  const status =
-    threadId === undefined && threads.isPending
+  const status = !currentThreadId
+    ? "Start a conversation to see its files here."
+    : detail.isPending
       ? "Loading files…"
-      : threadId === undefined && threads.isError
-        ? "Could not load your conversations."
-        : !currentThreadId
-          ? "Start a conversation to see its files here."
-          : detail.isPending
-            ? "Loading files…"
-            : detail.isError
-              ? "Could not load this conversation's files."
-              : ""
-  const error = (threadId === undefined && threads.isError) || detail.isError
-  const pending =
-    (threadId === undefined && threads.isPending) || detail.isPending
+      : detail.isError
+        ? "Could not load this conversation's files."
+        : ""
+  const error = Boolean(currentThreadId) && detail.isError
+  const pending = Boolean(currentThreadId) && detail.isPending
   return { currentThreadId, files, status, error, pending }
 }
 

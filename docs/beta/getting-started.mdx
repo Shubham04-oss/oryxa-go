@@ -1,0 +1,24 @@
+---
+title: "Getting started"
+description: "Sign in, create an account, verify your email, and join a workspace invitation."
+---
+
+## Sign in
+
+Open [Oryxa](https://app.oryxa.in/auth/sign-in), enter your email and password, then select **Sign in**. The page may also offer Google sign-in, depending on Oryxa's authentication configuration. If you don't have an account, select **Create an account**.
+
+## Create an account and verify your email
+
+Enter your name, work email, and a password with at least 12 characters, including uppercase and lowercase letters, a number, and a symbol. Select **Create account**. Check the inbox for the address you entered and open the verification link.
+
+Verification links expire after 24 hours. If a link has expired, was already used, or is incomplete, select **Send a new link** on the verification page and enter the same email address. Once the page confirms **Email verified**, sign in.
+
+## Accept a workspace invitation
+
+Open the invitation link from your email. If you're signed out, sign in and Oryxa will return you to the invitation. Use the email address the invitation was sent to, then select **Accept invitation**. Oryxa opens the workspace after you join.
+
+If you're signed in with a different account, select **Sign out and use another account**, then sign in with the invited address. If you need to create an account first, use the invited address and verify it. After signing in, select **Join** beside the workspace invitation, or reopen the original invitation link. You can join the invited workspace without creating another one.
+
+If the invitation is no longer available, ask the workspace admin for a new one. If the workspace has reached its member limit, ask its owner for help.
+
+> **Source and verification:** This draft was checked against the [auth lifecycle](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/auth/README.md#L7-L19), [sign-in and sign-up screens](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/src/components/auth/auth-pages.tsx#L101-L268), [email verification screen](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/src/components/auth/auth-pages.tsx#L435-L566), and [invitation screen](https://github.com/Shubham04-oss/oryxa-go/blob/611233f541a3980c3b38490abe665116e567a0e7/web-next/src/components/auth/invitation-accept-page.tsx#L10-L120) at release `611233f541a3`. This is a source review, not a live user-flow test.

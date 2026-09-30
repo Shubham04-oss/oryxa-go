@@ -10,9 +10,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/react"
-import { AgentTimeline, groupToolActivity } from "./agent-timeline"
+import {
+  AgentTimeline,
+  groupToolActivity,
+  toolGroupState,
+} from "./agent-timeline"
 import type { ConfirmationAnswer, Item } from "@/lib/threads/client"
 import { buildTimeline } from "@/lib/threads/timeline"
+import type { ToolEntry } from "@/lib/threads/timeline"
 
 vi.mock("thinking-orbs", () => ({
   ThinkingOrb: ({ state, paused }: { state: string; paused?: boolean }) => (
@@ -32,11 +37,13 @@ function timeline(
   items: Item[],
   {
     running = false,
+    ended,
     actionable = [],
     submitted = {},
     onAnswer = vi.fn<(answers: ConfirmationAnswer[]) => void>(),
   }: {
     running?: boolean
+    ended?: boolean
     actionable?: string[]
     submitted?: Record<string, boolean>
     onAnswer?: Mock<(answers: ConfirmationAnswer[]) => void>
@@ -47,6 +54,7 @@ function timeline(
       <AgentTimeline
         entries={buildTimeline(items)}
         running={running}
+        ended={ended}
         agentName={agent}
         actionable={new Set(actionable)}
         submitted={submitted}
@@ -183,6 +191,156 @@ describe("AgentTimeline", () => {
         .querySelector(".workspace-agent-tools-status")
         ?.getAttribute("title")
     ).toBe("mailbox full")
+  })
+
+  it("reads a call a stopped run left behind as interrupted, with no moving orb", () => {
+    // Stopped mid-call: the run's end marker never came.
+    const stopped: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Look it up" },
+      { type: "run_started", run_id: "run_1" },
+      { type: "tool_call", id: "ev_2", call_id: "c1", tool: "web_search" },
+    ]
+    const streaming = timeline(stopped, { running: true })
+    const live = streaming.container.querySelector(".workspace-agent-tools")
+    expect(live?.getAttribute("data-state")).toBe("running")
+    expect(live?.textContent).toContain("Running")
+    expect(live?.querySelector("canvas")?.getAttribute("data-orb-paused")).toBe(
+      "false"
+    )
+    cleanup()
+
+    const after = timeline(stopped, { running: false })
+    const row = after.container.querySelector(".workspace-agent-tools")
+    expect(row?.getAttribute("data-state")).toBe("interrupted")
+    expect(
+      row?.querySelector(".workspace-agent-tools-status")?.textContent
+    ).toBe("Interrupted")
+    expect(row?.textContent).not.toContain("Running")
+    expect(row?.querySelector("canvas")?.getAttribute("data-orb-paused")).toBe(
+      "true"
+    )
+    expect(row?.getAttribute("aria-label")).toBe("Web search · Interrupted")
+    // Still one quiet row that never expands into a list.
+    expect(
+      after.container.querySelectorAll(".workspace-agent-tools")
+    ).toHaveLength(1)
+    expect(row?.querySelector("summary, ol, button")).toBeNull()
+  })
+
+  it("leaves a call and a draft as they were while the run may only be out of sight", () => {
+    const items: Item[] = [
+      { type: "run_started", run_id: "run_1" },
+      { type: "tool_call", id: "ev_1", call_id: "c1", tool: "web_search" },
+      { type: "delta", author: agent, text: "Looking" },
+    ]
+    // Nothing streams here (the socket dropped, or a resume is on its way),
+    // but nothing says the run is over.
+    const alive = timeline(items, { running: false, ended: false })
+    const row = alive.container.querySelector(".workspace-agent-tools")
+    expect(row?.getAttribute("data-state")).toBe("running")
+    const draft = alive.log.querySelector('[data-from="agent"]')
+    expect(draft?.getAttribute("data-state")).toBe("streaming")
+    expect(within(alive.log).queryByText("Interrupted")).toBeNull()
+    cleanup()
+
+    // Told the run is over, the same rows read interrupted.
+    const over = timeline(items, { running: false, ended: true })
+    expect(
+      over.container
+        .querySelector(".workspace-agent-tools")
+        ?.getAttribute("data-state")
+    ).toBe("interrupted")
+    expect(within(over.log).getAllByText("Interrupted").length).toBeGreaterThan(
+      0
+    )
+  })
+
+  it("reads a call whose run ended without its result as interrupted, even while another run streams", () => {
+    const { container } = timeline(
+      [
+        { type: "run_started", run_id: "run_1" },
+        { type: "tool_call", id: "ev_1", call_id: "c1", tool: "web_search" },
+        {
+          type: "run_failed",
+          run_id: "run_1",
+          error: "The run was cancelled.",
+        },
+        { type: "run_started", run_id: "run_2" },
+      ],
+      { running: true }
+    )
+    const row = container.querySelector(".workspace-agent-tools")
+    expect(row?.getAttribute("data-state")).toBe("interrupted")
+    expect(row?.querySelector("canvas")?.getAttribute("data-orb-paused")).toBe(
+      "true"
+    )
+    // A failed run is one muted error line under it.
+    expect(container.querySelector(".workspace-agent-error")?.textContent).toBe(
+      "The run was cancelled."
+    )
+  })
+
+  it("keeps a stopped run's call interrupted while the next run streams", () => {
+    const { container } = timeline(
+      [
+        { type: "message", id: "ev_1", author: "member", text: "Look it up" },
+        { type: "run_started", run_id: "run_1" },
+        { type: "tool_call", id: "ev_2", call_id: "c1", tool: "web_search" },
+        // The member stopped it, and asked something else.
+        { type: "message", id: "ev_3", author: "member", text: "Never mind" },
+        { type: "run_started", run_id: "run_2" },
+        { type: "tool_call", id: "ev_4", call_id: "c2", tool: "read_file" },
+      ],
+      { running: true }
+    )
+    const rows = container.querySelectorAll(".workspace-agent-tools")
+    expect(rows).toHaveLength(2)
+    expect(rows[0].getAttribute("data-state")).toBe("interrupted")
+    expect(
+      rows[0].querySelector("canvas")?.getAttribute("data-orb-paused")
+    ).toBe("true")
+    expect(rows[1].getAttribute("data-state")).toBe("running")
+    expect(
+      rows[1].querySelector("canvas")?.getAttribute("data-orb-paused")
+    ).toBe("false")
+  })
+
+  it("folds finished and interrupted calls into one row that says the run was cut short", () => {
+    const { container } = timeline(
+      [
+        { type: "tool_call", id: "ev_1", call_id: "c1", tool: "web_search" },
+        { type: "tool_result", id: "ev_2", call_id: "c1", tool: "web_search" },
+        { type: "tool_call", id: "ev_3", call_id: "c2", tool: "read_file" },
+      ],
+      { running: false }
+    )
+    const rows = container.querySelectorAll(".workspace-agent-tools")
+    expect(rows).toHaveLength(1)
+    expect(rows[0].textContent).toContain("2 tool calls")
+    expect(rows[0].getAttribute("data-state")).toBe("interrupted")
+    expect(rows[0].getAttribute("aria-label")).toBe(
+      "Web search · Done; Read file · Interrupted"
+    )
+  })
+
+  it("leaves a call that waits on the member as it was when nothing streams", () => {
+    const { container } = timeline(
+      [
+        { type: "tool_call", id: "ev_1", call_id: "c1", tool: "send_email" },
+        {
+          type: "confirmation",
+          id: "ev_2",
+          call_id: "confirm_1",
+          tool_call_id: "c1",
+          tool: "send_email",
+          status: "pending",
+        },
+      ],
+      { running: false, actionable: ["confirm_1"] }
+    )
+    const row = container.querySelector(".workspace-agent-tools")
+    expect(row?.getAttribute("data-state")).toBe("waiting_approval")
+    expect(row?.textContent).toContain("Waiting for you")
   })
 
   it("uses compact app marks in the same row and starts a new row next turn", () => {
@@ -354,6 +512,32 @@ describe("AgentTimeline", () => {
       },
     ])
     expect(within(log).queryByText("Your session has ended.")).toBeNull()
+  })
+})
+
+describe("toolGroupState", () => {
+  const call = (state: ToolEntry["state"]): ToolEntry => ({
+    kind: "tool",
+    key: `tool:${state}`,
+    callId: state,
+    tool: "web_search",
+    state,
+  })
+
+  it("shows what still needs attention first, an interrupted call before an old failure", () => {
+    expect(toolGroupState([call("done"), call("interrupted")])).toBe(
+      "interrupted"
+    )
+    expect(toolGroupState([call("failed"), call("interrupted")])).toBe(
+      "interrupted"
+    )
+    expect(toolGroupState([call("interrupted"), call("running")])).toBe(
+      "running"
+    )
+    expect(
+      toolGroupState([call("interrupted"), call("waiting_approval")])
+    ).toBe("waiting_approval")
+    expect(toolGroupState([call("done"), call("failed")])).toBe("failed")
   })
 })
 
