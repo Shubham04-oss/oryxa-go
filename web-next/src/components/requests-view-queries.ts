@@ -8,6 +8,7 @@ import { useMemo } from "react"
 import { queryOptions, useQuery } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import {
+  getAgentRequest,
   listAgentActivity,
   listAgentRequests,
 } from "@/lib/agents/agent-requests"
@@ -19,9 +20,9 @@ import {
   AGENT_REQUESTS_LIMIT,
   AGENT_REQUESTS_POLL_MS,
   agentKeys,
-  agentRequestQueryOptions,
 } from "@/lib/agents/queries"
-import { membersQueryOptions } from "@/lib/auth/queries"
+import { organizationKeys } from "@/lib/auth/queries"
+import { getMembers } from "@/lib/auth/invitations"
 
 /** Which requests a list shows: all of them, or those made in Slack or by an agent in Oryxa. */
 export type OriginFilter = "all" | AgentRequestOrigin
@@ -65,9 +66,18 @@ export function requestListQueryOptions(
 /** One request, re-read the same way. */
 export function requestDetailQueryOptions(
   organizationId: string,
-  requestId: string
+  requestId: string,
+  viewerId?: string
 ) {
-  return { ...agentRequestQueryOptions(organizationId, requestId), ...settling }
+  return {
+    queryKey: [
+      ...agentKeys.request(organizationId, requestId),
+      ...(viewerId ? [viewerId] : []),
+    ],
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      getAgentRequest(organizationId, requestId, { signal }),
+    ...settling,
+  }
 }
 
 /** What happened to the member's Slack asks. */
@@ -112,12 +122,22 @@ export type PeopleNames = {
  * never sends every card back to "loading" and forward again, and is not
  * asked again by each card that mounts.
  */
-export function usePeopleNames(organizationId: string): PeopleNames {
+export function usePeopleNames(
+  organizationId: string,
+  viewerId?: string,
+  enabled = true
+): PeopleNames {
   const members = useQuery({
-    ...membersQueryOptions(organizationId),
+    queryKey: [
+      ...organizationKeys.members(organizationId),
+      ...(viewerId ? [viewerId] : []),
+    ],
+    queryFn: () => getMembers(organizationId),
+    staleTime: 60_000,
+    enabled,
     retryOnMount: false,
   })
-  const { data } = members
+  const data = !viewerId || members.isSuccess ? members.data : undefined
   const failed = members.errorUpdateCount > 0
   return useMemo(() => {
     const names = new Map(

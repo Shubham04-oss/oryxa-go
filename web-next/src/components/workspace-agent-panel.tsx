@@ -55,7 +55,11 @@ export type AgentPanelTab = "agents" | "dms" | "teams"
  * The shell bringing a tab forward (Team's "All conversations" opens DMs).
  * Each request is a new object, and each is honoured once.
  */
-export type AgentPanelTabRequest = { tab: AgentPanelTab }
+export type AgentPanelTabRequest = {
+  tab: AgentPanelTab
+  /** Home's All conversations opens the primary agent's history. */
+  history?: true
+}
 
 /** What the DMs tab lists and opens: the member's inbox, and whom it can name. */
 export type PanelDirectMessages = {
@@ -221,6 +225,10 @@ export function WorkspaceAgentPanel({
     setTab(tabRequest.tab)
     // "All conversations" means the list, not the one last open.
     if (tabRequest.tab === "dms") setDmView(dmPanelList)
+    if (tabRequest.tab === "agents" && tabRequest.history) {
+      setAgentId(null)
+      setAgentsSide(null)
+    }
   }
   const unread = directMessages?.inbox.unreadTotal ?? 0
   const [composing, setComposing] = useState(false)

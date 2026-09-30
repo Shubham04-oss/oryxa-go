@@ -88,7 +88,7 @@ export function RequestsActivity({
   onOpenRequest: (requestId: string) => void
 }) {
   const queryClient = useQueryClient()
-  const people = usePeopleNames(organizationId)
+  const people = usePeopleNames(organizationId, viewerId)
   const activity = useQuery(activityQueryOptions(organizationId))
   const [problem, setProblem] = useState("")
   const endAccess = useMutation({

@@ -1,16 +1,16 @@
 .home-overview {
-  width: min(360px, calc(100% - 32px));
-  margin: 28px auto;
+  width: min(760px, calc(100% - 48px));
+  margin: 28px auto 40px;
   display: grid;
-  gap: 12px;
+  gap: 16px;
   font-size: 12px;
 }
 .home-overview .workspace-agent-composer {
-  padding-top: 0;
+  padding: 14px 0 0;
 }
 .home-overview .workspace-composer {
-  background: var(--workspace-base, #111111);
-  border-color: transparent;
+  background: #1e1e1e;
+  border-color: #393939;
 }
 .home-overview .workspace-composer:focus-within {
   border-color: #777;
@@ -20,11 +20,11 @@
 }
 .home-card {
   min-width: 0;
-  padding: 14px;
-  border-radius: 12px;
+  padding: 18px 20px;
+  border-radius: 14px;
   background: var(--workspace-base, #111111);
 }
-.home-card header {
+.home-card > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -33,13 +33,13 @@
 }
 .home-card h2 {
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
-.home-card header > div {
+.home-card > header > div {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 14px;
 }
 .home-overview button {
   cursor: pointer;
@@ -48,7 +48,7 @@
   cursor: default;
   opacity: 0.55;
 }
-.home-card header button,
+.home-card > header button,
 .home-quiet button {
   flex: none;
   padding: 3px 0;
@@ -57,7 +57,7 @@
   color: var(--workspace-muted, #999999);
   font-size: 11px;
 }
-.home-card header button:not(:disabled):hover,
+.home-card > header button:not(:disabled):hover,
 .home-quiet button:not(:disabled):hover {
   color: var(--workspace-text, #f2f2f2);
 }
@@ -72,7 +72,7 @@
 }
 .home-row {
   min-width: 0;
-  padding: 5px 0;
+  padding: 8px 0;
 }
 .home-row > button {
   display: block;
@@ -116,11 +116,85 @@
 .home-card > .home-quiet {
   margin-top: 8px;
 }
+.home-card .home-recents {
+  margin-top: 14px;
+  padding-top: 5px;
+  border-top: 1px solid #2c2c2c;
+}
+.home-recents .home-row > button,
+.home-recents .home-row > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.home-recents small {
+  flex: none;
+}
+.home-needs > .workspace-request-card,
+.home-request-group > .workspace-request-card {
+  margin-top: 14px;
+  border-color: #333333;
+  background: #111111;
+}
+.home-request-group {
+  margin-top: 18px;
+}
+.home-request-group h3 {
+  margin: 0;
+  color: #999999;
+  font-size: 11px;
+  font-weight: 500;
+}
+.home-access-row,
+.home-setup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.home-access-row > div,
+.home-setup-row > div {
+  min-width: 0;
+}
+.home-access-row > button,
+.home-setup-row > button {
+  flex: none;
+}
+.home-setup .home-row + .home-row,
+.home-access-row + .home-access-row {
+  border-top: 1px solid #2c2c2c;
+}
+.home-empty {
+  padding: 2px 2px;
+}
 .home-quiet button {
   margin-left: 8px;
 }
 @media (max-width: 800px) {
   .home-overview {
+    width: calc(100% - 32px);
     margin-top: 20px;
+    gap: 14px;
+  }
+  .home-card {
+    padding: 16px;
+  }
+  .home-recents .home-row > button,
+  .home-recents .home-row > div {
+    align-items: flex-start;
+  }
+  .home-access-row,
+  .home-setup-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .home-access-row > div,
+  .home-setup-row > div {
+    flex: 1 1 180px;
+  }
+  .home-needs > .workspace-request-card,
+  .home-request-group > .workspace-request-card {
+    padding: 14px;
   }
 }

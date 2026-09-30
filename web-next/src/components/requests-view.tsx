@@ -128,7 +128,7 @@ function RequestList({
   hideId: string | null
   leases: ReadonlyMap<string, AgentLease>
 }) {
-  const people = usePeopleNames(organizationId)
+  const people = usePeopleNames(organizationId, viewerId)
   const query = useQuery(requestListQueryOptions(organizationId, box, origin))
   const requests = (query.data ?? []).filter((request) => request.id !== hideId)
   const now = Date.now()
