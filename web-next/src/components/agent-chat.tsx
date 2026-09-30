@@ -87,7 +87,7 @@ function composerLabel(agentName?: string): string {
 }
 
 /** An API refusal's own words, or `fallback` for anything without them. */
-export function failureText(error: unknown, fallback: string): string {
+function failureText(error: unknown, fallback: string): string {
   return error instanceof ApiError && error.message !== "Request failed"
     ? error.message
     : fallback
@@ -590,7 +590,7 @@ export function AgentChat({
 
 /**
  * The first messages that were not sent, each in a bubble ringed as a failed
- * message is in a DM, with what can be done about it: Retry sends it into a
+ * message is, with what can be done about it: Retry sends it into a
  * conversation of its own, Edit puts it in the composer (offered only while
  * that is empty, so nothing the member typed is ever replaced), Dismiss lets
  * it go. Its words are all it has: no conversation was ever made for it.
@@ -715,7 +715,7 @@ function OpeningConversation({
 type Connection = "connecting" | "open" | "reconnecting"
 
 /** The member's latest message, which the log scrolls back to when it changes. */
-export function lastUserMessageId(
+function lastUserMessageId(
   messages: readonly ThreadChatMessage[]
 ): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {

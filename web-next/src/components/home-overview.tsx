@@ -16,7 +16,7 @@ import {
   refreshRequests,
   usePeopleNames,
 } from "./requests-view-queries"
-import { clockTime } from "./direct-message-format"
+import { clockTime } from "./time-format"
 import { ApiError } from "@/lib/api/client"
 import {
   AGENT_REQUESTS_POLL_MS,

@@ -53,12 +53,17 @@ realtime objects. The member's primary-agent chat is one object per thread,
   `data-oryxa` parts and keeps the transcript. A page that reconnects resumes
   a run still streaming; a run is never replayed after the object restarts,
   since its tools may have side effects. Go still owns runs, thread lists and
-  artifacts. The right panel's Agents tab is the page's side
+  artifacts. The right agent panel is the page's side
   (`src/components/agent-chat.tsx`); `src/lib/threads/README.md` describes
   the contract it follows.
 - `DELETE` on the same path, from the app's own origin only, deletes the
   thread in Go and only then clears the object's transcript; a refusal from
   Go leaves both.
+
+The page connects to that one object only. On 2026-09-30 the owner kept just
+the agent ask-and-consent loop, and the screens for the objects below were
+archived (git tag `archive/pre-simplify-2026-09-30`); the Worker still hosts and exports every one of them and
+serves their routes, so no Durable Object migration is needed.
 
 The member's chat with one of their specialists is `SpecialistChatAgent`
 (`src/specialist-chat-agent.ts`), one object per specialist, named
@@ -78,8 +83,8 @@ Direct messages live only in Durable Objects: `DirectMessageAgent`
 `/agents/direct-message-agent/...` and `/agents/inbox-agent/...` once Go has
 said who the member is (`GET /v1/organizations/{org}`) and, for a DM, that
 they are one of its two people and the other is in the organization
-(`GET .../members`). Pages use `useDirectMessages` and `useInbox` from
-`src/lib/dms`. When a member leaves or an organization is deleted, Go calls
+(`GET .../members`). No page uses them now. When a member leaves or an
+organization is deleted, Go calls
 `POST /internal/realtime/purge`, signed with `REALTIME_PURGE_SECRET`, which
 empties their conversations. REALTIME.md holds the contract.
 

@@ -12,18 +12,11 @@ import {
   within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { StrictMode } from "react"
+import { StrictMode, useState } from "react"
 import type { ComponentProps, ReactElement } from "react"
-import {
-  ORG,
-  VIEWER,
-  agent,
-  fakeAgentsBackend,
-  primary,
-} from "./agents-fake-backend"
-import type { DmPeople } from "./direct-message-people"
+import { ORG, VIEWER, fakeAgentsBackend, primary } from "./agents-fake-backend"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
-import type { Inbox } from "@/lib/dms"
+import type { AgentPanelHistoryRequest } from "./workspace-agent-panel"
 import {
   MAX_WAITING_MESSAGES,
   claimPrimaryChatRequest,
@@ -38,8 +31,8 @@ import type { Item, Thread, ThreadDetail } from "@/lib/threads/client"
 import { agentChats } from "@/test/agent-chat"
 import { roomSockets } from "@/test/room-socket"
 
-// The panel holds what each agent's chat keeps while the member looks at
-// another, and answers the rest of the app's requests to open a
+// The panel holds what the primary agent's chat keeps while the panel is
+// collapsed, and answers the rest of the app's requests to open a
 // conversation. Its sockets and chats are stand-ins (src/test); Go is the
 // in-memory agents service, with the member's primary threads added here.
 vi.mock(
@@ -53,16 +46,6 @@ vi.mock(
 
 const HOUR = 60 * 60 * 1000
 const scope = { organizationId: ORG, userId: VIEWER }
-const scout = agent({ id: "agt_scout", name: "Scout" })
-const inbox: Inbox = { conversations: [], unreadTotal: 0, status: "live" }
-const people: DmPeople = {
-  status: "ready",
-  people: [],
-  find: () => undefined,
-  nameOf: () => undefined,
-  peer: () => undefined,
-  refetch: vi.fn(),
-}
 
 /** A conversation last active `age` ago (a minute by default: fresh). */
 function thread(id: string, title: string, age = 60_000): Thread {
@@ -110,7 +93,7 @@ function stubGo(seed: Seed = {}) {
         rememberChoice({ organizationId: ORG, userId }, primary.id, last.id)
     }
   }
-  const backend = fakeAgentsBackend({ agents: [primary, scout] })
+  const backend = fakeAgentsBackend({ agents: [primary] })
   let threads = seed.threads ?? []
   let made = 0
   let failing = 0
@@ -249,7 +232,7 @@ function panel(
       onExpand={vi.fn()}
       onCollapse={vi.fn()}
       organizationId={ORG}
-      directMessages={{ viewerId: VIEWER, inbox, people }}
+      viewerId={VIEWER}
       {...props}
     />
   )
@@ -257,8 +240,6 @@ function panel(
 
 const leoBox = () =>
   screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Leo" })
-const scoutBox = () =>
-  screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Scout" })
 const blank = "Ask anything to start a conversation."
 
 function chatName(threadId: string) {
@@ -269,10 +250,6 @@ function chatName(threadId: string) {
 async function socketOn(name: string) {
   await waitFor(() => expect(roomSockets.named(name).length).toBeGreaterThan(0))
   return roomSockets.named(name).at(-1)!
-}
-
-function switcher() {
-  return screen.getByRole("group", { name: "Switch agent" })
 }
 
 function type(box: HTMLTextAreaElement, text: string) {
@@ -312,43 +289,18 @@ afterEach(() => {
   window.sessionStorage.clear()
 })
 
-describe("what the agents' chats keep across a switch", () => {
-  it("keeps each agent's unsent message while the member visits the other", async () => {
-    stubGo({ threads: [thread("th_1", "Plan the launch")] })
-    withQueries(panel())
-    ;(await socketOn(chatName("th_1"))).open()
-    await screen.findByRole("group", { name: "Switch agent" })
-    type(leoBox(), "Half a thought")
-
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
-    await screen.findByRole("textbox", { name: "Message Scout" })
-    expect(screen.queryByRole("textbox", { name: "Message Leo" })).toBeNull()
-    await waitFor(() =>
-      expect(roomSockets.named(chatName(scout.id)).length).toBeGreaterThan(0)
-    )
-    roomSockets.named(chatName(scout.id)).at(-1)!.open()
-    type(scoutBox(), "A note for Scout")
-
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Leo" }))
-    await screen.findByRole("textbox", { name: "Message Leo" })
-    expect(leoBox().value).toBe("Half a thought")
-
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
-    await screen.findByRole("textbox", { name: "Message Scout" })
-    expect(scoutBox().value).toBe("A note for Scout")
-  })
-
-  it("keeps the primary chat's conversation, so leaving it does not decide it again", async () => {
+describe("what the chat keeps while the panel is collapsed", () => {
+  it("keeps the chat's conversation, so collapsing the panel does not decide it again", async () => {
     // No member, so nothing is remembered in the browser: the panel alone
     // holds where the chat was.
     stubGo({ threads: [thread("th_1", "Plan the launch")] })
-    withQueries(panel({ directMessages: undefined }))
+    const view = withQueries(panel({ viewerId: undefined }))
     fireEvent.click(await screen.findByRole("button", { name: "History" }))
     fireEvent.click(
       await screen.findByRole("button", { name: /^Plan the launch/ })
     )
     ;(await socketOn(chatName("th_1"))).open()
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
 
     const sockets = roomSockets.named(chatName("th_1")).length
 
@@ -356,9 +308,8 @@ describe("what the agents' chats keep across a switch", () => {
     fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
     expect(screen.getByText(blank)).toBeTruthy()
 
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
-    await screen.findByRole("textbox", { name: "Message Scout" })
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Leo" }))
+    view.rerender(panel({ viewerId: undefined, expanded: false }))
+    view.rerender(panel({ viewerId: undefined, expanded: true }))
 
     // Still the new conversation, not the fresh one the rules would pick.
     expect(await screen.findByText(blank)).toBeTruthy()
@@ -366,24 +317,34 @@ describe("what the agents' chats keep across a switch", () => {
     expect(roomSockets.named(chatName("th_1"))).toHaveLength(sockets)
   })
 
-  it("sends a first message into its own conversation though the member went to another agent and back before it was made, and leaves every draft alone", async () => {
+  it("keeps the member's unsent message while the panel is collapsed", async () => {
+    stubGo({ threads: [thread("th_1", "Plan the launch")] })
+    const view = withQueries(panel())
+    ;(await socketOn(chatName("th_1"))).open()
+    await screen.findByRole("textbox", { name: "Message Leo" })
+    type(leoBox(), "Half a thought")
+
+    view.rerender(panel({ expanded: false }))
+    view.rerender(panel({ expanded: true }))
+    expect(leoBox().value).toBe("Half a thought")
+  })
+
+  it("sends a first message into its own conversation though the panel was collapsed and opened before it was made", async () => {
     const go = stubGo({ threads: [] })
-    withQueries(panel())
+    const view = withQueries(panel())
     await screen.findByText(blank)
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
     const release = go.holdCreate()
 
     type(leoBox(), "Plan the launch")
     fireEvent.keyDown(leoBox(), { key: "Enter" })
     await waitFor(() => expect(go.calls).toContain(START))
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
-    await screen.findByRole("textbox", { name: "Message Scout" })
-    type(scoutBox(), "For Scout")
+    view.rerender(panel({ expanded: false }))
 
-    // Back with Leo while the conversation is still being made: the message
-    // is still on its way, in view, and the composer does not take a second
-    // one over it.
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Leo" }))
+    // Back with the chat while the conversation is still being made: the
+    // message is still on its way, in view, and the composer does not take a
+    // second one over it.
+    view.rerender(panel({ expanded: true }))
     expect(
       screen.getByRole("log").querySelector('[data-from="member"]')?.textContent
     ).toBe("Plan the launch")
@@ -398,46 +359,15 @@ describe("what the agents' chats keep across a switch", () => {
       agentChats.named(chatName("th_new")).sendMessage
     ).toHaveBeenCalledExactlyOnceWith({ text: "Plan the launch" })
     expect(leoBox().value).toBe("")
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
-    await screen.findByRole("textbox", { name: "Message Scout" })
-    expect(scoutBox().value).toBe("For Scout")
   })
 })
 
 describe("a first message on its way", () => {
-  it("still goes into its own conversation when the member leaves before its socket takes it", async () => {
-    const go = stubGo({ threads: [] })
-    withQueries(panel())
-    await screen.findByText(blank)
-    await screen.findByRole("group", { name: "Switch agent" })
-
-    type(leoBox(), "Plan the launch")
-    fireEvent.keyDown(leoBox(), { key: "Enter" })
-    // The thread exists and its chat is waiting for the socket.
-    await socketOn(chatName("th_new"))
-    expect(go.calls).toContain(START)
-
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
-    await screen.findByRole("textbox", { name: "Message Scout" })
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Leo" }))
-
-    // Back on the same conversation, its message still waiting in it.
-    await waitFor(() =>
-      expect(roomSockets.named(chatName("th_new")).length).toBeGreaterThan(1)
-    )
-    roomSockets.named(chatName("th_new")).at(-1)!.open()
-    expect(
-      agentChats.named(chatName("th_new")).sendMessage
-    ).toHaveBeenCalledExactlyOnceWith({ text: "Plan the launch" })
-    expect(leoBox().value).toBe("")
-    expect(go.calls.filter((call) => call === START)).toHaveLength(1)
-  })
-
   it("holds a request behind it, then opens what the request asked for", async () => {
     stubGo({ threads: [thread("th_b", "Somewhere else", 3 * HOUR)] })
     withQueries(panel())
     await screen.findByText(blank)
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
 
     type(leoBox(), "Plan the launch")
     fireEvent.keyDown(leoBox(), { key: "Enter" })
@@ -465,7 +395,7 @@ describe("a first message on its way", () => {
     stubGo({ threads: [] })
     withQueries(panel())
     await screen.findByText(blank)
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
     type(leoBox(), "Plan the launch")
     fireEvent.keyDown(leoBox(), { key: "Enter" })
     const socket = await socketOn(chatName("th_new"))
@@ -496,7 +426,7 @@ describe("a member who takes over the page", () => {
     const reported = vi.fn()
     const view = withQueries(panel({ onPrimaryThreadChange: reported }))
     ;(await socketOn(chatName("th_a"))).open()
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
     type(leoBox(), "Their draft")
     expect(reported).toHaveBeenLastCalledWith("th_a")
     const sockets = roomSockets.all.length
@@ -507,16 +437,11 @@ describe("a member who takes over the page", () => {
     go.as(other)
     const releaseList = go.holdList()
     const releaseAgents = go.holdAgents()
-    view.rerender(
-      panel({
-        onPrimaryThreadChange: reported,
-        directMessages: { viewerId: other, inbox, people },
-      })
-    )
+    view.rerender(panel({ onPrimaryThreadChange: reported, viewerId: other }))
     await act(async () => {})
-    // Not their agents (Scout is theirs), their conversation or their files,
-    // and nothing for this member to hear of theirs.
-    expect(screen.queryByRole("group", { name: "Switch agent" })).toBeNull()
+    // Not their agent's name, their conversation or their files, and nothing
+    // for this member to hear of theirs.
+    expect(screen.queryByRole("textbox", { name: "Message Leo" })).toBeNull()
     expect(screen.queryByText("Their plan")).toBeNull()
     expect(reported).toHaveBeenLastCalledWith(null)
     expect(seen.result.current).toBeNull()
@@ -549,47 +474,29 @@ describe("a member who takes over the page", () => {
     go.failNextCreate()
     const view = withQueries(panel())
     await screen.findByText(blank)
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
     act(() =>
       requestPrimaryChat(scope, { kind: "new", message: "Their private words" })
     )
     expect(await screen.findByText(down)).toBeTruthy()
 
     go.as(other)
-    view.rerender(panel({ directMessages: { viewerId: other, inbox, people } }))
+    view.rerender(panel({ viewerId: other }))
     expect(screen.queryByText("Their private words")).toBeNull()
     expect(screen.queryByText(down)).toBeNull()
     await screen.findByRole("textbox", { name: "Message Leo" })
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull()
   })
 
-  it("does not carry the specialist they had open, or their direct messages' drafts", async () => {
-    const go = stubGo({ threads: [thread("th_a", "Their plan")] })
-    const view = withQueries(panel())
-    ;(await socketOn(chatName("th_a"))).open()
-    fireEvent.click(await screen.findByRole("button", { name: "Scout" }))
-    await screen.findByRole("textbox", { name: "Message Scout" })
-
-    go.as(other)
-    view.rerender(panel({ directMessages: { viewerId: other, inbox, people } }))
-    // Back to their own primary agent, not the last member's specialist.
-    expect(screen.queryByRole("textbox", { name: "Message Scout" })).toBeNull()
-    expect(
-      await screen.findByRole("textbox", { name: "Message Leo" })
-    ).toBeTruthy()
-  })
-
   it("keeps a member's chat through a moment the session couldn't be read", async () => {
     stubGo({ threads: [thread("th_a", "Their plan")] })
     const view = withQueries(panel())
     ;(await socketOn(chatName("th_a"))).open()
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
     type(leoBox(), "Still here")
 
     // The session could not be read for a moment, then it was, unchanged.
-    view.rerender(
-      panel({ organizationId: undefined, directMessages: undefined })
-    )
+    view.rerender(panel({ organizationId: undefined, viewerId: undefined }))
     view.rerender(panel())
     expect(leoBox().value).toBe("Still here")
   })
@@ -602,37 +509,15 @@ describe("a request to open a conversation", () => {
     })
     withQueries(panel())
     ;(await socketOn(chatName("th_2"))).open()
-    await screen.findByRole("group", { name: "Switch agent" })
-    // The member is with Scout when the request comes.
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
-    await screen.findByRole("textbox", { name: "Message Scout" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
 
     act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
 
     await socketOn(chatName("th_1"))
-    await screen.findByRole("textbox", { name: "Message Leo" })
-    expect(
-      within(switcher()).getByRole("button", { name: "Leo", pressed: true })
-    ).toBeTruthy()
     expect(
       document.querySelector(".workspace-agent-thread-title")?.textContent
     ).toBe("Older")
     expect(rememberedChoice(scope, primary.id)).toBe("th_1")
-  })
-
-  it("brings the Agents tab forward", async () => {
-    stubGo({ threads: [thread("th_1", "Plan the launch")] })
-    withQueries(panel())
-    ;(await socketOn(chatName("th_1"))).open()
-    fireEvent.click(screen.getByRole("tab", { name: "DMs" }))
-    expect(
-      screen.getByRole("tab", { name: "DMs" }).getAttribute("aria-selected")
-    ).toBe("true")
-
-    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
-    expect(
-      screen.getByRole("tab", { name: "Agents" }).getAttribute("aria-selected")
-    ).toBe("true")
   })
 
   it("applies a request made before the panel was ever opened, once it is", async () => {
@@ -724,7 +609,7 @@ describe("a request to open a conversation", () => {
     stubGo({ threads: [] })
     withQueries(panel())
     await screen.findByText(blank)
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
     type(leoBox(), "Half a thought")
 
     act(() =>
@@ -741,7 +626,7 @@ describe("a request to open a conversation", () => {
   it("makes each of two quick requests' messages a conversation of its own, sends both, and ends on the second's", async () => {
     const go = stubGo({ threads: [thread("th_old", "Old", 5 * HOUR)] })
     withQueries(panel())
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
     const release = go.holdCreate()
 
     // The second arrives while the first's conversation is still being made.
@@ -866,7 +751,7 @@ describe("a request to open a conversation", () => {
     go.failNextCreate()
     withQueries(panel())
     await screen.findByText(blank)
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
 
     act(() =>
       requestPrimaryChat(scope, { kind: "new", message: "What changed today?" })
@@ -882,7 +767,7 @@ describe("a request to open a conversation", () => {
     go.failNextCreate()
     withQueries(panel())
     await screen.findByText(blank)
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
     type(leoBox(), "Half a thought")
 
     act(() =>
@@ -898,7 +783,7 @@ describe("a request to open a conversation", () => {
     const go = stubGo({ threads: [thread("th_old", "Old plan")] })
     withQueries(panel())
     ;(await socketOn(chatName("th_old"))).open()
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
     type(leoBox(), "Half a thought")
     const release = go.holdCreate()
     go.failNextCreate()
@@ -1038,6 +923,125 @@ describe("a request to open a conversation", () => {
   })
 })
 
+describe("what the panel offers", () => {
+  it("is the primary agent's chat and its history: no tabs, no switch, nobody else", async () => {
+    stubGo({ threads: [] })
+    withQueries(panel())
+    await screen.findByRole("textbox", { name: "Message Leo" })
+
+    const aside = screen.getByRole("complementary", { name: "Agent panel" })
+    expect(within(aside).queryByRole("tablist")).toBeNull()
+    expect(within(aside).queryByRole("tab")).toBeNull()
+    expect(
+      within(aside).queryByRole("group", { name: "Switch agent" })
+    ).toBeNull()
+    // The agent is named in the panel's own row, beside the way to collapse it.
+    expect(within(aside).getByText("Leo")).toBeTruthy()
+    const chat = within(aside).getByRole("region", { name: "Agent chat" })
+    expect(within(chat).getByRole("button", { name: "History" })).toBeTruthy()
+    expect(
+      within(aside).getByRole("button", { name: "Collapse agent panel" })
+    ).toBeTruthy()
+  })
+
+  it("does not name the agent, or a stand-in for it, until its list has loaded", async () => {
+    const go = stubGo({ threads: [] })
+    const release = go.holdAgents()
+    withQueries(panel())
+    await act(async () => {})
+
+    const aside = screen.getByRole("complementary", { name: "Agent panel" })
+    expect(within(aside).queryByText("Leo")).toBeNull()
+    expect(within(aside).queryByText("Primary agent")).toBeNull()
+
+    act(() => release())
+    expect(await within(aside).findByText("Leo")).toBeTruthy()
+  })
+
+  it("collapsed, is one button that opens it, with the toggle's focus", async () => {
+    stubGo({ threads: [] })
+    function Collapsible() {
+      const [expanded, setExpanded] = useState(false)
+      return (
+        <WorkspaceAgentPanel
+          expanded={expanded}
+          onExpand={() => setExpanded(true)}
+          onCollapse={() => setExpanded(false)}
+          organizationId={ORG}
+          viewerId={VIEWER}
+        />
+      )
+    }
+    withQueries(<Collapsible />)
+    const aside = screen.getByRole("complementary", { name: "Agent panel" })
+    expect(within(aside).queryByRole("tab")).toBeNull()
+    expect(within(aside).queryByText("Leo")).toBeNull()
+
+    fireEvent.click(
+      within(aside).getByRole("button", { name: "Open agent chat" })
+    )
+
+    const toggle = within(aside).getByRole("button", {
+      name: "Collapse agent panel",
+    })
+    expect(toggle.getAttribute("aria-expanded")).toBe("true")
+    expect(document.activeElement).toBe(toggle)
+    expect(
+      await screen.findByRole("textbox", { name: "Message Leo" })
+    ).toBeTruthy()
+    expect(
+      within(aside).queryByRole("button", { name: "Open agent chat" })
+    ).toBeNull()
+
+    fireEvent.click(toggle)
+    expect(
+      within(aside)
+        .getByRole("button", { name: "Expand agent panel" })
+        .getAttribute("aria-expanded")
+    ).toBe("false")
+    expect(
+      within(aside).getByRole("button", { name: "Open agent chat" })
+    ).toBeTruthy()
+  })
+
+  it("holds nothing but the chat while the focused Agent overview has it: no toggle, no rail", async () => {
+    stubGo({ threads: [] })
+    withQueries(panel({ expanded: false, primaryWork: true }))
+    await screen.findByRole("textbox", { name: "Message Leo" })
+
+    const aside = screen.getByRole("complementary", { name: "Agent panel" })
+    expect(
+      within(aside).queryByRole("button", { name: /agent panel$/ })
+    ).toBeNull()
+    expect(
+      within(aside).queryByRole("button", { name: "Open agent chat" })
+    ).toBeNull()
+    const chat = within(aside).getByRole("region", { name: "Agent chat" })
+    expect(chat.getAttribute("data-primary-chat")).toBe("true")
+    expect(chat.hasAttribute("hidden")).toBe(false)
+  })
+
+  it("opens the conversation history when asked, once for each request", async () => {
+    stubGo({ threads: [thread("th_1", "Plan the launch")] })
+    const first: AgentPanelHistoryRequest = { kind: "history" }
+    const view = withQueries(panel({ historyRequest: first }))
+    const history = await screen.findByRole("button", { name: "History" })
+    await waitFor(() =>
+      expect(history.getAttribute("aria-expanded")).toBe("true")
+    )
+    fireEvent.click(history)
+    expect(history.getAttribute("aria-expanded")).toBe("false")
+
+    // The same request is not honoured again; a new one is.
+    view.rerender(panel({ historyRequest: first }))
+    expect(history.getAttribute("aria-expanded")).toBe("false")
+    view.rerender(panel({ historyRequest: { kind: "history" } }))
+    await waitFor(() =>
+      expect(history.getAttribute("aria-expanded")).toBe("true")
+    )
+  })
+})
+
 describe("in StrictMode, as the dev server runs the app", () => {
   function strict(ui: ReactElement) {
     const client = new QueryClient({
@@ -1080,7 +1084,7 @@ describe("in StrictMode, as the dev server runs the app", () => {
     const go = stubGo({ threads: [] })
     strict(panel())
     await screen.findByText(blank)
-    await screen.findByRole("group", { name: "Switch agent" })
+    await screen.findByRole("textbox", { name: "Message Leo" })
     type(leoBox(), "Plan the launch")
     fireEvent.keyDown(leoBox(), { key: "Enter" })
     ;(await socketOn(chatName("th_new"))).open()
@@ -1143,14 +1147,6 @@ describe("a file the agent saves", () => {
     expect(screen.getByRole("link", { name: "report.pdf" })).toBeTruthy()
   })
 
-  it("leaves only the chip when the panel is on another tab", async () => {
-    const { onFile, finish } = await inARun()
-    fireEvent.click(screen.getByRole("tab", { name: "DMs" }))
-    finish()
-    expect(onFile).not.toHaveBeenCalled()
-    expect(screen.getByText("report.pdf")).toBeTruthy()
-  })
-
   it("opens in Agent overview from the focused overview's conversation column, whatever the panel does", async () => {
     const { onFile, finish } = await inARun({
       expanded: false,
@@ -1158,13 +1154,5 @@ describe("a file the agent saves", () => {
     })
     finish()
     expect(onFile).toHaveBeenCalledOnce()
-  })
-
-  it("leaves only the chip while the member is with a specialist", async () => {
-    const { onFile, finish } = await inARun()
-    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
-    await screen.findByRole("textbox", { name: "Message Scout" })
-    finish()
-    expect(onFile).not.toHaveBeenCalled()
   })
 })

@@ -1,7 +1,9 @@
 // A member's persistent agents: their primary agent (Krude's identity for
-// them, created on first use) and the specialists they create. Handlers are
-// in agents/primary/internal/httpserver/server.go; the rules behind them are
-// in agents/primary/internal/managedagents.
+// them, created on first use). The service also keeps specialists the member
+// creates; the page does not offer them (they were archived with
+// `archive/pre-simplify-2026-09-30`). Handlers are in
+// agents/primary/internal/httpserver/server.go; the rules behind them are in
+// agents/primary/internal/managedagents.
 import { apiRequest } from "@/lib/api/client"
 import { organizationPath, pick } from "./http"
 import type { ReadOptions } from "./http"
@@ -22,15 +24,6 @@ export type ManagedAgent = {
   revision: number
   created_at: string
   updated_at: string
-}
-
-export type CreateAgentInput = {
-  /** 1–60 characters, unique in the organization across every member. */
-  name: string
-  /** Up to 500 characters. */
-  description?: string
-  /** Required; up to 20,000 characters. */
-  instructions: string
 }
 
 /** Send at least one field; the server answers 400 for an empty change. */
@@ -68,17 +61,6 @@ export function getAgent(
   })
 }
 
-/** `POST …/agents` (server.createAgent): an active specialist owned by the caller, answered 201. */
-export function createAgent(
-  organizationId: string,
-  input: CreateAgentInput
-): Promise<ManagedAgent> {
-  return apiRequest<ManagedAgent>(agentsPath(organizationId), {
-    method: "POST",
-    body: pick(input, ["name", "description", "instructions"]),
-  })
-}
-
 /** `PATCH …/agents/{agentID}` (server.updateAgent). */
 export function updateAgent(
   organizationId: string,
@@ -89,12 +71,4 @@ export function updateAgent(
     method: "PATCH",
     body: pick(input, ["name", "description", "instructions", "status"]),
   })
-}
-
-/** `DELETE …/agents/{agentID}` (server.deleteAgent): 204; 409 agent_in_use while on a team or teamspace. */
-export async function deleteAgent(
-  organizationId: string,
-  agentId: string
-): Promise<void> {
-  await apiRequest(agentsPath(organizationId, agentId), { method: "DELETE" })
 }

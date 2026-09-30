@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest"
-import {
-  agentsErrorMessage,
-  cleanLine,
-  runeCount,
-  timeAgo,
-} from "./agents-format"
+import { agentsErrorMessage, timeAgo } from "./agents-format"
 import { ApiError } from "@/lib/api/client"
 
 describe("agentsErrorMessage", () => {
@@ -83,13 +78,6 @@ describe("agentsErrorMessage", () => {
         fallback
       )
     ).toBe("Too many requests. Try again in a minute.")
-  })
-})
-
-describe("server length rules", () => {
-  it("counts characters as Go does and cleans names as the server does", () => {
-    expect(runeCount("héllo 👋")).toBe(7)
-    expect(cleanLine("  Pipeline \n  reviewer ")).toBe("Pipeline reviewer")
   })
 })
 

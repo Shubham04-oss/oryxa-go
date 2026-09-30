@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { clockTime } from "./direct-message-format"
+import { clockTime } from "./time-format"
 import {
   activityIcon,
   activitySentence,

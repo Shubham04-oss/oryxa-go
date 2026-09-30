@@ -11,6 +11,17 @@ PartyServer's room primitives (connections, `broadcast`, hibernation) and
 synced state the `useAgent` hook reads, so there is no separate
 `partyserver` dependency.
 
+**What the page uses today (2026-09-30).** The owner kept only the agent
+ask-and-consent loop, so the page connects to one object: the primary agent's
+`ThreadChatAgent`, in the right agent panel. The specialist chat, the
+teamspace rooms, side conversations, direct messages and the inbox had
+screens, and those were archived; the **Worker still hosts and exports every
+one of these objects and serves their routes**, unused by the UI, because
+removing or renaming a Durable Object class needs a wrangler migration and
+none is being made. Go still sends the purges, events and request notes they
+take. The archived screens, their page-side clients and their tests are in the
+git tag `archive/pre-simplify-2026-09-30`, and "UI" at the end says what the page does now.
+
 ## Who holds the truth
 
 Go stays the source of truth wherever an agent acts: threads, specialist
@@ -20,15 +31,15 @@ transcript, fan-out, presence, and "typing" / "agent is working" signals.
 Conversations no agent acts in (DMs, and the human messages of a side
 conversation) live only in the Durable Object's SQLite.
 
-| Object | Name | Who connects | Go behind it | Storage |
-|---|---|---|---|---|
-| `ThreadChatAgent` | `org~thread` | the member | `POST …/threads/{id}/runs` (SSE) | DO transcript; Go thread canonical |
-| `SpecialistChatAgent` | `org~agent` | the member, own specialists only | `POST …/agents/{id}/runs` (SSE), with the `thread_id` the object keeps | DO transcript of the current conversation; Go threads canonical |
-| `TeamspaceRoomAgent` | `org~teamspace` | the teamspace's team | `…/teamspaces/{id}/messages` (read and post), `/catchup`, `…/teamspaces/{id}` (who is on the team), as each member | Go room canonical; DO keeps the recent window, fan-out, live presence, when Go last vouched for each member |
-| `SideConversationAgent` | `org~teamspace~userA~userB` (ids sorted) | those two members, on the teamspace's team | each person's own agent: `POST …/threads/{id}/runs` on a thread of theirs; the teammate's agent: `…/agent-requests` (create, list, read, decide), as each person | DO SQLite for people's messages and the transcript; Go for agent work: threads, requests, results |
-| `DirectMessageAgent` (a DM) | `org~userA~userB` (ids sorted) | those two members | none | DO SQLite only |
-| `InboxAgent` | `org~user` | that member | none | DO SQLite: the member's conversation list, its latest removal from each teamspace's team |
-| `RealtimeRegistryAgent` | `org` | nobody: inboxes, rooms and the purge | none | DO SQLite: who has an inbox, which rooms have let a socket in, purges carried out, a teamspace purge's progress |
+| Object | Name | Who connects | Go behind it | Storage | The page today |
+|---|---|---|---|---|---|
+| `ThreadChatAgent` | `org~thread` | the member | `POST …/threads/{id}/runs` (SSE) | DO transcript; Go thread canonical | the right panel's chat with the primary agent |
+| `SpecialistChatAgent` | `org~agent` | the member, own specialists only | `POST …/agents/{id}/runs` (SSE), with the `thread_id` the object keeps | DO transcript of the current conversation; Go threads canonical | nothing (archived) |
+| `TeamspaceRoomAgent` | `org~teamspace` | the teamspace's team | `…/teamspaces/{id}/messages` (read and post), `/catchup`, `…/teamspaces/{id}` (who is on the team), as each member | Go room canonical; DO keeps the recent window, fan-out, live presence, when Go last vouched for each member | nothing (archived) |
+| `SideConversationAgent` | `org~teamspace~userA~userB` (ids sorted) | those two members, on the teamspace's team | each person's own agent: `POST …/threads/{id}/runs` on a thread of theirs; the teammate's agent: `…/agent-requests` (create, list, read, decide), as each person | DO SQLite for people's messages and the transcript; Go for agent work: threads, requests, results | nothing (archived) |
+| `DirectMessageAgent` (a DM) | `org~userA~userB` (ids sorted) | those two members | none | DO SQLite only | nothing (archived) |
+| `InboxAgent` | `org~user` | that member | none | DO SQLite: the member's conversation list, its latest removal from each teamspace's team | nothing (archived) |
+| `RealtimeRegistryAgent` | `org` | nobody: inboxes, rooms and the purge | none | DO SQLite: who has an inbox, which rooms have let a socket in, purges carried out, a teamspace purge's progress | nothing |
 
 Go runs only a member's own agents (`managedagents` scopes by user). A
 teammate's agent is reached through the agent-request flow, which honours
@@ -53,6 +64,8 @@ unattended, room or delivery one. Resource tools continue to authorize every
 item independently.
 
 ## Specialist chats
+
+> **Archived client (2026-09-30).** The page no longer connects to this object: the screens, hooks and tests that did are in the git tag `archive/pre-simplify-2026-09-30`. The Worker still hosts and exports it, and this is what the object does; mentions below of the page's hooks and components (`useTeamspaceRoom`, `useDirectMessages`, `useInbox`, `useSideConversation`, `components/…`) describe that archived client.
 
 `SpecialistChatAgent` (`src/specialist-chat-agent.ts`) is the member's chat
 with one of their own specialists: one object per specialist, not per
@@ -93,6 +106,8 @@ through that object, so the object holds one conversation at a time:
   behind.
 
 ## Teamspace rooms
+
+> **Archived client (2026-09-30).** The page no longer connects to this object: the screens, hooks and tests that did are in the git tag `archive/pre-simplify-2026-09-30`. The Worker still hosts and exports it, and this is what the object does; mentions below of the page's hooks and components (`useTeamspaceRoom`, `useDirectMessages`, `useInbox`, `useSideConversation`, `components/…`) describe that archived client.
 
 `TeamspaceRoomAgent` (`src/teamspace-room-agent.ts`) is a teamspace's room,
 one object per teamspace, shared by everyone on its team who has the room
@@ -201,6 +216,8 @@ answers. What travels on the socket is in `src/lib/rooms/room-agent.ts`.
   room itself.
 
 ## Direct messages
+
+> **Archived client (2026-09-30).** The page no longer connects to this object: the screens, hooks and tests that did are in the git tag `archive/pre-simplify-2026-09-30`. The Worker still hosts and exports it, and this is what the object does; mentions below of the page's hooks and components (`useTeamspaceRoom`, `useDirectMessages`, `useInbox`, `useSideConversation`, `components/…`) describe that archived client.
 
 A DM is `DirectMessageAgent` (`src/direct-message-agent.ts`), one object per
 pair of people in an organization, named `directMessageName(org, userA,
@@ -327,6 +344,8 @@ the purges it carried out, and which members a teamspace's purge under way
 is done with (below). No page reaches it.
 
 ## Side conversations
+
+> **Archived client (2026-09-30).** The page no longer connects to this object: the screens, hooks and tests that did are in the git tag `archive/pre-simplify-2026-09-30`. The Worker still hosts and exports it, and this is what the object does; mentions below of the page's hooks and components (`useTeamspaceRoom`, `useDirectMessages`, `useInbox`, `useSideConversation`, `components/…`) describe that archived client.
 
 On a teamspace page the left panel is the group room. The right panel's
 Agents tab also lists the teammates' agents in that teamspace; picking one
@@ -1064,6 +1083,8 @@ down) costs a line that shows up late in a conversation, never a wrong answer.
 
 ### Request notes on the page
 
+> **Archived client (2026-09-30).** A DM's quiet request lines, `useRequestStanding`, `OpenRequestProvider` and the DMs tab's preview were screens of the archived direct messages (git tag `archive/pre-simplify-2026-09-30`). The objects still keep and send the notes, and the Worker still takes Go's. What the page keeps is the way to open Requests on a card from anywhere: `openRequest` (`components/requests-view-open.ts`), which the shell listens for, and `/?org=…&view=requests&request=…`.
+
 `useDirectMessages(org, viewer, peer)` hands a view `requests`: the notes its
 object holds, oldest line first, one for each request, at its latest revision
 (`DmRequestNote`: the note and `at`, where its line stands). They come with
@@ -1260,25 +1281,21 @@ their signatures) and that neither is ever signed as a purge.
 
 ## UI
 
-The right agent panel (DESIGN.md §2) is location-aware. Its tabs, Agents,
-DMs and Teams, stay the same everywhere. The DMs tab lists the member's
-inbox (`useInbox`); a DM opens there, and in the main canvas from People or
-the recent conversations, each view with `useDirectMessages` on the same
-object. On Home the Agents tab switches
-between the member's own agents. On a teamspace page it also offers that
-teamspace's teammates and their agents, each opening a side conversation
-in the tab (`components/side-conversation.tsx` on `useSideConversation`);
-the DMs tab opens one from its list the same way, whichever page is open,
-since its object needs only the ids. Each place is its own view, with its
-own socket, mounted only while it shows, as a DM's is.
+The right agent panel (DESIGN.md §2) has one view: the member's primary agent,
+a chat on `ThreadChatAgent` (`components/agent-chat.tsx`) and the history of
+its conversations. It has no tabs. It mounts when the panel is first opened (or
+when the focused Agent overview needs its chat), keeps the socket while the
+panel is collapsed, and is keyed by the member, so another member taking over
+the page gets a new object's socket and none of the last one's state. Every
+other object in this file is hosted but not connected to by any page.
 
-A DM's log also holds a quiet line for each agent request between its two
-people ([Request notes on the page](#request-notes-on-the-page)).
-
-A specialist's chat (`components/specialist-chat.tsx`) is one component in
-two places: its focused view's conversation column, and the Agents tab once
-the quick switch (or a team's Members tab Chat) selects it. Each is its own
-socket on the specialist's one object, so both show the same conversation:
-the object sends every socket the member's messages, the turn as it
-streams, a history selection, and a start-over. Each view keeps its draft
-through a history selection; one shared object holds the selected Go thread.
+What the archived screens did, in short, for whoever brings one back (they are
+in the git tag `archive/pre-simplify-2026-09-30` with their tests, and DESIGN.md §7 says the decision
+that archived them): the DMs tab listed the member's inbox (`useInbox`) and a
+DM opened there and in the main canvas from People (`useDirectMessages`), each
+view with its own socket on the same object, mounted only while it showed. On
+a teamspace page the Agents tab offered that teamspace's teammates and their
+agents, each opening a side conversation (`useSideConversation`); a
+specialist's chat (`components/specialist-chat.tsx`) was one component in two
+places, its focused view and the Agents tab, each its own socket on the
+specialist's one object.

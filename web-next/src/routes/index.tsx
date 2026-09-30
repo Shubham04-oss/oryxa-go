@@ -23,22 +23,17 @@ import {
   acceptReceivedInvitation,
   getReceivedInvitations,
 } from "@/lib/auth/invitations"
-import { isNameId } from "@/lib/dms/names"
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>) => ({
     org: typeof search.org === "string" ? search.org : undefined,
     view: typeof search.view === "string" ? search.view : undefined,
-    // The person whose DM is open in the main canvas, so a refresh returns
-    // to it (the organization is `org`).
-    dm: isNameId(search.dm) ? search.dm : undefined,
   }),
   component: Home,
 })
 
 function Home() {
-  const { org, dm } = Route.useSearch()
-  const navigate = Route.useNavigate()
+  const { org } = Route.useSearch()
   const queryClient = useQueryClient()
   const sessionEnded = useSyncExternalStore(
     subscribeSessionEnded,
@@ -135,14 +130,6 @@ function Home() {
       role={workspaceRole}
       organizationRole={role.data}
       selectedOrganization={selectedOrganization}
-      initialDirectMessage={dm}
-      onDirectMessageChange={(peerId) =>
-        void navigate({
-          to: "/",
-          search: (previous) => ({ ...previous, dm: peerId ?? undefined }),
-          replace: true,
-        })
-      }
     />
   )
 }

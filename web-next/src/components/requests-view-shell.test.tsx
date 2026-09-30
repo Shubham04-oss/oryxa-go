@@ -22,8 +22,8 @@ import {
 } from "./agents-fake-backend"
 import type { Role, Session } from "@/lib/auth/client"
 
-// A specialist's focused view holds its chat object's socket; the Agents
-// SDK stands in (src/test/room-socket.ts, src/test/agent-chat.ts).
+// The shell holds the primary agent's chat socket in its right panel; the
+// Agents SDK stands in (src/test/room-socket.ts, src/test/agent-chat.ts).
 vi.mock(
   "agents/react",
   async () => (await import("@/test/room-socket")).agentsReact
@@ -63,7 +63,7 @@ let client: QueryClient
 
 function renderShell(
   initial: {
-    section?: "agents" | "requests" | "specialists"
+    section?: "agents" | "requests"
     signedIn?: boolean
     mode?: "home" | "agents"
     organizationRole?: Role
@@ -195,7 +195,7 @@ describe("Requests in the workspace shell", () => {
     }
   )
 
-  it("is the fourth item of Agents' navigation, and opens the page", async () => {
+  it("is the second item of Agents' navigation, and opens the page", async () => {
     renderShell()
 
     const navigation = await screen.findByRole("navigation", {
@@ -205,12 +205,7 @@ describe("Requests in the workspace shell", () => {
       within(navigation)
         .getAllByRole("button")
         .map((button) => button.textContent)
-    ).toEqual([
-      "Agent overview",
-      "Multi-agent teams",
-      "Specialists",
-      "Requests",
-    ])
+    ).toEqual(["Agent overview", "Requests"])
     fireEvent.click(
       within(navigation).getByRole("button", { name: "Requests" })
     )
@@ -282,11 +277,11 @@ describe("Requests in the workspace shell", () => {
       name: "Agents navigation",
     })
     fireEvent.click(
-      within(navigation).getByRole("button", { name: "Specialists" })
+      within(navigation).getByRole("button", { name: "Agent overview" })
     )
     await waitFor(() =>
       expect(
-        screen.getByRole("heading", { name: "Specialists", level: 1 })
+        screen.getByRole("heading", { name: "Agent overview", level: 1 })
       ).toBeTruthy()
     )
     fireEvent.click(

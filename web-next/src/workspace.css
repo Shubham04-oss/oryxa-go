@@ -132,60 +132,7 @@
 .workspace-nav-item:hover { background: #222; color: #efefef; }
 .workspace-nav-item.is-active { background: #2d2d2d; color: #f3f3f3; font-weight: 600; }
 .workspace-nav-label { overflow: hidden; text-overflow: ellipsis; }
-.workspace-nav-count { margin-left: auto; color: #e9e9e9; font-size: 12px; }
 .workspace-shell[data-left="collapsed"] .workspace-nav-item { justify-content: center; padding: 0; }
-
-.workspace-conversations {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-  margin-top: 28px;
-}
-.workspace-conversations-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px 9px;
-  color: #858585;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-}
-.workspace-conversations-heading small { color: #777; font-size: 11px; }
-.workspace-conversations-list {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  max-height: 150px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-color: #444 transparent;
-  scrollbar-width: thin;
-}
-.workspace-conversation-item {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  width: 100%;
-  height: 48px;
-  flex: 0 0 48px;
-  padding: 6px 9px;
-  border-radius: 11px;
-  background: transparent;
-  color: #cfcfcf;
-  text-align: left;
-}
-.workspace-conversation-item:hover { background: #222; color: #fff; }
-.workspace-conversation-item.is-active { background: #2d2d2d; color: #fff; }
-.workspace-conversation-item .workspace-avatar { width: 31px; height: 31px; }
-.workspace-conversation-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 3px; }
-.workspace-conversation-item strong { overflow: hidden; font-size: 12px; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-conversation-item small { overflow: hidden; color: #858585; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-conversations-empty { margin: 2px 12px; color: #777; font-size: 11px; line-height: 1.45; }
-.workspace-shell[data-left="collapsed"] .workspace-conversations { margin-top: 24px; }
-.workspace-shell[data-left="collapsed"] .workspace-conversation-item { justify-content: center; padding: 6px 0; }
 
 .workspace-saved-views { margin-top: 25px; }
 .workspace-eyebrow { margin: 0 0 7px; color: #838383; font-size: 11px; text-transform: uppercase; }
@@ -272,12 +219,10 @@
   color: #f5f5f5;
   font-size: inherit;
 }
-.workspace-avatar .workspace-planet-fallback { overflow: hidden; padding: 0; }
-.workspace-planet-art { display: block; width: 100%; height: 100%; border-radius: 50%; }
 
 /* Shared chat composer: a pill-shaped field with a circular icon send
-   button. Reused by the focused-work composer, the DM composer, and the
-   agent panel composer so all three share one look (see DESIGN.md §1). */
+   button. Reused by Home's composer and the agent chat's so both share one
+   look (see DESIGN.md §1). */
 .workspace-composer {
   --composer-send-size: 32px;
   display: flex;
@@ -342,9 +287,6 @@
 }
 .workspace-composer-send:hover:not(:disabled) { background: #fff; }
 .workspace-composer-send:disabled { cursor: default; opacity: .45; }
-/* A control inside the pill before the field (a side conversation's "who
-   this goes to") sits as far in as the send button does on the right. */
-.workspace-composer[data-leading="true"] { position: relative; padding-left: 6px; }
 
 .workspace-middle { display: flex; flex-direction: column; background: var(--workspace-base); }
 .workspace-header {
@@ -388,35 +330,6 @@
   border-radius: 17px 17px 0 0;
   background: var(--workspace-canvas);
 }
-
-.workspace-entry-content { padding: 28px 32px; }
-.workspace-entry-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: 14px;
-  max-width: 700px;
-  margin-top: 15px;
-}
-.workspace-entry {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-  min-height: 155px;
-  padding: 18px;
-  border: 1px solid #3a3a3a;
-  border-radius: 16px;
-  background: #252525;
-  color: #eee;
-  text-align: left;
-  transition: background 180ms ease, border-color 180ms ease;
-}
-.workspace-entry:hover { border-color: #555; background: #2b2b2b; }
-.workspace-entry-kind { display: flex; align-items: center; gap: 9px; color: #a8a8a8; font-size: 11px; }
-.workspace-entry-kind .workspace-avatar { width: 30px; height: 30px; }
-.workspace-entry-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.workspace-entry-title strong { font-size: 16px; font-weight: 600; }
-.workspace-entry-title svg { color: #a8a8a8; }
-.workspace-entry-description { color: #a4a4a4; font-size: 12px; line-height: 1.5; }
 
 .workspace-knowledge-page {
   height: 100%;
@@ -505,72 +418,6 @@
 .workspace-knowledge-form-actions button { min-height: 32px; padding: 6px 12px; border: 1px solid #444; border-radius: 8px; background: #303030; color: #ddd; font-size: 11px; }
 .workspace-knowledge-form-actions button[type="submit"] { border-color: #ddd; background: #e9e9e9; color: #202020; font-weight: 600; }
 
-.workspace-teamspaces-page { height: 100%; min-height: 0; overflow-y: auto; padding: 30px 32px 48px; }
-.workspace-teamspaces-intro { display: flex; justify-content: flex-end; }
-.workspace-teamspace-primary-button,
-.workspace-teamspace-secondary-button { display: inline-flex; align-items: center; justify-content: center; flex: none; gap: 8px; min-height: 36px; padding: 8px 13px; border: 1px solid #ddd; border-radius: 10px; background: #e9e9e9; color: #202020; font-size: 12px; font-weight: 600; }
-.workspace-teamspace-primary-button:hover,
-.workspace-teamspace-form-actions button[type="submit"]:hover { background: #fff; }
-.workspace-teamspace-secondary-button { border-color: #454545; background: #2a2a2a; color: #e6e6e6; }
-.workspace-teamspace-secondary-button:hover { border-color: #666; background: #333; }
-.workspace-teamspace-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 28px; }
-.workspace-teamspace-metrics > div { display: flex; flex-direction: column; gap: 8px; min-height: 112px; padding: 17px 18px; border: 1px solid #393939; border-radius: 14px; background: #242424; }
-.workspace-teamspace-metrics span { color: #aaa; font-size: 11px; }
-.workspace-teamspace-metrics strong { color: #f2f2f2; font-size: 24px; font-weight: 600; line-height: 1; }
-.workspace-teamspace-metrics small { color: #858585; font-size: 11px; }
-.workspace-teamspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 28px 0 15px; }
-.workspace-teamspace-filters { display: flex; align-items: center; gap: 7px; }
-.workspace-teamspace-filters button { min-height: 31px; padding: 6px 12px; border: 1px solid #3e3e3e; border-radius: 999px; background: #272727; color: #a9a9a9; font-size: 11px; }
-.workspace-teamspace-filters button:hover { background: #303030; color: #eee; }
-.workspace-teamspace-filters button.is-active { border-color: #494949; background: #383838; color: #fff; }
-.workspace-teamspace-search { position: relative; display: flex; align-items: center; width: min(100%, 275px); }
-.workspace-teamspace-search > svg { position: absolute; left: 12px; color: #8f8f8f; pointer-events: none; }
-.workspace-teamspace-search [data-slot="input"] { height: 36px; padding-left: 38px; border-color: #3b3b3b; border-radius: 10px; background: #262626; color: #f2f2f2; font-size: 12px; }
-.workspace-teamspace-search [data-slot="input"]::placeholder,
-.workspace-teamspace-form [data-slot="input"]::placeholder,
-.workspace-teamspace-form [data-slot="textarea"]::placeholder { color: #858585; }
-.workspace-teamspace-list { display: flex; flex-direction: column; gap: 9px; }
-.workspace-teamspace-row { display: flex; align-items: center; gap: 15px; width: 100%; min-height: 88px; padding: 14px 18px; border: 1px solid #393939; border-radius: 14px; background: #242424; color: #eee; text-align: left; transition: background 180ms ease, border-color 180ms ease; }
-.workspace-teamspace-row:hover { border-color: #555; background: #2a2a2a; }
-.workspace-teamspace-row > .workspace-avatar { width: 42px; height: 42px; border: 1px solid #454545; background: #303030; }
-.workspace-teamspace-row-main { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
-.workspace-teamspace-row-main strong { overflow: hidden; color: #eee; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-teamspace-row-main small { overflow: hidden; color: #aaa; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-teamspace-row-main > span { color: #858585; font-size: 10px; }
-.workspace-teamspace-row-members { display: inline-flex; align-items: center; gap: 6px; color: #aaa; font-size: 11px; }
-.workspace-teamspace-row > svg:last-child { flex: none; color: #888; }
-.workspace-teamspace-status { display: inline-flex; align-items: center; justify-content: center; flex: none; min-height: 27px; padding: 4px 10px; border: 1px solid #4a4a4a; border-radius: 999px; color: #d9d9d9; font-size: 11px; line-height: 1; }
-.workspace-teamspace-status.active { border-color: #385c49; background: #263a2e; color: #b9e6c6; }
-.workspace-teamspace-status.paused { background: #303030; color: #aaa; }
-.workspace-teamspace-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; min-height: 190px; padding: 25px; border: 1px dashed #454545; border-radius: 15px; color: #aaa; text-align: center; }
-.workspace-teamspace-empty strong { color: #eee; font-size: 13px; }
-.workspace-teamspace-empty p { margin: 0; color: #999; font-size: 12px; }
-.workspace-teamspace-detail-actions { display: flex; flex-wrap: wrap; gap: 9px; }
-.workspace-teamspace-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; max-width: 850px; margin-top: 35px; }
-.workspace-teamspace-detail-grid > section { min-width: 0; padding: 18px; border: 1px solid #393939; border-radius: 15px; background: #242424; }
-.workspace-teamspace-detail-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 16px; }
-.workspace-teamspace-detail-section-head h3 { margin: 0; color: #eee; font-size: 13px; font-weight: 600; }
-.workspace-teamspace-detail-section-head span { color: #999; font-size: 11px; }
-.workspace-teamspace-members { display: flex; flex-direction: column; gap: 11px; margin: 0; padding: 0; list-style: none; }
-.workspace-teamspace-members li { display: flex; align-items: center; gap: 9px; color: #ddd; font-size: 12px; }
-.workspace-teamspace-members .workspace-avatar { width: 28px; height: 28px; }
-.workspace-teamspace-members small { margin-left: auto; color: #999; font-size: 10px; }
-.workspace-teamspace-detail-facts { display: flex; flex-direction: column; gap: 13px; }
-.workspace-teamspace-detail-facts > div { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; }
-.workspace-teamspace-detail-facts span { color: #999; }
-.workspace-teamspace-detail-facts strong { color: #ddd; font-weight: 500; text-align: right; }
-.workspace-teamspace-form { display: flex; flex-direction: column; gap: 9px; max-width: 540px; margin-top: 26px; padding: 20px; border: 1px solid #444; border-radius: 16px; background: #252525; }
-.workspace-teamspace-form h3 { margin: 0; color: #eee; font-size: 14px; font-weight: 600; }
-.workspace-teamspace-form > div:first-child p { margin: 5px 0 7px; color: #a5a5a5; font-size: 11px; }
-.workspace-teamspace-form label { color: #d6d6d6; font-size: 11px; font-weight: 500; }
-.workspace-teamspace-form [data-slot="input"],
-.workspace-teamspace-form [data-slot="textarea"] { border-color: #454545; background: #1e1e1e; color: #f2f2f2; font-size: 12px; }
-.workspace-teamspace-form [data-slot="input"] { height: 38px; }
-.workspace-teamspace-form [data-slot="textarea"] { min-height: 68px; resize: vertical; }
-.workspace-teamspace-form .workspace-teamspace-error { margin: 0; color: #ff9d9d; font-size: 11px; }
-.workspace-teamspace-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
-.workspace-teamspace-form-actions button { min-height: 32px; padding: 6px 12px; border: 1px solid #444; border-radius: 8px; background: #303030; color: #ddd; font-size: 11px; }
-.workspace-teamspace-form-actions button[type="submit"] { border-color: #ddd; background: #e9e9e9; color: #202020; font-weight: 600; }
 
 .workspace-focus { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .workspace-focus-header {
@@ -582,7 +429,6 @@
 }
 .workspace-focus-header h1 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; }
 .workspace-focus-header p { margin: 2px 0 0; color: #898989; font-size: 11px; }
-.workspace-focus-header .workspace-focus-team-avatar { width: 31px; height: 31px; }
 .workspace-focus-layout {
   display: grid;
   grid-template-columns: minmax(300px, 30%) minmax(0, 1fr);
@@ -597,50 +443,6 @@
   min-width: 0;
   min-height: 0;
 }
-.workspace-conversation-presence { display: flex; align-items: center; gap: 10px; min-height: 48px; }
-.workspace-presence-pill,
-.workspace-work-status {
-  display: inline-flex;
-  align-items: center;
-  min-height: 27px;
-  padding: 4px 11px;
-  border: 1px solid #383838;
-  border-radius: 999px;
-  background: #272727;
-  color: #eee;
-  font-size: 11px;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-.workspace-participants { display: flex; align-items: center; padding-left: 3px; }
-.workspace-participants .workspace-avatar {
-  width: 24px;
-  height: 24px;
-  margin-left: -3px;
-  border: 2px solid #eee;
-  background: #242824;
-  font-size: 8px;
-}
-.workspace-messages {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 16px;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 12px 4px 18px 0;
-}
-.workspace-messages-empty { margin: auto 0; color: #929292; font-size: 12px; line-height: 1.5; text-align: center; }
-.workspace-message { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
-.workspace-message .workspace-avatar { width: 30px; height: 30px; }
-.workspace-message-body { flex: 1; min-width: 0; }
-.workspace-message-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.workspace-message-meta strong { overflow: hidden; color: #eee; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-message-meta time { flex: none; color: #858585; font-size: 10px; }
-.workspace-message-body p { margin: 3px 0 0; color: #dedede; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
-/* Container/field/button look now comes from the shared .workspace-composer
-   classes; this class is kept only as a semantic hook on the form. */
-
 .workspace-work-column {
   position: relative;
   display: flex;
@@ -658,56 +460,6 @@
   border-radius: 17px;
   background: #1e1e1e;
 }
-/* Pinned to sit directly above the work panel, in the header's own 56px
-   band, so the tabs land on its centre row (y=28) like the back button and
-   title — not a separate strip with its own offset. */
-.workspace-work-tabs {
-  position: absolute;
-  right: 0;
-  bottom: 100%;
-  left: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 56px;
-  padding: 0 24px;
-}
-.workspace-work-tab {
-  min-height: 29px;
-  padding: 5px 13px;
-  border: 1px solid #373737;
-  border-radius: 999px;
-  background: #242424;
-  color: #aaa;
-  font-size: 11px;
-}
-.workspace-work-tab:hover { background: #303030; color: #eee; }
-.workspace-work-tab.is-active { border-color: #3e3e3e; background: #363636; color: #fff; }
-.workspace-work-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 92px;
-  padding: 20px 24px 16px;
-}
-.workspace-work-heading > div { min-width: 0; }
-.workspace-work-eyebrow { color: #919191; font-size: 10px; line-height: 1.2; }
-.workspace-work-heading h2 { margin: 5px 0 0; color: #eee; font-size: 16px; font-weight: 600; line-height: 1.3; }
-.workspace-work-heading p { margin: 5px 0 0; color: #a5a5a5; font-size: 11px; line-height: 1.4; }
-.workspace-work-body { display: flex; flex-direction: column; gap: 13px; flex: 1; min-height: 0; overflow-y: auto; padding: 0 24px 24px; }
-.workspace-work-card { padding: 19px 20px; border: 1px solid #363636; border-radius: 16px; background: #202020; }
-.workspace-work-card h3 { margin: 0; color: #eee; font-size: 13px; font-weight: 600; }
-.workspace-work-card p { margin: 0; color: #a5a5a5; font-size: 12px; line-height: 1.5; }
-.workspace-work-card h3 + .workspace-work-empty { margin-top: 16px; }
-.workspace-work-list { display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0; list-style: none; }
-.workspace-work-card h3 + .workspace-work-list { margin-top: 16px; }
-.workspace-work-list li { display: flex; align-items: baseline; gap: 10px; color: #a9a9a9; font-size: 12px; line-height: 1.45; }
-.workspace-work-list li::before { width: 5px; height: 5px; flex: none; border-radius: 50%; background: #a5a5a5; content: ""; }
-.workspace-file-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.workspace-file-list li { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid #373737; border-radius: 10px; color: #c9c9c9; font-size: 12px; }
-.workspace-file-list li span { flex: 1; }
-.workspace-file-list li svg:last-child { color: #777; }
 
 .workspace-right {
   position: relative;
@@ -721,8 +473,8 @@
   overflow: hidden;
   padding: 0 24px 24px;
 }
-/* The panel's top row is the header's 56px row, so its tabs and toggle sit
-   level with the page title. */
+/* The panel's top row is the header's 56px row, so the agent's name and the
+   toggle sit level with the page title. */
 .workspace-right-top {
   display: flex;
   align-items: center;
@@ -760,10 +512,8 @@
   padding-right: 4px;
   background: var(--workspace-base);
 }
-.workspace-shell[data-primary-work="true"] .workspace-agent-view[data-primary-chat="true"] .workspace-agent-identity { display: none; }
 .workspace-primary-focus-layout .workspace-agents-page { padding-top: 28px; }
 .workspace-agent-view:focus-visible { outline: 2px solid #d6d6d6; outline-offset: 2px; }
-.workspace-agent-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 44px; }
 .workspace-agent-conversation {
   display: flex;
   flex: 1;
@@ -780,7 +530,7 @@
 .workspace-agent-message[data-from="member"] { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 14px; background: #242424; }
 .workspace-agent-error { margin: 0; color: #e4aaa6; font-size: 12px; line-height: 1.45; }
 
-/* The Agents tab's conversation (DESIGN.md §3). The row above it names the
+/* The agent chat's conversation (DESIGN.md §3). The row above it names the
    conversation and starts a new one. */
 .workspace-agent-thread-bar { display: flex; align-items: center; gap: 8px; min-height: 36px; }
 .workspace-agent-thread-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; color: #929292; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -926,7 +676,6 @@
   }
   .workspace-shell[data-left="collapsed"] .workspace-left-top { height: 0; min-height: 0; }
   .workspace-shell[data-left="collapsed"] .workspace-navigation,
-  .workspace-shell[data-left="collapsed"] .workspace-conversations,
   .workspace-shell[data-left="collapsed"] .workspace-profile-area { display: none; }
   .workspace-shell[data-left="collapsed"] .workspace-mark-button {
     position: absolute;
@@ -1003,19 +752,8 @@
   .workspace-header:has(.workspace-organization-switcher) { flex-direction: column; gap: 4px; min-height: 82px; }
   .workspace-header:has(.workspace-organization-switcher) > h1 { max-width: 100%; }
   .workspace-organization-switcher { position: static; margin: 0 auto; }
-  .workspace-entry-content { padding: 16px; }
   .workspace-knowledge-page { padding: 20px 16px 40px; }
   .workspace-knowledge-toolbar { margin-top: 24px; }
-  .workspace-teamspaces-page { padding: 20px 16px 40px; }
-  .workspace-teamspace-metrics { gap: 8px; margin-top: 24px; }
-  .workspace-teamspace-metrics > div { min-height: 100px; padding: 13px 11px; }
-  .workspace-teamspace-metrics small { line-height: 1.35; }
-  .workspace-teamspace-toolbar { flex-wrap: wrap; gap: 12px; margin-top: 24px; }
-  .workspace-teamspace-search { width: 100%; }
-  .workspace-teamspace-row { gap: 10px; padding: 12px; }
-  .workspace-teamspace-row-members { display: none; }
-  .workspace-teamspace-row-main small { white-space: normal; }
-  .workspace-teamspace-detail-grid { grid-template-columns: minmax(0, 1fr); }
   .workspace-shell .workspace-focus-header {
     position: relative;
     justify-content: center;
@@ -1028,41 +766,13 @@
     top: 10px;
     left: 12px;
   }
-  .workspace-focus-header .workspace-focus-team-avatar { display: none; }
   .workspace-shell .workspace-focus-layout { padding-inline: 16px; }
-  .workspace-work-tabs { padding-inline: 16px; }
-  .workspace-work-heading { padding-inline: 16px; }
-  .workspace-work-body { padding-inline: 16px; }
-  .workspace-work-card { padding: 16px; }
-  .workspace-focus[data-composing="true"] {
-    flex: none;
-    height: 100dvh;
-    overflow: hidden;
-  }
-  .workspace-focus[data-composing="true"] .workspace-focus-layout {
-    flex: 1;
-    gap: 0;
-    min-height: 0;
-    overflow: hidden;
-    padding-bottom: max(12px, env(safe-area-inset-bottom));
-  }
-  .workspace-focus[data-composing="true"] .workspace-conversation {
-    flex: 1;
-    min-height: 0;
-  }
-  .workspace-focus[data-composing="true"] .workspace-messages {
-    flex: 1;
-    min-height: 0;
-  }
-  .workspace-focus[data-composing="true"] .workspace-work-column { display: none; }
 }
 
 @media (max-width: 960px) {
   .workspace-focus-layout { display: flex; flex-direction: column; gap: 18px; overflow-y: auto; padding: 0 16px 16px; }
   .workspace-conversation { flex: none; min-height: 350px; }
-.workspace-messages { min-height: 220px; }
   .workspace-work-column { flex: none; min-height: 0; }
-  .workspace-work-tabs { position: static; flex: none; height: auto; min-height: 56px; overflow-x: auto; padding-block: 10px; white-space: nowrap; }
   .workspace-work-panel { flex: none; min-height: 410px; }
   .workspace-focus-header { padding-inline: 16px; }
 }
@@ -1097,5 +807,4 @@
   .workspace-shell { transition: none; }
   .workspace-switcher-item { transition: none; }
   .workspace-switcher-item.is-selected { transform: none; }
-  .workspace-entry { transition: none; }
 }
