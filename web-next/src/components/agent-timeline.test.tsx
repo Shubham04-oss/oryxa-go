@@ -249,6 +249,31 @@ describe("AgentTimeline", () => {
     )
   })
 
+  it("keeps a stopped run's call interrupted while the next run streams", () => {
+    const { container } = timeline(
+      [
+        { type: "message", id: "ev_1", author: "member", text: "Look it up" },
+        { type: "run_started", run_id: "run_1" },
+        { type: "tool_call", id: "ev_2", call_id: "c1", tool: "web_search" },
+        // The member stopped it, and asked something else.
+        { type: "message", id: "ev_3", author: "member", text: "Never mind" },
+        { type: "run_started", run_id: "run_2" },
+        { type: "tool_call", id: "ev_4", call_id: "c2", tool: "read_file" },
+      ],
+      { running: true }
+    )
+    const rows = container.querySelectorAll(".workspace-agent-tools")
+    expect(rows).toHaveLength(2)
+    expect(rows[0].getAttribute("data-state")).toBe("interrupted")
+    expect(
+      rows[0].querySelector("canvas")?.getAttribute("data-orb-paused")
+    ).toBe("true")
+    expect(rows[1].getAttribute("data-state")).toBe("running")
+    expect(
+      rows[1].querySelector("canvas")?.getAttribute("data-orb-paused")
+    ).toBe("false")
+  })
+
   it("folds finished and interrupted calls into one row that says the run was cut short", () => {
     const { container } = timeline(
       [

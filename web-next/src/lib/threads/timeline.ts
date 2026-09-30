@@ -126,8 +126,9 @@ function roleOf(author: string): MessageRole {
  *
  * `run_started` and `run_completed` render nothing, but end any draft that
  * was never finished, so two runs' deltas never share a bubble. A run that
- * ends (`run_completed` or `run_failed`) also leaves its tool calls that got
- * no result `interrupted`: they will never get one. A `run_failed` with
+ * ends (`run_completed` or `run_failed`), or the member's next message, which
+ * only follows a run's end, also leaves the tool calls that got no result
+ * `interrupted`: they will never get one. A `run_failed` with
  * `sessionExpiredCode` renders nothing: it is the Durable Object asking the
  * page to refresh the session and send again.
  */
@@ -162,13 +163,17 @@ export function buildTimeline(
     if (draft) draft.state = "interrupted"
     draft = undefined
   }
-  // A run that ended: no draft goes on, and a call still running never
-  // gets its result. One held back by a confirmation is waiting, not lost.
-  const endRun = () => {
-    endDraft()
+  // A call still running that its run is over for never gets its result.
+  // One held back by a confirmation is waiting, not lost.
+  const interruptRunning = () => {
     for (const call of calls) {
       if (call.state === "running") call.state = "interrupted"
     }
+  }
+  // A run that ended: no draft goes on, and its calls are done with.
+  const endRun = () => {
+    endDraft()
+    interruptRunning()
   }
 
   items.forEach((item, index) => {
@@ -196,6 +201,10 @@ export function buildTimeline(
       }
       case "message": {
         const author = item.author ?? ""
+        // Go takes a message only once the run before it is over, so the
+        // member speaking again says that run's calls are too, whether or not
+        // its end marker came (a stopped run leaves none; history has none).
+        if (item.author === "member") interruptRunning()
         const drafted = draft && draft.author === author ? draft : undefined
         const existing = item.id ? messages.get(item.id) : undefined
         if (existing) {

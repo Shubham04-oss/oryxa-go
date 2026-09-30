@@ -530,6 +530,32 @@ describe("buildTimeline", () => {
     ).toMatchObject({ state: "done" })
   })
 
+  it("leaves a stopped run's call interrupted once the member speaks again, marker or none", () => {
+    const entries = buildTimeline([
+      { type: "message", id: "e1", author: "member", text: "Look it up" },
+      { type: "run_started", run_id: "run_1" },
+      { type: "tool_call", id: "e2", call_id: "call_1", tool: "web_search" },
+      // Stopped here: no run_completed came.
+      { type: "message", id: "e3", author: "member", text: "Never mind" },
+      { type: "run_started", run_id: "run_2" },
+      { type: "tool_call", id: "e4", call_id: "call_2", tool: "read_file" },
+    ])
+    expect(
+      entries.map((entry) => entry.kind === "tool" && entry.state)
+    ).toEqual([false, "interrupted", false, "running"])
+  })
+
+  it("does not read another author's message, or a draft, as the member speaking", () => {
+    expect(
+      toolOf([
+        { type: "tool_call", id: "e1", call_id: "call_1", tool: "web_search" },
+        { type: "message", id: "e2", author: "apps", text: "New email" },
+        { type: "message", id: "e3", author: "Krude", text: "Working on it" },
+        { type: "delta", author: "Krude", text: "More" },
+      ])
+    ).toMatchObject({ state: "running" })
+  })
+
   it("lets a result that does arrive settle a call whatever the markers say", () => {
     expect(
       toolOf([
