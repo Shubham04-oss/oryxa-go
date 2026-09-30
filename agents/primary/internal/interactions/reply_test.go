@@ -61,6 +61,11 @@ func (fake *fakeConsents) Consent(_ context.Context, id string, record ConsentRe
 	return request, nil, nil
 }
 
+// Leases are none: no choice these tests make gives one.
+func (fake *fakeConsents) Leases(context.Context, string, string, int) ([]Lease, error) {
+	return []Lease{}, nil
+}
+
 // Reply takes the lock the store's row lock stands for, as Get and Review do.
 func (repo *lockedRepository) Reply(ctx context.Context, id string, reply ReplyRecord, at time.Time) (agents.Interaction, error) {
 	repo.mu.Lock()
@@ -146,8 +151,16 @@ func slackReplyService(t *testing.T, changes ...func(*Config)) (*Service, *fakeR
 // pendingFromSlack puts in the ledger a request asked in Slack by user_a of
 // user_b's primary agent, waiting for user_b, and returns it.
 func pendingFromSlack(repo *fakeRepository) agents.Interaction {
-	request := agents.Interaction{
-		ID: "irq_slack", OrganizationID: "org_1", Approval: ApprovalOwner, Origin: OriginSlack, AskID: "iak_1",
+	request := slackRequest("irq_slack")
+	repo.requests[request.ID] = request
+	return request
+}
+
+// slackRequest is a request asked in Slack by user_a of user_b's primary agent,
+// waiting for user_b, as it would be stored under id.
+func slackRequest(id string) agents.Interaction {
+	return agents.Interaction{
+		ID: id, OrganizationID: "org_1", Approval: ApprovalOwner, Origin: OriginSlack, AskID: "iak_1",
 		Requester: agents.InteractionParty{UserID: "user_a", AgentID: "agt_a", AgentName: "Crew"},
 		Target:    agents.InteractionParty{UserID: "user_b", AgentID: "agt_b", AgentName: "Carl", UserDisplayName: "B"},
 		Purpose:   "Named in a message a member sent in Slack.", Task: "When do we ship the launch?",
@@ -156,8 +169,6 @@ func pendingFromSlack(repo *fakeRepository) agents.Interaction {
 		Status:               StatusPending, Revision: 1,
 		ExpiresAt: testNow.Add(24 * time.Hour), CreatedAt: testNow.Add(-time.Minute), UpdatedAt: testNow.Add(-time.Minute),
 	}
-	repo.requests[request.ID] = request
-	return request
 }
 
 // theOwner is user_b in their own signed-in session, the only actor a reply on
@@ -843,6 +854,55 @@ func TestAReplyLogsNeitherItsWordsNorItsTicket(t *testing.T) {
 	for _, secret := range []string{tickets.Reply, ownWords, "14th"} {
 		if strings.Contains(logged, secret) {
 			t.Fatalf("the log carries %q:\n%s", secret, logged)
+		}
+	}
+}
+
+// TestActivitySaysWhoseWordsAnAnswerWas: an answer the owner replied with,
+// whether the request was pending or its agent's answer was held, is written by
+// them in both members' activity; their agent's answer is not.
+func TestActivitySaysWhoseWordsAnAnswerWas(t *testing.T) {
+	ctx := context.Background()
+	service, repo := slackReplyService(t)
+	pending := pendingFromSlack(repo)
+	if _, err := service.ReplyAsOwner(ctx, theOwner, "token", pending.ID, ownWords); err != nil {
+		t.Fatal(err)
+	}
+	decider := agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b", Surface: SurfaceSlack}
+	held := slackRequest("irq_held")
+	held.Status = StatusReview
+	held.Decision = &agents.InteractionDecision{Decision: DecisionApproved, Consent: ConsentSummary, DecidedAt: testNow.Add(-time.Minute), DecidedBy: &decider}
+	held.Held = &agents.InteractionHeld{Result: agents.InteractionResult{Status: StatusCompleted, Summary: "Reach Priya at priya@example.com."}}
+	repo.requests[held.ID] = held
+	if _, err := service.ReplyAsOwner(ctx, theOwner, "token", held.ID, ownWords); err != nil {
+		t.Fatal(err)
+	}
+	byTheAgent := slackRequest("irq_agent")
+	byTheAgent.Status = StatusCompleted
+	byTheAgent.Decision = held.Decision
+	byTheAgent.Result = &agents.InteractionResult{Status: StatusCompleted, Summary: "The agent's words.", CompletedAt: testNow}
+	repo.requests[byTheAgent.ID] = byTheAgent
+
+	for _, member := range []agents.InteractionActor{theOwner, inOwnSession(requester)} {
+		entries, err := service.Activity(ctx, member, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		answered := map[string]ActivityEntry{}
+		for _, entry := range entries {
+			if entry.Kind == ActivityAnswered {
+				answered[entry.RequestID] = entry
+			}
+		}
+		if len(answered) != 3 || !answered[pending.ID].WrittenByOwner || !answered[held.ID].WrittenByOwner || answered[byTheAgent.ID].WrittenByOwner {
+			t.Fatalf("%s reads the answers as %+v, want the two replies written by the owner", member.UserID, answered)
+		}
+		encoded, _ := json.Marshal(answered[pending.ID])
+		if !strings.Contains(string(encoded), `"written_by_owner":true`) {
+			t.Fatalf("%s's entry for a reply reads %s", member.UserID, encoded)
+		}
+		if encoded, _ := json.Marshal(answered[byTheAgent.ID]); strings.Contains(string(encoded), "written_by_owner") {
+			t.Fatalf("%s's entry for the agent's answer reads %s", member.UserID, encoded)
 		}
 	}
 }

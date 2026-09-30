@@ -67,6 +67,32 @@ func TestAReplyToAPendingRequestIsOneChangeAndWinsItsAsk(t *testing.T) {
 		consent != ConsentReply || via != SurfaceWeb {
 		t.Fatalf("the row says consent %q via %q (%v)", consent, via, err)
 	}
+	ledger.answeredInOwnWords(request.ID, raya, asker)
+}
+
+// answeredInOwnWords fails the test unless every member named reads, in their
+// activity, the answer of the request as written by its owner.
+func (ledger *slackLedger) answeredInOwnWords(requestID string, members ...string) {
+	ledger.t.Helper()
+	for _, member := range members {
+		entries, err := ledger.service.Activity(context.Background(), ledger.owner(member), 0)
+		if err != nil {
+			ledger.t.Fatalf("%s's activity: %v", member, err)
+		}
+		answered := 0
+		for _, entry := range entries {
+			if entry.RequestID != requestID || entry.Kind != ActivityAnswered {
+				continue
+			}
+			answered++
+			if !entry.WrittenByOwner || entry.Status != StatusCompleted {
+				ledger.t.Fatalf("%s reads the answer as %+v, want it written by its owner", member, entry)
+			}
+		}
+		if answered != 1 {
+			ledger.t.Fatalf("%s's activity has %d answers for %s, want the reply: %+v", member, answered, requestID, entries)
+		}
+	}
 }
 
 // TestAReplyReplacesAHeldAnswerInTheLedger: the held answer is dropped, never
@@ -118,6 +144,7 @@ func TestAReplyReplacesAHeldAnswerInTheLedger(t *testing.T) {
 	if again := ledger.read(held.ID); again.Result == nil || again.Result.Summary != rayasWords {
 		t.Fatalf("the answer became %+v", again.Result)
 	}
+	ledger.answeredInOwnWords(held.ID, raya, asker)
 }
 
 // TestAReplyAndAChoiceAtOnceDecideOnce: the owner replying and choosing, on the
