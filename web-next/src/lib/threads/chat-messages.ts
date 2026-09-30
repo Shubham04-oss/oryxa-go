@@ -188,6 +188,7 @@ function storedItemKey(item: Item): string {
     item.id ?? "",
     item.type,
     item.call_id ?? "",
+    item.request_id ?? "",
     item.artifact ?? "",
     item.version ?? "",
   ].join("\u0000")

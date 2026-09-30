@@ -476,6 +476,9 @@ func withheldBecause(lapsed string) string {
 func (service *Service) viewFor(actor agents.InteractionActor, request agents.Interaction) agents.Interaction {
 	request = service.view(request)
 	if actsFor(actor, request.Target) {
+		// The asking member's private conversation is only a delivery pointer.
+		request.RequesterThreadID = ""
+		request.RequesterThreadAppName = ""
 		if actor.Session != agents.SessionMember {
 			request.Held = nil
 		}

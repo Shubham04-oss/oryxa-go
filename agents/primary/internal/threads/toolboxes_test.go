@@ -145,7 +145,7 @@ func storedNames(value any) []string {
 // TestARunDeliveringAnInteractionRecordsWhichOne: a run started to deliver
 // one interaction records its request in the thread's state as it starts,
 // which is where its interactions tools read what they may act on; a run
-// that delivers nothing records nothing.
+// that delivers nothing clears the delivery-only state.
 func TestARunDeliveringAnInteractionRecordsWhichOne(t *testing.T) {
 	ctx := context.Background()
 	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
@@ -186,14 +186,48 @@ func TestARunDeliveringAnInteractionRecordsWhichOne(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for key, want := range primaryagents.DeliveryState(delivery) {
+		wantState := primaryagents.DeliveryState(delivery)
+		if delivered.RequestID == "" {
+			wantState = primaryagents.ClearDeliveryState()
+		}
+		for key, want := range wantState {
 			got, err := after.Session.State().Get(key)
-			if delivered.RequestID == "" && err == nil {
-				t.Fatalf("delivering nothing, the thread records %v under %s", got, key)
-			}
-			if delivered.RequestID != "" && got != want {
+			if err != nil || got != want {
 				t.Fatalf("delivering %+v, the thread records %v under %s, want %v", delivered, got, key, want)
 			}
+		}
+	}
+}
+
+func TestDeliveryConfirmationContinuationRetainsItsRequestState(t *testing.T) {
+	h := newHarness(t, func(request *model.LLMRequest) (*genai.Content, error) {
+		if lastFunctionResponse(request) != nil {
+			return genai.NewContentFromText("Done.", genai.RoleModel), nil
+		}
+		return &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
+			ID: "call_1", Name: "delete_file", Args: map[string]any{"name": "plan.txt"},
+		}}}}, nil
+	})
+	ctx := context.Background()
+	thread, err := h.service.Create(ctx, asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery := primaryagents.Delivery{RequestID: "irq_1", Purpose: primaryagents.DeliveryWorks, Sources: []string{"thread_history"}}
+	items, _ := h.run(asha, thread.ID, RunInput{Message: "Do the approved work.", Delivery: delivery})
+	confirmations := find(items, ItemConfirmation)
+	if len(confirmations) != 1 {
+		t.Fatalf("confirmations = %+v", confirmations)
+	}
+	h.run(asha, thread.ID, RunInput{Confirmations: []Answer{{ID: confirmations[0].CallID, Confirmed: true}}})
+	stored, err := h.sessions.Get(ctx, &session.GetRequest{AppName: "krude", UserID: asha.UserID, SessionID: thread.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range primaryagents.DeliveryState(delivery) {
+		got, err := stored.Session.State().Get(key)
+		if err != nil || got != want {
+			t.Fatalf("confirmation continuation state %s = %v, want %v (err=%v)", key, got, want, err)
 		}
 	}
 }

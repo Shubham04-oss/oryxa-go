@@ -104,8 +104,24 @@ export type RunFailedEntry = {
   code?: string
 }
 
+/** A request filed in this conversation, read live using the member's session. */
+export type RequestEntry = {
+  kind: "request"
+  key: string
+  id?: string
+  at?: string
+  requestId: string
+  text?: string
+  status?: Item["status"]
+}
+
 export type TimelineEntry =
-  MessageEntry | ToolEntry | ConfirmationEntry | ArtifactEntry | RunFailedEntry
+  | MessageEntry
+  | ToolEntry
+  | ConfirmationEntry
+  | ArtifactEntry
+  | RunFailedEntry
+  | RequestEntry
 
 function roleOf(author: string): MessageRole {
   if (author === "member") return "member"
@@ -148,6 +164,7 @@ export function buildTimeline(
   const calls: ToolEntry[] = []
   const confirmations = new Map<string, ConfirmationEntry>()
   const artifacts = new Set<string>()
+  const requests = new Map<string, RequestEntry>()
   let draft: MessageEntry | undefined
   let drafts = 0
 
@@ -294,7 +311,10 @@ export function buildTimeline(
         break
       }
       case "confirmation": {
-        const status = item.status ?? "pending"
+        const status: ConfirmationStatus =
+          item.status === "approved" || item.status === "declined"
+            ? item.status
+            : "pending"
         let entry = item.call_id ? confirmations.get(item.call_id) : undefined
         if (entry) {
           // The same confirmation again, such as its answer: the latest
@@ -335,6 +355,27 @@ export function buildTimeline(
                 ? "declined"
                 : "running"
         }
+        break
+      }
+      case "request": {
+        if (!item.request_id) break
+        const previous = requests.get(item.request_id)
+        if (previous) {
+          previous.status = item.status
+          previous.text = item.text ?? previous.text
+          break
+        }
+        const entry: RequestEntry = {
+          kind: "request",
+          key: uniqueKey(`request:${item.request_id}`),
+          id: item.id,
+          at: item.at,
+          requestId: item.request_id,
+          text: item.text,
+          status: item.status,
+        }
+        requests.set(item.request_id, entry)
+        entries.push(entry)
         break
       }
       case "artifact": {

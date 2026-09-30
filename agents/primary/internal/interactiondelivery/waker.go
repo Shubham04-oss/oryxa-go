@@ -313,7 +313,7 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 	}
 
 	profile := reach(delivery.Kind, request)
-	started, err := waker.start(ctx, delivery, messageFor(delivery, request, waker.between(ctx, delivery, request, logger)), profile)
+	started, err := waker.start(ctx, delivery, request, messageFor(delivery, request, waker.between(ctx, delivery, request, logger)), profile)
 	switch {
 	case errors.Is(err, threads.ErrRunInProgress), errors.Is(err, threads.ErrConfirmationPending):
 		logger.InfoContext(ctx, "interaction delivery waits for the agent conversation", "reason", err)
@@ -385,13 +385,20 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 	logger.InfoContext(ctx, "interaction delivered to persistent agent", "run_id", started.Run.ID())
 }
 
-// start continues the request's stable conversation for this recipient, on
-// profile. If its stored thread was deleted, it clears the stale pointer and
-// allocates a replacement once.
-func (waker *Waker) start(ctx context.Context, delivery Delivery, message string, profile managedagents.UnattendedProfile) (managedagents.StartedRun, error) {
+// start reports an outcome in the conversation the asking agent filed it
+// from. The target's work and requests with no origin retain their stable
+// per-request conversation. A deleted conversation gets one replacement;
+// a busy conversation or one waiting on confirmation is retried as it is.
+func (waker *Waker) start(ctx context.Context, delivery Delivery, request agents.Interaction, message string, profile managedagents.UnattendedProfile) (managedagents.StartedRun, error) {
 	threadID, err := waker.store.Thread(ctx, delivery.RequestID, delivery.RecipientAgentID)
 	if err != nil {
 		return managedagents.StartedRun{}, err
+	}
+	storedThreadID := threadID
+	toRequester := !forTheTarget(delivery.Kind) &&
+		delivery.RecipientAgentID == request.Requester.AgentID && delivery.RecipientUserID == request.Requester.UserID
+	if threadID == "" && toRequester {
+		threadID = request.RequesterThreadID
 	}
 	// Every delivery is worked through the interactions toolbox, so the run
 	// starts with it loaded rather than spending model calls finding it.
@@ -402,7 +409,10 @@ func (waker *Waker) start(ctx context.Context, delivery Delivery, message string
 		// purpose allows: a run deciding does not answer. What it may read of
 		// the member's is what its reach loads, and the answer guard is told so
 		// when it answers.
-		Delivery: agents.Delivery{RequestID: delivery.RequestID, Purpose: purpose(delivery.Kind), Sources: sourcesOf(profile)},
+		Delivery: agents.Delivery{
+			RequestID: delivery.RequestID, Purpose: purpose(delivery.Kind), Sources: sourcesOf(profile),
+			PrimaryChat: toRequester && request.RequesterThreadID != "" && request.RequesterThreadAppName == agents.RootName,
+		},
 	}
 	member := threads.Member{UserID: delivery.RecipientUserID, OrganizationID: delivery.OrganizationID}
 	started, err := waker.agents.StartUnattendedRun(ctx, member, delivery.RecipientAgentID, threadID, input, profile)
@@ -415,7 +425,7 @@ func (waker *Waker) start(ctx context.Context, delivery Delivery, message string
 	if err != nil {
 		return managedagents.StartedRun{}, err
 	}
-	if threadID == "" || started.ThreadID != threadID {
+	if storedThreadID == "" || started.ThreadID != storedThreadID {
 		if err := waker.store.SetThread(ctx, delivery, started.ThreadID); err != nil {
 			started.Run.Discard(context.WithoutCancel(ctx), "could not record the interaction delivery thread")
 			return managedagents.StartedRun{}, err

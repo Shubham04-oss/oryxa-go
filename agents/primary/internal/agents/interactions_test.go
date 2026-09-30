@@ -81,6 +81,9 @@ func TestInteractionToolboxDerivesTheRequesterIdentity(t *testing.T) {
 	if service.actor.Session != SessionAgent {
 		t.Fatalf("a tool call acted in session %q, want %q", service.actor.Session, SessionAgent)
 	}
+	if service.actor.ThreadID == "" || service.actor.ThreadAppName != RootName {
+		t.Fatal("the tool did not record its authenticated originating session")
+	}
 }
 
 func TestInteractionToolboxNeedsAService(t *testing.T) {

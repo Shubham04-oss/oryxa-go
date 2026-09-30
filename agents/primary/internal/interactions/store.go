@@ -100,15 +100,15 @@ func insertRequest(ctx context.Context, tx pgx.Tx, request agents.Interaction, i
 			 target_user_id, target_agent_id, target_agent_name, target_user_email, target_user_display_name,
 			 purpose, task, context, requested_tools, requested_permissions, status, idempotency_key,
 			 revision, expires_at, created_at, updated_at, teamspace_id, approval, tools_judged_by,
-			 origin, ask_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22,$23,$24,$25)
+			 origin, ask_id, requester_thread_id, requester_thread_app_name)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22,$23,$24,$25,$26,$27)
 		ON CONFLICT (organization_id, requester_agent_id, idempotency_key) DO NOTHING
 		RETURNING `+selectColumns,
 		request.ID, request.OrganizationID, request.Requester.UserID, request.Requester.AgentID, request.Requester.AgentName,
 		request.Target.UserID, request.Target.AgentID, request.Target.AgentName, request.Target.UserEmail, request.Target.UserDisplayName,
 		request.Purpose, request.Task, contextJSON, toolsJSON, permissionsJSON, request.Status, idempotencyKey,
 		request.Revision, request.ExpiresAt, request.CreatedAt, request.TeamspaceID, request.Approval, request.ToolsJudgedBy,
-		request.Origin, request.AskID)
+		request.Origin, request.AskID, request.RequesterThreadID, request.RequesterThreadAppName)
 	switch err := scanInteraction(row, &stored); {
 	case errors.Is(err, pgx.ErrNoRows):
 		// The key is taken: return what it names.
@@ -797,7 +797,7 @@ const selectColumns = `
 	status, decision, result, revision, expires_at, created_at, updated_at,
 	teamspace_id, approval, decided_by_kind, decided_by_user_id, decided_by_agent_id,
 	tools_judged_by, guard, held_result, review,
-	ask_id, origin, decided_via, decided_reason, consent, secret_viewed_at`
+	ask_id, origin, decided_via, decided_reason, consent, secret_viewed_at, requester_thread_id, requester_thread_app_name`
 
 type scanner interface{ Scan(...any) error }
 
@@ -815,6 +815,8 @@ func scanInteraction(row scanner, target *agents.Interaction) error {
 		&target.TeamspaceID, &target.Approval, &decider.Kind, &decider.UserID, &decider.AgentID,
 		&target.ToolsJudgedBy, &guardJSON, &heldJSON, &reviewJSON,
 		&target.AskID, &target.Origin, &decider.Surface, &decider.Reason, &consent, &target.SecretViewedAt,
+		&target.RequesterThreadID,
+		&target.RequesterThreadAppName,
 	)
 	if err != nil {
 		return err

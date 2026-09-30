@@ -48,11 +48,27 @@ export type ItemType =
   | "tool_result"
   | "confirmation"
   | "artifact"
+  | "request"
   | "run_started"
   | "run_completed"
   | "run_failed"
 
 export type ConfirmationStatus = "pending" | "approved" | "declined"
+
+/** A request pointer's recorded state; the card reads its current state from Go. */
+export type RequestItemStatus =
+  | "asked"
+  | "answered"
+  | "held"
+  | "closed"
+  | "pending"
+  | "approved"
+  | "review"
+  | "rejected"
+  | "completed"
+  | "failed"
+  | "expired"
+  | "withheld"
 
 /** A run's token usage (Go: `agentsv1.Usage`). */
 export type ItemUsage = {
@@ -75,6 +91,7 @@ export type ItemUsage = {
  * | `tool_result`   | id, at, author, call_id, tool, failed, error (never any text)       |
  * | `confirmation`  | id, at, author, call_id, tool_call_id, tool, arguments, hint, status |
  * | `artifact`      | id, at, author, artifact, version                                   |
+ * | `request`       | id, at, author, request_id, status; a note can carry text            |
  * | `run_started`   | run_id, at                                                          |
  * | `run_completed` | run_id, at, usage                                                   |
  * | `run_failed`    | run_id, at, error; code only from the thread's Durable Object       |
@@ -132,8 +149,10 @@ export type Item = {
   failed?: boolean
   /** A confirmation's reason in the tool's own words; left out when ADK had only its developer-facing default. */
   hint?: string
-  /** A confirmation's state. A streamed confirmation is always `pending`; history says how it was answered. */
-  status?: ConfirmationStatus
+  /** A confirmation's state, or how a request stood when its pointer was recorded. */
+  status?: ConfirmationStatus | RequestItemStatus
+  /** The request a `request` item points to. Its card is read separately as the member. */
+  request_id?: string
   /** An artifact's file name, which never holds a "/". A `"user:"` prefix marks the member's own file, shared by all their threads. */
   artifact?: string
   /** An artifact's version, counted from 1. */

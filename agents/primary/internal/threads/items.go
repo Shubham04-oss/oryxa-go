@@ -36,10 +36,9 @@ const (
 	// ItemArtifact is a file a run kept, such as a browser screenshot or a
 	// file the sandbox saved, readable through the thread's artifact route.
 	ItemArtifact = "artifact"
-	// ItemRequest is a line Oryxa wrote in the thread about an agent request,
-	// with no model (Service.Note): it names the request, and the client shows
-	// the request's card from it. It is only ever in a Requests thread's
-	// history, never in a run's stream.
+	// ItemRequest is a pointer to an agent request: a metadata-only Requests
+	// note, or a successful interactions_create result in its originating
+	// conversation. The client reads the live card with the member's session.
 	ItemRequest = "request"
 	// ItemRunStarted, ItemRunCompleted and ItemRunFailed bracket a run.
 	ItemRunStarted   = "run_started"
@@ -219,6 +218,20 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 				item.Error = failure
 			}
 			items = append(items, item)
+			if response.Name == "interactions_create" && !item.Failed {
+				// A tool's response may contain private context or a held answer.
+				// Expose only its request pointer; Go authorizes the card's own read.
+				var request struct {
+					ID     string `json:"id"`
+					Status string `json:"status"`
+				}
+				if decodeInto(response.Response, &request) && request.ID != "" {
+					items = append(items, Item{
+						Type: ItemRequest, ID: event.ID, At: at(event), Author: author,
+						RequestID: request.ID, Status: request.Status, CallID: response.ID,
+					})
+				}
+			}
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(event.Actions.ArtifactDelta)) {

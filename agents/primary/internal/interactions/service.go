@@ -363,6 +363,7 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 	}
 	request := agents.Interaction{
 		ID: id, OrganizationID: actor.OrganizationID, TeamspaceID: input.TeamspaceID, Approval: approval,
+		RequesterThreadID: actor.ThreadID, RequesterThreadAppName: actor.ThreadAppName,
 		Requester: agents.InteractionParty{UserID: actor.UserID, AgentID: actor.AgentID, AgentName: actor.AgentName},
 		Target: agents.InteractionParty{
 			UserID: target.OwnerUserID, AgentID: target.ID, AgentName: target.Name,
@@ -417,6 +418,8 @@ func (service *Service) replay(actor agents.InteractionActor, stored agents.Inte
 func sameRequest(actor agents.InteractionActor, stored agents.Interaction, input agents.InteractionCreateInput) bool {
 	return stored.OrganizationID == actor.OrganizationID &&
 		stored.Requester.UserID == actor.UserID && stored.Requester.AgentID == actor.AgentID &&
+		stored.RequesterThreadID == actor.ThreadID &&
+		stored.RequesterThreadAppName == actor.ThreadAppName &&
 		stored.Target.AgentID == input.TargetAgentID && stored.TeamspaceID == input.TeamspaceID &&
 		stored.Purpose == input.Purpose && stored.Task == input.Task &&
 		slices.Equal(stored.Context, input.Context) &&
