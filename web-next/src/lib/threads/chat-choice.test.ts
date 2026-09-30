@@ -4,11 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   FRESH_CONVERSATION_MS,
   chooseThread,
+  claimPrimaryChatRequest,
   openingThread,
   publishPrimaryChatActivity,
   rememberChoice,
   rememberedChoice,
   requestPrimaryChat,
+  sameChatScope,
   usePrimaryChatActivity,
   usePrimaryChatRequest,
 } from "./chat-choice"
@@ -169,6 +171,37 @@ describe("requestPrimaryChat", () => {
     act(() => requestPrimaryChat(scope, { kind: "new", message: "Hello" }))
     expect(result.current).toMatchObject({ kind: "new", message: "Hello" })
     expect(result.current!.id).toBeGreaterThan(first!.id)
+  })
+})
+
+describe("claiming a request", () => {
+  it("lets a request be acted on once, however often it is asked", () => {
+    const { result } = renderHook(() => usePrimaryChatRequest())
+    act(() => requestPrimaryChat(scope, { kind: "new", message: "Hello" }))
+    const request = result.current!
+    expect(claimPrimaryChatRequest(request.id)).toBe(true)
+    expect(claimPrimaryChatRequest(request.id)).toBe(false)
+    expect(claimPrimaryChatRequest(request.id - 1)).toBe(false)
+
+    // The next request is a new one.
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "t1" }))
+    expect(claimPrimaryChatRequest(result.current!.id)).toBe(true)
+  })
+
+  it("keeps a request made before anyone was listening", () => {
+    act(() => requestPrimaryChat(scope, { kind: "new" }))
+    // A panel that mounts now reads it, and can claim it.
+    const { result } = renderHook(() => usePrimaryChatRequest())
+    expect(result.current).toMatchObject({ kind: "new" })
+    expect(claimPrimaryChatRequest(result.current!.id)).toBe(true)
+  })
+
+  it("knows a member's scope from another's", () => {
+    expect(sameChatScope(scope, { ...scope })).toBe(true)
+    expect(sameChatScope(scope, { ...scope, userId: "user-2" })).toBe(false)
+    expect(sameChatScope(scope, { ...scope, organizationId: "org-2" })).toBe(
+      false
+    )
   })
 })
 

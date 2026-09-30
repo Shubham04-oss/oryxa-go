@@ -6,6 +6,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
@@ -22,6 +23,13 @@ import {
 import type { DmPeople } from "./direct-message-people"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import type { Inbox } from "@/lib/dms"
+import {
+  PRIMARY_CHAT_AGENT,
+  claimPrimaryChatRequest,
+  rememberedChoice,
+  requestPrimaryChat,
+  usePrimaryChatRequest,
+} from "@/lib/threads/chat-choice"
 import type { Item, Thread, ThreadDetail } from "@/lib/threads/client"
 import { agentChats } from "@/test/agent-chat"
 import { roomSockets } from "@/test/room-socket"
@@ -39,6 +47,8 @@ vi.mock(
   async () => (await import("@/test/agent-chat")).aiChatReact
 )
 
+const HOUR = 60 * 60 * 1000
+const scope = { organizationId: ORG, userId: VIEWER }
 const scout = agent({ id: "agt_scout", name: "Scout" })
 const inbox: Inbox = { conversations: [], unreadTotal: 0, status: "live" }
 const people: DmPeople = {
@@ -140,7 +150,14 @@ function withQueries(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+  const wrap = (element: ReactElement) => (
+    <QueryClientProvider client={client}>{element}</QueryClientProvider>
+  )
+  const view = render(wrap(ui))
+  return {
+    ...view,
+    rerender: (next: ReactElement) => view.rerender(wrap(next)),
+  }
 }
 
 /** The panel as the shell mounts it, with a member (so it knows whose choices to keep) unless told otherwise. */
@@ -184,6 +201,10 @@ function type(box: HTMLTextAreaElement, text: string) {
 }
 
 beforeEach(() => {
+  // A request an earlier test left unclaimed must not reach this one.
+  const { result, unmount } = renderHook(() => usePrimaryChatRequest())
+  if (result.current) claimPrimaryChatRequest(result.current.id)
+  unmount()
   roomSockets.reset()
   agentChats.reset()
   vi.stubGlobal("matchMedia", () => ({
@@ -271,5 +292,161 @@ describe("what the agents' chats keep across a switch", () => {
     expect(await screen.findByText(blank)).toBeTruthy()
     await waitFor(() => expect(leoBox().value).toBe("Plan the launch"))
     expect(roomSockets.named(chatName("th_new"))).toHaveLength(0)
+  })
+})
+
+describe("a request to open a conversation", () => {
+  it("opens the conversation it names on the primary agent, and remembers the choice", async () => {
+    stubGo({
+      threads: [thread("th_2", "Newer"), thread("th_1", "Older", 3 * HOUR)],
+    })
+    withQueries(panel())
+    ;(await socketOn(chatName("th_2"))).open()
+    await screen.findByRole("group", { name: "Switch agent" })
+    // The member is with Scout when the request comes.
+    fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
+    await screen.findByRole("textbox", { name: "Message Scout" })
+
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
+
+    await socketOn(chatName("th_1"))
+    await screen.findByRole("textbox", { name: "Message Leo" })
+    expect(
+      within(switcher()).getByRole("button", { name: "Leo", pressed: true })
+    ).toBeTruthy()
+    expect(
+      document.querySelector(".workspace-agent-thread-title")?.textContent
+    ).toBe("Older")
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_1")
+  })
+
+  it("brings the Agents tab forward", async () => {
+    stubGo({ threads: [thread("th_1", "Plan the launch")] })
+    withQueries(panel())
+    ;(await socketOn(chatName("th_1"))).open()
+    fireEvent.click(screen.getByRole("tab", { name: "DMs" }))
+    expect(
+      screen.getByRole("tab", { name: "DMs" }).getAttribute("aria-selected")
+    ).toBe("true")
+
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
+    expect(
+      screen.getByRole("tab", { name: "Agents" }).getAttribute("aria-selected")
+    ).toBe("true")
+  })
+
+  it("applies a request made before the panel was ever opened, once it is", async () => {
+    stubGo({
+      threads: [thread("th_2", "Newer"), thread("th_1", "Older", 3 * HOUR)],
+    })
+    const view = withQueries(panel({ expanded: false }))
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
+    // The chat is not there yet: the panel holds what was asked for.
+    expect(roomSockets.all).toHaveLength(0)
+
+    view.rerender(panel({ expanded: true }))
+    await socketOn(chatName("th_1"))
+    // It never opened the fresh conversation first.
+    expect(roomSockets.named(chatName("th_2"))).toHaveLength(0)
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_1")
+  })
+
+  it("applies a request made before the panel first mounted", async () => {
+    stubGo({
+      threads: [thread("th_2", "Newer"), thread("th_1", "Older", 3 * HOUR)],
+    })
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
+    withQueries(panel())
+    await socketOn(chatName("th_1"))
+    expect(roomSockets.named(chatName("th_2"))).toHaveLength(0)
+  })
+
+  it("acts on a request once: nothing re-applies it when the panel renders or mounts again", async () => {
+    stubGo({ threads: [thread("th_1", "Older", 3 * HOUR)] })
+    const view = withQueries(panel())
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
+    ;(await socketOn(chatName("th_1"))).open()
+
+    // The member goes to a new conversation instead.
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    expect(screen.getByText(blank)).toBeTruthy()
+    view.rerender(panel({ expanded: true, primaryWork: false }))
+    expect(screen.getByText(blank)).toBeTruthy()
+
+    // A panel mounted afresh (the shell may be) does not open it again.
+    view.unmount()
+    roomSockets.reset()
+    withQueries(panel())
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(roomSockets.all).toHaveLength(0)
+  })
+
+  it("starts a new conversation with the message a request brings, once, as the composer would", async () => {
+    const go = stubGo({ threads: [thread("th_1", "Plan the launch")] })
+    withQueries(panel())
+    ;(await socketOn(chatName("th_1"))).open()
+
+    act(() =>
+      requestPrimaryChat(scope, {
+        kind: "new",
+        message: "  What changed today?  ",
+      })
+    )
+    await waitFor(() =>
+      expect(go.calls).toContain(`POST /v1/organizations/${ORG}/threads`)
+    )
+    const socket = await socketOn(chatName("th_new"))
+    // Its words wait in view for the new thread's socket, as a typed
+    // message's do.
+    expect(
+      screen.getByRole("log").querySelector('[data-from="member"]')?.textContent
+    ).toBe("What changed today?")
+    const chat = agentChats.named(chatName("th_new"))
+    expect(chat.sendMessage).not.toHaveBeenCalled()
+
+    socket.open()
+    expect(chat.sendMessage).toHaveBeenCalledExactlyOnceWith({
+      text: "What changed today?",
+    })
+    socket.open()
+    expect(chat.sendMessage).toHaveBeenCalledOnce()
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("th_new")
+
+    // Nothing waits to be sent into the next new conversation.
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    await act(async () => {})
+    expect(
+      go.calls.filter((call) => call.startsWith("POST /v1/organizations/"))
+    ).toHaveLength(1)
+  })
+
+  it("opens a blank chat, and remembers it, for a request with no message", async () => {
+    const go = stubGo({ threads: [thread("th_1", "Plan the launch")] })
+    withQueries(panel())
+    ;(await socketOn(chatName("th_1"))).open()
+
+    act(() => requestPrimaryChat(scope, { kind: "new" }))
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBe("new")
+    await act(async () => {})
+    expect(go.calls.some((call) => call.startsWith("POST"))).toBe(false)
+  })
+
+  it("ignores a request for another member", async () => {
+    stubGo({
+      threads: [thread("th_2", "Newer"), thread("th_1", "Older", 3 * HOUR)],
+    })
+    withQueries(panel())
+    ;(await socketOn(chatName("th_2"))).open()
+
+    act(() =>
+      requestPrimaryChat(
+        { organizationId: ORG, userId: "someone-else" },
+        { kind: "thread", threadId: "th_1" }
+      )
+    )
+    await act(async () => {})
+    expect(roomSockets.named(chatName("th_1"))).toHaveLength(0)
+    expect(rememberedChoice(scope, PRIMARY_CHAT_AGENT)).toBeNull()
   })
 })

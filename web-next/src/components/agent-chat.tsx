@@ -82,6 +82,13 @@ async function loadTranscript(
   return reconcileChatMessages(stored, detail?.items ?? [])
 }
 
+/** A message the app asked the chat to start a new conversation with. */
+export type FirstMessage = {
+  /** The request that asked, so each is sent once. */
+  id: number
+  text: string
+}
+
 /**
  * Whether a conversation waits on the member's confirmation, from Go's
  * detail of it. One that can't be read counts as not waiting.
@@ -112,6 +119,8 @@ export function AgentChat({
   setThreadId,
   draft,
   onDraftChange,
+  firstMessage,
+  onFirstMessageTaken,
   onComposingChange,
   onOpenOverview,
   inOverview = false,
@@ -133,6 +142,9 @@ export function AgentChat({
   /** The composer's text, kept by the panel too. */
   draft: string
   onDraftChange: (value: string) => void
+  /** Sent, as the composer would send it, once the chat is on a new conversation. */
+  firstMessage?: FirstMessage | null
+  onFirstMessageTaken?: (id: number) => void
   onComposingChange: (composing: boolean) => void
   onOpenOverview?: () => void
   inOverview?: boolean
@@ -205,6 +217,19 @@ export function AgentChat({
       mounted.current = false
     }
   }, [])
+
+  // A message the app asked to start the conversation with goes into the new
+  // chat as the composer's would, once and only once whatever the renders.
+  const firstTaken = useRef<number>(undefined)
+  useEffect(() => {
+    if (!firstMessage || threadId !== null || starting || pending !== null) {
+      return
+    }
+    if (firstTaken.current === firstMessage.id) return
+    firstTaken.current = firstMessage.id
+    onFirstMessageTaken?.(firstMessage.id)
+    void start(firstMessage.text)
+  })
 
   const composer: ComposerHandlers = {
     draft,

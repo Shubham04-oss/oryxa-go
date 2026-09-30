@@ -16,6 +16,7 @@ import {
   UsersRound,
 } from "lucide-react"
 import { AgentChat } from "./agent-chat"
+import type { FirstMessage } from "./agent-chat"
 import { AgentComposer } from "./agent-composer"
 import { AgentConversation } from "./agent-conversation"
 import { AgentSwitcher, FALLBACK_AGENT_NAME } from "./agent-switcher"
@@ -40,7 +41,13 @@ import type { Inbox } from "@/lib/dms"
 import { isNameId, sideConversationName } from "@/lib/dms/names"
 import type { Teamspace } from "@/lib/teamspaces/client"
 import { teamspaceKeys, teamspaceQueryOptions } from "@/lib/teamspaces/queries"
-import { PRIMARY_CHAT_AGENT } from "@/lib/threads/chat-choice"
+import {
+  PRIMARY_CHAT_AGENT,
+  claimPrimaryChatRequest,
+  rememberChoice,
+  sameChatScope,
+  usePrimaryChatRequest,
+} from "@/lib/threads/chat-choice"
 import type { ChatScope } from "@/lib/threads/chat-choice"
 import { cn } from "@/lib/utils"
 import type { ScreenContext } from "@/lib/agents/screen-context"
@@ -174,6 +181,9 @@ export function WorkspaceAgentPanel({
     string | null | undefined
   >()
   const [drafts, setDrafts] = useState<Partial<Record<string, string>>>({})
+  // The message a request wants the primary chat to start a new conversation
+  // with, until the chat takes it.
+  const [firstMessage, setFirstMessage] = useState<FirstMessage | null>(null)
   if (chatRequest && chatRequest !== answeredRequest) {
     setAnsweredRequest(chatRequest)
     setTab("agents")
@@ -247,6 +257,34 @@ export function WorkspaceAgentPanel({
   useEffect(() => {
     if (primaryThread !== undefined) onPrimaryThreadChange?.(primaryThread)
   }, [primaryThread, onPrimaryThreadChange])
+
+  // The rest of the app asking the primary chat to open a conversation (Home
+  // does, then expands the panel). Each request is acted on once: claiming it
+  // outlasts this panel, and a request made before the chat first mounted is
+  // still here for it, since what it asks for is held here, not in the chat.
+  const request = usePrimaryChatRequest()
+  useEffect(() => {
+    if (!request || !scope || !sameChatScope(request.scope, scope)) return
+    if (!claimPrimaryChatRequest(request.id)) return
+    setTab("agents")
+    setAgentId(null)
+    setAgentsSide(null)
+    if (request.kind === "thread") {
+      setPrimaryThread(request.threadId)
+      setFirstMessage(null)
+      rememberChoice(scope, PRIMARY_CHAT_AGENT, request.threadId)
+      return
+    }
+    setPrimaryThread(null)
+    rememberChoice(scope, PRIMARY_CHAT_AGENT, null)
+    const text = request.message?.trim()
+    setFirstMessage(text ? { id: request.id, text } : null)
+  }, [request, scope])
+
+  // A first message waits only for a new chat to send it into.
+  useEffect(() => {
+    if (typeof primaryThread === "string") setFirstMessage(null)
+  }, [primaryThread])
 
   // A rail button unmounts as the panel opens, so its focus moves to the tab
   // it opened rather than falling back to the page.
@@ -514,6 +552,12 @@ export function WorkspaceAgentPanel({
                     onSelectAgent={setAgentId}
                     primaryThread={primaryThread}
                     setPrimaryThread={setPrimaryThread}
+                    firstMessage={firstMessage}
+                    onFirstMessageTaken={(id) =>
+                      setFirstMessage((current) =>
+                        current?.id === id ? null : current
+                      )
+                    }
                     drafts={drafts}
                     onDraftChange={(agent, value) =>
                       setDrafts((current) => ({ ...current, [agent]: value }))
@@ -701,6 +745,8 @@ function AgentsView({
   onSelectAgent,
   primaryThread,
   setPrimaryThread,
+  firstMessage,
+  onFirstMessageTaken,
   drafts,
   onDraftChange,
   agentName,
@@ -722,6 +768,9 @@ function AgentsView({
   /** The primary chat's conversation, held here (`AgentChat`'s `threadId`). */
   primaryThread: string | null | undefined
   setPrimaryThread: Dispatch<SetStateAction<string | null | undefined>>
+  /** What a request asked the primary chat to start a new conversation with. */
+  firstMessage: FirstMessage | null
+  onFirstMessageTaken: (id: number) => void
   /** Every agent's unsent message, by the primary chat's key or a specialist's id. */
   drafts: Partial<Record<string, string>>
   onDraftChange: (agent: string, value: string) => void
@@ -797,6 +846,8 @@ function AgentsView({
           setThreadId={setPrimaryThread}
           draft={drafts[PRIMARY_CHAT_AGENT] ?? ""}
           onDraftChange={(value) => onDraftChange(PRIMARY_CHAT_AGENT, value)}
+          firstMessage={firstMessage}
+          onFirstMessageTaken={onFirstMessageTaken}
           onComposingChange={onComposingChange}
           inOverview={inAgentOverview}
           onOpenOverview={onOpenAgentOverview}

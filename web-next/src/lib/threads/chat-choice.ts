@@ -39,6 +39,11 @@ export const PRIMARY_CHAT_AGENT = "primary"
 
 const NEW_CHAT = "new"
 
+/** Whether two scopes are the same member's, in the same organization. */
+export function sameChatScope(a: ChatScope, b: ChatScope): boolean {
+  return a.organizationId === b.organizationId && a.userId === b.userId
+}
+
 function choiceKey(scope: ChatScope, agentId: string) {
   return `oryxa.chat.${scope.organizationId}.${scope.userId}.${agentId}`
 }
@@ -131,6 +136,7 @@ export async function openingThread({
 
 let latestRequest: PrimaryChatRequest | null = null
 let nextRequestId = 1
+let handledRequestId = 0
 const listeners = new Set<() => void>()
 
 /**
@@ -144,6 +150,18 @@ export function requestPrimaryChat(
 ) {
   latestRequest = { ...target, scope, id: nextRequestId++ }
   for (const listener of listeners) listener()
+}
+
+/**
+ * Claims a request for whoever acts on it: true the first time for each `id`,
+ * false after. The panel calls it for the request it reads, so however often
+ * it renders, or the page mounts it again, an old request is never opened
+ * twice; and a request made before the panel mounted is still there to claim.
+ */
+export function claimPrimaryChatRequest(id: number): boolean {
+  if (id <= handledRequestId) return false
+  handledRequestId = id
+  return true
 }
 
 function subscribe(listener: () => void) {
