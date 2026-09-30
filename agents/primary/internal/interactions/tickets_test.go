@@ -27,7 +27,7 @@ func testTickets(t *testing.T) *Tickets {
 
 func validClaims() TicketClaims {
 	return TicketClaims{
-		RequestID: "irq_1", OwnerUserID: "user_b", NoticeID: "ntc_1", Choice: ChoiceAccess,
+		RequestID: "irq_1", OwnerUserID: "user_b", NoticeID: "ntc_1", Kind: TicketConsent, Choice: ChoiceAccess,
 		ExpiresAt: ticketNow.Add(time.Hour),
 	}
 }

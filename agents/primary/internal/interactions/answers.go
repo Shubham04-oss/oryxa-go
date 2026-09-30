@@ -383,22 +383,27 @@ func withTexts(result agents.InteractionResult, texts []string) agents.Interacti
 	return result
 }
 
+// validReview is whether action is one a review takes.
+func validReview(action string) bool {
+	return action == ReviewSend || action == ReviewSendMasked || action == ReviewWithhold
+}
+
 // ReviewAsOwner records the addressed member's review of an answer the guard
 // held for them: ReviewSend delivers it as it was held, ReviewSendMasked its
 // fully masked version, and either completes the request (or fails it, when
 // the answer held was a failure); ReviewWithhold ends it withheld, with no
-// answer delivered. Only the member's own signed-in session reviews, exactly
-// as only it decides as the owner (DecideAsOwner): the actor must be marked
-// agents.SessionMember, which only the HTTP API's member path does, and
-// agents' tools see agents.InteractionService, which has no such method. It
-// reviews only a request in review that has not expired.
+// answer delivered. Only the member's own signed-in session reviews here,
+// exactly as only it decides as the owner (DecideAsOwner): the actor must be
+// marked agents.SessionMember, which only the HTTP API's member path does, and
+// agents' tools see agents.InteractionService, which has no such method. The
+// one other way a review is made is a click on the review Oryxa sent the member
+// in Slack, with its ticket (ReviewFromSlack). Both are the one review
+// (review), and whichever comes first is the review: the other finds the
+// answer no longer in review (ErrConflict).
 //
-// Sending the answer to a request made in a teamspace reads the teamspace
-// again first, with token, the member's own, as approving it did
-// (ownerMayApprove): an answer whose request no longer stands there, the
-// member who asked having left its team say, is withheld by Oryxa with the
-// reason instead, and the member told so (ErrClosed). Withholding needs
-// nothing to remain.
+// token is the member's own, from their session. It is needed only to send the
+// answer to a request made in a teamspace, whose standing is read again with
+// it first (review, mayStillSend).
 func (service *Service) ReviewAsOwner(ctx context.Context, actor agents.InteractionActor, token, id string, input agents.InteractionReviewInput) (agents.Interaction, error) {
 	if actor.Session != agents.SessionMember {
 		return agents.Interaction{}, fmt.Errorf("%w: only the member, in their own signed-in session, reviews an answer held for them", ErrForbidden)
@@ -411,11 +416,32 @@ func (service *Service) ReviewAsOwner(ctx context.Context, actor agents.Interact
 		return agents.Interaction{}, ErrForbidden
 	}
 	action := strings.ToLower(strings.TrimSpace(input.Action))
-	if action != ReviewSend && action != ReviewSendMasked && action != ReviewWithhold {
+	if !validReview(action) {
 		return agents.Interaction{}, fmt.Errorf("%w: action must be send, send_masked or withhold", ErrInvalid)
 	}
+	decider := agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID}
+	return service.viewed(actor)(service.review(ctx, request, action, decider, token))
+}
+
+// review records the addressed member's review of the answer held for them,
+// once who is reviewing is proved to be that member: by their own session
+// (ReviewAsOwner) or by a ticket of their review in Slack (ReviewFromSlack). It
+// reviews only a request in review that has not expired, sends masked only an
+// answer that has a masked version, and records the review with decider.
+//
+// Sending the answer to a request made in a teamspace reads the teamspace
+// again first, with token, the member's own, as approving it did
+// (ownerMayApprove): an answer whose request no longer stands there, the
+// member who asked having left its team say, is withheld by Oryxa with the
+// reason instead, and the member told so (ErrClosed). Without a token, which a
+// click in Slack never carries, such an answer is not sent at all (ErrInvalid),
+// and is left for the member to send in Oryxa. Withholding needs nothing to
+// remain.
+func (service *Service) review(ctx context.Context, request agents.Interaction, action string, decider agents.InteractionDecider, token string) (agents.Interaction, error) {
 	now := service.now().UTC()
 	switch {
+	case !validReview(action):
+		return agents.Interaction{}, fmt.Errorf("%w: action must be send, send_masked or withhold", ErrInvalid)
 	case !request.ExpiresAt.After(now):
 		// An answer still in review past its request's expiry reads as
 		// withheld already (view), and is no longer the member's to send.
@@ -430,9 +456,7 @@ func (service *Service) ReviewAsOwner(ctx context.Context, actor agents.Interact
 			return agents.Interaction{}, err
 		}
 	}
-	return service.viewed(actor)(service.repository.Review(ctx, request.ID, agents.InteractionReview{
-		Action: action, DecidedBy: agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID},
-	}, now))
+	return service.repository.Review(ctx, request.ID, agents.InteractionReview{Action: action, DecidedBy: decider}, now)
 }
 
 // mayStillSend reads again, with the member's own token, whether a request
