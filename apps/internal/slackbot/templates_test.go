@@ -147,8 +147,8 @@ func TestTheOwnerNoticeHasOnlyTheAskerTheQuestionAndThreeButtons(t *testing.T) {
 		t.Fatalf("buttons = %d", len(buttons))
 	}
 	for i, want := range []struct{ label, action, value string }{
-		{"Share AI summary only", ActionSummary, "t1.a.b"},
-		{"Give access for 1 hour", ActionAccess, "t1.c.d"},
+		{"Share answer", ActionSummary, "t1.a.b"},
+		{"Allow for 1 hour", ActionAccess, "t1.c.d"},
 		{"Deny", ActionDeny, "t1.e.f"},
 	} {
 		button := buttons[i].(map[string]any)

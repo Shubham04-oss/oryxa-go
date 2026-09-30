@@ -41,7 +41,7 @@ const LeaseTTL = time.Hour
 // What the asker reads of an owner's choice, in fixed words: an owner deciding
 // with a button writes nothing of their own.
 const (
-	summaryApproved = "Approved: AI summary only."
+	summaryApproved = "Approved: answer shared."
 	consentDenied   = "Denied."
 )
 

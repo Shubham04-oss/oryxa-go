@@ -15,7 +15,7 @@
           "action_id": "consent_summary",
           "text": {
             "emoji": false,
-            "text": "Share AI summary only",
+            "text": "Share answer",
             "type": "plain_text"
           },
           "type": "button",
@@ -25,7 +25,7 @@
           "action_id": "consent_access",
           "text": {
             "emoji": false,
-            "text": "Give access for 1 hour",
+            "text": "Allow for 1 hour",
             "type": "plain_text"
           },
           "type": "button",

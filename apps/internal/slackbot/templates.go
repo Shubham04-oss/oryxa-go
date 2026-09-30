@@ -286,7 +286,9 @@ type ownerNoticeParams struct {
 
 // renderOwnerNotice is the owner's notice, in a direct message: who is asking,
 // what, and three buttons. It says nothing else. The owner decides with what
-// they see here and on the card in Oryxa, which holds the rest.
+// they see here and on the card in Oryxa, which holds the rest. The buttons'
+// words are the card's, from web-next/src/components/request-card-format.ts
+// (Share answer, Allow for 1 hour, Deny): keep the two the same.
 func renderOwnerNotice(r renderer, raw json.RawMessage) (Rendered, error) {
 	var p ownerNoticeParams
 	if err := decodeParams(raw, &p); err != nil {
@@ -309,8 +311,8 @@ func renderOwnerNotice(r renderer, raw json.RawMessage) (Rendered, error) {
 		Blocks: []any{
 			section(asker + " is asking you through Oryxa:\n" + quoted(r.shown(p.Question, maxQuestionRunes))),
 			actionsBlock("consent",
-				button(ActionSummary, "Share AI summary only", p.Tickets.Summary),
-				button(ActionAccess, "Give access for 1 hour", p.Tickets.Access),
+				button(ActionSummary, "Share answer", p.Tickets.Summary),
+				button(ActionAccess, "Allow for 1 hour", p.Tickets.Access),
 				button(ActionDeny, "Deny", p.Tickets.Deny),
 			),
 		},
@@ -373,7 +375,8 @@ func renderNoticeSettled(r renderer, raw json.RawMessage) (Rendered, error) {
 	var outcome string
 	switch p.Decision {
 	case DecisionSummary:
-		outcome = "AI summary only"
+		// What the button the owner pressed said: Share answer.
+		outcome = "answer shared"
 	case DecisionAccess:
 		outcome = "access for 1 hour"
 	case DecisionDenied, DecisionWithdrawn, DecisionExpired, DecisionAnswered:
