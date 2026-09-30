@@ -22,10 +22,14 @@ import (
 )
 
 // fakeGuard answers every answer with its verdict, or finds nothing when it
-// has none, and keeps the texts it was given.
+// has none, and keeps the texts it was given and what it was told to judge
+// them by.
 type fakeGuard struct {
 	verdict *answerguard.Verdict
 	checked [][]string
+	// relevance is what each check was told, in order: the request, the run's
+	// tools, the mode, and whether the organization is regulated.
+	relevance []*answerguard.RelevanceInput
 }
 
 type fakeWorkspacePolicy struct {
@@ -37,8 +41,9 @@ func (provider fakeWorkspacePolicy) Get(context.Context, string) (policy.Setting
 	return provider.settings, provider.err
 }
 
-func (guard *fakeGuard) Check(_ context.Context, texts []string) answerguard.Verdict {
+func (guard *fakeGuard) CheckWith(_ context.Context, texts []string, relevance *answerguard.RelevanceInput) answerguard.Verdict {
 	guard.checked = append(guard.checked, slices.Clone(texts))
+	guard.relevance = append(guard.relevance, relevance)
 	if guard.verdict == nil {
 		return answerguard.Verdict{State: answerguard.StateClear, Texts: slices.Clone(texts)}
 	}

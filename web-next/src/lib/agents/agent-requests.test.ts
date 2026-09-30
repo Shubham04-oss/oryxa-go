@@ -1,11 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
+  AgentRequestAlreadyDecided,
+  asksForConsent,
+  canCarrySecret,
+  consentAgentRequest,
   decideAgentRequest,
   getAgentRequest,
+  isLeaseLive,
+  isSecretGone,
+  listAgentActivity,
   listAgentRequests,
+  openAgentRequestSecret,
+  originOf,
   respondToAgentRequest,
+  revokeAgentLease,
+  revokeAgentRequestSecret,
+  reviewAgentRequest,
+  shareAgentRequestSecret,
+  winnerOf,
 } from "./agent-requests"
-import type { AgentRequest, DecideAgentRequestInput } from "./agent-requests"
+import type {
+  AgentLease,
+  AgentRequest,
+  DecideAgentRequestInput,
+} from "./agent-requests"
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -162,5 +180,370 @@ describe("agent requests API", () => {
         summary: "No",
       })
     ).rejects.toMatchObject({ status: 403, code: "forbidden" })
+  })
+})
+
+const lease: AgentLease = {
+  id: "ils_1",
+  organization_id: "org-1",
+  asker_user_id: "user-2",
+  owner_user_id: "user-1",
+  channel_id: "C123",
+  thread_ts: "1727600000.000100",
+  request_id: "irq_1",
+  created_at: "2026-09-29T14:02:00Z",
+  expires_at: "2026-09-29T15:02:00Z",
+}
+
+describe("listing by origin and ask", () => {
+  it("sends the filters that are set, and no others", async () => {
+    const fetchMock = stubFetch(() => json({ requests: [] }))
+
+    await listAgentRequests("org-1", "inbox", { limit: 20, origin: "slack" })
+    await listAgentRequests("org-1", "sent", { askId: "iak_9" })
+    await listAgentRequests("org-1", "inbox", { origin: "agent" })
+
+    expect(sent(fetchMock).map(([, url]) => url)).toEqual([
+      "/v1/organizations/org-1/agent-requests/inbox?limit=20&origin=slack",
+      "/v1/organizations/org-1/agent-requests/sent?ask_id=iak_9",
+      "/v1/organizations/org-1/agent-requests/inbox?origin=agent",
+    ])
+  })
+
+  const slack: AgentRequest = { ...request, id: "irq_slack", origin: "slack" }
+  const agent: AgentRequest = { ...request, id: "irq_agent", origin: "agent" }
+  const legacy: AgentRequest = { ...request, id: "irq_legacy" }
+  const anotherSlack: AgentRequest = {
+    ...slack,
+    id: "irq_another_slack",
+  }
+  const mixed = [slack, legacy, agent, anotherSlack]
+
+  it.each(["inbox", "sent"] as const)(
+    "filters a mixed %s when an older server ignores origin, treating legacy requests as agents'",
+    async (box) => {
+      const fetchMock = stubFetch(() => json({ requests: mixed }))
+
+      expect(
+        await listAgentRequests("org-1", box, { origin: "slack" })
+      ).toEqual([slack, anotherSlack])
+      expect(
+        await listAgentRequests("org-1", box, { origin: "agent" })
+      ).toEqual([legacy, agent])
+      expect(sent(fetchMock)).toEqual([
+        [
+          "GET",
+          `/v1/organizations/org-1/agent-requests/${box}?origin=slack`,
+          undefined,
+        ],
+        [
+          "GET",
+          `/v1/organizations/org-1/agent-requests/${box}?origin=agent`,
+          undefined,
+        ],
+      ])
+    }
+  )
+
+  it.each(["inbox", "sent"] as const)(
+    "leaves an unfiltered %s in the server's order",
+    async (box) => {
+      stubFetch(() => json({ requests: mixed }))
+
+      expect(await listAgentRequests("org-1", box)).toEqual(mixed)
+    }
+  )
+})
+
+describe("reviewing a held answer", () => {
+  it("posts only the action", async () => {
+    const fetchMock = stubFetch(() => json(request))
+
+    await reviewAgentRequest("org-1", "irq_1", "send_masked")
+
+    expect(sent(fetchMock)).toEqual([
+      [
+        "POST",
+        "/v1/organizations/org-1/agent-requests/irq_1/review",
+        '{"action":"send_masked"}',
+      ],
+    ])
+  })
+})
+
+describe("the owner's consent choice", () => {
+  it("posts the choice and answers with the request and the lease access gave", async () => {
+    const decided = { ...request, status: "approved", revision: 2 }
+    const fetchMock = stubFetch(() => json({ request: decided, lease }))
+
+    const result = await consentAgentRequest("org-1", "irq_1", "access")
+
+    expect(result).toEqual({ request: decided, lease })
+    expect(sent(fetchMock)).toEqual([
+      [
+        "POST",
+        "/v1/organizations/org-1/agent-requests/irq_1/consent",
+        '{"choice":"access"}',
+      ],
+    ])
+  })
+
+  it("throws the winner of a choice that lost", async () => {
+    stubFetch(() =>
+      json(
+        {
+          error: {
+            code: "already_decided",
+            message: "agent request was already decided",
+          },
+          winner: {
+            request_id: "irq_1",
+            status: "approved",
+            revision: 2,
+            decision: "approved",
+            consent: "summary",
+            decided_by: { kind: "member", user_id: "user-1", surface: "slack" },
+            decided_at: "2026-09-29T14:02:00Z",
+            leaked: "not a field of the winner",
+          },
+        },
+        409
+      )
+    )
+
+    const lost = await consentAgentRequest("org-1", "irq_1", "deny").catch(
+      (error: unknown) => error
+    )
+
+    expect(lost).toBeInstanceOf(AgentRequestAlreadyDecided)
+    expect(lost).toMatchObject({
+      status: 409,
+      code: "already_decided",
+      message: "agent request was already decided",
+      winner: {
+        request_id: "irq_1",
+        status: "approved",
+        revision: 2,
+        decision: "approved",
+        consent: "summary",
+        decided_by: { kind: "member", user_id: "user-1", surface: "slack" },
+        decided_at: "2026-09-29T14:02:00Z",
+      },
+    })
+    expect((lost as AgentRequestAlreadyDecided).winner).not.toHaveProperty(
+      "leaked"
+    )
+  })
+
+  it("still says it lost when Go names no winner", async () => {
+    stubFetch(() =>
+      json({ error: { code: "already_decided", message: "decided" } }, 409)
+    )
+
+    await expect(
+      consentAgentRequest("org-1", "irq_1", "summary")
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "already_decided",
+      winner: undefined,
+    })
+  })
+
+  it("keeps the codes of every other refusal", async () => {
+    const answers = [
+      json({ error: { code: "request_expired", message: "expired" } }, 409),
+      json({ error: { code: "invalid_request", message: "no consent" } }, 400),
+      json({ error: { code: "consent_unavailable", message: "off" } }, 503),
+    ]
+    stubFetch(() => answers.shift() ?? json({}))
+
+    for (const expected of [
+      { status: 409, code: "request_expired" },
+      { status: 400, code: "invalid_request" },
+      { status: 503, code: "consent_unavailable" },
+    ]) {
+      const refused = await consentAgentRequest(
+        "org-1",
+        "irq_1",
+        "summary"
+      ).catch((error: unknown) => error)
+      expect(refused).not.toBeInstanceOf(AgentRequestAlreadyDecided)
+      expect(refused).toMatchObject(expected)
+    }
+  })
+
+  it("reads a winner as data: what is not a winner is none", () => {
+    expect(winnerOf(undefined)).toBeUndefined()
+    expect(winnerOf("approved")).toBeUndefined()
+    expect(
+      winnerOf({ request_id: "irq_1", status: "sideways", revision: 1 })
+    ).toBeUndefined()
+    expect(
+      winnerOf({ request_id: "irq_1", status: "expired", revision: 3 })
+    ).toEqual({ request_id: "irq_1", status: "expired", revision: 3 })
+  })
+})
+
+describe("leases and Activity", () => {
+  it("lists the latest activity", async () => {
+    const entries = [
+      {
+        kind: "asked",
+        at: "2026-09-29T14:00:00Z",
+        role: "owner",
+        with_user_id: "user-2",
+        request_id: "irq_1",
+        status: "pending",
+      },
+    ]
+    const fetchMock = stubFetch(() => json({ activity: entries }))
+
+    expect(await listAgentActivity("org-1", { limit: 100 })).toEqual(entries)
+    await listAgentActivity("org-1")
+
+    expect(sent(fetchMock).map(([method, url]) => [method, url])).toEqual([
+      ["GET", "/v1/organizations/org-1/agent-requests/activity?limit=100"],
+      ["GET", "/v1/organizations/org-1/agent-requests/activity"],
+    ])
+  })
+
+  it("revokes a lease and answers it as it now stands", async () => {
+    const ended = { ...lease, revoked_at: "2026-09-29T14:30:00Z" }
+    const fetchMock = stubFetch(() => json({ lease: ended }))
+
+    expect(await revokeAgentLease("org-1", "ils_1")).toEqual(ended)
+    expect(sent(fetchMock)).toEqual([
+      ["DELETE", "/v1/organizations/org-1/agent-leases/ils_1", undefined],
+    ])
+  })
+
+  it("knows a live lease from one that ended or ran out", () => {
+    const now = Date.parse("2026-09-29T14:30:00Z")
+    expect(isLeaseLive(lease, now)).toBe(true)
+    expect(isLeaseLive(lease, Date.parse("2026-09-29T15:02:00Z"))).toBe(false)
+    expect(
+      isLeaseLive({ ...lease, revoked_at: "2026-09-29T14:10:00Z" }, now)
+    ).toBe(false)
+  })
+})
+
+describe("one-time secrets", () => {
+  it("shares a value with a lifetime, or with none", async () => {
+    const fetchMock = stubFetch(() =>
+      json({ request_id: "irq_1", expires_at: "2026-09-29T15:00:00Z" })
+    )
+
+    expect(
+      await shareAgentRequestSecret("org-1", "irq_1", {
+        value: "hunter2",
+        ttlSeconds: 600,
+      })
+    ).toEqual({ request_id: "irq_1", expires_at: "2026-09-29T15:00:00Z" })
+    await shareAgentRequestSecret("org-1", "irq_1", { value: "hunter3" })
+
+    expect(sent(fetchMock)).toEqual([
+      [
+        "PUT",
+        "/v1/organizations/org-1/agent-requests/irq_1/secret",
+        '{"value":"hunter2","ttl_seconds":600}',
+      ],
+      [
+        "PUT",
+        "/v1/organizations/org-1/agent-requests/irq_1/secret",
+        '{"value":"hunter3"}',
+      ],
+    ])
+  })
+
+  it("opens a secret once: the second call is gone", async () => {
+    const answers = [
+      json({ value: "hunter2", expires_at: "2026-09-29T15:00:00Z" }),
+      json({ error: { code: "secret_gone", message: "already opened" } }, 410),
+    ]
+    const fetchMock = stubFetch(() => answers.shift() ?? json({}))
+
+    expect(await openAgentRequestSecret("org-1", "irq_1")).toEqual({
+      value: "hunter2",
+      expires_at: "2026-09-29T15:00:00Z",
+    })
+    const gone = await openAgentRequestSecret("org-1", "irq_1").catch(
+      (error: unknown) => error
+    )
+
+    expect(isSecretGone(gone)).toBe(true)
+    expect(gone).toMatchObject({ status: 410, code: "secret_gone" })
+    expect(sent(fetchMock).map(([method]) => method)).toEqual(["GET", "GET"])
+  })
+
+  it("takes a secret back, whether or not one was still there", async () => {
+    const fetchMock = stubFetch(() => new Response(null, { status: 204 }))
+
+    await expect(
+      revokeAgentRequestSecret("org-1", "irq_1")
+    ).resolves.toBeUndefined()
+    expect(sent(fetchMock)).toEqual([
+      [
+        "DELETE",
+        "/v1/organizations/org-1/agent-requests/irq_1/secret",
+        undefined,
+      ],
+    ])
+  })
+
+  it("does not take other errors for a secret that is gone", () => {
+    expect(isSecretGone(new Error("offline"))).toBe(false)
+    expect(isSecretGone(undefined)).toBe(false)
+  })
+})
+
+describe("what a request is", () => {
+  const slack: AgentRequest = {
+    ...request,
+    origin: "slack",
+    requested_permissions: ["consent:summary", "consent:access"],
+  }
+
+  it("asks for consent only when it asks for both consent permissions", () => {
+    expect(asksForConsent(slack)).toBe(true)
+    expect(asksForConsent({ requested_permissions: ["consent:summary"] })).toBe(
+      false
+    )
+    expect(asksForConsent(request)).toBe(false)
+  })
+
+  it("was an agent's unless it says Slack", () => {
+    expect(originOf(slack)).toBe("slack")
+    expect(originOf(request)).toBe("agent")
+    expect(originOf({ origin: "agent" })).toBe("agent")
+  })
+
+  it("carries a secret only once approved with access, and not after it closed", () => {
+    const decision = {
+      decision: "approved" as const,
+      message: "",
+      allowed_tools: [],
+      granted_permissions: [],
+      decided_at: "2026-09-29T14:02:00Z",
+    }
+    const access = { ...decision, consent: "access" as const }
+    const summary = { ...decision, consent: "summary" as const }
+
+    expect(canCarrySecret({ status: "approved", decision: access })).toBe(true)
+    expect(canCarrySecret({ status: "review", decision: access })).toBe(true)
+    expect(canCarrySecret({ status: "completed", decision: access })).toBe(true)
+    expect(canCarrySecret({ status: "approved", decision: summary })).toBe(
+      false
+    )
+    expect(canCarrySecret({ status: "pending", decision: undefined })).toBe(
+      false
+    )
+    for (const status of [
+      "expired",
+      "withheld",
+      "failed",
+      "rejected",
+    ] as const) {
+      expect(canCarrySecret({ status, decision: access })).toBe(false)
+    }
   })
 })

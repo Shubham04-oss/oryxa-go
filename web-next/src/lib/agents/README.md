@@ -28,8 +28,14 @@ Each domain lists its calls, then its query options.
   - `agentWorkflowsQueryOptions`, `agentWorkflowQueryOptions`,
     `workflowExecutionsQueryOptions`, `workflowExecutionQueryOptions`.
 - **Agent requests**, `agent-requests.ts`:
-  - `listAgentRequests(box)`, `getAgentRequest`, `decideAgentRequest`,
-    `respondToAgentRequest`;
+  - `listAgentRequests(box, { origin, askId })`, `getAgentRequest`,
+    `decideAgentRequest`, `respondToAgentRequest`, `reviewAgentRequest`;
+  - the Slack consent loop's calls: `consentAgentRequest` (the owner's
+    choice, `summary`, `access` or `deny`; a choice that lost the race to a
+    click in Slack throws `AgentRequestAlreadyDecided`, carrying the winner),
+    `revokeAgentLease`, `listAgentActivity`, and a credential's three calls,
+    `shareAgentRequestSecret`, `openAgentRequestSecret` (once; a second open
+    is `isSecretGone`) and `revokeAgentRequestSecret`;
   - `agentRequestsQueryOptions`, `agentRequestQueryOptions`.
 - **Organization agent**, `organization-agent.ts`:
   - `getOrganizationAgent`, `updateOrganizationAgent`,

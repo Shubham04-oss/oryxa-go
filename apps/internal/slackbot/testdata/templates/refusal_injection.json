@@ -1,0 +1,12 @@
+{
+  "text": "I can't help with that here.",
+  "blocks": [
+    {
+      "text": {
+        "text": "I can't help with that here.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

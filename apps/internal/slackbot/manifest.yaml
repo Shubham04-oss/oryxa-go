@@ -1,0 +1,75 @@
+# Oryxa's Slack app, as Slack's app manifest.
+#
+# This file is the only way the app's scopes, events and URLs change. Create
+# the app from it (api.slack.com/apps, "Create New App", "From a manifest"),
+# and change it here, never in Slack's settings: manifest_test.go pins every
+# value below, and the code that asks for the install (BotScopes) is held to
+# the scopes listed here.
+#
+# The URLs are production's: APPS_PUBLIC_BASE_URL is https://api.oryxa.in. A
+# deployment on another host changes them here, in the test and in the app
+# together. Slack does not check a request URL when the app is created, so
+# verify both in the app's settings after the first deploy.
+#
+# Token rotation is off, and stays off until the surface can refresh a token.
+# Slack turns it on for good, so it is not turned on to try.
+_metadata:
+  major_version: 2
+  minor_version: 1
+
+display_information:
+  name: Oryxa
+  description: Ask a question in Slack. Oryxa asks the person who knows, and the answer comes back only if they approve it.
+  long_description: >-
+    Mention Oryxa in a channel to ask a question. Oryxa finds the person who would know and asks them in a direct
+    message, with three choices: share an AI summary only, give access for an hour, or deny. If they approve,
+    their agent answers in your thread. Nothing is shared without the owner's say.
+  background_color: "#1f2937"
+
+features:
+  app_home:
+    home_tab_enabled: false
+    # The Messages tab is where people see Oryxa's direct messages. It is
+    # read-only: people ask in channels, and answer notices with their buttons.
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: Oryxa
+    always_online: false
+
+oauth_config:
+  redirect_urls:
+    - https://api.oryxa.in/v1/apps/slack/install/callback
+  scopes:
+    bot:
+      # The entry: people ask Oryxa by @-mentioning it in a channel it is in.
+      - app_mentions:read
+      # Posts what Oryxa says: the owner's notice, its updates, and the answers.
+      - chat:write
+      # Opens the owner's direct message, where the notice with its buttons goes.
+      - im:write
+      # Reads who is named in a question, to match them to members of the organization.
+      - users:read
+      # Matches a person to their Oryxa account by email, and does nothing else with it.
+      - users:read.email
+      # Tells whether a public channel is shared with another organization.
+      - channels:read
+      # Tells whether a private channel is private and shared with nobody, for the channels an admin marked high priority.
+      - groups:read
+
+settings:
+  event_subscriptions:
+    request_url: https://api.oryxa.in/v1/apps/slack/events
+    bot_events:
+      # A message that mentions the bot: the only message Oryxa ever reads.
+      - app_mention
+      # An admin removed the app, so its install ends.
+      - app_uninstalled
+      # The bot's token was revoked, so its install ends.
+      - tokens_revoked
+  interactivity:
+    is_enabled: true
+    request_url: https://api.oryxa.in/v1/apps/slack/interactivity
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

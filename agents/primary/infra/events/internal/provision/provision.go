@@ -157,8 +157,11 @@ func Run(ctx context.Context, eventBridgeClient eventBridgeAPI, sqsClient sqsAPI
 
 // EventPattern matches exactly the events agents consumes: app batches,
 // interaction lifecycle changes, shared teamspace publications for
-// organization synthesis, auth's news of a member or organization gone, and
-// human-team deletion for shared teamspace cleanup.
+// organization synthesis, auth's news of a member or organization gone,
+// human-team deletion for shared teamspace cleanup, and apps' three Slack
+// events (a message that mentioned the bot, a click on one of its buttons, and
+// a workspace's install ending). Run it after the release that consumes a type
+// it names: a consumer that does not know one fails it.
 func EventPattern() (string, error) {
 	subscriptions := inbound.Subscriptions()
 	var sources []map[string][]string

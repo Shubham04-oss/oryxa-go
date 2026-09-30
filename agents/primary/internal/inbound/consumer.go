@@ -4,7 +4,12 @@
 // membership removal that takes private state with it, a person leaving a
 // human team, which takes their contributions to its teamspace and says they
 // left it, and human-team deletion that removes the corresponding shared
-// teamspace.
+// teamspace. When the Slack consent loop is on it also hears what happens in
+// Slack, from apps: a message that mentioned the bot or a click on one of its
+// buttons is a job for the router, and a workspace uninstalling the app has
+// what the loop holds for it removed. The ledger's request events reach the
+// service that says what became of a Slack request before the delivery recorder
+// sees them.
 //
 // Batching decides when app triggers make a batch, while interaction events
 // carry routing identity and state only; authoritative request content stays
@@ -22,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -39,6 +45,8 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactiondelivery"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/slackrouter"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/surfaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
@@ -49,11 +57,22 @@ const component = "agents"
 
 // Subscriptions are the detail types agents consumes, by source, for a host
 // provisioning the rule that feeds its queue.
+//
+// The Slack consent loop adds apps' three Slack events: the two the router turns
+// into jobs, and a workspace's install ending, which is what tells agents to
+// forget the workspace. They are subscribed to whether the loop is on or not,
+// since what a rule matches is provisioned apart from any one process's
+// switches; a process with the loop off acknowledges them and does nothing.
+// Provisioning widens the rule only after the release that knows the types,
+// which the runbook says: a consumer that did not know one would fail it, and
+// the queue would move it to its dead-letter queue.
 func Subscriptions() map[string][]string {
+	apps := append(slices.Clone(slackrouter.Subscriptions()[appsv1.Source]), appsv1.SlackInstallChangedDetailType)
 	return map[string][]string{
 		batchingv1.Source: {batchingv1.TriggerBatchReadyDetailType},
 		authv1.Source:     {authv1.MemberRemovedDetailType, authv1.OrganizationDeletedDetailType},
 		teamsv1.Source:    {teamsv1.TeamDeletedDetailType, teamsv1.MemberRemovedDetailType},
+		appsv1.Source:     apps,
 		agentsv1.Source: {
 			agentsv1.InteractionRequestedDetailType,
 			agentsv1.InteractionDecidedDetailType,
@@ -94,6 +113,18 @@ type TeamForgetter func(ctx context.Context, organizationID, teamID string) erro
 // has one. removedAt is when the membership ended.
 type TeamMemberForgetter func(ctx context.Context, organizationID, teamID, userID string, removedAt time.Time) error
 
+// EventHandler is a service that turns a bus event it was handed into its own
+// durable work: slackrouter.Worker and surfaces.Worker. It never calls another
+// service while handling: an error is an event that cannot be read, or a
+// database that did not answer, and the queue delivers it again.
+type EventHandler interface {
+	HandleEvent(ctx context.Context, detailType, eventID string, data []byte) error
+}
+
+// WorkspaceForgetter removes what a service holds for a Slack workspace an
+// organization's install of the app ended in (Slack calls a workspace a team).
+type WorkspaceForgetter func(ctx context.Context, organizationID, teamID string) error
+
 // Consumer dispatches agents' queue.
 type Consumer struct {
 	recorder             Recorder
@@ -121,6 +152,38 @@ type Consumer struct {
 	// It is called from whichever goroutine handled the message, so it must
 	// be safe to call at the same time as itself.
 	interactionRecorded func()
+	// slackRouter takes the events apps publishes for a delivery from Slack,
+	// surfaces the ledger's request events, and forgetWorkspace what the loop
+	// holds for a workspace whose install ended. All are unset while the Slack
+	// consent loop is off.
+	slackRouter     EventHandler
+	surfaces        EventHandler
+	forgetWorkspace []WorkspaceForgetter
+}
+
+// WithSlackRouter hands apps' Slack delivery events, the two slackrouter.Handles
+// names, to the router. Without it they are acknowledged and dropped: the loop
+// is off, and nothing would act on them.
+func (consumer *Consumer) WithSlackRouter(router EventHandler) *Consumer {
+	consumer.slackRouter = router
+	return consumer
+}
+
+// WithSurfaces hands the ledger's request events, the three surfaces.Handles
+// names, to the service that says in Slack what became of a request asked there.
+// It hears each before the delivery recorder does, which stops at an answer held
+// for review, since a held answer is a status in the thread.
+func (consumer *Consumer) WithSurfaces(handler EventHandler) *Consumer {
+	consumer.surfaces = handler
+	return consumer
+}
+
+// WithWorkspaceForgetters adds the cleanup run when apps says a workspace's
+// install ended. Each runs whatever became of the rest, and the event fails,
+// to be delivered again, while any of them does.
+func (consumer *Consumer) WithWorkspaceForgetters(forget ...WorkspaceForgetter) *Consumer {
+	consumer.forgetWorkspace = append(consumer.forgetWorkspace, forget...)
+	return consumer
 }
 
 // WithOrganizationSynthesisRecorder records shared-entry events for the
@@ -263,7 +326,17 @@ func (consumer *Consumer) dispatch(ctx context.Context, event eventBridgeEvent, 
 		(event.DetailType == agentsv1.InteractionRequestedDetailType ||
 			event.DetailType == agentsv1.InteractionDecidedDetailType ||
 			event.DetailType == agentsv1.InteractionCompletedDetailType):
+		// What became of a request asked in Slack is said in Slack first, and
+		// for every status: the delivery recorder below returns early for a
+		// held answer, which is the very one the thread needs to say.
+		if err := consumer.slackSurfaces(ctx, event.DetailType, envelope); err != nil {
+			return err
+		}
 		return consumer.interactionChanged(ctx, event.DetailType, envelope)
+	case event.Source == appsv1.Source && slackrouter.Handles(event.DetailType):
+		return consumer.slackInbound(ctx, event.DetailType, envelope)
+	case event.Source == appsv1.Source && event.DetailType == appsv1.SlackInstallChangedDetailType:
+		return consumer.slackInstallChanged(ctx, envelope)
 	case event.Source == agentsv1.Source && event.DetailType == agentsv1.TeamspaceEntryPublishedDetailType:
 		if consumer.organizationRecorder == nil {
 			return fmt.Errorf("event %s: organization-agent synthesis is not configured", envelope.EventID)
@@ -340,6 +413,64 @@ func (consumer *Consumer) dispatch(ctx context.Context, event eventBridgeEvent, 
 	default:
 		return fmt.Errorf("event %s: no handler for %s from %s", event.ID, event.DetailType, event.Source)
 	}
+}
+
+// slackSurfaces hands a request event to the service that says what became of
+// a request asked in Slack. It does nothing while the loop is off, and for the
+// nearly all of the ledger's events that are not about a Slack request the
+// service returns before reading anything.
+func (consumer *Consumer) slackSurfaces(ctx context.Context, detailType string, envelope receivedEnvelope) error {
+	if consumer.surfaces == nil || !surfaces.Handles(detailType) {
+		return nil
+	}
+	return consumer.surfaces.HandleEvent(ctx, detailType, envelope.EventID, envelope.Data)
+}
+
+// slackInbound hands a delivery from Slack, which apps has verified and kept and
+// whose event carries ids alone, to the router as a job. With the loop off it is
+// acknowledged and dropped: apps purges what it kept after seven days, and a
+// mention from before the loop was switched on is not one to answer later.
+func (consumer *Consumer) slackInbound(ctx context.Context, detailType string, envelope receivedEnvelope) error {
+	if consumer.slackRouter == nil {
+		consumer.logger.InfoContext(ctx, "a Slack delivery arrived, and the Slack consent loop is off; it is dropped",
+			"event_id", envelope.EventID, "detail_type", detailType)
+		return nil
+	}
+	return consumer.slackRouter.HandleEvent(ctx, detailType, envelope.EventID, envelope.Data)
+}
+
+// slackInstallChanged forgets what the loop holds for a workspace when apps says
+// its install ended: an admin removing the app, Slack revoking the bot's token,
+// the organization disconnecting it. An install coming or going active again
+// needs nothing done: whoever asks next is matched again.
+func (consumer *Consumer) slackInstallChanged(ctx context.Context, envelope receivedEnvelope) error {
+	var changed appsv1.SlackInstallChanged
+	if err := json.Unmarshal(envelope.Data, &changed); err != nil {
+		return fmt.Errorf("event %s: decode Slack install change: %w", envelope.EventID, err)
+	}
+	if changed.OrganizationID == "" || changed.TeamID == "" {
+		return fmt.Errorf("event %s: a Slack install change needs an organization and a workspace", envelope.EventID)
+	}
+	if changed.State != appsv1.SlackInstallEnded {
+		return nil
+	}
+	if len(consumer.forgetWorkspace) == 0 {
+		consumer.logger.InfoContext(ctx, "a Slack install ended, and the Slack consent loop is off; nothing to forget",
+			"event_id", envelope.EventID, "organization_id", changed.OrganizationID, "reason", changed.Reason)
+		return nil
+	}
+	var failures []error
+	for index, forget := range consumer.forgetWorkspace {
+		if err := forget(ctx, changed.OrganizationID, changed.TeamID); err != nil {
+			failures = append(failures, fmt.Errorf("workspace forgetter %d of %d: %w", index+1, len(consumer.forgetWorkspace), err))
+		}
+	}
+	if err := errors.Join(failures...); err != nil {
+		return fmt.Errorf("event %s: %w", envelope.EventID, err)
+	}
+	consumer.logger.InfoContext(ctx, "forgot what agents kept for a workspace whose Slack install ended",
+		"event_id", envelope.EventID, "organization_id", changed.OrganizationID, "reason", changed.Reason)
+	return nil
 }
 
 func (consumer *Consumer) interactionChanged(ctx context.Context, detailType string, envelope receivedEnvelope) error {

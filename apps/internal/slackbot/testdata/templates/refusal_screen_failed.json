@@ -1,0 +1,12 @@
+{
+  "text": "I couldn't check that just now, so I didn't ask anyone. Try again in a moment.",
+  "blocks": [
+    {
+      "text": {
+        "text": "I couldn't check that just now, so I didn't ask anyone. Try again in a moment.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

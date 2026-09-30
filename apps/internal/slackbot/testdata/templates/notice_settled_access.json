@@ -1,0 +1,21 @@
+{
+  "text": "Approved by <@U0RAYA> at 2026-09-29 14:02 UTC · access for 1 hour",
+  "blocks": [
+    {
+      "text": {
+        "text": "<@U0ASKER> asked you through Oryxa:\n> When is the launch?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Approved by <@U0RAYA> at <!date^1790690520^{date_short_pretty} {time}|2026-09-29 14:02 UTC> · access for 1 hour",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}

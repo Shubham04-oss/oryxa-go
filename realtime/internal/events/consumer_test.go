@@ -26,6 +26,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/purge"
+	"github.com/Shubham04-oss/oryxa-go/realtime/internal/requests"
 )
 
 // auth and agents sign the events these tests deliver, as their publishers
@@ -162,6 +163,27 @@ func (fake *fakePurger) asked() []purge.Request {
 	return slices.Clone(fake.requests)
 }
 
+// fakeNoter records every note it is asked for, and answers with what fail
+// holds for its request and revision (key "request:revision"), or nil.
+type fakeNoter struct {
+	mu    sync.Mutex
+	notes []requests.Note
+	fail  map[string]error
+}
+
+func (fake *fakeNoter) Note(_ context.Context, note requests.Note) error {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.notes = append(fake.notes, note)
+	return fake.fail[fmt.Sprintf("%s:%d", note.RequestID, note.Revision)]
+}
+
+func (fake *fakeNoter) noted() []requests.Note {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return slices.Clone(fake.notes)
+}
+
 // samePurges compares requests field by field, and their times as instants.
 func samePurges(got, want []purge.Request) bool {
 	return slices.EqualFunc(got, want, func(a, b purge.Request) bool {
@@ -212,17 +234,24 @@ func newConsumer(t *testing.T, purger Purger) *Consumer {
 func newRecordingConsumer(t *testing.T, purger Purger, recorder Recorder) *Consumer {
 	t.Helper()
 	_, verifier := authHarness()
-	consumer, err := NewConsumer(purger, recorder, verifier, slog.New(slog.DiscardHandler))
+	consumer, err := NewConsumer(purger, &fakeNoter{}, recorder, verifier, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return consumer
 }
 
-func TestSubscriptionsAreTheEndsOfMembershipsAndTeamspaces(t *testing.T) {
+// Realtime hears the ends of memberships and teamspaces, which it purges for,
+// and the moves of a request between two members, which it has the Worker
+// note. The lease and secret events of a Slack ask change no request's state,
+// so they are not its business.
+func TestSubscriptionsAreTheEndsOfMembershipsAndTeamspacesAndTheMovesOfRequests(t *testing.T) {
 	want := map[string][]string{
-		"oryxa.auth":   {"auth.member.removed.v1", "auth.organization.deleted.v1"},
-		"oryxa.agents": {"agents.teamspace.deleted.v1", "agents.teamspace.member.removed.v1"},
+		"oryxa.auth": {"auth.member.removed.v1", "auth.organization.deleted.v1"},
+		"oryxa.agents": {
+			"agents.interaction.completed.v1", "agents.interaction.decided.v1", "agents.interaction.requested.v1",
+			"agents.teamspace.deleted.v1", "agents.teamspace.member.removed.v1",
+		},
 	}
 	got := Subscriptions()
 	if len(got) != len(want) {
@@ -382,7 +411,7 @@ func TestConsumerFollowsTheRegistrysSignaturePolicy(t *testing.T) {
 			t.Fatal(err)
 		}
 		purger := &fakePurger{}
-		consumer, err := NewConsumer(purger, &fakeRecorder{}, registry.Verifier(), slog.New(slog.DiscardHandler))
+		consumer, err := NewConsumer(purger, &fakeNoter{}, &fakeRecorder{}, registry.Verifier(), slog.New(slog.DiscardHandler))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -575,7 +604,7 @@ func TestPollDeletesWhatIsDoneWithAndKeepsWhatMaySucceedLater(t *testing.T) {
 	}}
 	var logs strings.Builder
 	_, verifier := authHarness()
-	consumer, err := NewConsumer(client, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+	consumer, err := NewConsumer(client, &fakeNoter{}, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -704,7 +733,7 @@ func TestPollSaysWhenADeletionFails(t *testing.T) {
 			queue.batches = [][]sqstypes.Message{{message("purged", memberRemoved("evt_1", "org_1", "user-2", autheventsv1.MemberRemovedReasonLeft))}}
 			var logs strings.Builder
 			_, verifier := authHarness()
-			consumer, err := NewConsumer(&fakePurger{}, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+			consumer, err := NewConsumer(&fakePurger{}, &fakeNoter{}, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -739,7 +768,7 @@ func TestPollLogsADroppedPurgeWhole(t *testing.T) {
 			queue := &fakeQueue{cancel: cancel, batches: [][]sqstypes.Message{{message("refused", test.body)}}}
 			var logs strings.Builder
 			_, verifier := authHarness()
-			consumer, err := NewConsumer(purger, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+			consumer, err := NewConsumer(purger, &fakeNoter{}, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -774,7 +803,8 @@ func TestConsumerDropsARemovalStillToCome(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			purger := &fakePurger{}
 			consumer := newConsumer(t, purger)
-			request, err := consumer.handle(context.Background(), event.body, event.at.Add(-maxClockSkew-time.Second))
+			result, err := consumer.handle(context.Background(), event.body, event.at.Add(-maxClockSkew-time.Second))
+			request := result.purge
 			if !errors.Is(err, errFutureRemoval) || !request.RemovedAt.Equal(event.at) || len(purger.asked()) != 0 {
 				t.Fatalf("handle() = %+v, %v; purges %+v; want the purge named, refused and not sent", request, err, purger.asked())
 			}
@@ -795,7 +825,7 @@ func TestPollDropsARemovalStillToComeLoudly(t *testing.T) {
 	queue := &fakeQueue{cancel: cancel, batches: [][]sqstypes.Message{{message("future", future)}}}
 	var logs strings.Builder
 	_, verifier := authHarness()
-	consumer, err := NewConsumer(purger, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+	consumer, err := NewConsumer(purger, &fakeNoter{}, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -832,13 +862,16 @@ func logged(t *testing.T, logs, prefix string) map[string]any {
 
 func TestNewConsumerRefusesToRunBlind(t *testing.T) {
 	_, verifier := authHarness()
-	if _, err := NewConsumer(nil, &fakeRecorder{}, verifier, nil); err == nil {
+	if _, err := NewConsumer(nil, &fakeNoter{}, &fakeRecorder{}, verifier, nil); err == nil {
 		t.Fatal("NewConsumer() without a purger = nil error")
 	}
-	if _, err := NewConsumer(&fakePurger{}, nil, verifier, nil); err == nil {
+	if _, err := NewConsumer(&fakePurger{}, nil, &fakeRecorder{}, verifier, nil); err == nil {
+		t.Fatal("NewConsumer() without a noter = nil error")
+	}
+	if _, err := NewConsumer(&fakePurger{}, &fakeNoter{}, nil, verifier, nil); err == nil {
 		t.Fatal("NewConsumer() without a recorder = nil error")
 	}
-	if _, err := NewConsumer(&fakePurger{}, &fakeRecorder{}, nil, nil); err == nil {
+	if _, err := NewConsumer(&fakePurger{}, &fakeNoter{}, &fakeRecorder{}, nil, nil); err == nil {
 		t.Fatal("NewConsumer() without a verifier = nil error")
 	}
 }
@@ -934,7 +967,7 @@ func TestPollKeepsAPurgeItCouldNotRecord(t *testing.T) {
 	}}
 	var logs strings.Builder
 	_, verifier := authHarness()
-	consumer, err := NewConsumer(&fakePurger{}, recorder, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+	consumer, err := NewConsumer(&fakePurger{}, &fakeNoter{}, recorder, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -66,6 +66,7 @@ type authHarness struct {
 	preferences  *fakePreferences
 	answerGuard  *fakeAnswerChecker
 	guardPolicy  *fakeAnswerGuardPreferences
+	secrets      *fakeSecretShares
 	server       *Server
 }
 
@@ -87,6 +88,7 @@ func newAuthHarness() *authHarness {
 		preferences:  &fakePreferences{},
 		answerGuard:  &fakeAnswerChecker{},
 		guardPolicy:  &fakeAnswerGuardPreferences{},
+		secrets:      &fakeSecretShares{},
 	}
 	h.server = New(h.directory, h.threadsSvc, Config{
 		AllowedOrigins: []string{"https://app.oryxa.test"},
@@ -108,6 +110,7 @@ func newAuthHarness() *authHarness {
 		AnswerGuard:         h.answerGuard,
 
 		AnswerGuardPreferences: h.guardPolicy,
+		SecretShares:           h.secrets,
 	}, nil)
 	return h
 }
@@ -399,6 +402,31 @@ var authzRoutes = []authzRoute{
 		pattern: "POST /v1/organizations/{organizationID}/agent-requests/{requestID}/review", method: http.MethodPost,
 		path: "/v1/organizations/org_1/agent-requests/irq_other/review", body: `{"action":"send"}`, malformedBody: unknownField, identity: lastInteractionActor,
 	},
+	// -- agent requests from Slack: consent, activity, leases, secrets -----
+	{
+		pattern: "GET /v1/organizations/{organizationID}/agent-requests/activity", method: http.MethodGet,
+		path: "/v1/organizations/org_1/agent-requests/activity", malformedQuery: "?limit=abc", identity: lastInteractionActor,
+	},
+	{
+		pattern: "POST /v1/organizations/{organizationID}/agent-requests/{requestID}/consent", method: http.MethodPost,
+		path: "/v1/organizations/org_1/agent-requests/irq_other/consent", body: `{"choice":"summary"}`, malformedBody: unknownField, identity: lastInteractionActor,
+	},
+	{
+		pattern: "PUT /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", method: http.MethodPut,
+		path: "/v1/organizations/org_1/agent-requests/irq_other/secret", body: `{"value":"sk-live-example"}`, malformedBody: unknownField, identity: lastInteractionActor,
+	},
+	{
+		pattern: "GET /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", method: http.MethodGet,
+		path: "/v1/organizations/org_1/agent-requests/irq_other/secret", identity: lastInteractionActor,
+	},
+	{
+		pattern: "DELETE /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", method: http.MethodDelete,
+		path: "/v1/organizations/org_1/agent-requests/irq_other/secret", identity: lastInteractionActor,
+	},
+	{
+		pattern: "DELETE /v1/organizations/{organizationID}/agent-leases/{leaseID}", method: http.MethodDelete,
+		path: "/v1/organizations/org_1/agent-leases/ils_other", identity: lastInteractionActor,
+	},
 	// -- organization agent / context -------------------------------------
 	{
 		pattern: "GET /v1/organizations/{organizationID}/organization-agent", method: http.MethodGet,
@@ -509,8 +537,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 61 {
-		t.Fatalf("authzRoutes has %d entries, want 61 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 67 {
+		t.Fatalf("authzRoutes has %d entries, want 67 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -602,8 +630,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 31 {
-		t.Fatalf("tested %d state-changing routes, want 31 - a route's method changed without updating this expectation", tested)
+	if tested != 35 {
+		t.Fatalf("tested %d state-changing routes, want 35 - a route's method changed without updating this expectation", tested)
 	}
 }
 
@@ -661,8 +689,8 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 			}
 		})
 	}
-	if tested != 35 {
-		t.Fatalf("tested %d routes for malformed input, want 35 - a route gained or lost a body/limit/version without updating this expectation", tested)
+	if tested != 38 {
+		t.Fatalf("tested %d routes for malformed input, want 38 - a route gained or lost a body/limit/version without updating this expectation", tested)
 	}
 }
 
