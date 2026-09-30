@@ -26,6 +26,8 @@ export type PrimaryChatTarget =
 export type PrimaryChatRequest = PrimaryChatTarget & {
   id: number
   scope: ChatScope
+  /** A message the chat was already holding too many of to take: it is not to be sent, and the chat shows it as not sent. */
+  refused?: true
 }
 
 /** How long after its last activity a conversation still reopens on its own. */
@@ -136,33 +138,65 @@ export async function openingThread({
   return held ? latest.id : null
 }
 
-let latestRequest: PrimaryChatRequest | null = null
+/**
+ * How many requests carrying a message may wait for the chat to take them.
+ * The chat takes them as soon as it can, so only one that never reads them (no
+ * panel, an agents list that never answers) fills this; the request after that
+ * is refused, and no older one is pushed out to make room.
+ */
+export const MAX_WAITING_MESSAGES = 20
+
+/** The words a request starts a new conversation with, trimmed; none for one that only opens a conversation. */
+export function requestMessage(target: PrimaryChatTarget): string {
+  return target.kind === "new" ? (target.message?.trim() ?? "") : ""
+}
+
+// The requests nobody has claimed yet, oldest first.
+let waiting: readonly PrimaryChatRequest[] = []
 let nextRequestId = 1
-let handledRequestId = 0
 const listeners = new Set<() => void>()
+
+function announce() {
+  for (const listener of listeners) listener()
+}
 
 /**
  * Asks the agent panel's primary chat to open `target`. The caller opens the
  * panel itself; the chat switches to the conversation, or to a new one and
  * sends `message` as its first message, and remembers the choice.
+ *
+ * Each request waits until the chat claims it, however many are made before
+ * it does (the panel takes none until the member's agents have loaded), and
+ * the chat gets them in the order they were made. A message past
+ * `MAX_WAITING_MESSAGES` is refused: it still waits its turn, marked `refused`
+ * so the chat shows it as not sent instead of sending it.
  */
 export function requestPrimaryChat(
   scope: ChatScope,
   target: PrimaryChatTarget
 ) {
-  latestRequest = { ...target, scope, id: nextRequestId++ }
-  for (const listener of listeners) listener()
+  const request: PrimaryChatRequest = { ...target, scope, id: nextRequestId++ }
+  const held = waiting.filter(
+    (other) =>
+      !other.refused &&
+      requestMessage(other) !== "" &&
+      sameChatScope(other.scope, scope)
+  ).length
+  const refused = requestMessage(target) !== "" && held >= MAX_WAITING_MESSAGES
+  waiting = [...waiting, refused ? { ...request, refused: true } : request]
+  announce()
 }
 
 /**
  * Claims a request for whoever acts on it: true the first time for each `id`,
- * false after. The panel calls it for the request it reads, so however often
- * it renders, or the page mounts it again, an old request is never opened
- * twice; and a request made before the panel mounted is still there to claim.
+ * false after. A claimed request is gone from the queue, so however often the
+ * panel renders, or the page mounts it again, a request is never acted on
+ * twice; and one made before the panel mounted is still there to claim.
  */
 export function claimPrimaryChatRequest(id: number): boolean {
-  if (id <= handledRequestId) return false
-  handledRequestId = id
+  if (!waiting.some((request) => request.id === id)) return false
+  waiting = waiting.filter((request) => request.id !== id)
+  announce()
   return true
 }
 
@@ -173,11 +207,20 @@ function subscribe(listener: () => void) {
   }
 }
 
-/** The latest request, for the chat to act on once per `id`. */
-export function usePrimaryChatRequest(): PrimaryChatRequest | null {
+/**
+ * The oldest request nobody has claimed, for the chat to act on once per `id`:
+ * claim it and the next one is read. With a `scope`, only that member's in that
+ * organization, so a request for someone else never holds theirs up.
+ */
+export function usePrimaryChatRequest(
+  scope?: ChatScope
+): PrimaryChatRequest | null {
   return useSyncExternalStore(
     subscribe,
-    () => latestRequest,
+    () =>
+      waiting.find(
+        (request) => !scope || sameChatScope(request.scope, scope)
+      ) ?? null,
     () => null
   )
 }
@@ -339,6 +382,13 @@ export type PrimaryChat = {
 export type PrimaryChatAction =
   /** The app asked for a conversation (see `requestPrimaryChat`). */
   | { type: "request"; request: PrimaryChatRequest; screen?: ScreenContext }
+  /** The app asked with a message the chat had no room for (`refused`): it is kept as not sent, for `notice`. */
+  | {
+      type: "refused"
+      request: PrimaryChatRequest
+      notice: string
+      screen?: ScreenContext
+    }
   /** The member sent the first message of a new chat from the composer. */
   | { type: "submit"; text: string; screen?: ScreenContext }
   /** The rules chose the conversation to open. Only fills in a chat still undecided and idle. */
@@ -407,7 +457,7 @@ export function primaryChatReducer(
   switch (action.type) {
     case "request": {
       const { request } = action
-      const text = request.kind === "new" ? (request.message?.trim() ?? "") : ""
+      const text = requestMessage(request)
       const task: ChatTask =
         request.kind === "thread"
           ? { id: request.id, kind: "open", threadId: request.threadId }
@@ -420,6 +470,24 @@ export function primaryChatReducer(
         touched: state.touched + 1,
         notice: "",
       })
+    }
+    case "refused": {
+      const text = requestMessage(action.request)
+      if (!text) return state
+      return {
+        ...state,
+        unsent: [
+          ...state.unsent,
+          {
+            id: action.request.id,
+            text,
+            screen: action.screen,
+            notice: action.notice,
+          },
+        ],
+        touched: state.touched + 1,
+        notice: "",
+      }
     }
     case "submit": {
       const text = action.text.trim()

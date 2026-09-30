@@ -25,6 +25,7 @@ import type { DmPeople } from "./direct-message-people"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import type { Inbox } from "@/lib/dms"
 import {
+  MAX_WAITING_MESSAGES,
   claimPrimaryChatRequest,
   rememberedChoice,
   requestPrimaryChat,
@@ -271,9 +272,14 @@ const notSent = () =>
 const down = "Not sent. The agents service is down."
 
 beforeEach(() => {
-  // A request an earlier test left unclaimed must not reach this one.
+  // Requests an earlier test left unclaimed must not reach this one.
   const { result, unmount } = renderHook(() => usePrimaryChatRequest())
-  if (result.current) claimPrimaryChatRequest(result.current.id)
+  while (result.current) {
+    const { id } = result.current
+    act(() => {
+      claimPrimaryChatRequest(id)
+    })
+  }
   unmount()
   roomSockets.reset()
   agentChats.reset()
@@ -753,6 +759,87 @@ describe("a request to open a conversation", () => {
     expect(
       agentChats.named(chatName("th_new")).sendMessage
     ).toHaveBeenCalledOnce()
+  })
+
+  it("keeps every request made while the agents list loads, and makes and sends each into a conversation of its own, in order", async () => {
+    const go = stubGo({ threads: [thread("th_old", "Old", 5 * HOUR)] })
+    const release = go.holdAgents()
+    withQueries(panel())
+    act(() =>
+      requestPrimaryChat(scope, { kind: "new", message: "First question" })
+    )
+    act(() =>
+      requestPrimaryChat(scope, { kind: "new", message: "Second question" })
+    )
+    await act(async () => {})
+    // The panel takes none until it knows the agent: nothing is made yet.
+    expect(go.calls.filter((call) => call === START)).toHaveLength(0)
+    expect(roomSockets.all).toHaveLength(0)
+
+    act(() => release())
+    ;(await socketOn(chatName("th_new"))).open()
+    expect(
+      agentChats.named(chatName("th_new")).sendMessage
+    ).toHaveBeenCalledExactlyOnceWith({ text: "First question" })
+    ;(await socketOn(chatName("th_new_2"))).open()
+    expect(
+      agentChats.named(chatName("th_new_2")).sendMessage
+    ).toHaveBeenCalledExactlyOnceWith({ text: "Second question" })
+
+    expect(go.calls.filter((call) => call === START)).toHaveLength(2)
+    expect(roomSockets.all.at(-1)?.options.name).toBe(chatName("th_new_2"))
+    await waitFor(() =>
+      expect(rememberedChoice(scope, primary.id)).toBe("th_new_2")
+    )
+    expect(notSent()).toEqual([])
+    // Neither went into the other's conversation, and each went once.
+    expect(
+      agentChats.named(chatName("th_new")).sendMessage
+    ).toHaveBeenCalledOnce()
+  })
+
+  it("is not held up by a request for another member", async () => {
+    stubGo({
+      threads: [thread("th_2", "Newer"), thread("th_1", "Older", 3 * HOUR)],
+    })
+    act(() =>
+      requestPrimaryChat(
+        { organizationId: ORG, userId: "someone-else" },
+        { kind: "thread", threadId: "th_2" }
+      )
+    )
+    act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
+    withQueries(panel())
+    await socketOn(chatName("th_1"))
+    expect(roomSockets.named(chatName("th_2"))).toHaveLength(0)
+    expect(rememberedChoice(scope, primary.id)).toBe("th_1")
+  })
+
+  it("refuses the message after the last it has room for, and keeps its words as not sent", async () => {
+    const go = stubGo({ threads: [] })
+    const releaseAgents = go.holdAgents()
+    // The first conversation is never made here, so what follows only waits.
+    go.holdCreate()
+    withQueries(panel())
+    for (let count = 1; count <= MAX_WAITING_MESSAGES + 1; count += 1) {
+      act(() =>
+        requestPrimaryChat(scope, { kind: "new", message: `Message ${count}` })
+      )
+    }
+    act(() => releaseAgents())
+
+    expect(
+      await screen.findByText("Not sent. Too many messages were waiting.")
+    ).toBeTruthy()
+    expect(notSent()).toEqual([`Message ${MAX_WAITING_MESSAGES + 1}`])
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy()
+    // The messages ahead of it are all still on their way, in one line.
+    expect(go.calls.filter((call) => call === START)).toHaveLength(1)
+    expect(
+      screen
+        .getByRole("log")
+        .querySelector('[data-from="member"]:not([data-status])')?.textContent
+    ).toBe("Message 1")
   })
 
   it("keeps a request's words as not sent when its conversation can't be made, and leaves an empty composer empty", async () => {

@@ -3,6 +3,7 @@ import { act, renderHook } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   FRESH_CONVERSATION_MS,
+  MAX_WAITING_MESSAGES,
   PRIMARY_DRAFT,
   chooseThread,
   claimPrimaryChatRequest,
@@ -218,19 +219,163 @@ describe("remembered choice", () => {
   })
 })
 
+/** Claims every request still waiting, so no test leaves one for the next. */
+function drainRequests() {
+  const { result, unmount } = renderHook(() => usePrimaryChatRequest())
+  while (result.current) {
+    const { id } = result.current
+    act(() => {
+      claimPrimaryChatRequest(id)
+    })
+  }
+  unmount()
+}
+
 describe("requestPrimaryChat", () => {
+  afterEach(drainRequests)
+
   it("hands each request to the chat with a growing id", () => {
     const { result } = renderHook(() => usePrimaryChatRequest())
     act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "t1" }))
     const first = result.current
     expect(first).toMatchObject({ kind: "thread", threadId: "t1", scope })
+    act(() => claimPrimaryChatRequest(first!.id))
     act(() => requestPrimaryChat(scope, { kind: "new", message: "Hello" }))
     expect(result.current).toMatchObject({ kind: "new", message: "Hello" })
     expect(result.current!.id).toBeGreaterThan(first!.id)
   })
+
+  it("keeps every request until it is claimed, and hands them over oldest first, each once", () => {
+    const { result } = renderHook(() => usePrimaryChatRequest())
+    act(() => {
+      requestPrimaryChat(scope, { kind: "new", message: "First" })
+      requestPrimaryChat(scope, { kind: "thread", threadId: "t1" })
+      requestPrimaryChat(scope, { kind: "new", message: "Third" })
+    })
+    // The later requests did not replace the first.
+    const handed: unknown[] = []
+    while (result.current) {
+      const request = result.current
+      handed.push(request.kind === "new" ? request.message : request.threadId)
+      const claims: boolean[] = []
+      act(() => {
+        claims.push(claimPrimaryChatRequest(request.id))
+        // Claimed, it is gone: not claimed again.
+        claims.push(claimPrimaryChatRequest(request.id))
+      })
+      expect(claims).toEqual([true, false])
+    }
+    expect(handed).toEqual(["First", "t1", "Third"])
+  })
+
+  it("does not hand a request over again once it is claimed, however often the chat reads", () => {
+    act(() => requestPrimaryChat(scope, { kind: "new", message: "Once" }))
+    const first = renderHook(() => usePrimaryChatRequest())
+    const id = first.result.current!.id
+    act(() => {
+      claimPrimaryChatRequest(id)
+    })
+    expect(first.result.current).toBeNull()
+    // A chat that mounts afterwards finds nothing to act on.
+    const later = renderHook(() => usePrimaryChatRequest())
+    expect(later.result.current).toBeNull()
+  })
+
+  it("hands over one member's requests without waiting behind another's", () => {
+    const other = { organizationId: "org-1", userId: "user-2" }
+    act(() => {
+      requestPrimaryChat(other, { kind: "new", message: "Theirs" })
+      requestPrimaryChat(scope, { kind: "new", message: "Mine" })
+    })
+    const mine = renderHook(() => usePrimaryChatRequest(scope))
+    expect(mine.result.current).toMatchObject({ message: "Mine", scope })
+    const theirs = renderHook(() => usePrimaryChatRequest(other))
+    expect(theirs.result.current).toMatchObject({ message: "Theirs" })
+    // Without a scope, whoever came first.
+    const anyone = renderHook(() => usePrimaryChatRequest())
+    expect(anyone.result.current).toMatchObject({ message: "Theirs" })
+
+    act(() => {
+      claimPrimaryChatRequest(mine.result.current!.id)
+    })
+    expect(mine.result.current).toBeNull()
+    expect(theirs.result.current).toMatchObject({ message: "Theirs" })
+  })
+
+  describe("when more messages wait than the chat may hold", () => {
+    const say = (message: string, from = scope) =>
+      act(() => requestPrimaryChat(from, { kind: "new", message }))
+    const waiting = () => {
+      const seen: NonNullable<ReturnType<typeof usePrimaryChatRequest>>[] = []
+      const { result } = renderHook(() => usePrimaryChatRequest())
+      while (result.current) {
+        const request = result.current
+        seen.push(request)
+        act(() => {
+          claimPrimaryChatRequest(request.id)
+        })
+      }
+      return seen
+    }
+
+    it("refuses the one past the limit, and pushes no older message out to make room", () => {
+      for (let count = 1; count <= MAX_WAITING_MESSAGES; count += 1) {
+        say(`Message ${count}`)
+      }
+      say("One too many")
+      const requests = waiting()
+      expect(requests).toHaveLength(MAX_WAITING_MESSAGES + 1)
+      const kept = requests.slice(0, MAX_WAITING_MESSAGES)
+      // Every message that was in is still in, in order, and none is marked.
+      expect(
+        kept.map((request) => "message" in request && request.message)
+      ).toEqual(
+        Array.from(
+          { length: MAX_WAITING_MESSAGES },
+          (_, index) => `Message ${index + 1}`
+        )
+      )
+      expect(kept.some((request) => request.refused)).toBe(false)
+      // The one after them says so, and still has its words.
+      expect(requests.at(-1)).toMatchObject({
+        message: "One too many",
+        refused: true,
+      })
+    })
+
+    it("makes room again as the chat takes messages", () => {
+      for (let count = 1; count <= MAX_WAITING_MESSAGES; count += 1) {
+        say(`Message ${count}`)
+      }
+      const { result } = renderHook(() => usePrimaryChatRequest())
+      act(() => {
+        claimPrimaryChatRequest(result.current!.id)
+      })
+      say("Room for this one")
+      expect(waiting().at(-1)).toMatchObject({ message: "Room for this one" })
+      expect(waiting()).toEqual([])
+    })
+
+    it("counts only messages, and only this member's", () => {
+      const other = { organizationId: "org-1", userId: "user-2" }
+      for (let count = 1; count <= MAX_WAITING_MESSAGES; count += 1) {
+        say(`Theirs ${count}`, other)
+      }
+      // Another member's messages take none of this member's room, and a
+      // request that only opens a conversation is never refused.
+      say("Mine")
+      act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "t1" }))
+      act(() => requestPrimaryChat(scope, { kind: "new", message: "   " }))
+      const mine = waiting().filter((request) => request.scope === scope)
+      expect(mine).toHaveLength(3)
+      expect(mine.some((request) => request.refused)).toBe(false)
+    })
+  })
 })
 
 describe("claiming a request", () => {
+  afterEach(drainRequests)
+
   it("lets a request be acted on once, however often it is asked", () => {
     const { result } = renderHook(() => usePrimaryChatRequest())
     act(() => requestPrimaryChat(scope, { kind: "new", message: "Hello" }))
@@ -596,6 +741,37 @@ describe("the primary chat's state", () => {
         chat
       )
       expect(states(done)).toEqual({ thread: "t_c", shown: "t_c", waiting: [] })
+    })
+
+    it("is also what a message the chat had no room for becomes: kept, and nothing sent", () => {
+      const refused = (message: string, id: number): PrimaryChatAction => ({
+        type: "refused",
+        request: { kind: "new", message, id, scope, refused: true },
+        notice: "Too many messages were waiting.",
+      })
+      const chat = run([
+        ask(1, { kind: "new", message: "First" }),
+        refused("  Extra  ", 2),
+      ])
+      expect(chat.unsent).toEqual([
+        {
+          id: 2,
+          text: "Extra",
+          screen: undefined,
+          notice: "Too many messages were waiting.",
+        },
+      ])
+      // Nothing is waiting to be sent for it, and it counts as the member's doing.
+      expect(chat.tasks.map((task) => task.id)).toEqual([1])
+      expect(chat.touched).toBe(2)
+      // Without words there is nothing to keep.
+      expect(primaryChatReducer(chat, refused("   ", 3))).toBe(chat)
+
+      // And like any other, it can be sent again.
+      const again = run([{ type: "retry", id: 2 }], chat)
+      expect(
+        again.tasks.map((task) => task.kind === "send" && task.text)
+      ).toEqual(["First", "Extra"])
     })
 
     it("can fail again, and is then one message again, not two", () => {
