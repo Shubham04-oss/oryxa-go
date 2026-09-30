@@ -131,6 +131,13 @@ jobs:
             echo "${service}_TEST_DATABASE_URL=postgres://oryxa:oryxa@localhost:5432/oryxa?sslmode=disable" >> "$GITHUB_ENV"
           done
           docker exec -i "${{ job.services.postgres.id }}" psql -U oryxa -d oryxa -v ON_ERROR_STOP=1 < infra/postgres/init/001_extensions.sql
+          # The schemas several test packages create at once. go test runs
+          # packages in parallel against this one database, and CREATE SCHEMA
+          # IF NOT EXISTS is not safe against itself: two transactions that
+          # both find it missing collide on pg_namespace (SQLSTATE 23505).
+          # A laptop's database, like production's, already has them.
+          docker exec -i "${{ job.services.postgres.id }}" psql -U oryxa -d oryxa -v ON_ERROR_STOP=1 \
+            -c 'CREATE SCHEMA IF NOT EXISTS agents_primary' -c 'CREATE SCHEMA IF NOT EXISTS workspace'
       - name: Auth's schema
         # agents' session tests read auth's tables, which a laptop's database
         # already has; auth's own tests migrate them into this fresh one.
