@@ -9,11 +9,13 @@ import { FileText, Inbox, ShieldQuestion } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { ApiError } from "@/lib/api/client"
 import { agentRequestQueryOptions } from "@/lib/agents/queries"
+import { isOwnerWritten } from "@/lib/agents/agent-requests"
+import type { AgentRequest } from "@/lib/agents/agent-requests"
 import {
   isRequestReadRefused,
   requestCardAnswer,
   requestCardPollInterval,
-  requestCardStatus,
+  requestCardState,
 } from "@/lib/threads/requests"
 import { toolkitName } from "@/lib/apps/client"
 import type {
@@ -28,6 +30,7 @@ import {
   humanizeToolName,
   isImageArtifact,
 } from "@/lib/threads/timeline"
+import { firstName } from "./people-format"
 import { featuredSlugs, toolkitIcon } from "./workspace-tools-data"
 import type {
   ArtifactEntry,
@@ -699,6 +702,13 @@ function ArtifactName({ entry }: { entry: ArtifactEntry }) {
   )
 }
 
+/** The owner a request was made to, as the asker calls them: a first name, when the request says whose it is. */
+function ownerFirstName(request: AgentRequest | undefined): string | undefined {
+  const target = request?.target
+  const name = target?.user_display_name?.trim() || target?.user_email?.trim()
+  return name ? firstName(name) : undefined
+}
+
 /** A pointer reads only the request Go authorizes this member to see. */
 export function AgentRequestCard({
   entry,
@@ -718,6 +728,8 @@ export function AgentRequestCard({
   const request = query.data
   const title = request ? `Asked ${request.target.agent_name}` : "Agent request"
   const answer = request && requestCardAnswer(request)
+  // What the owner wrote is shown as they wrote it, never read as Markdown.
+  const written = request && isOwnerWritten(request)
   return (
     <div className="workspace-agent-request" role="group" aria-label={title}>
       <p className="workspace-agent-confirmation-title">
@@ -730,10 +742,15 @@ export function AgentRequestCard({
         </p>
       )}
       <p className="workspace-agent-note" aria-live="polite">
-        {requestCardStatus(request?.status ?? entry.status)}
+        {requestCardState(request, entry.status, ownerFirstName(request))}
       </p>
       <div aria-live="polite">
-        {answer && <AgentMarkdown text={answer} />}
+        {answer &&
+          (written ? (
+            <p className="workspace-agent-request-reply">{answer}</p>
+          ) : (
+            <AgentMarkdown text={answer} />
+          ))}
         {request?.status === "rejected" && request.decision?.message && (
           <p className="workspace-agent-note">{request.decision.message}</p>
         )}

@@ -13,7 +13,7 @@ import { agentIdentity } from "./agents-format"
 import { PrimaryAgentPaused } from "./primary-agent-paused"
 import { RequestCard } from "./request-card"
 import { IdentityAvatar } from "./workspace-avatar"
-import { activitySentence } from "./requests-activity-format"
+import { activitySentence, repliedRequestIds } from "./requests-activity-format"
 import {
   activityQueryOptions,
   refreshRequests,
@@ -27,7 +27,7 @@ import {
   agentRequestsQueryOptions,
 } from "@/lib/agents/queries"
 import { isUnavailableHere } from "@/lib/agents/policy"
-import { revokeAgentLease } from "@/lib/agents/agent-requests"
+import { isOwnerWritten, revokeAgentLease } from "@/lib/agents/agent-requests"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
 import { getAgentGrant } from "@/lib/auth/settings"
 import { slackKeys } from "@/lib/apps/slack"
@@ -338,7 +338,10 @@ function HomeDesk({
   const sharedIds = new Set(
     sharedAnswers.slice(0, 3).map((request) => request.id)
   )
-  const sharedActivity = (authorizedData(activity) ?? [])
+  const activityRows = authorizedData(activity) ?? []
+  // Answers the member gave in their own words are not "their agent's".
+  const replied = repliedRequestIds(activityRows)
+  const sharedActivity = activityRows
     .filter(
       (entry) =>
         entry.role === "owner" &&
@@ -352,6 +355,11 @@ function HomeDesk({
         rows.findIndex((row) => row.request_id === entry.request_id) === index
     )
     .slice(0, 3)
+  const ownerReplied =
+    sharedAnswers.slice(0, 3).some(isOwnerWritten) ||
+    sharedActivity.some(
+      (entry) => entry.request_id && replied.has(entry.request_id)
+    )
   const slackStatus = authorizedData(slack)
   const corpusRows = authorizedData(corpora)
   const agentGrant = authorizedData(grant)
@@ -668,7 +676,7 @@ function HomeDesk({
               )}
               {(sharedAnswers.length > 0 || sharedActivity.length > 0) && (
                 <div className="home-request-group">
-                  <h3>Your agent shared</h3>
+                  <h3>{ownerReplied ? "Answers sent" : "Your agent shared"}</h3>
                   {sharedAnswers.slice(0, 3).map(requestCard)}
                   {sharedActivity.length > 0 && (
                     <ul>
@@ -679,11 +687,15 @@ function HomeDesk({
                             onClick={() => onOpenRequests(entry.request_id)}
                           >
                             <span>
-                              {activitySentence(entry, {
-                                viewerId: viewer,
-                                nameOf: people.nameOf,
-                                now,
-                              })}
+                              {activitySentence(
+                                entry,
+                                {
+                                  viewerId: viewer,
+                                  nameOf: people.nameOf,
+                                  now,
+                                },
+                                replied
+                              )}
                             </span>
                             <small>
                               {relativeTime(entry.at)} · Open request
