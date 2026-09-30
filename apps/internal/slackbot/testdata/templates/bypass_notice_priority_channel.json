@@ -1,0 +1,12 @@
+{
+  "text": "<@U0ASKER> asked you a question in <#G0SECRET>, and your agent answered without asking you first.",
+  "blocks": [
+    {
+      "text": {
+        "text": "<@U0ASKER> asked you in <#G0SECRET>, and your agent answered without asking you first, because the channel is marked high priority:\n> Where are the dev keys?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

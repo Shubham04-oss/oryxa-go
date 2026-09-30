@@ -1,0 +1,12 @@
+{
+  "text": "Only members of Acme in Oryxa can ask me.",
+  "blocks": [
+    {
+      "text": {
+        "text": "Only members of Acme in Oryxa can ask me.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

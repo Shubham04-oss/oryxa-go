@@ -8,6 +8,7 @@ import (
 
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardpolicy"
 )
 
 // CollaborationSpaces exposes only spaces in which the persistent agent may
@@ -81,7 +82,7 @@ func (service *Service) CollaborationPublish(ctx context.Context, actor primarya
 	}
 	var found *primaryagents.SharedEntryGuard
 	if service.guard != nil {
-		publication, found, err = service.guarded(ctx, space.ID, publication)
+		publication, found, err = service.guarded(ctx, actor, space.ID, publication)
 		if err != nil {
 			return primaryagents.SharedEntry{}, err
 		}
@@ -125,7 +126,7 @@ const (
 // the rule a room applies too) replaces the text, so nothing but that ever
 // reaches the ledger. A publication the guard could not check, or whose lists
 // no longer hold the lines they were given, is refused with ErrUnchecked.
-func (service *Service) guarded(ctx context.Context, teamspaceID string, publication PublishEntryInput) (PublishEntryInput, *primaryagents.SharedEntryGuard, error) {
+func (service *Service) guarded(ctx context.Context, actor primaryagents.TeamspaceActor, teamspaceID string, publication PublishEntryInput) (PublishEntryInput, *primaryagents.SharedEntryGuard, error) {
 	publication = cleanPublishEntry(publication)
 	if err := validatePublishEntry(publication); err != nil {
 		return PublishEntryInput{}, nil, err
@@ -139,7 +140,26 @@ func (service *Service) guarded(ctx context.Context, teamspaceID string, publica
 	texts[artifactNamesText], texts[artifactURIsText] = strings.Join(names, "\n"), strings.Join(uris, "\n")
 	texts[artifactMediaTypesText], texts[toolsUsedText] = strings.Join(mediaTypes, "\n"), strings.Join(publication.ToolsUsed, "\n")
 
-	outcome := service.guard.Check(ctx, texts).At(len(texts), answerguard.IntensityStrict)
+	settings := guardpolicy.Effective{Peer: guardpolicy.LevelStrict, Relevance: guardpolicy.RelevanceOff}
+	if service.guardPolicy != nil {
+		var err error
+		settings, err = service.guardPolicy.Effective(ctx, actor.OrganizationID, actor.UserID)
+		if err != nil {
+			service.logger.WarnContext(ctx, "a teamspace publication could not read answer guard settings, so it uses their conservative fallback",
+				"organization_id", actor.OrganizationID, "user_id", actor.UserID)
+		}
+	}
+	intensity := answerguard.IntensityStrict
+	if settings.Peer == guardpolicy.LevelSecrets {
+		intensity = answerguard.IntensitySecrets
+	}
+	run := primaryagents.GuardRun(ctx)
+	outcome := service.guard.CheckWith(ctx, texts, &answerguard.RelevanceInput{
+		Request: run.Request, Context: run.Context, Sources: run.Sources,
+		Mode: string(settings.Relevance), Regulated: settings.Regulated,
+		RequireCompleteInput: true,
+		OrganizationID:       actor.OrganizationID, UserID: actor.UserID,
+	}).At(len(texts), intensity)
 	if outcome.State != answerguard.StateClear || outcome.Shareable == nil {
 		// What was found is logged by kind, never by value.
 		service.logger.InfoContext(ctx, "the answer guard read what an agent published to a teamspace",

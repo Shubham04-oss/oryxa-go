@@ -421,6 +421,12 @@ describe("security headers", () => {
     const purge = await send(new Request(`${site}/internal/realtime/purge`))
     expect(purge.status).toBe(405)
     secured(purge)
+
+    const requests = await send(
+      new Request(`${site}/internal/realtime/requests`)
+    )
+    expect(requests.status).toBe(405)
+    secured(requests)
   })
 
   it("puts them on what a Durable Object answers, and on Go's answer to a delete", async () => {

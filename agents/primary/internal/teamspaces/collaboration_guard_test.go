@@ -79,9 +79,9 @@ func guardedSpace(t *testing.T, options ...Option) (*Service, *fakeRepository) {
 	return service, repo
 }
 
-func realGuard(t *testing.T, bedrock *bedrockFinding) *answerguard.Guard {
+func realGuard(t *testing.T, bedrock *bedrockFinding, options ...answerguard.Option) *answerguard.Guard {
 	t.Helper()
-	guard, err := answerguard.New(bedrock, answerguard.Config{Identifier: "gr_answers", Version: "1"})
+	guard, err := answerguard.New(bedrock, answerguard.Config{Identifier: "gr_answers", Version: "1"}, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,13 +233,35 @@ func TestAPublicationThatCannotBeCheckedIsNotStored(t *testing.T) {
 // scriptedGuard is a guard that answers with the verdict it is given, and
 // keeps what it was asked.
 type scriptedGuard struct {
-	verdict func(texts []string) answerguard.Verdict
-	asked   [][]string
+	verdict   func(texts []string) answerguard.Verdict
+	asked     [][]string
+	relevance []answerguard.RelevanceInput
 }
 
 func (guard *scriptedGuard) Check(_ context.Context, texts []string) answerguard.Verdict {
 	guard.asked = append(guard.asked, slices.Clone(texts))
 	return guard.verdict(texts)
+}
+
+func (guard *scriptedGuard) CheckWith(ctx context.Context, texts []string, input *answerguard.RelevanceInput) answerguard.Verdict {
+	guard.relevance = append(guard.relevance, *input)
+	return guard.Check(ctx, texts)
+}
+
+func TestAgentPublicationInvokesTheRelevanceAwareGuard(t *testing.T) {
+	guard := &scriptedGuard{verdict: func(texts []string) answerguard.Verdict {
+		return answerguard.Verdict{State: answerguard.StateClear, Texts: texts}
+	}}
+	service, _ := guardedSpace(t, WithGuard(guard))
+	_, err := service.CollaborationPublish(context.Background(), ada, "token", "tsp_1", primaryagents.SharedEntryInput{
+		Kind: "result", Title: "Launch", Summary: "Ready.", ToolsUsed: []string{"directory_load"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(guard.relevance) != 1 {
+		t.Fatal("agent publication bypassed CheckWith")
+	}
 }
 
 // TestAVerdictThatDoesNotFitThePublicationSharesNothing: a guard that hands

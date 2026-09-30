@@ -1,0 +1,21 @@
+{
+  "text": "From Raya's agent · approved by Raya (AI summary only): The launch is on the 14th.",
+  "blocks": [
+    {
+      "text": {
+        "text": "The launch is on the 14th.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "From Raya's agent · approved by Raya (AI summary only)",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}

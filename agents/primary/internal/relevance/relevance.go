@@ -154,11 +154,14 @@ var (
 	ErrUnknownCategory = errors.New("relevance: the judge named a category that does not exist")
 	// ErrNotConfigured is a judge built without a client or a model.
 	ErrNotConfigured = errors.New("relevance: the judge has no model to ask")
+	// ErrIncompleteInput is a sharing surface requiring the whole request
+	// and answer, but missing a request or exceeding the judge's text caps.
+	ErrIncompleteInput = errors.New("relevance: the complete request and answer could not be checked")
 )
 
 // ErrKind names why an answer could not be checked, for a log or a metric:
 // "none" for no error, and otherwise timeout, canceled, unavailable,
-// blocked, empty, unparseable, category, not_configured or other.
+// blocked, empty, unparseable, category, not_configured, incomplete or other.
 func ErrKind(err error) string {
 	for _, kind := range []struct {
 		err  error
@@ -173,6 +176,7 @@ func ErrKind(err error) string {
 		{ErrUnparseable, "unparseable"},
 		{ErrUnknownCategory, "category"},
 		{ErrNotConfigured, "not_configured"},
+		{ErrIncompleteInput, "incomplete"},
 	} {
 		if kind.err == nil && err == nil || kind.err != nil && errors.Is(err, kind.err) {
 			return kind.name

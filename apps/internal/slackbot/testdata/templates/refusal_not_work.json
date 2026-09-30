@@ -1,0 +1,12 @@
+{
+  "text": "I only pass on work questions.",
+  "blocks": [
+    {
+      "text": {
+        "text": "I only pass on work questions.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

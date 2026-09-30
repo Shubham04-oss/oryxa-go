@@ -2,8 +2,10 @@
 // layouts: the main canvas (Team → People, or Team's recent conversations)
 // and the agent panel's DMs tab. Each place mounts its own view, with its own
 // socket on the DM's one object (useDirectMessages), so both stay current.
-// DESIGN.md §3, "Direct messages", says how it reads.
-import { useMemo } from "react"
+// DESIGN.md §3, "Direct messages", says how it reads. A request between the
+// two people (an agent asked the other's, from Oryxa or Slack) has a quiet
+// line of its own in the log (REALTIME.md, "Request notes").
+import { useEffect, useMemo, useRef } from "react"
 import type { ReactNode } from "react"
 import { ArrowLeft } from "lucide-react"
 import { AgentComposer } from "./agent-composer"
@@ -18,8 +20,8 @@ import {
 import type { Notice } from "./conversation-log"
 import {
   clockTime,
+  conversationTimeline,
   countLabel,
-  dmTimeline,
   messageKey,
   seenMessageId,
 } from "./direct-message-format"
@@ -31,6 +33,11 @@ import { IdentityAvatar } from "./workspace-avatar"
 import { DM_MAX_BODY_LENGTH, useDirectMessages } from "@/lib/dms"
 import type { DirectMessages, DmMessage } from "@/lib/dms"
 import { codePoints } from "@/lib/dms/protocol"
+import { useOpenRequest } from "@/lib/dms/request-navigation"
+import type { OpenRequest } from "@/lib/dms/request-navigation"
+import { requestLine, requestStateWord } from "@/lib/dms/request-notes"
+import type { DmRequestNote } from "@/lib/dms/request-notes"
+import { useRequestStanding } from "@/lib/dms/use-request-standing"
 import { cn } from "@/lib/utils"
 
 /** `canvas`: the main canvas, under the header that names the person. `panel`: the DMs tab, under a compact row with the way back to its list. */
@@ -82,6 +89,13 @@ type ViewProps = {
   autoFocus?: boolean
   /** The panel's way back to its list. */
   onBack?: () => void
+  /**
+   * What a request's line calls to open the request in the Requests view,
+   * by its id. Without it the line takes the shell's (`OpenRequestProvider`,
+   * src/lib/dms/request-navigation.ts), and without either the line has no
+   * Open, since it would open nothing.
+   */
+  onOpenRequest?: OpenRequest
 }
 
 /** A DM with `peer`, over its own socket for as long as it is mounted. */
@@ -89,7 +103,48 @@ export function DirectMessageView({ organizationId, ...props }: ViewProps) {
   const dm = useDirectMessages(organizationId, props.viewerId, props.peer.id)
   // The rest of the page shows the dot for whoever an open view knows is online.
   useReportPresence(props.peer.id, dm.peer.online)
-  return <DirectMessageConversation dm={dm} {...props} />
+  return (
+    <DirectMessageConversation
+      dm={dm}
+      organizationId={organizationId}
+      {...props}
+    />
+  )
+}
+
+/** A request's line in the log: where it stands in it, and the request it says. */
+type RequestEntry = { id: string; createdAt: string; note: DmRequestNote }
+
+function isMessage(item: DmMessage | RequestEntry): item is DmMessage {
+  return "authorId" in item
+}
+
+/** The messages with each request's line among them, by when its line stands. */
+export function withRequests(
+  messages: readonly DmMessage[],
+  requests: readonly DmRequestNote[]
+): Array<DmMessage | RequestEntry> {
+  const entries = requests.map((note) => ({
+    id: note.requestId,
+    createdAt: note.at,
+    note,
+  }))
+  if (entries.length === 0) return [...messages]
+  const merged: Array<DmMessage | RequestEntry> = []
+  let next = 0
+  for (const message of messages) {
+    // A line goes before the first message that came after it.
+    while (
+      next < entries.length &&
+      entries[next].createdAt <= message.createdAt
+    ) {
+      merged.push(entries[next])
+      next += 1
+    }
+    merged.push(message)
+  }
+  merged.push(...entries.slice(next))
+  return merged
 }
 
 /**
@@ -99,6 +154,7 @@ export function DirectMessageView({ organizationId, ...props }: ViewProps) {
  */
 export function DirectMessageConversation({
   dm,
+  organizationId,
   viewerId,
   peer,
   layout,
@@ -108,23 +164,45 @@ export function DirectMessageConversation({
   onComposingChange,
   autoFocus = false,
   onBack,
-}: Omit<ViewProps, "organizationId"> & { dm: DirectMessages }) {
+  onOpenRequest,
+}: Omit<ViewProps, "organizationId"> & {
+  dm: DirectMessages
+  /** The DM's organization: where its requests are read from Go, as the member. */
+  organizationId?: string
+}) {
   const { messages, status } = dm
   const name = peer.name
   const short = peer.short
+  const shellOpensRequests = useOpenRequest()
+  const openRequest = onOpenRequest ?? shellOpensRequests
 
   // Nothing to show or send: the DM refused the viewer (the other person
   // left, or a purge ended it for good), or there is no DM to open.
   const refused = status === "not-allowed" || status === "closed"
   const sessionEnded = status === "session_expired"
   const shown = refused ? [] : messages
-  const timeline = useMemo(() => dmTimeline(shown, viewerId), [shown, viewerId])
+  const requests = refused ? none : dm.requests
+  const entries = useMemo(
+    () => withRequests(shown, requests),
+    [shown, requests]
+  )
+  const timeline = useMemo(
+    () =>
+      conversationTimeline<DmMessage, RequestEntry>(
+        entries,
+        viewerId,
+        isMessage
+      ),
+    [entries, viewerId]
+  )
   const seenId = useMemo(
     () => seenMessageId(shown, viewerId, dm.peer.lastReadSeq),
     [shown, viewerId, dm.peer.lastReadSeq]
   )
   const log = useConversationLog({
-    keys: shown.map(messageKey),
+    keys: entries.map((entry) =>
+      isMessage(entry) ? messageKey(entry) : `request:${entry.id}`
+    ),
     items: messages,
     latestSeq: latestConfirmed(messages),
     seqOf: (message) => message.seq,
@@ -149,6 +227,26 @@ export function DirectMessageConversation({
     autoFocus,
     onComposingChange,
   })
+
+  // A request that is new, or moved on, while the conversation is open is
+  // said aloud, as an approval landing in a side conversation is; what was
+  // there when it opened is not news.
+  const requestRevisions = useRef<ReadonlyMap<string, number>>(undefined)
+  const { announce } = log
+  useEffect(() => {
+    if (status !== "live") return
+    const now = new Map(requests.map((note) => [note.requestId, note.revision]))
+    const before = requestRevisions.current
+    requestRevisions.current = now
+    if (!before) return
+    for (const note of requests) {
+      if ((before.get(note.requestId) ?? 0) < note.revision) {
+        announce(
+          `${requestLine(note.askerId === viewerId, short, note.origin)}: ${requestStateWord(note.state)}`
+        )
+      }
+    }
+  }, [requests, status, viewerId, short, announce])
 
   const length = composerLength(draft, DM_MAX_BODY_LENGTH)
 
@@ -205,10 +303,23 @@ export function DirectMessageConversation({
               start={`This is the start of your conversation with ${name}.`}
             />
           )}
-          {timeline.map((item) =>
-            item.kind === "day" ? (
-              <DaySeparator key={item.key} label={item.label} />
-            ) : (
+          {timeline.map((item) => {
+            if (item.kind === "day") {
+              return <DaySeparator key={item.key} label={item.label} />
+            }
+            if (item.kind === "entry") {
+              return (
+                <RequestLine
+                  key={item.key}
+                  note={item.item.note}
+                  organizationId={organizationId}
+                  viewerId={viewerId}
+                  peer={peer}
+                  onOpen={openRequest}
+                />
+              )
+            }
+            return (
               <MessageGroup
                 key={item.key}
                 group={item}
@@ -218,7 +329,7 @@ export function DirectMessageConversation({
                 onRetry={dm.retry}
               />
             )
-          )}
+          })}
           {empty && (
             <EmptyConversation
               status={status}
@@ -264,6 +375,62 @@ export function DirectMessageConversation({
         />
       </div>
     </section>
+  )
+}
+
+/** No requests, always the same array. */
+const none: DmRequestNote[] = []
+
+/**
+ * A request between the two people, as a quiet line in the log: who asked
+ * whose agent, where it was made (Slack, when it was), where the request
+ * stands, and when its line was first noted, with Open for the Requests view
+ * when the shell wired one. Nothing in it is anybody's words: the sentence is
+ * fixed, the other person's name is the directory's, and where the request
+ * stands is Go's own word to the member, read as their session (the note's
+ * until Go has answered). Go refusing the member the request hides the line.
+ */
+export function RequestLine({
+  note,
+  organizationId,
+  viewerId,
+  peer,
+  onOpen,
+}: {
+  note: DmRequestNote
+  organizationId?: string
+  viewerId: string
+  peer: DmPeer
+  onOpen?: OpenRequest
+}) {
+  const standing = useRequestStanding(organizationId, note)
+  if (standing.hidden) return null
+  const said = requestLine(note.askerId === viewerId, peer.short, note.origin)
+  const state = requestStateWord(standing.state)
+  return (
+    <p
+      className="workspace-side-status"
+      data-request-state={standing.state}
+      data-request-id={note.requestId}
+    >
+      {said} · {state}{" "}
+      <time dateTime={note.at} title={fullTime(note.at)}>
+        {clockTime(note.at)}
+      </time>
+      {onOpen && (
+        <>
+          {" "}
+          <button
+            className="workspace-dm-retry"
+            type="button"
+            aria-label={`Open the request: ${said}, ${state}`}
+            onClick={() => onOpen(note.requestId)}
+          >
+            Open
+          </button>
+        </>
+      )}
+    </p>
   )
 }
 

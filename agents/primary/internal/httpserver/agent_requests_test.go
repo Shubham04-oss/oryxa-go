@@ -53,6 +53,124 @@ func (service *fakeInteractions) ReviewAsOwner(_ context.Context, actor primarya
 	return service.request, nil
 }
 
+// ConsentAsOwner, Activity, RevokeLease and the secret authorizations are the
+// routes the Slack consent loop added. Each records the actor it was called with
+// before anything else, and refuses any that is not the member in their own
+// session, as the ledger does.
+func (service *fakeInteractions) ConsentAsOwner(_ context.Context, actor primaryagents.InteractionActor, id, choice string) (interactions.ConsentResult, error) {
+	service.actors = append(service.actors, actor)
+	if actor.Session != primaryagents.SessionMember {
+		return interactions.ConsentResult{}, interactions.ErrForbidden
+	}
+	service.consents = append(service.consents, choice)
+	if service.consentErr != nil {
+		return interactions.ConsentResult{Request: service.request}, service.consentErr
+	}
+	service.request.ID, service.request.Status = id, interactions.StatusApproved
+	result := interactions.ConsentResult{Request: service.request, Choice: choice}
+	if choice == interactions.ChoiceAccess {
+		result.Lease = &interactions.Lease{ID: "ils_1", OrganizationID: actor.OrganizationID, OwnerUserID: actor.UserID, AskerUserID: "user_asker",
+			ChannelID: "C1", ThreadTS: "1.1", ExpiresAt: time.Date(2026, time.September, 29, 15, 0, 0, 0, time.UTC)}
+	}
+	return result, nil
+}
+
+func (service *fakeInteractions) Activity(_ context.Context, actor primaryagents.InteractionActor, limit int) ([]interactions.ActivityEntry, error) {
+	service.actors = append(service.actors, actor)
+	service.limit = limit
+	return []interactions.ActivityEntry{{Kind: interactions.ActivityAsked, Role: interactions.ActivityOwner, RequestID: "irq_1"}}, nil
+}
+
+func (service *fakeInteractions) RevokeLease(_ context.Context, actor primaryagents.InteractionActor, id string) (interactions.Lease, error) {
+	service.actors = append(service.actors, actor)
+	if actor.Session != primaryagents.SessionMember {
+		return interactions.Lease{}, interactions.ErrForbidden
+	}
+	service.revoked = append(service.revoked, id)
+	revokedAt := time.Date(2026, time.September, 29, 14, 30, 0, 0, time.UTC)
+	return interactions.Lease{ID: id, OrganizationID: actor.OrganizationID, OwnerUserID: actor.UserID, RevokedAt: &revokedAt}, nil
+}
+
+func (service *fakeInteractions) share(actor primaryagents.InteractionActor, id string) interactions.SecretShare {
+	return interactions.SecretShare{RequestID: id, OrganizationID: actor.OrganizationID, OwnerUserID: actor.UserID, AskerUserID: "user_asker"}
+}
+
+func (service *fakeInteractions) AuthorizeSecretPut(_ context.Context, actor primaryagents.InteractionActor, id string, asked time.Duration) (interactions.SecretShare, time.Duration, error) {
+	service.actors = append(service.actors, actor)
+	if actor.Session != primaryagents.SessionMember {
+		return interactions.SecretShare{}, 0, interactions.ErrForbidden
+	}
+	if service.secretErr != nil {
+		return interactions.SecretShare{}, 0, service.secretErr
+	}
+	if asked == 0 {
+		asked = interactions.MaxSecretTTL
+	}
+	return service.share(actor, id), asked, nil
+}
+
+func (service *fakeInteractions) AuthorizeSecretView(_ context.Context, actor primaryagents.InteractionActor, id string) (interactions.SecretShare, error) {
+	service.actors = append(service.actors, actor)
+	if actor.Session != primaryagents.SessionMember {
+		return interactions.SecretShare{}, interactions.ErrForbidden
+	}
+	return service.share(actor, id), service.secretErr
+}
+
+func (service *fakeInteractions) AuthorizeSecretRevoke(_ context.Context, actor primaryagents.InteractionActor, id string) (interactions.SecretShare, error) {
+	service.actors = append(service.actors, actor)
+	if actor.Session != primaryagents.SessionMember {
+		return interactions.SecretShare{}, interactions.ErrForbidden
+	}
+	return service.share(actor, id), service.secretErr
+}
+
+// fakeSecretShares keeps what it is asked to keep, in memory, opening each
+// secret once. It records the share of every call, which the routes take from
+// the ledger and never from the request.
+type fakeSecretShares struct {
+	values  map[string]string
+	shares  []interactions.SecretShare
+	ttls    []time.Duration
+	putErr  error
+	viewErr error
+}
+
+func (fake *fakeSecretShares) Put(_ context.Context, share interactions.SecretShare, value string, ttl time.Duration) (interactions.SecretMeta, error) {
+	fake.shares = append(fake.shares, share)
+	fake.ttls = append(fake.ttls, ttl)
+	if fake.putErr != nil {
+		return interactions.SecretMeta{}, fake.putErr
+	}
+	if fake.values == nil {
+		fake.values = map[string]string{}
+	}
+	fake.values[share.RequestID] = value
+	return interactions.SecretMeta{ExpiresAt: time.Date(2026, time.September, 29, 15, 0, 0, 0, time.UTC)}, nil
+}
+
+func (fake *fakeSecretShares) View(_ context.Context, share interactions.SecretShare) (interactions.SecretValue, error) {
+	fake.shares = append(fake.shares, share)
+	if fake.viewErr != nil {
+		return interactions.SecretValue{}, fake.viewErr
+	}
+	value, ok := fake.values[share.RequestID]
+	if !ok {
+		return interactions.SecretValue{Value: "sk-live-example", ExpiresAt: time.Date(2026, time.September, 29, 15, 0, 0, 0, time.UTC)}, nil
+	}
+	delete(fake.values, share.RequestID)
+	return interactions.SecretValue{Value: value, ExpiresAt: time.Date(2026, time.September, 29, 15, 0, 0, 0, time.UTC)}, nil
+}
+
+func (fake *fakeSecretShares) Revoke(_ context.Context, share interactions.SecretShare) error {
+	fake.shares = append(fake.shares, share)
+	if _, ok := fake.values[share.RequestID]; !ok {
+		return interactions.ErrSecretGone
+	}
+	delete(fake.values, share.RequestID)
+	return nil
+}
+
 // teamspaceInteractions is fakeInteractions keeping the last request body it
 // was asked to create and the last listing it was asked for.
 type teamspaceInteractions struct {
@@ -285,8 +403,8 @@ func TestOnlyTheMembersOwnSessionDecidesARequestHeldForThem(t *testing.T) {
 	if decided.Code != http.StatusOK || body.Status != interactions.StatusApproved || body.Approval != interactions.ApprovalOwner || body.TeamspaceID != "tsp_1" {
 		t.Fatalf("the member's own decision = %d %s, want 200 and an approved request held for its owner in tsp_1", decided.Code, decided.Body.String())
 	}
-	// Who decided is in the JSON: the member, in their own session.
-	if !strings.Contains(decided.Body.String(), `"decided_by":{"kind":"member","user_id":"user_1"}`) {
+	// Who decided is in the JSON: the member, in their own session, on the web.
+	if !strings.Contains(decided.Body.String(), `"decided_by":{"kind":"member","user_id":"user_1","surface":"web"}`) {
 		t.Fatalf("the decision = %s, want decision.decided_by naming user_1 as the member", decided.Body.String())
 	}
 	// Approving it read the teamspace again, as the member, with their own

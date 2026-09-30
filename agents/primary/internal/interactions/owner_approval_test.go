@@ -232,7 +232,7 @@ func TestADecisionRecordsWhoMadeIt(t *testing.T) {
 	held := createInTeamspace(t, service, "agt_b")
 	byOwner, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", held.ID, approve)
 	if err != nil || byOwner.Decision == nil || byOwner.Decision.DecidedBy == nil ||
-		*byOwner.Decision.DecidedBy != (agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b"}) || !DecidedByItsOwner(byOwner) {
+		*byOwner.Decision.DecidedBy != (agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b", Surface: SurfaceWeb}) || !DecidedByItsOwner(byOwner) {
 		t.Fatalf("the member's own decision = %+v, %v; want decided_by the member", byOwner.Decision, err)
 	}
 	delegated := createInTeamspace(t, service, "agt_auto")

@@ -10,7 +10,8 @@ import {
   SpecialistEntry,
   StatusPill,
 } from "./agents-parts"
-import { agentsErrorMessage } from "./agents-format"
+import { agentsErrorMessage, plural } from "./agents-format"
+import { openRequests } from "./requests-view-open"
 import { SpecialistFocus } from "./specialist-focus"
 import { SpecialistsSection } from "./specialists-section"
 import { AgentTeamFocus } from "./multi-agent-team-focus"
@@ -157,11 +158,14 @@ function Stat({
   value,
   detail,
   query,
+  onOpen,
 }: {
   label: string
   value?: number
   detail?: string
   query: { isPending: boolean; isError: boolean; error: unknown }
+  /** Where the tile leads: a quiet link under it. */
+  onOpen?: { label: string; open: () => void }
 }) {
   const unavailable = isUnavailableHere(query.error)
   return (
@@ -177,6 +181,15 @@ function Stat({
             : "Could not load"
           : detail}
       </small>
+      {onOpen && (
+        <button
+          className="workspace-requests-stat-link"
+          type="button"
+          onClick={onOpen.open}
+        >
+          {onOpen.label}
+        </button>
+      )}
     </div>
   )
 }
@@ -331,6 +344,7 @@ function AgentsOverview({
           value={inbox.data && waitingOn(inbox.data, viewerId).length}
           detail="For you to approve or answer"
           query={inbox}
+          onOpen={{ label: "View requests", open: () => openRequests() }}
         />
       </dl>
 

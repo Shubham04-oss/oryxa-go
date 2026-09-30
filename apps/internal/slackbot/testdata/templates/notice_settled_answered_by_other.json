@@ -1,0 +1,21 @@
+{
+  "text": "Answered by Maya",
+  "blocks": [
+    {
+      "text": {
+        "text": "<@U0ASKER> asked you through Oryxa:\n> When is the launch?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Answered by *Maya*",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}

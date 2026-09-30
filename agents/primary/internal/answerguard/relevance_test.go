@@ -50,6 +50,53 @@ func saying(result relevance.Result) *fakeJudge {
 	return &fakeJudge{decide: func(relevance.Input) relevance.Result { return result }}
 }
 
+func TestCompletePublicationInputHonorsCapsWithoutJudgingClippedText(t *testing.T) {
+	for _, test := range []struct {
+		name, mode, request string
+		texts               []string
+		public, incomplete  bool
+	}{
+		{"exact answer cap", RelevanceHold, "Question", []string{strings.Repeat("é", relevance.MaxAnswerRunes)}, false, false},
+		{"answer beyond cap", RelevanceHold, "Question", []string{strings.Repeat("é", relevance.MaxAnswerRunes+1)}, false, true},
+		{"combined fields exceed cap", RelevanceHold, "Question", []string{strings.Repeat("a", 20_000), strings.Repeat("b", 4_001)}, false, true},
+		{"missing request", RelevanceHold, "", []string{"A private answer."}, false, true},
+		{"request beyond cap", RelevanceHold, strings.Repeat("é", relevance.MaxRequestRunes+1), []string{"An answer."}, false, true},
+		{"exact request cap", RelevanceHold, strings.Repeat("é", relevance.MaxRequestRunes), []string{"An answer."}, false, false},
+		{"shadow records unchecked", RelevanceShadow, "", []string{"An answer."}, false, true},
+		{"off remains off", RelevanceOff, "", []string{"An answer."}, false, true},
+		{"public sources skip relevance", RelevanceHold, "", []string{strings.Repeat("a", relevance.MaxAnswerRunes+1)}, true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			judge := saying(judgedClean)
+			guard := judged(t, judge)
+			sources := privateSources
+			if test.public {
+				sources = []string{"directory_load"}
+			}
+			verdict := guard.CheckWith(context.Background(), test.texts, &RelevanceInput{Request: test.request, Sources: sources, Mode: test.mode, RequireCompleteInput: true})
+			active := test.mode != RelevanceOff && !test.public
+			wouldHold := active && test.incomplete
+			held := wouldHold && test.mode == RelevanceHold
+			if verdict.Relevance == nil || verdict.Relevance.WouldHold != wouldHold || verdict.Relevance.Held != held {
+				t.Fatalf("relevance=%+v wouldHold=%t held=%t", verdict.Relevance, wouldHold, held)
+			}
+			wantCalls := 0
+			if active && !test.incomplete {
+				wantCalls = 1
+			}
+			if judge.calls() != wantCalls {
+				t.Fatalf("judge calls=%d want=%d", judge.calls(), wantCalls)
+			}
+			if wouldHold && verdict.Relevance.Err != "incomplete" {
+				t.Fatalf("unchecked reason=%q", verdict.Relevance.Err)
+			}
+			if (verdict.Shareable(len(test.texts)) == nil) != held {
+				t.Fatalf("shareable=%q held=%t", verdict.Shareable(len(test.texts)), held)
+			}
+		})
+	}
+}
+
 // What a judge can make of an answer.
 var (
 	judgedClean    = relevance.Result{Judged: true, Model: "fake-judge", Certainty: 0.95}

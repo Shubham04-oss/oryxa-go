@@ -1,0 +1,21 @@
+{
+  "text": "From Raya's agent · approved by Raya: The launch is on the 14th, per the plan: \"ship Tuesday\".",
+  "blocks": [
+    {
+      "text": {
+        "text": "The launch is on the 14th, per the plan: \"ship Tuesday\".",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "From Raya's agent · approved by Raya",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}

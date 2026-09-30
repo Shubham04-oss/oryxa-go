@@ -1,0 +1,12 @@
+{
+  "text": "I don't work in group messages. Ask me in a channel.",
+  "blocks": [
+    {
+      "text": {
+        "text": "I don't work in group messages. Ask me in a channel.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

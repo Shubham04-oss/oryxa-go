@@ -10,6 +10,10 @@
 // connection it belongs to, as apps.trigger.received.v1, written in the same
 // transaction as the mark that dedupes the delivery.
 //
+// A toolkit that is no integration, such as Oryxa's own Slack bot, is a Surface:
+// it shares all of this, and takes its verified deliveries itself, at static
+// URLs, instead of through Pusher.Parse (see surface.go).
+//
 // An endpoint's secret depends on whose endpoint it is. The core generates it
 // for a connection's subscription, an admin enters it for an organization's
 // own app, and the deployment's comes from configuration. A secret kept in
