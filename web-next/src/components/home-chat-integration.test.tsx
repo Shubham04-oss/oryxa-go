@@ -317,21 +317,33 @@ describe("Home's public primary-chat integration", () => {
     agentChats
       .named(objectName("th_old"))
       .update({ messages: itemsToChatMessages([held]) })
-    await home().findByText("Needs confirmation")
-    expect(
-      home().getByRole("heading", { name: "Waiting on you · 2" })
-    ).toBeTruthy()
-    expect(work().getAllByRole("listitem")).toHaveLength(1)
-    expect(home().queryByText(/Nothing waiting/)).toBeNull()
+    await home().findByText("1 tool confirmation · Open chat to decide")
+    const needs = within(home().getByRole("region", { name: "Needs you" }))
+    expect(needs.getAllByRole("article")).toHaveLength(1)
+    expect(needs.getByText(/Quarterly numbers/)).toBeTruthy()
     expect(
       within(
-        home().getByRole("region", { name: "Waiting on you" })
-      ).getAllByRole("button", { name: /Exact older conversation/ })
+        needs.getByRole("list", { name: "Tool confirmations" })
+      ).getAllByRole("listitem")
     ).toHaveLength(1)
-    fireEvent.click(home().getByRole("button", { name: "All confirmations" }))
+    expect(work().getAllByRole("listitem")).toHaveLength(2)
+    expect(home().queryByText("Nothing needs you right now.")).toBeNull()
     expect(
-      document.querySelector(".workspace-agent-thread-title")?.textContent
-    ).toBe("Exact older conversation")
+      needs.getAllByRole("button", { name: /Exact older conversation/ })
+    ).toHaveLength(1)
+    fireEvent.click(work().getByRole("button", { name: "New chat" }))
+    await screen.findByText("Ask anything to start a conversation.")
+    fireEvent.click(
+      needs.getByRole("button", { name: /Exact older conversation/ })
+    )
+    await waitFor(() =>
+      expect(
+        document.querySelector(".workspace-agent-thread-title")?.textContent
+      ).toBe("Exact older conversation")
+    )
+    expect(
+      agentChats.named(objectName("th_old")).sendMessage
+    ).not.toHaveBeenCalled()
   })
 
   it("preserves a second Home message sent while a first new conversation is still being created", async () => {

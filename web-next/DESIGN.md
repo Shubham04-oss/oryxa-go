@@ -118,6 +118,9 @@ not permission to copy every incidental value into a new component.
     so this bounded read does not cover older unopened conversations. State
     the coverage visibly, and never show an unqualified all-clear when any
     conversations or reads remain unchecked.
+    Full chat detail checks poll every 30 seconds and refresh on mount and
+    window focus; lightweight lists may poll every 10 seconds. The open chat's
+    live waiting state updates Home immediately through its scoped activity.
   - **Open access** follows Needs you. List live access windows from the
     server's active, member-scoped lease list, with expiry and whose agent may
     read whose information. End access is offered only when the server grants

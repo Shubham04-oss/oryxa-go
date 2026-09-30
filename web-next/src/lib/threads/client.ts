@@ -586,6 +586,10 @@ export function threadApprovalQueryOptions(
     ] as const,
     queryFn: ({ signal }) => getThread(organizationId, threadId, { signal }),
     retry: retryUnlessRefused,
-    staleTime: 10_000,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
+    refetchIntervalInBackground: false,
   })
 }

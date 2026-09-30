@@ -275,7 +275,7 @@ function HomeDesk({
   const confirmations = useQueries({
     queries: checkedIds.map((threadId) => ({
       ...threadApprovalQueryOptions(org, threadId, viewer),
-      ...poll,
+      enabled,
     })),
   })
   const waitingChats = checkedIds.flatMap((threadId, index) => {

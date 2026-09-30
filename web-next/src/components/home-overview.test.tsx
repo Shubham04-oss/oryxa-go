@@ -9,7 +9,11 @@ import {
   waitFor,
   within,
 } from "@testing-library/react"
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query"
 import type { ComponentProps } from "react"
 import { agentKeys } from "@/lib/agents/queries"
 import { threadKeys } from "@/lib/threads/client"
@@ -165,6 +169,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   clients.splice(0).forEach((client) => client.clear())
+  focusManager.setFocused(undefined)
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -493,6 +498,58 @@ it("checks only newest five primary chats plus the distinct open chat and opens 
     screen.getByRole<HTMLButtonElement>("button", { name: /Open older chat/ })
   )
   expect(view.onOpenConversation).toHaveBeenCalledWith("chat-10")
+})
+
+it("polls bounded chat details every thirty seconds while lists stay quick and mount and focus refresh immediately", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
+  const go = stubApi({
+    [`${path}/threads`]: {
+      threads: Array.from({ length: 6 }, (_, i) => chat(`chat-${i}`)),
+    },
+  })
+  const activity = { threadId: "chat-5", state: "idle" as const }
+  const view = renderHome({ primaryChatActivity: activity })
+  const detailReads = () =>
+    go.calls.filter((call) => call.url.pathname.startsWith(`${path}/threads/`))
+  const listReads = () =>
+    go.calls.filter((call) => call.url.pathname === `${path}/threads`)
+  await screen.findByText("Nothing needs you right now.")
+  expect(detailReads()).toHaveLength(6)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_000)
+  })
+  expect(listReads()).toHaveLength(2)
+  expect(detailReads()).toHaveLength(6)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(19_999)
+  })
+  expect(detailReads()).toHaveLength(6)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1)
+  })
+  expect(detailReads()).toHaveLength(12)
+
+  view.unmount()
+  render(
+    <QueryClientProvider client={view.client}>
+      <HomeOverview
+        organizationId={ORG}
+        viewerId={OWNER}
+        primaryChatActivity={activity}
+        onOpenRequests={vi.fn()}
+        onOpenAgent={vi.fn()}
+        onOpenTools={vi.fn()}
+        onOpenKnowledge={vi.fn()}
+      />
+    </QueryClientProvider>
+  )
+  await screen.findByText("Nothing needs you right now.")
+  expect(detailReads()).toHaveLength(18)
+  await act(async () => {
+    focusManager.setFocused(false)
+    focusManager.setFocused(true)
+  })
+  await waitFor(() => expect(detailReads()).toHaveLength(24))
 })
 
 it("deduplicates an open chat already among five and never reads side-conversation histories", async () => {

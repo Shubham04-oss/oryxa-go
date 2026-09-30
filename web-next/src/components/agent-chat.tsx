@@ -228,10 +228,6 @@ export function AgentChat({
   const historyDetails = useQueries({
     queries: candidates.map((thread) => ({
       ...threadApprovalQueryOptions(organizationId, thread.id, scope?.userId),
-      refetchInterval: (query: { state: { data?: ThreadDetail } }) =>
-        (query.state.data?.pending_confirmations.length ?? 0) > 0
-          ? 10_000
-          : false,
       enabled: hydrated && visible,
     })),
   })
