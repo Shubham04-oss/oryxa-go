@@ -69,6 +69,7 @@ function backend({
   let lists = [...recent]
   let creates = 0
   let createGate: ReturnType<typeof deferred<Response>> | undefined
+  let agentsGate: ReturnType<typeof deferred<void>> | undefined
   let refusedReads: ReturnType<typeof deferred<Response>> | undefined
   const api = mockApi(({ url, method }) => {
     const path = url.pathname
@@ -106,8 +107,11 @@ function backend({
           })
         : json({ error: { code: "forbidden", message: "Not available" } }, 403)
     }
-    if (resource === "agents")
-      return json({ agents: own ? [{ ...primary, organization_id: org }] : [] })
+    if (resource === "agents") {
+      const response = () =>
+        json({ agents: own ? [{ ...primary, organization_id: org }] : [] })
+      return agentsGate ? agentsGate.promise.then(response) : response()
+    }
     if (resource === "agent-requests/inbox")
       return json({
         requests:
@@ -134,13 +138,30 @@ function backend({
     setSession(next: Session) {
       currentSession = next
     },
-    holdCreate() {
+    holdCreate({ fail = false }: { fail?: boolean } = {}) {
       const gate = deferred<Response>()
       createGate = gate
       return () => {
+        if (fail) {
+          gate.resolve(
+            json(
+              { error: { code: "internal", message: "Couldn't start" } },
+              500
+            )
+          )
+          return
+        }
         const created = thread("th_created", "New Home conversation")
         lists = [created, ...lists]
         gate.resolve(json(created, 201))
+      }
+    },
+    holdAgents() {
+      const gate = deferred<void>()
+      agentsGate = gate
+      return () => {
+        agentsGate = undefined
+        gate.resolve()
       }
     },
     holdRefusedReads() {
@@ -223,7 +244,7 @@ describe("Home's public primary-chat integration", () => {
     await waitFor(() =>
       expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(1)
     )
-    expect(home().getByText("Starting conversation")).toBeTruthy()
+    expect(await home().findByText("Starting conversation")).toBeTruthy()
     expect(work().getAllByRole("listitem")).toHaveLength(3)
     expect(
       work()
@@ -370,6 +391,93 @@ describe("Home's public primary-chat integration", () => {
     )
     for (const chat of deliveredB)
       expect(chat.name).toBe(objectName("th_created_2"))
+  })
+
+  it("delivers both Home submissions once into distinct new conversations after the member's agents finish loading", async () => {
+    const api = backend()
+    const release = api.holdAgents()
+    renderShell()
+    await home().findByRole("button", { name: /Exact older conversation/ })
+    sendHome("First held-agents Home request")
+    sendHome("Second held-agents Home request")
+    expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(0)
+
+    await act(async () => release())
+    ;(await socket("th_created")).open()
+    const firstChat = agentChats.named(objectName("th_created"))
+    expect(firstChat.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      { text: "First held-agents Home request" },
+      {
+        body: {
+          screen_context: expect.objectContaining({ view: "home/overview" }),
+        },
+      }
+    )
+    ;(await socket("th_created_2")).open()
+    const secondChat = agentChats.named(objectName("th_created_2"))
+    expect(secondChat.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      { text: "Second held-agents Home request" },
+      {
+        body: {
+          screen_context: expect.objectContaining({ view: "home/overview" }),
+        },
+      }
+    )
+    expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(2)
+    const sent = agentChats.all.flatMap((chat) =>
+      chat.sendMessage.mock.calls.map(
+        ([message]) => (message as { text?: string } | undefined)?.text
+      )
+    )
+    expect(
+      sent.filter((text) => text === "First held-agents Home request")
+    ).toHaveLength(1)
+    expect(
+      sent.filter((text) => text === "Second held-agents Home request")
+    ).toHaveLength(1)
+  })
+
+  it("keeps a failed first Home message recoverable beside an occupied primary draft after the next Home message sends", async () => {
+    const api = backend()
+    const release = api.holdCreate({ fail: true })
+    renderShell()
+    fireEvent.click(
+      await home().findByRole("button", { name: /Exact older conversation/ })
+    )
+    ;(await socket("th_old")).open()
+    fireEvent.change(
+      await screen.findByRole("textbox", { name: "Message Leo" }),
+      { target: { value: "Half a thought" } }
+    )
+    sendHome("Failed first Home request")
+    await waitFor(() =>
+      expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(1)
+    )
+    sendHome("Following Home request")
+    await act(async () => release())
+    ;(await socket("th_created_2")).open()
+    expect(
+      agentChats.named(objectName("th_created_2")).sendMessage
+    ).toHaveBeenCalledExactlyOnceWith(
+      { text: "Following Home request" },
+      {
+        body: {
+          screen_context: expect.objectContaining({ view: "home/overview" }),
+        },
+      }
+    )
+    expect(screen.getByDisplayValue("Half a thought")).toBeTruthy()
+    // A failed submission must remain visible and recoverable independently
+    // of the next request; it cannot replace the member's existing draft.
+    expect(await screen.findByText("Failed first Home request")).toBeTruthy()
+    expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(2)
+    expect(
+      agentChats.all.flatMap((chat) =>
+        chat.sendMessage.mock.calls.map(
+          ([message]) => (message as { text?: string } | undefined)?.text
+        )
+      )
+    ).not.toContain("Failed first Home request")
   })
 
   it.each([
