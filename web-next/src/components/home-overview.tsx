@@ -5,6 +5,7 @@ import type {
   UseQueryOptions,
 } from "@tanstack/react-query"
 import { useHydrated } from "@tanstack/react-router"
+import { ThinkingOrb } from "thinking-orbs"
 import { AgentComposer } from "./agent-composer"
 import { ApiError } from "@/lib/api/client"
 import {
@@ -180,40 +181,71 @@ export function HomeOverview({
       refetchIntervalInBackground: false,
     })),
   })
-  const waiting = inboxRows.filter((request) =>
+  const waitingRequests = inboxRows.filter((request) =>
     waitsOnMember(request, viewerId ?? "", Date.now())
   )
   const conversations = (currentData(threads) ?? []).filter(
     (thread) => !thread.origin || thread.origin === "chat"
   )
   // Activity describes the selected primary chat, not all background work.
-  // It takes one of the three rows, even before a new thread has an ID.
-  const active =
-    primaryChatActivity && primaryChatActivity.state !== "idle"
-      ? primaryChatActivity
-      : null
-  const agentWork = [
-    ...(active
+  const running =
+    primaryChatActivity?.state === "running" ? primaryChatActivity : null
+  const waitingChat =
+    primaryChatActivity?.state === "waiting" ? primaryChatActivity : null
+  const activityTitle =
+    conversations.find((thread) => thread.id === primaryChatActivity?.threadId)
+      ?.title || "Current conversation"
+  const waitingThreadId = waitingChat?.threadId ?? null
+  const openWaitingConversation =
+    waitingThreadId !== null && onOpenConversation
+      ? () => onOpenConversation(waitingThreadId)
+      : undefined
+  const waiting = [
+    ...(waitingChat
       ? [
           {
-            threadId: active.threadId,
+            id: `chat:${waitingChat.threadId ?? "pending"}`,
+            title: activityTitle,
+            detail: "Needs confirmation",
+            open: openWaitingConversation,
+          },
+        ]
+      : []),
+    ...waitingRequests.slice(0, waitingChat ? 2 : 3).map((request) => ({
+      id: `request:${request.id}`,
+      title: request.purpose || request.task,
+      detail: `${request.status === "review" ? "Answer to review" : "Request to approve"} · ${request.requester.agent_name}`,
+      open: () => onOpenRequests(request.id),
+    })),
+  ]
+  const waitingCount = waitingRequests.length + (waitingChat ? 1 : 0)
+  const incompleteRequests =
+    !inbox.isSuccess || inbox.isFetching || inboxRows.length >= requestLimit
+  const agentWork = [
+    ...(running
+      ? [
+          {
+            threadId: running.threadId,
             title:
-              active.threadId === null && active.state === "running"
+              running.threadId === null
                 ? "Starting conversation"
-                : conversations.find((thread) => thread.id === active.threadId)
-                    ?.title || "Current conversation",
-            detail:
-              active.state === "waiting" ? "Needs confirmation" : "Working",
+                : activityTitle,
+            detail: "Working",
+            running: true,
           },
         ]
       : []),
     ...conversations
-      .filter((thread) => thread.id !== active?.threadId)
-      .slice(0, active ? 2 : 3)
+      .filter(
+        (thread) =>
+          thread.id !== running?.threadId && thread.id !== waitingChat?.threadId
+      )
+      .slice(0, running ? 2 : 3)
       .map((thread) => ({
         threadId: thread.id,
         title: thread.title || "New conversation",
         detail: relativeTime(thread.updated_at),
+        running: false,
       })),
   ].slice(0, 3)
   const toolProblems = (currentData(connections) ?? []).filter(
@@ -249,8 +281,7 @@ export function HomeOverview({
   const settled = [inbox, threads, connections, corpora, ...failures].every(
     (query) => query.isSuccess && !query.isFetching
   )
-  const needsMember =
-    waiting.length > 0 || attention.length > 0 || active?.state === "waiting"
+  const needsMember = waitingCount > 0 || attention.length > 0
   // A base with no visible documents cannot contain a visible failed document.
   const checkedCount =
     corpusRows.length -
@@ -288,34 +319,45 @@ export function HomeOverview({
             <section className="home-card" aria-label="Waiting on you">
               <header>
                 <h2>
-                  Waiting on you · {waiting.length}
-                  {inboxRows.length >= requestLimit ? "+" : ""}
+                  Waiting on you · {waitingCount}
+                  {incompleteRequests ? "+" : ""}
                 </h2>
-                <button type="button" onClick={() => onOpenRequests()}>
-                  All
-                </button>
-              </header>
-              <ul>
-                {waiting.slice(0, 3).map((request) => (
-                  <li key={request.id} className="home-row">
+                <div>
+                  {waitingChat && (
                     <button
                       type="button"
-                      onClick={() => onOpenRequests(request.id)}
+                      aria-label="All confirmations"
+                      disabled={!openWaitingConversation}
+                      onClick={openWaitingConversation}
                     >
-                      <span>{request.purpose || request.task}</span>
-                      <small>
-                        {request.status === "review"
-                          ? "Answer to review"
-                          : "Request to approve"}{" "}
-                        · {request.requester.agent_name}
-                      </small>
+                      {waitingRequests.length > 0 ? "All confirmations" : "All"}
                     </button>
+                  )}
+                  {waitingRequests.length > 0 && (
+                    <button type="button" onClick={() => onOpenRequests()}>
+                      All requests
+                    </button>
+                  )}
+                </div>
+              </header>
+              <ul>
+                {waiting.map((item) => (
+                  <li key={item.id} className="home-row">
+                    {item.open ? (
+                      <button type="button" onClick={item.open}>
+                        <span>{item.title}</span> <small>{item.detail}</small>
+                      </button>
+                    ) : (
+                      <div role="status">
+                        <span>{item.title}</span> <small>{item.detail}</small>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
               {inboxRows.length >= requestLimit && (
                 <p className="home-quiet">
-                  From the latest {requestLimit} requests.
+                  Only the latest {requestLimit} requests were checked.
                 </p>
               )}
             </section>
@@ -343,7 +385,22 @@ export function HomeOverview({
                   <li key={work.threadId ?? "starting"} className="home-row">
                     {work.threadId === null ? (
                       <div role="status">
-                        <span>{work.title}</span> <small>{work.detail}</small>
+                        <span>{work.title}</span>{" "}
+                        <small
+                          className={
+                            work.running ? "home-work-status" : undefined
+                          }
+                        >
+                          {work.running && (
+                            <ThinkingOrb
+                              size={20}
+                              theme="dark"
+                              state="working"
+                              aria-hidden="true"
+                            />
+                          )}
+                          {work.detail}
+                        </small>
                       </div>
                     ) : (
                       <button
@@ -354,7 +411,22 @@ export function HomeOverview({
                             onOpenConversation?.(work.threadId)
                         }}
                       >
-                        <span>{work.title}</span> <small>{work.detail}</small>
+                        <span>{work.title}</span>{" "}
+                        <small
+                          className={
+                            work.running ? "home-work-status" : undefined
+                          }
+                        >
+                          {work.running && (
+                            <ThinkingOrb
+                              size={20}
+                              theme="dark"
+                              state="working"
+                              aria-hidden="true"
+                            />
+                          )}
+                          {work.detail}
+                        </small>
                       </button>
                     )}
                   </li>
@@ -406,7 +478,7 @@ export function HomeOverview({
           {needsMember && coverage && <p className="home-quiet">{coverage}</p>}
           {needsMember &&
             inboxRows.length >= requestLimit &&
-            waiting.length === 0 && (
+            waitingCount === 0 && (
               <p className="home-quiet">
                 Only the latest {requestLimit} requests were checked.
               </p>

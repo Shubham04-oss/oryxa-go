@@ -21,6 +21,12 @@ import type { Connection } from "@/lib/apps/client"
 import type { Corpus, CorpusDocument } from "@/lib/rag/client"
 import { HomeOverview } from "./home-overview"
 
+vi.mock("thinking-orbs", () => ({
+  ThinkingOrb: ({ state }: { state: string }) => (
+    <i aria-hidden="true" data-orb-state={state} />
+  ),
+}))
+
 const path = "/v1/organizations/org_1"
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -237,7 +243,7 @@ describe("HomeOverview", () => {
       "Other member work",
     ])
       expect(screen.queryByText(title)).toBeNull()
-    fireEvent.click(within(card).getByRole("button", { name: "All" }))
+    fireEvent.click(within(card).getByRole("button", { name: "All requests" }))
     fireEvent.click(
       within(card).getByRole("button", { name: /Legacy owner approval/ })
     )
@@ -249,7 +255,9 @@ describe("HomeOverview", () => {
         .find((url) => url.pathname.endsWith("/inbox"))
         ?.searchParams.get("limit")
     ).toBe("100")
-    expect(within(card).getByText("From the latest 100 requests.")).toBeTruthy()
+    expect(
+      within(card).getByText("Only the latest 100 requests were checked.")
+    ).toBeTruthy()
   })
 
   it("puts member decisions before recent conversations and failures below the composer", async () => {
@@ -351,6 +359,11 @@ describe("HomeOverview", () => {
     await within(card).findByText("Conversation 4")
     expect(
       within(card)
+        .getAllByRole("listitem")[0]
+        .querySelector('[data-orb-state="working"]')
+    ).toBeTruthy()
+    expect(
+      within(card)
         .getAllByRole("listitem")
         .map((row) => row.textContent)
     ).toEqual([
@@ -389,6 +402,11 @@ describe("HomeOverview", () => {
       expect.stringContaining("Conversation 2"),
     ])
     expect(within(card).queryByText("Working")).toBeNull()
+    expect(card.querySelector("[data-orb-state]")).toBeNull()
+    view.rerenderHome({ primaryChatActivity: null })
+    expect(within(card).getAllByRole("listitem")).toHaveLength(3)
+    expect(within(card).getAllByText("Sep 23")).toHaveLength(3)
+    expect(card.querySelector("[data-orb-state]")).toBeNull()
   })
 
   it("shows selected tool confirmation separately without inflating Inbox decisions or claiming quiet", async () => {
@@ -396,9 +414,9 @@ describe("HomeOverview", () => {
     const view = renderHome({
       primaryChatActivity: { threadId: "th_held", state: "waiting" },
     })
-    await screen.findByRole("heading", { name: "Waiting on you · 1" })
-    const card = screen.getByRole("region", { name: "Your agent" })
-    expect(within(card).getAllByRole("listitem")).toHaveLength(1)
+    await screen.findByRole("heading", { name: "Waiting on you · 2" })
+    const card = screen.getByRole("region", { name: "Waiting on you" })
+    expect(within(card).getAllByRole("listitem")).toHaveLength(2)
     fireEvent.click(
       within(card).getByRole("button", {
         name: "Current conversation Needs confirmation",
@@ -406,6 +424,13 @@ describe("HomeOverview", () => {
     )
     expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("th_held")
     expect(view.onOpenRequests).not.toHaveBeenCalled()
+    fireEvent.click(
+      within(card).getByRole("button", { name: "All confirmations" })
+    )
+    expect(view.onOpenConversation).toHaveBeenLastCalledWith("th_held")
+    expect(view.onOpenConversation).toHaveBeenCalledTimes(2)
+    fireEvent.click(within(card).getByRole("button", { name: "All requests" }))
+    expect(view.onOpenRequests).toHaveBeenCalledExactlyOnceWith()
     expect(screen.queryByText(/Nothing waiting/)).toBeNull()
 
     // A confirmation alone is actionable even when the inbox is empty.
@@ -417,10 +442,117 @@ describe("HomeOverview", () => {
     })
     await waitFor(() =>
       expect(
-        screen.queryByRole("region", { name: "Waiting on you" })
-      ).toBeNull()
+        within(card).getByRole("heading", { name: "Waiting on you · 1" })
+      ).toBeTruthy()
     )
     expect(screen.getByText("Needs confirmation")).toBeTruthy()
+    expect(
+      within(card).queryByRole("button", { name: "All requests" })
+    ).toBeNull()
+    expect(
+      within(card).getByRole("button", { name: "All confirmations" })
+        .textContent
+    ).toBe("All")
+    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+  })
+
+  it("keeps a known confirmation reachable after an Inbox refusal without showing its cached private request or claiming a complete count", async () => {
+    let refused = false
+    stubApi({
+      [`${path}/agent-requests/inbox`]: () =>
+        refused
+          ? json(
+              { error: { code: "forbidden", message: "Private diagnostic" } },
+              403
+            )
+          : json({ requests: [request({ purpose: "Private old approval" })] }),
+    })
+    const view = renderHome({
+      primaryChatActivity: { threadId: "th_held", state: "waiting" },
+    })
+    await screen.findByRole("heading", { name: "Waiting on you · 2" })
+    refused = true
+    await act(async () => {
+      await view.client.refetchQueries({
+        queryKey: agentKeys.requestBox("org_1", "inbox", 100),
+      })
+    })
+    await screen.findByText("Couldn’t load requests.")
+    const waiting = screen.getByRole("region", { name: "Waiting on you" })
+    expect(
+      within(waiting).getByRole("heading", { name: "Waiting on you · 1+" })
+    ).toBeTruthy()
+    expect(within(waiting).getAllByRole("listitem")).toHaveLength(1)
+    expect(screen.queryByText("Private old approval")).toBeNull()
+    expect(screen.queryByText("Private diagnostic")).toBeNull()
+    expect(
+      within(waiting).queryByRole("button", { name: "All requests" })
+    ).toBeNull()
+    fireEvent.click(
+      within(waiting).getByRole("button", { name: "All confirmations" })
+    )
+    expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("th_held")
+    expect(view.onOpenRequests).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+  })
+
+  it("prioritizes one confirmation conversation in the bounded mixed waiting list and keeps other recent chats reachable", async () => {
+    stubApi({
+      [`${path}/agent-requests/inbox`]: {
+        requests: Array.from({ length: 100 }, (_, i) =>
+          request({ id: `req_${i}`, purpose: `Approval ${i}` })
+        ),
+      },
+      [`${path}/threads`]: {
+        threads: [
+          {
+            id: "th_held",
+            title: "Held conversation",
+            updated_at: "2026-09-23T10:00:00Z",
+          },
+          ...Array.from({ length: 4 }, (_, i) => ({
+            id: `recent_${i}`,
+            title: `Recent ${i}`,
+            updated_at: "2026-09-23T10:00:00Z",
+          })),
+        ],
+      },
+    })
+    const view = renderHome({
+      primaryChatActivity: { threadId: "th_held", state: "waiting" },
+    })
+    const waiting = await screen.findByRole("region", {
+      name: "Waiting on you",
+    })
+    await within(waiting).findByText("Held conversation")
+    expect(
+      within(waiting).getByRole("heading", { name: "Waiting on you · 101+" })
+    ).toBeTruthy()
+    expect(
+      within(waiting)
+        .getAllByRole("listitem")
+        .map((row) => row.textContent)
+    ).toEqual([
+      "Held conversation Needs confirmation",
+      "Approval 0 Request to approve · Nia",
+      "Approval 1 Request to approve · Nia",
+    ])
+    const agent = screen.getByRole("region", { name: "Your agent" })
+    expect(within(agent).getAllByRole("listitem")).toHaveLength(3)
+    expect(within(agent).queryByText("Held conversation")).toBeNull()
+    expect(screen.queryByText("Recent 3")).toBeNull()
+    expect(screen.queryByText("Approval 2")).toBeNull()
+    fireEvent.click(
+      within(waiting).getByRole("button", { name: "All confirmations" })
+    )
+    fireEvent.click(
+      within(waiting).getByRole("button", { name: "All requests" })
+    )
+    fireEvent.click(within(agent).getByRole("button", { name: /Recent 2/ }))
+    expect(view.onOpenConversation).toHaveBeenNthCalledWith(1, "th_held")
+    expect(view.onOpenConversation).toHaveBeenNthCalledWith(2, "recent_2")
+    expect(view.onOpenRequests).toHaveBeenCalledExactlyOnceWith()
+    expect(view.onNewChat).not.toHaveBeenCalled()
     expect(screen.queryByText(/Nothing waiting/)).toBeNull()
   })
 
@@ -446,6 +578,11 @@ describe("HomeOverview", () => {
     expect(within(card).getByRole("status").textContent).toBe(
       "Starting conversation Working"
     )
+    expect(
+      within(card)
+        .getByRole("status")
+        .querySelector('[data-orb-state="working"]')
+    ).toBeTruthy()
     expect(within(card).queryByText("Recent 2")).toBeNull()
     expect(view.onNewChat).not.toHaveBeenCalled()
     view.rerenderHome({

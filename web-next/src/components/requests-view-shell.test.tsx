@@ -132,7 +132,7 @@ describe("Requests in the workspace shell", () => {
       const card = await screen.findByRole("region", { name: "Waiting on you" })
       fireEvent.click(
         within(card).getByRole("button", {
-          name: target === "All" ? "All" : /Quarterly numbers/,
+          name: target === "All" ? "All requests" : /Quarterly numbers/,
         })
       )
 

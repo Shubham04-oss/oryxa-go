@@ -98,6 +98,11 @@
   font-size: 11px;
   line-height: 1.45;
 }
+.home-row .home-work-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
 .home-row > button:not(:disabled):hover span {
   color: #fff;
 }

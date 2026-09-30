@@ -276,7 +276,7 @@ describe("Home's public primary-chat integration", () => {
     expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(1)
   })
 
-  it("shows the selected chat's held tool confirmation without adding it to the real Inbox count", async () => {
+  it("counts the selected confirmation conversation once alongside Inbox requests and opens its actual chat", async () => {
     const held: Item = {
       type: "confirmation",
       id: "ev_held",
@@ -298,13 +298,19 @@ describe("Home's public primary-chat integration", () => {
       .update({ messages: itemsToChatMessages([held]) })
     await home().findByText("Needs confirmation")
     expect(
-      home().getByRole("heading", { name: "Waiting on you · 1" })
+      home().getByRole("heading", { name: "Waiting on you · 2" })
     ).toBeTruthy()
-    expect(work().getAllByRole("listitem")).toHaveLength(2)
+    expect(work().getAllByRole("listitem")).toHaveLength(1)
     expect(home().queryByText(/Nothing waiting/)).toBeNull()
     expect(
-      work().getAllByRole("button", { name: /Exact older conversation/ })
+      within(
+        home().getByRole("region", { name: "Waiting on you" })
+      ).getAllByRole("button", { name: /Exact older conversation/ })
     ).toHaveLength(1)
+    fireEvent.click(home().getByRole("button", { name: "All confirmations" }))
+    expect(
+      document.querySelector(".workspace-agent-thread-title")?.textContent
+    ).toBe("Exact older conversation")
   })
 
   it("preserves a second Home message sent while a first new conversation is still being created", async () => {

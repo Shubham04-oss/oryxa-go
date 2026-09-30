@@ -102,18 +102,27 @@ not permission to copy every incidental value into a new component.
     `ThreadChatAgent` path, with Home remaining the current screen context.
     The shell opens the right panel, then requests the new conversation
     through the shared chat-choice API; it does not navigate to focused work.
-  - After the composer, show Waiting on you for owner approvals and held
-    answers to review, then Your agent, then Needs attention for failed or
-    expired tools and failed knowledge documents.
+  - After the composer, show Waiting on you for owner approvals, held answers
+    to review and the selected chat's tool confirmations, then Your agent,
+    then Needs attention for failed or expired tools and failed knowledge
+    documents. A conversation with one or more confirmations counts as one
+    waiting item. Put that conversation first, labelled “Needs confirmation”;
+    its row opens that exact chat. All confirmations opens the same chat's
+    confirmation cards, and All requests separately opens Requests when Inbox
+    items exist. For confirmations alone, show All with the accessible name
+    All confirmations. Neither shortcut implies a chat confirmation is in
+    Inbox.
   - Your agent has one list of at most three conversations. Put the selected
-    primary chat first when its scoped live activity is running or waiting,
-    then fill the remaining rows with recent chats, without duplicating its
-    exact ID. Idle or absent activity leaves up to three real recents,
-    including when nothing else needs the member. This signal describes the
+    primary chat first when its scoped live activity is running, with the
+    existing Thinking Orb in its working state. Fill the remaining rows with
+    recent chats, without duplicating its exact ID or a waiting conversation
+    already shown above. Idle or absent activity leaves up to three real
+    recents, including when nothing else needs the member. This signal describes the
     selected chat, not every background job; never infer work from update time.
-    A waiting chat says “Needs confirmation” and suppresses the quiet line,
-    without adding to the Inbox count. Before a running chat has an ID, show
-    a noninteractive “Starting conversation” row. Each concrete conversation
+    A waiting chat suppresses the quiet line and adds one to Home's combined
+    waiting count, while the Requests Inbox count remains its own. Before a
+    running chat has an ID, show a noninteractive “Starting conversation” row.
+    Each concrete conversation
     opens its exact ID in the right panel while staying on Home. New chat
     starts a blank conversation, and All opens the agent's work.
   - Scope the primary panel's retained conversation and draft to the current
@@ -123,8 +132,9 @@ not permission to copy every incidental value into a new component.
     Hide sections that have nothing. With no decisions, tool confirmations or
     failures, keep one quiet line alongside any real recent conversations.
   - Counts must reflect the response's limits: a full bounded requests response
-    is a lower bound (`N+`), not a total. Check only a fixed number of knowledge
-    bases, query failed documents directly, and state coverage naturally
+    is a lower bound (`N+`), not a total; a known live confirmation also gets
+    `N+` while Inbox reads are loading or refused. Check only a fixed number of
+    knowledge bases, query failed documents directly, and state coverage naturally
     (for example, “Checked 3 of 8 knowledge bases”). Loading, a refused read,
     and partial coverage must never imply that all work is clear.
 - A teamspace or extensive agentic task is a focused work view: no left
