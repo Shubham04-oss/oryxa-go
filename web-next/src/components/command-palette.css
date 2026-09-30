@@ -1,0 +1,48 @@
+.workspace-command-palette {
+  background: var(--workspace-surface, #1e1e1e);
+  color: var(--workspace-text, #f2f2f2);
+  width: min(480px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+}
+.workspace-command-palette [data-slot="command"] {
+  background: var(--workspace-surface, #1e1e1e);
+}
+.workspace-command-palette [data-slot="command-input"] {
+  font-size: 13px;
+}
+.workspace-command-palette [data-slot="command-list"] {
+  max-height: min(360px, 50dvh);
+}
+.workspace-command-palette [data-slot="command-item"] {
+  font-size: 12px;
+}
+.workspace-command-palette [data-slot="command-item"][data-selected="true"] {
+  background: var(--workspace-raised, #242424);
+}
+.workspace-command-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workspace-command-label small {
+  display: block;
+  font-size: 11px;
+  color: var(--workspace-muted, #999999);
+}
+.workspace-command-source p,
+.workspace-command-empty {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--workspace-muted, #999999);
+}
+.workspace-command-source button {
+  margin-left: 8px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.workspace-command-source button:focus-visible {
+  outline: 2px solid #aaa;
+  outline-offset: 3px;
+}
