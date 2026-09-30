@@ -1,33 +1,11 @@
-// A stand-in for the Agents SDK's `useAgent`, for the tests of the pages
-// on realtime objects (the teamspace room, the specialist chat, a DM, an
-// inbox, a side conversation): each mount gets a socket the test opens,
-// closes and speaks through as the Durable Object would. Use it with
+// A stand-in for the Agents SDK's `useAgent`, for the tests of the pages on
+// realtime objects (the primary agent's chat): each mount gets a socket the
+// test opens, closes and reads what the page said on, as the Durable Object
+// would. Use it with
 // `vi.mock("agents/react", async () => (await import("@/test/room-socket")).agentsReact)`,
 // and, for a chat, src/test/agent-chat.ts for `useAgentChat`.
 import { act } from "@testing-library/react"
 import { useRef } from "react"
-import type {
-  DmClientMessage,
-  DmServerMessage,
-  InboxServerMessage,
-} from "@/lib/dms/protocol"
-import type {
-  RoomClientMessage,
-  RoomServerMessage,
-  TeamspaceRoomState,
-} from "@/lib/rooms/room-agent"
-import type { SideClientMessage, SideServerMessage } from "@/lib/side/protocol"
-import type { SpecialistChatState } from "@/lib/specialists/chat-messages"
-
-/** What an object syncs to its sockets. */
-type SyncedState = TeamspaceRoomState | SpecialistChatState
-
-/** What a page says on a socket. */
-type ClientMessage = RoomClientMessage | DmClientMessage | SideClientMessage
-
-/** What an object says on one. */
-type ServerMessage =
-  RoomServerMessage | DmServerMessage | InboxServerMessage | SideServerMessage
 
 type Options = {
   agent: string
@@ -35,8 +13,6 @@ type Options = {
   enabled?: boolean
   onOpen?: (event: Event) => void
   onClose?: (event: { code: number; target: unknown }) => void
-  onMessage?: (event: { data: string }) => void
-  onStateUpdate?: (state: SyncedState, source: "server") => void
 }
 
 export class FakeRoomSocket {
@@ -44,12 +20,12 @@ export class FakeRoomSocket {
   readonly OPEN = 1
   readyState = 0
   /** What the page said, oldest first, whether or not the socket was open (PartySocket queues it). */
-  readonly sent: ClientMessage[] = []
+  readonly sent: unknown[] = []
   reconnects = 0
   private readonly openListeners = new Set<() => void>()
 
   send(data: string) {
-    this.sent.push(JSON.parse(data) as ClientMessage)
+    this.sent.push(JSON.parse(data))
   }
 
   addEventListener(type: string, listener: () => void) {
@@ -83,36 +59,6 @@ export class FakeRoomSocket {
       this.options.onOpen?.(new Event("open"))
       for (const listener of [...this.openListeners]) listener()
     })
-  }
-
-  /** The object says something on it. */
-  says(message: ServerMessage) {
-    act(() => {
-      this.options.onMessage?.({ data: JSON.stringify(message) })
-    })
-  }
-
-  /** The object's synced state changes. */
-  state(state: SyncedState) {
-    act(() => {
-      this.options.onStateUpdate?.(state, "server")
-    })
-  }
-
-  /** The socket closes without the page closing it. */
-  drop(code = 1006) {
-    act(() => {
-      this.readyState = 3
-      this.options.onClose?.({ code, target: this })
-    })
-  }
-
-  /** What the page said of one kind. */
-  said<TType extends ClientMessage["type"]>(type: TType) {
-    return this.sent.filter(
-      (message): message is Extract<ClientMessage, { type: TType }> =>
-        message.type === type
-    )
   }
 }
 

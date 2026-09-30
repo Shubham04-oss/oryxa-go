@@ -87,7 +87,7 @@ function composerLabel(agentName?: string): string {
 }
 
 /** An API refusal's own words, or `fallback` for anything without them. */
-export function failureText(error: unknown, fallback: string): string {
+function failureText(error: unknown, fallback: string): string {
   return error instanceof ApiError && error.message !== "Request failed"
     ? error.message
     : fallback
@@ -715,7 +715,7 @@ function OpeningConversation({
 type Connection = "connecting" | "open" | "reconnecting"
 
 /** The member's latest message, which the log scrolls back to when it changes. */
-export function lastUserMessageId(
+function lastUserMessageId(
   messages: readonly ThreadChatMessage[]
 ): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {

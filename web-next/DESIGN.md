@@ -12,6 +12,16 @@ not use it to override this contract. The implementation is primarily in
 `src/components/auth/auth.css`; those files show how the rules are realized,
 not permission to copy every incidental value into a new component.
 
+**Archived on 2026-09-30.** The owner kept only the agent ask-and-consent loop
+(Home's desk, the primary agent's chat, Requests, Knowledge bases, Tools,
+Settings and sign-in). Multi-agent teams, Workflows, Specialists and the whole
+Team mode (Teamspaces and rooms, side conversations, direct messages and the
+People directory) are gone from the UI, along with the right panel's DMs and
+Teams tabs. Their screens and their rules were removed from this contract with
+them; everything is recoverable from the git tag
+`archive/pre-simplify-2026-09-30`, and §7 says what stays in the Worker. Do not
+rebuild any of it without an explicit decision that supersedes this note.
+
 ## 1. Visual foundation
 
 | Role | Color | Use |
@@ -54,33 +64,26 @@ not permission to copy every incidental value into a new component.
 - Expanding the right panel collapses the left. Collapsing the right expands
   the center; it must **not** automatically expand the left. A manually
   collapsed left sidebar stays collapsed until the user opens it.
-- Home, Team, and Agents are the three primary icon-first pill controls. The
-  active one is slightly enlarged and more prominent, not a giant tab.
-- The right agent panel holds the member's agent and team conversations. Its
-  tabs, Agents (the default), DMs and Teams, use the same icon-first pills;
-  the Agents pill carries the primary agent's voxel avatar. When the member
-  has more than one agent, the Agents tab's top row is a quick switch between
-  them: the one in use is the oval pill with its name, like the pills
-  elsewhere, and the rest stay avatar-only. With a single agent the row is not
-  shown, and it never shows empty or example slots. The panel is
-  location-aware: on a teamspace page the Agents tab also offers that
-  teamspace's teammates and their agents, below the member's own (§3, "Side
-  conversations"); elsewhere it does not. Collapsed, the panel's rail shows
-  one icon per tab, and each opens the panel on that tab. A tab without a
-  live service shows a one-line empty state, never example people, rooms or
-  messages.
+- Home and Agents are the two primary icon-first pill controls. The active
+  one is slightly enlarged and more prominent, not a giant tab.
+- The right agent panel holds the member's primary agent: its chat and the
+  history of its conversations, and nothing else. It has no tabs. Expanded, its
+  top row is the agent's oval pill (the agent's voxel avatar and its name, the
+  name only once it has loaded) beside the collapse toggle. Collapsed, its rail
+  is one button, the agent's avatar, which opens the panel; focus moves to the
+  toggle. Without a workspace it shows the chat disabled with a one-line
+  reason, never example messages. In the focused Agent overview (§3) the panel
+  is that view's conversation column and has no toggle and no rail.
 - Sidebar content follows the primary mode:
 
   | Mode | Left navigation |
   | --- | --- |
   | Home | Today, Knowledge bases, Tools |
-  | Team | Teamspaces, People, then up to three visible recent conversations |
-  | Agents | Agent overview, Requests, Multi-agent teams, Specialists |
+  | Agents | Agent overview, Requests |
 
 - The shared workspace header is compact (56px at normal desktop/mobile
   widths), with its title centered. It contains the **current context**:
-  opening a DM shows the person's name/avatar, not “People”; opening a
-  teamspace or agent shows that work's title. Back navigation lives there.
+  opening a knowledge base shows its name. Back navigation lives there.
   Do not repeat the page title, a hero slogan, or a generic description at
   the top of the main canvas. No preview badge in the header.
 - Desktop panel toggles use left/right panel glyphs so back navigation remains
@@ -161,18 +164,20 @@ not permission to copy every incidental value into a new component.
     Network failures, timeouts and 5xx responses keep the session recoverable
     with bounded backoff. Do not erase scoped chat choices or queued requests;
     drafts held only in the mounted shell are not recovered after a new sign-in.
-- A teamspace or extensive agentic task is a focused work view: no left
-  sidebar, naked conversation on the base surface, compact title/back header,
-  and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
-  sit **above** the work panel. The panel's top area belongs to the selected
-  view's heading and state, not the tab strip.
+- **Agents → Agent overview** shows the primary agent (its name and status,
+  with Resume while it is paused), one "Requests waiting" tile that leads to
+  Requests, and the files of the current conversation (below). Nothing else
+  belongs to Agents mode: it offers no specialists, teams or workflows.
+- The Agent overview is the one focused work view: no left sidebar, naked
+  conversation on the base surface, compact title/back header, and a separate
+  work panel.
 - Expanding the primary agent's chat uses Agent overview as focused work:
   the same mounted conversation sits on the left, and the overview occupies
-  the work panel. The right rail offers only DMs and Teams in this state.
-  Files from the current conversation appear in the overview, following the
+  the work panel. The panel offers nothing else in this state: no toggle and
+  no rail (§2). Files from the current conversation appear in the overview, following the
   conversation the chat is on: a new chat has none, and neither does a chat
   that has not opened yet. Selecting a file, or a newly saved file while the
-  chat is in view (the expanded panel's Agents tab, or this view), turns the
+  chat is in view (the expanded panel, or this view), turns the
   work panel into a clean, compact viewer while the mounted chat remains on
   the left, even if the agent panel was never opened. A file saved while the
   chat is out of view stays a chip in the chat. Markdown uses the same
@@ -192,10 +197,9 @@ not permission to copy every incidental value into a new component.
   The agent receives only the current Oryxa view, selection and explicitly
   marked visible item handles when a message is sent; it never implies a live
   view of other windows or grants access to those items.
-- Header-row controls — work tabs, panel tabs, panel toggles — sit on the
-  header's own centre row (y=28 in its 56px band), vertically level with the
-  back button and title, even when (like the work tabs) they are positioned
-  over a region below the header rather than inside the `<header>` itself.
+- Header-row controls, the panel's agent row and toggle, sit on the header's
+  own centre row (y=28 in its 56px band), vertically level with the back
+  button and title.
 - An agent conversation reads as a quiet log on the base surface: the
   member's messages in raised bubbles on the right; the agent's answers as
   full-width Markdown, labelled only when a sub-agent wrote them; each run of
@@ -214,13 +218,9 @@ not permission to copy every incidental value into a new component.
   only the result authorized for the requester appears. Confirmations are small
   cards with Decline and Approve pills (several waiting are answered together);
   files as a thumbnail or a file chip; a failed run as one muted error line,
-  and an answer cut short marked "Interrupted". A specialist's answer is its
-  work result's summary, with one muted line under it for the rest (needs
-  your input or blocked, the tools it used, the files it saved, the hand-offs
-  it suggests); while it works, one muted line with a Thinking Orb says so. In
-  the agent panel one muted row above it names the conversation, with a
-  clear, quiet New chat control; a specialist's focused view carries the
-  same in its presence row. Below it, a compact History disclosure lists real
+  and an answer cut short marked "Interrupted". In the agent panel one muted
+  row above it names the conversation, with a clear, quiet New chat control.
+  Below it, a compact History disclosure lists real
   conversations newest first, each with title, relative time, open and delete.
   A waiting conversation says "Needs approval". Hide empty abandoned starts
   unless currently selected or waiting on approval; an accessible untitled
@@ -228,7 +228,7 @@ not permission to copy every incidental value into a new component.
   object first, then deletes its canonical Go thread. A failure stays visible
   and retryable.
   While the panel stays mounted, keep whatever is open, including through
-  collapse/re-expand and tab absence. On remount or reload, the conversation
+  collapse/re-expand. On remount or reload, the conversation
   the member left **less than five minutes ago** in this tab reopens, including
   a history pick; an **explicit** New chat in that window stays new. Otherwise,
   check the five newest chat conversations and open the newest one waiting on
@@ -241,9 +241,7 @@ not permission to copy every incidental value into a new component.
   chat does not suppress a newly waiting approval. The member can type at once;
   the primary chat gives choosing five seconds before it opens New. Keep drafts
   and unsent messages, and never automatically switch a mounted conversation.
-  A specialist uses the same history and opening rule in both its panel and
-  focused view. Its shared live object refuses a conversation change while it
-  is streaming, so another view cannot interrupt the run. A first message, from
+  A first message, from
   the composer or from a request elsewhere in the app (Home's box), is made a conversation of its own
   and sent into it, in order, whatever the member does meanwhile: the chat ends
   on the latest, no message is dropped, and a request never touches the
@@ -253,117 +251,9 @@ not permission to copy every incidental value into a new component.
   composer, only while that is empty) and Dismiss: nothing else clears it, and
   it is never put in the composer by itself. A request waits until the panel
   takes it (once the member's agents have loaded), in the order it was made;
-  past twenty messages waiting, the next is refused the same way. A
-  specialist's live log changes only through its opening rule or an explicit
-  history/New chat/delete action. Go keeps previous conversations until deleted.
-  Switching agents keeps each one's conversation and unsent message. What the panel holds belongs to the member:
-  another member taking over the page inherits none of it.
-- People is a DM area, not teammate administration or a combined “People &
-  teams” directory. Recent/started conversations belong in Team's left
-  sidebar, with at most three visible there. A DM uses the same dynamic header
-  principle and keeps the conversation/composer as the main content.
-- **Direct messages.** A DM is one conversation (`direct-message.tsx`) in two
-  layouts, each its own view of the same live object (REALTIME.md): the main
-  canvas, opened from People or Team's recent conversations, under the header
-  that names the person; and the agent panel's DMs tab, under a compact row
-  with a back arrow to the list.
-  - It reads as a quiet log (a centered column in the canvas): the member's
-    messages in raised bubbles on the right, the other person's as plain text
-    on the left beside their avatar. Each person's messages within one minute
-    form a group with one time, and a separator starts each day ("Today",
-    "Yesterday", or the date). The log names nobody: the header does.
-  - A message waiting for the object is faded; a failed one says "Not sent."
-    with Retry. A quiet "Seen" sits under the member's last message the other
-    person has read, until they reply. Their typing is one muted pulsing line
-    at the end.
-  - Online means they have this DM open in a visible tab: a green dot on
-    their avatar in the header, and on any list row whose DM a view on the
-    page has open. Nobody is ever shown offline.
-  - The log follows the end only while the reader is there; otherwise new
-    messages raise a "N new messages" pill and are announced. The page before
-    loads at the top without moving what the reader is looking at, and the
-    start of the conversation says so.
-  - Unread is a count on a DMs row, a dot on a recent conversation in Team's
-    navigation, and a badge on the DMs tab and its rail icon ("9+" past
-    nine); a phone, which has no rail, puts a dot on the panel's edge
-    control. A DM counts as read while it is on screen, at its end, in a
-    visible tab.
-  - States: loading; empty ("Say hello to Priya"); "You can't message this
-    person" once they have left; session ended, with Sign in; and "Can't
-    reach this conversation" with Try again, while the composer keeps taking
-    messages that send once it is back.
-  - People lists everyone in the organization but the member, with role and
-    shared teamspaces as context, search, and a Message action. Team's
-    navigation shows the three latest DMs, and "All" opens the DMs tab, where
-    "New message" picks anyone in the organization. The canvas DM is in the
-    page's address (`?dm=`), so a refresh returns to it.
-  - Opening a DM moves focus to its composer, or to the log on a phone so the
-    keyboard stays down; going back returns focus to the person or row it
-    came from. Editing, deleting, reactions and attachments do not exist yet,
-    so nothing offers them.
-- **Side conversations.** Two teammates and both their agents, about one
-  teamspace's work, away from its room (REALTIME.md). On a teamspace page the
-  Agents tab adds a quiet "In this teamspace" section under the member's own
-  agents: each teammate with a seat there, their unread count, and their
-  agents as small chips with how each takes a request ("asks first" or
-  "automatic"). A teammate opens the conversation in the tab, with a back
-  arrow to the list; a chip opens it asking that agent. The DMs tab lists
-  side conversations with their teamspace as context and opens them the same
-  way, with no teamspace open.
-  - It is a DM's compact layout (`side-conversation.tsx`): the bar names the
-    teammate and the teamspace, with both people's agents as small voxel
-    avatars. People's messages read as a DM's; a question to an agent carries
-    a quiet "Asked Leo". An agent's message is its avatar and "Leo · your
-    agent" or "Nia · Priya's agent", full-width Markdown, a Thinking Orb working
-    line until it has words, and for a request's result one quiet line, "on
-    behalf of Priya · approved by Priya" (or "ran without asking"). The
-    member's own agent answers live on the member's screen alone: the other
-    person sees its working line until the answer has been checked, then
-    the words. What the answer guard hid from the other person in it is one
-    quiet line under the answer, on the member's view only ("Shared with a
-    password hidden"), and an answer it could not check reads "This answer
-    couldn't be checked, so it wasn't shared." for both.
-  - A request is a small card: who asked which agent what, and one status
-    line with an icon (sending; not filed, with Retry; waiting for Priya to
-    approve; approved and working; waiting for Priya to review the answer;
-    done; declined; failed; expired; not shared). Only the agent's owner
-    sees Decline and Approve, with an optional note, named for who and what
-    ("Approve Nia's request from Member"). When the request asks to read
-    their connected apps or the team's knowledge, their card says so in one
-    line ("Nia may read your connected apps and team knowledge.") and adds
-    Approve without tools between them. Approve with tools is the filled
-    primary choice and allows what was asked for; the card says plainly
-    that Approve without tools means the agent can't look anything up.
-    A request that ends without a result also leaves a quiet centered line
-    in the log, which says why when Oryxa closed it or withheld its answer
-    ("Withheld by Oryxa." on the card), and never repeats an agent's
-    decision, whose words are fixed ("Pricing declined the request.").
-  - An answer the answer guard holds for its owner's review shows them, on
-    the card, why in plain words ("Nia's answer includes an email address
-    and a phone number. Review it before it's shared.", or "couldn't be
-    checked automatically"), the answer, a preview of it masked ("Send
-    masked shares:"), and Don't send, Send and Send masked (the primary).
-    An answer that could not be checked has no masked version, so neither
-    the preview nor Send masked; one that was its agent's failure says so
-    above it ("Nia couldn't finish the request, and says:"). Send and Send
-    masked wait until the answer has loaded; Don't send never does. A
-    refused review says why on the card. The one who asked sees only that
-    it waits; a result shared after review says "reviewed by Priya" in its
-    quiet line, and one not shared leaves "Priya chose not to share Nia's
-    answer."
-  - The composer is the shared pill with a smaller pill inside it, before the
-    field, naming whom the message goes to: the teammate (the default), "Ask
-    my agent", or one of the teammate's agents, picked from a small menu. The
-    line under the field says who approves, or that the member's own agent
-    is still answering (a second question waits for it). Asking an agent is
-    for that one message; the next goes to the teammate again.
-  - The member's own agent's confirmations show to them alone, as in the
-    specialist chat; the teammate sees only that it waits. Answers and
-    approvals that land in place are said aloud.
-  - States: loading; empty ("Talk with Priya about Launch room"); "You can't
-    open this conversation" once either person is off the team; session
-    ended, with Sign in; a paused teamspace, readable with the composer off
-    and why; and "Can't reach this conversation" with Try again.
+  past twenty messages waiting, the next is refused the same way. Go keeps
+  previous conversations until deleted. What the panel holds belongs to the
+  member: another member taking over the page inherits none of it.
 - **Requests** (Agents → Requests) is where a member sees what waits on them
   and what they asked, whether an agent filed it or someone asked in Slack. It
   has three tabs: Inbox, with the requests waiting on the member first and the
@@ -372,7 +262,7 @@ not permission to copy every incidental value into a new component.
   which names people and states and never a question or an answer. A filter
   (All, Slack, Oryxa) narrows the first two. The lists are re-read as the page
   is focused and every few seconds, so a request decided in Slack settles here
-  without a reload. A request a link or a DM's line names opens first, above
+  without a reload. A request a link or a note names opens first, above
   the lists (`/?org=…&view=requests&request=…`).
   - **The request card** says who asked, the question, where it came from (in
     Slack, or in Oryxa), where it stands and, for the person it is theirs to
@@ -400,17 +290,7 @@ not permission to copy every incidental value into a new component.
     (up to an hour); they can take it back. The member who asked sees "Open
     the secret", which says it is shown once before it is pressed; the value is
     shown once, then gone for good.
-- **A request in a DM.** A request between the two people of a DM is one quiet
-  centered line in its log, where it happened in time: who asked whose agent,
-  and where ("You asked Priya's agent in Slack", "Priya asked your agent"), with
-  one word for where it stands (waiting, approved, declined, answered, held,
-  failed, not shared, expired). The line's state moves in place, its place in
-  the log does not, and a move while the DM is open is announced. It holds no
-  question or answer: its "Open" opens the request's card in Requests, and the
-  card is read from Go as the member, so the line is never more than a pointer.
-  A request made in a teamspace has no line here: the side conversation in that
-  teamspace shows it.
-- Teamspace management is role-aware. Put account, teammate, organization,
+- Administration is role-aware. Put account, teammate, organization,
   access, email, and billing administration inside Settings, opened from the
   user menu. Keep the simple Organization tab in that single Settings surface;
   do not split account and organization into separate full-page settings apps.
@@ -436,11 +316,10 @@ not permission to copy every incidental value into a new component.
 
 ## 4. Avatars and imagery
 
-- Use the shadcn Avatar primitive for teamspace and identity avatars. Keep
-  image boxes square so circular avatars never become oval in narrow rails.
+- Use the shadcn Avatar primitive for identity avatars. Keep image boxes
+  square so circular avatars never become oval in narrow rails.
 - Human user identities use DiceBear Lorelei with stable per-user variation;
-  agents use DiceBear voxel art. Teamspaces use distinct planet treatments,
-  not the same Saturn repeated for every team.
+  agents use DiceBear voxel art.
 - Use real integration logos where recognizable. Keep them legible against the
   dark UI, often on a small light tile. Do not substitute a generic UI icon
   for a known brand.
@@ -465,14 +344,14 @@ not permission to copy every incidental value into a new component.
   give the visible height to the conversation and composer. Restore the work
   panel after composition. Do not let a checklist push the composer off-screen.
   The agent panel's composer follows the same rule: the panel fits the visible
-  height, so its tabs and composer stay on screen.
+  height, so its agent row and composer stay on screen.
 - Check a representative desktop viewport near 1099×807 and a phone viewport
   near 423×927, including panel-open, panel-closed, and keyboard/composer
   states when relevant. These are regression targets, not fixed layout sizes.
 
 ## 6. Rules for adding or changing a screen
 
-1. Start from the shared shell/header and the correct Home/Team/Agents mode;
+1. Start from the shared shell/header and the correct Home/Agents mode;
    do not create a new navigation system for one page.
 2. Decide what belongs in the header, sidebar, and main canvas. The header
    names the current context; the sidebar navigates; the canvas does the work.
@@ -487,3 +366,25 @@ not permission to copy every incidental value into a new component.
 
 If a new requirement conflicts with this contract, resolve it explicitly with
 the user decision, implementation, and an update here in the same change.
+
+## 7. Archived features (2026-09-30)
+
+Removed from the UI, and from this contract, on 2026-09-30, when the owner
+kept only the agent ask-and-consent loop. Everything is recoverable from the
+git tag `archive/pre-simplify-2026-09-30`, which holds the screens, their
+clients and their tests, and the design rules that stood in §2 and §3 (the
+Team mode, the right panel's DMs and Teams tabs and agent switcher, focused
+teamspace, team and specialist views, direct messages, side conversations and
+a request's line in a DM).
+
+- **Multi-agent teams, Workflows and Specialists** (Agents mode).
+- **Team mode**: Teamspaces and rooms, side conversations, direct messages and
+  recent conversations, the People directory, and opening a DM from the
+  address (`?dm=`). People and invitations are in Settings.
+- **Not touched:** the Go services, and the realtime Worker. `src/server.ts`
+  still exports every Durable Object class (the specialist chat, teamspace
+  rooms, side conversations, direct messages, the inbox and the registry) and
+  serves their routes, so no Durable Object migration is needed; the UI just no
+  longer connects to any but the primary agent's thread chat. REALTIME.md says
+  what each object holds. A request card that names a teamspace still renders,
+  without a link into an archived screen.

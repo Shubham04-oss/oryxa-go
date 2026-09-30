@@ -1,9 +1,14 @@
 # Conversations data layer
 
-Primary-agent threads (`lib/threads`) and specialist conversations
-(`lib/specialists`). No UI: typed calls, stream parsing and pure timeline
-logic. The Go contract is `agents/primary/internal/httpserver/server.go` and
+Primary-agent threads (`lib/threads`), and the specialist conversation's
+wire types the Worker's specialist object shares (`lib/specialists`). No UI:
+typed calls, stream parsing and pure timeline logic. The Go contract is
+`agents/primary/internal/httpserver/server.go` and
 `agents/primary/internal/threads`; every exported call names its handler.
+
+The page chats with the primary agent only. The specialist chat's screens and
+page client (`lib/specialists/client.ts`) were archived on 2026-09-30 (git tag
+`archive/pre-simplify-2026-09-30`); `SpecialistChatAgent` stays in the Worker, unused by the page.
 
 | Module | What it offers |
 | --- | --- |
@@ -12,7 +17,7 @@ logic. The Go contract is `agents/primary/internal/httpserver/server.go` and
 | `timeline.ts` | `buildTimeline`, `unseenLiveItems`, `pendingConfirmationIds`, and small naming helpers |
 | `chat-messages.ts` | The Durable Object's transcript: `ThreadChatMessage`, `threadAgentName`, `itemsToChatMessages`, `chatMessagesToItems`, `reconcileChatMessages`, `withoutSupersededDeltas`, `sessionExpiredCode` |
 | `agent-socket.ts` | `reopenSocket`, to carry a refreshed session to the Durable Object |
-| `../specialists` | `listSpecialistThreads`, `getSpecialistThread`, `startSpecialistRun` (direct SSE, `X-Oryxa-Thread`), keys and query options; `parseSpecialistResult` for a specialist's JSON answer; the specialist chat's Durable Object: `specialistAgentName`, `SpecialistChatState`, `getSpecialistChatMessages`, `clearSpecialistChat`, `readableSpecialistItems`, `isProgressMarker` (`chat-messages.ts`, `client.ts`) |
+| `../specialists` | what the Worker's `SpecialistChatAgent` shares: `parseSpecialistResult` for a specialist's JSON answer, `specialistAgentName`, `SpecialistChatState`, `readableSpecialistItems`, `isProgressMarker` (`chat-messages.ts`, `result.ts`). The page-side calls were archived |
 
 Everything here uses relative URLs and the browser's cookies through
 `apiFetch`: run the queries in the browser, not during SSR.
@@ -31,9 +36,7 @@ page's request, and Go cancels it when that request goes away. The object
 does not replay a run after it restarts: tools have side effects.
 
 `startRun` is the same run over direct SSE from the browser. It stays for
-tests and for a page without the object. A specialist's chat has its own
-object, `SpecialistChatAgent` (below); `startSpecialistRun` is its direct
-SSE path.
+tests and for a page without the object.
 
 ## A page with the Durable Object
 
@@ -74,46 +77,15 @@ shows once. `startRun` throws `ApiError` with Go's code when a run is refused
 otherwise resolves how it ended: `completed`, `failed` (Go's words),
 `aborted` (your signal; Go stops the run), or `incomplete`.
 
-## A page with the specialist chat
+## The specialist chat, archived
 
-`SpecialistChatAgent` is one object per specialist, named
-`specialistAgentName(org, agent)`, holding the chat's current Go
-conversation (REALTIME.md says why it is not one per conversation).
-
-1. **Open**: `const agent = useAgent<SpecialistChatState>({ agent:
-   "specialist-chat-agent", name: specialistAgentName(org, agentId) })` and
-   `useAgentChat({ agent, getInitialMessages: () =>
-   getSpecialistChatMessages(org, agentId) })`. The Worker answers 404 for a
-   specialist that is not the member's (or for their primary agent, whose
-   chat is its threads). When two views of one page hold the same chat (a
-   specialist's focused view and the agent panel do,
-   `components/specialist-chat.tsx`), each reads the transcript itself and
-   passes it as `messages` with `getInitialMessages: null`: `useAgentChat`
-   caches that read once per object name for the whole page and drops it
-   when any view unmounts, so a second view would start from the first
-   view's old copy, and the one left behind would suspend to read again.
-2. **The conversation**: `agent.state.threadId` (or `onStateUpdate`) is the
-   Go thread the chat continues; null until the first message, and after it
-   starts over. With it, `getSpecialistThread(org, agentId, threadId)` gives
-   `pending_confirmations`, and `reconcileChatMessages(chat.messages,
-   readableSpecialistItems(detail.items))` merges what Go stored and the
-   transcript lacks. Go's history holds the raw JSON answers; always pass it
-   through `readableSpecialistItems` first.
-3. **Render**: `buildTimeline(chatMessagesToItems(chat.messages))`, as for a
-   thread. A specialist's message entry has `text` (its result's summary)
-   and `result` (status: `completed`, `needs_input` or `blocked`; tools;
-   files; suggested hand-offs, which are suggestions only). A `streaming`
-   draft with no text is the progress marker: show the specialist working.
-4. **Stream and confirm**: as for a thread. Refusals arrive as `run_failed`
-   with Go's code, plus `agent_disabled` for a paused specialist; answers
-   need a conversation (`threadId`).
-5. **Start over**: `clearSpecialistChat(org, agentId)` (or
-   `chat.clearHistory()`) empties the transcript and forgets the
-   conversation; the next message starts a new one. Go keeps the old one
-   (it has no route to delete it), still listed by `listSpecialistThreads`
-   and readable with `getSpecialistThread`; the object does not continue an
-   older conversation. Clear the chat before deleting the specialist: once
-   Go forgets the agent, the Worker can no longer reach its chat.
+`SpecialistChatAgent` (one object per specialist, named
+`specialistAgentName(org, agent)`, holding the chat's current Go conversation;
+REALTIME.md says why it is not one per conversation) has no page now: the
+specialist screens and their client were archived on 2026-09-30, with the
+rules for reading its transcript, reconciling it with Go's and starting it
+over. They are in the git tag `archive/pre-simplify-2026-09-30`. The object, its Worker route and the wire
+types in `lib/specialists` stay.
 
 ## What the Worker and the Durable Object do
 
@@ -154,5 +126,6 @@ specialist conversations.
   only its developer-facing default (`confirmationHint` writes words).
 - `author` is the agent's display name, and sub-agents the primary agent
   hands the turn to (`planner`, `researcher`) write under their own names.
-- Specialist conversations have no delete route and no artifact route in Go,
-  and no create route either: the first run allocates one.
+- Specialist conversations (hosted, not used by the page) have no delete
+  route and no artifact route in Go, and no create route either: the first
+  run allocates one.

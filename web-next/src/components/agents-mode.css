@@ -176,5 +176,9 @@
 
 @media (max-width: 800px) {
   .workspace-agents-page { padding: 20px 16px 40px; }
-  .workspace-agents-stats { gap: 8px; margin-bottom: 24px; }
+  .workspace-agents-stats {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+    gap: 8px;
+    margin-bottom: 24px;
+  }
 }

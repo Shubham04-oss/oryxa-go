@@ -45,7 +45,7 @@ import {
 import type { PrimaryChatTarget } from "@/lib/threads/chat-choice"
 
 /** What the workspace's member may do in it: the admin sees what an admin manages. */
-export type WorkspaceRole = "admin" | "member"
+type WorkspaceRole = "admin" | "member"
 
 type Section = "overview" | "knowledge" | "tools" | "agents" | "requests"
 type PrimaryMode = "home" | "agents"
