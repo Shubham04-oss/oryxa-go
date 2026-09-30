@@ -307,6 +307,27 @@ describe("AgentChat", () => {
     expect(screen.queryByText("Reconnecting…")).toBeNull()
   })
 
+  it("stops showing a tool call as running once its run is stopped", async () => {
+    const items: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Look it up" },
+      { type: "tool_call", id: "ev_2", call_id: "c1", tool: "web_search" },
+    ]
+    stubApi({ threads: [thread("th_1", "Look it up")], items })
+    hooks.chat.messages = itemsToChatMessages(items)
+    hooks.chat.status = "streaming"
+    renderChat()
+    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
+    open("org_1~th_1")
+    const row = () => document.querySelector(".workspace-agent-tools")
+    expect(row()?.getAttribute("data-state")).toBe("running")
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop response" }))
+    expect(hooks.stop).toHaveBeenCalledOnce()
+    updateChat({ status: "ready" })
+    expect(row()?.getAttribute("data-state")).toBe("interrupted")
+    expect(row()?.textContent).toContain("Interrupted")
+  })
+
   it("starts a thread with the first message when the member has none", async () => {
     const calls = stubApi({ threads: [] })
     renderChat()

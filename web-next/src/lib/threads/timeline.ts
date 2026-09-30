@@ -39,10 +39,16 @@ export type MessageEntry = {
  * `waiting_approval` while a confirmation holds the call back; `declined`
  * once the member declined it (Go then reports the rejection as a failed
  * result, which leaves it declined); `running` again once approved, until its
- * result makes it `done` or `failed`.
+ * result makes it `done` or `failed`. `interrupted` when its run ended (it
+ * completed, failed or was stopped) before the call got a result.
  */
 export type ToolState =
-  "running" | "waiting_approval" | "declined" | "done" | "failed"
+  | "running"
+  | "waiting_approval"
+  | "declined"
+  | "done"
+  | "failed"
+  | "interrupted"
 
 export type ToolEntry = {
   kind: "tool"
@@ -119,9 +125,11 @@ function roleOf(author: string): MessageRole {
  * transcript from `chatMessagesToItems`, goes in as `history`.
  *
  * `run_started` and `run_completed` render nothing, but end any draft that
- * was never finished, so two runs' deltas never share a bubble. A `run_failed`
- * with `sessionExpiredCode` renders nothing: it is the Durable Object asking
- * the page to refresh the session and send again.
+ * was never finished, so two runs' deltas never share a bubble. A run that
+ * ends (`run_completed` or `run_failed`) also leaves its tool calls that got
+ * no result `interrupted`: they will never get one. A `run_failed` with
+ * `sessionExpiredCode` renders nothing: it is the Durable Object asking the
+ * page to refresh the session and send again.
  */
 export function buildTimeline(
   history: readonly Item[],
@@ -135,6 +143,8 @@ export function buildTimeline(
   const keys = new Set<string>()
   const messages = new Map<string, MessageEntry>()
   const tools = new Map<string, ToolEntry>()
+  // Every call, including those with no call id to find them by.
+  const calls: ToolEntry[] = []
   const confirmations = new Map<string, ConfirmationEntry>()
   const artifacts = new Set<string>()
   let draft: MessageEntry | undefined
@@ -151,6 +161,14 @@ export function buildTimeline(
   const endDraft = () => {
     if (draft) draft.state = "interrupted"
     draft = undefined
+  }
+  // A run that ended: no draft goes on, and a call still running never
+  // gets its result. One held back by a confirmation is waiting, not lost.
+  const endRun = () => {
+    endDraft()
+    for (const call of calls) {
+      if (call.state === "running") call.state = "interrupted"
+    }
   }
 
   items.forEach((item, index) => {
@@ -235,6 +253,7 @@ export function buildTimeline(
           state: "running",
         }
         if (item.call_id) tools.set(item.call_id, entry)
+        calls.push(entry)
         entries.push(entry)
         break
       }
@@ -254,6 +273,7 @@ export function buildTimeline(
             state: "running",
           }
           if (item.call_id) tools.set(item.call_id, entry)
+          calls.push(entry)
           entries.push(entry)
         }
         // A declined call never runs; ADK answers it with a failed result
@@ -326,11 +346,13 @@ export function buildTimeline(
         break
       }
       case "run_started":
-      case "run_completed":
         endDraft()
         break
+      case "run_completed":
+        endRun()
+        break
       case "run_failed":
-        endDraft()
+        endRun()
         if (item.code === sessionExpiredCode) break
         entries.push({
           kind: "run_failed",

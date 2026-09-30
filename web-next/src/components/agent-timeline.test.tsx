@@ -10,9 +10,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/react"
-import { AgentTimeline, groupToolActivity } from "./agent-timeline"
+import {
+  AgentTimeline,
+  groupToolActivity,
+  toolGroupState,
+} from "./agent-timeline"
 import type { ConfirmationAnswer, Item } from "@/lib/threads/client"
 import { buildTimeline } from "@/lib/threads/timeline"
+import type { ToolEntry } from "@/lib/threads/timeline"
 
 vi.mock("thinking-orbs", () => ({
   ThinkingOrb: ({ state, paused }: { state: string; paused?: boolean }) => (
@@ -185,6 +190,103 @@ describe("AgentTimeline", () => {
     ).toBe("mailbox full")
   })
 
+  it("reads a call a stopped run left behind as interrupted, with no moving orb", () => {
+    // Stopped mid-call: the run's end marker never came.
+    const stopped: Item[] = [
+      { type: "message", id: "ev_1", author: "member", text: "Look it up" },
+      { type: "run_started", run_id: "run_1" },
+      { type: "tool_call", id: "ev_2", call_id: "c1", tool: "web_search" },
+    ]
+    const streaming = timeline(stopped, { running: true })
+    const live = streaming.container.querySelector(".workspace-agent-tools")
+    expect(live?.getAttribute("data-state")).toBe("running")
+    expect(live?.textContent).toContain("Running")
+    expect(live?.querySelector("canvas")?.getAttribute("data-orb-paused")).toBe(
+      "false"
+    )
+    cleanup()
+
+    const after = timeline(stopped, { running: false })
+    const row = after.container.querySelector(".workspace-agent-tools")
+    expect(row?.getAttribute("data-state")).toBe("interrupted")
+    expect(
+      row?.querySelector(".workspace-agent-tools-status")?.textContent
+    ).toBe("Interrupted")
+    expect(row?.textContent).not.toContain("Running")
+    expect(row?.querySelector("canvas")?.getAttribute("data-orb-paused")).toBe(
+      "true"
+    )
+    expect(row?.getAttribute("aria-label")).toBe("Web search · Interrupted")
+    // Still one quiet row that never expands into a list.
+    expect(
+      after.container.querySelectorAll(".workspace-agent-tools")
+    ).toHaveLength(1)
+    expect(row?.querySelector("summary, ol, button")).toBeNull()
+  })
+
+  it("reads a call whose run ended without its result as interrupted, even while another run streams", () => {
+    const { container } = timeline(
+      [
+        { type: "run_started", run_id: "run_1" },
+        { type: "tool_call", id: "ev_1", call_id: "c1", tool: "web_search" },
+        {
+          type: "run_failed",
+          run_id: "run_1",
+          error: "The run was cancelled.",
+        },
+        { type: "run_started", run_id: "run_2" },
+      ],
+      { running: true }
+    )
+    const row = container.querySelector(".workspace-agent-tools")
+    expect(row?.getAttribute("data-state")).toBe("interrupted")
+    expect(row?.querySelector("canvas")?.getAttribute("data-orb-paused")).toBe(
+      "true"
+    )
+    // A failed run is one muted error line under it.
+    expect(container.querySelector(".workspace-agent-error")?.textContent).toBe(
+      "The run was cancelled."
+    )
+  })
+
+  it("folds finished and interrupted calls into one row that says the run was cut short", () => {
+    const { container } = timeline(
+      [
+        { type: "tool_call", id: "ev_1", call_id: "c1", tool: "web_search" },
+        { type: "tool_result", id: "ev_2", call_id: "c1", tool: "web_search" },
+        { type: "tool_call", id: "ev_3", call_id: "c2", tool: "read_file" },
+      ],
+      { running: false }
+    )
+    const rows = container.querySelectorAll(".workspace-agent-tools")
+    expect(rows).toHaveLength(1)
+    expect(rows[0].textContent).toContain("2 tool calls")
+    expect(rows[0].getAttribute("data-state")).toBe("interrupted")
+    expect(rows[0].getAttribute("aria-label")).toBe(
+      "Web search · Done; Read file · Interrupted"
+    )
+  })
+
+  it("leaves a call that waits on the member as it was when nothing streams", () => {
+    const { container } = timeline(
+      [
+        { type: "tool_call", id: "ev_1", call_id: "c1", tool: "send_email" },
+        {
+          type: "confirmation",
+          id: "ev_2",
+          call_id: "confirm_1",
+          tool_call_id: "c1",
+          tool: "send_email",
+          status: "pending",
+        },
+      ],
+      { running: false, actionable: ["confirm_1"] }
+    )
+    const row = container.querySelector(".workspace-agent-tools")
+    expect(row?.getAttribute("data-state")).toBe("waiting_approval")
+    expect(row?.textContent).toContain("Waiting for you")
+  })
+
   it("uses compact app marks in the same row and starts a new row next turn", () => {
     const { container } = timeline([
       { type: "message", id: "ev_1", author: "member", text: "Check my apps" },
@@ -354,6 +456,32 @@ describe("AgentTimeline", () => {
       },
     ])
     expect(within(log).queryByText("Your session has ended.")).toBeNull()
+  })
+})
+
+describe("toolGroupState", () => {
+  const call = (state: ToolEntry["state"]): ToolEntry => ({
+    kind: "tool",
+    key: `tool:${state}`,
+    callId: state,
+    tool: "web_search",
+    state,
+  })
+
+  it("shows what still needs attention first, an interrupted call before an old failure", () => {
+    expect(toolGroupState([call("done"), call("interrupted")])).toBe(
+      "interrupted"
+    )
+    expect(toolGroupState([call("failed"), call("interrupted")])).toBe(
+      "interrupted"
+    )
+    expect(toolGroupState([call("interrupted"), call("running")])).toBe(
+      "running"
+    )
+    expect(
+      toolGroupState([call("interrupted"), call("waiting_approval")])
+    ).toBe("waiting_approval")
+    expect(toolGroupState([call("done"), call("failed")])).toBe("failed")
   })
 })
 

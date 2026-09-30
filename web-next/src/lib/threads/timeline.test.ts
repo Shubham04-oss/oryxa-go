@@ -431,6 +431,115 @@ describe("buildTimeline", () => {
     ).toMatchObject({ state: "interrupted", text: "Partial" })
   })
 
+  it("leaves a call with no result interrupted once its run completes", () => {
+    const entries = buildTimeline([
+      { type: "run_started", run_id: "run_1" },
+      { type: "tool_call", id: "e1", call_id: "call_1", tool: "web_search" },
+      { type: "tool_call", id: "e2", call_id: "call_2", tool: "read_file" },
+      { type: "tool_result", id: "e3", call_id: "call_1", tool: "web_search" },
+      { type: "run_completed", run_id: "run_1" },
+    ])
+    expect(
+      entries.map((entry) => entry.kind === "tool" && entry.state)
+    ).toEqual(["done", "interrupted"])
+  })
+
+  it("leaves a call with no result interrupted once its run fails, and still says the run failed", () => {
+    const entries = buildTimeline([
+      { type: "tool_call", id: "e1", call_id: "call_1", tool: "web_search" },
+      { type: "run_failed", run_id: "run_1", error: "The run was cancelled." },
+    ])
+    expect(entries.map((entry) => entry.kind)).toEqual(["tool", "run_failed"])
+    expect(entries[0]).toMatchObject({ state: "interrupted" })
+  })
+
+  it("finds a call with no call id to interrupt it", () => {
+    expect(
+      toolOf([
+        { type: "tool_call", id: "e1", tool: "web_search" },
+        { type: "run_completed", run_id: "run_1" },
+      ])
+    ).toMatchObject({ state: "interrupted" })
+  })
+
+  it("leaves a call running while its run has not ended", () => {
+    expect(
+      toolOf([
+        { type: "run_started", run_id: "run_1" },
+        { type: "tool_call", id: "e1", call_id: "call_1", tool: "web_search" },
+      ])
+    ).toMatchObject({ state: "running" })
+  })
+
+  it("does not interrupt what an earlier run's end says nothing of", () => {
+    const entries = buildTimeline([
+      { type: "run_started", run_id: "run_1" },
+      { type: "tool_call", id: "e1", call_id: "call_1", tool: "web_search" },
+      { type: "tool_result", id: "e2", call_id: "call_1", tool: "web_search" },
+      { type: "run_completed", run_id: "run_1" },
+      { type: "run_started", run_id: "run_2" },
+      { type: "tool_call", id: "e3", call_id: "call_2", tool: "read_file" },
+    ])
+    expect(
+      entries.map((entry) => entry.kind === "tool" && entry.state)
+    ).toEqual(["done", "running"])
+  })
+
+  it("leaves a call waiting for approval waiting when its run completes", () => {
+    expect(
+      toolOf([
+        { type: "run_started", run_id: "run_1" },
+        { type: "tool_call", call_id: "call_1", tool: "slack_post_message" },
+        {
+          type: "confirmation",
+          call_id: "confirm_1",
+          tool_call_id: "call_1",
+          tool: "slack_post_message",
+          status: "pending",
+        },
+        { type: "run_completed", run_id: "run_1" },
+      ])
+    ).toMatchObject({ state: "waiting_approval" })
+  })
+
+  it("runs an approved call again in the next run, and interrupts it if that run ends without a result", () => {
+    const asked: Item[] = [
+      { type: "run_started", run_id: "run_1" },
+      { type: "tool_call", call_id: "call_1", tool: "slack_post_message" },
+      {
+        type: "confirmation",
+        call_id: "confirm_1",
+        tool_call_id: "call_1",
+        status: "pending",
+      },
+      { type: "run_completed", run_id: "run_1" },
+      // The answer is echoed before Go's stream starts.
+      { type: "confirmation", call_id: "confirm_1", status: "approved" },
+      { type: "run_started", run_id: "run_2" },
+    ]
+    expect(toolOf(asked)).toMatchObject({ state: "running" })
+    expect(
+      toolOf([...asked, { type: "run_failed", error: "Cancelled." }])
+    ).toMatchObject({ state: "interrupted" })
+    expect(
+      toolOf([
+        ...asked,
+        { type: "tool_result", call_id: "call_1", tool: "slack_post_message" },
+        { type: "run_completed", run_id: "run_2" },
+      ])
+    ).toMatchObject({ state: "done" })
+  })
+
+  it("lets a result that does arrive settle a call whatever the markers say", () => {
+    expect(
+      toolOf([
+        { type: "tool_call", call_id: "call_1", tool: "web_search" },
+        { type: "run_completed", run_id: "run_1" },
+        { type: "tool_result", call_id: "call_1", tool: "web_search" },
+      ])
+    ).toMatchObject({ state: "done" })
+  })
+
   it("starts a new bubble when another agent takes the turn", () => {
     const entries = buildTimeline([
       { type: "delta", author: "Krude", text: "Asking the researcher" },

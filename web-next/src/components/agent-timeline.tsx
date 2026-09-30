@@ -66,10 +66,30 @@ export function groupToolActivity(
 
 /** The state a group of calls shows: whatever still needs attention first. */
 export function toolGroupState(tools: readonly ToolEntry[]): ToolState {
-  for (const state of ["waiting_approval", "running", "failed"] as const) {
+  for (const state of [
+    "waiting_approval",
+    "running",
+    "interrupted",
+    "failed",
+  ] as const) {
     if (tools.some((tool) => tool.state === state)) return state
   }
   return tools.every((tool) => tool.state === "declined") ? "declined" : "done"
+}
+
+/**
+ * A call is only still running while its run streams. With no run streaming,
+ * one still running was left behind by a run that was stopped or broke off
+ * (its end marker never came), so it reads as interrupted, as a draft does.
+ */
+function settledCalls(
+  tools: readonly ToolEntry[],
+  running: boolean
+): ToolEntry[] {
+  if (running) return [...tools]
+  return tools.map((tool) =>
+    tool.state === "running" ? { ...tool, state: "interrupted" } : tool
+  )
 }
 
 const toolStateWords: Record<ToolState, string> = {
@@ -77,6 +97,7 @@ const toolStateWords: Record<ToolState, string> = {
   waiting_approval: "Waiting for you",
   declined: "Declined",
   failed: "Failed",
+  interrupted: "Interrupted",
   done: "Done",
 }
 
@@ -169,7 +190,15 @@ function toolGroupLabel(tools: ToolEntry[]): string {
   return humanizeToolName(tool.tool) || name
 }
 
-function ToolGroup({ tools }: { tools: ToolEntry[] }) {
+function ToolGroup({
+  tools: calls,
+  running,
+}: {
+  tools: ToolEntry[]
+  /** Whether a run is streaming now. */
+  running: boolean
+}) {
+  const tools = settledCalls(calls, running)
   const state = toolGroupState(tools)
   const active = tools.find((tool) => tool.state === "running") || tools[0]
   const apps = [
@@ -697,7 +726,9 @@ export function AgentTimeline({
         )
         break
       case "tools":
-        blocks.push(<ToolGroup key={entry.key} tools={entry.tools} />)
+        blocks.push(
+          <ToolGroup key={entry.key} tools={entry.tools} running={running} />
+        )
         break
       case "confirmation": {
         const isOpen = open.includes(entry)
