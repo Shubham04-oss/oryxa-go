@@ -39,18 +39,26 @@ jobs:
       - name: What the change touches
         id: paths
         env:
+          EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          # The files this change touches: a pull request's against where it
-          # branched, a push's against the commit before it. Anything unknown,
-          # or the workflow itself, checks everything.
+          # The files this change touches: a pull request's against the base
+          # it merges into, a push's against the commit before it. Anything
+          # unknown, or the workflow itself, checks everything.
           all=false
-          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+          files=
+          if [ "$EVENT" = pull_request ] && git rev-parse -q --verify 'HEAD^2' >/dev/null; then
+            # GitHub checks a pull request out as its merge into the base's
+            # current tip, the merge's first parent. The event's base can be
+            # older, and diffing against it would count what landed on the
+            # base since then as this change.
+            files=$(git diff --name-only 'HEAD^1' HEAD)
+          elif [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
             all=true
           else
             files=$(git diff --name-only "$(git merge-base "$BASE" HEAD)" HEAD)
-            grep -q '^\.github/' <<<"$files" && all=true
           fi
+          grep -q '^\.github/' <<<"$files" && all=true
           if [ "$all" = true ]; then
             printf 'go=true\nweb=true\nweb_next=true\ntofu=true\n' >> "$GITHUB_OUTPUT"
             exit 0
@@ -241,7 +249,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.tofu == 'true'
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    # The providers are several hundred megabytes. From a cold cache on the
+    # Mac's runners they have taken over ten minutes to download.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f # v1.0.8
@@ -251,6 +261,10 @@ jobs:
           tofu_wrapper: false
       - name: Validate deploy/production
         # Without the S3 backend: this checks the configuration, not the state.
+        # A self-hosted runner's tool cache outlives the job, so the providers
+        # download once per runner; on GitHub's machines it starts empty.
         run: |
+          export TF_PLUGIN_CACHE_DIR="$RUNNER_TOOL_CACHE/opentofu-plugins"
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
           tofu -chdir=deploy/production init -backend=false -input=false
           tofu -chdir=deploy/production validate
