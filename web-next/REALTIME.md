@@ -13,7 +13,7 @@ synced state the `useAgent` hook reads, so there is no separate
 
 **What the page uses today (2026-09-30).** The owner kept only the agent
 ask-and-consent loop, so the page connects to one object: the primary agent's
-`ThreadChatAgent`, in the right agent panel. The specialist chat, the
+`ThreadChatAgent`, in the workspace's central screen. The specialist chat, the
 teamspace rooms, side conversations, direct messages and the inbox had
 screens, and those were archived; the **Worker still hosts and exports every
 one of these objects and serves their routes**, unused by the UI, because
@@ -33,7 +33,7 @@ conversation) live only in the Durable Object's SQLite.
 
 | Object | Name | Who connects | Go behind it | Storage | The page today |
 |---|---|---|---|---|---|
-| `ThreadChatAgent` | `org~thread` | the member | `POST …/threads/{id}/runs` (SSE) | DO transcript; Go thread canonical | the right panel's chat with the primary agent |
+| `ThreadChatAgent` | `org~thread` | the member | `POST …/threads/{id}/runs` (SSE) | DO transcript; Go thread canonical | the chat with the primary agent, in the central screen |
 | `SpecialistChatAgent` | `org~agent` | the member, own specialists only | `POST …/agents/{id}/runs` (SSE), with the `thread_id` the object keeps | DO transcript of the current conversation; Go threads canonical | nothing (archived) |
 | `TeamspaceRoomAgent` | `org~teamspace` | the teamspace's team | `…/teamspaces/{id}/messages` (read and post), `/catchup`, `…/teamspaces/{id}` (who is on the team), as each member | Go room canonical; DO keeps the recent window, fan-out, live presence, when Go last vouched for each member | nothing (archived) |
 | `SideConversationAgent` | `org~teamspace~userA~userB` (ids sorted) | those two members, on the teamspace's team | each person's own agent: `POST …/threads/{id}/runs` on a thread of theirs; the teammate's agent: `…/agent-requests` (create, list, read, decide), as each person | DO SQLite for people's messages and the transcript; Go for agent work: threads, requests, results | nothing (archived) |
@@ -1281,13 +1281,19 @@ their signatures) and that neither is ever signed as a purge.
 
 ## UI
 
-The right agent panel (DESIGN.md §2) has one view: the member's primary agent,
-a chat on `ThreadChatAgent` (`components/agent-chat.tsx`) and the history of
-its conversations. It has no tabs. It mounts when the panel is first opened (or
-when the focused Agent overview needs its chat), keeps the socket while the
-panel is collapsed, and is keyed by the member, so another member taking over
-the page gets a new object's socket and none of the last one's state. Every
-other object in this file is hosted but not connected to by any page.
+The workspace is one sidebar and one central screen (DESIGN.md §2, §3). The
+center hosts the member's primary agent: a chat on `ThreadChatAgent`
+(`components/agent-chat.tsx`), one conversation at a time, and the sidebar
+lists the history of its conversations. The shell holds the chat's state
+(`components/primary-chat-host.ts`) and keeps the chat mounted, hidden while
+Requests, Knowledge or Tools is in the center, so its socket and a streaming
+run go on. It connects to a conversation only once the member's agent has
+been in the center (or a first message needs it): a link straight to another
+screen opens no socket. The chat is keyed by the member, so another member
+taking over the page gets a new object's socket and none of the last one's
+state. Every other object in this file is hosted but not connected to by any
+page. Nothing about the object, its routes or the Worker's checks changed
+with the layout.
 
 What the archived screens did, in short, for whoever brings one back (they are
 in the git tag `archive/pre-simplify-2026-09-30` with their tests, and DESIGN.md §7 says the decision

@@ -53,7 +53,7 @@ realtime objects. The member's primary-agent chat is one object per thread,
   `data-oryxa` parts and keeps the transcript. A page that reconnects resumes
   a run still streaming; a run is never replayed after the object restarts,
   since its tools may have side effects. Go still owns runs, thread lists and
-  artifacts. The right agent panel is the page's side
+  artifacts. The conversation in the workspace's center is the page's side
   (`src/components/agent-chat.tsx`); `src/lib/threads/README.md` describes
   the contract it follows.
 - `DELETE` on the same path, from the app's own origin only, deletes the
