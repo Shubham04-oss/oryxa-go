@@ -1,5 +1,6 @@
-import { useSyncExternalStore } from "react"
+import { useEffect, useSyncExternalStore } from "react"
 import type { Thread } from "./client"
+import type { ScreenContext } from "@/lib/agents/screen-context"
 
 // Which conversation the primary agent's chat opens, and how the rest of the
 // app (Home, for one) asks it to open a particular conversation or a new one.
@@ -263,4 +264,270 @@ export function usePrimaryChatActivity(
     () => (sameScope(latestActivityScope, scope) ? latestActivity : null),
     () => null
   )
+}
+
+// What the agent panel holds for the primary chat, in one reducer: the
+// conversation it is on, the requests and first messages waiting their turn,
+// and the members' unsent messages. Keeping it in one place is what lets
+// every step be named by the request it belongs to, so a slow step of an old
+// request can't undo a newer one and no message is dropped: each first
+// message is made a conversation of its own, and sent into it, in order.
+
+/** Where the primary chat's unsent message is kept, among each agent's (the others by the specialist's id). */
+export const PRIMARY_DRAFT = "primary"
+
+/**
+ * A message to start a new conversation with, on its way to the primary
+ * agent. `id` names the request or send it came from, and every step that
+ * follows names it too.
+ */
+export type FirstMessage = {
+  id: number
+  kind: "send"
+  text: string
+  /** What the member was looking at when they sent it. */
+  screen?: ScreenContext
+  /** The conversation made for it, once it exists. */
+  threadId?: string
+  /** A chat is making that conversation now. */
+  making?: boolean
+  /** Its conversation's chat has taken the message to send. */
+  taken?: boolean
+}
+
+/** One thing the chat was asked to do: open a conversation, start a blank one, or start one with a first message. */
+export type ChatTask =
+  | { id: number; kind: "open"; threadId: string }
+  | { id: number; kind: "blank" }
+  | FirstMessage
+
+export type PrimaryChat = {
+  /** The conversation the chat is on: undefined until it is decided, null for a new one. */
+  thread: string | null | undefined
+  /** Whether that was a choice (of the member, or of a request) rather than the rules': only a choice is remembered. */
+  chosen: boolean
+  /** What waits, oldest first. An open or a blank chat is done at once; a first message stays until its conversation has it. */
+  tasks: ChatTask[]
+  /** Every agent's unsent message, by `PRIMARY_DRAFT` or the specialist's id. */
+  drafts: Partial<Record<string, string>>
+  /** Why a start didn't happen, for the blank chat to say. */
+  notice: string
+  /** A first message no conversation could be made for, when the composer could not take it back. */
+  unsent: string | null
+  /** Counts each request and send: something the member just did here. */
+  touched: number
+  /** The last id given to a send from the composer (requests have their own ids, which are positive). */
+  own: number
+}
+
+export type PrimaryChatAction =
+  /** The app asked for a conversation (see `requestPrimaryChat`). */
+  | { type: "request"; request: PrimaryChatRequest; screen?: ScreenContext }
+  /** The member sent the first message of a new chat from the composer. */
+  | { type: "submit"; text: string; screen?: ScreenContext }
+  /** The rules chose the conversation to open. Only fills in a chat still undecided and idle. */
+  | { type: "decide"; thread: string | null }
+  /** The member (or a conversation that is gone) moved the chat. Waits while a first message is on its way. */
+  | { type: "move"; thread: string | null; notice?: string }
+  | { type: "making"; id: number }
+  | { type: "made"; id: number; threadId: string }
+  | { type: "taken"; id: number }
+  | { type: "sent"; id: number }
+  | { type: "failed"; id: number; notice: string }
+  | { type: "draft"; key: string; text: string }
+  /** Another member has the page: nothing held is theirs. */
+  | { type: "reset" }
+
+export function initialPrimaryChat(): PrimaryChat {
+  return {
+    thread: undefined,
+    chosen: false,
+    tasks: [],
+    drafts: {},
+    notice: "",
+    unsent: null,
+    touched: 0,
+    own: 0,
+  }
+}
+
+/** Applies the tasks at the front that need no conversation made. */
+function settle(state: PrimaryChat): PrimaryChat {
+  let { thread, tasks } = state
+  while (tasks.length > 0 && tasks[0].kind !== "send") {
+    const task = tasks[0]
+    thread = task.kind === "open" ? task.threadId : null
+    tasks = tasks.slice(1)
+  }
+  return tasks === state.tasks
+    ? state
+    : { ...state, thread, tasks, chosen: true }
+}
+
+function amend(
+  state: PrimaryChat,
+  id: number,
+  change: (message: FirstMessage) => FirstMessage
+): PrimaryChat {
+  const tasks = state.tasks.map((task) =>
+    task.id === id && task.kind === "send" ? change(task) : task
+  )
+  return tasks.some((task, index) => task !== state.tasks[index])
+    ? { ...state, tasks }
+    : state
+}
+
+export function primaryChatReducer(
+  state: PrimaryChat,
+  action: PrimaryChatAction
+): PrimaryChat {
+  switch (action.type) {
+    case "request": {
+      const { request } = action
+      const text = request.kind === "new" ? (request.message?.trim() ?? "") : ""
+      const task: ChatTask =
+        request.kind === "thread"
+          ? { id: request.id, kind: "open", threadId: request.threadId }
+          : text
+            ? { id: request.id, kind: "send", text, screen: action.screen }
+            : { id: request.id, kind: "blank" }
+      return settle({
+        ...state,
+        tasks: [...state.tasks, task],
+        touched: state.touched + 1,
+        notice: "",
+        unsent: null,
+      })
+    }
+    case "submit": {
+      const text = action.text.trim()
+      if (!text) return state
+      const own = state.own + 1
+      return settle({
+        ...state,
+        own,
+        tasks: [
+          ...state.tasks,
+          { id: -own, kind: "send", text, screen: action.screen },
+        ],
+        // The composer gives its text up; a request's message never did.
+        drafts: { ...state.drafts, [PRIMARY_DRAFT]: "" },
+        touched: state.touched + 1,
+        notice: "",
+        unsent: null,
+      })
+    }
+    case "decide":
+      return state.thread === undefined && state.tasks.length === 0
+        ? { ...state, thread: action.thread }
+        : state
+    case "move": {
+      let tasks = state.tasks
+      const head = tasks.at(0)
+      if (head?.kind === "send") {
+        // Not yet in its conversation's hands: it goes first.
+        if (!head.taken) return state
+        tasks = tasks.slice(1)
+      }
+      return settle({
+        ...state,
+        tasks,
+        thread: action.thread,
+        chosen: true,
+        notice: action.notice ?? "",
+        unsent: null,
+      })
+    }
+    case "making":
+      return amend(state, action.id, (message) => ({
+        ...message,
+        making: true,
+      }))
+    case "made":
+      return amend(state, action.id, (message) =>
+        message.threadId ? message : { ...message, threadId: action.threadId }
+      )
+    case "taken":
+      return amend(state, action.id, (message) =>
+        message.threadId ? { ...message, taken: true } : message
+      )
+    case "sent": {
+      const head = state.tasks.at(0)
+      if (head?.id !== action.id || head.kind !== "send" || !head.taken) {
+        return state
+      }
+      return settle({
+        ...state,
+        thread: head.threadId ?? null,
+        chosen: true,
+        tasks: state.tasks.slice(1),
+      })
+    }
+    case "failed": {
+      const failed = state.tasks.find((task) => task.id === action.id)
+      if (!failed || failed.kind !== "send") return state
+      // Back into the composer if it is empty, never over what is there:
+      // the words are then said in the blank chat, where nothing can hide
+      // them.
+      const restore = (state.drafts[PRIMARY_DRAFT] ?? "") === ""
+      return settle({
+        ...state,
+        tasks: state.tasks.filter((task) => task.id !== action.id),
+        thread: failed === state.tasks[0] ? null : state.thread,
+        chosen: failed === state.tasks[0] ? true : state.chosen,
+        drafts: restore
+          ? { ...state.drafts, [PRIMARY_DRAFT]: failed.text }
+          : state.drafts,
+        unsent: restore ? null : failed.text,
+        notice: action.notice,
+      })
+    }
+    case "draft":
+      return {
+        ...state,
+        drafts: { ...state.drafts, [action.key]: action.text },
+      }
+    case "reset":
+      // The counter goes on, so a step still coming for an old send can't
+      // land on a new one.
+      return { ...initialPrimaryChat(), own: state.own }
+  }
+}
+
+/** The message on its way: the task at the front, when it starts a conversation with one. */
+export function firstMessage(state: PrimaryChat): FirstMessage | null {
+  const head = state.tasks.at(0)
+  return head?.kind === "send" ? head : null
+}
+
+/**
+ * The conversation the chat shows: the one being made for the message on its
+ * way (a blank chat until it exists), else the one the chat is on.
+ */
+export function shownThread(state: PrimaryChat): string | null | undefined {
+  const message = firstMessage(state)
+  return message ? (message.threadId ?? null) : state.thread
+}
+
+/**
+ * Remembers, for the browser session, the conversation the chat shows once
+ * it is a choice (the member's, or a request's, never the rules': see
+ * `PrimaryChat.chosen`), including the blank one a message is being made a
+ * conversation for. One place for it means what is remembered is what the
+ * chat ended up on, whatever order slow steps arrived in.
+ */
+export function useRememberedChoice(
+  chat: PrimaryChat,
+  scope: ChatScope | undefined,
+  agentId: string | undefined
+) {
+  const shown = shownThread(chat)
+  const choice = chat.chosen || firstMessage(chat) !== null
+  const organizationId = scope?.organizationId
+  const userId = scope?.userId
+  useEffect(() => {
+    if (shown === undefined || !choice || !organizationId || !userId) return
+    if (!agentId) return
+    rememberChoice({ organizationId, userId }, agentId, shown)
+  }, [shown, choice, organizationId, userId, agentId])
 }

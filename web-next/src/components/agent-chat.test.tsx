@@ -12,14 +12,17 @@ import {
   within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { useState } from "react"
+import { useReducer, useState } from "react"
 import type { ReactElement } from "react"
 import { AgentChat } from "./agent-chat"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import {
+  initialPrimaryChat,
+  primaryChatReducer,
   rememberChoice,
   rememberedChoice,
   usePrimaryChatActivity,
+  useRememberedChoice,
 } from "@/lib/threads/chat-choice"
 import { itemsToChatMessages } from "@/lib/threads/chat-messages"
 import type { Item, Thread } from "@/lib/threads/client"
@@ -207,8 +210,9 @@ const scope = { organizationId: "org_1", userId: "user_1" }
 const LEO = "agt_leo"
 
 /**
- * The chat as the panel mounts it, holding its conversation and draft.
- * `agent` is the primary agent's id, or null while the agents list is out.
+ * The chat as the panel mounts it, holding its state in the reducer the panel
+ * uses. `agent` is the primary agent's id, or null while the agents list is
+ * out.
  */
 function ChatHost({
   remember = true,
@@ -217,18 +221,20 @@ function ChatHost({
   remember?: boolean
   agent?: string | null
 }) {
-  const [threadId, setThreadId] = useState<string | null | undefined>()
-  const [draft, setDraft] = useState("")
+  const [chat, dispatch] = useReducer(
+    primaryChatReducer,
+    undefined,
+    initialPrimaryChat
+  )
+  useRememberedChoice(chat, remember ? scope : undefined, agent ?? undefined)
   return (
     <AgentChat
       organizationId="org_1"
       scope={remember ? scope : undefined}
       agentId={agent ?? undefined}
       agentName="Leo"
-      threadId={threadId}
-      setThreadId={setThreadId}
-      draft={draft}
-      onDraftChange={setDraft}
+      chat={chat}
+      dispatch={dispatch}
       onComposingChange={vi.fn()}
     />
   )

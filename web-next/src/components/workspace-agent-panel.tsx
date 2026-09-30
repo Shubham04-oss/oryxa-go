@@ -1,11 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import type {
-  ComponentType,
-  Dispatch,
-  KeyboardEvent,
-  ReactNode,
-  SetStateAction,
-} from "react"
+import { useEffect, useMemo, useReducer, useRef, useState } from "react"
+import type { ComponentType, Dispatch, KeyboardEvent, ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft,
@@ -16,7 +10,6 @@ import {
   UsersRound,
 } from "lucide-react"
 import { AgentChat } from "./agent-chat"
-import type { FirstMessage } from "./agent-chat"
 import { AgentComposer } from "./agent-composer"
 import { AgentConversation } from "./agent-conversation"
 import { AgentSwitcher, FALLBACK_AGENT_NAME } from "./agent-switcher"
@@ -43,11 +36,18 @@ import type { Teamspace } from "@/lib/teamspaces/client"
 import { teamspaceKeys, teamspaceQueryOptions } from "@/lib/teamspaces/queries"
 import {
   claimPrimaryChatRequest,
-  rememberChoice,
+  initialPrimaryChat,
+  primaryChatReducer,
   sameChatScope,
+  shownThread,
   usePrimaryChatRequest,
+  useRememberedChoice,
 } from "@/lib/threads/chat-choice"
-import type { ChatScope } from "@/lib/threads/chat-choice"
+import type {
+  ChatScope,
+  PrimaryChat,
+  PrimaryChatAction,
+} from "@/lib/threads/chat-choice"
 import { cn } from "@/lib/utils"
 import type { ScreenContext } from "@/lib/agents/screen-context"
 
@@ -83,9 +83,6 @@ export type AgentPanelChatRequest = { agentId: string }
 
 /** Avatar seed for the primary agent until its id has loaded. */
 const PRIMARY_AGENT_SEED = "primary-agent"
-
-/** The primary chat's unsent message, among every agent's (by id). */
-const PRIMARY_DRAFT = "primary"
 
 const panelTabs: Array<{
   key: AgentPanelTab
@@ -175,17 +172,14 @@ export function WorkspaceAgentPanel({
   const [sideDrafts, setSideDrafts] = useState<
     Partial<Record<string, SideDraft>>
   >({})
-  // What the agents' chats hold while the member looks at another agent: the
-  // primary chat's conversation (`undefined` until the chat decides it, `null`
-  // for a new one), and every agent's unsent message, by `PRIMARY_DRAFT` or
-  // the specialist's id.
-  const [primaryThread, setPrimaryThread] = useState<
-    string | null | undefined
-  >()
-  const [drafts, setDrafts] = useState<Partial<Record<string, string>>>({})
-  // The message a request wants the primary chat to start a new conversation
-  // with, until the chat takes it.
-  const [firstMessage, setFirstMessage] = useState<FirstMessage | null>(null)
+  // What the primary chat holds while the member looks at another agent: the
+  // conversation it is on, what waits to be opened or sent, and every agent's
+  // unsent message (chat-choice.ts).
+  const [chat, dispatch] = useReducer(
+    primaryChatReducer,
+    undefined,
+    initialPrimaryChat
+  )
   if (chatRequest && chatRequest !== answeredRequest) {
     setAnsweredRequest(chatRequest)
     setTab("agents")
@@ -269,14 +263,16 @@ export function WorkspaceAgentPanel({
 
   // The shell follows the primary chat's conversation: Agent overview lists
   // its files.
+  const shown = shownThread(chat)
   useEffect(() => {
-    if (primaryThread !== undefined) onPrimaryThreadChange?.(primaryThread)
-  }, [primaryThread, onPrimaryThreadChange])
+    if (shown !== undefined) onPrimaryThreadChange?.(shown)
+  }, [shown, onPrimaryThreadChange])
 
   // The rest of the app asking the primary chat to open a conversation (Home
   // does, then expands the panel). Each request is acted on once: claiming it
-  // outlasts this panel, and a request made before the chat first mounted is
-  // still here for it, since what it asks for is held here, not in the chat.
+  // outlasts this panel. What it asks for is held here, in order, not in the
+  // chat, so a request made before the chat first mounted is still applied,
+  // and one made while another's message is on its way waits its turn.
   const request = usePrimaryChatRequest()
   useEffect(() => {
     if (!request || !scope || !chatAgent) return
@@ -285,22 +281,9 @@ export function WorkspaceAgentPanel({
     setTab("agents")
     setAgentId(null)
     setAgentsSide(null)
-    if (request.kind === "thread") {
-      setPrimaryThread(request.threadId)
-      setFirstMessage(null)
-      rememberChoice(scope, chatAgent, request.threadId)
-      return
-    }
-    setPrimaryThread(null)
-    rememberChoice(scope, chatAgent, null)
-    const text = request.message?.trim()
-    setFirstMessage(text ? { id: request.id, text } : null)
+    dispatch({ type: "request", request, screen: getScreenContext?.() })
   }, [request, scope, chatAgent])
-
-  // A first message waits only for a new chat to send it into.
-  useEffect(() => {
-    if (typeof primaryThread === "string") setFirstMessage(null)
-  }, [primaryThread])
+  useRememberedChoice(chat, scope, chatAgent)
 
   // A rail button unmounts as the panel opens, so its focus moves to the tab
   // it opened rather than falling back to the page.
@@ -567,18 +550,8 @@ export function WorkspaceAgentPanel({
                     agents={agents.data}
                     agentId={agentId}
                     onSelectAgent={setAgentId}
-                    primaryThread={primaryThread}
-                    setPrimaryThread={setPrimaryThread}
-                    firstMessage={firstMessage}
-                    onFirstMessageTaken={(id) =>
-                      setFirstMessage((current) =>
-                        current?.id === id ? null : current
-                      )
-                    }
-                    drafts={drafts}
-                    onDraftChange={(agent, value) =>
-                      setDrafts((current) => ({ ...current, [agent]: value }))
-                    }
+                    chat={chat}
+                    dispatch={dispatch}
                     agentName={agentName}
                     agentSeed={agentSeed}
                     onComposingChange={(value) => {
@@ -759,12 +732,8 @@ function AgentsView({
   agents,
   agentId,
   onSelectAgent,
-  primaryThread,
-  setPrimaryThread,
-  firstMessage,
-  onFirstMessageTaken,
-  drafts,
-  onDraftChange,
+  chat,
+  dispatch,
   agentName,
   agentSeed,
   onComposingChange,
@@ -783,15 +752,9 @@ function AgentsView({
   /** The specialist in use, or null for the primary agent. */
   agentId: string | null
   onSelectAgent: (agentId: string | null) => void
-  /** The primary chat's conversation, held here (`AgentChat`'s `threadId`). */
-  primaryThread: string | null | undefined
-  setPrimaryThread: Dispatch<SetStateAction<string | null | undefined>>
-  /** What a request asked the primary chat to start a new conversation with. */
-  firstMessage: FirstMessage | null
-  onFirstMessageTaken: (id: number) => void
-  /** Every agent's unsent message, by `PRIMARY_DRAFT` or a specialist's id. */
-  drafts: Partial<Record<string, string>>
-  onDraftChange: (agent: string, value: string) => void
+  /** What the primary chat holds, and how it moves (chat-choice.ts). */
+  chat: PrimaryChat
+  dispatch: Dispatch<PrimaryChatAction>
   agentName?: string
   agentSeed: string
   onComposingChange: (composing: boolean) => void
@@ -850,8 +813,10 @@ function AgentsView({
           organizationId={organizationId}
           specialist={inUse}
           missing={agents !== undefined && !listed}
-          draft={drafts[inUse.id] ?? ""}
-          onDraftChange={(value) => onDraftChange(inUse.id, value)}
+          draft={chat.drafts[inUse.id] ?? ""}
+          onDraftChange={(text) =>
+            dispatch({ type: "draft", key: inUse.id, text })
+          }
           onComposingChange={onComposingChange}
           getScreenContext={getScreenContext}
         />
@@ -861,12 +826,8 @@ function AgentsView({
           scope={scope}
           agentId={chatAgent}
           agentName={agentName}
-          threadId={primaryThread}
-          setThreadId={setPrimaryThread}
-          draft={drafts[PRIMARY_DRAFT] ?? ""}
-          onDraftChange={(value) => onDraftChange(PRIMARY_DRAFT, value)}
-          firstMessage={firstMessage}
-          onFirstMessageTaken={onFirstMessageTaken}
+          chat={chat}
+          dispatch={dispatch}
           onComposingChange={onComposingChange}
           inOverview={inAgentOverview}
           onOpenOverview={onOpenAgentOverview}
