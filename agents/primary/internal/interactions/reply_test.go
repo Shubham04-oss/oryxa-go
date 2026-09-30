@@ -14,6 +14,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
+	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
 )
 
@@ -843,6 +844,19 @@ func TestAReplyLogsNeitherItsWordsNorItsTicket(t *testing.T) {
 		if strings.Contains(logged, secret) {
 			t.Fatalf("the log carries %q:\n%s", secret, logged)
 		}
+	}
+}
+
+// TestTheBusNamesAReplyAsTheLedgerDoes: the consent an event carries for a
+// reply is the ledger's own word for it, which is what the consumer reads to
+// wake nobody for the approval.
+func TestTheBusNamesAReplyAsTheLedgerDoes(t *testing.T) {
+	if ConsentReply != agentsv1.InteractionConsentReply {
+		t.Fatalf("the ledger says %q and the bus %q", ConsentReply, agentsv1.InteractionConsentReply)
+	}
+	request := agents.Interaction{ID: "irq_1", Status: StatusApproved, Decision: &agents.InteractionDecision{Consent: ConsentReply}}
+	if got := changed(request).Consent; got != agentsv1.InteractionConsentReply {
+		t.Fatalf("the event says consent %q", got)
 	}
 }
 

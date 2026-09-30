@@ -200,9 +200,10 @@ type InteractionChanged struct {
 	// published, which is to be read as InteractionOriginAgent.
 	Origin string `json:"origin,omitempty"`
 	// Consent is how far the owner let the answer go, once they approved:
-	// InteractionConsentSummary or InteractionConsentAccess. Absent until the
-	// request is decided, for a rejection, and for an approval that granted no
-	// consent, which is every approval made before Slack asks.
+	// InteractionConsentSummary or InteractionConsentAccess, or
+	// InteractionConsentReply when the owner answered it themself. Absent until
+	// the request is decided, for a rejection, and for an approval that granted
+	// no consent, which is every approval made before Slack asks.
 	Consent string `json:"consent,omitempty"`
 }
 
@@ -224,6 +225,11 @@ const (
 	// read, and, for an hour, answers the same member's follow-ups in that
 	// Slack thread.
 	InteractionConsentAccess = "access"
+	// InteractionConsentReply is an owner who answered the request themself, in
+	// their own words, in the same change that approved it: its decided event
+	// is followed at once by its completed one, and there is no work for the
+	// owner's agent, which is never woken for it.
+	InteractionConsentReply = "reply"
 )
 
 // Who decides a request, as InteractionChanged.Approval.

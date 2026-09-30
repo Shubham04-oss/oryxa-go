@@ -501,6 +501,15 @@ func (consumer *Consumer) interactionChanged(ctx context.Context, detailType str
 	case agentsv1.InteractionDecidedDetailType:
 		switch changed.Status {
 		case "approved":
+			if changed.Consent == agentsv1.InteractionConsentReply {
+				// Its owner answered it themself, in the change that approved it:
+				// there is no work for their agent, and the completed event that
+				// follows tells the member who asked. The waker would find the
+				// request answered and wake nobody; it is not asked to.
+				consumer.logger.InfoContext(ctx, "interaction answered by its owner as it was approved; no agent is woken",
+					"event_id", envelope.EventID, "request_id", changed.RequestID)
+				return nil
+			}
 			delivery.RecipientUserID = changed.TargetUserID
 			delivery.RecipientAgentID = changed.TargetAgentID
 			delivery.Kind = interactiondelivery.KindTargetApproved
