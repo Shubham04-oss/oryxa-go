@@ -398,7 +398,14 @@ not permission to copy every incidental value into a new component.
   their last section in this browser, remembered per member and workspace.
   Unavailable or no longer permitted remembered sections fall back to Account.
   Explicit Billing and Slack entry points still open the requested section.
-- Knowledge Bases is a Home destination. Tools is also under Home. Connected
+- Knowledge Bases is a Home destination. Creating one asks for a short name,
+  with a concrete label example and a visible 2–60 character hint; facts and
+  notes belong in its content. After creation, open that base with Add content
+  already on Note, retaining the choices for a link or file. The member may
+  cancel adding; ordinary visits to an existing base keep the form closed.
+  Cancelling creation while its request is out never opens a base that arrives
+  later. Preserve the existing permissions and honest errors.
+- Tools is also under Home. Connected
   tools form one horizontal, logo-led row with expandable details. The browse
   catalog is categorized and uses two sleek cards per row at normal and small
   widths. Collapsed cards show logo and name only; description and details

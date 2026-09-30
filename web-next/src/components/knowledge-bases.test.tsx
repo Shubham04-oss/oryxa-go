@@ -162,10 +162,12 @@ function renderKnowledge(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
+  let selectBase!: (base: SelectedKnowledgeBase | null) => void
   function Harness() {
     const [selected, setSelected] = useState<SelectedKnowledgeBase | null>(
       props.selected ?? null
     )
+    selectBase = setSelected
     return (
       <KnowledgeBases
         organizationId="org_1"
@@ -186,7 +188,10 @@ function renderKnowledge(
       <Harness />
     </QueryClientProvider>
   )
-  return { onSelect }
+  return {
+    onSelect,
+    select: (base: SelectedKnowledgeBase | null) => act(() => selectBase(base)),
+  }
 }
 
 const openHandbook = { selected: { id: "cor_1", name: "Handbook" } }
@@ -338,20 +343,25 @@ describe("the knowledge bases list", () => {
 })
 
 describe("creating a knowledge base", () => {
-  it("creates a real member corpus and opens it", async () => {
+  it("creates a real member corpus and goes straight to adding a note", async () => {
     const created = corpus({
       id: "cor_9",
       name: "Engineering handbook",
       slug: "engineering-handbook",
       metadata: { description: "Technical decisions and guides." },
     })
+    const documents: CorpusDocument[] = []
     const api = stubApi({
       "GET /v1/capabilities": capabilities(true),
       "GET /v1/organizations/org_1/corpora": { corpora: [] },
       "POST /v1/organizations/org_1/corpora": () => json(created, 201),
       "GET /v1/organizations/org_1/corpora/cor_9": created,
-      "GET /v1/organizations/org_1/corpora/cor_9/documents": {
-        documents: [],
+      "GET /v1/organizations/org_1/corpora/cor_9/documents": () =>
+        json({ documents }),
+      "POST /v1/organizations/org_1/corpora/cor_9/documents": () => {
+        const added = document({ corpus_id: "cor_9", status: "pending" })
+        documents.push(added)
+        return json(added, 202)
       },
     })
     const { onSelect } = renderKnowledge()
@@ -370,7 +380,7 @@ describe("creating a knowledge base", () => {
     expect(screen.getByText("Use at least 2 characters.")).toBeTruthy()
     expect(api.find("POST", "/v1/organizations/org_1/corpora")).toHaveLength(0)
 
-    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
       target: { value: "Engineering handbook" },
     })
     fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
@@ -394,6 +404,131 @@ describe("creating a knowledge base", () => {
     })
     expect(await screen.findByText("No documents yet")).toBeTruthy()
     expect(screen.getByText("Technical decisions and guides.")).toBeTruthy()
+    expect(
+      screen.getByRole<HTMLInputElement>("radio", { name: "Note" }).checked
+    ).toBe(true)
+    fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
+      target: { value: "We chose pgvector for local runs." },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }))
+    await waitFor(() =>
+      expect(
+        api.find("POST", "/v1/organizations/org_1/corpora/cor_9/documents")[0]
+          ?.body
+      ).toEqual({
+        source: { kind: "inline" },
+        text: "We chose pgvector for local runs.",
+      })
+    )
+    expect(await screen.findByText("Decision log")).toBeTruthy()
+    expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
+  })
+
+  it("explains a short name and its existing length limit accessibly", async () => {
+    stubApi({
+      "GET /v1/capabilities": capabilities(true),
+      "GET /v1/organizations/org_1/corpora": { corpora: [] },
+    })
+    renderKnowledge()
+    await screen.findByText("No knowledge bases yet")
+    fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
+    const name = screen.getByRole("textbox", { name: "Short name" })
+    expect(name.getAttribute("placeholder")).toBe("e.g. Engineering handbook")
+    expect(name.getAttribute("maxlength")).toBe("60")
+    const hint = screen.getByText(
+      "Short label, 2–60 characters. Add facts and notes next."
+    )
+    expect(name.getAttribute("aria-describedby")).toBe(hint.id)
+    fireEvent.click(screen.getByRole("button", { name: "Create base" }))
+    expect(name.getAttribute("aria-describedby")).toContain(hint.id)
+    expect(name.getAttribute("aria-describedby")).toContain(
+      "knowledge-base-name-error"
+    )
+  })
+
+  it.each(["AB", "A".repeat(60)])(
+    "accepts a name within the existing constraints: %s",
+    async (name) => {
+      const made = corpus({ name })
+      const api = stubApi({
+        ...detailRoutes(made, () => []),
+        "POST /v1/organizations/org_1/corpora": () => json(made, 201),
+      })
+      renderKnowledge()
+      await screen.findByRole("button", { name: `Open ${name}` })
+      fireEvent.click(
+        screen.getByRole("button", { name: "New knowledge base" })
+      )
+      fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
+        target: { value: ` ${name} ` },
+      })
+      fireEvent.click(screen.getByRole("button", { name: "Create base" }))
+      await screen.findByRole("button", { name: "Add note" })
+      expect(
+        api.find("POST", "/v1/organizations/org_1/corpora")[0]?.body
+      ).toMatchObject({ name })
+    }
+  )
+
+  it.each(["A", "A".repeat(61)])(
+    "refuses a name outside the existing constraints before creating: %s",
+    async (name) => {
+      const api = stubApi({
+        "GET /v1/capabilities": capabilities(true),
+        "GET /v1/organizations/org_1/corpora": { corpora: [] },
+      })
+      renderKnowledge()
+      await screen.findByText("No knowledge bases yet")
+      fireEvent.click(
+        screen.getByRole("button", { name: "New knowledge base" })
+      )
+      fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
+        target: { value: name },
+      })
+      fireEvent.click(screen.getByRole("button", { name: "Create base" }))
+      expect(
+        screen.getByText(
+          name.length < 2
+            ? "Use at least 2 characters."
+            : "Use at most 60 characters."
+        )
+      ).toBeTruthy()
+      expect(api.find("POST", "/v1/organizations/org_1/corpora")).toHaveLength(
+        0
+      )
+    }
+  )
+
+  it("keeps an existing empty base closed and does not repeat the create handoff after Cancel or return", async () => {
+    const made = corpus()
+    stubApi({
+      ...detailRoutes(made, () => []),
+      "POST /v1/organizations/org_1/corpora": () => json(made, 201),
+    })
+    const view = renderKnowledge()
+    const open = await screen.findByRole("button", { name: "Open Handbook" })
+    fireEvent.click(open)
+    await screen.findByText("No documents yet")
+    expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
+    view.select(null)
+    fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
+      target: { value: "Handbook" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create base" }))
+    await screen.findByRole("textbox", { name: "Text" })
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
+    view.select(null)
+    view.select({ id: made.id, name: made.name })
+    await screen.findByText("No documents yet")
+    expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
+    view.select(null)
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Handbook" })
+    )
+    await screen.findByText("No documents yet")
+    expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
   })
 
   it("lets an admin share one with the whole workspace", async () => {
@@ -411,7 +546,7 @@ describe("creating a knowledge base", () => {
     await screen.findByText("No knowledge bases yet")
 
     fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
       target: { value: "Company wiki" },
     })
     fireEvent.click(screen.getByRole("radio", { name: "Everyone in Acme" }))
@@ -431,6 +566,8 @@ describe("creating a knowledge base", () => {
         scope: "organization",
       })
     )
+    expect(await screen.findByRole("button", { name: "Add note" })).toBeTruthy()
+    expect(screen.getByRole("radio", { name: "Admins only" })).toBeTruthy()
   })
 
   it("explains a refusal", async () => {
@@ -444,7 +581,7 @@ describe("creating a knowledge base", () => {
     await screen.findByText("No knowledge bases yet")
 
     fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
       target: { value: "Wiki" },
     })
     fireEvent.click(screen.getByRole("button", { name: "Create base" }))
@@ -473,7 +610,7 @@ describe("creating a knowledge base", () => {
       fireEvent.click(
         screen.getByRole("button", { name: "New knowledge base" })
       )
-      fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
         target: { value: "First try" },
       })
       fireEvent.click(screen.getByRole("button", { name: "Create base" }))
@@ -514,14 +651,14 @@ describe("creating a knowledge base", () => {
       fireEvent.click(
         screen.getByRole("button", { name: "New knowledge base" })
       )
-      fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
         target: { value: "Second try" },
       })
       list.push(made)
       request.answer(json(made, 201))
       await screen.findByRole("button", { name: "Open First try" })
 
-      const name = screen.getByRole("textbox", { name: "Name" })
+      const name = screen.getByRole("textbox", { name: "Short name" })
       expect((name as HTMLInputElement).value).toBe("Second try")
       expect(newBaseHeading()).toBeTruthy()
       expect(onSelect).not.toHaveBeenCalled()
@@ -550,7 +687,7 @@ describe("creating a knowledge base", () => {
     await screen.findByText("No knowledge bases yet")
 
     fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
       target: { value: "Never sent" },
     })
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
