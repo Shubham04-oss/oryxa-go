@@ -302,7 +302,7 @@ type InteractionCreateInput struct {
 	Purpose              string                   `json:"purpose" jsonschema:"Why this agent is the appropriate recipient."`
 	Task                 string                   `json:"task" jsonschema:"The bounded question or work request. Do not put instructions for bypassing the recipient's policy here."`
 	Context              []InteractionContextItem `json:"context,omitempty"`
-	RequestedTools       []string                 `json:"requested_tools,omitempty" jsonschema:"Toolboxes the task needs of the member you ask: apps (their connected apps, read only) and knowledge (the organization's knowledge search). Naming one does not grant it; the approval says which the work may use, and nothing else is loaded for it."`
+	RequestedTools       []string                 `json:"requested_tools,omitempty" jsonschema:"Toolboxes the task needs of the member you ask: apps (their connected apps, read only) and knowledge (the organization's knowledge search). Information requests should ask for knowledge; omitting this field requests knowledge by default. Pass an explicit empty list only when the task needs no lookups. Naming a toolbox does not grant it; the approval says which the work may use, and nothing else is loaded for it."`
 	RequestedPermissions []string                 `json:"requested_permissions,omitempty" jsonschema:"Explicit permissions the task may need. Naming one does not grant it."`
 	ExpiresInSeconds     int                      `json:"expires_in_seconds,omitempty" jsonschema:"Lifetime from 300 to 604800 seconds; defaults to 86400."`
 }
@@ -526,6 +526,12 @@ func (tools interactionTools) actor(ctx agent.Context, needsToken bool) (Interac
 // anything is filed or a token is asked for. The ledger then checks the seat
 // and the team as it always does; the pin grants nothing of its own.
 func (tools interactionTools) create(ctx agent.Context, input InteractionCreateInput) (Interaction, error) {
+	// Information requests need a way to look up their answer. Preserve an
+	// explicit list, including an empty one for work that needs no lookups.
+	// This only requests access; the ledger and the holder's approval grant it.
+	if input.RequestedTools == nil {
+		input.RequestedTools = []string{KnowledgeToolboxName}
+	}
 	teamspaceID, err := pinnedTeamspaceFor(ctx, input.TeamspaceID)
 	if err != nil {
 		return Interaction{}, err

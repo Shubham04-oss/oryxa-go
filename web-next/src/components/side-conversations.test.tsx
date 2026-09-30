@@ -1059,10 +1059,22 @@ describe("What a side conversation holds", () => {
       within(first)
         .getAllByRole("button", { name: /request from Priya Shah/ })
         .map((button) => button.textContent)
-    ).toEqual(["Decline", "Approve without tools", "Approve"])
+    ).toEqual(["Decline", "Approve without tools", "Approve with tools"])
+    const approve = within(first).getByRole("button", {
+      name: "Approve with tools for Leo's request from Priya Shah",
+    })
+    expect(approve.getAttribute("data-primary")).toBe("true")
+    const withoutTools = within(first).getByRole("button", {
+      name: "Approve Leo's request from Priya Shah without tools",
+    })
+    expect(
+      document.getElementById(withoutTools.getAttribute("aria-describedby")!)
+        ?.textContent
+    ).toBe("Approve without tools means Leo can’t look anything up.")
     expect(within(third).getByText("Leo may read team knowledge.")).toBeTruthy()
     for (const plain of [fourth, fifth]) {
       expect(within(plain).queryByText(/may read/)).toBeNull()
+      expect(within(plain).queryByText(/can’t look anything up/)).toBeNull()
       expect(
         within(plain)
           .getAllByRole("button", { name: /request from Priya Shah/ })
@@ -1073,10 +1085,11 @@ describe("What a side conversation holds", () => {
       name: "You asked Nia, Priya's agent",
     })
     expect(within(mine).queryByText(/may read/)).toBeNull()
+    expect(within(mine).queryByText(/can’t look anything up/)).toBeNull()
 
     fireEvent.click(
       within(first).getByRole("button", {
-        name: "Approve Leo's request from Priya Shah",
+        name: "Approve with tools for Leo's request from Priya Shah",
       })
     )
     fireEvent.click(

@@ -294,7 +294,9 @@ not permission to copy every incidental value into a new component.
     ("Approve Nia's request from Member"). When the request asks to read
     their connected apps or the team's knowledge, their card says so in one
     line ("Nia may read your connected apps and team knowledge.") and adds
-    Approve without tools between them; Approve allows what was asked for.
+    Approve without tools between them. Approve with tools is the filled
+    primary choice and allows what was asked for; the card says plainly
+    that Approve without tools means the agent can't look anything up.
     A request that ends without a result also leaves a quiet centered line
     in the log, which says why when Oryxa closed it or withheld its answer
     ("Withheld by Oryxa." on the card), and never repeats an agent's

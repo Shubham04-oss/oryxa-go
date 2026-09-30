@@ -768,6 +768,7 @@ function RequestCard({
   const cardRef = useRef<HTMLElement>(null)
   const noteRef = useRef<HTMLInputElement>(null)
   const noteId = useId()
+  const noToolsId = useId()
   const mineAsked = card.requesterId === reader.viewerId
   const agent =
     card.targetAgentName ||
@@ -921,6 +922,11 @@ function RequestCard({
               Add a note
             </button>
           )}
+          {tools && (
+            <p id={noToolsId} className="workspace-side-card-no-tools">
+              Approve without tools means {agent} can’t look anything up.
+            </p>
+          )}
           <div className="workspace-agent-confirmation-actions">
             <button
               className="workspace-agent-pill"
@@ -938,6 +944,7 @@ function RequestCard({
                 className="workspace-agent-pill"
                 type="button"
                 aria-label={`Approve ${agent}'s request from ${requesterName} without tools`}
+                aria-describedby={noToolsId}
                 disabled={card.deciding}
                 onClick={() => decide("approve-bare")}
               >
@@ -950,13 +957,19 @@ function RequestCard({
               className="workspace-agent-pill"
               type="button"
               data-primary="true"
-              aria-label={`Approve ${agent}'s request from ${requesterName}`}
+              aria-label={
+                tools
+                  ? `Approve with tools for ${agent}'s request from ${requesterName}`
+                  : `Approve ${agent}'s request from ${requesterName}`
+              }
               disabled={card.deciding}
               onClick={() => decide("approve")}
             >
               {card.deciding && pressed === "approve"
                 ? "Approving…"
-                : "Approve"}
+                : tools
+                  ? "Approve with tools"
+                  : "Approve"}
             </button>
           </div>
         </div>

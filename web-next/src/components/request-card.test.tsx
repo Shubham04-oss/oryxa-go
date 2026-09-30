@@ -426,11 +426,19 @@ describe("a request that asks for nothing more than approval", () => {
 
     expect(await screen.findByText("Waiting for you to approve.")).toBeTruthy()
     expect(screen.queryByRole("group")).toBeNull()
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Approve Krude's request from Raya Patel",
-      })
-    )
+    const approve = screen.getByRole("button", {
+      name: "Approve with tools for Krude's request from Raya Patel",
+    })
+    expect(approve.textContent).toBe("Approve with tools")
+    expect(approve.getAttribute("data-primary")).toBe("true")
+    const withoutTools = screen.getByRole("button", {
+      name: "Approve Krude's request from Raya Patel without tools",
+    })
+    expect(
+      document.getElementById(withoutTools.getAttribute("aria-describedby")!)
+        ?.textContent
+    ).toBe("Approve without tools means Krude can’t look anything up.")
+    fireEvent.click(approve)
 
     await screen.findByText(
       `Approved in Oryxa by you at ${clockTime("2026-09-29T12:31:00Z")}.`
@@ -506,6 +514,26 @@ describe("a request that asks for nothing more than approval", () => {
       message: "Approved in Oryxa.",
       allowed_tools: [],
     })
+  })
+
+  it("keeps a tool-free request's plain approval, without a second choice", async () => {
+    renderCard(agentRequest({ requested_tools: [] }))
+
+    const approve = await screen.findByRole("button", {
+      name: "Approve Krude's request from Raya Patel",
+    })
+    expect(approve.textContent).toBe("Approve")
+    expect(approve.getAttribute("data-primary")).toBe("true")
+    expect(screen.queryByRole("button", { name: /without tools/ })).toBeNull()
+    expect(screen.queryByText(/can’t look anything up/)).toBeNull()
+  })
+
+  it("shows the approval explanation only to the holder", async () => {
+    renderCard(agentRequest(), { viewer: ASKER })
+
+    await screen.findByText("Waiting for Ada to decide.")
+    expect(screen.queryByRole("button", { name: /Approve/ })).toBeNull()
+    expect(screen.queryByText(/can’t look anything up/)).toBeNull()
   })
 
   it("says why a decision could not be recorded", async () => {
