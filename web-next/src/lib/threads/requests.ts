@@ -1,3 +1,4 @@
+import { isOwnerWritten, needsOwnerReply } from "@/lib/agents/agent-requests"
 import type {
   AgentRequest,
   AgentRequestStatus,
@@ -51,6 +52,28 @@ export function requestCardStatus(
   return status
     ? (recordedStateWords[status] ?? "Request filed")
     : "Request filed"
+}
+
+/**
+ * The line under an asker's request card: where it stands. An ask that needs
+ * its owner's own reply says who it waits on ("Waiting for Ada to reply"), and
+ * an answer the owner wrote says who wrote it ("Ada replied") in place of the
+ * agent's "Answered". `owner` is how the asker calls them (a first name), when
+ * the request says; `entryStatus` is the conversation's own note of it, for
+ * before the request has been read.
+ */
+export function requestCardState(
+  request: AgentRequest | undefined,
+  entryStatus: RequestEntry["status"],
+  owner?: string
+): string {
+  if (request && request.status === "pending" && needsOwnerReply(request)) {
+    return `Waiting for ${owner ?? "the owner"} to reply`
+  }
+  if (request && request.status === "completed" && isOwnerWritten(request)) {
+    return `${owner ?? "The owner"} replied`
+  }
+  return requestCardStatus(request?.status ?? entryStatus)
 }
 
 /** Only published results are shown, even if an older API carries a held draft. */

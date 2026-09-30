@@ -233,6 +233,18 @@ export function afterRespondToAgentRequest(
 }
 
 /**
+ * After `replyToAgentRequest`: caches the request as its owner now reads it
+ * (answered, with their own words) and refreshes both boxes.
+ */
+export function afterReplyToAgentRequest(
+  queryClient: QueryClient,
+  organizationId: string,
+  updated: AgentRequest
+): Promise<void> {
+  return afterAgentRequestChange(queryClient, organizationId, updated)
+}
+
+/**
  * After `updateOrganizationAgent`. Every teamspace embeds the organization
  * agent, and its status decides whether work can be published there, so
  * teamspaces are refreshed too.

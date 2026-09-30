@@ -44,6 +44,17 @@ export type AgentRequestConsent = "summary" | "access"
 export type AgentRequestConsentChoice = AgentRequestConsent | "deny"
 
 /**
+ * What a recorded decision's `consent` may say: how far an approval let the
+ * answer go (`AgentRequestConsent`), or `reply`, the owner answered in their
+ * own words and their agent never ran. `reply` is not a choice of
+ * `POST …/consent`; it has a route of its own (`replyToAgentRequest`).
+ */
+export type AgentRequestDecisionConsent = AgentRequestConsent | "reply"
+
+/** The longest an owner's own reply may be, in characters as Go counts them, once trimmed. */
+export const REPLY_MAX_CHARACTERS = 4000
+
+/**
  * `expired` is computed when read: a pending or approved request past
  * `expires_at`. `review` holds a finished answer the answer guard found
  * personal data in until its target member reviews it (not terminal);
@@ -87,6 +98,13 @@ export type AgentRequestGuard = {
 export type AgentRequestReviewAction = "send" | "send_masked" | "withhold"
 
 /**
+ * What a recorded review says was done: one of the choices above, or `reply`,
+ * the owner wrote their own answer in place of the held one
+ * (`replyToAgentRequest`, which `POST …/review` does not take).
+ */
+export type AgentRequestReviewed = AgentRequestReviewAction | "reply"
+
+/**
  * Who recorded a decision or a review. `kind` is `member` (the addressed
  * member, in their own session on the web or on the notice Oryxa sent them in
  * Slack), `agent`, `system` (Oryxa closing a request), `lease` (Oryxa
@@ -118,7 +136,7 @@ export type AgentRequestDecider = {
  * in its teamspace as it was to be sent.
  */
 export type AgentRequestReview = {
-  action: AgentRequestReviewAction
+  action: AgentRequestReviewed
   decided_by: AgentRequestDecider
   decided_at: string
   reason?: string
@@ -147,8 +165,12 @@ export type AgentRequestDecision = {
   decided_at: string
   /** Who decided: absent from a decision an older build recorded. */
   decided_by?: AgentRequestDecider
-  /** How far the approval let the answer go; absent from a rejection and from an approval that granted neither consent. */
-  consent?: AgentRequestConsent
+  /**
+   * How far the approval let the answer go, or `reply` when the owner
+   * answered in their own words; absent from a rejection and from an approval
+   * that granted neither consent.
+   */
+  consent?: AgentRequestDecisionConsent
 }
 
 export type AgentRequestResult = {
@@ -158,6 +180,12 @@ export type AgentRequestResult = {
   tools_used: string[]
   artifacts: string[]
   completed_at: string
+  /**
+   * The owner wrote this answer themselves (`replyToAgentRequest`): it is
+   * their words, not their agent's. The owner and the asker both read it;
+   * absent from an answer the agent wrote.
+   */
+  written_by_owner?: boolean
 }
 
 /**
@@ -187,6 +215,14 @@ export type AgentRequest = {
    * the owner.
    */
   approval?: "agent" | "owner"
+  /**
+   * Who should answer, judged when it was made: `owner` when answering needs
+   * the owner's own judgment (an approval, decision, plan, commitment or
+   * opinion, rather than a fact they already wrote down), so nothing runs
+   * their agent until they choose to let it; `agent` otherwise. Absent from
+   * older requests, which means `agent`.
+   */
+  answer_by?: "owner" | "agent"
   requester: AgentRequestParty
   target: AgentRequestParty
   purpose: string
@@ -383,6 +419,33 @@ export function asksForConsent(
   )
 }
 
+/**
+ * Whether the request needs its owner's own reply (`answer_by: "owner"`):
+ * nothing runs their agent until they choose to let it. A request that says
+ * nothing, as every older one does, is for the agent.
+ */
+export function needsOwnerReply(
+  request: Pick<AgentRequest, "answer_by">
+): boolean {
+  return request.answer_by === "owner"
+}
+
+/**
+ * Whether the answer is the owner's own words, not their agent's. Go marks
+ * the answer (`result.written_by_owner`); the two records of how it came to be
+ * (`decision.consent: "reply"`, `review.action: "reply"`) say the same, so any
+ * one of them is enough.
+ */
+export function isOwnerWritten(
+  request: Pick<AgentRequest, "result" | "decision" | "review">
+): boolean {
+  return (
+    request.result?.written_by_owner === true ||
+    request.decision?.consent === "reply" ||
+    request.review?.action === "reply"
+  )
+}
+
 /** Where a request was made: a request that names none was an agent's. */
 export function originOf(
   request: Pick<AgentRequest, "origin">
@@ -452,7 +515,7 @@ export type AgentRequestWinner = {
   status: AgentRequestStatus
   revision: number
   decision?: "approved" | "rejected"
-  consent?: AgentRequestConsent
+  consent?: AgentRequestDecisionConsent
   decided_by?: AgentRequestDecider
   decided_at?: string
 }
@@ -508,7 +571,9 @@ export function winnerOf(value: unknown): AgentRequestWinner | undefined {
     status: status as AgentRequestStatus,
     revision,
     ...(decision === "approved" || decision === "rejected" ? { decision } : {}),
-    ...(consent === "summary" || consent === "access" ? { consent } : {}),
+    ...(consent === "summary" || consent === "access" || consent === "reply"
+      ? { consent }
+      : {}),
     ...(isRecord(by) && typeof by.kind === "string"
       ? {
           decided_by: {
@@ -553,17 +618,59 @@ export async function consentAgentRequest(
   )
   return readApiResponse(response, async (current) => {
     if (current.ok) return current.json()
-    if (current.status === 409) {
-      const body = await jsonBody(current.clone())
-      const failure = isRecord(body) && isRecord(body.error) ? body.error : {}
-      if (failure.code === "already_decided") {
-        throw new AgentRequestAlreadyDecided(
-          text(failure.message) ?? "agent request was already decided",
-          isRecord(body) ? winnerOf(body.winner) : undefined
-        )
-      }
+    return refuseOwnerChoice(current)
+  })
+}
+
+/**
+ * What an owner's choice that Go refused throws: `AgentRequestAlreadyDecided`,
+ * carrying the winner, for a 409 `already_decided` (the same shape for
+ * `…/consent` and `…/reply`), and an `ApiError` for every other refusal.
+ */
+async function refuseOwnerChoice(response: Response): Promise<never> {
+  if (response.status === 409) {
+    const body = await jsonBody(response.clone())
+    const failure = isRecord(body) && isRecord(body.error) ? body.error : {}
+    if (failure.code === "already_decided") {
+      throw new AgentRequestAlreadyDecided(
+        text(failure.message) ?? "agent request was already decided",
+        isRecord(body) ? winnerOf(body.winner) : undefined
+      )
     }
-    throw await requestError(current)
+  }
+  throw await requestError(response)
+}
+
+/**
+ * `POST …/agent-requests/{requestID}/reply` (server.replyInteraction): the
+ * owner answers in their own words, in their own session, and their agent
+ * never runs. It is for a request that waits on their decision (it becomes
+ * approved and completed at once, `decision.consent: "reply"`) and for one
+ * whose answer is held for their review (their text replaces it,
+ * `review.action: "reply"`). Either way the answer is `result` with
+ * `written_by_owner` set. `text` is trimmed by Go and is 1 to
+ * `REPLY_MAX_CHARACTERS` characters (a 400 says otherwise). Whoever decides
+ * first wins, here or on the notice in Slack, and a reply that lost throws
+ * `AgentRequestAlreadyDecided` carrying the winner. Other refusals are an
+ * `ApiError`: 403 for one that is not the caller's (or an agent's token),
+ * 404 for one that cannot be read, 409 `request_expired` or `request_closed`.
+ * Answers the request as the owner now reads it.
+ */
+export async function replyToAgentRequest(
+  organizationId: string,
+  requestId: string,
+  replyText: string
+): Promise<AgentRequest> {
+  const response = await apiFetch(
+    requestsPath(organizationId, requestId, "reply"),
+    { method: "POST", body: { text: replyText } }
+  )
+  return readApiResponse(response, async (current) => {
+    if (current.ok) {
+      const answered: { request: AgentRequest } = await current.json()
+      return answered.request
+    }
+    return refuseOwnerChoice(current)
   })
 }
 
@@ -616,7 +723,7 @@ export type AgentActivityEntry = {
   status?: AgentRequestStatus
   /** On a `decided` entry: approved or rejected, how far the answer may go, who decided, where and why. */
   decision?: "approved" | "rejected"
-  consent?: AgentRequestConsent
+  consent?: AgentRequestDecisionConsent
   decided_by?: AgentRequestDecider
   /** On the two lease entries. */
   lease?: AgentLease
