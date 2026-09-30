@@ -93,7 +93,19 @@ A gets a private acknowledgement. An approved answer is posted in the thread, wh
 
 ## Round 2: everyone says yes
 
-H4 turns on background agent access and signs in again. A asks asks 1, 2, 3 and 5 again, and asks 4 once more, and every holder approves. **Pass: five correct answers, each built only from its holder's note.**
+A may have **at most five asks open**, and an unanswered ask stays open for 24 hours. H4's ask from round 1 is still open, so it isn't asked again:
+
+1. H4 turns on background agent access and signs in again.
+2. H4 answers their round-1 prompt with **Summary only**.
+3. A asks asks 1, 2, 3 and 5 again, as new messages, and H1, H2, H3 and H5 each approve.
+
+**Pass: five correct answers, each built only from its holder's note.** Round 1's other asks are closed by then (answered or denied), so A never has more than five open.
+
+**Known gaps, fixed after this test, not before:**
+- Slack identity is only a matching confirmed email. There's no link the member confirms, so a Slack workspace admin could pose as someone.
+- Refused mentions have no per-asker hourly cap.
+
+Both are fine for a controlled test with our own six accounts.
 
 ## The screen tour
 
