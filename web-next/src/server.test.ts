@@ -304,57 +304,44 @@ describe("routing to the Durable Object", () => {
 })
 
 describe("deleting a conversation", () => {
-  it("deletes the thread in Go first, then purges the transcript", async () => {
-    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
-    const response = await send(deleteRequest())
-
-    expect(response.status).toBe(204)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit]
-    expect(String(url)).toBe(goThread)
-    expect(init.method).toBe("DELETE")
-    expect(init.headers).toEqual({ Cookie: cookie, Origin: app })
-    expect(sdk.getAgentByName).toHaveBeenCalledWith(
-      env.ThreadChatAgent,
-      "org_sim~thread_1"
-    )
-    expect(sdk.purgeTranscript).toHaveBeenCalledTimes(1)
+  it("checks ownership, clears the object, then deletes Go's thread", async () => {
+    fetchMock
+      .mockResolvedValueOnce(json({ id: "thread_1", items: [] }, 200))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    expect((await send(deleteRequest())).status).toBe(204)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[1][1]).toEqual({
+      method: "DELETE",
+      headers: { Cookie: cookie, Origin: app },
+    })
     expect(fetchMock.mock.invocationCallOrder[0]).toBeLessThan(
       sdk.purgeTranscript.mock.invocationCallOrder[0]
     )
-    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+    expect(sdk.purgeTranscript.mock.invocationCallOrder[0]).toBeLessThan(
+      fetchMock.mock.invocationCallOrder[1]
+    )
   })
-
-  it("keeps the transcript when Go refuses, and passes Go's answer on", async () => {
-    for (const [status, code] of [
-      [404, "not_found"],
-      [403, "forbidden"],
-      [401, "unauthorized"],
-      [500, "internal"],
-    ] as const) {
-      fetchMock.mockResolvedValueOnce(goError(status, code, "Go's words"))
-      const response = await send(deleteRequest())
-      expect(response.status).toBe(status)
-      expect(await errorOf(response)).toEqual({ code, message: "Go's words" })
+  it("never touches the object when Go refuses ownership", async () => {
+    for (const status of [401, 403, 404]) {
+      fetchMock.mockResolvedValueOnce(
+        goError(status, "not_found", "Go's words")
+      )
+      expect((await send(deleteRequest())).status).toBe(status)
     }
-    expect(sdk.getAgentByName).not.toHaveBeenCalled()
     expect(sdk.purgeTranscript).not.toHaveBeenCalled()
   })
-
-  it("keeps the transcript when Go cannot be reached", async () => {
-    fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"))
-    const response = await send(deleteRequest())
-    expect(response.status).toBe(503)
-    expect(sdk.purgeTranscript).not.toHaveBeenCalled()
-  })
-
-  it("still reports the deletion when the purge after it fails", async () => {
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {})
-    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+  it("keeps Go's thread reachable for a retry when clearing fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
     sdk.purgeTranscript.mockRejectedValueOnce(new Error("overloaded"))
-    const response = await send(deleteRequest())
-    expect(response.status).toBe(204)
-    expect(logged).toHaveBeenCalled()
+    expect((await send(deleteRequest())).status).toBe(503)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it("passes Go's delete refusal after clearing, so canonical history remains", async () => {
+    fetchMock
+      .mockResolvedValueOnce(json({ id: "thread_1", items: [] }, 200))
+      .mockResolvedValueOnce(goError(409, "run_in_progress", "Busy"))
+    expect((await send(deleteRequest())).status).toBe(409)
+    expect(sdk.purgeTranscript).toHaveBeenCalledOnce()
   })
 })
 
@@ -443,7 +430,9 @@ describe("security headers", () => {
       { id: "user_1", role: "user", parts: [] },
     ])
 
-    fetchMock.mockResolvedValueOnce(goError(500, "internal", "Go's words"))
+    fetchMock
+      .mockResolvedValueOnce(json({ id: "thread_1", items: [] }, 200))
+      .mockResolvedValueOnce(goError(500, "internal", "Go's words"))
     const deleted = await send(
       new Request(chat.replace(app, site), {
         method: "DELETE",

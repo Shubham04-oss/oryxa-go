@@ -14,6 +14,7 @@ import {
   publishPrimaryChatActivity,
   rememberChoice,
   rememberedChoice,
+  rememberedView,
   requestPrimaryChat,
   sameChatScope,
   shownThread,
@@ -31,176 +32,94 @@ const now = Date.parse("2026-09-30T10:00:00Z")
 const ago = (ms: number) => new Date(now - ms).toISOString()
 const scope = { organizationId: "org-1", userId: "user-1" }
 
-describe("chooseThread", () => {
-  it("reopens the latest conversation while it's fresh", () => {
-    const threads = [
-      { id: "t2", title: "Plan", updated_at: ago(5 * 60_000), origin: "chat" },
-    ]
-    expect(chooseThread(threads, null, now)).toBe("t2")
-  })
-
-  it("opens a new chat once the latest conversation is an hour old", () => {
-    const threads = [
-      {
-        id: "t2",
-        title: "Plan",
-        updated_at: ago(FRESH_CONVERSATION_MS),
-        origin: "chat",
-      },
-    ]
+describe("opening a conversation", () => {
+  const threads = [
+    { id: "newest", title: "Latest", updated_at: ago(1000), origin: "chat" },
+    { id: "untitled", title: "", updated_at: ago(2000), origin: "chat" },
+    {
+      id: "old",
+      title: "Earlier",
+      updated_at: ago(24 * 60 * 60_000),
+      origin: "chat",
+    },
+  ]
+  it("does not infer member presence from a recently updated conversation", () => {
     expect(chooseThread(threads, null, now)).toBeNull()
+    expect(chooseThread(threads, "old", now)).toBeNull()
   })
-
-  it("opens a new chat when there's no conversation or no readable time", () => {
-    expect(chooseThread([], null, now)).toBeNull()
+  it("reopens a recent history choice only strictly within five minutes", () => {
     expect(
-      chooseThread(
-        [{ id: "t1", title: "Plan", updated_at: "", origin: "chat" }],
-        null,
-        now
-      )
+      chooseThread(threads, "old", now, now - FRESH_CONVERSATION_MS + 1)
+    ).toBe("old")
+    expect(
+      chooseThread(threads, "old", now, now - FRESH_CONVERSATION_MS)
     ).toBeNull()
+    expect(chooseThread(threads, "old", now, now + 1)).toBeNull()
+    expect(chooseThread(threads, "gone", now, now - 1)).toBeNull()
   })
-
-  it("follows the member's choice over freshness", () => {
-    const threads = [
-      { id: "t2", title: "Plan", updated_at: ago(60_000), origin: "chat" },
-      {
-        id: "t1",
-        title: "Plan",
-        updated_at: ago(3 * FRESH_CONVERSATION_MS),
-        origin: "chat",
-      },
-    ]
-    expect(chooseThread(threads, "new", now)).toBeNull()
-    expect(chooseThread(threads, "t1", now)).toBe("t1")
-  })
-
-  it("ignores a chosen conversation that no longer exists", () => {
-    const threads = [
-      { id: "t2", title: "Plan", updated_at: ago(60_000), origin: "chat" },
-    ]
-    expect(chooseThread(threads, "gone", now)).toBe("t2")
-  })
-
-  it("never picks a conversation that isn't a chat", () => {
-    const threads = [
-      { id: "w1", title: "Plan", updated_at: ago(60_000), origin: "wakeup" },
-      { id: "t1", title: "Plan", updated_at: ago(2 * 60_000), origin: "chat" },
-    ]
-    expect(chooseThread(threads, null, now)).toBe("t1")
-  })
-
-  it("skips a conversation with no title, which no message ever went into", () => {
-    const threads = [
-      { id: "t3", title: "", updated_at: ago(60_000), origin: "chat" },
-      { id: "t2", title: "  ", updated_at: ago(2 * 60_000), origin: "chat" },
-      { id: "t1", title: "Plan", updated_at: ago(3 * 60_000), origin: "chat" },
-    ]
-    expect(chooseThread(threads, null, now)).toBe("t1")
-    // Nothing but abandoned starts is no conversation at all.
-    expect(chooseThread(threads.slice(0, 2), null, now)).toBeNull()
-    // One the member chose is theirs to open, title or not.
-    expect(chooseThread(threads, "t3", now)).toBe("t3")
-  })
-
-  it("reads a thread with no origin as a chat, as Go does", () => {
-    const threads = [
-      { id: "t1", title: "Plan", updated_at: ago(60_000), origin: "" },
-    ]
-    expect(chooseThread(threads, null, now)).toBe("t1")
-  })
-})
-
-describe("openingThread", () => {
-  const old = (id: string, origin = "chat") => ({
-    id,
-    title: "Plan",
-    updated_at: ago(3 * FRESH_CONVERSATION_MS),
-    origin,
-  })
-
-  it("asks nothing when the member's choice or freshness decides", async () => {
+  it("keeps a recent conversation or explicit New over a pending approval", async () => {
     const waiting = vi.fn(async () => true)
-    const fresh = [
-      { id: "t2", title: "Plan", updated_at: ago(60_000), origin: "chat" },
-    ]
     expect(
-      await openingThread({ threads: fresh, choice: null, now, waiting })
-    ).toBe("t2")
+      await openingThread({
+        threads,
+        choice: "old",
+        leftAt: now - 1,
+        now,
+        waiting,
+      })
+    ).toBe("old")
     expect(
-      await openingThread({ threads: [old("t1")], choice: "t1", now, waiting })
-    ).toBe("t1")
-    expect(
-      await openingThread({ threads: fresh, choice: "new", now, waiting })
-    ).toBeNull()
-    expect(
-      await openingThread({ threads: [], choice: null, now, waiting })
+      await openingThread({
+        threads,
+        choice: "new",
+        leftAt: now - 1,
+        now,
+        waiting,
+      })
     ).toBeNull()
     expect(waiting).not.toHaveBeenCalled()
   })
-
-  it("keeps an old latest conversation open only while it waits on the member", async () => {
-    const threads = [old("t2"), old("t1")]
-    const waits = vi.fn(async (id: string) => id === "t2")
-    expect(
-      await openingThread({ threads, choice: null, now, waiting: waits })
-    ).toBe("t2")
-    expect(waits).toHaveBeenCalledExactlyOnceWith("t2")
-
-    // Only the latest is asked about, not the older ones.
-    const nothing = vi.fn(async () => false)
-    expect(
-      await openingThread({ threads, choice: null, now, waiting: nothing })
-    ).toBeNull()
-    expect(nothing).toHaveBeenCalledExactlyOnceWith("t2")
-  })
-
-  it("asks about the latest titled chat, not an abandoned start", async () => {
-    const waiting = vi.fn(async () => true)
-    const threads = [{ ...old("t2"), title: "" }, old("t1")]
-    expect(await openingThread({ threads, choice: null, now, waiting })).toBe(
-      "t1"
-    )
-    expect(waiting).toHaveBeenCalledExactlyOnceWith("t1")
-  })
-
-  it("asks about the latest chat, not an update from the member's apps", async () => {
-    const waiting = vi.fn(async () => true)
-    const threads = [old("w1", "wakeup"), old("t1")]
-    expect(await openingThread({ threads, choice: null, now, waiting })).toBe(
-      "t1"
-    )
-    expect(waiting).toHaveBeenCalledExactlyOnceWith("t1")
+  it("scans every real chat and picks the newest pending, including untitled chats", async () => {
+    const waiting = vi.fn(async (id: string) => id !== "newest")
     expect(
       await openingThread({
-        threads: [old("w1", "wakeup")],
+        threads: [
+          threads[2],
+          { id: "wakeup", title: "Apps", updated_at: ago(0), origin: "wakeup" },
+          threads[0],
+          threads[1],
+        ],
+        choice: "old",
+        leftAt: now - FRESH_CONVERSATION_MS,
+        now,
+        waiting,
+      })
+    ).toBe("untitled")
+    expect(waiting.mock.calls.map(([id]) => id)).toEqual([
+      "newest",
+      "untitled",
+      "old",
+    ])
+  })
+  it("opens New when every check fails or nothing waits, including a stale New choice", async () => {
+    expect(
+      await openingThread({
+        threads,
+        choice: "new",
+        leftAt: now - FRESH_CONVERSATION_MS,
+        now,
+        waiting: async () => false,
+      })
+    ).toBeNull()
+    expect(
+      await openingThread({
+        threads,
         choice: null,
         now,
-        waiting,
+        waiting: async () => {
+          throw new Error("offline")
+        },
       })
-    ).toBeNull()
-    expect(waiting).toHaveBeenCalledOnce()
-  })
-
-  it("falls back to the latest when the chosen conversation is gone", async () => {
-    const waiting = vi.fn(async () => true)
-    expect(
-      await openingThread({
-        threads: [old("t1")],
-        choice: "gone",
-        now,
-        waiting,
-      })
-    ).toBe("t1")
-  })
-
-  it("opens a new chat when the check itself fails", async () => {
-    const waiting = vi.fn(async () => {
-      throw new Error("offline")
-    })
-    expect(
-      await openingThread({ threads: [old("t1")], choice: null, now, waiting })
     ).toBeNull()
   })
 })
@@ -963,10 +882,10 @@ describe("what the primary chat remembers", () => {
     const remembered = () => rememberedChoice(scope, "agt_leo")
     expect(remembered()).toBeNull()
 
-    // The rules' decision is not the member's.
+    // Automatic opens are last-viewed conversations too.
     const decided = run([{ type: "decide", thread: "t1" }])
     rerender({ chat: decided })
-    expect(remembered()).toBeNull()
+    expect(remembered()).toBe("t1")
 
     // A message asked for from elsewhere: a blank chat, then its conversation.
     const asked = run([ask(1, { kind: "new", message: "Hi" })], decided)
@@ -996,5 +915,89 @@ describe("what the primary chat remembers", () => {
     renderHook(() => useRememberedChoice(chat, undefined, "agt_leo"))
     renderHook(() => useRememberedChoice(chat, scope, undefined))
     expect(window.sessionStorage.length).toBe(0)
+  })
+})
+
+describe("last viewed timestamps", () => {
+  afterEach(() => {
+    window.sessionStorage.clear()
+    vi.useRealTimers()
+  })
+  it("records a real leave and never extends a hidden panel's grace", () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(now)
+    const chat = { ...initialPrimaryChat(), thread: "old" }
+    const hook = renderHook(
+      ({ visible }) => useRememberedChoice(chat, scope, "agent", visible),
+      { initialProps: { visible: true } }
+    )
+    expect(rememberedView(scope, "agent")?.leftAt).toBe(now)
+    vi.setSystemTime(now + 1000)
+    hook.rerender({ visible: false })
+    expect(rememberedView(scope, "agent")?.leftAt).toBe(now + 1000)
+    vi.setSystemTime(now + FRESH_CONVERSATION_MS + 1000)
+    act(() => {
+      document.dispatchEvent(new Event("pointerdown"))
+      window.dispatchEvent(new Event("pagehide"))
+    })
+    expect(rememberedView(scope, "agent")?.leftAt).toBe(now + 1000)
+  })
+  it("treats a legacy unbounded choice as stale", () => {
+    window.sessionStorage.setItem("oryxa.chat.org-1.user-1.agent", "old")
+    expect(rememberedView(scope, "agent")).toBeNull()
+  })
+})
+
+describe("automatic blank views", () => {
+  afterEach(() => {
+    window.sessionStorage.clear()
+    vi.useRealTimers()
+  })
+  it("does not keep automatic New over an approval that arrives before reload", async () => {
+    const blank = { ...initialPrimaryChat(), thread: null }
+    const hook = renderHook(() => useRememberedChoice(blank, scope, "agent"))
+    expect(rememberedView(scope, "agent")).toBeNull()
+    hook.unmount()
+    const stored = rememberedView(scope, "agent")
+    expect(
+      await openingThread({
+        threads: [{ id: "pending", title: "", updated_at: ago(1000) }],
+        choice: stored?.choice ?? null,
+        leftAt: stored?.leftAt,
+        now,
+        waiting: async () => true,
+      })
+    ).toBe("pending")
+  })
+  it("does not refresh a hidden tab's timestamp on late pagehide or cleanup", () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(now)
+    let visibility: DocumentVisibilityState = "visible"
+    const original = Object.getOwnPropertyDescriptor(
+      document,
+      "visibilityState"
+    )
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibility,
+    })
+    const hook = renderHook(() =>
+      useRememberedChoice(
+        { ...initialPrimaryChat(), thread: "old" },
+        scope,
+        "agent"
+      )
+    )
+    vi.setSystemTime(now + 1000)
+    visibility = "hidden"
+    act(() => document.dispatchEvent(new Event("visibilitychange")))
+    vi.setSystemTime(now + 10 * FRESH_CONVERSATION_MS)
+    act(() => window.dispatchEvent(new Event("pagehide")))
+    hook.unmount()
+    expect(rememberedView(scope, "agent")?.leftAt).toBe(now + 1000)
+    if (original) Object.defineProperty(document, "visibilityState", original)
+    else
+      delete (document as unknown as { visibilityState?: string })
+        .visibilityState
   })
 })

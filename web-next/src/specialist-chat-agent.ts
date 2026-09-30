@@ -16,11 +16,16 @@ import {
 import type { RefusalWords, RelayWords } from "./chat-relay"
 import {
   readableSpecialistStream,
+  readableSpecialistItems,
   specialistAgentName,
   withoutProgressMarkers,
 } from "./lib/specialists/chat-messages"
 import type { SpecialistChatState } from "./lib/specialists/chat-messages"
-import { itemPart, withoutSupersededDeltas } from "./lib/threads/chat-messages"
+import {
+  reconcileChatMessages,
+  itemPart,
+  withoutSupersededDeltas,
+} from "./lib/threads/chat-messages"
 import type { ThreadChatMessage } from "./lib/threads/chat-messages"
 import { runRequestBody } from "./lib/threads/client"
 import type { Item, RunInput } from "./lib/threads/client"
@@ -205,8 +210,8 @@ function isChatClear(message: WSMessage): boolean {
  * the page can read Go's copy with `getSpecialistThread`) and sends it as
  * `thread_id` on every later run. Starting over (the Worker's DELETE, or
  * useAgentChat's `clearHistory()`) clears the transcript and forgets the id,
- * so the next message starts a new conversation. Go keeps the old one: it
- * has no route that deletes a specialist conversation, so nothing here can.
+ * so the next message starts a new conversation. Go keeps the old one until the member deletes its history item. Selecting
+ * history restores canonical readable Go messages and the exact thread id.
  *
  * Only the specialist's owner reaches it: the Worker routes a socket only
  * once Go answers `GET …/agents/{agent}` for the member's cookie, and Go
@@ -247,6 +252,28 @@ export class SpecialistChatAgent extends AIChatAgent<
     await this.sessions.session().clearMessages()
     await this.persistMessages([])
     this.forgetConversation()
+  }
+
+  /** Restore a Go-authorized history conversation, and fan it out to every view. */
+  async selectConversation(
+    threadId: string | null,
+    items: Item[]
+  ): Promise<boolean> {
+    if (this.state.threadId === threadId) return true
+    if (!(await this.waitUntilStable({ timeout: 1 }))) return false
+    this.resetTurnState()
+    await this.sessions.session().clearMessages()
+    this.setState({ threadId })
+    await this.persistMessages(
+      reconcileChatMessages([], readableSpecialistItems(items))
+    )
+    return true
+  }
+
+  /** Clear only the named conversation before Go deletes it; another open chat stays put. */
+  async removeConversation(threadId: string): Promise<boolean> {
+    if (this.state.threadId !== threadId) return true
+    return this.selectConversation(null, [])
   }
 
   /** Continues `threadId` from now on. */

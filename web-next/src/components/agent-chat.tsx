@@ -2,19 +2,19 @@ import {
   Fragment,
   Suspense,
   useEffect,
-  useEffectEvent,
   useId,
   useMemo,
   useRef,
   useState,
 } from "react"
 import type { Dispatch, ReactElement } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import { useHydrated } from "@tanstack/react-router"
 import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { useAgent } from "agents/react"
 import { Expand, SquarePen } from "lucide-react"
+import { AgentChatHistory } from "./agent-chat-history"
 import { AgentComposer } from "./agent-composer"
 import { AgentActivity, AgentTimeline } from "./agent-timeline"
 import { AgentConversation } from "./agent-conversation"
@@ -22,12 +22,13 @@ import { ApiError } from "@/lib/api/client"
 import { getSession } from "@/lib/auth/client"
 import { reopenSocket } from "@/lib/threads/agent-socket"
 import {
-  FRESH_CONVERSATION_MS,
   PRIMARY_DRAFT,
   firstMessage,
   openingThread,
   publishPrimaryChatActivity,
-  rememberedChoice,
+  rememberedView,
+  chatHistory,
+  useRememberedView,
   shownThread,
 } from "@/lib/threads/chat-choice"
 import type {
@@ -46,12 +47,17 @@ import {
 import type { ThreadChatMessage } from "@/lib/threads/chat-messages"
 import {
   createThread,
+  deleteThreadChat,
   getThreadChatMessages,
   threadDetailQueryOptions,
   threadKeys,
   threadListQueryOptions,
 } from "@/lib/threads/client"
-import type { ConfirmationAnswer, Thread } from "@/lib/threads/client"
+import type {
+  ConfirmationAnswer,
+  Thread,
+  ThreadDetail,
+} from "@/lib/threads/client"
 import { buildTimeline, pendingConfirmationIds } from "@/lib/threads/timeline"
 import type { ArtifactEntry } from "@/lib/threads/timeline"
 import { socketProtocol } from "@/lib/socket-protocol"
@@ -146,9 +152,9 @@ async function waitsOnMember(
 
 /**
  * The Agents tab's chat with the member's primary agent. It opens the
- * conversation the member chose in this browser session, or their latest one
- * while it is fresh or still waits on them, and otherwise a new one that
- * their first message starts (chat-choice.ts). It runs through the thread's
+ * last view in this tab for less than five minutes, then the newest one waiting
+ * on their approval, otherwise a new one that their first message starts.
+ * While mounted it keeps the open conversation (chat-choice.ts). It runs through the thread's
  * Durable Object (REALTIME.md), in the browser only.
  *
  * What it is on, what waits to be opened or sent, and the unsent messages are
@@ -165,6 +171,7 @@ export function AgentChat({
   onComposingChange,
   onOpenOverview,
   inOverview = false,
+  visible = true,
   onFileCreated,
   getScreenContext,
 }: {
@@ -183,6 +190,7 @@ export function AgentChat({
   onComposingChange: (composing: boolean) => void
   onOpenOverview?: () => void
   inOverview?: boolean
+  visible?: boolean
   onFileCreated?: (file: {
     threadId: string
     name: string
@@ -200,6 +208,33 @@ export function AgentChat({
   // member's list has loaded.
   const listed = threads.data !== undefined
   const threadId = shownThread(chat)
+  useRememberedView(
+    threadId,
+    scope,
+    agentId,
+    visible,
+    chat.chosen || firstMessage(chat) !== null
+  )
+  const history = chatHistory(threads.data ?? [])
+  const historyDetails = useQueries({
+    queries: history.map((thread) => ({
+      ...threadDetailQueryOptions(organizationId, thread.id),
+      staleTime: 10_000,
+      refetchInterval: (query: { state: { data?: ThreadDetail } }) =>
+        (query.state.data?.pending_confirmations.length ?? 0) > 0
+          ? 10_000
+          : false,
+      enabled: hydrated && visible,
+    })),
+  })
+  const approvals = new Set(
+    history
+      .filter(
+        (_, i) =>
+          (historyDetails[i].data?.pending_confirmations.length ?? 0) > 0
+      )
+      .map((thread) => thread.id)
+  )
   const first = firstMessage(chat)
   const draft = chat.drafts[PRIMARY_DRAFT] ?? ""
   const onDraftChange = (text: string) =>
@@ -243,17 +278,19 @@ export function AgentChat({
   }, [threadId, listed, state, scopeOrganization, scopeUser])
   useEffect(() => () => publishPrimaryChatActivity(null), [])
 
-  // Once the list is here: the member's choice, else the latest conversation
-  // while it is fresh, else (after asking Go) one that still waits on them.
+  // Once the list is here: a last view younger than five minutes, otherwise
+  // the newest pending approval, otherwise New chat.
   // Unless something else moved the chat while this was asked: the reducer
   // takes a decision only for a chat still undecided.
   useEffect(() => {
     if (threadId !== undefined || !threads.data) return
     if (scope && !agentId) return
     let stale = false
+    const remembered = scope && agentId ? rememberedView(scope, agentId) : null
     void openingThread({
       threads: threads.data,
-      choice: scope && agentId ? rememberedChoice(scope, agentId) : null,
+      choice: remembered?.choice ?? null,
+      leftAt: remembered?.leftAt,
       now: Date.now(),
       waiting: (id) => waitsOnMember(queryClient, organizationId, id),
     }).then((chosen) => {
@@ -397,9 +434,6 @@ export function AgentChat({
             })
           }}
           onFileCreated={onFileCreated}
-          onIdle={startNew}
-          inOverview={inOverview}
-          touched={chat.touched}
           onStateChange={(id, next) =>
             setReported({ threadId: id, state: next })
           }
@@ -476,16 +510,44 @@ export function AgentChat({
           </button>
         )}
         <button
-          className="workspace-agent-new"
+          className="workspace-agent-new workspace-agent-new-chat"
           type="button"
           aria-label="New conversation"
           title="New conversation"
-          disabled={!threadId || first !== null}
+          disabled={first !== null}
           onClick={startNew}
         >
-          <SquarePen size={15} strokeWidth={1.7} />
+          <SquarePen size={15} strokeWidth={1.7} /> New chat
         </button>
       </div>
+      <AgentChatHistory
+        threads={history}
+        selected={threadId}
+        waiting={approvals}
+        loading={threads.isPending}
+        error={
+          threads.isError
+            ? failureText(threads.error, "Couldn't load your conversations.")
+            : undefined
+        }
+        onRetry={() => void threads.refetch()}
+        disabled={first !== null || state === "running"}
+        onOpen={(id) => dispatch({ type: "move", thread: id })}
+        onDelete={async (id) => {
+          await deleteThreadChat(organizationId, id)
+          await queryClient.cancelQueries({ queryKey: list.queryKey })
+          queryClient.setQueryData<Thread[]>(list.queryKey, (old) =>
+            old?.filter((thread) => thread.id !== id)
+          )
+          queryClient.removeQueries({
+            queryKey: threadKeys.detail(organizationId, id),
+          })
+          if (threadId === id) startNew()
+          void queryClient.invalidateQueries({
+            queryKey: threadKeys.list(organizationId),
+          })
+        }}
+      />
       {body}
     </>
   )
@@ -645,9 +707,6 @@ function ThreadChat({
   onDraftChange,
   onComposingChange,
   onFileCreated,
-  onIdle,
-  inOverview,
-  touched,
   onStateChange,
 }: ComposerHandlers & {
   organizationId: string
@@ -661,11 +720,8 @@ function ThreadChat({
   onPendingTaken: () => void
   onMissing: () => void
   /** The member came back to a conversation left alone for an hour: the chat moves on to a new one. */
-  onIdle: () => void
   /** The focused Agent overview is open, with its viewer or editor: the member is at work in it. */
-  inOverview: boolean
   /** Counts what the member or the app just did here (a request, a first message), such as opening the conversation already open. */
-  touched: number
   /** What this thread is doing: a run streams, a confirmation waits on the member, or neither. */
   onStateChange: (threadId: string, state: ChatState) => void
   onFileCreated?: (file: {
@@ -695,7 +751,6 @@ function ThreadChat({
     retried: boolean
   }>({ expired: false, retried: false })
   // When this conversation was last opened, sent to or heard from.
-  const lastActivity = useRef(Date.now())
 
   const agent = useAgent({
     protocol: socketProtocol(),
@@ -768,7 +823,6 @@ function ThreadChat({
   }
 
   function send(text: string, screen = getScreenContext?.()) {
-    lastActivity.current = Date.now()
     setRunError("")
     const body = screen ? { screen_context: screen } : undefined
     lastSend.current = { body, expired: false, retried: false }
@@ -782,7 +836,6 @@ function ThreadChat({
   }
 
   function answer(answers: ConfirmationAnswer[]) {
-    lastActivity.current = Date.now()
     setRunError("")
     setSubmitted((current) => {
       const next = { ...current }
@@ -912,52 +965,6 @@ function ThreadChat({
     : actionable.size > 0
       ? "waiting"
       : "idle"
-  // A tab left open overnight comes back to a new chat rather than
-  // yesterday's: when it shows again (its tab visible, its window focused)
-  // after an hour with nothing done here, and nothing streaming or waiting
-  // on the member. Nothing is deleted. What counts as something done is what
-  // the member does anywhere in the app: sending, hearing an answer, opening
-  // this conversation (even when it is already open: a request for it), and
-  // pointer and keyboard in the page. A file's viewer or editor is a frame of
-  // its own that takes the pointer and the keys, and focus coming back from it
-  // is not the member returning: while the focused Agent overview is open the
-  // chat is never left, and closing it starts the hour afresh.
-  // How much the conversation holds, so that a reconnect handing over the
-  // same messages again is not taken for something heard.
-  const said = useMemo(
-    () =>
-      chat.messages.reduce((total, item) => total + 1 + item.parts.length, 0),
-    [chat.messages]
-  )
-  useEffect(() => {
-    lastActivity.current = Date.now()
-  }, [said, running, touched, inOverview])
-  const cameBack = useEffectEvent(() => {
-    if (document.visibilityState === "hidden") return
-    if (running || actionable.size > 0 || pending || inOverview) return
-    if (Date.now() - lastActivity.current < FRESH_CONVERSATION_MS) return
-    onIdle()
-  })
-  useEffect(() => {
-    const onReturn = () => cameBack()
-    const onActivity = () => {
-      lastActivity.current = Date.now()
-    }
-    document.addEventListener("visibilitychange", onReturn)
-    window.addEventListener("focus", onReturn)
-    const options = { capture: true, passive: true }
-    for (const type of ["pointerdown", "keydown", "wheel"]) {
-      document.addEventListener(type, onActivity, options)
-    }
-    return () => {
-      document.removeEventListener("visibilitychange", onReturn)
-      window.removeEventListener("focus", onReturn)
-      for (const type of ["pointerdown", "keydown", "wheel"]) {
-        document.removeEventListener(type, onActivity, options)
-      }
-    }
-  }, [])
-
   // Said as it changes, and taken back when this thread's chat goes, so a
   // later visit doesn't start from what it last said.
   useEffect(() => {

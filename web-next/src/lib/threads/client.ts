@@ -235,8 +235,8 @@ export function threadChatPath(
 
 /**
  * DELETE /agents/thread-chat-agent/{org}~{thread}: the Worker (src/server.ts)
- * forwards Go's DELETE and, only once Go has deleted the thread, clears the
- * Durable Object's stored transcript; it answers with Go's response, so a
+ * checks ownership with Go, clears the Durable Object's transcript, then
+ * forwards Go's DELETE; it answers with Go's response, so a
  * refusal carries Go's code. Not a Go route. Delete through this whenever
  * the conversation used the Durable Object.
  */

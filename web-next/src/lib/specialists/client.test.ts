@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { QueryClient } from "@tanstack/react-query"
 import {
   clearSpecialistChat,
+  deleteSpecialistThread,
+  selectSpecialistChat,
   getSpecialistChatMessages,
   getSpecialistThread,
   listSpecialistThreads,
@@ -357,6 +359,41 @@ describe("the specialist chat's Durable Object", () => {
     await clearSpecialistChat("org_1", "agt_sales")
     expect(fetchMock).toHaveBeenCalledWith(
       "/agents/specialist-chat-agent/org_1~agt_sales",
+      expect.objectContaining({ method: "DELETE", credentials: "include" })
+    )
+  })
+})
+
+describe("specialist history writes", () => {
+  it("selects an exact thread (or explicit New) through the checked live object", async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetcher)
+    await selectSpecialistChat("org_1", "agt_sales", "old")
+    await selectSpecialistChat("org_1", "agt_sales", null)
+    expect(fetcher.mock.calls).toEqual([
+      [
+        "/agents/specialist-chat-agent/org_1~agt_sales/conversation",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ thread_id: "old" }),
+          credentials: "include",
+        }),
+      ],
+      [
+        "/agents/specialist-chat-agent/org_1~agt_sales/conversation",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ thread_id: null }),
+        }),
+      ],
+    ])
+  })
+  it("deletes through the object so clearing happens before Go removes access", async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetcher)
+    await deleteSpecialistThread("org_1", "agt_sales", "old")
+    expect(fetcher).toHaveBeenCalledWith(
+      "/agents/specialist-chat-agent/org_1~agt_sales/threads/old",
       expect.objectContaining({ method: "DELETE", credentials: "include" })
     )
   })

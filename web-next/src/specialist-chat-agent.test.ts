@@ -573,6 +573,7 @@ function records(agent: SpecialistChatAgent) {
     calls: Array<string>
     sdkMessages: Array<unknown>
     stored: unknown
+    clearMessages: ReturnType<typeof vi.fn>
     waitUntilStable: ReturnType<typeof vi.fn>
     persistMessages: ReturnType<typeof vi.fn>
     setState: ReturnType<typeof vi.fn>
@@ -769,5 +770,46 @@ describe("SpecialistChatAgent", () => {
     expect(() =>
       agent.validateStateChange({ threadId: "agent_thread_9" }, "server")
     ).not.toThrow()
+  })
+})
+
+describe("specialist history selection", () => {
+  it("restores canonical history as readable messages and broadcasts its exact conversation", async () => {
+    const agent = makeAgent()
+    agent.setState({ threadId: "agent_thread_1" })
+    const old = [
+      {
+        type: "message" as const,
+        id: "old",
+        author: "member",
+        text: "Earlier question",
+      },
+    ]
+    expect(await agent.selectConversation("agent_thread_2", old)).toBe(true)
+    const recorded = records(agent)
+    expect(recorded.clearMessages).toHaveBeenCalledOnce()
+    expect(recorded.persistMessages).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ role: "user" })])
+    )
+    expect(agent.state).toEqual({ threadId: "agent_thread_2" })
+  })
+  it("refuses switching a chat while a stream is still active", async () => {
+    const agent = makeAgent()
+    agent.setState({ threadId: "agent_thread_1" })
+    const recorded = records(agent)
+    recorded.waitUntilStable.mockResolvedValueOnce(false)
+    expect(await agent.selectConversation(null, [])).toBe(false)
+    expect(recorded.waitUntilStable).toHaveBeenCalledWith({ timeout: 1 })
+    expect(recorded.clearMessages).not.toHaveBeenCalled()
+    expect(agent.state).toEqual({ threadId: "agent_thread_1" })
+  })
+  it("leaves the current live chat alone when deleting another history item", async () => {
+    const agent = makeAgent()
+    agent.setState({ threadId: "agent_thread_1" })
+    expect(await agent.removeConversation("agent_thread_2")).toBe(true)
+    expect(records(agent).clearMessages).not.toHaveBeenCalled()
+    expect(agent.state).toEqual({ threadId: "agent_thread_1" })
+    expect(await agent.removeConversation("agent_thread_1")).toBe(true)
+    expect(agent.state).toEqual({ threadId: null })
   })
 })

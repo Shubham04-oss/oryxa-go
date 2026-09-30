@@ -12,6 +12,8 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
+import { SpecialistChat } from "./specialist-chat"
+import { rememberChoice } from "@/lib/threads/chat-choice"
 import { AgentsFocus } from "./agents-mode"
 import {
   ORG,
@@ -178,6 +180,7 @@ function conversationTitle() {
 beforeEach(() => {
   roomSockets.reset()
   agentChats.reset()
+  window.sessionStorage.clear()
   vi.stubGlobal("matchMedia", () => ({
     matches: false,
     addEventListener: vi.fn(),
@@ -616,9 +619,9 @@ describe("Starting over", () => {
     await waitFor(() =>
       expect(backend.writes()).toEqual([
         {
-          method: "DELETE",
-          path: `/agents/specialist-chat-agent/${scoutChat}`,
-          body: undefined,
+          method: "PUT",
+          path: `/agents/specialist-chat-agent/${scoutChat}/conversation`,
+          body: { thread_id: null },
         },
       ])
     )
@@ -631,7 +634,7 @@ describe("Starting over", () => {
     expect(
       within(log).getByText("Ask anything to start a conversation.")
     ).toBeTruthy()
-    expect(startOver.hasAttribute("disabled")).toBe(true)
+    expect(startOver.hasAttribute("disabled")).toBe(false)
     expect(backend.state.agents.map((entry) => entry.id)).toContain(scout.id)
   })
 
@@ -643,7 +646,7 @@ describe("Starting over", () => {
     renderFocus(backend)
     await chatLoaded()
     chatSocket().open()
-    backend.failNext("DELETE", /specialist-chat-agent/, {
+    backend.failNext("PUT", /specialist-chat-agent/, {
       status: 503,
       code: "unavailable",
       message: "Your specialist's conversation is unavailable.",
@@ -919,5 +922,93 @@ describe("Deleting a specialist", () => {
         .hasAttribute("disabled")
     ).toBe(true)
     expect(backend.writes()).toEqual([])
+  })
+})
+
+describe("specialist history and the default conversation", () => {
+  const chatScope = { organizationId: ORG, userId: VIEWER }
+  function renderOwn(backend: FakeAgentsBackend) {
+    vi.stubGlobal("fetch", vi.fn(backend.fetch))
+    return withQueries(
+      <SpecialistChat
+        organizationId={ORG}
+        specialist={scout}
+        scope={chatScope}
+        layout="focus"
+      />
+    )
+  }
+  it("restores a recent history pick ahead of a different pending approval and keeps the draft", async () => {
+    rememberChoice(chatScope, scout.id, "old")
+    const backend = fakeAgentsBackend({
+      agents: [primary, scout],
+      conversations: {
+        [scout.id]: [
+          conversation({ id: "pending", pending_confirmations: ["approval"] }),
+          conversation({
+            id: "old",
+            title: "Earlier work",
+            updated_at: new Date(Date.now() - HOUR).toISOString(),
+          }),
+        ],
+      },
+    })
+    renderOwn(backend)
+    await chatLoaded()
+    chatSocket().open()
+    chatSocket().state({ threadId: "pending" })
+    await waitFor(() =>
+      expect(backend.writes()).toContainEqual({
+        method: "PUT",
+        path: `/agents/specialist-chat-agent/${scoutChat}/conversation`,
+        body: { thread_id: "old" },
+      })
+    )
+    chatSocket().state({ threadId: "old" })
+    const composer = screen.getByRole("textbox", { name: "Message Scout" })
+    await waitFor(() => expect(composer.hasAttribute("disabled")).toBe(false))
+    fireEvent.change(composer, { target: { value: "Keep the draft" } })
+    fireEvent.click(screen.getByRole("button", { name: "History" }))
+    expect(await screen.findByText(/Needs approval/)).toBeTruthy()
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Review the pipeline.*Needs approval/,
+      })
+    )
+    await waitFor(() =>
+      expect(backend.writes()).toContainEqual({
+        method: "PUT",
+        path: `/agents/specialist-chat-agent/${scoutChat}/conversation`,
+        body: { thread_id: "pending" },
+      })
+    )
+    chatSocket().state({ threadId: "pending" })
+    expect((composer as HTMLTextAreaElement).value).toBe("Keep the draft")
+  })
+  it("ignores a history pick at the five-minute boundary and opens the newest pending conversation", async () => {
+    rememberChoice(chatScope, scout.id, "old", Date.now() - 5 * 60_000)
+    const backend = fakeAgentsBackend({
+      agents: [primary, scout],
+      conversations: {
+        [scout.id]: [
+          conversation({ id: "pending", pending_confirmations: ["approval"] }),
+          conversation({
+            id: "old",
+            updated_at: new Date(Date.now() - HOUR).toISOString(),
+          }),
+        ],
+      },
+    })
+    renderOwn(backend)
+    await chatLoaded()
+    chatSocket().open()
+    chatSocket().state({ threadId: "old" })
+    await waitFor(() =>
+      expect(backend.writes()).toContainEqual({
+        method: "PUT",
+        path: `/agents/specialist-chat-agent/${scoutChat}/conversation`,
+        body: { thread_id: "pending" },
+      })
+    )
   })
 })

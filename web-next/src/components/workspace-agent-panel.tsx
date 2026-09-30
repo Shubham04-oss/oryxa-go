@@ -40,7 +40,6 @@ import {
   primaryChatReducer,
   shownThread,
   usePrimaryChatRequest,
-  useRememberedChoice,
 } from "@/lib/threads/chat-choice"
 import type {
   ChatScope,
@@ -339,7 +338,6 @@ export function WorkspaceAgentPanel({
         : { type: "request", request, screen }
     )
   }, [request, scope, chatAgent])
-  useRememberedChoice(chat, scope, chatAgent)
 
   // A rail button unmounts as the panel opens, so its focus moves to the tab
   // it opened rather than falling back to the page.
@@ -601,6 +599,7 @@ export function WorkspaceAgentPanel({
                 >
                   <AgentsView
                     organizationId={organizationId}
+                    visible={agentsVisible}
                     scope={scope}
                     owner={owner}
                     chatAgent={chatAgent}
@@ -783,6 +782,7 @@ function AgentsTabSide({
  * (REALTIME.md).
  */
 function AgentsView({
+  visible,
   organizationId,
   scope,
   owner,
@@ -801,6 +801,7 @@ function AgentsView({
   onPrimaryFileCreated,
   getScreenContext,
 }: {
+  visible: boolean
   organizationId?: string
   scope?: ChatScope
   /** Whose page this is (see the panel): the chat is theirs, and a new one is made for the next member. */
@@ -870,6 +871,8 @@ function AgentsView({
         <SpecialistChat
           key={inUse.id}
           layout="panel"
+          scope={scope}
+          visible={visible}
           organizationId={organizationId}
           specialist={inUse}
           missing={agents !== undefined && !listed}
@@ -885,6 +888,7 @@ function AgentsView({
           key={owner}
           organizationId={organizationId}
           scope={scope}
+          visible={visible}
           agentId={chatAgent}
           agentName={agentName}
           chat={chat}

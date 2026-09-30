@@ -28,6 +28,7 @@ import {
   MAX_WAITING_MESSAGES,
   claimPrimaryChatRequest,
   rememberedChoice,
+  rememberChoice,
   requestPrimaryChat,
   usePrimaryChatActivity,
   usePrimaryChatRequest,
@@ -84,6 +85,8 @@ type Seed = {
   pending?: Record<string, string[]>
   /** The first thread made; later ones are `th_new_2`, `th_new_3` and so on. */
   created?: Thread
+  /** Transport fixtures resume their own explicitly viewed conversation. */
+  rememberLatest?: boolean
 }
 
 /** A call that starts a conversation. */
@@ -95,6 +98,18 @@ const START = `POST /v1/organizations/${ORG}/threads`
  * it is released; `failNextCreate` makes the next start fail.
  */
 function stubGo(seed: Seed = {}) {
+  if (seed.rememberLatest !== false) {
+    for (const [userId, list] of Object.entries(
+      seed.lists ?? { [VIEWER]: seed.threads ?? [] }
+    )) {
+      const last = list.find(
+        (item) =>
+          item.title.trim() && Date.now() - Date.parse(item.updated_at) < HOUR
+      )
+      if (last)
+        rememberChoice({ organizationId: ORG, userId }, primary.id, last.id)
+    }
+  }
   const backend = fakeAgentsBackend({ agents: [primary, scout] })
   let threads = seed.threads ?? []
   let made = 0
@@ -328,6 +343,10 @@ describe("what the agents' chats keep across a switch", () => {
     // holds where the chat was.
     stubGo({ threads: [thread("th_1", "Plan the launch")] })
     withQueries(panel({ directMessages: undefined }))
+    fireEvent.click(await screen.findByRole("button", { name: "History" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Plan the launch/ })
+    )
     ;(await socketOn(chatName("th_1"))).open()
     await screen.findByRole("group", { name: "Switch agent" })
 
@@ -522,7 +541,7 @@ describe("a member who takes over the page", () => {
       expect(seen.result.current).toEqual({ threadId: "th_b", state: "idle" })
     )
     // The last member's remembered choice stays theirs.
-    expect(rememberedChoice(otherScope, primary.id)).toBeNull()
+    expect(rememberedChoice(otherScope, primary.id)).toBe("th_b")
   })
 
   it("does not carry a message the last member could not send", async () => {
@@ -964,13 +983,14 @@ describe("a request to open a conversation", () => {
     comeBack(50 * 60_000)
     expect(title()).toBe("Plan the launch")
 
-    // An hour after the request, it is left as any other.
-    comeBack(HOUR)
-    expect(title()).toBe("New conversation")
+    // A mounted chat keeps its view even after a long absence.
+    comeBack(3 * HOUR)
+    expect(title()).toBe("Plan the launch")
   })
 
   it("waits for the agents list, so what it remembers is kept under the agent's id", async () => {
     const go = stubGo({
+      rememberLatest: false,
       threads: [thread("th_2", "Newer"), thread("th_1", "Older", 3 * HOUR)],
     })
     const release = go.holdAgents()
@@ -1014,7 +1034,7 @@ describe("a request to open a conversation", () => {
     )
     await act(async () => {})
     expect(roomSockets.named(chatName("th_1"))).toHaveLength(0)
-    expect(rememberedChoice(scope, primary.id)).toBeNull()
+    expect(rememberedChoice(scope, primary.id)).toBe("th_2")
   })
 })
 

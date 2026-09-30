@@ -22,7 +22,6 @@ import {
   rememberChoice,
   rememberedChoice,
   usePrimaryChatActivity,
-  useRememberedChoice,
 } from "@/lib/threads/chat-choice"
 import type { PrimaryChat } from "@/lib/threads/chat-choice"
 import { itemsToChatMessages } from "@/lib/threads/chat-messages"
@@ -151,7 +150,15 @@ function stubApi({
   created = thread("th_new", ""),
   /** Conversations Go no longer has (the list may still name them). */
   gone = [] as string[],
+  rememberLatest = true,
 } = {}) {
+  if (rememberLatest && rememberedChoice(scope, LEO) === null) {
+    const last = threads.find(
+      (item) => (!item.origin || item.origin === "chat") && item.title.trim()
+    )
+    if (last && Date.now() - Date.parse(last.updated_at) < HOUR)
+      rememberChoice(scope, LEO, last.id)
+  }
   const calls: string[] = []
   vi.stubGlobal(
     "fetch",
@@ -166,6 +173,11 @@ function stubApi({
           return json(created, 201)
         }
         return json({ threads })
+      }
+      const deletion = /^\/agents\/thread-chat-agent\/org_1~([^/]+)$/.exec(path)
+      if (deletion && method === "DELETE") {
+        threads = threads.filter((row) => row.id !== deletion[1])
+        return new Response(null, { status: 204 })
       }
       if (path.endsWith("/get-messages")) return json([])
       const detail = /^\/v1\/organizations\/org_1\/threads\/([^/]+)$/.exec(path)
@@ -264,7 +276,6 @@ function ChatHost({
     initial,
     (start) => start ?? initialPrimaryChat()
   )
-  useRememberedChoice(chat, remember ? asViewer : undefined, agent ?? undefined)
   return (
     <AgentChat
       organizationId="org_1"
@@ -523,7 +534,7 @@ describe("AgentChat", () => {
       screen
         .getByRole("button", { name: "New conversation" })
         .hasAttribute("disabled")
-    ).toBe(true)
+    ).toBe(false)
 
     type("Plan the launch")
     await waitFor(() =>
@@ -887,21 +898,21 @@ describe("which conversation the chat opens", () => {
     await opensThread("th_1")
   })
 
-  it("ignores a chosen conversation that no longer exists", async () => {
+  it("ignores a chosen conversation that no longer exists and opens New", async () => {
     rememberChoice(scope, LEO, "th_gone")
     stubApi({ threads: [thread("th_1", "Fresh", 60_000)] })
     renderChat()
-    await opensThread("th_1")
+    expect(await screen.findByText(blank)).toBeTruthy()
   })
 
-  it("keeps a member's choice of a new chat over a fresh conversation, and asks Go about nothing", async () => {
+  it("keeps a member's choice of a new chat over a fresh conversation, over pending approvals", async () => {
     rememberChoice(scope, LEO, null)
     const calls = stubApi({ threads: [thread("th_1", "Fresh", 60_000)] })
     renderChat()
 
     expect(await screen.findByText(blank)).toBeTruthy()
     expect(hooks.agentOptions).toHaveLength(0)
-    expect(calls.some((call) => call.includes("/threads/th_1"))).toBe(false)
+    expect(calls.some((call) => call.includes("/get-messages"))).toBe(false)
   })
 
   it("stays on a new chat after a reload, when the member started one", async () => {
@@ -1005,7 +1016,7 @@ describe("which conversation the chat opens", () => {
   it("does not wait for it when there is nothing to remember", async () => {
     stubApi({ threads: [thread("th_1", "Plan the launch")] })
     renderWithQueries(<ChatHost remember={false} agent={null} />)
-    await opensThread("th_1")
+    expect(await screen.findByText(blank)).toBeTruthy()
   })
 
   it("opens a new chat when Go can't say whether the old conversation waits", async () => {
@@ -1034,218 +1045,28 @@ describe("which conversation the chat opens", () => {
   })
 })
 
-describe("a conversation left alone", () => {
-  let visibility: DocumentVisibilityState = "visible"
-
-  beforeEach(() => {
-    // Only the clock moves: the chat's own timers and promises run as usual.
-    vi.useFakeTimers({ toFake: ["Date"] })
-    visibility = "visible"
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => visibility,
-    })
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  /** Time passes; then the tab shows again, or the window is focused. */
-  function comeBack(
-    after: number,
-    event: "visibilitychange" | "focus" = "visibilitychange"
-  ) {
-    vi.setSystemTime(Date.now() + after)
-    act(() => {
-      if (event === "focus") window.dispatchEvent(new Event("focus"))
-      else document.dispatchEvent(new Event("visibilitychange"))
-    })
-  }
-
-  /** A new chat is titled so; a conversation shows its own title. */
-  const onNewChat = () => screen.queryByText("New conversation") !== null
-
-  async function openThread() {
-    const calls = stubApi({ threads: [thread("th_1", "Plan the launch")] })
-    renderChat()
-    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
-    open("org_1~th_1")
-    return calls
-  }
-
-  it("gives way to a new chat when the tab shows again after an hour, and deletes nothing", async () => {
-    const calls = await openThread()
-    fireEvent.change(composer(), { target: { value: "Half a thought" } })
-
-    comeBack(HOUR)
-    expect(onNewChat()).toBe(true)
-    expect(rememberedChoice(scope, LEO)).toBe("new")
-    // What they were typing goes with them, and the old conversation stays.
-    expect((composer() as HTMLTextAreaElement).value).toBe("Half a thought")
-    expect(calls.filter((call) => call.startsWith("DELETE"))).toEqual([])
-    expect(calls.filter((call) => call.startsWith("POST"))).toEqual([])
-  })
-
-  it("does the same when the window is focused again", async () => {
-    await openThread()
-    comeBack(3 * HOUR, "focus")
-    expect(onNewChat()).toBe(true)
-    expect(rememberedChoice(scope, LEO)).toBe("new")
-  })
-
-  it("leaves a conversation alone that was active within the hour", async () => {
-    await openThread()
-    comeBack(HOUR - 60_000)
-    expect(onNewChat()).toBe(false)
-    expect(rememberedChoice(scope, LEO)).toBeNull()
-  })
-
-  it("counts what the member sends, and what the agent says, as activity", async () => {
-    await openThread()
-    vi.setSystemTime(Date.now() + 50 * 60_000)
-    type("Still here")
-    comeBack(50 * 60_000)
-    expect(onNewChat()).toBe(false)
-
-    // Half an hour on, the agent answers.
-    vi.setSystemTime(Date.now() + 30 * 60_000)
-    updateChat({
-      messages: itemsToChatMessages([
-        { type: "message", id: "ev_2", author: "Leo", text: "Hi there" },
-      ]),
-    })
-    comeBack(45 * 60_000)
-    expect(onNewChat()).toBe(false)
-
-    comeBack(30 * 60_000)
-    expect(onNewChat()).toBe(true)
-  })
-
-  it("does not take a reconnect that hands over the same conversation again for news", async () => {
-    await openThread()
-    comeBack(50 * 60_000)
-    // The socket reconnected in the background: the same messages, again.
-    updateChat({ messages: [...hooks.chat.messages] })
-    comeBack(20 * 60_000)
-    expect(onNewChat()).toBe(true)
-  })
-
-  it("counts the member's pointer, keys and scrolling anywhere in the page as activity", async () => {
-    await openThread()
-    comeBack(50 * 60_000)
-    fireEvent.pointerDown(document.body)
-    comeBack(50 * 60_000)
-    expect(onNewChat()).toBe(false)
-
-    fireEvent.keyDown(document.body, { key: "a" })
-    comeBack(50 * 60_000)
-    expect(onNewChat()).toBe(false)
-
-    fireEvent.wheel(document.body)
-    comeBack(50 * 60_000)
-    expect(onNewChat()).toBe(false)
-
-    // An hour with none of it, and the chat is left.
-    comeBack(HOUR)
-    expect(onNewChat()).toBe(true)
-  })
-
-  it("is never left while the Agent overview's viewer or editor is open, and its hour starts afresh when that closes", async () => {
-    // A file's viewer or editor is a frame that keeps the pointer and the
-    // keys; focus coming back from it is not the member returning.
+describe("a mounted conversation", () => {
+  afterEach(() => vi.useRealTimers())
+  it("keeps its current chat, composer draft and unsent rows through a long tab absence", async () => {
     stubApi({ threads: [thread("th_1", "Plan the launch")] })
-    function Overview() {
-      const [viewing, setViewing] = useState(true)
-      return (
-        <>
-          <button type="button" onClick={() => setViewing(false)}>
-            Close overview
-          </button>
-          <ChatHost inOverview={viewing} />
-        </>
-      )
+    const initial = {
+      ...initialPrimaryChat(),
+      thread: "th_1",
+      unsent: [{ id: 20, text: "Waiting message", notice: "Offline." }],
     }
-    renderWithQueries(<Overview />)
+    renderWithQueries(<ChatHost initial={initial} />)
     await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
     open("org_1~th_1")
-
-    comeBack(3 * HOUR, "focus")
-    comeBack(2 * HOUR)
-    expect(onNewChat()).toBe(false)
-
-    fireEvent.click(screen.getByRole("button", { name: "Close overview" }))
-    comeBack(30 * 60_000)
-    expect(onNewChat()).toBe(false)
-    comeBack(31 * 60_000)
-    expect(onNewChat()).toBe(true)
-  })
-
-  it("does not leave a run that is streaming, and starts counting when it ends", async () => {
-    await openThread()
-    updateChat({ status: "streaming" })
-    comeBack(3 * HOUR)
-    expect(onNewChat()).toBe(false)
-
-    updateChat({ status: "ready" })
-    comeBack(30 * 60_000)
-    expect(onNewChat()).toBe(false)
-    comeBack(HOUR)
-    expect(onNewChat()).toBe(true)
-  })
-
-  it("does not leave a confirmation that waits on the member", async () => {
-    const items: Item[] = [
-      { type: "message", id: "ev_1", author: "member", text: "Email Sam" },
-      {
-        type: "confirmation",
-        id: "ev_2",
-        call_id: "call_1",
-        tool_call_id: "tool_1",
-        tool: "send_email",
-        arguments: { to: "sam@example.com" },
-        status: "pending",
-      },
-    ]
-    stubApi({
-      threads: [thread("th_1", "Email Sam")],
-      items,
-      pending: ["call_1"],
+    fireEvent.change(composer(), { target: { value: "Half a thought" } })
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(Date.now() + 3 * HOUR)
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"))
+      window.dispatchEvent(new Event("focus"))
     })
-    hooks.chat.messages = itemsToChatMessages(items)
-    renderChat()
-    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
-    open("org_1~th_1")
-    await screen.findByRole("group", { name: "Confirm Send email" })
-
-    comeBack(6 * HOUR)
-    expect(onNewChat()).toBe(false)
-    expect(
-      screen.getByRole("group", { name: "Confirm Send email" })
-    ).toBeTruthy()
-  })
-
-  it("waits for the tab to be visible", async () => {
-    await openThread()
-    visibility = "hidden"
-    comeBack(3 * HOUR)
-    expect(onNewChat()).toBe(false)
-
-    visibility = "visible"
-    comeBack(0, "focus")
-    expect(onNewChat()).toBe(true)
-  })
-
-  it("never takes a conversation from the member the moment they chose it", async () => {
-    rememberChoice(scope, LEO, "th_1")
-    stubApi({ threads: [thread("th_1", "Chosen", 30 * HOUR)] })
-    renderChat()
-    await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
-    open("org_1~th_1")
-
-    comeBack(0)
-    comeBack(0, "focus")
-    expect(onNewChat()).toBe(false)
+    expect(screen.getByText("Plan the launch")).toBeTruthy()
+    expect((composer() as HTMLTextAreaElement).value).toBe("Half a thought")
+    expect(notSentWords()).toEqual(["Waiting message"])
     expect(rememberedChoice(scope, LEO)).toBe("th_1")
   })
 })
@@ -1356,7 +1177,8 @@ describe("a member who takes over the page", () => {
   const theirs = { ...scope, userId: "user_b" }
 
   it("does not choose, show or publish a conversation from the last member's cached list, and waits for its own", async () => {
-    stubApi({ threads: [thread("th_b", "Your plan")] })
+    stubApi({ threads: [thread("th_b", "Your plan")], rememberLatest: false })
+    rememberChoice(theirs, LEO, "th_b")
     // The other member's list is warm in the cache the two share.
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -1599,5 +1421,51 @@ describe("WorkspaceAgentPanel", () => {
     expect(
       within(screen.getByRole("tab", { name: "Agents" })).getByLabelText("Leo")
     ).toBeTruthy()
+  })
+})
+
+describe("primary chat history actions", () => {
+  it("opens an exact history id and deletes it through the chat object while preserving draft/unsent", async () => {
+    const calls = stubApi({
+      threads: [thread("th_1", "Earlier", 24 * HOUR), thread("th_2", "Latest")],
+      rememberLatest: false,
+    })
+    const initial = {
+      ...initialPrimaryChat(),
+      thread: null,
+      unsent: [{ id: 30, text: "Still waiting", notice: "Offline." }],
+    }
+    renderWithQueries(<ChatHost initial={initial} />)
+    fireEvent.change(composer(), { target: { value: "Keep my draft" } })
+    fireEvent.click(screen.getByRole("button", { name: "History" }))
+    fireEvent.click(await screen.findByRole("button", { name: /Earlier.*ago/ }))
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        "org_1~th_1"
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Delete Earlier" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm delete Earlier" })
+    )
+    await waitFor(() =>
+      expect(calls).toContain("DELETE /agents/thread-chat-agent/org_1~th_1")
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Delete Earlier" })
+      ).toBeNull()
+    )
+    expect(screen.getByText("New conversation")).toBeTruthy()
+    expect((composer() as HTMLTextAreaElement).value).toBe("Keep my draft")
+    expect(notSentWords()).toEqual(["Still waiting"])
+  })
+  it("opens New when no member was recently present even if the server chat is fresh", async () => {
+    stubApi({ threads: [thread("th_1", "Fresh")], rememberLatest: false })
+    renderChat()
+    expect(
+      await screen.findByText("Ask anything to start a conversation.")
+    ).toBeTruthy()
+    expect(rememberedChoice(scope, LEO)).toBeNull()
   })
 })
