@@ -116,7 +116,7 @@ const (
 // BotScopes are the bot scopes the app asks for. manifest.yaml lists the same
 // ones, each with the reason it is there, and a test holds the two together.
 var BotScopes = []string{
-	"app_mentions:read", "chat:write", "reactions:write", "im:write", "users:read", "users:read.email", "channels:read", "groups:read",
+	"app_mentions:read", "chat:write", "im:write", "users:read", "users:read.email", "channels:read", "groups:read",
 }
 
 // The kinds of inbound record.

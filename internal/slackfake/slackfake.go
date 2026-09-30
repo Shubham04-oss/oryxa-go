@@ -61,7 +61,7 @@ const (
 // BotScopes are the scopes a workspace grants by default: what Oryxa's app
 // asks for, as apps/internal/slackbot/manifest.yaml lists them.
 var BotScopes = []string{
-	"app_mentions:read", "chat:write", "reactions:write", "im:write", "users:read", "users:read.email", "channels:read", "groups:read",
+	"app_mentions:read", "chat:write", "im:write", "users:read", "users:read.email", "channels:read", "groups:read",
 }
 
 // Workspace is a Slack workspace that installed the app.

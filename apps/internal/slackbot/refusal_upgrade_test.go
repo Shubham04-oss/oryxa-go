@@ -23,7 +23,7 @@ func TestRouterRefusalsKeepCompletedAndInFlightLegacyClaimsAcrossUpgrade(t *test
 		for _, completed := range []bool{false, true} {
 			t.Run(test.name+map[bool]string{true: "/completed", false: "/inflight"}[completed], func(t *testing.T) {
 				h := newHarness(t)
-				h.installFor(testOrg)
+				h.installWithRefusalReactions()
 				inbound := h.seenThread(slackfake.Mention{Text: askText, TS: "1780000700.000200", ThreadTS: "1780000000.000100"})
 				key := "slackrouter:" + inbound.ID + ":refusal"
 				if test.person != "" {
@@ -102,7 +102,7 @@ func TestUncertainPrivatePostCompletionDoesNotStartAReactionRetry(t *testing.T) 
 	for _, committed := range []bool{false, true} {
 		t.Run(map[bool]string{true: "write committed before error", false: "write did not commit"}[committed], func(t *testing.T) {
 			h := newHarness(t)
-			h.installFor(testOrg)
+			h.installWithRefusalReactions()
 			inbound := h.seenThread(slackfake.Mention{Text: askText})
 			h.service.store = &uncertainCompletionStore{Store: h.store, committed: committed}
 			h.fake.RateLimit("reactions.add", 7*time.Second, 1)

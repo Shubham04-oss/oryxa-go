@@ -46,8 +46,6 @@ oauth_config:
       - app_mentions:read
       # Posts what Oryxa says: the owner's notice, its updates, and the answers.
       - chat:write
-      # Adds a neutral bot reaction to a refused ask so its private explanation is noticed.
-      - reactions:write
       # Opens the owner's direct message, where the notice with its buttons goes.
       - im:write
       # Reads who is named in a question, to match them to members of the organization.

@@ -338,13 +338,16 @@ holds `slackbot.BotScopes` (which the Add to Slack link asks for) and
 `slackfake`'s default scopes to it, so they cannot drift.
 
 - **Bot scopes**, each with its reason in the file: `app_mentions:read`,
-  `chat:write`, `reactions:write`, `im:write`, `users:read`, `users:read.email`, `channels:read`,
+  `chat:write`, `im:write`, `users:read`, `users:read.email`, `channels:read`,
   `groups:read`. No user scope, no channel-history scope: the bot reads only
   messages that mention it.
-  `reactions:write` lets the bot mark a refused ask with a neutral speech bubble;
-  the reason remains private. Existing installations need the updated manifest
-  and a new scope grant before reactions work. Missing scope leaves the private
-  explanation working and logs that the installation needs updating.
+  Refusal reactions are implemented but `reactions:write` is not requested yet,
+  so new installs and reinstalls keep the current permissions. Reactions run
+  only when an install has already granted that optional scope; the reason
+  stays private. Without it, the private explanation works and reactions are
+  skipped. To activate them: (1) Shubham adds `reactions:write` in the Slack
+  app's settings and reinstalls; (2) a small follow-up PR adds the scope to
+  `BotScopes` and `manifest.yaml`, keeping the manifest pins consistent.
 - **Events** (`bot_events`): `app_mention`, `app_uninstalled`, `tokens_revoked`.
   Interactivity on. Messages tab read-only, no Home tab. Org deploy, socket mode
   and **token rotation off**: the install refuses a token that rotates, because

@@ -13,6 +13,21 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/slackfake"
 )
 
+// installWithRefusalReactions grants the optional reaction scope explicitly;
+// the production manifest and ordinary fake installs do not request it yet.
+func (h *harness) installWithRefusalReactions() Install {
+	h.t.Helper()
+	install := h.installFor(testOrg)
+	install.Scopes = append(slices.Clone(install.Scopes), "reactions:write")
+	h.store.mu.Lock()
+	h.store.installs[install.TeamID] = install
+	h.store.mu.Unlock()
+	workspace := h.fake.Workspace(install.TeamID)
+	workspace.Scopes = append(slices.Clone(workspace.Scopes), "reactions:write")
+	h.fake.AddWorkspace(workspace)
+	return install
+}
+
 func refusalRequest(inbound Inbound, key, params string) PostRequest {
 	return PostRequest{
 		OrganizationID: testOrg, IdempotencyKey: key, RefusalInboundID: inbound.ID,
@@ -40,7 +55,7 @@ func TestEveryRefusalIsPrivateWithANeutralBotReactionOnTheExactAsk(t *testing.T)
 	} {
 		t.Run(test.reason+test.hint, func(t *testing.T) {
 			h := newHarness(t)
-			h.installFor(testOrg)
+			h.installWithRefusalReactions()
 			inbound := h.seenThread(slackfake.Mention{Text: "<@" + slackfake.DefaultBotUserID + "> ask @Raya about private-topic", TS: "1780000700.000200", ThreadTS: "1780000000.000100"})
 			params, _ := json.Marshal(refusalParams{Reason: test.reason, Hint: test.hint, Name: "Raya"})
 			request := refusalRequest(inbound, "key-refusal", string(params))
@@ -72,7 +87,7 @@ func TestEveryRefusalIsPrivateWithANeutralBotReactionOnTheExactAsk(t *testing.T)
 
 func TestRefusalReactionRetryKeepsThePrivateExplanationOnce(t *testing.T) {
 	h := newHarness(t)
-	h.installFor(testOrg)
+	h.installWithRefusalReactions()
 	inbound := h.seenThread(slackfake.Mention{Text: askText})
 	request := refusalRequest(inbound, "key-retry-refusal", `{"reason":"no_owner"}`)
 	h.fake.RateLimit("reactions.add", 3*time.Second, 1)
@@ -89,7 +104,7 @@ func TestRefusalReactionRetryKeepsThePrivateExplanationOnce(t *testing.T) {
 
 func TestARecordedRefusalCannotMoveItsReactionToAnotherAsk(t *testing.T) {
 	h := newHarness(t)
-	h.installFor(testOrg)
+	h.installWithRefusalReactions()
 	first := h.seenThread(slackfake.Mention{Text: askText, TS: "1780000000.000100"})
 	request := refusalRequest(first, "key-fixed-refusal", `{"reason":"no_owner"}`)
 	if _, err := h.service.Post(context.Background(), request); err != nil {
@@ -105,7 +120,7 @@ func TestARecordedRefusalCannotMoveItsReactionToAnotherAsk(t *testing.T) {
 
 func TestAReactionWhoseBotTokenEndedKeepsThePrivateRefusalAndEndsTheInstall(t *testing.T) {
 	h := newHarness(t)
-	h.installFor(testOrg)
+	h.installWithRefusalReactions()
 	inbound := h.seenThread(slackfake.Mention{Text: askText})
 	h.fake.Fail("reactions.add", "token_revoked", 1)
 	if _, err := h.service.Post(context.Background(), refusalRequest(inbound, "key-token-refusal", `{"reason":"no_owner"}`)); !errors.Is(err, domain.ErrNotConnected) || len(h.fake.Messages()) != 1 || h.store.install(slackfake.DefaultTeamID).Active() {
@@ -117,7 +132,7 @@ func TestRefusalVisibilityFailureStillExplainsPrivately(t *testing.T) {
 	for _, code := range []string{"missing_scope", "message_not_found", "no_permission", "thread_locked"} {
 		t.Run(code, func(t *testing.T) {
 			h := newHarness(t)
-			h.installFor(testOrg)
+			h.installWithRefusalReactions()
 			inbound := h.seenThread(slackfake.Mention{Text: askText})
 			h.fake.Fail("reactions.add", code, 1)
 			if result, err := h.service.Post(context.Background(), refusalRequest(inbound, "key-visibility", `{"reason":"no_owner"}`)); err != nil || !result.Ephemeral || len(h.fake.Messages()) != 1 {
@@ -130,7 +145,7 @@ func TestRefusalVisibilityFailureStillExplainsPrivately(t *testing.T) {
 	}
 	t.Run("old installation", func(t *testing.T) {
 		h := newHarness(t)
-		install := h.installFor(testOrg)
+		install := h.installWithRefusalReactions()
 		install.Scopes = slices.DeleteFunc(slices.Clone(install.Scopes), func(scope string) bool { return scope == "reactions:write" })
 		h.store.installs[install.TeamID] = install
 		inbound := h.seenThread(slackfake.Mention{Text: askText})
@@ -153,7 +168,7 @@ func TestRefusalReactionCannotBeRedirectedToAnotherVerifiedMessage(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t)
-			h.installFor(testOrg)
+			h.installWithRefusalReactions()
 			inbound := h.seenThread(slackfake.Mention{Text: askText, TS: "1780000700.000200", ThreadTS: "1780000000.000100"})
 			request := refusalRequest(inbound, "key-bound-refusal", `{"reason":"no_owner"}`)
 			copied := inbound
