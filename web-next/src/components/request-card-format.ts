@@ -11,8 +11,9 @@ import type {
   AgentRequestGuard,
   AgentRequestWinner,
 } from "@/lib/agents/agent-requests"
-import { clockTime, dayLabel, firstName } from "./direct-message-format"
-import { capitalized, toolsLine } from "./side-conversation-format"
+import { clockTime, dayLabel } from "./time-format"
+import { firstName } from "./people-format"
+import { capitalized, toolsLine } from "./request-words"
 
 /** Which side of a request the reader is: the member it is addressed to, or the one who asked. */
 export type RequestSide = "owner" | "asker" | "other"

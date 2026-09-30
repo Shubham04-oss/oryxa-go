@@ -15,7 +15,7 @@ import {
   focusManager,
 } from "@tanstack/react-query"
 import { RequestCard, RequestCardById } from "./request-card"
-import { clockTime } from "./direct-message-format"
+import { clockTime } from "./time-format"
 import {
   ASKER,
   NOW,

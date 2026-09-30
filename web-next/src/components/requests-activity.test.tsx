@@ -11,7 +11,7 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { RequestsActivity } from "./requests-activity"
-import { clockTime } from "./direct-message-format"
+import { clockTime } from "./time-format"
 import {
   ASKER,
   NOW,

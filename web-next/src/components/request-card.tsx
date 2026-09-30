@@ -19,7 +19,7 @@ import {
 import "./request-card.css"
 import { AgentMarkdown } from "./agent-timeline"
 import { agentsErrorMessage } from "./agents-format"
-import { clockTime } from "./direct-message-format"
+import { clockTime, fullTime } from "./time-format"
 import { HeldAnswerReview } from "./request-card-review"
 import { OpenSecret, ShareSecret } from "./request-card-secret"
 import {
@@ -48,7 +48,7 @@ import {
   requestDetailQueryOptions,
   usePeopleNames,
 } from "./requests-view-queries"
-import { fullTime, personIdentity } from "./teamspace-format"
+import { personIdentity } from "./people-format"
 import { IdentityAvatar } from "./workspace-avatar"
 import { ApiError } from "@/lib/api/client"
 import {

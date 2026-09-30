@@ -15,7 +15,7 @@ import {
   focusManager,
 } from "@tanstack/react-query"
 import { RequestsCanvas, RequestsView } from "./requests-view"
-import { clockTime } from "./direct-message-format"
+import { clockTime } from "./time-format"
 import {
   ASKER,
   NOW,
