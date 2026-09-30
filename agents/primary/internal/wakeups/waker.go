@@ -46,7 +46,8 @@ const (
 // Threads is the run API a wake-up goes through. threads.Service implements
 // it.
 type Threads interface {
-	CreateTitled(ctx context.Context, member threads.Member, title string) (threads.Thread, error)
+	CreateWakeup(ctx context.Context, member threads.Member, title string) (threads.Thread, error)
+	Origin(ctx context.Context, member threads.Member, threadID string) (string, error)
 	StartRun(ctx context.Context, member threads.Member, threadID string, input threads.RunInput) (*threads.Run, error)
 	Delete(ctx context.Context, member threads.Member, threadID string) error
 }
@@ -246,18 +247,32 @@ func (waker *Waker) wake(ctx context.Context, batch Batch) {
 // start opens a run in the member's wake-up thread, making the thread when
 // they have none or deleted theirs. Two wake-ups making one at once settle on
 // whichever was recorded first, and the other's is removed.
+//
+// A thread recorded from before wake-ups had an origin of their own was made
+// a chat, so it is listed with the member's conversations and the web app
+// opens it as their latest. It is left where it is, as a past conversation
+// that nothing more is added to, and replaced the way a deleted thread is: by
+// a new one of the wakeup origin.
 func (waker *Waker) start(ctx context.Context, member threads.Member, input threads.RunInput) (*threads.Run, error) {
 	threadID, err := waker.store.Thread(ctx, member.OrganizationID, member.UserID)
 	if err != nil {
 		return nil, err
 	}
 	if threadID != "" {
-		run, err := waker.threads.StartRun(ctx, member, threadID, input)
-		if !errors.Is(err, threads.ErrNotFound) {
-			return run, err
+		// A thread that cannot be read is not one to make another for: the
+		// member's updates would be split between the two.
+		origin, err := waker.threads.Origin(ctx, member, threadID)
+		if err != nil && !errors.Is(err, threads.ErrNotFound) {
+			return nil, err
+		}
+		if err == nil && origin == threads.OriginWakeup {
+			run, err := waker.threads.StartRun(ctx, member, threadID, input)
+			if !errors.Is(err, threads.ErrNotFound) {
+				return run, err
+			}
 		}
 	}
-	created, err := waker.threads.CreateTitled(ctx, member, ThreadTitle)
+	created, err := waker.threads.CreateWakeup(ctx, member, ThreadTitle)
 	if err != nil {
 		return nil, err
 	}

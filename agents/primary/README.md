@@ -631,15 +631,21 @@ from inside a run.
 
 Every thread says where it came from, as `origin` in its JSON (in the
 listing, on creation, and in a thread's detail): `"chat"` is the member's own
-conversation with Krude, and `"side_conversation"` a thread the web app's
-side conversation opened to run the member's own agent on its internal
-prompt. The origin is written to the thread's session state when it is
-created, beside the organization it was started in, and nothing changes it
-afterwards. Threads Oryxa opens for the member itself, such as wake-up
-reports, are chats, and so is a thread with no origin in its state: every
-thread from before origins. Only the listing tells them apart: reading,
-running, deleting or downloading from a thread by its id works the same for
-either origin.
+conversation with Krude, `"side_conversation"` a thread the web app's side
+conversation opened to run the member's own agent on its internal prompt, and
+`"wakeup"` the thread their apps' events are reported in (see
+[Wake-ups](#wake-ups)), which they did not start. The origin is written to the
+thread's session state when it is created, beside the organization it was
+started in, and nothing changes it afterwards. A client can start a chat or a
+side conversation, and `POST` refuses any other origin, `"wakeup"` included:
+only agents makes the wake-up thread, and `?origin=wakeup` lists it. Any other
+thread Oryxa opens for the member itself is a chat, and so is a thread with no
+origin in its state: every thread from before origins. That includes a member's
+"Updates from your apps" thread from before wake-ups had an origin of their
+own; the first wake-up for such a member starts a new thread of origin
+`"wakeup"` and leaves the old one a past chat that nothing more is added to.
+Only the listing tells origins apart: reading, running, deleting or downloading
+from a thread by its id works the same for every origin.
 
 ### Persistent agent API
 

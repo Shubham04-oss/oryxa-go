@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -262,6 +263,12 @@ func TestAWakeUpTellsKrudeInTheMembersUpdatesThread(t *testing.T) {
 	if detail.Title != ThreadTitle {
 		t.Fatalf("title = %q", detail.Title)
 	}
+	if detail.Origin != threads.OriginWakeup {
+		t.Fatalf("origin = %q, want %q: the member's chat list is not the place for it", detail.Origin, threads.OriginWakeup)
+	}
+	if chats, err := service.List(context.Background(), member); err != nil || len(chats) != 0 {
+		t.Fatalf("the member's chats = %+v, %v, want none of the updates thread", chats, err)
+	}
 	if len(detail.Items) != 2 || detail.Items[0].Author != threads.AuthorApps || !strings.Contains(detail.Items[0].Text, "GMAIL_NEW_MESSAGE") ||
 		detail.Items[1].Text != "You have a new email about the launch." {
 		t.Fatalf("items = %+v", detail.Items)
@@ -410,8 +417,12 @@ func TestAWakeUpThatFinishedIsRecordedAsDoneEvenAsTheWakerStops(t *testing.T) {
 // failingThreads is the run API when starting a run fails.
 type failingThreads struct{ failure error }
 
-func (failingThreads) CreateTitled(_ context.Context, member threads.Member, title string) (threads.Thread, error) {
-	return threads.Thread{ID: "thread_1", Title: title}, nil
+func (failingThreads) CreateWakeup(_ context.Context, member threads.Member, title string) (threads.Thread, error) {
+	return threads.Thread{ID: "thread_1", Title: title, Origin: threads.OriginWakeup}, nil
+}
+
+func (failingThreads) Origin(context.Context, threads.Member, string) (string, error) {
+	return threads.OriginWakeup, nil
 }
 
 func (api failingThreads) StartRun(ctx context.Context, _ threads.Member, _ string, _ threads.RunInput) (*threads.Run, error) {
@@ -475,8 +486,13 @@ func TestAThreadTheMemberDeletedIsMadeAgain(t *testing.T) {
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := store.threads["org_1/user_1"]; got == "deleted-thread" || got == "" || len(store.done) != 1 {
+	got := store.threads["org_1/user_1"]
+	if got == "deleted-thread" || got == "" || len(store.done) != 1 {
 		t.Fatalf("thread = %q, done = %v", got, store.done)
+	}
+	member := threads.Member{UserID: "user_1", OrganizationID: "org_1"}
+	if origin, err := service.Origin(context.Background(), member, got); err != nil || origin != threads.OriginWakeup {
+		t.Fatalf("the thread made again has origin %q, %v, want %q", origin, err, threads.OriginWakeup)
 	}
 }
 
@@ -552,7 +568,7 @@ func TestTwoWakeUpsMakingAThreadSettleOnOne(t *testing.T) {
 	runs := &recordingRuns{}
 	service, _ := newThreads(t, &answeringModel{}, runs)
 	member := threads.Member{UserID: "user_1", OrganizationID: "org_1"}
-	first, err := service.CreateTitled(context.Background(), member, ThreadTitle)
+	first, err := service.CreateWakeup(context.Background(), member, ThreadTitle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,12 +577,146 @@ func TestTwoWakeUpsMakingAThreadSettleOnOne(t *testing.T) {
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	listed, err := service.List(context.Background(), member)
+	listed, err := service.ListFrom(context.Background(), member, threads.OriginAll)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(listed) != 1 || listed[0].ID != first.ID || len(runs.started) != 1 || runs.started[0].SessionID != first.ID {
 		t.Fatalf("threads = %v, runs = %+v: want the first recorded thread alone, and the run in it", listed, runs.started)
+	}
+}
+
+// A member's updates thread from before wake-ups had an origin of their own
+// was made a chat: listed with their conversations, and the one the web app
+// opens as their latest. The next wake-up leaves it as a past chat that
+// nothing more is added to, and goes on in a thread of the wakeup origin,
+// which every wake-up after that reuses.
+func TestAnUpdatesThreadMadeAsAChatIsLeftBehindForOneOfTheWakeupOrigin(t *testing.T) {
+	ctx := context.Background()
+	runs := &recordingRuns{}
+	service, _ := newThreads(t, &answeringModel{}, runs)
+	member := threads.Member{UserID: "user_1", OrganizationID: "org_1"}
+	old, err := service.CreateTitled(ctx, member, ThreadTitle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeBatches{pending: []Batch{batchFor("wb_1")}, threads: map[string]string{"org_1/user_1": old.ID}}
+	waker := NewWaker(store, service, fakeMembers{}, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
+
+	if err := waker.WakeDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	current := store.threads["org_1/user_1"]
+	if current == "" || current == old.ID || len(store.done) != 1 || len(runs.started) != 1 || runs.started[0].SessionID != current {
+		t.Fatalf("thread = %q (was %q), done = %v, runs = %+v: want the wake-up told in a new thread", current, old.ID, store.done, runs.started)
+	}
+	if origin, err := service.Origin(ctx, member, current); err != nil || origin != threads.OriginWakeup {
+		t.Fatalf("the new thread has origin %q, %v, want %q", origin, err, threads.OriginWakeup)
+	}
+	left, err := service.Get(ctx, member, old.ID)
+	if err != nil || left.Origin != threads.OriginChat || len(left.Items) != 0 {
+		t.Fatalf("the old thread = %+v, %v, want the chat it was, with nothing told in it", left, err)
+	}
+	if chats, err := service.List(ctx, member); err != nil || len(chats) != 1 || chats[0].ID != old.ID {
+		t.Fatalf("the member's chats = %+v, %v, want only the old thread, as a past chat", chats, err)
+	}
+
+	// The next wake-up goes on in the new thread, and makes no third.
+	store.pending = []Batch{batchFor("wb_2")}
+	if err := waker.WakeDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	all, err := service.ListFrom(ctx, member, threads.OriginAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.threads["org_1/user_1"] != current || len(runs.started) != 2 || runs.started[1].SessionID != current || len(all) != 2 || len(store.done) != 2 {
+		t.Fatalf("thread = %q, runs = %+v, threads = %+v, done = %v: want the second wake-up in the new thread alone", store.threads["org_1/user_1"], runs.started, all, store.done)
+	}
+	told, err := service.Get(ctx, member, current)
+	if err != nil || len(told.Items) != 4 {
+		t.Fatalf("the new thread = %+v, %v, want both wake-ups and Krude's answers to them", told.Items, err)
+	}
+}
+
+// Two wake-ups can both find the chat-made thread and each make a thread to
+// replace it. They settle on whichever was recorded first, the other's is
+// removed, and the run goes in the one that stands.
+func TestTwoWakeUpsLeavingAChatThreadBehindSettleOnOne(t *testing.T) {
+	ctx := context.Background()
+	runs := &recordingRuns{}
+	service, _ := newThreads(t, &answeringModel{}, runs)
+	member := threads.Member{UserID: "user_1", OrganizationID: "org_1"}
+	old, err := service.CreateTitled(ctx, member, ThreadTitle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.CreateWakeup(ctx, member, ThreadTitle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeBatches{pending: []Batch{batchFor("wb_1")}, threads: map[string]string{"org_1/user_1": old.ID}, raceThread: first.ID}
+	waker := NewWaker(store, service, fakeMembers{}, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	all, err := service.ListFrom(ctx, member, threads.OriginAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, thread := range all {
+		kept = append(kept, thread.ID)
+	}
+	slices.Sort(kept)
+	want := []string{old.ID, first.ID}
+	slices.Sort(want)
+	if !slices.Equal(kept, want) || store.threads["org_1/user_1"] != first.ID || len(runs.started) != 1 || runs.started[0].SessionID != first.ID {
+		t.Fatalf("threads = %v, recorded = %q, runs = %+v: want the old thread and the first recorded, and the run in the latter", kept, store.threads["org_1/user_1"], runs.started)
+	}
+}
+
+// unreadableThreads is the run API when a thread's origin cannot be read.
+type unreadableThreads struct {
+	Threads
+	failure error
+}
+
+func (api unreadableThreads) Origin(context.Context, threads.Member, string) (string, error) {
+	return "", api.failure
+}
+
+// A thread that cannot be read is not one to make another for: a passing
+// database error would split the member's updates between two threads. The
+// wake-up fails as a start does, counted against its events, and the thread
+// stays recorded.
+func TestAWakeUpDoesNotMakeAnotherThreadWhenItCannotReadTheOneRecorded(t *testing.T) {
+	ctx := context.Background()
+	runs := &recordingRuns{}
+	service, _ := newThreads(t, &answeringModel{}, runs)
+	member := threads.Member{UserID: "user_1", OrganizationID: "org_1"}
+	recorded, err := service.CreateWakeup(ctx, member, ThreadTitle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeBatches{pending: []Batch{batchFor("wb_1")}, threads: map[string]string{"org_1/user_1": recorded.ID}}
+	var logs bytes.Buffer
+	api := unreadableThreads{Threads: service, failure: errors.New("the session store is down")}
+	if err := loggingWaker(store, api, fakeMembers{}, &logs).WakeDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	all, err := service.ListFrom(ctx, member, threads.OriginAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed, released := store.released["wb_1"]; !released || !failed || len(store.done) != 0 {
+		t.Fatalf("released = %v, done = %v, want released as failed", store.released, store.done)
+	}
+	if store.threads["org_1/user_1"] != recorded.ID || len(all) != 1 || len(runs.started) != 0 {
+		t.Fatalf("recorded = %q, threads = %+v, runs = %+v: want the thread kept and none made", store.threads["org_1/user_1"], all, runs.started)
+	}
+	if !strings.Contains(logs.String(), "wake-up could not start") {
+		t.Fatalf("the failure was not reported:\n%s", logs.String())
 	}
 }
 

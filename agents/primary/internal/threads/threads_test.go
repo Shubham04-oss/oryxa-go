@@ -596,13 +596,176 @@ func TestListShowsOnlyChatThreadsAndListFromSelectsByOrigin(t *testing.T) {
 	}
 }
 
-func TestListFromRefusesAnythingButChatSideConversationOrAll(t *testing.T) {
+func TestListFromRefusesAnythingButAnOriginOrAll(t *testing.T) {
 	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
 		return genai.NewContentFromText("ok", genai.RoleModel), nil
 	})
-	for _, origin := range []string{"", "  ", "bogus", "Chat", "ALL"} {
+	for _, origin := range []string{"", "  ", "bogus", "Chat", "ALL", "Wakeup"} {
 		if _, err := h.service.ListFrom(context.Background(), asha, origin); !errors.Is(err, ErrInvalid) {
 			t.Errorf("ListFrom(%q) = %v, want ErrInvalid", origin, err)
+		}
+	}
+}
+
+// threadIDs is the ids of listed, in order.
+func threadIDs(listed []Thread) []string {
+	ids := make([]string, 0, len(listed))
+	for _, thread := range listed {
+		ids = append(ids, thread.ID)
+	}
+	return ids
+}
+
+// TestCreateWakeupMakesAThreadOnlyTheWakerCanMake checks the thread a
+// member's apps' events are reported in: it reads back with the wakeup origin
+// and the title it was given, and no origin a client can name makes one.
+func TestCreateWakeupMakesAThreadOnlyTheWakerCanMake(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("ok", genai.RoleModel), nil
+	})
+	wakeup, err := h.service.CreateWakeup(context.Background(), asha, "Updates from your apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wakeup.Origin != OriginWakeup || wakeup.Title != "Updates from your apps" || wakeup.CreatedAt.IsZero() {
+		t.Fatalf("CreateWakeup = %+v, want a wakeup thread with the title given", wakeup)
+	}
+	got, err := h.service.Get(context.Background(), asha, wakeup.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Origin != OriginWakeup || got.Title != "Updates from your apps" {
+		t.Fatalf("read back %+v, want the wakeup origin and the title kept", got.Thread)
+	}
+
+	// CreateFrom is what the HTTP route calls: a client cannot ask for one.
+	for _, origin := range []string{OriginWakeup, " wakeup ", OriginAll} {
+		if _, err := h.service.CreateFrom(context.Background(), asha, origin); !errors.Is(err, ErrInvalid) {
+			t.Errorf("CreateFrom(%q) = %v, want ErrInvalid", origin, err)
+		}
+	}
+	if listed, err := h.service.ListFrom(context.Background(), asha, OriginAll); err != nil || len(listed) != 1 {
+		t.Fatalf("ListFrom(all) = %+v, %v, want the wakeup thread alone: a refused origin made nothing", listed, err)
+	}
+}
+
+// TestTheDefaultListLeavesOutWakeupThreads checks that a member's chat list,
+// the default, never holds the thread their apps' events are reported in,
+// while listing by its origin, or by all, reaches it.
+func TestTheDefaultListLeavesOutWakeupThreads(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("ok", genai.RoleModel), nil
+	})
+	chat, err := h.service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	side, err := h.service.CreateFrom(context.Background(), asha, OriginSideConversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wakeup, err := h.service.CreateWakeup(context.Background(), asha, "Updates from your apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The wake-up thread is the latest active, as it is after an overnight
+	// update, and must still not lead the member's chats.
+	h.run(asha, wakeup.ID, RunInput{Message: "an email arrived"})
+
+	if listed, err := h.service.List(context.Background(), asha); err != nil || !slices.Equal(threadIDs(listed), []string{chat.ID}) {
+		t.Fatalf("List() = %+v, %v, want only the chat thread", listed, err)
+	}
+	everything := []string{chat.ID, side.ID, wakeup.ID}
+	slices.Sort(everything)
+	for origin, want := range map[string][]string{
+		OriginChat: {chat.ID}, OriginSideConversation: {side.ID}, OriginWakeup: {wakeup.ID}, OriginAll: everything,
+	} {
+		listed, err := h.service.ListFrom(context.Background(), asha, origin)
+		if err != nil {
+			t.Errorf("ListFrom(%s) = %v", origin, err)
+			continue
+		}
+		got := threadIDs(listed)
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Errorf("ListFrom(%s) = %v, want %v", origin, got, want)
+		}
+	}
+}
+
+// recordingSessions notes how much history each read of a thread asked for.
+type recordingSessions struct {
+	session.Service
+	recent []int
+}
+
+func (sessions *recordingSessions) Get(ctx context.Context, request *session.GetRequest) (*session.GetResponse, error) {
+	sessions.recent = append(sessions.recent, request.NumRecentEvents)
+	return sessions.Service.Get(ctx, request)
+}
+
+// TestOriginSaysWhereAMembersThreadCameFromWithoutReadingItsHistory checks
+// every origin a thread can have, a thread with none in its state, and that
+// asking reads one event of a long thread rather than all of them.
+func TestOriginSaysWhereAMembersThreadCameFromWithoutReadingItsHistory(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("ok", genai.RoleModel), nil
+	})
+	chat, err := h.service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	side, err := h.service.CreateFrom(context.Background(), asha, OriginSideConversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wakeup, err := h.service.CreateWakeup(context.Background(), asha, "Updates from your apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []string{"one", "two", "three"} {
+		h.run(asha, wakeup.ID, RunInput{Message: message})
+	}
+	bare, err := h.sessions.Create(context.Background(), &session.CreateRequest{
+		AppName: "krude", UserID: asha.UserID,
+		State: map[string]any{adksession.StateOrganizationID: asha.OrganizationID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recording := &recordingSessions{Service: h.sessions}
+	service, err := New(Config{
+		AppName: "krude", Agent: h.service.agent, Sessions: recording, Runs: h.runs, Prices: h.service.prices,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct{ id, want string }{
+		"chat": {chat.ID, OriginChat}, "side conversation": {side.ID, OriginSideConversation},
+		"wakeup with a history": {wakeup.ID, OriginWakeup}, "none in state": {bare.Session.ID(), OriginChat},
+	} {
+		got, err := service.Origin(context.Background(), asha, test.id)
+		if err != nil || got != test.want {
+			t.Errorf("Origin(%s) = %q, %v, want %q", name, got, err, test.want)
+		}
+	}
+	if len(recording.recent) != 4 || slices.ContainsFunc(recording.recent, func(recent int) bool { return recent != 1 }) {
+		t.Errorf("reads asked for %v events, want one each: a thread's history is not needed to tell its origin", recording.recent)
+	}
+
+	// Only the member's own threads, in the organization they were made in.
+	elsewhere := Member{UserID: asha.UserID, OrganizationID: "org_2"}
+	someoneElse := Member{UserID: "user_ravi", OrganizationID: asha.OrganizationID}
+	for name, test := range map[string]struct {
+		member Member
+		id     string
+	}{
+		"another organization": {elsewhere, wakeup.ID}, "someone else": {someoneElse, wakeup.ID},
+		"a thread that is not there": {asha, "missing"}, "a blank id": {asha, "  "},
+	} {
+		if got, err := service.Origin(context.Background(), test.member, test.id); !errors.Is(err, ErrNotFound) || got != "" {
+			t.Errorf("Origin(%s) = %q, %v, want ErrNotFound", name, got, err)
 		}
 	}
 }
