@@ -12,6 +12,7 @@ import {
   within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { useState } from "react"
 import type { ReactElement } from "react"
 import { AgentChat } from "./agent-chat"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
@@ -202,15 +203,26 @@ function renderWithQueries(ui: ReactElement) {
 
 const scope = { organizationId: "org_1", userId: "user_1" }
 
-function renderChat() {
-  return renderWithQueries(
+/** The chat as the panel mounts it, holding its conversation and draft. */
+function ChatHost({ remember = true }: { remember?: boolean }) {
+  const [threadId, setThreadId] = useState<string | null | undefined>()
+  const [draft, setDraft] = useState("")
+  return (
     <AgentChat
       organizationId="org_1"
-      scope={scope}
+      scope={remember ? scope : undefined}
       agentName="Leo"
+      threadId={threadId}
+      setThreadId={setThreadId}
+      draft={draft}
+      onDraftChange={setDraft}
       onComposingChange={vi.fn()}
     />
   )
+}
+
+function renderChat() {
+  return renderWithQueries(<ChatHost />)
 }
 
 const composer = () => screen.getByRole("textbox", { name: "Message Leo" })
@@ -653,13 +665,7 @@ describe("which conversation the chat opens", () => {
 
   it("remembers nothing without a scope, and still applies the rules", async () => {
     stubApi({ threads: [thread("th_1", "Old", 6 * HOUR)] })
-    renderWithQueries(
-      <AgentChat
-        organizationId="org_1"
-        agentName="Leo"
-        onComposingChange={vi.fn()}
-      />
-    )
+    renderWithQueries(<ChatHost remember={false} />)
     expect(await screen.findByText(blank)).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
     expect(window.sessionStorage.length).toBe(0)

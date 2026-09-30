@@ -1,4 +1,5 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react"
+import type { Dispatch, SetStateAction } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import { useHydrated } from "@tanstack/react-router"
@@ -107,10 +108,13 @@ export function AgentChat({
   organizationId,
   scope,
   agentName,
+  threadId,
+  setThreadId,
+  draft,
+  onDraftChange,
   onComposingChange,
   onOpenOverview,
   inOverview = false,
-  onThreadChange,
   onFileCreated,
   getScreenContext,
 }: {
@@ -118,10 +122,20 @@ export function AgentChat({
   /** Whose choices the chat remembers for the session; without it none are. */
   scope?: ChatScope
   agentName?: string
+  /**
+   * The conversation the chat is on, kept by the panel so it outlasts a
+   * switch to another agent: `undefined` until the rules in chat-choice.ts
+   * decide it, `null` for a conversation not started yet.
+   */
+  threadId: string | null | undefined
+  /** Where the chat's own moves go: a decision only fills in a thread still undecided, the member's moves replace it. */
+  setThreadId: Dispatch<SetStateAction<string | null | undefined>>
+  /** The composer's text, kept by the panel too. */
+  draft: string
+  onDraftChange: (value: string) => void
   onComposingChange: (composing: boolean) => void
   onOpenOverview?: () => void
   inOverview?: boolean
-  onThreadChange?: (threadId: string | null) => void
   onFileCreated?: (file: {
     threadId: string
     name: string
@@ -135,11 +149,6 @@ export function AgentChat({
     ...threadListQueryOptions(organizationId),
     enabled: hydrated,
   })
-  // `undefined` until the rules in chat-choice.ts decide it; `null` for a
-  // conversation not started yet; then the thread the tab stays on, whatever
-  // the list does.
-  const [threadId, setThreadId] = useState<string | null | undefined>()
-  const [draft, setDraft] = useState("")
   // The first message of a new conversation, until its thread's socket
   // takes it.
   const [pending, setPending] = useState<string | null>(null)
@@ -168,6 +177,7 @@ export function AgentChat({
 
   // Once the list is here: the member's choice, else the latest conversation
   // while it is fresh, else (after asking Go) one that still waits on them.
+  // Unless the member or a request moved the chat while this was asked.
   useEffect(() => {
     if (threadId !== undefined || !threads.data) return
     let stale = false
@@ -177,20 +187,28 @@ export function AgentChat({
       now: Date.now(),
       waiting: (id) => waitsOnMember(queryClient, organizationId, id),
     }).then((chosen) => {
-      if (!stale) setThreadId(chosen)
+      if (!stale) {
+        setThreadId((current) => (current === undefined ? chosen : current))
+      }
     })
     return () => {
       stale = true
     }
   }, [threadId, threads.data])
 
+  // Whether this chat is still on screen, for a thread that takes a moment
+  // to create.
+  const mounted = useRef(true)
   useEffect(() => {
-    if (threadId !== undefined) onThreadChange?.(threadId)
-  }, [threadId, onThreadChange])
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   const composer: ComposerHandlers = {
     draft,
-    onDraftChange: setDraft,
+    onDraftChange,
     onComposingChange,
   }
   const title =
@@ -203,9 +221,15 @@ export function AgentChat({
     setNotice("")
     setPending(message)
     setPendingScreen(getScreenContext?.())
-    setDraft("")
+    onDraftChange("")
     try {
       const thread = await createThread(organizationId)
+      if (!mounted.current) {
+        // The member went to another agent meanwhile. The message goes back
+        // to the composer rather than into a chat nobody is looking at.
+        onDraftChange(message)
+        return
+      }
       queryClient.setQueryData<Thread[]>(
         threadKeys.list(organizationId),
         (list) => [
@@ -220,7 +244,7 @@ export function AgentChat({
       if (scope) rememberChoice(scope, PRIMARY_CHAT_AGENT, thread.id)
     } catch (error) {
       setPending(null)
-      setDraft(message)
+      onDraftChange(message)
       setNotice(failureText(error, "Couldn't start a conversation. Try again."))
     } finally {
       setStarting(false)
@@ -289,7 +313,7 @@ export function AgentChat({
           label={composerLabel(agentName)}
           placeholder={composerLabel(agentName)}
           value={draft}
-          onChange={setDraft}
+          onChange={onDraftChange}
           onSubmit={(message) => void start(message)}
           disabled={starting}
           status={starting ? "Connecting…" : undefined}

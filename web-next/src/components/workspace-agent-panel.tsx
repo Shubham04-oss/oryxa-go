@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import type { ComponentType, KeyboardEvent, ReactNode } from "react"
+import type {
+  ComponentType,
+  Dispatch,
+  KeyboardEvent,
+  ReactNode,
+  SetStateAction,
+} from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft,
@@ -34,6 +40,7 @@ import type { Inbox } from "@/lib/dms"
 import { isNameId, sideConversationName } from "@/lib/dms/names"
 import type { Teamspace } from "@/lib/teamspaces/client"
 import { teamspaceKeys, teamspaceQueryOptions } from "@/lib/teamspaces/queries"
+import { PRIMARY_CHAT_AGENT } from "@/lib/threads/chat-choice"
 import type { ChatScope } from "@/lib/threads/chat-choice"
 import { cn } from "@/lib/utils"
 import type { ScreenContext } from "@/lib/agents/screen-context"
@@ -159,6 +166,14 @@ export function WorkspaceAgentPanel({
   const [sideDrafts, setSideDrafts] = useState<
     Partial<Record<string, SideDraft>>
   >({})
+  // What the agents' chats hold while the member looks at another agent: the
+  // primary chat's conversation (`undefined` until the chat decides it, `null`
+  // for a new one), and every agent's unsent message, by the primary chat's
+  // key or the specialist's id.
+  const [primaryThread, setPrimaryThread] = useState<
+    string | null | undefined
+  >()
+  const [drafts, setDrafts] = useState<Partial<Record<string, string>>>({})
   if (chatRequest && chatRequest !== answeredRequest) {
     setAnsweredRequest(chatRequest)
     setTab("agents")
@@ -226,6 +241,12 @@ export function WorkspaceAgentPanel({
       .join(""),
     kind: "agent",
   }
+
+  // The shell follows the primary chat's conversation: Agent overview lists
+  // its files.
+  useEffect(() => {
+    if (primaryThread !== undefined) onPrimaryThreadChange?.(primaryThread)
+  }, [primaryThread, onPrimaryThreadChange])
 
   // A rail button unmounts as the panel opens, so its focus moves to the tab
   // it opened rather than falling back to the page.
@@ -491,6 +512,12 @@ export function WorkspaceAgentPanel({
                     agents={agents.data}
                     agentId={agentId}
                     onSelectAgent={setAgentId}
+                    primaryThread={primaryThread}
+                    setPrimaryThread={setPrimaryThread}
+                    drafts={drafts}
+                    onDraftChange={(agent, value) =>
+                      setDrafts((current) => ({ ...current, [agent]: value }))
+                    }
                     agentName={agentName}
                     agentSeed={agentSeed}
                     onComposingChange={(value) => {
@@ -499,7 +526,6 @@ export function WorkspaceAgentPanel({
                     }}
                     inAgentOverview={primaryWork}
                     onOpenAgentOverview={onOpenAgentOverview}
-                    onPrimaryThreadChange={onPrimaryThreadChange}
                     onPrimaryFileCreated={
                       (primaryWork || tab === "agents") &&
                       !agentsSide &&
@@ -673,13 +699,16 @@ function AgentsView({
   agents,
   agentId,
   onSelectAgent,
+  primaryThread,
+  setPrimaryThread,
+  drafts,
+  onDraftChange,
   agentName,
   agentSeed,
   onComposingChange,
   teammates,
   inAgentOverview,
   onOpenAgentOverview,
-  onPrimaryThreadChange,
   onPrimaryFileCreated,
   getScreenContext,
 }: {
@@ -690,6 +719,12 @@ function AgentsView({
   /** The specialist in use, or null for the primary agent. */
   agentId: string | null
   onSelectAgent: (agentId: string | null) => void
+  /** The primary chat's conversation, held here (`AgentChat`'s `threadId`). */
+  primaryThread: string | null | undefined
+  setPrimaryThread: Dispatch<SetStateAction<string | null | undefined>>
+  /** Every agent's unsent message, by the primary chat's key or a specialist's id. */
+  drafts: Partial<Record<string, string>>
+  onDraftChange: (agent: string, value: string) => void
   agentName?: string
   agentSeed: string
   onComposingChange: (composing: boolean) => void
@@ -697,7 +732,6 @@ function AgentsView({
   teammates?: ReactNode
   inAgentOverview?: boolean
   onOpenAgentOverview?: () => void
-  onPrimaryThreadChange?: (threadId: string | null) => void
   onPrimaryFileCreated?: (file: {
     threadId: string
     name: string
@@ -749,6 +783,8 @@ function AgentsView({
           organizationId={organizationId}
           specialist={inUse}
           missing={agents !== undefined && !listed}
+          draft={drafts[inUse.id] ?? ""}
+          onDraftChange={(value) => onDraftChange(inUse.id, value)}
           onComposingChange={onComposingChange}
           getScreenContext={getScreenContext}
         />
@@ -757,10 +793,13 @@ function AgentsView({
           organizationId={organizationId}
           scope={scope}
           agentName={agentName}
+          threadId={primaryThread}
+          setThreadId={setPrimaryThread}
+          draft={drafts[PRIMARY_CHAT_AGENT] ?? ""}
+          onDraftChange={(value) => onDraftChange(PRIMARY_CHAT_AGENT, value)}
           onComposingChange={onComposingChange}
           inOverview={inAgentOverview}
           onOpenOverview={onOpenAgentOverview}
-          onThreadChange={onPrimaryThreadChange}
           onFileCreated={onPrimaryFileCreated}
           getScreenContext={getScreenContext}
         />
