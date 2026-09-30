@@ -7,6 +7,14 @@
 .workspace-command-palette [data-slot="command"] {
   background: var(--workspace-surface, #1e1e1e);
 }
+.workspace-command-palette [data-slot="command-input-wrapper"] {
+  padding-right: 40px;
+}
+.workspace-command-palette [data-slot="input-group"]:focus-within {
+  border-color: var(--workspace-muted, #999999);
+  outline: 2px solid var(--workspace-muted, #999999);
+  outline-offset: 2px;
+}
 .workspace-command-palette [data-slot="command-input"] {
   font-size: 13px;
 }
