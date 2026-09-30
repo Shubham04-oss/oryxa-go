@@ -1,0 +1,24 @@
+.workspace-agent-request {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #353535;
+  border-radius: 12px;
+  background: #111111;
+  overflow-wrap: anywhere;
+}
+.workspace-agent-request-task {
+  margin: 0;
+  color: #d3d3d3;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.workspace-agent-request .workspace-agent-note {
+  margin: 0;
+}
+.workspace-agent-request .workspace-agent-markdown {
+  font-size: 12px;
+}

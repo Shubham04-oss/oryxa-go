@@ -295,7 +295,18 @@ func (service *Service) startRun(ctx context.Context, member threads.Member, id,
 	if definition.Status != StatusActive {
 		return StartedRun{}, ErrDisabled
 	}
-	engine, err := service.engine(definition, profile)
+	application := appName(definition.ID)
+	if input.Delivery.PrimaryChat {
+		// This switch comes only from trusted delivery metadata. Nothing a
+		// member or model names may move a specialist into the primary chat,
+		// or let approved work use the asking member's conversation.
+		if definition.Kind != KindPrimary || profile != DeliveryReport ||
+			input.Delivery.Purpose != primaryagents.DeliveryReports || input.Delivery.RequestID == "" {
+			return StartedRun{}, fmt.Errorf("%w: only an outcome report to a primary agent may continue its primary chat", threads.ErrInvalid)
+		}
+		application = primaryagents.RootName
+	}
+	engine, err := service.engineIn(definition, profile, application)
 	if err != nil {
 		return StartedRun{}, err
 	}
@@ -368,6 +379,10 @@ func (service *Service) deleteArtifacts(ctx context.Context, app, userID, thread
 }
 
 func (service *Service) engine(definition Definition, profile UnattendedProfile) (*threads.Service, error) {
+	return service.engineIn(definition, profile, appName(definition.ID))
+}
+
+func (service *Service) engineIn(definition Definition, profile UnattendedProfile, application string) (*threads.Service, error) {
 	built, err := service.factory(definition)
 	if err != nil {
 		return nil, fmt.Errorf("build agent: %w", err)
@@ -390,7 +405,7 @@ func (service *Service) engine(definition Definition, profile UnattendedProfile)
 		built, memory = unattended, nil
 	}
 	engine, err := threads.New(threads.Config{
-		AppName: appName(definition.ID), Agent: built, Unattended: unattended, Sessions: service.sessions,
+		AppName: application, Agent: built, Unattended: unattended, Sessions: service.sessions,
 		Artifacts: service.artifacts, Memory: memory, Runs: service.runs,
 		Prices: service.prices, Logger: service.logger,
 		InitialState: map[string]any{

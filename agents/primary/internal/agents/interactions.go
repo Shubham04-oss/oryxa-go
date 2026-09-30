@@ -82,6 +82,10 @@ type Delivery struct {
 	// judged as one whose sources cannot be read (SourcesUnrecorded), never let
 	// through unread; an empty list records that the run reaches nothing private.
 	Sources []string
+	// PrimaryChat reports back into the primary chat's own ADK namespace,
+	// rather than the managed-agent namespace used for unattended work. Only
+	// the waker sets it from the originating run's trusted app identity.
+	PrimaryChat bool
 }
 
 // DeliveryState is what a run delivering one interaction adds to its
@@ -92,6 +96,14 @@ func DeliveryState(delivery Delivery) map[string]any {
 		state[deliverySourcesKey] = strings.Join(delivery.Sources, ",")
 	}
 	return state
+}
+
+// ClearDeliveryState resets a fresh ordinary run after a delivery used the
+// same conversation. A nil source value is deliberately unrecorded, rather
+// than an empty string that would claim this ordinary run read no private
+// sources. Confirmation continuations keep their original delivery state.
+func ClearDeliveryState() map[string]any {
+	return map[string]any{deliveredRequestKey: "", deliveryPurposeKey: "", deliverySourcesKey: nil}
 }
 
 // RequestTool is value as the tool vocabulary spells it: AppsToolboxName or
@@ -126,6 +138,10 @@ type InteractionActor struct {
 	AgentID        string
 	AgentName      string
 	AgentKind      string
+	// ThreadID is the originating conversation, taken from the run's session
+	// by the tool adapter. It is never supplied by a model or an HTTP body.
+	ThreadID      string
+	ThreadAppName string
 	// Session is who is acting: SessionMember for the member themself in
 	// their own signed-in session, SessionAgent for an agent's run. Anything
 	// else, nothing included, is never taken for the member.
@@ -238,6 +254,12 @@ type InteractionReviewInput struct {
 type Interaction struct {
 	ID             string `json:"id"`
 	OrganizationID string `json:"organization_id"`
+	// RequesterThreadID is where the asking agent filed this request. Older
+	// requests and requests filed outside an agent run have none.
+	RequesterThreadID string `json:"requester_thread_id,omitempty"`
+	// RequesterThreadAppName distinguishes the main primary chat from a
+	// managed agent's conversation. It is internal delivery metadata.
+	RequesterThreadAppName string `json:"-"`
 	// TeamspaceID is the shared teamspace the request was made in; it is
 	// absent for a request made outside one.
 	TeamspaceID string `json:"teamspace_id,omitempty"`
@@ -502,10 +524,12 @@ func (tools interactionTools) actor(ctx agent.Context, needsToken bool) (Interac
 	// through the API, never through a model.
 	actor := InteractionActor{
 		OrganizationID: member.OrganizationID, UserID: member.UserID,
-		AgentID:   stateText(ctx.ReadonlyState(), AgentIDKey, ""),
-		AgentName: stateText(ctx.ReadonlyState(), AgentNameKey, ""),
-		AgentKind: stateText(ctx.ReadonlyState(), AgentKindKey, ""),
-		Session:   SessionAgent,
+		AgentID:       stateText(ctx.ReadonlyState(), AgentIDKey, ""),
+		AgentName:     stateText(ctx.ReadonlyState(), AgentNameKey, ""),
+		AgentKind:     stateText(ctx.ReadonlyState(), AgentKindKey, ""),
+		Session:       SessionAgent,
+		ThreadID:      ctx.SessionID(),
+		ThreadAppName: ctx.AppName(),
 	}
 	if actor.AgentID == "" {
 		return InteractionActor{}, "", errors.New("this conversation has no persistent agent identity for cross-agent requests")

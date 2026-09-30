@@ -236,6 +236,8 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 			run.stateDelta = map[string]any{}
 		}
 		maps.Copy(run.stateDelta, agents.DeliveryState(input.Delivery))
+	} else if message != "" {
+		maps.Copy(run.stateDelta, agents.ClearDeliveryState())
 	}
 	history := sessionEvents(stored)
 	run.guardInput = publicationGuardInput(history, message)

@@ -6,7 +6,15 @@ import remarkGfm from "remark-gfm"
 import { ThinkingOrb } from "thinking-orbs"
 import type { OrbState } from "thinking-orbs"
 import { FileText, Inbox, ShieldQuestion } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
 import { ApiError } from "@/lib/api/client"
+import { agentRequestQueryOptions } from "@/lib/agents/queries"
+import {
+  isRequestReadRefused,
+  requestCardAnswer,
+  requestCardPollInterval,
+  requestCardStatus,
+} from "@/lib/threads/requests"
 import { toolkitName } from "@/lib/apps/client"
 import type {
   SpecialistResult,
@@ -25,10 +33,12 @@ import type {
   ArtifactEntry,
   ConfirmationEntry,
   MessageEntry,
+  RequestEntry,
   TimelineEntry,
   ToolEntry,
   ToolState,
 } from "@/lib/threads/timeline"
+import "./agent-request-card.css"
 
 /** One agent turn's tool calls, shown as one quiet row. */
 export type ToolGroupEntry = { kind: "tools"; key: string; tools: ToolEntry[] }
@@ -655,6 +665,65 @@ function ArtifactName({ entry }: { entry: ArtifactEntry }) {
   )
 }
 
+/** A pointer reads only the request Go authorizes this member to see. */
+export function AgentRequestCard({
+  entry,
+  organizationId,
+}: {
+  entry: RequestEntry
+  organizationId: string
+}) {
+  const query = useQuery({
+    ...agentRequestQueryOptions(organizationId, entry.requestId),
+    retry: false,
+    refetchInterval: (current) =>
+      requestCardPollInterval(current.state.data, current.state.error),
+  })
+  // A refusal wins over cached data, including a previously visible answer.
+  if (isRequestReadRefused(query.error)) return null
+  const request = query.data
+  const title = request ? `Asked ${request.target.agent_name}` : "Agent request"
+  const answer = request && requestCardAnswer(request)
+  return (
+    <div className="workspace-agent-request" role="group" aria-label={title}>
+      <p className="workspace-agent-confirmation-title">
+        <Inbox size={14} strokeWidth={1.8} aria-hidden="true" />
+        {title}
+      </p>
+      {(request?.task || entry.text) && (
+        <p className="workspace-agent-request-task">
+          {request?.task || entry.text}
+        </p>
+      )}
+      <p className="workspace-agent-note" aria-live="polite">
+        {requestCardStatus(request?.status ?? entry.status)}
+      </p>
+      <div aria-live="polite">
+        {answer && <AgentMarkdown text={answer} />}
+        {request?.status === "rejected" && request.decision?.message && (
+          <p className="workspace-agent-note">{request.decision.message}</p>
+        )}
+      </div>
+      {query.isPending && (
+        <p className="workspace-agent-note">Loading request…</p>
+      )}
+      {query.error && (
+        <p className="workspace-agent-note" role="status">
+          Couldn't load the latest request.{" "}
+          <button
+            className="workspace-agent-text-button"
+            type="button"
+            disabled={query.isFetching}
+            onClick={() => void query.refetch()}
+          >
+            Try again
+          </button>
+        </p>
+      )}
+    </div>
+  )
+}
+
 /**
  * A conversation's entries, as `buildTimeline` makes them: the member's
  * messages, the agent's answers in Markdown (a growing draft while one
@@ -794,6 +863,15 @@ export function AgentTimeline({
           ) : (
             <ArtifactName key={entry.key} entry={entry} />
           )
+        )
+        break
+      case "request":
+        blocks.push(
+          <AgentRequestCard
+            key={entry.key}
+            entry={entry}
+            organizationId={organizationId}
+          />
         )
         break
       case "run_failed":
