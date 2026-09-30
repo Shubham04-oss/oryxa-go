@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -255,6 +256,46 @@ func TestAReplyAndAReviewAtOnceEndTheReviewOnce(t *testing.T) {
 		}
 		if stored := ledger.read(held.ID); stored.Status == StatusReview || stored.Held != nil {
 			t.Fatalf("round %d: the request is %+v, want its review over", round, stored)
+		}
+	}
+}
+
+// TestTheLedgerKeepsAReplysReviewAndNothingLooser: the review column takes a
+// reply instead of a held answer, and still refuses an action it does not know;
+// both checks 017 replaced know a reply and are validated, and stay so however
+// often 017 and 018 run again.
+func TestTheLedgerKeepsAReplysReviewAndNothingLooser(t *testing.T) {
+	ledger := newSlackLedger(t, func(config *Config) { config.ConsentGuard = holding(consentguard.KindUngrounded) })
+	ctx := context.Background()
+	_, held := ledger.heldInSlack("1792000302.000100", raya)
+	try := func(set string) error {
+		_, err := ledger.database.Pool.Exec(ctx, `UPDATE agents_primary.agent_interactions SET `+set+` WHERE id=$1`, held.ID)
+		return err
+	}
+	if err := try(`status='completed', held_result=NULL, result='{"status":"completed","summary":"Mine.","written_by_owner":true}', review='{"action":"reply"}'`); err != nil {
+		t.Errorf("a reply instead of the held answer was refused: %v", err)
+	}
+	if err := try(`review='{"action":"replied"}'`); err == nil {
+		t.Error("a review action nobody knows was stored")
+	}
+	for range 2 {
+		if _, err := ledger.database.Pool.Exec(ctx, `UPDATE oryxa_migrations SET checksum='stale'
+			WHERE service='agent-interactions' AND name IN ('017_reply.sql', '018_validate_reply.sql')`); err != nil {
+			t.Fatal(err)
+		}
+		if err := ledger.store.Migrate(ctx); err != nil {
+			t.Fatalf("applying 017 and 018 again: %v", err)
+		}
+	}
+	for _, name := range []string{"agent_interactions_consent_check", "agent_interactions_review_check"} {
+		var definition string
+		var validated bool
+		if err := ledger.database.Pool.QueryRow(ctx, `SELECT pg_get_constraintdef(oid), convalidated FROM pg_constraint
+			WHERE conname=$1 AND conrelid='agents_primary.agent_interactions'::regclass`, name).Scan(&definition, &validated); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !validated || !strings.Contains(definition, "'reply'") {
+			t.Errorf("%s is validated=%v and reads %s, want it validated and knowing a reply", name, validated, definition)
 		}
 	}
 }
