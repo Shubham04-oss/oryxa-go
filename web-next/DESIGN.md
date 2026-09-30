@@ -107,11 +107,12 @@ not permission to copy every incidental value into a new component.
   - Next, **Needs you** holds actual Inbox decisions, held answers awaiting
     the member's review, and their primary-agent tool confirmations. Reuse the
     request cards' authorized actions and race handling: Slack asks offer
-    Summary only, Allow for 1 hour and Deny inline; held answers offer the
-    existing review choices. A tool-confirmation row opens its exact chat so
-    the member can review the actual confirmation cards. Count conversations
-    once, even when they have several pending tool confirmations. Requests
-    awaiting automatic agent approval do not wait on the member. Primary-chat
+    Share answer, Allow for 1 hour and Deny inline, and any other request
+    Share answer and Deny; held answers offer the existing review choices. A
+    tool-confirmation row opens its exact chat so the member can review the
+    actual confirmation cards. Count conversations once, even when they have
+    several pending tool confirmations. Requests awaiting automatic agent
+    approval do not wait on the member. Primary-chat
     confirmations are checked in the five newest chats plus the open chat,
     using the same newest-five selection as history and the opening rule. Go
     derives confirmations from events and maintains no aggregate pending flag,
@@ -375,16 +376,24 @@ not permission to copy every incidental value into a new component.
   the lists (`/?org=…&view=requests&request=…`).
   - **The request card** says who asked, the question, where it came from (in
     Slack, or in Oryxa), where it stands and, for the person it is theirs to
-    answer, what to do. A request from Slack is answered with one of three
-    choices, "Summary only", "Allow for 1 hour" or "Deny", and the card says in
-    a line what each lets the agent do. Any other request is approved or
-    declined, as in a side conversation. Whichever surface decided first, the
-    card settles, and says who won ("Approved in Slack by Raya at 14:02.") when
-    the member's own choice lost. An answer the guards held shows its owner why
-    in plain words, the answer, and Don't send, Send and Send masked; the one
-    who asked sees only that it waits. Access the owner gave says until when
-    the asker's follow-ups are answered without asking, with an End access
-    action while it lasts and "You ended Ada's access." after.
+    answer, what to do, in one set of words wherever the request came from,
+    the same as the buttons of Slack's notice. A request from Slack is answered
+    with one of three choices, "Share answer", "Allow for 1 hour" or "Deny",
+    and the card says in a line what each lets the agent do ("Allow for 1
+    hour": the agent may quote what it reads, and the asker's follow-ups in
+    that thread are answered for an hour). Any other request, one an agent
+    filed in Oryxa, is answered with "Share answer" or "Deny" and an optional
+    note. Sharing the answer allows the tools the request asked for, which the
+    card says above the choices ("Krude may read team knowledge."), and it
+    offers no approval without them. Each button is named to a screen reader by
+    its words and whose request it is ("Share answer to Raya's request").
+    Whichever surface decided first, the card settles, and says who won
+    ("Approved in Slack by Raya at 14:02.") when the member's own choice lost.
+    An answer the guards held shows its owner why in plain words, the answer,
+    and Don't send, Send and Send masked; the one who asked sees only that it
+    waits. Access the owner gave says until when the asker's follow-ups are
+    answered without asking, with an End access action while it lasts and "You
+    ended Ada's access." after.
   - **A secret** is never shown in Slack or in a log. When an ask is for a
     credential, its owner pastes the value into the card, which keeps it in one
     uncontrolled field, sends it once and clears it, and picks how long it waits

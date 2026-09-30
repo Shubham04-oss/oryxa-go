@@ -1,11 +1,12 @@
 // A request as its member reads it (DESIGN.md §3, "Requests"): who asked, the
 // question, where it came from, where it stands and what is theirs to do:
-// choose what their agent may share with the person who asked (Slack asks),
-// approve or decline (any other request), review an answer the guard held,
-// end access they gave, share a one-time secret, or, for the one who asked,
-// open it. Requests reads the lists and hands each card its request; a card
-// that is given only an id (`RequestCardById`) reads Go itself, as the member,
-// and settles when the request changes elsewhere.
+// choose what their agent may share with the person who asked (a Slack ask:
+// Share answer, Allow for 1 hour or Deny), share the answer or deny (any other
+// request), review an answer the guard held, end access they gave, share a
+// one-time secret, or, for the one who asked, open it. Requests reads the
+// lists and hands each card its request; a card that is given only an id
+// (`RequestCardById`) reads Go itself, as the member, and settles when the
+// request changes elsewhere.
 import { useEffect, useId, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
@@ -22,8 +23,11 @@ import { clockTime } from "./direct-message-format"
 import { HeldAnswerReview } from "./request-card-review"
 import { OpenSecret, ShareSecret } from "./request-card-secret"
 import {
+  DENY,
+  SHARE_ANSWER,
   consentChoicePending,
   consentChoices,
+  denyName,
   expiresPhrase,
   isOpenToDecide,
   originLabel,
@@ -31,6 +35,7 @@ import {
   requestTitle,
   askerName,
   ownerName,
+  shareAnswerName,
   shortName,
   sideOf,
   statusOf,
@@ -193,7 +198,6 @@ export function RequestCard({
   const noteRef = useRef<HTMLInputElement>(null)
   const noteId = useId()
   const choicesId = useId()
-  const noToolsId = useId()
 
   const request = latest && latest.revision > given.revision ? latest : given
   const stillOpen =
@@ -227,7 +231,6 @@ export function RequestCard({
   const status = statusOf(request, reader)
   const origin = originLabel(request)
   const reads = open && !lostNow ? readsLine(request, reader) : undefined
-  const asksForTools = allowedTools(request).length > 0
   const expires = expiresPhrase(request, now)
   const long = isLong(request.task)
   const shared =
@@ -287,21 +290,18 @@ export function RequestCard({
     },
   })
 
+  // Share answer approves, with the tools the request asked for: the card
+  // offers no approval without them (Go still takes one). Deny declines.
   const decide = useMutation({
-    mutationFn: (input: {
-      decision: "approved" | "rejected"
-      withTools: boolean
-    }) =>
+    mutationFn: (decision: "approved" | "rejected") =>
       decideAgentRequest(organizationId, request.id, {
-        decision: input.decision,
+        decision,
         // Go requires a note: without one, the decision says where it was made.
         message:
           note.trim() ||
-          (input.decision === "approved"
-            ? "Approved in Oryxa."
-            : "Declined in Oryxa."),
-        ...(input.decision === "approved"
-          ? { allowed_tools: input.withTools ? allowedTools(request) : [] }
+          (decision === "approved" ? "Approved in Oryxa." : "Denied in Oryxa."),
+        ...(decision === "approved"
+          ? { allowed_tools: allowedTools(request) }
           : {}),
       }),
     onSuccess: async (updated) => {
@@ -454,7 +454,7 @@ export function RequestCard({
                 data-choice={choice.choice}
                 type="button"
                 key={choice.choice}
-                aria-label={choice.label}
+                aria-label={choice.name(askerShort)}
                 aria-describedby={`${choicesId}-${choice.choice}`}
                 disabled={busy}
                 onClick={() => {
@@ -501,64 +501,29 @@ export function RequestCard({
               Add a note
             </button>
           )}
-          {asksForTools && (
-            <p id={noToolsId} className="workspace-request-reads">
-              Approve without tools means {agent} can’t look anything up.
-            </p>
-          )}
           <div className="workspace-request-actions">
             <button
               className="workspace-agent-pill"
               type="button"
-              aria-label={`Decline ${agent}'s request from ${asker}`}
+              aria-label={denyName(askerShort)}
               disabled={busy}
-              onClick={() =>
-                decide.mutate({ decision: "rejected", withTools: false })
-              }
+              onClick={() => decide.mutate("rejected")}
             >
-              {decide.isPending && decide.variables.decision === "rejected"
-                ? "Declining…"
-                : "Decline"}
+              {decide.isPending && decide.variables === "rejected"
+                ? "Denying…"
+                : DENY}
             </button>
-            {asksForTools && (
-              <button
-                className="workspace-agent-pill"
-                type="button"
-                aria-label={`Approve ${agent}'s request from ${asker} without tools`}
-                aria-describedby={noToolsId}
-                disabled={busy}
-                onClick={() =>
-                  decide.mutate({ decision: "approved", withTools: false })
-                }
-              >
-                {decide.isPending &&
-                decide.variables.decision === "approved" &&
-                !decide.variables.withTools
-                  ? "Approving…"
-                  : "Approve without tools"}
-              </button>
-            )}
             <button
               className="workspace-agent-pill"
               data-primary="true"
               type="button"
-              aria-label={
-                asksForTools
-                  ? `Approve with tools for ${agent}'s request from ${asker}`
-                  : `Approve ${agent}'s request from ${asker}`
-              }
+              aria-label={shareAnswerName(askerShort)}
               disabled={busy}
-              onClick={() =>
-                decide.mutate({ decision: "approved", withTools: true })
-              }
+              onClick={() => decide.mutate("approved")}
             >
-              {decide.isPending &&
-              decide.variables.decision === "approved" &&
-              decide.variables.withTools
-                ? "Approving…"
-                : asksForTools
-                  ? "Approve with tools"
-                  : "Approve"}
+              {decide.isPending && decide.variables === "approved"
+                ? "Sharing…"
+                : SHARE_ANSWER}
             </button>
           </div>
         </div>

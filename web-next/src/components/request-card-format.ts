@@ -140,9 +140,9 @@ export function requestTitle(request: AgentRequest, reader: Reader): string {
   return `${asker} asked ${targetAgentName(request, reader)}`
 }
 
-/** How far an approval let the answer go, as a short sentence. */
+/** How far an approval let the answer go, as a short sentence, in the words of the choice that gave it. */
 export function consentWords(consent: AgentRequestConsent): string {
-  return consent === "access" ? "Access for 1 hour." : "Summary only."
+  return consent === "access" ? "Access for 1 hour." : "Answer shared."
 }
 
 /** When, to follow "at": the clock today, and the day and clock otherwise. */
@@ -211,7 +211,7 @@ function bypassWhy(
 
 /**
  * How a request was decided, as a sentence, where and by whom and when:
- * "Approved in Slack by Raya at 2:02 PM. Summary only." A lease, a bypass, an
+ * "Approved in Slack by Raya at 2:02 PM. Answer shared." A lease, a bypass, an
  * agent and Oryxa each say so in their own words, and never a code.
  */
 function decisionSentence(
@@ -238,11 +238,9 @@ function decisionSentence(
     case "agent":
       return `${rejected ? "Declined" : "Approved"} by ${owner === "you" ? "your" : `${owner}'s`} agent${at}.`
     default: {
-      const verb = rejected
-        ? asksForConsent(request)
-          ? "Denied"
-          : "Declined"
-        : "Approved"
+      // A member's own choice is worded as its button was: Deny, whichever
+      // surface the request came from.
+      const verb = rejected ? "Denied" : "Approved"
       const where =
         by?.surface === "slack"
           ? " in Slack"
@@ -549,7 +547,7 @@ export function statusOf(
       }
     }
     case "rejected":
-      return { tone: "ended", text: decided ?? "Declined." }
+      return { tone: "ended", text: decided ?? "Denied." }
     case "failed":
       return {
         tone: "failed",
@@ -607,38 +605,85 @@ export function readsLine(
 }
 
 // ---------------------------------------------------------------------------
-// The owner's three choices
+// The owner's choices
 // ---------------------------------------------------------------------------
+//
+// One set of words wherever a request came from, and the same three as the
+// buttons of the notice Slack's DM sends (apps/internal/slackbot/templates.go).
+// A Slack ask is answered with three of them (`POST …/consent`): Share answer,
+// Allow for 1 hour and Deny. A request an agent filed in Oryxa is answered
+// with two (`POST …/decision`): Share answer, an approval with the tools it
+// asked for, and Deny, a decline.
+
+/** The words on the choices. */
+export const SHARE_ANSWER = "Share answer"
+export const ALLOW_FOR_AN_HOUR = "Allow for 1 hour"
+export const DENY = "Deny"
+
+/** A first name as a possessive ("Raya's"), and "your" for the reader. */
+function possessiveName(name: string): string {
+  return name === "you" ? "your" : `${name}'s`
+}
+
+/**
+ * What a choice's button is called to a screen reader: its words and whose
+ * request they are about, given the asker's first name ("Share answer to
+ * Raya's request"). A page of cards has these buttons once a card, so the
+ * visible words alone would not tell them apart.
+ */
+export function shareAnswerName(asker: string): string {
+  return `${SHARE_ANSWER} to ${possessiveName(asker)} request`
+}
+
+export function allowForAnHourName(asker: string): string {
+  return `${ALLOW_FOR_AN_HOUR} for ${possessiveName(asker)} request`
+}
+
+export function denyName(asker: string): string {
+  return `${DENY} ${possessiveName(asker)} request`
+}
 
 export type ConsentChoiceCopy = {
   choice: "summary" | "access" | "deny"
   label: string
+  /** What the button is called to a screen reader, given the asker's first name. */
+  name: (asker: string) => string
   /** What it lets the agent do, as the owner is asked, given the asker's first name. */
   detail: (asker: string) => string
 }
 
-/** The three choices, in the order Slack's notice offers them, with what each lets the agent do. */
+/** The three choices of a Slack ask, in the order Slack's notice offers them, with what each lets the agent do. */
 export const consentChoices: readonly ConsentChoiceCopy[] = [
   {
     choice: "summary",
-    label: "Summary only",
+    label: SHARE_ANSWER,
+    name: shareAnswerName,
     detail: () =>
       "Your agent answers in its own words. It won't copy passages from your documents or share links.",
   },
   {
     choice: "access",
-    label: "Allow for 1 hour",
+    label: ALLOW_FOR_AN_HOUR,
+    name: allowForAnHourName,
     detail: (asker) =>
-      `Your agent may quote what it reads. ${asker}'s follow-up questions in the same Slack thread are answered without asking you again for an hour, and you can end that any time.`,
+      `Your agent may quote what it reads. ${asker}'s follow-ups in that thread are answered for an hour.`,
   },
   {
     choice: "deny",
-    label: "Deny",
+    label: DENY,
+    name: denyName,
     detail: (asker) => `Nothing is shared. ${asker} is told you said no.`,
   },
 ]
 
 /** A choice's label as its button says it while the choice is on its way. */
 export function consentChoicePending(choice: ConsentChoiceCopy["choice"]) {
-  return choice === "deny" ? "Denying…" : "Approving…"
+  switch (choice) {
+    case "summary":
+      return "Sharing…"
+    case "access":
+      return "Allowing…"
+    case "deny":
+      return "Denying…"
+  }
 }

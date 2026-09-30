@@ -121,22 +121,36 @@ describe("a Slack ask, for the member it is addressed to", () => {
     const group = within(card).getByRole("group", {
       name: "Choose what Krude may share with Raya",
     })
-    for (const label of ["Summary only", "Allow for 1 hour", "Deny"]) {
-      expect(within(group).getByRole("button", { name: label })).toBeTruthy()
-    }
+    // The words on the buttons, in Slack's order, and what a screen reader
+    // calls each: its words and whose request they are about.
+    expect(
+      within(group)
+        .getAllByRole("button")
+        .map((button) => [
+          button.querySelector("strong")?.textContent,
+          button.getAttribute("aria-label"),
+        ])
+    ).toEqual([
+      ["Share answer", "Share answer to Raya's request"],
+      ["Allow for 1 hour", "Allow for 1 hour for Raya's request"],
+      ["Deny", "Deny Raya's request"],
+    ])
     expect(
       within(group).getByText(
-        /answers in its own words. It won't copy passages/
+        "Your agent answers in its own words. It won't copy passages from your documents or share links."
       )
     ).toBeTruthy()
     expect(
       within(group).getByText(
-        /Raya's follow-up questions in the same Slack thread/
+        "Your agent may quote what it reads. Raya's follow-ups in that thread are answered for an hour."
       )
     ).toBeTruthy()
     expect(
       within(group).getByText("Nothing is shared. Raya is told you said no.")
     ).toBeTruthy()
+    // One set of words: the old names of these choices are nowhere on the card.
+    expect(card.textContent).not.toMatch(/Summary only|AI summary/)
+    expect(card.textContent).not.toMatch(/Approve|Decline|without tools/)
   })
 
   it("offers the asker no choice, only where it stands", async () => {
@@ -147,10 +161,13 @@ describe("a Slack ask, for the member it is addressed to", () => {
     })
     expect(within(card).getByText("Waiting for Ada to decide.")).toBeTruthy()
     expect(within(card).queryByRole("group")).toBeNull()
-    expect(within(card).queryByRole("button", { name: "Deny" })).toBeNull()
+    expect(within(card).queryByRole("button", { name: /Deny/ })).toBeNull()
+    expect(
+      within(card).queryByRole("button", { name: /Share answer|Allow for/ })
+    ).toBeNull()
   })
 
-  it("records Summary only, and then says how it was decided", async () => {
+  it("records Share answer, and then says how it was decided", async () => {
     const { go } = renderCard(slackRequest(), {
       routes: {
         [`POST ${consentPath}`]: () => ({
@@ -159,10 +176,14 @@ describe("a Slack ask, for the member it is addressed to", () => {
       },
     })
 
-    fireEvent.click(await screen.findByRole("button", { name: "Summary only" }))
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Share answer to Raya's request",
+      })
+    )
 
     await screen.findByText(
-      `Approved in Oryxa by you at ${clockTime("2026-09-29T12:31:00Z")}. Summary only.`
+      `Approved in Oryxa by you at ${clockTime("2026-09-29T12:31:00Z")}. Answer shared.`
     )
     expect(go.calls.find((call) => call.path === consentPath)?.body).toEqual({
       choice: "summary",
@@ -180,7 +201,9 @@ describe("a Slack ask, for the member it is addressed to", () => {
       },
     })
 
-    fireEvent.click(await screen.findByRole("button", { name: "Deny" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Deny Raya's request" })
+    )
 
     await screen.findByText(
       `Denied in Oryxa by you at ${clockTime("2026-09-29T12:31:00Z")}.`
@@ -200,16 +223,18 @@ describe("a Slack ask, for the member it is addressed to", () => {
     })
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Allow for 1 hour" })
+      await screen.findByRole("button", {
+        name: "Allow for 1 hour for Raya's request",
+      })
     )
 
-    await screen.findByText("Approving…")
+    await screen.findByText("Allowing…")
     for (const button of within(screen.getByRole("group")).getAllByRole(
       "button"
     )) {
       expect((button as HTMLButtonElement).disabled).toBe(true)
     }
-    fireEvent.click(screen.getByRole("button", { name: "Deny" }))
+    fireEvent.click(screen.getByRole("button", { name: "Deny Raya's request" }))
     answerConsent(
       json({ request: decidedByOwner("access", "approved"), lease })
     )
@@ -225,15 +250,16 @@ describe("a Slack ask, for the member it is addressed to", () => {
       },
     })
 
-    fireEvent.click(await screen.findByRole("button", { name: "Deny" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Deny Raya's request" })
+    )
 
     expect((await screen.findByRole("alert")).textContent).toBe(
       "Slack consent isn't set up on this server."
     )
-    expect(screen.getByRole("button", { name: "Deny" })).toHaveProperty(
-      "disabled",
-      false
-    )
+    expect(
+      screen.getByRole("button", { name: "Deny Raya's request" })
+    ).toHaveProperty("disabled", false)
   })
 
   it("says a request that ran out, and offers nothing", async () => {
@@ -269,11 +295,13 @@ describe("a choice that lost the race", () => {
       },
     })
 
-    fireEvent.click(await screen.findByRole("button", { name: "Deny" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Deny Raya's request" })
+    )
 
     const lost = await screen.findByText(/Already decided\./)
     expect(lost.parentElement?.textContent).toBe(
-      `Already decided. Approved in Slack by you at ${clockTime("2026-09-29T12:02:00Z")}. Summary only.`
+      `Already decided. Approved in Slack by you at ${clockTime("2026-09-29T12:02:00Z")}. Answer shared.`
     )
     expect(screen.queryByRole("group")).toBeNull()
     expect(screen.queryByRole("alert")).toBeNull()
@@ -301,7 +329,7 @@ describe("a choice that lost the race", () => {
     focusManager.setFocused(true)
 
     await screen.findByText(
-      `Approved in Slack by you at ${clockTime("2026-09-29T12:02:00Z")}. Summary only.`
+      `Approved in Slack by you at ${clockTime("2026-09-29T12:02:00Z")}. Answer shared.`
     )
     expect(screen.queryByRole("group", { name: /Choose what/ })).toBeNull()
     focusManager.setFocused(undefined)
@@ -323,7 +351,9 @@ describe("access the owner gave", () => {
     })
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Allow for 1 hour" })
+      await screen.findByRole("button", {
+        name: "Allow for 1 hour for Raya's request",
+      })
     )
 
     await screen.findByText(
@@ -404,41 +434,57 @@ describe("access the owner gave", () => {
   })
 })
 
-describe("a request that asks for nothing more than approval", () => {
-  it("approves with the tools it asked for, and says where it was decided", async () => {
-    const { go } = renderCard(agentRequest(), {
-      routes: {
-        [`POST ${decisionPath}`]: () => ({
-          ...agentRequest(),
-          status: "approved",
-          revision: 2,
-          decision: {
-            decision: "approved",
-            message: "Approved in Oryxa.",
-            allowed_tools: ["knowledge"],
-            granted_permissions: [],
-            decided_at: "2026-09-29T12:31:00Z",
-            decided_by: { kind: "member", user_id: OWNER, surface: "web" },
-          },
-        }),
-      },
-    })
+describe("a request an agent filed in Oryxa, which has two choices", () => {
+  const sharedByOwner = (): AgentRequest => ({
+    ...agentRequest(),
+    status: "approved",
+    revision: 2,
+    decision: {
+      decision: "approved",
+      message: "Approved in Oryxa.",
+      allowed_tools: ["knowledge"],
+      granted_permissions: [],
+      decided_at: "2026-09-29T12:31:00Z",
+      decided_by: { kind: "member", user_id: OWNER, surface: "web" },
+    },
+  })
+
+  it("offers Share answer and Deny, and nothing between them", async () => {
+    renderCard(agentRequest())
 
     expect(await screen.findByText("Waiting for you to approve.")).toBeTruthy()
     expect(screen.queryByRole("group")).toBeNull()
-    const approve = screen.getByRole("button", {
-      name: "Approve with tools for Krude's request from Raya Patel",
-    })
-    expect(approve.textContent).toBe("Approve with tools")
-    expect(approve.getAttribute("data-primary")).toBe("true")
-    const withoutTools = screen.getByRole("button", {
-      name: "Approve Krude's request from Raya Patel without tools",
-    })
+    // What approving lets the agent read is said once, above the choices.
+    expect(screen.getByText("Krude may read team knowledge.")).toBeTruthy()
     expect(
-      document.getElementById(withoutTools.getAttribute("aria-describedby")!)
-        ?.textContent
-    ).toBe("Approve without tools means Krude can’t look anything up.")
-    fireEvent.click(approve)
+      screen
+        .getAllByRole("button")
+        .map((button) => [
+          button.textContent,
+          button.getAttribute("aria-label"),
+        ])
+    ).toEqual([
+      ["Add a note", null],
+      ["Deny", "Deny Raya's request"],
+      ["Share answer", "Share answer to Raya's request"],
+    ])
+    expect(
+      screen
+        .getByRole("button", { name: "Share answer to Raya's request" })
+        .getAttribute("data-primary")
+    ).toBe("true")
+  })
+
+  it("shares the answer with the tools it asked for, and says where it was decided", async () => {
+    const { go } = renderCard(agentRequest(), {
+      routes: { [`POST ${decisionPath}`]: sharedByOwner },
+    })
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Share answer to Raya's request",
+      })
+    )
 
     await screen.findByText(
       `Approved in Oryxa by you at ${clockTime("2026-09-29T12:31:00Z")}.`
@@ -450,7 +496,7 @@ describe("a request that asks for nothing more than approval", () => {
     })
   })
 
-  it("declines with a note", async () => {
+  it("denies with a note", async () => {
     const { go } = renderCard(agentRequest(), {
       routes: {
         [`POST ${decisionPath}`]: () => ({
@@ -476,14 +522,10 @@ describe("a request that asks for nothing more than approval", () => {
         target: { value: "Not this week." },
       }
     )
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Decline Krude's request from Raya Patel",
-      })
-    )
+    fireEvent.click(screen.getByRole("button", { name: "Deny Raya's request" }))
 
     await screen.findByText(
-      `Declined in Oryxa by you at ${clockTime("2026-09-29T12:31:00Z")}.`
+      `Denied in Oryxa by you at ${clockTime("2026-09-29T12:31:00Z")}.`
     )
     expect(go.calls.find((call) => call.path === decisionPath)?.body).toEqual({
       decision: "rejected",
@@ -491,22 +533,91 @@ describe("a request that asks for nothing more than approval", () => {
     })
   })
 
-  it("approves without tools when asked to", async () => {
+  it("says where it was denied when there is no note to say", async () => {
     const { go } = renderCard(agentRequest(), {
       routes: {
         [`POST ${decisionPath}`]: () => ({
           ...agentRequest(),
-          status: "approved",
+          status: "rejected",
           revision: 2,
         }),
       },
     })
 
     fireEvent.click(
+      await screen.findByRole("button", { name: "Deny Raya's request" })
+    )
+
+    await screen.findByText("Denied.")
+    expect(go.calls.find((call) => call.path === decisionPath)?.body).toEqual({
+      decision: "rejected",
+      message: "Denied in Oryxa.",
+    })
+  })
+
+  it("shows the choice on its way, and no second click gets through", async () => {
+    let answerDecision: (response: Response) => void = () => {}
+    const { go } = renderCard(agentRequest(), {
+      routes: {
+        [`POST ${decisionPath}`]: () =>
+          new Promise<Response>((resolve) => {
+            answerDecision = resolve
+          }),
+      },
+    })
+
+    fireEvent.click(
       await screen.findByRole("button", {
-        name: "Approve Krude's request from Raya Patel without tools",
+        name: "Share answer to Raya's request",
       })
     )
+
+    await screen.findByText("Sharing…")
+    for (const name of [/Deny/, /Share answer/]) {
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name }).disabled
+      ).toBe(true)
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Deny Raya's request" }))
+    answerDecision(json(sharedByOwner()))
+    await screen.findByText(/Approved in Oryxa by you/)
+    expect(go.calls.filter((call) => call.path === decisionPath)).toHaveLength(
+      1
+    )
+  })
+
+  it("never offers an approval without tools, nor says what one means", async () => {
+    for (const requested_tools of [["knowledge"], ["apps", "knowledge"], []]) {
+      const { unmount } = renderCard(agentRequest({ requested_tools }))
+
+      await screen.findByRole("button", {
+        name: "Share answer to Raya's request",
+      })
+      expect(screen.queryByRole("button", { name: /without tools/ })).toBeNull()
+      expect(screen.queryByRole("button", { name: /Approve/ })).toBeNull()
+      expect(screen.queryByText(/can’t look anything up/)).toBeNull()
+      expect(document.body.textContent).not.toMatch(/without tools/i)
+      unmount()
+    }
+  })
+
+  it("allows no tool for a request that asked for none", async () => {
+    const { go } = renderCard(agentRequest({ requested_tools: [] }), {
+      routes: {
+        [`POST ${decisionPath}`]: () => ({
+          ...agentRequest({ requested_tools: [] }),
+          status: "approved",
+          revision: 2,
+        }),
+      },
+    })
+
+    const share = await screen.findByRole("button", {
+      name: "Share answer to Raya's request",
+    })
+    // The same two choices as any request has, and no line on what it may read.
+    expect(screen.queryByText(/may read/)).toBeNull()
+    fireEvent.click(share)
 
     await screen.findByText("Krude is working on it…")
     expect(go.calls.find((call) => call.path === decisionPath)?.body).toEqual({
@@ -516,24 +627,14 @@ describe("a request that asks for nothing more than approval", () => {
     })
   })
 
-  it("keeps a tool-free request's plain approval, without a second choice", async () => {
-    renderCard(agentRequest({ requested_tools: [] }))
-
-    const approve = await screen.findByRole("button", {
-      name: "Approve Krude's request from Raya Patel",
-    })
-    expect(approve.textContent).toBe("Approve")
-    expect(approve.getAttribute("data-primary")).toBe("true")
-    expect(screen.queryByRole("button", { name: /without tools/ })).toBeNull()
-    expect(screen.queryByText(/can’t look anything up/)).toBeNull()
-  })
-
-  it("shows the approval explanation only to the holder", async () => {
+  it("offers the asker no choice", async () => {
     renderCard(agentRequest(), { viewer: ASKER })
 
     await screen.findByText("Waiting for Ada to decide.")
+    expect(
+      screen.queryByRole("button", { name: /Share answer|Deny/ })
+    ).toBeNull()
     expect(screen.queryByRole("button", { name: /Approve/ })).toBeNull()
-    expect(screen.queryByText(/can’t look anything up/)).toBeNull()
   })
 
   it("says why a decision could not be recorded", async () => {
@@ -545,9 +646,7 @@ describe("a request that asks for nothing more than approval", () => {
     })
 
     fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Decline Krude's request from Raya Patel",
-      })
+      await screen.findByRole("button", { name: "Deny Raya's request" })
     )
 
     expect((await screen.findByRole("alert")).textContent).toBe(
