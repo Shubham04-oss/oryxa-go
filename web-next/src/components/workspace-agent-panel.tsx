@@ -564,7 +564,6 @@ export function WorkspaceAgentPanel({
                     organizationId={organizationId}
                     scope={scope}
                     chatAgent={chatAgent}
-                    visible={agentsVisible}
                     agents={agents.data}
                     agentId={agentId}
                     onSelectAgent={setAgentId}
@@ -757,7 +756,6 @@ function AgentsView({
   organizationId,
   scope,
   chatAgent,
-  visible,
   agents,
   agentId,
   onSelectAgent,
@@ -780,8 +778,6 @@ function AgentsView({
   scope?: ChatScope
   /** The primary agent's id once known: what its chat's remembered choices are kept under. */
   chatAgent?: string
-  /** Whether this view is in front of the member (see `agentsVisible`). */
-  visible: boolean
   /** The member's agents, once read. */
   agents?: ManagedAgent[]
   /** The specialist in use, or null for the primary agent. */
@@ -854,7 +850,6 @@ function AgentsView({
           organizationId={organizationId}
           specialist={inUse}
           missing={agents !== undefined && !listed}
-          visible={visible}
           draft={drafts[inUse.id] ?? ""}
           onDraftChange={(value) => onDraftChange(inUse.id, value)}
           onComposingChange={onComposingChange}

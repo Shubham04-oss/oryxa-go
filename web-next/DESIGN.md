@@ -144,9 +144,10 @@ not permission to copy every incidental value into a new component.
   their latest chat while it was active within the last hour, then one that
   still waits on their confirmation. A chat left alone for an hour comes back
   to a new conversation when its tab shows again, never while a run streams
-  or a confirmation waits, and nothing is deleted. A specialist's chat starts
-  its stale conversation over the same way. Switching agents keeps each one's
-  conversation and unsent message.
+  or a confirmation waits, and nothing is deleted. A specialist's chat never
+  starts over by itself, since that empties its log: only its New conversation
+  button does. Switching agents keeps each one's conversation and unsent
+  message.
 - People is a DM area, not teammate administration or a combined “People &
   teams” directory. Recent/started conversations belong in Team's left
   sidebar, with at most three visible there. A DM uses the same dynamic header

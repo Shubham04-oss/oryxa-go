@@ -22,7 +22,6 @@ import {
   team,
 } from "./agents-fake-backend"
 import type { FakeAgentsBackend } from "./agents-fake-backend"
-import { SpecialistChat } from "./specialist-chat"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import { WorkspaceShell } from "./workspace-shell"
 import type { Session } from "@/lib/auth/client"
@@ -657,7 +656,7 @@ describe("Starting over", () => {
   })
 })
 
-describe("A conversation left alone", () => {
+describe("A specialist's conversation is never cleared by itself", () => {
   let visibility: DocumentVisibilityState = "visible"
 
   beforeEach(() => {
@@ -681,14 +680,6 @@ describe("A conversation left alone", () => {
           call.path === `/agents/specialist-chat-agent/${scoutChat}`
       )
 
-  function seed(fields: Partial<ThreadDetail> = {}, agents = [primary, scout]) {
-    return fakeAgentsBackend({
-      agents,
-      chats: { [scout.id]: transcript(asked, answered) },
-      conversations: { [scout.id]: [conversation(fields)] },
-    })
-  }
-
   /** The chat opens, and its object says which conversation it is on. */
   async function opened(backend: FakeAgentsBackend) {
     renderFocus(backend)
@@ -696,192 +687,90 @@ describe("A conversation left alone", () => {
     const socket = chatSocket()
     socket.open()
     socket.state({ threadId: "th_1" })
+    await act(async () => {})
     return socket
   }
 
-  it("starts over as it opens when the conversation is an hour old, the way the button does", async () => {
-    const backend = seed({
-      updated_at: new Date(Date.now() - HOUR).toISOString(),
-    })
-    const socket = await opened(backend)
-
-    await waitFor(() => expect(cleared(backend)).toHaveLength(1))
-    // Go keeps the old conversation; the object empties and forgets it.
-    expect(backend.writes()).toEqual([
-      {
-        method: "DELETE",
-        path: `/agents/specialist-chat-agent/${scoutChat}`,
-        body: undefined,
-      },
-    ])
-    agentChats.named(scoutChat).update({ messages: [] })
-    socket.state({ threadId: null })
-    expect(conversationTitle()).toBe("New conversation")
-    expect(backend.state.agents.map((entry) => entry.id)).toContain(scout.id)
-  })
-
-  it("leaves a conversation that was active within the hour", async () => {
-    const backend = seed({
-      updated_at: new Date(Date.now() - 59 * 60_000).toISOString(),
-    })
-    await opened(backend)
-    await waitFor(() => expect(conversationTitle()).toBe("Review the pipeline"))
-    await act(async () => {})
-    expect(cleared(backend)).toHaveLength(0)
-  })
-
-  it("leaves an old conversation that still waits on the member", async () => {
-    const confirm: Item = {
-      type: "confirmation",
-      id: "ev_c",
-      call_id: "call_9",
-      tool_call_id: "tool_9",
-      author: "Scout",
-      tool: "send_email",
-      arguments: { to: "sam@example.com" },
-      status: "pending",
-    }
+  it("leaves a conversation Go last touched hours ago as it opens: it may hold the result the member came for", async () => {
     const backend = fakeAgentsBackend({
       agents: [primary, scout],
-      chats: { [scout.id]: transcript(asked, confirm) },
+      chats: { [scout.id]: transcript(asked, answered) },
       conversations: {
         [scout.id]: [
           conversation({
             updated_at: new Date(Date.now() - 5 * HOUR).toISOString(),
-            items: [asked, confirm],
-            pending_confirmations: ["call_9"],
           }),
         ],
       },
     })
     await opened(backend)
-    await act(async () => {})
     expect(cleared(backend)).toHaveLength(0)
-    expect(
-      screen.getByRole("group", { name: "Confirm Send email" })
-    ).toBeTruthy()
+    expect(screen.getByText("stalled")).toBeTruthy()
   })
 
-  it("leaves an old conversation while its specialist is working", async () => {
-    const backend = seed({
-      updated_at: new Date(Date.now() - 5 * HOUR).toISOString(),
-    })
-    renderFocus(backend)
-    await chatLoaded()
-    const socket = chatSocket()
-    socket.open()
-    agentChats.named(scoutChat).update({ status: "streaming" })
-    socket.state({ threadId: "th_1" })
-    await act(async () => {})
-    expect(cleared(backend)).toHaveLength(0)
-  })
-
-  it("keeps a paused specialist's history readable", async () => {
-    const backend = seed(
-      { updated_at: new Date(Date.now() - 5 * HOUR).toISOString() },
-      [primary, agent({ id: scout.id, name: "Scout", status: "disabled" })]
-    )
-    await opened(backend)
-    await act(async () => {})
-    expect(cleared(backend)).toHaveLength(0)
-    expect(screen.getByText("Review the pipeline")).toBeTruthy()
-  })
-
-  it("starts over when the tab comes back after an hour, and not before", async () => {
+  it("leaves it when the tab comes back hours later, and after a reconnect", async () => {
     vi.useFakeTimers({ toFake: ["Date"] })
-    const backend = seed()
-    await opened(backend)
-    await act(async () => {})
-    expect(cleared(backend)).toHaveLength(0)
+    const backend = fakeAgentsBackend({
+      agents: [primary, scout],
+      chats: { [scout.id]: transcript(asked, answered) },
+      conversations: { [scout.id]: [conversation()] },
+    })
+    const socket = await opened(backend)
 
-    vi.setSystemTime(Date.now() + 30 * 60_000)
+    // The laptop sleeps for three hours: on waking the tab is visible and
+    // the window focused while the socket reconnects.
+    vi.setSystemTime(Date.now() + 3 * HOUR)
+    socket.drop(1006)
     act(() => {
       document.dispatchEvent(new Event("visibilitychange"))
-    })
-    await act(async () => {})
-    expect(cleared(backend)).toHaveLength(0)
-
-    vi.setSystemTime(Date.now() + 40 * 60_000)
-    act(() => {
       window.dispatchEvent(new Event("focus"))
     })
-    await waitFor(() => expect(cleared(backend)).toHaveLength(1))
-  })
-
-  it("asks Go, so a conversation another device kept going is not cleared from here", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] })
-    const backend = seed()
-    await opened(backend)
     await act(async () => {})
-
-    // Two hours on, but the conversation moved on elsewhere meanwhile.
-    vi.setSystemTime(Date.now() + 2 * HOUR)
-    backend.state.conversations.get(scout.id)![0].updated_at = new Date(
-      Date.now() - 60_000
-    ).toISOString()
-    act(() => {
-      document.dispatchEvent(new Event("visibilitychange"))
-    })
-    await act(async () => {})
-    expect(cleared(backend)).toHaveLength(0)
-  })
-
-  it("waits for the tab to be visible", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] })
-    const backend = seed()
-    await opened(backend)
-    await act(async () => {})
-
-    vi.setSystemTime(Date.now() + 2 * HOUR)
-    visibility = "hidden"
-    act(() => {
-      document.dispatchEvent(new Event("visibilitychange"))
-    })
-    await act(async () => {})
-    expect(cleared(backend)).toHaveLength(0)
-
-    visibility = "visible"
-    act(() => {
-      document.dispatchEvent(new Event("visibilitychange"))
-    })
-    await waitFor(() => expect(cleared(backend)).toHaveLength(1))
-  })
-
-  it("checks again when the panel puts it in front of the member", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] })
-    const backend = seed()
-    vi.stubGlobal("fetch", vi.fn(backend.fetch))
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    })
-    const chat = (visible: boolean) => (
-      <QueryClientProvider client={client}>
-        <SpecialistChat
-          layout="panel"
-          organizationId={ORG}
-          specialist={scout}
-          visible={visible}
-        />
-      </QueryClientProvider>
-    )
-    const view = render(chat(true))
-    await chatLoaded()
-    const socket = chatSocket()
     socket.open()
-    socket.state({ threadId: "th_1" })
-    await act(async () => {})
-
-    // Behind another tab for two hours: nothing happens while it is hidden.
-    view.rerender(chat(false))
-    vi.setSystemTime(Date.now() + 2 * HOUR)
-    act(() => {
-      document.dispatchEvent(new Event("visibilitychange"))
-    })
     await act(async () => {})
     expect(cleared(backend)).toHaveLength(0)
+    expect(screen.getByText("stalled")).toBeTruthy()
+  })
 
-    view.rerender(chat(true))
-    await waitFor(() => expect(cleared(backend)).toHaveLength(1))
+  it("does not read a fast browser clock as an old conversation", async () => {
+    // Go says the conversation was active a minute ago...
+    const backend = fakeAgentsBackend({
+      agents: [primary, scout],
+      chats: { [scout.id]: transcript(asked, answered) },
+      conversations: { [scout.id]: [conversation()] },
+    })
+    // ...but this browser's clock runs two hours ahead of Go's.
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(Date.now() + 2 * HOUR)
+    await opened(backend)
+    expect(cleared(backend)).toHaveLength(0)
+  })
+
+  it("keeps a message Go never stored, such as a refused send, in the transcript", async () => {
+    const retry: Item = {
+      type: "message",
+      id: "local_1",
+      author: "member",
+      text: "Please try again with the Q3 numbers",
+    }
+    const backend = fakeAgentsBackend({
+      agents: [primary, scout],
+      // The object holds the member's newest message, refused before Go
+      // stored it; Go's copy ends at the answer, two hours ago.
+      chats: { [scout.id]: transcript(asked, answered, retry) },
+      conversations: {
+        [scout.id]: [
+          conversation({
+            updated_at: new Date(Date.now() - 2 * HOUR).toISOString(),
+          }),
+        ],
+      },
+    })
+    await opened(backend)
+    expect(cleared(backend)).toHaveLength(0)
+    expect(
+      screen.getByText("Please try again with the Q3 numbers")
+    ).toBeTruthy()
   })
 })
 
