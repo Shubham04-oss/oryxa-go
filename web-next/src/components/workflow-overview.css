@@ -279,6 +279,9 @@
   outline: 2px solid #aaa;
   outline-offset: 3px;
 }
+.workflow-overview .workflow-entry-toggle:focus-visible {
+  outline-offset: -3px;
+}
 @media (max-width: 600px) {
   .workflow-entry-toggle {
     flex-wrap: wrap;

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   cleanup,
@@ -173,6 +174,45 @@ afterEach(() => {
 })
 
 describe("workflow overview", () => {
+  it("keeps the focused Close control's outline inside its clipped workflow card", async () => {
+    const style = document.createElement("style")
+    style.textContent = readFileSync(
+      "src/components/workflow-overview.css",
+      "utf8"
+    )
+    try {
+      backend()
+      overview()
+      await open()
+      const toggle = screen.getByRole<HTMLButtonElement>("button", {
+        name: "Close Weekly review workflow",
+      })
+      fireEvent.keyDown(document, { key: "Tab" })
+      toggle.focus()
+      // jsdom caches computed styles before focus; attaching the real sheet
+      // after keyboard focus lets it resolve this control's focus rule.
+      document.head.append(style)
+      expect(document.activeElement).toBe(toggle)
+      expect(toggle.matches(":focus-visible")).toBe(true)
+      expect(
+        getComputedStyle(toggle.closest(".workflow-entry")!).overflow
+      ).toBe("hidden")
+      const ring = getComputedStyle(toggle)
+      expect(ring.outline).toBe("2px solid #aaa")
+      expect(ring.outlineOffset).toBe("-3px")
+      expect(
+        parseFloat(ring.outlineOffset) + parseFloat(ring.outline)
+      ).toBeLessThanOrEqual(0)
+      fireEvent.click(toggle)
+      expect(toggle.getAttribute("aria-label")).toBe(
+        "Open Weekly review workflow"
+      )
+      expect(document.activeElement).toBe(toggle)
+    } finally {
+      style.remove()
+    }
+  })
+
   it("blocks running after a cached empty history fails to refresh, until it recovers", async () => {
     let failHistory = false
     const api = backend({
@@ -699,6 +739,102 @@ describe("workflow form", () => {
       target: { value: "Review the notes" },
     })
   }
+  it.each([
+    ["cron(0 9 * * *)", "cron(0 9 * * ? *)"],
+    ["rate(1 days)", "rate(1 day)"],
+    ["rate(2 hour)", "rate(2 hours)"],
+  ])(
+    "refuses %s before saving and accepts its correction",
+    async (invalid, valid) => {
+      const api = backend()
+      form()
+      fill()
+      fireEvent.click(screen.getByLabelText("Run on a schedule"))
+      const expression = screen.getByLabelText<HTMLInputElement>(
+        "Schedule expression"
+      )
+      fireEvent.change(expression, { target: { value: invalid } })
+      fireEvent.click(screen.getByRole("button", { name: "Create workflow" }))
+      expect(
+        screen.getByText(
+          "That schedule isn't valid. Try rate(1 day), rate(2 hours) or cron(0 9 * * ? *)."
+        )
+      ).toBeTruthy()
+      expect(expression.getAttribute("aria-invalid")).toBe("true")
+      expect(expression.value).toBe(invalid)
+      expect(api.writes).toEqual([])
+      fireEvent.change(expression, { target: { value: valid } })
+      fireEvent.click(screen.getByRole("button", { name: "Create workflow" }))
+      await waitFor(() => expect(api.writes.length).toBe(1))
+      expect(api.writes[0].body).toMatchObject({
+        schedule: { expression: valid, timezone: "UTC", state: "enabled" },
+      })
+      expect(expression.getAttribute("aria-invalid")).toBeNull()
+    }
+  )
+
+  it.each(["create", "edit"])(
+    "explains a server-refused %s schedule without its internal-mode error and allows retry",
+    async (mode) => {
+      let refused = true
+      const api = backend({
+        fail: (method) =>
+          refused && (method === "POST" || method === "PATCH")
+            ? refusal(
+                400,
+                "invalid_request",
+                "create workflow schedule: invalid agent workflow: local workflow mode supports at(...) and rate(...); AWS mode also supports cron(...) safely"
+              )
+            : undefined,
+      })
+      const onDone = vi.fn()
+      wrapper(
+        <WorkflowForm
+          organizationId={ORG}
+          workflow={mode === "edit" ? weekly : undefined}
+          teams={[crew]}
+          onDone={onDone}
+          onCancel={vi.fn()}
+        />
+      )
+      if (mode === "create") {
+        fill()
+        fireEvent.click(screen.getByLabelText("Run on a schedule"))
+      }
+      const expression = screen.getByLabelText<HTMLInputElement>(
+        "Schedule expression"
+      )
+      fireEvent.change(expression, { target: { value: "cron(0 9 * * ? *)" } })
+      const submit = screen.getByRole("button", {
+        name: mode === "edit" ? "Save changes" : "Create workflow",
+      })
+      fireEvent.click(submit)
+      await screen.findByText(
+        "That schedule isn't valid. Try rate(1 day), rate(2 hours) or cron(0 9 * * ? *)."
+      )
+      expect(expression.getAttribute("aria-invalid")).toBe("true")
+      expect(expression.value).toBe("cron(0 9 * * ? *)")
+      expect(
+        screen.getByLabelText<HTMLTextAreaElement>("Task for assignment 1")
+          .value
+      ).toBe(mode === "edit" ? "Summarise the week" : "Review the notes")
+      expect(document.body.textContent).not.toMatch(
+        /Create workflow schedule:|invalid agent workflow|local workflow mode|AWS mode/i
+      )
+      expect(api.writes.length).toBe(1)
+      expect(onDone).not.toHaveBeenCalled()
+      refused = false
+      fireEvent.change(expression, { target: { value: "rate(1 day)" } })
+      fireEvent.click(submit)
+      await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1))
+      expect(api.writes.length).toBe(2)
+      expect(api.writes[1].body).toMatchObject({
+        schedule: { expression: "rate(1 day)" },
+      })
+      expect(expression.getAttribute("aria-invalid")).toBeNull()
+    }
+  )
+
   it("validates required fields, exact rune bounds, timezone and schedule before sending", () => {
     const api = backend()
     form()

@@ -26,6 +26,27 @@ import {
 type Fields = Record<string, string>
 type Assignment = WorkflowAssignment & { key: number }
 
+const invalidScheduleMessage =
+  "That schedule isn't valid. Try rate(1 day), rate(2 hours) or cron(0 9 * * ? *)."
+
+function validScheduleExpression(expression: string): boolean {
+  const match = /^(rate|cron|at)\(([^()]+)\)$/.exec(expression)
+  if (!match || runeCount(expression) > 256) return false
+  const fields = match[2].trim().split(/\s+/)
+  if (match[1] === "cron") return fields.length === 6
+  if (match[1] === "rate") {
+    const [amount, unit] = fields
+    return (
+      fields.length === 2 &&
+      /^[1-9]\d*$/.test(amount) &&
+      (Number(amount) === 1
+        ? /^(minute|hour|day)$/.test(unit)
+        : /^(minutes|hours|days)$/.test(unit))
+    )
+  }
+  return true
+}
+
 export function WorkflowForm({
   organizationId,
   workflow,
@@ -97,6 +118,13 @@ export function WorkflowForm({
         setErrors({
           name: `You already have a workflow called “${input.name}”.`,
         })
+      else if (
+        error instanceof ApiError &&
+        error.code === "invalid_request" &&
+        input.schedule &&
+        /schedule|expression/i.test(error.message)
+      )
+        setErrors({ expression: invalidScheduleMessage })
       else
         setFormError(
           agentsErrorMessage(error, "Could not save the workflow. Try again.", {
@@ -185,12 +213,8 @@ export function WorkflowForm({
         found[`context-${key}`] = "Use at most 10,000 characters."
     })
     if (fields.schedule) {
-      if (
-        !/^(rate|cron|at)\(.+\)$/.test(fields.schedule.expression) ||
-        runeCount(fields.schedule.expression) > 256
-      )
-        found.expression =
-          "Use rate(...), cron(...) or at(...), up to 256 characters."
+      if (!validScheduleExpression(fields.schedule.expression))
+        found.expression = invalidScheduleMessage
       try {
         new Intl.DateTimeFormat("en", {
           timeZone: fields.schedule.timezone,
