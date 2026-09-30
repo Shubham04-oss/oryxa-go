@@ -75,6 +75,25 @@ func (service *fakeInteractions) ConsentAsOwner(_ context.Context, actor primary
 	return result, nil
 }
 
+// ReplyAsOwner is the owner's own answer, as the ledger takes it: only from the
+// member in their own session, and recorded as theirs.
+func (service *fakeInteractions) ReplyAsOwner(_ context.Context, actor primaryagents.InteractionActor, token, id, text string) (primaryagents.Interaction, error) {
+	service.actors = append(service.actors, actor)
+	service.token = token
+	if actor.Session != primaryagents.SessionMember {
+		return primaryagents.Interaction{}, interactions.ErrForbidden
+	}
+	service.replies = append(service.replies, text)
+	if service.replyErr != nil {
+		return service.request, service.replyErr
+	}
+	service.request.ID, service.request.Status = id, interactions.StatusCompleted
+	service.request.Decision = &primaryagents.InteractionDecision{Decision: interactions.DecisionApproved, Consent: interactions.ConsentReply,
+		DecidedBy: &primaryagents.InteractionDecider{Kind: interactions.DecidedByMember, UserID: actor.UserID, Surface: interactions.SurfaceWeb}}
+	service.request.Result = &primaryagents.InteractionResult{Status: interactions.StatusCompleted, Summary: text, WrittenByOwner: true}
+	return service.request, nil
+}
+
 func (service *fakeInteractions) Activity(_ context.Context, actor primaryagents.InteractionActor, limit int) ([]interactions.ActivityEntry, error) {
 	service.actors = append(service.actors, actor)
 	service.limit = limit

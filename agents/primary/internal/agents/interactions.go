@@ -174,7 +174,10 @@ type InteractionDecision struct {
 	// Consent is how far the approval let the answer go: "summary", an AI
 	// summary alone, or "access", excerpts of what the agent read. It follows
 	// from the permissions granted (consent:summary, consent:access), and is
-	// absent from a rejection and from an approval that granted neither.
+	// absent from a rejection and from an approval that granted neither. It is
+	// "reply" for a request its owner answered themself, in their own words,
+	// while it waited for them: approved and answered at once, with nothing
+	// granted to their agent, which never runs for it.
 	Consent string `json:"consent,omitempty"`
 }
 
@@ -210,6 +213,11 @@ type InteractionResult struct {
 	ToolsUsed   []string  `json:"tools_used"`
 	Artifacts   []string  `json:"artifacts"`
 	CompletedAt time.Time `json:"completed_at"`
+	// WrittenByOwner is an answer the addressed member wrote themself, in their
+	// own signed-in session, rather than their agent: their reply in their own
+	// words, and a response they recorded through the API. Both members read it.
+	// It is absent from an answer an agent gave.
+	WrittenByOwner bool `json:"written_by_owner,omitempty"`
 }
 
 // InteractionGuard is what the answer guard found in an answer the member
@@ -235,8 +243,10 @@ type InteractionHeld struct {
 }
 
 // InteractionReview is the addressed member's review of a held answer:
-// "send", "send_masked" or "withhold", who decided and when. A request that
-// expired in review is withheld by Oryxa ("system"), with Reason saying so.
+// "send", "send_masked" or "withhold", who decided and when, or "reply" when
+// they answered in their own words instead, which replaced the held answer. A
+// request that expired in review is withheld by Oryxa ("system"), with Reason
+// saying so.
 type InteractionReview struct {
 	Action    string             `json:"action"`
 	DecidedBy InteractionDecider `json:"decided_by"`

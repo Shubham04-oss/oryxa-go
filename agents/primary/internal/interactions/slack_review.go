@@ -13,11 +13,13 @@ import (
 // owner's review, as every held answer does. The owner is told in Slack: a
 // direct message with the answer and three buttons, Send, Send masked (only
 // for an answer that has a masked version) and Don't send, each carrying a
-// review ticket (tickets.go). A click is the owner's review exactly as their
-// review on the web is (ReviewAsOwner): the same review, recorded the same way
-// with the surface it was made on, and whichever of the two comes first is the
-// review, by the lock Store.Review takes on the request; the other finds the
-// answer no longer in review (ErrConflict).
+// review ticket (tickets.go), and a fourth, Reply yourself, whose reply ticket
+// lets them answer in their own words instead (reply.go). A click is the
+// owner's review exactly as their review on the web is (ReviewAsOwner): the
+// same review, recorded the same way with the surface it was made on, and
+// whichever of the two comes first is the review, by the lock Store.Review
+// takes on the request; the other finds the answer no longer in review
+// (ErrConflict).
 //
 // A click carries no member token, and needs none: who clicked is proved by the
 // ticket, made by this ledger for the request's owner and signed, and by the
@@ -33,6 +35,9 @@ type ReviewTickets struct {
 	// a masked version, and is empty otherwise, since there is nothing to send
 	// masked.
 	Send, SendMasked, Withhold string
+	// Reply is the ticket of the Reply yourself button, always made: a reply
+	// ticket (TicketReply) that lands only while the answer is still in review.
+	Reply string
 	// ExpiresAt is when they stop working: when the request's review ends.
 	ExpiresAt time.Time
 }
@@ -61,17 +66,18 @@ func (service *Service) ReviewTickets(ctx context.Context, requestID, reviewID s
 	}
 	made := ReviewTickets{ExpiresAt: request.ExpiresAt.UTC()}
 	type ticketFor struct {
-		action string
-		into   *string
+		kind, action string
+		into         *string
 	}
-	buttons := []ticketFor{{ReviewSend, &made.Send}, {ReviewWithhold, &made.Withhold}}
+	buttons := []ticketFor{{TicketReview, ReviewSend, &made.Send}, {TicketReview, ReviewWithhold, &made.Withhold}}
 	if request.Held.MaskedResult != nil {
-		buttons = append(buttons, ticketFor{ReviewSendMasked, &made.SendMasked})
+		buttons = append(buttons, ticketFor{TicketReview, ReviewSendMasked, &made.SendMasked})
 	}
+	buttons = append(buttons, ticketFor{TicketReply, StatusReview, &made.Reply})
 	for _, button := range buttons {
 		ticket, err := service.tickets.Mint(TicketClaims{
 			RequestID: request.ID, OwnerUserID: request.Target.UserID, NoticeID: reviewID,
-			Kind: TicketReview, Choice: button.action, ExpiresAt: request.ExpiresAt,
+			Kind: button.kind, Choice: button.action, ExpiresAt: request.ExpiresAt,
 		})
 		if err != nil {
 			return ReviewTickets{}, err

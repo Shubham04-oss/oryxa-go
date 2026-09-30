@@ -139,6 +139,13 @@ type AgentInteractions interface {
 	// decided first is interactions.ErrAlreadyDecided, and the result then
 	// holds it as it stands, and so the winner.
 	ConsentAsOwner(context.Context, primaryagents.InteractionActor, string, string) (interactions.ConsentResult, error)
+	// ReplyAsOwner is the member answering, in their own session and their
+	// own words, a request addressed to them that waits for them: pending, or
+	// with an answer held for their review. It takes their own token, which a
+	// reply to a request made in a teamspace reads that teamspace with. A
+	// request decided or reviewed first is interactions.ErrAlreadyDecided, and
+	// the request it answers is then as it stands, and so the winner.
+	ReplyAsOwner(ctx context.Context, actor primaryagents.InteractionActor, token, id, text string) (primaryagents.Interaction, error)
 	// Activity is what happened to the member's Slack asks, newest first.
 	Activity(context.Context, primaryagents.InteractionActor, int) ([]interactions.ActivityEntry, error)
 	// RevokeLease ends a lease the member gave.
@@ -354,6 +361,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/response", server.respondInteraction)
 	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/review", server.reviewInteraction)
 	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/consent", server.consentInteraction)
+	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/reply", server.replyInteraction)
 	server.handle("PUT /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", server.putSecret)
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", server.viewSecret)
 	server.handle("DELETE /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", server.revokeSecret)

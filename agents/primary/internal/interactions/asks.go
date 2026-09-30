@@ -46,6 +46,11 @@ const (
 const (
 	ConsentSummary = "summary"
 	ConsentAccess  = "access"
+	// ConsentReply is an owner who answered the request themself, in their own
+	// words, instead of letting their agent: the request is approved and
+	// answered in one change, and nothing is granted to their agent, which
+	// never runs for it (reply.go). No permission grants it.
+	ConsentReply = "reply"
 )
 
 // ConsentFor is how far a decision let the answer go, which follows from the

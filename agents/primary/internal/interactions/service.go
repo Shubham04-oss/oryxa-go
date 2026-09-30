@@ -138,6 +138,12 @@ type Repository interface {
 	// sent as held, sent masked, or withheld, by them, or withheld by Oryxa
 	// with the reason.
 	Review(ctx context.Context, id string, review agents.InteractionReview, at time.Time) (agents.Interaction, error)
+	// Reply records the addressed member's own answer, in their own words, in
+	// one transaction: a pending request is approved and completed with it,
+	// and one in review has the answer held for them replaced by it, and
+	// completes. A request in any other status, or not in the status the reply
+	// was made for, is ErrConflict.
+	Reply(ctx context.Context, id string, reply ReplyRecord, at time.Time) (agents.Interaction, error)
 	// Hold keeps a request for its owner's own decision: a pending one is
 	// marked held, and an approved one has its approval withdrawn and is
 	// pending, held, again.
