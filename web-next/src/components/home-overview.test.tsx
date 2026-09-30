@@ -319,9 +319,7 @@ describe("HomeOverview", () => {
       },
     })
     const callbacks = renderHome()
-    expect(
-      await screen.findByText("Nothing waiting in the work checked.")
-    ).toBeTruthy()
+    expect(await screen.findByText("Nothing needs you right now.")).toBeTruthy()
     const recent = screen.getByRole("region", { name: "Your agent" })
     expect(within(recent).getAllByRole("listitem")).toHaveLength(3)
     expect(screen.queryByText("Completed plan 3")).toBeNull()
@@ -341,6 +339,89 @@ describe("HomeOverview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send message" }))
     expect(callbacks.onNewChat).toHaveBeenCalledExactlyOnceWith("Start fresh")
   })
+
+  it("skips untitled leading recents before filling three titled rows and opens their exact conversations", async () => {
+    stubApi({
+      [`${path}/threads`]: {
+        threads: [
+          ...["", " \t\n ", undefined].map((title, i) => ({
+            id: `abandoned_${i}`,
+            title,
+            origin: "chat",
+            updated_at: "2026-09-23T10:00:00Z",
+          })),
+          ...Array.from({ length: 4 }, (_, i) => ({
+            id: `titled_${i}`,
+            title: `Completed conversation ${i}`,
+            origin: i === 1 ? undefined : "chat",
+            updated_at: "2026-09-23T10:00:00Z",
+          })),
+        ],
+      },
+    })
+    const view = renderHome()
+    const card = await screen.findByRole("region", { name: "Your agent" })
+    expect(
+      within(card)
+        .getAllByRole("listitem")
+        .map((row) => row.querySelector("span")?.textContent)
+    ).toEqual([
+      "Completed conversation 0",
+      "Completed conversation 1",
+      "Completed conversation 2",
+    ])
+    expect(screen.queryByText("New conversation")).toBeNull()
+    expect(screen.queryByText("Completed conversation 3")).toBeNull()
+    fireEvent.click(
+      within(card).getByRole("button", { name: /Completed conversation 2/ })
+    )
+    expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("titled_2")
+    expect(view.onNewChat).not.toHaveBeenCalled()
+  })
+
+  it.each(["running", "waiting"] as const)(
+    "keeps an untitled selected %s conversation reachable while filling only titled recents",
+    async (state) => {
+      stubApi({
+        [`${path}/threads`]: {
+          threads: [
+            {
+              id: "current",
+              title: " \t\n ",
+              origin: "chat",
+              updated_at: "2026-09-23T10:00:00Z",
+            },
+            ...Array.from({ length: 3 }, (_, i) => ({
+              id: `titled_${i}`,
+              title: `Completed conversation ${i}`,
+              origin: "chat",
+              updated_at: "2026-09-23T10:00:00Z",
+            })),
+          ],
+        },
+      })
+      const view = renderHome({
+        primaryChatActivity: { threadId: "current", state },
+      })
+      const card = await screen.findByRole("region", {
+        name: state === "running" ? "Your agent" : "Waiting on you",
+      })
+      await within(card).findByRole("button", {
+        name: `Current conversation ${state === "running" ? "Working" : "Needs confirmation"}`,
+      })
+      await screen.findByText("Completed conversation 0")
+      const work = screen.getByRole("region", { name: "Your agent" })
+      expect(within(work).getAllByRole("listitem")).toHaveLength(3)
+      expect(within(work).getAllByText(/Completed conversation/)).toHaveLength(
+        state === "running" ? 2 : 3
+      )
+      fireEvent.click(
+        within(card).getByRole("button", { name: /Current conversation/ })
+      )
+      expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("current")
+      expect(view.onNewChat).not.toHaveBeenCalled()
+    }
+  )
 
   it("pins selected live work outside the first three recents and deduplicates its exact conversation", async () => {
     stubApi({
@@ -431,7 +512,7 @@ describe("HomeOverview", () => {
     expect(view.onOpenConversation).toHaveBeenCalledTimes(2)
     fireEvent.click(within(card).getByRole("button", { name: "All requests" }))
     expect(view.onOpenRequests).toHaveBeenCalledExactlyOnceWith()
-    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
 
     // A confirmation alone is actionable even when the inbox is empty.
     await act(async () => {
@@ -453,7 +534,7 @@ describe("HomeOverview", () => {
       within(card).getByRole("button", { name: "All confirmations" })
         .textContent
     ).toBe("All")
-    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
   })
 
   it("keeps a known confirmation reachable after an Inbox refusal without showing its cached private request or claiming a complete count", async () => {
@@ -493,7 +574,7 @@ describe("HomeOverview", () => {
     )
     expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("th_held")
     expect(view.onOpenRequests).not.toHaveBeenCalled()
-    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
   })
 
   it("prioritizes one confirmation conversation in the bounded mixed waiting list and keeps other recent chats reachable", async () => {
@@ -553,7 +634,7 @@ describe("HomeOverview", () => {
     expect(view.onOpenConversation).toHaveBeenNthCalledWith(2, "recent_2")
     expect(view.onOpenRequests).toHaveBeenCalledExactlyOnceWith()
     expect(view.onNewChat).not.toHaveBeenCalled()
-    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
   })
 
   it("counts a pending new thread as one noninteractive work row until its exact ID arrives", async () => {
@@ -657,7 +738,7 @@ describe("HomeOverview", () => {
       expect(scan.searchParams.get("status")).toBe("failed")
       expect(scan.searchParams.get("limit")).toBe("3")
     }
-    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
   })
 
   it("does not claim all clear when a checked base fails or when requests are still loading", async () => {
@@ -676,12 +757,12 @@ describe("HomeOverview", () => {
       await screen.findByText("Couldn’t load Private base failures.")
     ).toBeTruthy()
     expect(screen.getByText("Loading requests…")).toBeTruthy()
-    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
     answer(json({ requests: [] }))
     await waitFor(() =>
       expect(screen.queryByText("Loading requests…")).toBeNull()
     )
-    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy()
   })
 
@@ -701,8 +782,61 @@ describe("HomeOverview", () => {
     expect(
       await screen.findByText("Couldn’t load knowledge bases.")
     ).toBeTruthy()
-    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
   })
+
+  it("shows one plain quiet line after checking both knowledge bases completely", async () => {
+    stubApi({
+      [`${path}/corpora`]: { corpora: [corpus("base_1"), corpus("base_2")] },
+      [`${path}/corpora/base_1/documents`]: { documents: [] },
+      [`${path}/corpora/base_2/documents`]: { documents: [] },
+    })
+    renderHome()
+    expect(await screen.findByText("Nothing needs you right now.")).toBeTruthy()
+    expect(
+      screen.getAllByRole("status").map((status) => status.textContent)
+    ).toEqual(["Nothing needs you right now."])
+    expect(screen.queryByText(/Checked/)).toBeNull()
+    expect(screen.queryAllByRole("region")).toHaveLength(0)
+  })
+
+  it.each(["requests", "knowledge"] as const)(
+    "keeps the quiet line qualified when only %s coverage is incomplete",
+    async (source) => {
+      stubApi({
+        [`${path}/agent-requests/inbox`]: {
+          requests:
+            source === "requests"
+              ? Array.from({ length: 100 }, (_, i) =>
+                  request({ id: `done_${i}`, status: "completed" })
+                )
+              : [],
+        },
+        [`${path}/corpora`]: {
+          corpora:
+            source === "knowledge"
+              ? Array.from({ length: 5 }, (_, i) => corpus(`base_${i}`))
+              : [],
+        },
+        ...Object.fromEntries(
+          [0, 1, 2].map((i) => [
+            `${path}/corpora/base_${i}/documents`,
+            { documents: [] },
+          ])
+        ),
+      })
+      renderHome()
+      expect(
+        await screen.findByText(
+          source === "requests"
+            ? "Nothing waiting in the work checked. Only the latest 100 requests were checked."
+            : "Nothing waiting in the work checked. Checked 3 of 5 knowledge bases."
+        )
+      ).toBeTruthy()
+      expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
+      expect(screen.getAllByRole("status")).toHaveLength(1)
+    }
+  )
 
   it("shows one qualified quiet line for a full response and incomplete knowledge coverage", async () => {
     stubApi({
@@ -807,9 +941,7 @@ describe("HomeOverview", () => {
     ).toBeTruthy()
     view.rerenderHome({ organizationId: "org_2" })
     expect(screen.queryByText("Private old-workspace decision")).toBeNull()
-    expect(
-      await screen.findByText("Nothing waiting in the work checked.")
-    ).toBeTruthy()
+    expect(await screen.findByText("Nothing needs you right now.")).toBeTruthy()
     expect(screen.queryByRole("region", { name: "Waiting on you" })).toBeNull()
   })
 
@@ -884,7 +1016,7 @@ describe("HomeOverview", () => {
     view.rerenderHome({ viewerId: "next_member" })
     expect(screen.queryByText(/Private old-member/)).toBeNull()
     expect(screen.queryByText(/Checked/)).toBeNull()
-    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
     await waitFor(() => {
       for (const url of Object.keys(oldRows))
         expect(calls.filter((call) => call.pathname === url)).toHaveLength(2)
@@ -996,7 +1128,7 @@ describe("HomeOverview", () => {
       expect(
         screen.queryByRole("button", { name: new RegExp(selected.label) })
       ).toBeNull()
-      expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+      expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
       if (source === "knowledge bases")
         expect(screen.queryByText(/Checked/)).toBeNull()
       if (source === "Base failures") {
@@ -1011,7 +1143,7 @@ describe("HomeOverview", () => {
       expect(
         screen.queryByRole("button", { name: new RegExp(selected.label) })
       ).toBeNull()
-      expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+      expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
       expect(screen.queryByText("Private diagnostic")).toBeNull()
       if (source === "knowledge bases")
         expect(screen.queryByText(/Checked/)).toBeNull()
@@ -1044,6 +1176,6 @@ describe("HomeOverview", () => {
     expect(
       screen.queryByRole("button", { name: /Private cached tool/ })
     ).toBeNull()
-    expect(screen.queryByText(/Nothing waiting/)).toBeNull()
+    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
   })
 })

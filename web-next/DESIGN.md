@@ -116,9 +116,12 @@ not permission to copy every incidental value into a new component.
     primary chat first when its scoped live activity is running, with the
     existing Thinking Orb in its working state. Fill the remaining rows with
     recent chats, without duplicating its exact ID or a waiting conversation
-    already shown above. Idle or absent activity leaves up to three real
-    recents, including when nothing else needs the member. This signal describes the
-    selected chat, not every background job; never infer work from update time.
+    already shown above. Skip missing, empty or whitespace-only recent titles
+    before limiting the rows. Selected running or waiting work with no title
+    stays reachable as “Current conversation.” Idle or absent activity leaves up
+    to three real recents, including when nothing else needs the member. This
+    signal describes the selected chat, not every background job; never infer
+    work from update time.
     A waiting chat suppresses the quiet line and adds one to Home's combined
     waiting count, while the Requests Inbox count remains its own. Before a
     running chat has an ID, show a noninteractive “Starting conversation” row.
@@ -133,6 +136,11 @@ not permission to copy every incidental value into a new component.
   - At most three rows per section; All opens the relevant section.
     Hide sections that have nothing. With no decisions, tool confirmations or
     failures, keep one quiet line alongside any real recent conversations.
+    Once all reads have settled successfully with complete coverage, that line
+    is “Nothing needs you right now.” without repeating complete knowledge-base
+    coverage. Bounded requests or partial knowledge coverage keep the qualified
+    single line about the work checked; denied or loading reads never imply all
+    clear.
   - Counts must reflect the response's limits: a full bounded requests response
     is a lower bound (`N+`), not a total; a known live confirmation also gets
     `N+` while Inbox reads are loading or refused. Check only a fixed number of

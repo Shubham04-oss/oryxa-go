@@ -107,6 +107,10 @@ function relativeTime(timestamp: string) {
   }).format(time)
 }
 
+function conversationTitle(title?: string) {
+  return title?.trim() ?? ""
+}
+
 export function HomeOverview({
   organizationId,
   viewerId,
@@ -193,8 +197,11 @@ export function HomeOverview({
   const waitingChat =
     primaryChatActivity?.state === "waiting" ? primaryChatActivity : null
   const activityTitle =
-    conversations.find((thread) => thread.id === primaryChatActivity?.threadId)
-      ?.title || "Current conversation"
+    conversationTitle(
+      conversations.find(
+        (thread) => thread.id === primaryChatActivity?.threadId
+      )?.title
+    ) || "Current conversation"
   const waitingThreadId = waitingChat?.threadId ?? null
   const openWaitingConversation =
     waitingThreadId !== null && onOpenConversation
@@ -238,12 +245,14 @@ export function HomeOverview({
     ...conversations
       .filter(
         (thread) =>
-          thread.id !== running?.threadId && thread.id !== waitingChat?.threadId
+          conversationTitle(thread.title).length > 0 &&
+          thread.id !== running?.threadId &&
+          thread.id !== waitingChat?.threadId
       )
       .slice(0, running ? 2 : 3)
       .map((thread) => ({
         threadId: thread.id,
-        title: thread.title || "New conversation",
+        title: conversationTitle(thread.title),
         detail: relativeTime(thread.updated_at),
         running: false,
       })),
@@ -485,11 +494,17 @@ export function HomeOverview({
             )}
           {settled && !needsMember && (
             <p className="home-quiet" role="status">
-              Nothing waiting in the work checked.
-              {coverage ? ` ${coverage}` : ""}
-              {inboxRows.length >= requestLimit
-                ? ` Only the latest ${requestLimit} requests were checked.`
-                : ""}
+              {!incompleteRequests && !incompleteKnowledge ? (
+                "Nothing needs you right now."
+              ) : (
+                <>
+                  Nothing waiting in the work checked.
+                  {coverage ? ` ${coverage}` : ""}
+                  {inboxRows.length >= requestLimit
+                    ? ` Only the latest ${requestLimit} requests were checked.`
+                    : ""}
+                </>
+              )}
             </p>
           )}
         </>
