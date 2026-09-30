@@ -280,7 +280,7 @@ func TestAForgedOrExpiredTicketDecidesNothing(t *testing.T) {
 		}
 		return ticket
 	}
-	claims := TicketClaims{RequestID: request.ID, OwnerUserID: raya, NoticeID: "ntc_1", Choice: ChoiceAccess, ExpiresAt: request.ExpiresAt}
+	claims := TicketClaims{RequestID: request.ID, OwnerUserID: raya, NoticeID: "ntc_1", Kind: TicketConsent, Choice: ChoiceAccess, ExpiresAt: request.ExpiresAt}
 	altered := []byte(tickets.Deny)
 	altered[len(altered)-3] ^= 1
 	for name, ticket := range map[string]string{
@@ -305,7 +305,7 @@ func TestAForgedOrExpiredTicketDecidesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	brief, err := short.Mint(TicketClaims{RequestID: request.ID, OwnerUserID: raya, NoticeID: "ntc_1", Choice: ChoiceAccess, ExpiresAt: ledger.clock.Now().Add(-time.Second)})
+	brief, err := short.Mint(TicketClaims{RequestID: request.ID, OwnerUserID: raya, NoticeID: "ntc_1", Kind: TicketConsent, Choice: ChoiceAccess, ExpiresAt: ledger.clock.Now().Add(-time.Second)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +379,7 @@ func TestTheWrongClickerDecidesNothing(t *testing.T) {
 	// A ticket made for a request whose owner is someone else is refused
 	// even when it is signed: tickets are minted from the ledger, so this is a
 	// key that leaked.
-	leaked, err := testTickets(t).Mint(TicketClaims{RequestID: next.ID, OwnerUserID: maya, NoticeID: "ntc_1", Choice: ChoiceAccess, ExpiresAt: next.ExpiresAt})
+	leaked, err := testTickets(t).Mint(TicketClaims{RequestID: next.ID, OwnerUserID: maya, NoticeID: "ntc_1", Kind: TicketConsent, Choice: ChoiceAccess, ExpiresAt: next.ExpiresAt})
 	if err != nil {
 		t.Fatal(err)
 	}
