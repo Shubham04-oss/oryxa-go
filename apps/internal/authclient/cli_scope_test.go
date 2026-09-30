@@ -26,6 +26,7 @@ func TestCLISetupTokenCannotAuthorizeOrdinaryMemberAccess(t *testing.T) {
 		"POST /v1/organizations/{organizationID}/agent-requests/{requestID}/decision",
 		"POST /v1/organizations/{organizationID}/agent-requests/{requestID}/review",
 		"GET /v1/organizations/{organizationID}/threads",
+		"GET /v1/organizations/{organizationID}/apps/slack/status",
 		"GET /v1/organizations/{organizationID}/files",
 		"POST /v1/organizations/{organizationID}/apps/tools/{tool}/run",
 		"POST /v1/organizations/{organizationID}/apps/read",

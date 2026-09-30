@@ -27,6 +27,7 @@ func TestCLISetupTokenCannotReadThreadsOrMakeOwnerDecisions(t *testing.T) {
 		{http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_1/review", http.StatusForbidden},
 		{http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_1/consent", http.StatusForbidden},
 		{http.MethodGet, "/v1/organizations/org_1/agent-requests/activity", http.StatusForbidden},
+		{http.MethodGet, "/v1/organizations/org_1/agent-leases", http.StatusForbidden},
 		{http.MethodPut, "/v1/organizations/org_1/agent-requests/irq_1/secret", http.StatusForbidden},
 		{http.MethodGet, "/v1/organizations/org_1/agent-requests/irq_1/secret", http.StatusForbidden},
 		{http.MethodDelete, "/v1/organizations/org_1/agent-requests/irq_1/secret", http.StatusForbidden},

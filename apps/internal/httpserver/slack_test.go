@@ -39,6 +39,12 @@ type fakeSlack struct {
 
 func (f *fakeSlack) record(name string) { f.calls = append(f.calls, name) }
 
+func (f *fakeSlack) Status(_ context.Context, credentials authclient.Credentials, organizationID string) (slackbot.StatusView, error) {
+	f.record("status")
+	f.credentials, f.organization = credentials, organizationID
+	return slackbot.StatusView{Status: slackbot.StatusActive}, f.err
+}
+
 func (f *fakeSlack) Install(_ context.Context, credentials authclient.Credentials, organizationID, returnTo string) (slackbot.InstallView, error) {
 	f.record("install")
 	f.credentials, f.organization, f.returnTo = credentials, organizationID, returnTo
@@ -156,6 +162,7 @@ func TestTheSlackRoutesAreServedOnlyWhereTheSurfaceIsOn(t *testing.T) {
 		"POST /v1/apps/slack/interactivity",
 		"GET /v1/apps/slack/install/callback",
 		"GET /v1/organizations/{organizationID}/apps/slack/install",
+		"GET /v1/organizations/{organizationID}/apps/slack/status",
 		"DELETE /v1/organizations/{organizationID}/apps/slack/install",
 		"GET /v1/organizations/{organizationID}/apps/slack/channels",
 		"PUT /v1/organizations/{organizationID}/apps/slack/channels",

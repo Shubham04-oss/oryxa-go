@@ -412,6 +412,10 @@ var authzRoutes = []authzRoute{
 		path: "/v1/organizations/org_1/agent-requests/activity", malformedQuery: "?limit=abc", identity: lastInteractionActor,
 	},
 	{
+		pattern: "GET /v1/organizations/{organizationID}/agent-leases", method: http.MethodGet,
+		path: "/v1/organizations/org_1/agent-leases", malformedQuery: "?limit=abc", identity: lastInteractionActor,
+	},
+	{
 		pattern: "POST /v1/organizations/{organizationID}/agent-requests/{requestID}/consent", method: http.MethodPost,
 		path: "/v1/organizations/org_1/agent-requests/irq_other/consent", body: `{"choice":"summary"}`, malformedBody: unknownField, identity: lastInteractionActor,
 	},
@@ -693,8 +697,8 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 			}
 		})
 	}
-	if tested != 38 {
-		t.Fatalf("tested %d routes for malformed input, want 38 - a route gained or lost a body/limit/version without updating this expectation", tested)
+	if tested != 39 {
+		t.Fatalf("tested %d routes for malformed input, want 39 - a route gained or lost a body/limit/version without updating this expectation", tested)
 	}
 }
 

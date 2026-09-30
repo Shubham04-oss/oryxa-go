@@ -247,4 +247,7 @@ type Consents interface {
 	// Leases lists, newest first, the leases the member gave and the ones they
 	// hold.
 	Leases(ctx context.Context, organizationID, userID string, limit int) ([]Lease, error)
+	// ActiveLeases selects only live windows the member gave or holds, and
+	// returns at most limit+1 rows for a page's continuation check.
+	ActiveLeases(ctx context.Context, organizationID, userID string, limit int, before LeaseCursor, at time.Time) ([]Lease, error)
 }

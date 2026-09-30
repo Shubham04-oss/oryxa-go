@@ -143,6 +143,7 @@ type AgentInteractions interface {
 	Activity(context.Context, primaryagents.InteractionActor, int) ([]interactions.ActivityEntry, error)
 	// RevokeLease ends a lease the member gave.
 	RevokeLease(context.Context, primaryagents.InteractionActor, string) (interactions.Lease, error)
+	ActiveLeases(context.Context, primaryagents.InteractionActor, interactions.LeaseQuery) (interactions.LeasePage, error)
 	// AuthorizeSecretPut, AuthorizeSecretView and AuthorizeSecretRevoke say
 	// whether the member may share, open or revoke the secret of a request,
 	// and hand back the share the store keeps it under. Sharing also says how
@@ -357,6 +358,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", server.viewSecret)
 	server.handle("DELETE /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", server.revokeSecret)
 	server.handle("DELETE /v1/organizations/{organizationID}/agent-leases/{leaseID}", server.revokeLease)
+	server.handle("GET /v1/organizations/{organizationID}/agent-leases", server.activeLeases)
 	server.handle("GET /v1/organizations/{organizationID}/organization-agent", server.getOrganizationAgent)
 	server.handle("PATCH /v1/organizations/{organizationID}/organization-agent", server.updateOrganizationAgent)
 	server.handle("GET /v1/organizations/{organizationID}/organization-agent/context", server.getOrganizationAgentContext)

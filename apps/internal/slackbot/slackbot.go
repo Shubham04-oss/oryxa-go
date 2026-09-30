@@ -279,6 +279,9 @@ type Store interface {
 	// InstallForOrganization reads an organization's active install, or when
 	// it has none the one that ended last.
 	InstallForOrganization(ctx context.Context, organizationID string) (Install, error)
+	// InstallStatusForOrganization reads only the active/latest status, with
+	// no sealed token or private install fields.
+	InstallStatusForOrganization(ctx context.Context, organizationID string) (string, error)
 	// SaveInstall makes install the workspace's active install, replacing
 	// whatever was there, and writes the event event names in the same
 	// transaction. reinstalled tells it whether an active install was
