@@ -89,64 +89,66 @@ not permission to copy every incidental value into a new component.
 
 ## 3. Focused work and content pages
 
-- **Home — Today.** Start Home with both sidebars collapsed. Ordinary
-  navigation never auto-expands one: keep the state the member leaves with
-  its toggles when they return to Home; the normal mutual-collapse rules
-  still apply. Home's explicit chat shortcuts open the right panel. On a
-  phone, both navigation overlays start closed and close after a selection.
-  Today is a centered column about 360px wide on the `#1e1e1e` canvas, with
-  its composer and cards on `#111111`, tight rows and 11–12px type. No greeting,
-  starter prompts, saved-view examples or Teamspaces card.
-  - The composer always starts a **new** primary-agent conversation. It never
-    resumes the latest one. Sending follows the existing authenticated
-    `ThreadChatAgent` path, with Home remaining the current screen context.
-    The shell opens the right panel, then requests the new conversation
-    through the shared chat-choice API; it does not navigate to focused work.
-  - After the composer, show Waiting on you for owner approvals, held answers
-    to review and the selected chat's tool confirmations, then Your agent,
-    then Needs attention for failed or expired tools and failed knowledge
-    documents. A conversation with one or more confirmations counts as one
-    waiting item. Put that conversation first, labelled “Needs confirmation”;
-    its row opens that exact chat. All confirmations opens the same chat's
-    confirmation cards, and All requests separately opens Requests when Inbox
-    items exist. For confirmations alone, show All with the accessible name
-    All confirmations. Neither shortcut implies a chat confirmation is in
-    Inbox.
-  - Your agent has one list of at most three conversations. Put the selected
-    primary chat first when its scoped live activity is running, with the
-    existing Thinking Orb in its working state. Fill the remaining rows with
-    recent chats, without duplicating its exact ID or a waiting conversation
-    already shown above. Skip missing, empty or whitespace-only recent titles
-    before limiting the rows. Selected running or waiting work with no title
-    stays reachable as “Current conversation.” Idle or absent activity leaves up
-    to three real recents, including when nothing else needs the member. This
-    signal describes the selected chat, not every background job; never infer
-    work from update time.
-    A waiting chat suppresses the quiet line and adds one to Home's combined
-    waiting count, while the Requests Inbox count remains its own. Before a
-    running chat has an ID, show a noninteractive “Starting conversation” row.
-    Each concrete conversation
-    opens its exact ID in the right panel while staying on Home. New chat
-    starts a blank conversation, and All opens the agent's work.
-  - Scope the primary panel's retained conversation and draft to the current
-    workspace and member. A scope change remounts that panel; Home must not
-    treat the previous scope's activity as current.
-    A member change remounts the entire shell, clearing open dialogs, navigation
-    and drafts. Refreshing the same member's session preserves their choices.
-  - At most three rows per section; All opens the relevant section.
-    Hide sections that have nothing. With no decisions, tool confirmations or
-    failures, keep one quiet line alongside any real recent conversations.
-    Once all reads have settled successfully with complete coverage, that line
-    is “Nothing needs you right now.” without repeating complete knowledge-base
-    coverage. Bounded requests or partial knowledge coverage keep the qualified
-    single line about the work checked; denied or loading reads never imply all
-    clear.
-  - Counts must reflect the response's limits: a full bounded requests response
-    is a lower bound (`N+`), not a total; a known live confirmation also gets
-    `N+` while Inbox reads are loading or refused. Check only a fixed number of
-    knowledge bases, query failed documents directly, and state coverage naturally
-    (for example, “Checked 3 of 8 knowledge bases”). Loading, a refused read,
-    and partial coverage must never imply that all work is clear.
+- **Home — Today.** Home is the member's desk for the consent loop. Start
+  with both rails collapsed and preserve the member's explicit toggle choices
+  on return. Use a centered column at most 760px wide on the `#1e1e1e` canvas,
+  compact `#111111` cards, the section 1 palette and Geist type. On a phone,
+  cards use the available width and controls wrap without horizontal scrolling;
+  navigation overlays close after a selection. No greeting or starter prompts.
+  - The first card holds the composer and up to three recent primary-agent
+    conversations, newest first. The composer always starts a **new** chat in
+    the right panel through the existing authenticated chat-choice queue,
+    keeping Home as its screen context. Each recent opens its exact thread;
+    All opens primary conversation history in the right panel. Keep drafts
+    and recoverable unsent messages. Do not infer running work from timestamps;
+    use the selected chat's scoped live activity and the existing Thinking Orb.
+    Untitled selected work stays reachable as Current conversation; a run
+    without a thread ID is a noninteractive Starting conversation row.
+  - Next, **Needs you** holds actual Inbox decisions, held answers awaiting
+    the member's review, and their primary-agent tool confirmations. Reuse the
+    request cards' authorized actions and race handling: Slack asks offer
+    Summary only, Allow for 1 hour and Deny inline; held answers offer the
+    existing review choices. A tool-confirmation row opens its exact chat so
+    the member can review the actual confirmation cards. Count conversations
+    once, even when they have several pending tool confirmations. Requests
+    awaiting automatic agent approval do not wait on the member. Primary-chat
+    confirmations are checked in the five newest chats plus the open chat,
+    using the same newest-five selection as history and the opening rule. Go
+    derives confirmations from events and maintains no aggregate pending flag,
+    so this bounded read does not cover older unopened conversations. State
+    the coverage visibly, and never show an unqualified all-clear when any
+    conversations or reads remain unchecked.
+    Full chat detail checks poll every 30 seconds and refresh on mount and
+    window focus; lightweight lists may poll every 10 seconds. The open chat's
+    live waiting state updates Home immediately through its scoped activity.
+  - **Open access** follows Needs you. List live access windows from the
+    server's active, member-scoped lease list, with expiry and whose agent may
+    read whose information. End access is offered only when the server grants
+    this member revocation authority; it uses the existing lease revocation
+    path. Do not reconstruct live windows from a bounded activity feed or
+    promise they ended before the server confirms it.
+  - **Your requests & shared answers** follows Open access. Show what the
+    member asked others, its current status and the answer actually released
+    to them, plus their agent's sharing activity. Read Inbox, Sent and Activity;
+    Activity is metadata, never an authorization to reveal a held answer or
+    private tool output. Open the exact request for its full authorized detail.
+  - **Finish setup** comes last and contains only incomplete steps: Slack
+    not connected, no knowledge content, and background access off. Use real
+    Slack status, knowledge and account grant reads. Offer the action the
+    member may perform; a member who cannot manage Slack gets an honest
+    administrator hint. Once setup is complete, this card disappears.
+  - Hide every empty section. The quiet state is the composer card, the line
+    “Nothing needs you right now.”, then **Set up your workspace** if setup
+    has unfinished steps. Real recent conversations remain inside the composer
+    card. Loading, failed, refused, paginated or incomplete decision reads
+    must not imply all clear; state the actual checked coverage and offer retry
+    where appropriate. Full bounded responses are lower bounds, not totals.
+  - All data comes from authenticated APIs; there is no production prototype
+    route or fixture data. Scope private caches and retained chat activity to
+    the current workspace and member. Hide cached private work and actions
+    after an authorization refusal. A member change remounts the shell and a
+    workspace/member change remounts the panel; refreshing the same member's
+    session preserves their choices and drafts.
 - A teamspace or extensive agentic task is a focused work view: no left
   sidebar, naked conversation on the base surface, compact title/back header,
   and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity

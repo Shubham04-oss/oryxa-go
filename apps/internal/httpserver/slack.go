@@ -14,6 +14,7 @@ import (
 // SlackService is what the Slack surface's routes ask of it.
 // *slackbot.Service is one.
 type SlackService interface {
+	Status(ctx context.Context, credentials authclient.Credentials, organizationID string) (slackbot.StatusView, error)
 	Install(ctx context.Context, credentials authclient.Credentials, organizationID, returnTo string) (slackbot.InstallView, error)
 	Uninstall(ctx context.Context, credentials authclient.Credentials, organizationID string) error
 	CompleteInstall(ctx context.Context, callback slackbot.InstallCallback) (slackbot.InstallCompletion, error)
@@ -70,6 +71,7 @@ func (server *Server) routeSlack(slack *Slack) {
 	}
 	server.handle("GET "+slackbot.InstallCallbackPath, server.slackInstallCallback)
 	server.handle("GET /v1/organizations/{organizationID}/apps/slack/install", server.slackInstall)
+	server.handle("GET /v1/organizations/{organizationID}/apps/slack/status", server.slackStatus)
 	server.handle("DELETE /v1/organizations/{organizationID}/apps/slack/install", server.slackUninstall)
 	server.handle("GET /v1/organizations/{organizationID}/apps/slack/channels", server.slackChannels)
 	server.handle("PUT /v1/organizations/{organizationID}/apps/slack/channels", server.slackSetChannels)
@@ -102,6 +104,21 @@ func (server *Server) slackFailed(writer http.ResponseWriter, request *http.Requ
 	default:
 		server.handleError(writer, request, err)
 	}
+}
+
+// slackStatus is a separate member-safe read; the admin install endpoint
+// creates OAuth state and cannot serve Home's connection-status polling.
+func (server *Server) slackStatus(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	view, err := server.slack.Status(request.Context(), credentials, request.PathValue("organizationID"))
+	if err != nil {
+		server.slackFailed(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
 }
 
 // ---- Admin routes: an admin of the organization, with a session ----

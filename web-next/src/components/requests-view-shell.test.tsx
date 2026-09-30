@@ -44,6 +44,21 @@ const waiting = request({
   task: "Share the pipeline total.",
 })
 
+const shared = request({
+  id: "irq_shared",
+  status: "completed",
+  task: "A shared pipeline answer.",
+  origin: "slack",
+  result: {
+    status: "completed",
+    summary: "The pipeline total was shared.",
+    content: "",
+    tools_used: [],
+    artifacts: [],
+    completed_at: "2026-09-20T10:00:00Z",
+  },
+})
+
 let client: QueryClient
 
 function renderShell(
@@ -63,6 +78,29 @@ function renderShell(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
       const path = new URL(input, "http://localhost").pathname
+      if (path === `/v1/organizations/${ORG}/agent-requests/activity`) {
+        return new Response(
+          JSON.stringify({
+            activity: [
+              {
+                kind: "answered",
+                role: "owner",
+                request_id: shared.id,
+                status: shared.status,
+                with_user_id: shared.requester.user_id,
+                at: shared.updated_at,
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (path === `/v1/organizations/${ORG}/agent-requests/${shared.id}`) {
+        return new Response(JSON.stringify(shared), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
       if (path === `/v1/organizations/${ORG}/agent-requests/irq_shell`) {
         return new Response(JSON.stringify(waiting), {
           status: 200,
@@ -126,13 +164,16 @@ afterEach(() => {
 
 describe("Requests in the workspace shell", () => {
   it.each(["All", "row"])(
-    "opens Home's waiting %s in Requests, selecting only a named row",
+    "opens Home's %s shortcut in Requests, selecting only a named shared-activity row",
     async (target) => {
       renderShell({ mode: "home" })
-      const card = await screen.findByRole("region", { name: "Waiting on you" })
+      const card = await screen.findByRole("region", {
+        name:
+          target === "All" ? "Needs you" : "Your requests and shared answers",
+      })
       fireEvent.click(
         within(card).getByRole("button", {
-          name: target === "All" ? "All requests" : /Quarterly numbers/,
+          name: target === "All" ? "All requests" : /Your agent answered/,
         })
       )
 
@@ -144,7 +185,8 @@ describe("Requests in the workspace shell", () => {
         const opened = await screen.findByRole("region", {
           name: "Opened request",
         })
-        await within(opened).findByText("Share the pipeline total.")
+        await within(opened).findByText(shared.task)
+        expect(within(opened).queryByText(waiting.task)).toBeNull()
       } else {
         expect(
           screen.queryByRole("region", { name: "Opened request" })

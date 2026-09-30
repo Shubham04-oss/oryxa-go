@@ -177,6 +177,17 @@ func (m *memoryStore) InstallForOrganization(_ context.Context, organizationID s
 	return *found, nil
 }
 
+func (m *memoryStore) InstallStatusForOrganization(ctx context.Context, organizationID string) (string, error) {
+	m.mu.Lock()
+	err := m.failure()
+	m.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	install, err := m.InstallForOrganization(ctx, organizationID)
+	return install.Status, err
+}
+
 func (m *memoryStore) SaveInstall(_ context.Context, install Install, event func(bool) (domain.Event, error)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

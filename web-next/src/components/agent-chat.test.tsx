@@ -26,8 +26,12 @@ import {
 } from "@/lib/threads/chat-choice"
 import type { PrimaryChat } from "@/lib/threads/chat-choice"
 import { itemsToChatMessages } from "@/lib/threads/chat-messages"
-import { threadListQueryOptions } from "@/lib/threads/client"
-import type { Item, Thread } from "@/lib/threads/client"
+import {
+  threadApprovalQueryOptions,
+  threadKeys,
+  threadListQueryOptions,
+} from "@/lib/threads/client"
+import type { Item, Thread, ThreadDetail } from "@/lib/threads/client"
 
 // The Agents SDK's hooks stand in: `useAgent` hands back a socket the test
 // opens and closes through the options the component passed, and
@@ -243,7 +247,10 @@ function renderWithQueries(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+  return {
+    ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>),
+    client,
+  }
 }
 
 const scope = { organizationId: "org_1", userId: "user_1" }
@@ -1446,6 +1453,97 @@ describe("WorkspaceAgentPanel", () => {
 })
 
 describe("primary chat history actions", () => {
+  it.each([403, 404])(
+    "hides retained approval markers after a %i refusal without restoring canonical cache data",
+    async (status) => {
+      const waiting = thread("waiting", "")
+      const retained: ThreadDetail = {
+        ...waiting,
+        items: [],
+        pending_confirmations: ["approval"],
+      }
+      let refuse = false
+      stubApi({ threads: [waiting], rememberLatest: false })
+      const fetcher = vi.mocked(fetch)
+      const answer = fetcher.getMockImplementation()!
+      fetcher.mockImplementation(async (input, init) => {
+        const url = new URL(String(input), "http://localhost")
+        if (url.pathname === "/v1/organizations/org_1/threads/waiting")
+          return refuse
+            ? json({ error: { code: "refused", message: "no" } }, status)
+            : json(retained)
+        return answer(input, init)
+      })
+      const view = renderWithQueries(
+        <ChatHost initial={{ ...initialPrimaryChat(), thread: null }} />
+      )
+      await screen.findByText("Ask anything to start a conversation.")
+      view.client.setQueryData(
+        threadKeys.detail(scope.organizationId, waiting.id),
+        retained
+      )
+      fireEvent.click(screen.getByRole("button", { name: "History" }))
+      await screen.findByRole("button", {
+        name: /Untitled chat.*Needs approval/,
+      })
+      fireEvent.change(composer(), { target: { value: "Keep my draft" } })
+      refuse = true
+      const options = threadApprovalQueryOptions(
+        scope.organizationId,
+        waiting.id,
+        scope.userId
+      )
+      await act(async () => {
+        await view.client.invalidateQueries({ queryKey: options.queryKey })
+      })
+      expect(view.client.getQueryState(options.queryKey)?.status).toBe("error")
+      expect(view.client.getQueryData(options.queryKey)).toEqual(retained)
+      await waitFor(() =>
+        expect(screen.queryByText(/Needs approval/)).toBeNull()
+      )
+      expect(screen.queryByRole("button", { name: /Untitled chat/ })).toBeNull()
+      expect((composer() as HTMLTextAreaElement).value).toBe("Keep my draft")
+    }
+  )
+  it("keeps older cached approval markers scoped to the current member", async () => {
+    const history = Array.from({ length: 8 }, (_, i) =>
+      thread(`chat_${i}`, `Chat ${i}`, (i + 1) * 60_000)
+    )
+    stubApi({ threads: history, rememberLatest: false })
+    const view = renderWithQueries(
+      <ChatHost initial={{ ...initialPrimaryChat(), thread: null }} />
+    )
+    const detail = (index: number): ThreadDetail => ({
+      ...history[index],
+      items: [],
+      pending_confirmations: ["approval"],
+    })
+    view.client.setQueryData(
+      threadApprovalQueryOptions(scope.organizationId, "chat_5", scope.userId)
+        .queryKey,
+      detail(5)
+    )
+    view.client.setQueryData(
+      threadApprovalQueryOptions(scope.organizationId, "chat_6", "someone-else")
+        .queryKey,
+      detail(6)
+    )
+    view.client.setQueryData(
+      threadKeys.detail(scope.organizationId, "chat_7"),
+      detail(7)
+    )
+    await screen.findByText("Ask anything to start a conversation.")
+    fireEvent.click(screen.getByRole("button", { name: "History" }))
+    expect(
+      await screen.findByRole("button", { name: /Chat 5.*Needs approval/ })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: /Chat 6.*Needs approval/ })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: /Chat 7.*Needs approval/ })
+    ).toBeNull()
+  })
   it("opens an exact history id and deletes it through the chat object while preserving draft/unsent", async () => {
     const calls = stubApi({
       threads: [thread("th_1", "Earlier", 24 * HOUR), thread("th_2", "Latest")],

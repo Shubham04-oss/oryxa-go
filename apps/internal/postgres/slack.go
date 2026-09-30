@@ -73,6 +73,15 @@ func (store *Store) InstallForOrganization(ctx context.Context, organizationID s
 	return install, notFound("slack install", err)
 }
 
+// InstallStatusForOrganization reads the same active/latest install as the
+// admin view, without selecting or decoding its sealed bot token.
+func (store *Store) InstallStatusForOrganization(ctx context.Context, organizationID string) (string, error) {
+	var status string
+	err := store.pool.QueryRow(ctx, `SELECT status FROM apps_slack_installs
+		WHERE organization_id=$1 ORDER BY (status='active') DESC, updated_at DESC LIMIT 1`, organizationID).Scan(&status)
+	return status, notFound("slack install status", err)
+}
+
 // SaveInstall makes install the workspace's active install and writes its
 // event, in one transaction.
 func (store *Store) SaveInstall(ctx context.Context, install slackbot.Install, event func(reinstalled bool) (domain.Event, error)) error {

@@ -13,6 +13,7 @@ import {
   listThreads,
   retryUnlessRefused,
   startRun,
+  threadApprovalQueryOptions,
   threadDetailQueryOptions,
   threadKeys,
   threadListQueryOptions,
@@ -530,6 +531,32 @@ describe("artifacts", () => {
 })
 
 describe("query helpers", () => {
+  it("shares approval reads for one member across Home and history, without reusing another member's data", async () => {
+    const fetch = vi.fn(async () =>
+      json({ id: "th_1", items: [], pending_confirmations: ["approve"] })
+    )
+    vi.stubGlobal("fetch", fetch)
+    const client = new QueryClient()
+    const options = () => threadApprovalQueryOptions("org_1", "th_1", "user_a")
+    const [home, history] = await Promise.all([
+      client.fetchQuery(options()),
+      client.fetchQuery(options()),
+    ])
+    expect(home).toBe(history)
+    await client.fetchQuery(options())
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(
+      client.getQueryData(
+        threadApprovalQueryOptions("org_1", "th_1", "user_b").queryKey
+      )
+    ).toBeUndefined()
+    await client.invalidateQueries({
+      queryKey: threadKeys.detail("org_1", "th_1"),
+    })
+    await client.fetchQuery(options())
+    expect(fetch).toHaveBeenCalledTimes(2)
+    client.clear()
+  })
   it("scopes keys by organization, with the list and a thread apart", () => {
     expect(threadKeys.all("org_1")).toEqual(["threads", "org_1"])
     expect(threadKeys.list("org_1")).toEqual(["threads", "org_1", "list"])

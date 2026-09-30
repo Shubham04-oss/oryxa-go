@@ -32,6 +32,7 @@ var slackRoutes = []string{
 	"POST /v1/apps/slack/interactivity",
 	"GET /v1/apps/slack/install/callback",
 	"GET /v1/organizations/{organizationID}/apps/slack/install",
+	"GET /v1/organizations/{organizationID}/apps/slack/status",
 	"DELETE /v1/organizations/{organizationID}/apps/slack/install",
 	"GET /v1/organizations/{organizationID}/apps/slack/channels",
 	"PUT /v1/organizations/{organizationID}/apps/slack/channels",

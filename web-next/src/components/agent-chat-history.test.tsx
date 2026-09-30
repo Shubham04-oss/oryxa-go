@@ -30,6 +30,26 @@ const threads = [
 afterEach(cleanup)
 
 describe("conversation history", () => {
+  it("opens for each explicit Home request without picking a chat or overriding a later collapse", () => {
+    const props = {
+      threads,
+      onOpen: vi.fn(),
+      onDelete: vi.fn(),
+      onOpened: vi.fn(),
+    }
+    const request = {}
+    const view = render(<AgentChatHistory {...props} openRequest={request} />)
+    const toggle = screen.getByRole("button", { name: "History" })
+    expect(toggle.getAttribute("aria-expanded")).toBe("true")
+    expect(props.onOpened).toHaveBeenCalledOnce()
+    expect(props.onOpen).not.toHaveBeenCalled()
+    fireEvent.click(toggle)
+    view.rerender(<AgentChatHistory {...props} openRequest={request} />)
+    expect(toggle.getAttribute("aria-expanded")).toBe("false")
+    view.rerender(<AgentChatHistory {...props} openRequest={{}} />)
+    expect(toggle.getAttribute("aria-expanded")).toBe("true")
+    expect(props.onOpened).toHaveBeenCalledTimes(2)
+  })
   it("shows newest first, titles, relative time, current selection and approval markers", () => {
     const open = vi.fn()
     render(

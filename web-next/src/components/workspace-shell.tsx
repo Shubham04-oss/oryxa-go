@@ -516,6 +516,12 @@ function WorkspaceShellContent({
     )
   }
 
+  function openHomeHistory() {
+    closePrimaryWork()
+    expandAgentPanel()
+    setTabRequest({ tab: "agents", history: true })
+  }
+
   function navigateFromHome(mode: PrimaryMode, next: Section) {
     closePrimaryWork()
     teamspaces.close()
@@ -953,9 +959,17 @@ function WorkspaceShellContent({
                     openHomeConversation({ kind: "thread", threadId })
                   }
                   onOpenRequests={openHomeRequests}
-                  onOpenAgent={() => navigateFromHome("agents", "agents")}
+                  onOpenAgent={openHomeHistory}
                   onOpenTools={() => navigateFromHome("home", "tools")}
                   onOpenKnowledge={() => navigateFromHome("home", "knowledge")}
+                  onOpenSlack={() => {
+                    setSettingsPage("slack")
+                    setSettingsOpen(true)
+                  }}
+                  onOpenAccount={() => {
+                    setSettingsPage("account")
+                    setSettingsOpen(true)
+                  }}
                 />
               )}
               {section === "knowledge" && (

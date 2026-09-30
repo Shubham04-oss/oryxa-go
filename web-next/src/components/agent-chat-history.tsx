@@ -1,4 +1,4 @@
-import { useId, useState } from "react"
+import { useEffect, useId, useState } from "react"
 import { ChevronDown, Trash2 } from "lucide-react"
 import { timeAgo } from "./agents-format"
 import type { Thread } from "@/lib/threads/client"
@@ -15,6 +15,8 @@ export function AgentChatHistory({
   onRetry,
   onOpen,
   onDelete,
+  openRequest,
+  onOpened,
 }: {
   threads: readonly Thread[]
   selected?: string | null
@@ -25,12 +27,20 @@ export function AgentChatHistory({
   onRetry?: () => void
   onOpen: (id: string) => void
   onDelete: (id: string) => Promise<void>
+  /** An explicit Home shortcut, consumed once without changing the chat. */
+  openRequest?: object | null
+  onOpened?: () => void
 }) {
   const id = useId()
   const [expanded, setExpanded] = useState(false)
   const [confirm, setConfirm] = useState<string>()
   const [deleting, setDeleting] = useState<string>()
   const [failure, setFailure] = useState("")
+  useEffect(() => {
+    if (!openRequest) return
+    setExpanded(true)
+    onOpened?.()
+  }, [openRequest, onOpened])
   const rows = threads
     .filter(
       (thread) =>

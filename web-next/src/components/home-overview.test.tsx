@@ -1,142 +1,126 @@
 // @vitest-environment jsdom
-
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import {
-  cleanup,
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react"
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query"
 import type { ComponentProps } from "react"
-import type { AgentRequest } from "@/lib/agents/agent-requests"
 import { agentKeys } from "@/lib/agents/queries"
 import { threadKeys } from "@/lib/threads/client"
-import { connectionsQueryOptions } from "@/lib/apps/client"
-import { ragKeys } from "@/lib/rag/client"
-import type { Connection } from "@/lib/apps/client"
-import type { Corpus, CorpusDocument } from "@/lib/rag/client"
+import type { AgentRequest } from "@/lib/agents/agent-requests"
+import type { ActiveAgentLease } from "@/lib/home/client"
 import { HomeOverview } from "./home-overview"
+import {
+  ASKER,
+  OWNER,
+  ORG,
+  NOW,
+  agentRequest,
+  answer,
+  members,
+  slackRequest,
+} from "./request-card-fixtures"
 
 vi.mock("thinking-orbs", () => ({
   ThinkingOrb: ({ state }: { state: string }) => (
     <i aria-hidden="true" data-orb-state={state} />
   ),
 }))
-
-const path = "/v1/organizations/org_1"
+const path = `/v1/organizations/${ORG}`
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
   })
-
-function request(overrides: Partial<AgentRequest> = {}): AgentRequest {
-  return {
-    id: "req_1",
-    organization_id: "org_1",
-    approval: "owner",
-    requester: { user_id: "peer", agent_id: "agt_peer", agent_name: "Nia" },
-    target: { user_id: "member", agent_id: "agt_member", agent_name: "Leo" },
-    purpose: "Review the launch plan",
-    task: "Draft a launch plan",
-    context: [],
-    requested_tools: [],
-    requested_permissions: [],
-    status: "pending",
-    revision: 1,
-    expires_at: new Date(Date.now() + 60_000).toISOString(),
-    created_at: "",
-    updated_at: "",
+const refused = () =>
+  json({ error: { code: "forbidden", message: "private diagnostic" } }, 403)
+const request = (overrides: Partial<AgentRequest> = {}) =>
+  agentRequest({
+    expires_at: new Date(NOW + 3600_000).toISOString(),
     ...overrides,
-  }
-}
+  })
+const chat = (id: string, title = id, origin?: string) => ({
+  id,
+  title,
+  origin,
+  updated_at: new Date(NOW).toISOString(),
+})
+const activeLease = (
+  id = "lease-1",
+  overrides: Partial<ActiveAgentLease> = {}
+): ActiveAgentLease => ({
+  id,
+  organization_id: ORG,
+  owner_user_id: OWNER,
+  asker_user_id: ASKER,
+  channel_id: "channel",
+  thread_ts: "123.4",
+  created_at: new Date(NOW).toISOString(),
+  expires_at: new Date(NOW + 3600_000).toISOString(),
+  role: "owner",
+  can_revoke: true,
+  ...overrides,
+})
+const page = (leases: ActiveAgentLease[] = [], extra: object = {}) => ({
+  leases,
+  observed_at: new Date(NOW).toISOString(),
+  has_more: false,
+  ...extra,
+})
+const base = { id: "base", name: "Knowledge", document_count: 1 }
+type Route =
+  unknown | ((url: URL, init?: RequestInit) => Response | Promise<Response>)
 
-function connection(id: string, status: Connection["status"]): Connection {
-  return {
-    id,
-    toolkit: id,
-    label: id,
-    status,
-    member_id: "member",
-    auto_subscribe: false,
-    created_at: "",
-    updated_at: "",
-  }
-}
-
-function corpus(id: string, documentCount = 1): Corpus {
-  return {
-    id,
-    organization_id: "org_1",
-    slug: id,
-    name: id,
-    scope: "member",
-    member_id: "member",
-    embedding: {
-      provider: "vertex",
-      model: "text-embedding-005",
-      dimensions: 768,
-      metric: "cosine",
-    },
-    backend: "pgvector",
-    chunking: { strategy: "structure", max_tokens: 512, overlap_tokens: 76 },
-    metadata: {},
-    document_count: documentCount,
-    chunk_count: 0,
-    created_by: "member",
-    created_at: "",
-    updated_at: "",
-  }
-}
-
-function failedDocument(id: string): CorpusDocument {
-  return {
-    id,
-    corpus_id: "base_1",
-    organization_id: "org_1",
-    source: { kind: "inline" },
-    title: id,
-    content_type: "text/plain",
-    content_sha256: "",
-    byte_size: 0,
-    status: "failed",
-    chunk_count: 0,
-    attempts: 1,
-    created_by: "member",
-    created_at: "",
-    updated_at: "",
-  }
-}
-
-function stubApi(overrides: Record<string, unknown> = {}) {
-  const routes: Record<string, unknown> = {
+function stubApi(overrides: Record<string, Route> = {}) {
+  const routes: Record<string, Route> = {
     [`${path}/agent-requests/inbox`]: { requests: [] },
+    [`${path}/agent-requests/sent`]: { requests: [] },
+    [`${path}/agent-requests/activity`]: { activity: [] },
+    [`${path}/agent-leases`]: page(),
     [`${path}/threads`]: { threads: [] },
-    [`${path}/apps/connections`]: { connections: [] },
-    [`${path}/corpora`]: { corpora: [] },
+    [`${path}/corpora`]: { corpora: [base] },
+    [`${path}/apps/slack/status`]: { status: "active", can_manage: false },
+    [`${path}/members`]: { members },
+    "/v1/agent-grant": { granted: true },
     ...overrides,
   }
-  const calls: URL[] = []
+  const calls: { url: URL; method: string; body?: unknown }[] = []
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost")
-      calls.push(url)
+      calls.push({
+        url,
+        method: init?.method ?? "GET",
+        body:
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      })
       const value = routes[url.pathname]
-      if (typeof value === "function")
-        return (value as (url: URL) => Response | Promise<Response>)(url)
-      return value === undefined
-        ? json({ error: { code: "not_found", message: "No route" } }, 404)
-        : json(value)
+      if (typeof value === "function") return value(url, init)
+      if (value !== undefined) return json(value)
+      if (url.pathname.startsWith(`${path}/threads/`))
+        return json({
+          ...chat(url.pathname.split("/").at(-1)!),
+          items: [],
+          pending_confirmations: [],
+        })
+      return json({ error: { code: "not_found", message: "No route" } }, 404)
     })
   )
-  return calls
+  return { calls, routes }
 }
 
+const clients: QueryClient[] = []
 function renderHome(
   overrides: Partial<ComponentProps<typeof HomeOverview>> = {}
 ) {
@@ -147,13 +131,16 @@ function renderHome(
     onOpenConversation: vi.fn(),
     onOpenTools: vi.fn(),
     onOpenKnowledge: vi.fn(),
+    onOpenSlack: vi.fn(),
+    onOpenAccount: vi.fn(),
   }
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
+  clients.push(client)
   const props = {
-    organizationId: "org_1",
-    viewerId: "member",
+    organizationId: ORG,
+    viewerId: OWNER,
     ...callbacks,
     ...overrides,
   }
@@ -175,1007 +162,838 @@ function renderHome(
   }
 }
 
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  vi.setSystemTime(NOW)
+})
 afterEach(() => {
   cleanup()
+  clients.splice(0).forEach((client) => client.clear())
+  focusManager.setFocused(undefined)
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
-describe("HomeOverview", () => {
-  it("counts only this member's unexpired owner approvals and held answers, with an honest limited count", async () => {
-    const waiting = [
-      request(),
-      request({
-        id: "review",
-        status: "review",
-        purpose: "Review Nia’s answer",
-      }),
-      request({
-        id: "legacy",
-        approval: undefined,
-        purpose: "Legacy owner approval",
-      }),
-      request({ id: "fourth", purpose: "Fourth approval" }),
-    ]
-    const ignored = [
-      request({
-        id: "automatic",
-        approval: "agent",
-        purpose: "Automatic work",
-      }),
-      request({
-        id: "approved",
-        status: "approved",
-        purpose: "Already approved",
-      }),
-      request({
-        id: "expired",
-        expires_at: new Date(Date.now() - 1000).toISOString(),
-        purpose: "Expired work",
-      }),
-      request({
-        id: "other",
-        target: {
-          user_id: "other",
-          agent_id: "agt_other",
-          agent_name: "Other",
-        },
-        purpose: "Other member work",
-      }),
-      ...Array.from({ length: 92 }, (_, i) =>
-        request({ id: `done_${i}`, status: "completed" })
-      ),
-    ]
-    const calls = stubApi({
-      [`${path}/agent-requests/inbox`]: { requests: [...waiting, ...ignored] },
-    })
-    const callbacks = renderHome()
-    const card = await screen.findByRole("region", { name: "Waiting on you" })
-    expect(
-      within(card).getByRole("heading", { name: "Waiting on you · 4+" })
-    ).toBeTruthy()
-    expect(within(card).getAllByRole("listitem")).toHaveLength(3)
-    expect(within(card).getByText("Answer to review · Nia")).toBeTruthy()
-    for (const title of [
-      "Fourth approval",
-      "Automatic work",
-      "Already approved",
-      "Expired work",
-      "Other member work",
-    ])
-      expect(screen.queryByText(title)).toBeNull()
-    fireEvent.click(within(card).getByRole("button", { name: "All requests" }))
-    fireEvent.click(
-      within(card).getByRole("button", { name: /Legacy owner approval/ })
-    )
-    expect(callbacks.onOpenRequests).toHaveBeenCalledTimes(2)
-    expect(callbacks.onOpenRequests).toHaveBeenNthCalledWith(1)
-    expect(callbacks.onOpenRequests).toHaveBeenNthCalledWith(2, "legacy")
-    expect(
-      calls
-        .find((url) => url.pathname.endsWith("/inbox"))
-        ?.searchParams.get("limit")
-    ).toBe("100")
-    expect(
-      within(card).getByText("Only the latest 100 requests were checked.")
-    ).toBeTruthy()
+it("keeps composer and three titled recent chats in the agent card, opening exact chats and history", async () => {
+  stubApi({
+    [`${path}/threads`]: {
+      threads: [
+        chat("blank", "  "),
+        chat("wake", "Wake", "wakeup"),
+        chat("one", " First "),
+        chat("two", "Second"),
+        chat("three", "Third"),
+        chat("four", "Fourth"),
+      ],
+    },
   })
-
-  it("puts member decisions before recent conversations and failures below the composer", async () => {
-    stubApi({
-      [`${path}/agent-requests/inbox`]: { requests: [request()] },
-      [`${path}/threads`]: {
-        threads: [
-          {
-            id: "recent",
-            title: "Recent conversation",
-            origin: "chat",
-            updated_at: "2026-09-23T10:00:00Z",
-          },
-        ],
-      },
-      [`${path}/apps/connections`]: {
-        connections: [connection("Broken tool", "failed")],
-      },
+  const view = renderHome()
+  const agent = screen.getByRole("region", { name: "Your agent" })
+  expect(
+    within(agent).getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Start a new conversation",
     })
-    const { container } = renderHome()
-    await screen.findByRole("region", { name: "Waiting on you" })
-    await screen.findByRole("region", { name: "Your agent" })
-    await screen.findByRole("region", { name: "Needs attention" })
-    expect(
-      Array.from(
-        container.querySelectorAll("textarea[aria-label], section[aria-label]")
-      ).map((element) => element.getAttribute("aria-label"))
-    ).toEqual([
-      "Start a new conversation",
-      "Waiting on you",
-      "Your agent",
-      "Needs attention",
-    ])
-  })
-
-  it("keeps three real recent conversations below the composer even when no decision or failure needs the member", async () => {
-    stubApi({
-      [`${path}/threads`]: {
-        threads: [
-          {
-            id: "app_update",
-            title: "Private app update",
-            origin: "app_update",
-            updated_at: "2026-09-23T10:00:00Z",
-          },
-          {
-            id: "side",
-            title: "Side conversation",
-            origin: "side",
-            updated_at: "2026-09-23T10:00:00Z",
-          },
-          ...Array.from({ length: 4 }, (_, i) => ({
-            id: `old_${i}`,
-            title: `Completed plan ${i}`,
-            origin: i === 1 ? "chat" : undefined,
-            updated_at: "2026-09-23T10:00:00Z",
-          })),
-        ],
-      },
-    })
-    const callbacks = renderHome()
-    expect(await screen.findByText("Nothing needs you right now.")).toBeTruthy()
-    const recent = screen.getByRole("region", { name: "Your agent" })
-    expect(within(recent).getAllByRole("listitem")).toHaveLength(3)
-    expect(screen.queryByText("Completed plan 3")).toBeNull()
-    expect(screen.queryByText("Private app update")).toBeNull()
-    expect(screen.queryByText("Side conversation")).toBeNull()
-    fireEvent.click(
-      within(recent).getByRole("button", { name: /Completed plan 1/ })
-    )
-    expect(callbacks.onOpenConversation).toHaveBeenCalledExactlyOnceWith(
-      "old_1"
-    )
-    expect(screen.getAllByRole("status")).toHaveLength(1)
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Start a new conversation" }),
-      { target: { value: "  Start fresh  " } }
-    )
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }))
-    expect(callbacks.onNewChat).toHaveBeenCalledExactlyOnceWith("Start fresh")
-  })
-
-  it("skips untitled leading recents before filling three titled rows and opens their exact conversations", async () => {
-    stubApi({
-      [`${path}/threads`]: {
-        threads: [
-          ...["", " \t\n ", undefined].map((title, i) => ({
-            id: `abandoned_${i}`,
-            title,
-            origin: "chat",
-            updated_at: "2026-09-23T10:00:00Z",
-          })),
-          ...Array.from({ length: 4 }, (_, i) => ({
-            id: `titled_${i}`,
-            title: `Completed conversation ${i}`,
-            origin: i === 1 ? undefined : "chat",
-            updated_at: "2026-09-23T10:00:00Z",
-          })),
-        ],
-      },
-    })
-    const view = renderHome()
-    const card = await screen.findByRole("region", { name: "Your agent" })
-    expect(
-      within(card)
-        .getAllByRole("listitem")
-        .map((row) => row.querySelector("span")?.textContent)
-    ).toEqual([
-      "Completed conversation 0",
-      "Completed conversation 1",
-      "Completed conversation 2",
-    ])
-    expect(screen.queryByText("New conversation")).toBeNull()
-    expect(screen.queryByText("Completed conversation 3")).toBeNull()
-    fireEvent.click(
-      within(card).getByRole("button", { name: /Completed conversation 2/ })
-    )
-    expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("titled_2")
-    expect(view.onNewChat).not.toHaveBeenCalled()
-  })
-
-  it.each(["running", "waiting"] as const)(
-    "keeps an untitled selected %s conversation reachable while filling only titled recents",
-    async (state) => {
-      stubApi({
-        [`${path}/threads`]: {
-          threads: [
-            {
-              id: "current",
-              title: " \t\n ",
-              origin: "chat",
-              updated_at: "2026-09-23T10:00:00Z",
-            },
-            ...Array.from({ length: 3 }, (_, i) => ({
-              id: `titled_${i}`,
-              title: `Completed conversation ${i}`,
-              origin: "chat",
-              updated_at: "2026-09-23T10:00:00Z",
-            })),
-          ],
-        },
-      })
-      const view = renderHome({
-        primaryChatActivity: { threadId: "current", state },
-      })
-      const card = await screen.findByRole("region", {
-        name: state === "running" ? "Your agent" : "Waiting on you",
-      })
-      await within(card).findByRole("button", {
-        name: `Current conversation ${state === "running" ? "Working" : "Needs confirmation"}`,
-      })
-      await screen.findByText("Completed conversation 0")
-      const work = screen.getByRole("region", { name: "Your agent" })
-      expect(within(work).getAllByRole("listitem")).toHaveLength(3)
-      expect(within(work).getAllByText(/Completed conversation/)).toHaveLength(
-        state === "running" ? 2 : 3
-      )
-      fireEvent.click(
-        within(card).getByRole("button", { name: /Current conversation/ })
-      )
-      expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("current")
-      expect(view.onNewChat).not.toHaveBeenCalled()
-    }
+  ).toBeTruthy()
+  await within(agent).findByRole("button", { name: /First/ })
+  expect(
+    within(agent).getByRole("list", { name: "Recent conversations" }).children
+  ).toHaveLength(3)
+  expect(screen.queryByText("Fourth")).toBeNull()
+  fireEvent.click(
+    within(agent).getByRole<HTMLButtonElement>("button", { name: /Second/ })
   )
-
-  it("pins selected live work outside the first three recents and deduplicates its exact conversation", async () => {
-    stubApi({
-      [`${path}/threads`]: {
-        threads: Array.from({ length: 5 }, (_, i) => ({
-          id: `th_${i}`,
-          title: `Conversation ${i}`,
-          updated_at: "2026-09-23T10:00:00Z",
-        })),
-      },
+  expect(view.onOpenConversation).toHaveBeenCalledWith("two")
+  fireEvent.click(
+    within(agent).getByRole<HTMLButtonElement>("button", {
+      name: "All conversations",
     })
-    const view = renderHome({
-      primaryChatActivity: { threadId: "th_4", state: "running" },
-    })
-    const card = await screen.findByRole("region", { name: "Your agent" })
-    await within(card).findByText("Conversation 4")
-    expect(
-      within(card)
-        .getAllByRole("listitem")[0]
-        .querySelector('[data-orb-state="working"]')
-    ).toBeTruthy()
-    expect(
-      within(card)
-        .getAllByRole("listitem")
-        .map((row) => row.textContent)
-    ).toEqual([
-      "Conversation 4 Working",
-      expect.stringContaining("Conversation 0"),
-      expect.stringContaining("Conversation 1"),
-    ])
-    fireEvent.click(
-      within(card).getByRole("button", { name: /Conversation 4/ })
-    )
-    expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("th_4")
-    expect(view.onNewChat).not.toHaveBeenCalled()
-
-    view.rerenderHome({
-      primaryChatActivity: { threadId: "th_1", state: "running" },
-    })
-    expect(
-      within(card)
-        .getAllByRole("listitem")
-        .map((row) => row.textContent)
-    ).toEqual([
-      "Conversation 1 Working",
-      expect.stringContaining("Conversation 0"),
-      expect.stringContaining("Conversation 2"),
-    ])
-    view.rerenderHome({
-      primaryChatActivity: { threadId: "th_1", state: "idle" },
-    })
-    expect(
-      within(card)
-        .getAllByRole("listitem")
-        .map((row) => row.textContent)
-    ).toEqual([
-      expect.stringContaining("Conversation 0"),
-      expect.stringContaining("Conversation 1"),
-      expect.stringContaining("Conversation 2"),
-    ])
-    expect(within(card).queryByText("Working")).toBeNull()
-    expect(card.querySelector("[data-orb-state]")).toBeNull()
-    view.rerenderHome({ primaryChatActivity: null })
-    expect(within(card).getAllByRole("listitem")).toHaveLength(3)
-    expect(within(card).getAllByText("Sep 23")).toHaveLength(3)
-    expect(card.querySelector("[data-orb-state]")).toBeNull()
-  })
-
-  it("shows selected tool confirmation separately without inflating Inbox decisions or claiming quiet", async () => {
-    stubApi({ [`${path}/agent-requests/inbox`]: { requests: [request()] } })
-    const view = renderHome({
-      primaryChatActivity: { threadId: "th_held", state: "waiting" },
-    })
-    await screen.findByRole("heading", { name: "Waiting on you · 2" })
-    const card = screen.getByRole("region", { name: "Waiting on you" })
-    expect(within(card).getAllByRole("listitem")).toHaveLength(2)
-    fireEvent.click(
-      within(card).getByRole("button", {
-        name: "Current conversation Needs confirmation",
-      })
-    )
-    expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("th_held")
-    expect(view.onOpenRequests).not.toHaveBeenCalled()
-    fireEvent.click(
-      within(card).getByRole("button", { name: "All confirmations" })
-    )
-    expect(view.onOpenConversation).toHaveBeenLastCalledWith("th_held")
-    expect(view.onOpenConversation).toHaveBeenCalledTimes(2)
-    fireEvent.click(within(card).getByRole("button", { name: "All requests" }))
-    expect(view.onOpenRequests).toHaveBeenCalledExactlyOnceWith()
-    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
-
-    // A confirmation alone is actionable even when the inbox is empty.
-    await act(async () => {
-      view.client.setQueryData(
-        [...agentKeys.requestBox("org_1", "inbox", 100), "home", "member"],
-        []
-      )
-    })
-    await waitFor(() =>
-      expect(
-        within(card).getByRole("heading", { name: "Waiting on you · 1" })
-      ).toBeTruthy()
-    )
-    expect(screen.getByText("Needs confirmation")).toBeTruthy()
-    expect(
-      within(card).queryByRole("button", { name: "All requests" })
-    ).toBeNull()
-    expect(
-      within(card).getByRole("button", { name: "All confirmations" })
-        .textContent
-    ).toBe("All")
-    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
-  })
-
-  it("keeps a known confirmation reachable after an Inbox refusal without showing its cached private request or claiming a complete count", async () => {
-    let refused = false
-    stubApi({
-      [`${path}/agent-requests/inbox`]: () =>
-        refused
-          ? json(
-              { error: { code: "forbidden", message: "Private diagnostic" } },
-              403
-            )
-          : json({ requests: [request({ purpose: "Private old approval" })] }),
-    })
-    const view = renderHome({
-      primaryChatActivity: { threadId: "th_held", state: "waiting" },
-    })
-    await screen.findByRole("heading", { name: "Waiting on you · 2" })
-    refused = true
-    await act(async () => {
-      await view.client.refetchQueries({
-        queryKey: agentKeys.requestBox("org_1", "inbox", 100),
-      })
-    })
-    await screen.findByText("Couldn’t load requests.")
-    const waiting = screen.getByRole("region", { name: "Waiting on you" })
-    expect(
-      within(waiting).getByRole("heading", { name: "Waiting on you · 1+" })
-    ).toBeTruthy()
-    expect(within(waiting).getAllByRole("listitem")).toHaveLength(1)
-    expect(screen.queryByText("Private old approval")).toBeNull()
-    expect(screen.queryByText("Private diagnostic")).toBeNull()
-    expect(
-      within(waiting).queryByRole("button", { name: "All requests" })
-    ).toBeNull()
-    fireEvent.click(
-      within(waiting).getByRole("button", { name: "All confirmations" })
-    )
-    expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("th_held")
-    expect(view.onOpenRequests).not.toHaveBeenCalled()
-    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
-  })
-
-  it("prioritizes one confirmation conversation in the bounded mixed waiting list and keeps other recent chats reachable", async () => {
-    stubApi({
-      [`${path}/agent-requests/inbox`]: {
-        requests: Array.from({ length: 100 }, (_, i) =>
-          request({ id: `req_${i}`, purpose: `Approval ${i}` })
-        ),
-      },
-      [`${path}/threads`]: {
-        threads: [
-          {
-            id: "th_held",
-            title: "Held conversation",
-            updated_at: "2026-09-23T10:00:00Z",
-          },
-          ...Array.from({ length: 4 }, (_, i) => ({
-            id: `recent_${i}`,
-            title: `Recent ${i}`,
-            updated_at: "2026-09-23T10:00:00Z",
-          })),
-        ],
-      },
-    })
-    const view = renderHome({
-      primaryChatActivity: { threadId: "th_held", state: "waiting" },
-    })
-    const waiting = await screen.findByRole("region", {
-      name: "Waiting on you",
-    })
-    await within(waiting).findByText("Held conversation")
-    expect(
-      within(waiting).getByRole("heading", { name: "Waiting on you · 101+" })
-    ).toBeTruthy()
-    expect(
-      within(waiting)
-        .getAllByRole("listitem")
-        .map((row) => row.textContent)
-    ).toEqual([
-      "Held conversation Needs confirmation",
-      "Approval 0 Request to approve · Nia",
-      "Approval 1 Request to approve · Nia",
-    ])
-    const agent = screen.getByRole("region", { name: "Your agent" })
-    expect(within(agent).getAllByRole("listitem")).toHaveLength(3)
-    expect(within(agent).queryByText("Held conversation")).toBeNull()
-    expect(screen.queryByText("Recent 3")).toBeNull()
-    expect(screen.queryByText("Approval 2")).toBeNull()
-    fireEvent.click(
-      within(waiting).getByRole("button", { name: "All confirmations" })
-    )
-    fireEvent.click(
-      within(waiting).getByRole("button", { name: "All requests" })
-    )
-    fireEvent.click(within(agent).getByRole("button", { name: /Recent 2/ }))
-    expect(view.onOpenConversation).toHaveBeenNthCalledWith(1, "th_held")
-    expect(view.onOpenConversation).toHaveBeenNthCalledWith(2, "recent_2")
-    expect(view.onOpenRequests).toHaveBeenCalledExactlyOnceWith()
-    expect(view.onNewChat).not.toHaveBeenCalled()
-    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
-  })
-
-  it("counts a pending new thread as one noninteractive work row until its exact ID arrives", async () => {
-    stubApi({
-      [`${path}/threads`]: {
-        threads: Array.from({ length: 3 }, (_, i) => ({
-          id: `th_${i}`,
-          title: `Recent ${i}`,
-          updated_at: "2026-09-23T10:00:00Z",
-        })),
-      },
-    })
-    const view = renderHome({
-      primaryChatActivity: { threadId: null, state: "running" },
-    })
-    const card = await screen.findByRole("region", { name: "Your agent" })
-    await within(card).findByText("Recent 0")
-    expect(within(card).getAllByRole("listitem")).toHaveLength(3)
-    expect(
-      within(card).getAllByRole("listitem")[0].querySelector("button")
-    ).toBeNull()
-    expect(within(card).getByRole("status").textContent).toBe(
-      "Starting conversation Working"
-    )
-    expect(
-      within(card)
-        .getByRole("status")
-        .querySelector('[data-orb-state="working"]')
-    ).toBeTruthy()
-    expect(within(card).queryByText("Recent 2")).toBeNull()
-    expect(view.onNewChat).not.toHaveBeenCalled()
-    view.rerenderHome({
-      primaryChatActivity: { threadId: "th_created", state: "running" },
-    })
-    fireEvent.click(
-      within(card).getByRole("button", { name: "Current conversation Working" })
-    )
-    expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith(
-      "th_created"
-    )
-    expect(view.onNewChat).not.toHaveBeenCalled()
-  })
-
-  it("checks failed documents in at most three nonempty bases and preserves partial coverage and cursors", async () => {
-    const bases = Array.from({ length: 8 }, (_, i) =>
-      corpus(`base_${i + 1}`, i === 7 ? 0 : 6)
-    )
-    const calls = stubApi({
-      [`${path}/corpora`]: { corpora: bases },
-      [`${path}/corpora/base_1/documents`]: {
-        documents: [
-          failedDocument("a"),
-          failedDocument("b"),
-          failedDocument("c"),
-        ],
-        next_cursor: "more-failures",
-      },
-      [`${path}/corpora/base_2/documents`]: { documents: [] },
-      [`${path}/corpora/base_3/documents`]: { documents: [] },
-      [`${path}/apps/connections`]: {
-        connections: [
-          connection("Broken tool", "failed"),
-          connection("Expired tool", "expired"),
-          connection("Connecting tool", "pending"),
-          connection("Healthy tool", "active"),
-        ],
-      },
-      [`${path}/threads`]: {
-        threads: Array.from({ length: 4 }, (_, i) => ({
-          id: `th_${i}`,
-          title: `Recent ${i}`,
-          updated_at: "2026-09-23T10:00:00Z",
-        })),
-      },
-    })
-    const callbacks = renderHome({
-      primaryChatActivity: { threadId: "th_0", state: "running" },
-    })
-    expect(
-      await screen.findByText("Checked 4 of 8 knowledge bases.")
-    ).toBeTruthy()
-    const card = screen.getByRole("region", { name: "Needs attention" })
-    expect(
-      within(card).getByRole("heading", { name: "Needs attention · 3+" })
-    ).toBeTruthy()
-    expect(within(card).getByText("3+ failed documents")).toBeTruthy()
-    expect(within(card).getAllByRole("listitem")).toHaveLength(3)
-    expect(screen.queryByText("Connecting tool")).toBeNull()
-    expect(screen.queryByText("Healthy tool")).toBeNull()
-    const agent = screen.getByRole("region", { name: "Your agent" })
-    expect(within(agent).getAllByRole("listitem")).toHaveLength(3)
-    fireEvent.click(within(agent).getByRole("button", { name: "New chat" }))
-    expect(callbacks.onNewChat).toHaveBeenCalledExactlyOnceWith()
-    fireEvent.click(within(card).getByRole("button", { name: /Broken tool/ }))
-    fireEvent.click(within(card).getByRole("button", { name: /base_1/ }))
-    expect(callbacks.onOpenTools).toHaveBeenCalledOnce()
-    expect(callbacks.onOpenKnowledge).toHaveBeenCalledOnce()
-    const scans = calls.filter((url) => url.pathname.endsWith("/documents"))
-    expect(scans).toHaveLength(3)
-    for (const scan of scans) {
-      expect(scan.searchParams.get("status")).toBe("failed")
-      expect(scan.searchParams.get("limit")).toBe("3")
-    }
-    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
-  })
-
-  it("does not claim all clear when a checked base fails or when requests are still loading", async () => {
-    let answer!: (response: Response) => void
-    const pending = new Promise<Response>((resolve) => {
-      answer = resolve
-    })
-    stubApi({
-      [`${path}/agent-requests/inbox`]: () => pending,
-      [`${path}/corpora`]: { corpora: [corpus("Private base")] },
-      [`${path}/corpora/Private%20base/documents`]: () =>
-        json({ error: { code: "forbidden", message: "No access" } }, 403),
-    })
-    renderHome()
-    expect(
-      await screen.findByText("Couldn’t load Private base failures.")
-    ).toBeTruthy()
-    expect(screen.getByText("Loading requests…")).toBeTruthy()
-    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
-    answer(json({ requests: [] }))
-    await waitFor(() =>
-      expect(screen.queryByText("Loading requests…")).toBeNull()
-    )
-    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
-    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy()
-  })
-
-  it("keeps optional unavailable services distinct from denied reads and preserves independent cards", async () => {
-    stubApi({
-      [`${path}/agent-requests/inbox`]: { requests: [request()] },
-      [`${path}/apps/connections`]: () =>
-        json({ error: { code: "not_found", message: "Absent" } }, 404),
-      [`${path}/corpora`]: () =>
-        json({ error: { code: "forbidden", message: "Denied" } }, 403),
-    })
-    renderHome()
-    expect(
-      await screen.findByRole("region", { name: "Waiting on you" })
-    ).toBeTruthy()
-    expect(await screen.findByText("tools is not available here.")).toBeTruthy()
-    expect(
-      await screen.findByText("Couldn’t load knowledge bases.")
-    ).toBeTruthy()
-    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
-  })
-
-  it("shows one plain quiet line after checking both knowledge bases completely", async () => {
-    stubApi({
-      [`${path}/corpora`]: { corpora: [corpus("base_1"), corpus("base_2")] },
-      [`${path}/corpora/base_1/documents`]: { documents: [] },
-      [`${path}/corpora/base_2/documents`]: { documents: [] },
-    })
-    renderHome()
-    expect(await screen.findByText("Nothing needs you right now.")).toBeTruthy()
-    expect(
-      screen.getAllByRole("status").map((status) => status.textContent)
-    ).toEqual(["Nothing needs you right now."])
-    expect(screen.queryByText(/Checked/)).toBeNull()
-    expect(screen.queryAllByRole("region")).toHaveLength(0)
-  })
-
-  it.each(["requests", "knowledge"] as const)(
-    "keeps the quiet line qualified when only %s coverage is incomplete",
-    async (source) => {
-      stubApi({
-        [`${path}/agent-requests/inbox`]: {
-          requests:
-            source === "requests"
-              ? Array.from({ length: 100 }, (_, i) =>
-                  request({ id: `done_${i}`, status: "completed" })
-                )
-              : [],
-        },
-        [`${path}/corpora`]: {
-          corpora:
-            source === "knowledge"
-              ? Array.from({ length: 5 }, (_, i) => corpus(`base_${i}`))
-              : [],
-        },
-        ...Object.fromEntries(
-          [0, 1, 2].map((i) => [
-            `${path}/corpora/base_${i}/documents`,
-            { documents: [] },
-          ])
-        ),
-      })
-      renderHome()
-      expect(
-        await screen.findByText(
-          source === "requests"
-            ? "Nothing waiting in the work checked. Only the latest 100 requests were checked."
-            : "Nothing waiting in the work checked. Checked 3 of 5 knowledge bases."
-        )
-      ).toBeTruthy()
-      expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
-      expect(screen.getAllByRole("status")).toHaveLength(1)
-    }
   )
+  expect(view.onOpenAgent).toHaveBeenCalledOnce()
+  fireEvent.change(within(agent).getByRole<HTMLTextAreaElement>("textbox"), {
+    target: { value: "  Check the launch plan  " },
+  })
+  fireEvent.click(
+    within(agent).getByRole<HTMLButtonElement>("button", {
+      name: "Send message",
+    })
+  )
+  expect(view.onNewChat).toHaveBeenCalledWith("Check the launch plan")
+  expect(within(agent).getByRole<HTMLTextAreaElement>("textbox").value).toBe("")
+})
 
-  it("shows one qualified quiet line for a full response and incomplete knowledge coverage", async () => {
-    stubApi({
-      [`${path}/agent-requests/inbox`]: {
-        requests: Array.from({ length: 100 }, (_, i) =>
-          request({ id: `done_${i}`, status: "completed" })
+it("pins a running open chat once and keeps starting chat truthful until an ID exists", async () => {
+  stubApi({
+    [`${path}/threads`]: {
+      threads: [
+        chat("one"),
+        chat("two"),
+        chat("three"),
+        chat("open", "Running chat"),
+      ],
+    },
+  })
+  const view = renderHome({
+    primaryChatActivity: { state: "running", threadId: "open" },
+  })
+  const recents = await screen.findByRole("list", {
+    name: "Recent conversations",
+  })
+  await waitFor(() => expect(recents.children).toHaveLength(3))
+  expect(within(recents).getAllByText("Running chat")).toHaveLength(1)
+  expect(
+    within(recents)
+      .getByText("Working")
+      .querySelector("[data-orb-state=working]")
+  ).toBeTruthy()
+  view.rerenderHome({
+    primaryChatActivity: { state: "running", threadId: null },
+  })
+  await screen.findByText("Starting conversation")
+  expect(
+    screen.queryByRole("button", { name: /Starting conversation/ })
+  ).toBeNull()
+})
+
+it("uses real inline consent and held answer cards, followed by access, sent/shared answers and unfinished setup", async () => {
+  const consent = slackRequest({
+    expires_at: new Date(NOW + 3600_000).toISOString(),
+  })
+  const held = request({
+    id: "held",
+    status: "review",
+    task: "Review this answer",
+    held: {
+      result: answer("Held answer with personal data"),
+      masked_result: answer("Masked answer"),
+    },
+    guard: { state: "held", kinds: ["EMAIL"] },
+  })
+  stubApi({
+    [`${path}/agent-requests/inbox`]: {
+      requests: [
+        consent,
+        held,
+        request({
+          id: "shared",
+          status: "completed",
+          task: "What you shared",
+          result: answer("The agent shared this answer"),
+        }),
+      ],
+    },
+    [`${path}/agent-requests/sent`]: {
+      requests: [
+        request({
+          id: "sent",
+          requester: consent.target,
+          target: consent.requester,
+          status: "completed",
+          task: "What you asked",
+          result: answer("An answer to your request"),
+        }),
+      ],
+    },
+    [`${path}/agent-leases`]: page([activeLease()]),
+    [`${path}/apps/slack/status`]: {
+      status: "not_installed",
+      can_manage: true,
+    },
+    [`${path}/corpora`]: { corpora: [] },
+    "/v1/agent-grant": { granted: false },
+  })
+  const view = renderHome()
+  const needs = await screen.findByRole("region", { name: "Needs you" })
+  expect(
+    within(needs).getByRole<HTMLButtonElement>("button", {
+      name: /Summary only/,
+    })
+  ).toBeTruthy()
+  expect(
+    within(needs).getByRole<HTMLButtonElement>("button", {
+      name: /Allow for 1 hour/,
+    })
+  ).toBeTruthy()
+  expect(
+    within(needs).getByRole<HTMLButtonElement>("button", { name: /Deny/ })
+  ).toBeTruthy()
+  expect(within(needs).getByText("Held answer with personal data")).toBeTruthy()
+  expect(
+    within(needs).getByRole<HTMLButtonElement>("button", {
+      name: /Send .*masked/,
+    })
+  ).toBeTruthy()
+  await screen.findByText("An answer to your request")
+  const sections = [...view.container.querySelectorAll(".home-card")].map(
+    (node) => node.getAttribute("aria-label")
+  )
+  expect(sections).toEqual([
+    "Your agent",
+    "Needs you",
+    "Open access",
+    "Your requests and shared answers",
+    "Finish setup",
+  ])
+  expect(screen.getByText("The agent shared this answer")).toBeTruthy()
+  fireEvent.click(
+    screen.getByRole<HTMLButtonElement>("button", { name: "Connect" })
+  )
+  expect(view.onOpenSlack).toHaveBeenCalledOnce()
+  fireEvent.click(
+    screen.getByRole<HTMLButtonElement>("button", { name: "Add" })
+  )
+  expect(view.onOpenKnowledge).toHaveBeenCalledOnce()
+  fireEvent.click(
+    screen.getByRole<HTMLButtonElement>("button", { name: "Open Account" })
+  )
+  expect(view.onOpenAccount).toHaveBeenCalledOnce()
+})
+
+it("posts a Home consent choice through the existing guarded request action", async () => {
+  const pending = slackRequest({
+    expires_at: new Date(NOW + 3600_000).toISOString(),
+  })
+  let current = pending
+  const go = stubApi({
+    [`${path}/agent-requests/inbox`]: () => json({ requests: [current] }),
+    [`${path}/agent-requests/${pending.id}/consent`]: () => {
+      current = { ...pending, status: "rejected", revision: 2 }
+      return json({ request: current })
+    },
+  })
+  renderHome()
+  fireEvent.click(await screen.findByRole("button", { name: /Deny/ }))
+  await waitFor(() =>
+    expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
+  )
+  expect(go.calls.find((call) => call.method === "POST")?.body).toEqual({
+    choice: "deny",
+  })
+})
+
+it("keeps only this member's unexpired owner decisions and held reviews; bounds cards with All requests", async () => {
+  stubApi({
+    [`${path}/agent-requests/inbox`]: {
+      requests: [
+        request({
+          id: "foreign",
+          target: {
+            user_id: "other",
+            agent_id: "other-agent",
+            agent_name: "Other",
+          },
+          task: "Foreign owner",
+        }),
+        request({ id: "agent", approval: "agent", task: "Agent handles this" }),
+        request({
+          id: "expired",
+          expires_at: new Date(NOW - 1).toISOString(),
+          task: "Expired request",
+        }),
+        ...[1, 2, 3, 4].map((id) =>
+          request({ id: `own-${id}`, task: `Owner request ${id}` })
         ),
-      },
-      [`${path}/corpora`]: {
-        corpora: Array.from({ length: 5 }, (_, i) => corpus(`base_${i}`)),
-      },
-      ...Object.fromEntries(
-        [0, 1, 2].map((i) => [
-          `${path}/corpora/base_${i}/documents`,
-          { documents: [] },
-        ])
-      ),
-    })
-    renderHome()
-    expect(
-      await screen.findByText(
-        "Nothing waiting in the work checked. Checked 3 of 5 knowledge bases. Only the latest 100 requests were checked."
-      )
-    ).toBeTruthy()
-    expect(screen.getAllByRole("status")).toHaveLength(1)
-    expect(screen.queryAllByRole("region")).toHaveLength(0)
+      ],
+    },
   })
+  const view = renderHome()
+  const needs = await screen.findByRole("region", { name: "Needs you" })
+  expect(within(needs).getAllByRole("article")).toHaveLength(3)
+  expect(screen.queryByText("Foreign owner")).toBeNull()
+  expect(screen.queryByText("Agent handles this")).toBeNull()
+  expect(screen.queryByText("Expired request")).toBeNull()
+  expect(
+    screen.getByText("1 more request needs you. Open All requests to decide.")
+  ).toBeTruthy()
+  fireEvent.click(
+    within(needs).getByRole<HTMLButtonElement>("button", {
+      name: "All requests",
+    })
+  )
+  expect(view.onOpenRequests).toHaveBeenCalledWith()
+})
 
-  it("keeps preview read-only and fetches no member data", async () => {
-    const calls = stubApi()
-    renderHome({ organizationId: undefined, viewerId: undefined })
-    expect(
-      screen
-        .getByRole("button", { name: "Send message" })
-        .hasAttribute("disabled")
-    ).toBe(true)
-    expect(screen.getByText("Sign in to start a conversation.")).toBeTruthy()
-    expect(calls).toHaveLength(0)
-    expect(screen.queryAllByRole("region")).toHaveLength(0)
+it("keeps a card's decision note and composer draft mounted during a background refresh", async () => {
+  let finish: ((response: Response) => void) | undefined
+  let refreshing = false
+  stubApi({
+    [`${path}/agent-requests/inbox`]: () =>
+      refreshing
+        ? new Promise<Response>((resolve) => {
+            finish = resolve
+          })
+        : json({ requests: [request()] }),
   })
-
-  it("does not send or imply exact-thread navigation before its supported chat callbacks are wired", async () => {
-    stubApi({
-      [`${path}/threads`]: {
-        threads: [
-          {
-            id: "old",
-            title: "Existing work",
-            updated_at: "2026-09-23T10:00:00Z",
-          },
-        ],
-      },
-    })
-    const callbacks = renderHome({
-      onNewChat: undefined,
-      onOpenConversation: undefined,
-    })
-    expect(
-      await screen.findByRole("button", { name: /Existing work/ })
-    ).toBeTruthy()
-    expect(
-      screen
-        .getByRole("button", { name: /Existing work/ })
-        .hasAttribute("disabled")
-    ).toBe(true)
-    expect(
-      screen.getByRole("button", { name: "New chat" }).hasAttribute("disabled")
-    ).toBe(true)
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Start a new conversation" }),
-      { target: { value: "New work" } }
-    )
-    fireEvent.keyDown(
-      screen.getByRole("textbox", { name: "Start a new conversation" }),
-      { key: "Enter" }
-    )
-    expect(
-      screen
-        .getByRole("button", { name: "Send message" })
-        .hasAttribute("disabled")
-    ).toBe(true)
-    expect(
-      screen.getByText("Conversation shortcuts are unavailable.")
-    ).toBeTruthy()
-    expect(callbacks.onNewChat).not.toHaveBeenCalled()
-    expect(callbacks.onOpenConversation).not.toHaveBeenCalled()
+  const view = renderHome()
+  fireEvent.click(await screen.findByRole("button", { name: "Add a note" }))
+  const note = screen.getByRole<HTMLInputElement>("textbox", {
+    name: /A note for Raya/,
   })
-
-  it("drops the old workspace's private rows immediately when the workspace changes", async () => {
-    stubApi({
-      [`${path}/agent-requests/inbox`]: {
-        requests: [request({ purpose: "Private old-workspace decision" })],
-      },
-      "/v1/organizations/org_2/agent-requests/inbox": { requests: [] },
-      "/v1/organizations/org_2/threads": { threads: [] },
-      "/v1/organizations/org_2/apps/connections": { connections: [] },
-      "/v1/organizations/org_2/corpora": { corpora: [] },
-    })
-    const view = renderHome()
-    expect(
-      await screen.findByText("Private old-workspace decision")
-    ).toBeTruthy()
-    view.rerenderHome({ organizationId: "org_2" })
-    expect(screen.queryByText("Private old-workspace decision")).toBeNull()
-    expect(await screen.findByText("Nothing needs you right now.")).toBeTruthy()
-    expect(screen.queryByRole("region", { name: "Waiting on you" })).toBeNull()
+  fireEvent.change(note, {
+    target: { value: "Please use the public launch notes" },
   })
+  const composer = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Start a new conversation",
+  })
+  fireEvent.change(composer, { target: { value: "Unsent question" } })
+  refreshing = true
+  let refetch: Promise<void> | undefined
+  act(() => {
+    refetch = view.client.invalidateQueries({
+      queryKey: agentKeys.requestBox(ORG, "inbox"),
+    })
+  })
+  await waitFor(() => expect(finish).toBeTypeOf("function"))
+  expect(
+    screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: /A note for Raya/,
+    })
+  ).toBe(note)
+  expect(note.value).toBe("Please use the public launch notes")
+  await act(async () => {
+    finish!(json({ requests: [request()] }))
+    await refetch
+  })
+  expect(
+    screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: /A note for Raya/,
+    })
+  ).toBe(note)
+  expect(composer.value).toBe("Unsent question")
+})
 
-  it("fresh-reads every private source after a same-workspace member change, including failed documents", async () => {
-    let nextMember = false
-    let releaseLists!: () => void
-    let releaseDocuments!: () => void
-    const listsReady = new Promise<void>((resolve) => {
-      releaseLists = resolve
-    })
-    const documentsReady = new Promise<void>((resolve) => {
-      releaseDocuments = resolve
-    })
-    const oldRows = {
-      [`${path}/agent-requests/inbox`]: {
-        requests: [request({ purpose: "Private old-member approval" })],
-      },
-      [`${path}/threads`]: {
-        threads: [
-          {
-            id: "old_thread",
-            title: "Private old-member chat",
-            updated_at: "",
-          },
-        ],
-      },
-      [`${path}/apps/connections`]: {
-        connections: [connection("Private old-member tool", "failed")],
-      },
-      [`${path}/corpora`]: {
-        corpora: [{ ...corpus("same_base"), name: "Private old-member base" }],
-      },
-    }
-    const nextRows: Record<string, unknown> = {
-      [`${path}/agent-requests/inbox`]: {
-        requests: [
-          request({
-            purpose: "New-member approval",
-            target: {
-              user_id: "next_member",
-              agent_id: "next_agent",
-              agent_name: "Next",
-            },
+it("checks only newest five primary chats plus the distinct open chat and opens exact confirmations", async () => {
+  const go = stubApi({
+    [`${path}/threads`]: {
+      threads: [
+        chat("wake", "Wake", "wakeup"),
+        ...Array.from({ length: 12 }, (_, i) => chat(`chat-${i}`)),
+      ],
+    },
+    [`${path}/threads/chat-1`]: {
+      ...chat("chat-1", "Needs a tool choice"),
+      items: [],
+      pending_confirmations: ["a", "b"],
+    },
+    [`${path}/threads/chat-10`]: {
+      ...chat("chat-10", "Open older chat"),
+      items: [],
+      pending_confirmations: ["c"],
+    },
+  })
+  const view = renderHome({
+    primaryChatActivity: { threadId: "chat-10", state: "idle" },
+  })
+  await screen.findByText("2 tool confirmations · Open chat to decide")
+  expect(
+    screen.getByText(/limited to your five newest chats and the open chat/)
+  ).toBeTruthy()
+  const details = go.calls
+    .filter((call) => call.url.pathname.startsWith(`${path}/threads/`))
+    .map((call) => call.url.pathname.split("/").at(-1))
+  expect(details.sort()).toEqual(
+    ["chat-0", "chat-1", "chat-2", "chat-3", "chat-4", "chat-10"].sort()
+  )
+  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
+  fireEvent.click(
+    screen.getByRole<HTMLButtonElement>("button", { name: /Open older chat/ })
+  )
+  expect(view.onOpenConversation).toHaveBeenCalledWith("chat-10")
+})
+
+it("polls bounded chat details every thirty seconds while lists stay quick and mount and focus refresh immediately", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
+  const go = stubApi({
+    [`${path}/threads`]: {
+      threads: Array.from({ length: 6 }, (_, i) => chat(`chat-${i}`)),
+    },
+  })
+  const activity = { threadId: "chat-5", state: "idle" as const }
+  const view = renderHome({ primaryChatActivity: activity })
+  const detailReads = () =>
+    go.calls.filter((call) => call.url.pathname.startsWith(`${path}/threads/`))
+  const listReads = () =>
+    go.calls.filter((call) => call.url.pathname === `${path}/threads`)
+  await screen.findByText("Nothing needs you right now.")
+  expect(detailReads()).toHaveLength(6)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_000)
+  })
+  expect(listReads()).toHaveLength(2)
+  expect(detailReads()).toHaveLength(6)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(19_999)
+  })
+  expect(detailReads()).toHaveLength(6)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1)
+  })
+  expect(detailReads()).toHaveLength(12)
+
+  view.unmount()
+  render(
+    <QueryClientProvider client={view.client}>
+      <HomeOverview
+        organizationId={ORG}
+        viewerId={OWNER}
+        primaryChatActivity={activity}
+        onOpenRequests={vi.fn()}
+        onOpenAgent={vi.fn()}
+        onOpenTools={vi.fn()}
+        onOpenKnowledge={vi.fn()}
+      />
+    </QueryClientProvider>
+  )
+  await screen.findByText("Nothing needs you right now.")
+  expect(detailReads()).toHaveLength(18)
+  await act(async () => {
+    focusManager.setFocused(false)
+    focusManager.setFocused(true)
+  })
+  await waitFor(() => expect(detailReads()).toHaveLength(24))
+})
+
+it("deduplicates an open chat already among five and never reads side-conversation histories", async () => {
+  const go = stubApi({
+    [`${path}/threads`]: {
+      threads: [
+        chat("side", "Side", "side_conversation"),
+        ...[1, 2, 3, 4, 5].map((i) => chat(String(i))),
+      ],
+    },
+  })
+  renderHome({ primaryChatActivity: { state: "idle", threadId: "2" } })
+  await screen.findByText("Nothing needs you right now.")
+  expect(
+    go.calls.filter((call) => call.url.pathname.startsWith(`${path}/threads/`))
+  ).toHaveLength(5)
+})
+
+it("keeps known live confirmation reachable after a refused detail refresh while cached confirmations disappear", async () => {
+  let deny = false
+  stubApi({
+    [`${path}/threads`]: {
+      threads: [
+        chat("stored", "Stored confirmation"),
+        chat("live", "Open chat"),
+      ],
+    },
+    [`${path}/threads/stored`]: () =>
+      deny
+        ? refused()
+        : json({
+            ...chat("stored", "Stored confirmation"),
+            items: [],
+            pending_confirmations: ["a"],
           }),
-        ],
-      },
-      [`${path}/threads`]: { threads: [] },
-      [`${path}/apps/connections`]: { connections: [] },
-      [`${path}/corpora`]: {
-        corpora: [{ ...corpus("same_base"), name: "New-member base" }],
-      },
-    }
-    const calls = stubApi({
-      ...Object.fromEntries(
-        Object.entries(oldRows).map(([url, rows]) => [
-          url,
-          () =>
-            nextMember
-              ? listsReady.then(() => json(nextRows[url]))
-              : json(rows),
-        ])
-      ),
-      [`${path}/corpora/same_base/documents`]: () =>
-        nextMember
-          ? documentsReady.then(() => json({ documents: [] }))
-          : json({ documents: [failedDocument("old_failure")] }),
-    })
-    const view = renderHome()
-    await screen.findByText("Checked 1 of 1 knowledge bases.")
-    expect(screen.getByText("Private old-member chat")).toBeTruthy()
-    nextMember = true
-    view.rerenderHome({ viewerId: "next_member" })
-    expect(screen.queryByText(/Private old-member/)).toBeNull()
-    expect(screen.queryByText(/Checked/)).toBeNull()
-    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
-    await waitFor(() => {
-      for (const url of Object.keys(oldRows))
-        expect(calls.filter((call) => call.pathname === url)).toHaveLength(2)
-    })
-    await act(async () => releaseLists())
-    await screen.findByText("Loading New-member base failures…")
-    expect(screen.queryByText("1 failed document")).toBeNull()
-    expect(screen.getByText("Checked 0 of 1 knowledge bases.")).toBeTruthy()
-    expect(screen.queryByRole("region", { name: "Needs attention" })).toBeNull()
-    await act(async () => releaseDocuments())
-    await screen.findByText("Checked 1 of 1 knowledge bases.")
-    expect(
-      calls.filter((call) => call.pathname.endsWith("/documents"))
-    ).toHaveLength(2)
-    expect(screen.queryByText(/Private old-member/)).toBeNull()
+    [`${path}/threads/live`]: () =>
+      deny
+        ? refused()
+        : json({
+            ...chat("live", "Open chat"),
+            items: [],
+            pending_confirmations: ["b"],
+          }),
   })
-
-  it.each([
-    "requests",
-    "agent work",
-    "tools",
-    "knowledge bases",
-    "Base failures",
-  ])(
-    "removes cached %s choices and counts during a refresh and after a refused read",
-    async (source) => {
-      const sources = {
-        requests: {
-          route: `${path}/agent-requests/inbox`,
-          key: agentKeys.requestBox("org_1", "inbox", 100),
-          label: "Private approval",
-        },
-        "agent work": {
-          route: `${path}/threads`,
-          key: threadKeys.list("org_1"),
-          label: "Private chat",
-        },
-        tools: {
-          route: `${path}/apps/connections`,
-          key: connectionsQueryOptions("org_1").queryKey,
-          label: "Private tool",
-        },
-        "knowledge bases": {
-          route: `${path}/corpora`,
-          key: ragKeys.corpora("org_1"),
-          label: "Base",
-        },
-        "Base failures": {
-          route: `${path}/corpora/base/documents`,
-          key: ragKeys.documents("org_1", "base"),
-          label: "Base",
-        },
-      }
-      const selected = sources[source as keyof typeof sources]
-      let refresh = false
-      let release!: () => void
-      const ready = new Promise<void>((resolve) => {
-        release = resolve
-      })
-      const rows: Record<string, unknown> = {
-        [`${path}/agent-requests/inbox`]: {
-          requests: [request({ purpose: "Private approval" })],
-        },
-        [`${path}/threads`]: {
-          threads: [
-            { id: "private_chat", title: "Private chat", updated_at: "" },
-          ],
-        },
-        [`${path}/apps/connections`]: {
-          connections: [connection("Private tool", "failed")],
-        },
-        [`${path}/corpora`]: { corpora: [{ ...corpus("base"), name: "Base" }] },
-        [`${path}/corpora/base/documents`]: {
-          documents: [failedDocument("private_failure")],
-        },
-      }
-      stubApi(
-        Object.fromEntries(
-          Object.entries(rows).map(([url, data]) => [
-            url,
-            () =>
-              refresh && url === selected.route
-                ? ready.then(() =>
-                    json(
-                      {
-                        error: {
-                          code: "forbidden",
-                          message: "Private diagnostic",
-                        },
-                      },
-                      403
-                    )
-                  )
-                : json(data),
-          ])
-        )
-      )
-      const view = renderHome()
-      await screen.findByText("Checked 1 of 1 knowledge bases.")
-      expect(
-        screen.getByRole("button", { name: new RegExp(selected.label) })
-      ).toBeTruthy()
-      refresh = true
-      let refetch!: Promise<void>
-      await act(async () => {
-        refetch = view.client.refetchQueries({ queryKey: selected.key })
-      })
-      await screen.findByText(`Loading ${source}…`)
-      expect(
-        screen.queryByRole("button", { name: new RegExp(selected.label) })
-      ).toBeNull()
-      expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
-      if (source === "knowledge bases")
-        expect(screen.queryByText(/Checked/)).toBeNull()
-      if (source === "Base failures") {
-        expect(screen.queryByText("1 failed document")).toBeNull()
-        expect(screen.getByText("Checked 0 of 1 knowledge bases.")).toBeTruthy()
-      }
-      await act(async () => {
-        release()
-        await refetch
-      })
-      await screen.findByText(`Couldn’t load ${source}.`)
-      expect(
-        screen.queryByRole("button", { name: new RegExp(selected.label) })
-      ).toBeNull()
-      expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
-      expect(screen.queryByText("Private diagnostic")).toBeNull()
-      if (source === "knowledge bases")
-        expect(screen.queryByText(/Checked/)).toBeNull()
-      if (source === "Base failures") {
-        expect(screen.queryByText("1 failed document")).toBeNull()
-        expect(screen.getByText("Checked 0 of 1 knowledge bases.")).toBeTruthy()
-      }
-    }
+  const view = renderHome({
+    primaryChatActivity: { state: "waiting", threadId: "live" },
+  })
+  await screen.findByRole("list", { name: "Tool confirmations" })
+  deny = true
+  await act(async () => {
+    await view.client.invalidateQueries({ queryKey: threadKeys.all(ORG) })
+  })
+  const needs = screen.getByRole("region", { name: "Needs you" })
+  expect(within(needs).queryByText("Stored confirmation")).toBeNull()
+  fireEvent.click(
+    within(needs).getByRole<HTMLButtonElement>("button", { name: /Open chat/ })
   )
+  expect(view.onOpenConversation).toHaveBeenCalledWith("live")
+  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
+  expect(screen.queryByText("private diagnostic")).toBeNull()
+})
 
-  it("removes a previously readable tool after a refresh refuses access", async () => {
-    let refused = false
-    stubApi({
-      [`${path}/apps/connections`]: () =>
-        refused
-          ? json({ error: { code: "forbidden" } }, 403)
-          : json({
-              connections: [connection("Private cached tool", "failed")],
-            }),
-    })
-    const view = renderHome()
-    await screen.findByRole("button", { name: /Private cached tool/ })
-    refused = true
-    await act(async () => {
-      await view.client.refetchQueries({
-        queryKey: connectionsQueryOptions("org_1").queryKey,
-      })
-    })
-    await screen.findByText("Couldn’t load tools.")
-    expect(
-      screen.queryByRole("button", { name: /Private cached tool/ })
-    ).toBeNull()
-    expect(screen.queryByText(/Nothing (?:waiting|needs you)/)).toBeNull()
+it("never claims all clear when history coverage is partial, loading, or refused", async () => {
+  stubApi({
+    [`${path}/threads`]: {
+      threads: Array.from({ length: 8 }, (_, i) => chat(String(i))),
+    },
+    [`${path}/threads/1`]: refused,
   })
+  renderHome()
+  await screen.findByText("Couldn’t load tool confirmations.")
+  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
+  expect(screen.getByText(/Older chats may still need you/)).toBeTruthy()
+})
+
+it("gives quiet complete empty Home exactly once, with only unfinished setup", async () => {
+  stubApi({
+    [`${path}/corpora`]: { corpora: [{ ...base, document_count: 0 }] },
+    [`${path}/apps/slack/status`]: { status: "ended", can_manage: false },
+    "/v1/agent-grant": { granted: false },
+  })
+  renderHome()
+  expect(
+    await screen.findAllByText("Nothing needs you right now.")
+  ).toHaveLength(1)
+  const setup = screen.getByRole("region", { name: "Set up your workspace" })
+  expect(
+    within(setup).getByText("Ask a workspace admin to connect Slack.")
+  ).toBeTruthy()
+  expect(within(setup).queryByRole("button", { name: "Connect" })).toBeNull()
+  expect(within(setup).getByText("Add knowledge")).toBeTruthy()
+  expect(within(setup).getByText("Enable background access")).toBeTruthy()
+  expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
+  expect(screen.queryByRole("region", { name: "Open access" })).toBeNull()
+})
+
+it("hides completed setup and does not create Slack authorization URLs", async () => {
+  const go = stubApi()
+  renderHome()
+  await screen.findByText("Nothing needs you right now.")
+  expect(screen.queryByText("Set up your workspace")).toBeNull()
+  expect(
+    go.calls.some(
+      (call) =>
+        call.url.pathname.includes("slack/install") ||
+        call.url.pathname.endsWith("authorize")
+    )
+  ).toBe(false)
+})
+
+it("exposes End access only on owned revocable active windows and settles the server winning lease", async () => {
+  const owned = activeLease()
+  let revoked = false
+  const go = stubApi({
+    [`${path}/agent-leases`]: () =>
+      json(
+        page(
+          revoked
+            ? [
+                activeLease("received", {
+                  role: "asker",
+                  can_revoke: false,
+                  owner_user_id: ASKER,
+                  asker_user_id: OWNER,
+                }),
+              ]
+            : [
+                owned,
+                activeLease("received", {
+                  role: "asker",
+                  can_revoke: false,
+                  owner_user_id: ASKER,
+                  asker_user_id: OWNER,
+                }),
+                activeLease("expired", {
+                  expires_at: new Date(NOW - 1).toISOString(),
+                }),
+                activeLease("foreign", {
+                  owner_user_id: "stranger",
+                  asker_user_id: "someone",
+                }),
+              ]
+        )
+      ),
+    [`${path}/agent-leases/${owned.id}`]: () => {
+      revoked = true
+      return json({
+        lease: { ...owned, revoked_at: new Date(NOW).toISOString() },
+      })
+    },
+  })
+  renderHome()
+  const section = await screen.findByRole("region", { name: "Open access" })
+  await within(section).findByText("Raya Patel can ask your agent")
+  expect(
+    within(section).getAllByRole("button", { name: "End access" })
+  ).toHaveLength(1)
+  expect(within(section).getAllByRole("listitem")).toHaveLength(2)
+  fireEvent.click(
+    within(section).getByRole<HTMLButtonElement>("button", {
+      name: "End access",
+    })
+  )
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "End access" })).toBeNull()
+  )
+  expect(go.calls.find((call) => call.method === "DELETE")?.url.pathname).toBe(
+    `${path}/agent-leases/${owned.id}`
+  )
+})
+
+it("makes every live access page reachable without pretending a first page is complete", async () => {
+  const go = stubApi({
+    [`${path}/agent-leases`]: (url: URL) =>
+      json(
+        url.searchParams.has("cursor")
+          ? page([activeLease("lease-5")])
+          : page(
+              [1, 2, 3, 4].map((i) => activeLease(`lease-${i}`)),
+              { has_more: true, next_cursor: "opaque+cursor/" }
+            )
+      ),
+  })
+  renderHome()
+  const section = await screen.findByRole("region", { name: "Open access" })
+  expect(within(section).getAllByRole("listitem")).toHaveLength(3)
+  fireEvent.click(
+    within(section).getByRole<HTMLButtonElement>("button", {
+      name: "All access",
+    })
+  )
+  expect(within(section).getAllByRole("listitem")).toHaveLength(4)
+  fireEvent.click(
+    within(section).getByRole<HTMLButtonElement>("button", {
+      name: "Load more access",
+    })
+  )
+  await waitFor(() =>
+    expect(within(section).getAllByRole("listitem")).toHaveLength(5)
+  )
+  expect(
+    go.calls.some(
+      (call) => call.url.searchParams.get("cursor") === "opaque+cursor/"
+    )
+  ).toBe(true)
+  expect(
+    within(section).queryByRole("button", { name: "Load more access" })
+  ).toBeNull()
+})
+
+it("uses server observation to keep live windows despite a member clock ahead", async () => {
+  vi.setSystemTime(NOW + 86400_000)
+  stubApi({ [`${path}/agent-leases`]: page([activeLease()]) })
+  renderHome()
+  await screen.findByRole("button", { name: "End access" })
+})
+
+it("removes access when server-relative time expires while the page remains open", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
+  stubApi({
+    [`${path}/agent-leases`]: page([
+      activeLease("short", { expires_at: new Date(NOW + 2000).toISOString() }),
+    ]),
+  })
+  renderHome()
+  await screen.findByRole("button", { name: "End access" })
+  act(() => {
+    vi.advanceTimersByTime(3000)
+  })
+  expect(screen.queryByRole("region", { name: "Open access" })).toBeNull()
+})
+
+it("includes actual shared Activity without duplicating shown answers, withholding held work from shared rows", async () => {
+  stubApi({
+    [`${path}/agent-requests/inbox`]: {
+      requests: [
+        request({
+          id: "shared",
+          status: "completed",
+          result: answer("Shared answer"),
+        }),
+      ],
+    },
+    [`${path}/agent-requests/activity`]: {
+      activity: [
+        {
+          kind: "answered",
+          role: "owner",
+          request_id: "shared",
+          status: "completed",
+          with_user_id: ASKER,
+          at: new Date(NOW).toISOString(),
+        },
+        {
+          kind: "answered",
+          role: "owner",
+          request_id: "older",
+          status: "completed",
+          with_user_id: ASKER,
+          at: new Date(NOW).toISOString(),
+        },
+        {
+          kind: "answered",
+          role: "owner",
+          request_id: "held",
+          status: "review",
+          with_user_id: ASKER,
+          at: new Date(NOW).toISOString(),
+        },
+      ],
+    },
+  })
+  const view = renderHome()
+  await screen.findByText("Shared answer")
+  const section = screen.getByRole("region", {
+    name: "Your requests and shared answers",
+  })
+  const activity = await within(section).findByRole("button", {
+    name: /Your agent answered Raya/,
+  })
+  expect(
+    within(section).getAllByRole("button", { name: /Open request/ })
+  ).toHaveLength(1)
+  fireEvent.click(activity)
+  expect(view.onOpenRequests).toHaveBeenCalledWith("older")
+})
+
+it("does not claim quiet when the request inbox reaches its server limit", async () => {
+  stubApi({
+    [`${path}/agent-requests/inbox`]: {
+      requests: Array.from({ length: 100 }, (_, i) =>
+        request({ id: `old-${i}`, status: "rejected" })
+      ),
+    },
+  })
+  renderHome()
+  await screen.findByText("Only the latest 100 requests were checked.")
+  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
+})
+
+it("keeps preview read-only and does not fetch private APIs", async () => {
+  const go = stubApi()
+  renderHome({ organizationId: undefined, viewerId: undefined })
+  expect(screen.getByText("Sign in to start a conversation.")).toBeTruthy()
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: "Send message" })
+      .disabled
+  ).toBe(true)
+  await act(async () => {})
+  expect(go.calls).toHaveLength(0)
+  expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
+})
+
+it("leaves unsupported conversation callbacks visibly disabled and drafts editable", async () => {
+  stubApi({ [`${path}/threads`]: { threads: [chat("one")] } })
+  renderHome({ onOpenConversation: undefined, onNewChat: undefined })
+  await screen.findByRole("button", { name: /one/ })
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: /one/ }).disabled
+  ).toBe(true)
+  expect(
+    screen.getByText("Conversation shortcuts are unavailable.")
+  ).toBeTruthy()
+  fireEvent.change(screen.getByRole<HTMLTextAreaElement>("textbox"), {
+    target: { value: "An unsent question" },
+  })
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox").value).toBe(
+    "An unsent question"
+  )
+})
+
+it.each([
+  {
+    name: "requests",
+    route: `${path}/agent-requests/inbox`,
+    seed: { requests: [request({ task: "Private pending task" })] },
+    privateText: "Private pending task",
+    key: agentKeys.requestBox(ORG, "inbox"),
+  },
+  {
+    name: "your requests",
+    route: `${path}/agent-requests/sent`,
+    seed: {
+      requests: [
+        request({
+          requester: { user_id: OWNER, agent_id: "own", agent_name: "Krude" },
+          target: { user_id: ASKER, agent_id: "peer", agent_name: "Nia" },
+          task: "Private outgoing task",
+        }),
+      ],
+    },
+    privateText: "Private outgoing task",
+    key: agentKeys.requestBox(ORG, "sent"),
+  },
+  {
+    name: "conversations",
+    route: `${path}/threads`,
+    seed: { threads: [chat("private", "Private recent title")] },
+    privateText: "Private recent title",
+    key: threadKeys.list(ORG),
+  },
+  {
+    name: "open access",
+    route: `${path}/agent-leases`,
+    seed: page([activeLease()]),
+    privateText: "Raya Patel can ask your agent",
+    key: [...agentKeys.requests(ORG), "active-leases"],
+  },
+  {
+    name: "Slack status",
+    route: `${path}/apps/slack/status`,
+    seed: { status: "not_installed", can_manage: true },
+    privateText: "Connect Slack",
+    key: ["apps", ORG],
+  },
+  {
+    name: "background access",
+    route: "/v1/agent-grant",
+    seed: { granted: false },
+    privateText: "Enable background access",
+    key: ["auth", "agent-grant"],
+  },
+])(
+  "removes private $name after a refused refresh, preserving the unsent composer",
+  async ({ name, route, seed, privateText, key }) => {
+    let deny = false
+    stubApi({ [route]: () => (deny ? refused() : json(seed)) })
+    const view = renderHome()
+    await screen.findByText(privateText)
+    const field = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Start a new conversation",
+    })
+    fireEvent.change(field, { target: { value: "Keep this draft" } })
+    deny = true
+    await act(async () => {
+      await view.client.invalidateQueries({ queryKey: key })
+    })
+    await screen.findByText(`Couldn’t load ${name}.`)
+    expect(screen.queryByText(privateText)).toBeNull()
+    expect(field.value).toBe("Keep this draft")
+    expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
+    expect(screen.queryByText("private diagnostic")).toBeNull()
+  }
+)
+
+it("drops prior viewer work and drafts immediately and freshly authorizes all private caches for the next viewer", async () => {
+  let nextViewer = false
+  let finish: ((response: Response) => void) | undefined
+  const go = stubApi({
+    [`${path}/agent-requests/inbox`]: () =>
+      nextViewer
+        ? new Promise<Response>((resolve) => {
+            finish = resolve
+          })
+        : json({ requests: [request({ task: "Old viewer private task" })] }),
+  })
+  const view = renderHome()
+  await screen.findByText("Old viewer private task")
+  fireEvent.change(
+    screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Start a new conversation",
+    }),
+    { target: { value: "Old viewer draft" } }
+  )
+  const firstCalls = go.calls.length
+  nextViewer = true
+  view.rerenderHome({ viewerId: "new-member" })
+  expect(screen.queryByText("Old viewer private task")).toBeNull()
+  expect(
+    screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Start a new conversation",
+    }).value
+  ).toBe("")
+  await waitFor(() => expect(go.calls.length).toBeGreaterThan(firstCalls + 7))
+  await act(async () => {
+    finish!(json({ requests: [] }))
+  })
+  await screen.findByText("Nothing needs you right now.")
+  const keys = view.client
+    .getQueryCache()
+    .getAll()
+    .map((query) => query.queryKey)
+  expect(
+    keys.filter((key) => key.includes("new-member")).length
+  ).toBeGreaterThanOrEqual(9)
+  expect(keys.every((key) => key.includes(ORG))).toBe(true)
 })

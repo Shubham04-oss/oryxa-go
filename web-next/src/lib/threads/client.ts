@@ -571,3 +571,25 @@ export function threadDetailQueryOptions(
     retry: retryUnlessRefused,
   })
 }
+
+/** Shared, member-scoped bounded reads for Home, history and opening checks. */
+export function threadApprovalQueryOptions(
+  organizationId: string,
+  threadId: string,
+  viewerId?: string
+) {
+  return queryOptions({
+    queryKey: [
+      ...threadKeys.detail(organizationId, threadId),
+      "approvals",
+      viewerId ?? "",
+    ] as const,
+    queryFn: ({ signal }) => getThread(organizationId, threadId, { signal }),
+    retry: retryUnlessRefused,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
+    refetchIntervalInBackground: false,
+  })
+}

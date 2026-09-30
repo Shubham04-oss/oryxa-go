@@ -175,7 +175,7 @@ export function RequestCard({
   autoFocus,
 }: RequestCardProps) {
   const queryClient = useQueryClient()
-  const people = usePeopleNames(organizationId)
+  const people = usePeopleNames(organizationId, viewerId)
   // What a change made on this card answered, until the lists read it too.
   const [latest, setLatest] = useState<AgentRequest>()
   const [ownLease, setOwnLease] = useState<AgentLease>()
@@ -252,7 +252,7 @@ export function RequestCard({
     setLatest(updated)
     setProblem("")
     queryClient.setQueryData(
-      agentKeys.request(organizationId, updated.id),
+      [...agentKeys.request(organizationId, updated.id), viewerId],
       updated
     )
     return refreshRequests(queryClient, organizationId)
@@ -668,8 +668,10 @@ export function RequestCardById({
   lease?: AgentLease
   autoFocus?: boolean
 }) {
-  const people = usePeopleNames(organizationId)
-  const query = useQuery(requestDetailQueryOptions(organizationId, requestId))
+  const people = usePeopleNames(organizationId, viewerId)
+  const query = useQuery(
+    requestDetailQueryOptions(organizationId, requestId, viewerId)
+  )
 
   if (query.isPending || people.status === "loading") {
     return (

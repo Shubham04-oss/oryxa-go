@@ -55,7 +55,11 @@ export type AgentPanelTab = "agents" | "dms" | "teams"
  * The shell bringing a tab forward (Team's "All conversations" opens DMs).
  * Each request is a new object, and each is honoured once.
  */
-export type AgentPanelTabRequest = { tab: AgentPanelTab }
+export type AgentPanelTabRequest = {
+  tab: AgentPanelTab
+  /** Home's All conversations opens the primary agent's history. */
+  history?: true
+}
 
 /** What the DMs tab lists and opens: the member's inbox, and whom it can name. */
 export type PanelDirectMessages = {
@@ -216,11 +220,18 @@ export function WorkspaceAgentPanel({
   const [dmDrafts, setDmDrafts] = useState<Partial<Record<string, string>>>({})
   const [answeredTabRequest, setAnsweredTabRequest] =
     useState<AgentPanelTabRequest | null>(null)
+  const [historyRequest, setHistoryRequest] =
+    useState<AgentPanelTabRequest | null>(null)
   if (tabRequest && tabRequest !== answeredTabRequest) {
     setAnsweredTabRequest(tabRequest)
     setTab(tabRequest.tab)
     // "All conversations" means the list, not the one last open.
     if (tabRequest.tab === "dms") setDmView(dmPanelList)
+    if (tabRequest.tab === "agents" && tabRequest.history) {
+      setAgentId(null)
+      setAgentsSide(null)
+      setHistoryRequest(tabRequest)
+    }
   }
   const unread = directMessages?.inbox.unreadTotal ?? 0
   const [composing, setComposing] = useState(false)
@@ -263,6 +274,7 @@ export function WorkspaceAgentPanel({
       setSideDrafts({})
       setDmView(dmPanelList)
       setDmDrafts({})
+      setHistoryRequest(null)
     }
   }
   // On a teamspace page, its teammates: read as the page reads it (one
@@ -598,6 +610,8 @@ export function WorkspaceAgentPanel({
                   hidden={Boolean(agentsSide)}
                 >
                   <AgentsView
+                    openHistoryRequest={historyRequest}
+                    onHistoryOpened={() => setHistoryRequest(null)}
                     organizationId={organizationId}
                     visible={agentsVisible}
                     scope={scope}
@@ -782,6 +796,8 @@ function AgentsTabSide({
  * (REALTIME.md).
  */
 function AgentsView({
+  openHistoryRequest,
+  onHistoryOpened,
   visible,
   organizationId,
   scope,
@@ -801,6 +817,8 @@ function AgentsView({
   onPrimaryFileCreated,
   getScreenContext,
 }: {
+  openHistoryRequest?: object | null
+  onHistoryOpened?: () => void
   visible: boolean
   organizationId?: string
   scope?: ChatScope
@@ -885,6 +903,8 @@ function AgentsView({
         />
       ) : organizationId ? (
         <AgentChat
+          openHistoryRequest={openHistoryRequest}
+          onHistoryOpened={onHistoryOpened}
           key={owner}
           organizationId={organizationId}
           scope={scope}

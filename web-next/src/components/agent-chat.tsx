@@ -51,6 +51,7 @@ import {
   createThread,
   deleteThreadChat,
   getThreadChatMessages,
+  threadApprovalQueryOptions,
   threadDetailQueryOptions,
   threadKeys,
   threadListQueryOptions,
@@ -144,13 +145,11 @@ const OPENING_FALLBACK_MS = 5000
 async function waitsOnMember(
   queryClient: QueryClient,
   organizationId: string,
-  threadId: string
+  threadId: string,
+  viewerId?: string
 ): Promise<boolean> {
   const detail = await queryClient
-    .fetchQuery({
-      ...threadDetailQueryOptions(organizationId, threadId),
-      staleTime: 10_000,
-    })
+    .fetchQuery(threadApprovalQueryOptions(organizationId, threadId, viewerId))
     .catch(() => undefined)
   return (detail?.pending_confirmations.length ?? 0) > 0
 }
@@ -179,6 +178,8 @@ export function AgentChat({
   visible = true,
   onFileCreated,
   getScreenContext,
+  openHistoryRequest,
+  onHistoryOpened,
 }: {
   organizationId: string
   /** Whose choices the chat remembers for the session; without it none are. */
@@ -202,6 +203,8 @@ export function AgentChat({
     version?: number
   }) => void
   getScreenContext?: () => ScreenContext
+  openHistoryRequest?: object | null
+  onHistoryOpened?: () => void
 }) {
   const queryClient = useQueryClient()
   const hydrated = useHydrated()
@@ -224,28 +227,36 @@ export function AgentChat({
   const candidates = approvalCandidates(history)
   const historyDetails = useQueries({
     queries: candidates.map((thread) => ({
-      ...threadDetailQueryOptions(organizationId, thread.id),
-      staleTime: 10_000,
-      refetchInterval: (query: { state: { data?: ThreadDetail } }) =>
-        (query.state.data?.pending_confirmations.length ?? 0) > 0
-          ? 10_000
-          : false,
+      ...threadApprovalQueryOptions(organizationId, thread.id, scope?.userId),
       enabled: hydrated && visible,
     })),
   })
   const knownDetails = new Map(
-    candidates.map((thread, i) => [thread.id, historyDetails[i].data])
+    candidates.map((thread, i) => [
+      thread.id,
+      historyDetails[i].isSuccess ? historyDetails[i].data : undefined,
+    ])
   )
   const approvals = new Set(
     history
       .filter((thread) => {
-        // Older chats may already be known from an explicit history pick;
-        // reading that cache never fans out more network requests.
-        const detail =
-          knownDetails.get(thread.id) ??
-          queryClient.getQueryData<ThreadDetail>(
-            threadKeys.detail(organizationId, thread.id)
-          )
+        // A refused candidate must not recover its marker from retained data.
+        // Older chats may be known from this member's earlier bounded reads;
+        // reading their cache never fans out more network requests.
+        const cached = knownDetails.has(thread.id)
+          ? undefined
+          : queryClient.getQueryState<ThreadDetail>(
+              threadApprovalQueryOptions(
+                organizationId,
+                thread.id,
+                scope?.userId
+              ).queryKey
+            )
+        const detail = knownDetails.has(thread.id)
+          ? knownDetails.get(thread.id)
+          : cached?.status === "success"
+            ? cached.data
+            : undefined
         return (detail?.pending_confirmations.length ?? 0) > 0
       })
       .map((thread) => thread.id)
@@ -308,7 +319,8 @@ export function AgentChat({
       choice: remembered?.choice ?? null,
       leftAt: remembered?.leftAt,
       now,
-      waiting: (id) => waitsOnMember(queryClient, organizationId, id),
+      waiting: (id) =>
+        waitsOnMember(queryClient, organizationId, id, scope?.userId),
     }).then((chosen) => {
       if (!stale)
         dispatch({
@@ -542,6 +554,8 @@ export function AgentChat({
         </button>
       </div>
       <AgentChatHistory
+        openRequest={openHistoryRequest}
+        onOpened={onHistoryOpened}
         threads={history}
         selected={threadId}
         waiting={approvals}
