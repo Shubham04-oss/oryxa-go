@@ -12,8 +12,10 @@ import (
 // answer to a question asked in Slack, the thread is told only that it is held
 // (status), and its owner is sent this, in a direct message: who asked what,
 // why the answer was held, the answer, and three buttons, Send, Send masked
-// (only where there is a masked version) and Don't send. It is the one message
-// that shows a held answer, and it goes to a direct message and nowhere else.
+// (only where there is a masked version) and Don't send, and a fourth, Reply
+// yourself, which opens a modal for their own answer instead (reply.go). It is
+// the one message that shows a held answer, and it goes to a direct message and
+// nowhere else.
 // Once the owner has reviewed it, on either surface, it is replaced with how the
 // review ended (held_review_settled), which shows the answer no more.
 const (
@@ -83,11 +85,12 @@ type heldReviewParams struct {
 	Secret  bool   `json:"secret"`
 	// Tickets are the buttons' values, opaque to apps, which only passes them
 	// along and never reads or logs them. SendMasked is there exactly when the
-	// preview is masked.
+	// preview is masked; Reply, for Reply yourself, when it is given.
 	Tickets *struct {
 		Send       string `json:"send"`
 		SendMasked string `json:"send_masked"`
 		Withhold   string `json:"withhold"`
+		Reply      string `json:"reply"`
 	} `json:"tickets"`
 }
 
@@ -182,6 +185,15 @@ func renderHeldReview(r renderer, raw json.RawMessage) (Rendered, error) {
 		buttons = append(buttons, button(ActionReviewSendMasked, "Send masked", p.Tickets.SendMasked))
 	}
 	buttons = append(buttons, button(ActionReviewWithhold, "Don't send", p.Tickets.Withhold))
+	if p.Tickets.Reply != "" {
+		// The owner may answer in their own words instead, which sends none of
+		// what is shown here.
+		if err := checkTicket("reply", p.Tickets.Reply); err != nil {
+			return Rendered{}, err
+		}
+		guide += " *" + replyLabel + "* sends your own words instead."
+		buttons = append(buttons, button(ActionReply, replyLabel, p.Tickets.Reply))
+	}
 	for _, part := range splitSections(label+"\n"+quoted(r.shown(p.Preview, maxPreviewRunes)), maxSectionRunes) {
 		blocks = append(blocks, section(part))
 	}
@@ -202,6 +214,9 @@ const (
 	// ran out, or another owner's answer settled the question first.
 	ReviewExpired         = "expired"
 	ReviewAnsweredByOther = "answered_by_other"
+	// ReviewReplied is the owner answering in their own words instead, on
+	// either surface.
+	ReviewReplied = "replied"
 )
 
 type heldReviewSettledParams struct {
@@ -210,6 +225,9 @@ type heldReviewSettledParams struct {
 	Question    string     `json:"question"`
 	Outcome     string     `json:"outcome"`
 	DecidedAt   *time.Time `json:"decided_at"`
+	// Reply is what the owner replied instead, for ReviewReplied, as it was
+	// sent; left out of one to a question that asked for a secret.
+	Reply string `json:"reply"`
 }
 
 // renderHeldReviewSettled is a review after it ended: the same asker and
@@ -227,6 +245,12 @@ func renderHeldReviewSettled(r renderer, raw json.RawMessage) (Rendered, error) 
 	asker, err := r.asker(p.AskerUserID, p.AskerName)
 	if err != nil {
 		return Rendered{}, err
+	}
+	if p.Outcome == ReviewReplied {
+		return renderReplied(r, asker, p.Question, p.Reply, p.DecidedAt)
+	}
+	if p.Reply != "" {
+		return Rendered{}, invalid("reply is said of a review the owner replied to instead, and no other")
 	}
 	var line string
 	switch p.Outcome {

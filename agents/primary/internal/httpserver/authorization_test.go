@@ -420,6 +420,10 @@ var authzRoutes = []authzRoute{
 		path: "/v1/organizations/org_1/agent-requests/irq_other/consent", body: `{"choice":"summary"}`, malformedBody: unknownField, identity: lastInteractionActor,
 	},
 	{
+		pattern: "POST /v1/organizations/{organizationID}/agent-requests/{requestID}/reply", method: http.MethodPost,
+		path: "/v1/organizations/org_1/agent-requests/irq_other/reply", body: `{"text":"In my own words."}`, malformedBody: unknownField, identity: lastInteractionActor,
+	},
+	{
 		pattern: "PUT /v1/organizations/{organizationID}/agent-requests/{requestID}/secret", method: http.MethodPut,
 		path: "/v1/organizations/org_1/agent-requests/irq_other/secret", body: `{"value":"sk-live-example"}`, malformedBody: unknownField, identity: lastInteractionActor,
 	},
@@ -545,8 +549,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 69 {
-		t.Fatalf("authzRoutes has %d entries, want 69 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 70 {
+		t.Fatalf("authzRoutes has %d entries, want 70 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -638,8 +642,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 36 {
-		t.Fatalf("tested %d state-changing routes, want 36 - a route's method changed without updating this expectation", tested)
+	if tested != 37 {
+		t.Fatalf("tested %d state-changing routes, want 37 - a route's method changed without updating this expectation", tested)
 	}
 }
 
@@ -697,8 +701,8 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 			}
 		})
 	}
-	if tested != 39 {
-		t.Fatalf("tested %d routes for malformed input, want 39 - a route gained or lost a body/limit/version without updating this expectation", tested)
+	if tested != 40 {
+		t.Fatalf("tested %d routes for malformed input, want 40 - a route gained or lost a body/limit/version without updating this expectation", tested)
 	}
 }
 

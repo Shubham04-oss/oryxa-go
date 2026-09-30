@@ -33,6 +33,7 @@ type fakeRepository struct {
 	creates  int
 	holds    int
 	reviews  int
+	replies  int
 }
 
 func newFakeRepository() *fakeRepository {
@@ -196,6 +197,45 @@ func (repo *fakeRepository) Review(_ context.Context, id string, review agents.I
 	request.UpdatedAt = at
 	repo.requests[id] = request
 	repo.reviews++
+	return request, nil
+}
+
+// Reply changes the fake ledger as Store does: a pending request is approved
+// and answered, two revisions on, and one in review has its held answer
+// replaced.
+func (repo *fakeRepository) Reply(_ context.Context, id string, reply ReplyRecord, at time.Time) (agents.Interaction, error) {
+	if err := reply.valid(); err != nil {
+		return agents.Interaction{}, err
+	}
+	request, ok := repo.requests[id]
+	switch {
+	case !ok:
+		return agents.Interaction{}, ErrNotFound
+	case !replyLands(request, reply.Stage):
+		return agents.Interaction{}, ErrConflict
+	case !request.ExpiresAt.After(at):
+		return agents.Interaction{}, ErrExpired
+	}
+	answered := *reply.Answer.Result
+	answered.CompletedAt = at
+	switch request.Status {
+	case StatusPending:
+		decider := reply.Decider
+		request.Decision = &agents.InteractionDecision{
+			Decision: DecisionApproved, Message: replyDecided, AllowedTools: []string{}, GrantedPermissions: []string{},
+			DecidedAt: at, DecidedBy: &decider, Consent: ConsentReply,
+		}
+		answered.CompletedAt = at.Add(time.Microsecond)
+		request.Revision += 2
+	case StatusReview:
+		request.Held = nil
+		request.Review = &agents.InteractionReview{Action: ReviewReply, DecidedBy: reply.Decider, DecidedAt: at}
+		request.Revision++
+	}
+	request.Status, request.Result, request.Guard = StatusCompleted, &answered, reply.Answer.Guard
+	request.UpdatedAt = answered.CompletedAt
+	repo.requests[id] = request
+	repo.replies++
 	return request, nil
 }
 

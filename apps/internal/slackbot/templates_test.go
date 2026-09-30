@@ -44,8 +44,9 @@ func (h *harness) renderOK(template, params string) Rendered {
 }
 
 const (
-	tickets = `"tickets":{"summary":"t1.summary.sig","access":"t1.access.sig","deny":"t1.deny.sig"}`
-	decided = `"decided_by_user_id":"U0RAYA","decided_at":"2026-09-29T14:02:00Z"`
+	tickets          = `"tickets":{"summary":"t1.summary.sig","access":"t1.access.sig","deny":"t1.deny.sig"}`
+	ticketsWithReply = `"tickets":{"summary":"t1.summary.sig","access":"t1.access.sig","deny":"t1.deny.sig","reply":"t1.reply.sig"}`
+	decided          = `"decided_by_user_id":"U0RAYA","decided_at":"2026-09-29T14:02:00Z"`
 )
 
 // The wording and the structure of every template, pinned. A change to what
@@ -53,17 +54,21 @@ const (
 var templateGoldens = []struct{ name, template, params string }{
 	{"owner_notice", TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"When is the launch?\nAnd who signs it off?",` + tickets + `}`},
 	{"owner_notice_asker_by_name", TemplateOwnerNotice, `{"asker_name":"Alex Kim","question":"Can I see the dev keys?",` + tickets + `}`},
+	{"owner_notice_with_reply", TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"When is the launch?\nAnd who signs it off?",` + ticketsWithReply + `}`},
 	{"notice_settled_summary", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"approved_summary",` + decided + `}`},
 	{"notice_settled_access", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"approved_access",` + decided + `}`},
 	{"notice_settled_denied", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"denied",` + decided + `}`},
 	{"notice_settled_answered_by_other", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"answered_by_other","decided_by_name":"Maya"}`},
 	{"notice_settled_expired", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"expired"}`},
+	{"notice_settled_replied", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"replied","decided_at":"2026-10-01T09:30:00Z","reply":"The 14th.\nI sign it off myself."}`},
+	{"notice_settled_replied_without_words", TemplateNoticeSettled, `{"asker_name":"Alex Kim","question":"Can you share the staging API key?","decision":"replied","decided_at":"2026-10-01T09:30:00Z"}`},
 	{"ask_ack", TemplateAskAck, `{"owners":[{"user_id":"U0RAYA"},{"name":"Maya"}],"open_url":"` + testWebURL + `/?org=org_1&view=requests&request=req_1"}`},
 	{"ask_ack_without_link", TemplateAskAck, `{"owners":[{"user_id":"U0RAYA"}]}`},
 	{"answer_summary", TemplateAnswer, `{"text":"The launch is on the 14th.","owner_name":"Raya","mode":"summary"}`},
 	{"answer_access", TemplateAnswer, `{"text":"The launch is on the 14th, per the plan: \"ship Tuesday\".","owner_name":"Raya","mode":"access"}`},
 	{"answer_lease", TemplateAnswer, `{"text":"Still the 14th.","owner_name":"Raya","mode":"lease"}`},
 	{"answer_bypass", TemplateAnswer, `{"text":"The launch is on the 14th.","owner_name":"Raya","mode":"bypass"}`},
+	{"answer_reply", TemplateAnswer, `{"text":"The 14th, and I sign it off myself.","owner_name":"Raya","mode":"reply"}`},
 	{"status_waiting", TemplateStatus, `{"state":"waiting","owner_name":"Raya"}`},
 	{"status_working", TemplateStatus, `{"state":"working","owner_name":"Raya"}`},
 	{"status_held", TemplateStatus, `{"state":"held","owner_name":"Raya"}`},
@@ -94,12 +99,14 @@ var templateGoldens = []struct{ name, template, params string }{
 	{"held_review_masked", TemplateHeldReview, `{"asker_name":"Alex Kim","question":"How do I reach Priya?","reasons":["email","phone"],"preview":"Write to {EMAIL} or call {PHONE}.","masked":true,` + reviewTicketsMasked + `}`},
 	{"held_review_every_reason", TemplateHeldReview, `{"asker_user_id":"U0ASKER","question":"When is the launch?","reasons":` + everyReason + `,"preview":"The launch is on the 14th.",` + reviewTickets + `}`},
 	{"held_review_secret", TemplateHeldReview, `{"asker_user_id":"U0ASKER","question":"Can you share the staging API key?","reasons":["unchecked"],"secret":true}`},
+	{"held_review_with_reply", TemplateHeldReview, `{"asker_user_id":"U0ASKER","question":"When is the launch?","reasons":["irrelevant"],"preview":"Revenue grew by about a fifth in Q3.",` + reviewTicketsWithReply + `}`},
 	{"held_review_settled_sent", TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","outcome":"sent","decided_at":"2026-09-29T14:02:00Z"}`},
 	{"held_review_settled_sent_masked", TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","outcome":"sent_masked","decided_at":"2026-09-29T14:02:00Z"}`},
 	{"held_review_settled_not_sent", TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","outcome":"not_sent","decided_at":"2026-09-29T14:02:00Z"}`},
 	{"held_review_settled_decided_elsewhere", TemplateHeldReviewSettled, `{"asker_name":"Alex Kim","question":"When is the launch?","outcome":"decided_elsewhere","decided_at":"2026-09-29T14:02:00Z"}`},
 	{"held_review_settled_expired", TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","outcome":"expired"}`},
 	{"held_review_settled_answered_by_other", TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","outcome":"answered_by_other"}`},
+	{"held_review_settled_replied", TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","outcome":"replied","decided_at":"2026-10-01T09:30:00Z","reply":"It moved to the 21st."}`},
 }
 
 func TestEveryTemplateRendersAsPinned(t *testing.T) {
@@ -199,6 +206,9 @@ func TestWhatACallerSuppliesCannotBecomeMarkup(t *testing.T) {
 		"a refusal":        {TemplateRefusal, `{"reason":"owner_not_member","name":"` + hostile + `"}`},
 		"an ack":           {TemplateAskAck, `{"owners":[{"name":"` + hostile + `"}]}`},
 		"a bypass notice":  {TemplateBypassNotice, `{"asker_name":"` + hostile + `","question":"` + hostile + `","reason":"org_chart"}`},
+		"a reply":          {TemplateAnswer, `{"text":"` + hostile + `","owner_name":"` + hostile + `","mode":"reply"}`},
+		"a replied notice": {TemplateNoticeSettled, `{"asker_name":"x","question":"` + hostile + `","decision":"replied","reply":"` + hostile + `"}`},
+		"a replied review": {TemplateHeldReviewSettled, `{"asker_name":"x","question":"` + hostile + `","outcome":"replied","reply":"` + hostile + `"}`},
 	} {
 		got := renderedJSON(t, h.renderOK(test.template, test.params))
 		for _, raw := range []string{"<!channel>", "<!here>", "<!everyone>", "<@U0EVIL>", "<#C0SECRET>", "<https://evil", "<mailto:"} {
@@ -249,6 +259,9 @@ func TestNoTemplateEverRendersASecret(t *testing.T) {
 			"a refusal":        {TemplateRefusal, fmt.Sprintf(`{"reason":"not_member","organization_name":%q}`, stuffed)},
 			"an ack":           {TemplateAskAck, fmt.Sprintf(`{"owners":[{"name":%q}]}`, stuffed)},
 			"a bypass notice":  {TemplateBypassNotice, fmt.Sprintf(`{"asker_name":%q,"question":%q,"reason":"org_chart"}`, stuffed, stuffed)},
+			"a reply":          {TemplateAnswer, fmt.Sprintf(`{"text":%q,"owner_name":%q,"mode":"reply"}`, stuffed, stuffed)},
+			"a replied notice": {TemplateNoticeSettled, fmt.Sprintf(`{"asker_name":"x","question":"q","decision":"replied","reply":%q}`, stuffed)},
+			"a replied review": {TemplateHeldReviewSettled, fmt.Sprintf(`{"asker_name":"x","question":"q","outcome":"replied","reply":%q}`, stuffed)},
 		} {
 			got := renderedJSON(t, h.renderOK(test.template, test.params))
 			if strings.Contains(got, bare) {
@@ -364,6 +377,11 @@ func TestParamsAreCheckedAgainstTheirTemplate(t *testing.T) {
 		"a bypass with a channel that is none": {TemplateBypassNotice, `{"asker_name":"a","question":"q","reason":"org_chart","channel_id":"general"}`},
 		"a bypass for no reason":               {TemplateBypassNotice, `{"asker_name":"a","question":"q","reason":"because"}`},
 		"a private note with params":           {TemplatePrivateNote, `{"text":"x"}`},
+		"a reply ticket with a space in it":    {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","tickets":{"summary":"a","access":"b","deny":"c","reply":"d e"}}`},
+		"a reply said of an approval":          {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"q","decision":"approved_summary","decided_by_name":"Raya","reply":"mine"}`},
+		"a reply said of a review that sent":   {TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"q","outcome":"sent","reply":"mine"}`},
+		"a replied notice with no question":    {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","decision":"replied","reply":"mine"}`},
+		"a reply with no owner":                {TemplateAnswer, `{"text":"t","mode":"reply"}`},
 		"params with a NUL in them":            {TemplateStatus, "{\"state\":\"held\",\"owner_name\":\"a\\u0000b\"}"},
 	} {
 		_, _, err := h.service.render(test.template, json.RawMessage(test.params))

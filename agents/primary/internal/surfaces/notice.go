@@ -36,11 +36,13 @@ type ownerNoticeParams struct {
 	Tickets     noticeTickets `json:"tickets"`
 }
 
-// noticeTickets are the values of the notice's three buttons.
+// noticeTickets are the values of the notice's buttons: the three choices, and
+// Reply yourself, which an ask of a secret has none of.
 type noticeTickets struct {
 	Summary string `json:"summary"`
 	Access  string `json:"access"`
 	Deny    string `json:"deny"`
+	Reply   string `json:"reply,omitempty"`
 }
 
 // noticeSettledParams are the parameters of apps' notice_settled template.
@@ -52,6 +54,10 @@ type noticeSettledParams struct {
 	DecidedByUserID string     `json:"decided_by_user_id,omitempty"`
 	DecidedByName   string     `json:"decided_by_name,omitempty"`
 	DecidedAt       *time.Time `json:"decided_at,omitempty"`
+	// Reply is what the owner replied, as it was delivered, for a notice they
+	// replied to; left out for an ask of a secret, whose answer is never in
+	// Slack.
+	Reply string `json:"reply,omitempty"`
 }
 
 // bypassNoticeParams are the parameters of apps' bypass_notice template.
@@ -96,6 +102,9 @@ func (p *pass) noticeState() string {
 		}
 		// Oryxa closed it: there is no owner's word to show.
 		return stateExpired
+	case decision.Consent == interactions.ConsentReply:
+		// The owner answered it themself, on either surface.
+		return stateReplied
 	case decision.Consent == interactions.ConsentAccess:
 		return stateApprovedAccess
 	}
@@ -143,7 +152,10 @@ func (p *pass) askerParams(ctx context.Context) (userID, name string, err error)
 }
 
 // sendNotice sends the owner their notice: who asked, what, and three buttons
-// whose tickets the ledger makes for it.
+// whose tickets the ledger makes for it, and a fourth, Reply yourself, which
+// opens a modal for their own answer. An ask of a secret has no Reply yourself:
+// its owner shares the secret once, in Oryxa, and nothing they write is put in
+// Slack.
 func (p *pass) sendNotice(ctx context.Context) error {
 	request := p.request
 	owner, err := p.member(ctx, request.Target.UserID)
@@ -170,12 +182,15 @@ func (p *pass) sendNotice(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	buttons := noticeTickets{Summary: tickets.Summary, Access: tickets.Access, Deny: tickets.Deny}
+	if p.ask.Kind != interactions.AskSecret {
+		buttons.Reply = tickets.Reply
+	}
 	posted, sent, err := p.send(ctx, roleNotice, slackrouter.Post{
 		Target:   directTarget(owner.slackUserID),
 		Template: templateOwnerNotice,
 		Params: ownerNoticeParams{
-			AskerUserID: askerUser, AskerName: askerWord, Question: request.Task,
-			Tickets: noticeTickets{Summary: tickets.Summary, Access: tickets.Access, Deny: tickets.Deny},
+			AskerUserID: askerUser, AskerName: askerWord, Question: request.Task, Tickets: buttons,
 		},
 	})
 	if err != nil || !sent {
@@ -211,6 +226,14 @@ func (p *pass) settleNotice(ctx context.Context, link Link, state string) error 
 			at := request.Decision.DecidedAt.UTC()
 			params.DecidedAt = &at
 		}
+	case stateReplied:
+		// The notice is the owner's own direct message: it says what they
+		// replied, as it was delivered, unless it was an ask of a secret.
+		if request.Decision != nil && !request.Decision.DecidedAt.IsZero() {
+			at := request.Decision.DecidedAt.UTC()
+			params.DecidedAt = &at
+		}
+		params.Reply = p.replyShown()
 	}
 	err = p.service.deps.Slack.Update(ctx, appsclient.Update{
 		OrganizationID: request.OrganizationID, ChannelID: link.ChannelID, TS: link.TS,

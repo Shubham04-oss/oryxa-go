@@ -584,3 +584,11 @@ func (c *Client) Update(ctx context.Context, token secrets.Secret, channel, ts, 
 	_, err := c.postJSON(ctx, "chat.update", token, map[string]any{"channel": channel, "ts": ts, "text": text, "blocks": blocks})
 	return err
 }
+
+// OpenView opens a modal for the person whose click trigger is (views.open),
+// which Slack takes once and for three seconds after the click. It needs no
+// scope of its own: the bot's token is enough.
+func (c *Client) OpenView(ctx context.Context, token secrets.Secret, trigger string, view map[string]any) error {
+	_, err := c.postJSON(ctx, "views.open", token, map[string]any{"trigger_id": trigger, "view": view})
+	return err
+}

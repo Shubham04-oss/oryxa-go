@@ -283,6 +283,13 @@ func (store *Store) Decide(ctx context.Context, id string, input agents.Interact
 // and how far the approval lets the answer go (ConsentFor), each in a column of
 // its own beside the decision.
 func decideLocked(ctx context.Context, tx pgx.Tx, current agents.Interaction, input agents.InteractionDecisionInput, decider agents.InteractionDecider, at time.Time) (agents.Interaction, error) {
+	return decideLockedAs(ctx, tx, current, input, decider, ConsentFor(input.Decision, input.GrantedPermissions), at)
+}
+
+// decideLockedAs is decideLocked with how far the approval lets the answer go
+// given rather than read from what it grants: an owner's own reply (Reply) is
+// ConsentReply, which no permission grants.
+func decideLockedAs(ctx context.Context, tx pgx.Tx, current agents.Interaction, input agents.InteractionDecisionInput, decider agents.InteractionDecider, consent string, at time.Time) (agents.Interaction, error) {
 	decision := agents.InteractionDecision{
 		Decision: input.Decision, Message: input.Message,
 		AllowedTools: nonNilStrings(input.AllowedTools), GrantedPermissions: nonNilStrings(input.GrantedPermissions), DecidedAt: at,
@@ -302,7 +309,7 @@ func decideLocked(ctx context.Context, tx pgx.Tx, current agents.Interaction, in
 			decided_via=$8, decided_reason=$9, consent=$10
 		WHERE id=$1 RETURNING `+selectColumns,
 		current.ID, status, decisionJSON, at, decider.Kind, decider.UserID, decider.AgentID,
-		decider.Surface, decider.Reason, ConsentFor(input.Decision, input.GrantedPermissions)), &result)
+		decider.Surface, decider.Reason, consent), &result)
 	if err != nil {
 		return agents.Interaction{}, err
 	}

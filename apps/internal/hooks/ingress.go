@@ -156,7 +156,8 @@ func (h ingress) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 // deliver hands a verified, unhandled delivery to its surface, and answers
-// 200 once the surface has recorded it.
+// 200 once the surface has recorded it, with the answer the surface gives when
+// it is one that answers (AnsweringSurface).
 func (h ingress) deliver(ctx context.Context, writer http.ResponseWriter, endpoint Endpoint, d *delivery, key string, now time.Time, log *slog.Logger) {
 	surface, ok := h.service.surface(endpoint.Toolkit)
 	if !ok {
@@ -168,11 +169,24 @@ func (h ingress) deliver(ctx context.Context, writer http.ResponseWriter, endpoi
 	header := d.header.Clone()
 	header.Del("Authorization")
 	header.Del("Cookie")
-	if err := surface.Deliver(ctx, h.alias.kind, key, header, bytes.Clone(d.body), now); err != nil {
+	var answer json.RawMessage
+	var err error
+	if answering, ok := surface.(AnsweringSurface); ok {
+		answer, err = answering.DeliverAndAnswer(ctx, h.alias.kind, key, header, bytes.Clone(d.body), now)
+	} else {
+		err = surface.Deliver(ctx, h.alias.kind, key, header, bytes.Clone(d.body), now)
+	}
+	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			err = fmt.Errorf("%w: the delivery could not be recorded in time: %v", errUnavailable, err)
 		}
 		failed(ctx, writer, log, err)
+		return
+	}
+	if len(answer) > 0 {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write(answer)
 		return
 	}
 	writer.WriteHeader(http.StatusOK)

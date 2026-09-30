@@ -26,6 +26,7 @@ func TestCLISetupTokenCannotReadThreadsOrMakeOwnerDecisions(t *testing.T) {
 		{http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_1/decision", http.StatusForbidden},
 		{http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_1/review", http.StatusForbidden},
 		{http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_1/consent", http.StatusForbidden},
+		{http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_1/reply", http.StatusForbidden},
 		{http.MethodGet, "/v1/organizations/org_1/agent-requests/activity", http.StatusForbidden},
 		{http.MethodGet, "/v1/organizations/org_1/agent-leases", http.StatusForbidden},
 		{http.MethodPut, "/v1/organizations/org_1/agent-requests/irq_1/secret", http.StatusForbidden},
@@ -48,5 +49,8 @@ func TestCLISetupTokenCannotReadThreadsOrMakeOwnerDecisions(t *testing.T) {
 	}
 	if len(interactions.consents) != 0 || len(interactions.revoked) != 0 || len(interactions.actors) != 0 || len(shares.shares) != 0 {
 		t.Fatal("CLI reached the consent choices, the leases or the secrets")
+	}
+	if len(interactions.replies) != 0 {
+		t.Fatal("CLI reached an owner's reply")
 	}
 }

@@ -320,6 +320,23 @@ func (asks slackAsks) Review(ctx context.Context, ticket, clickerUserID string) 
 	return nil
 }
 
+// Reply implements slackrouter.Asks. It hands a reply an owner sent from the
+// modal of a Reply yourself button to the ledger as it is: the ticket the button
+// carried, the member who sent it, and their words. Whether the ticket is a
+// genuine reply ticket, whether the sender is who it names, whether the words
+// are a reply and whether the request still waits for its owner are the ledger's
+// to check, and a reply it refuses, for any of them, is refused for good: a reply
+// that came after the owner's choice, review or other reply is one.
+func (asks slackAsks) Reply(ctx context.Context, ticket, senderUserID, text string) error {
+	if _, err := asks.service.ReplyFromSlack(ctx, ticket, senderUserID, text); err != nil {
+		if isRefusal(err) {
+			return slackrouter.Permanent(err)
+		}
+		return err
+	}
+	return nil
+}
+
 // isRefusal reports whether err is the ledger saying no to a call that the same
 // call would meet again: a ticket it did not make, of the other kind or that ran
 // out, a click by another member, a request already decided or reviewed, expired,

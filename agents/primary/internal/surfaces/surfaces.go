@@ -7,18 +7,20 @@
 // of it is a view of the ledger:
 //
 //   - the owner is sent a notice in a direct message, with three buttons
-//     (interactions.ConsentTickets), and the notice is replaced with what became
-//     of it, whichever surface the owner decided on;
+//     (interactions.ConsentTickets) and a fourth, Reply yourself, which opens a
+//     modal for their own answer, and the notice is replaced with what became of
+//     it, whichever surface the owner decided on;
 //   - an answer is posted in the thread it was asked in, saying how far its owner
 //     let it go, or in the asker's own direct message where a bypass says so;
+//     an answer its owner wrote themself says it is theirs ("Raya replied:");
 //   - an answer held for its owner's review is a status with no word of the
 //     answer in it, and a refusal, or a request that ended without an answer, is
 //     said to the asker alone;
 //   - the owner of an answer held for their review is sent it in a direct
 //     message, with why it was held and three buttons (Send, Send masked where
-//     there is a masked version, Don't send) whose tickets the ledger makes
-//     (interactions.ReviewTickets), and the message is replaced with how the
-//     review ended, whichever surface the owner reviewed on;
+//     there is a masked version, Don't send) and Reply yourself, whose tickets
+//     the ledger makes (interactions.ReviewTickets), and the message is replaced
+//     with how the review ended, whichever surface the owner reviewed on;
 //   - an owner who was not asked is told that their agent answered anyway;
 //   - the asker's own agent chat gets a note without a model (threads.Note).
 //
@@ -93,20 +95,23 @@ const (
 )
 
 // The states a settled notice says, which are the decisions apps' notice_settled
-// template knows.
+// template knows. stateReplied is the owner having answered it themself, on
+// either surface, which the notice says with their words.
 const (
 	stateApprovedSummary = "approved_summary"
 	stateApprovedAccess  = "approved_access"
 	stateDenied          = "denied"
 	stateAnsweredByOther = "answered_by_other"
 	stateExpired         = "expired"
+	stateReplied         = "replied"
 )
 
 // The states a settled review says, which are the outcomes apps'
 // held_review_settled template knows. The first three are the owner's own
 // review in Slack; a review they made in Oryxa is decided elsewhere, whatever
-// it was; the last two are Oryxa's, which withholds an answer whose review ran
-// out of time, and one whose ask another owner's answer settled first.
+// it was; the next two are Oryxa's, which withholds an answer whose review ran
+// out of time, and one whose ask another owner's answer settled first; and the
+// last is the owner answering in their own words instead, on either surface.
 const (
 	reviewSent             = "sent"
 	reviewSentMasked       = "sent_masked"
@@ -114,4 +119,5 @@ const (
 	reviewDecidedElsewhere = "decided_elsewhere"
 	reviewExpired          = "expired"
 	reviewAnsweredByOther  = "answered_by_other"
+	reviewReplied          = "replied"
 )

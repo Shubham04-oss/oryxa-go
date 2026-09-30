@@ -526,12 +526,17 @@ func heldForOwner(delivery Delivery, request agents.Interaction) bool {
 	return delivery.Kind == KindTargetRequested && interactions.HeldForOwner(request)
 }
 
+// deliverySatisfied is whether what a delivery asks of its agent is done, or no
+// longer to be done: a request decided, or answered, meanwhile, or expired. A
+// request its owner answered themself (interactions.RepliedByOwner) was
+// approved and answered in one change, so its approval asks no work of anyone,
+// whatever its status reads: the owner's agent is never started for a reply.
 func deliverySatisfied(delivery Delivery, request agents.Interaction, now time.Time) bool {
 	switch delivery.Kind {
 	case KindTargetRequested:
 		return !request.ExpiresAt.After(now) || request.Status != interactions.StatusPending
 	case KindTargetApproved:
-		return !request.ExpiresAt.After(now) || request.Status != interactions.StatusApproved
+		return !request.ExpiresAt.After(now) || request.Status != interactions.StatusApproved || interactions.RepliedByOwner(request)
 	default:
 		return false
 	}
@@ -635,8 +640,15 @@ func messageFor(delivery Delivery, request agents.Interaction, named between) st
 	if delivery.Kind == KindTargetApproved {
 		text += consentSentence(request)
 	}
+	if delivery.Kind == KindRequesterCompleted && interactions.RepliedByOwner(request) {
+		text += ownerReplied
+	}
 	return text
 }
+
+// ownerReplied tells the agent reporting an answer that the member it asked
+// wrote it themself, so that it does not pass their words off as their agent's.
+const ownerReplied = " The member you asked answered it themself, in their own words, rather than their agent (the result is written_by_owner): say the answer is theirs."
 
 // What an owner allowed of the answer to a request made from Slack, told to the
 // agent doing the work so that it does not write what it will not be let to

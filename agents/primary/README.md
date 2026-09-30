@@ -799,12 +799,13 @@ and a decision made here is the member's own:
 | `GET /v1/organizations/{org}/agent-requests` | Lists, newest first, the requests the member's agents sent and were sent; `?box=inbox`, `sent` or `all` (the default) says which side |
 | `GET /v1/organizations/{org}/agent-requests/inbox` | Lists requests addressed to the member's agents |
 | `GET /v1/organizations/{org}/agent-requests/sent` | Lists requests sent by the member's agents |
-| `GET /v1/organizations/{org}/agent-requests/activity` | What happened to the member's Slack asks, newest first: asks made and received, how each was decided and where, bypasses, leases, answers and secrets opened. Names, states and times, never a question or an answer (`?limit=`) |
+| `GET /v1/organizations/{org}/agent-requests/activity` | What happened to the member's Slack asks, newest first: asks made and received, how each was decided and where, bypasses, leases, answers and secrets opened; an `answered` entry says `written_by_owner` when the answer was the owner's own reply. Names, states and times, never a question or an answer (`?limit=`) |
 | `GET /v1/organizations/{org}/agent-requests/{request}` | Reads one request visible to the member |
 | `POST /v1/organizations/{org}/agent-requests/{request}/decision` | The member approves or rejects, in their own session, with narrowed tools and permissions; the only way a request held for its owner is decided. Approving one made in a teamspace reads it again first, with the member's own token |
 | `POST /v1/organizations/{org}/agent-requests/{request}/response` | Completes an approved request with the strict result envelope |
 | `POST /v1/organizations/{org}/agent-requests/{request}/review` | The member sends, sends masked, or withholds an answer the answer guard held for them, in their own session (see [Answer guard](#answer-guard)) |
 | `POST /v1/organizations/{org}/agent-requests/{request}/consent` | The owner's choice of a request that came from Slack, in their own session: `{"choice": "summary" \| "access" \| "deny"}`. `409 already_decided` carries the winner when the button in Slack was clicked first (see [The Slack consent loop](#the-slack-consent-loop)) |
+| `POST /v1/organizations/{org}/agent-requests/{request}/reply` | The owner answers in their own words, in their own session: `{"text"}`, trimmed, 1 to 4000 characters. A pending request is approved and completed in one change, and the owner's agent never runs; an answer held for their review is replaced and never sent. `409 already_decided` carries the winner, as `/consent`'s does (see [Reply yourself](#reply-yourself)) |
 | `PUT` `GET` `DELETE /v1/organizations/{org}/agent-requests/{request}/secret` | The owner shares a credential the asker asked for (`{"value", "ttl_seconds"}`, 60 to 3600, an hour by default); the member who asked opens it once (a second view is `410 secret_gone`); the owner revokes it. `503 secrets_unavailable` without a store that can seal one |
 | `DELETE /v1/organizations/{org}/agent-leases/{lease}` | The owner ends the access they gave an asker in one Slack thread before it runs out; the asker's follow-ups there ask again |
 
@@ -850,9 +851,10 @@ Oryxa has closed it.
 
 A member @-mentions Oryxa's Slack app in a channel and names whose agents to
 ask: "@oryxa ask @raya for the Q3 numbers". Each person named is told in a
-direct message, with three buttons: Share answer, Allow for 1 hour, or Deny.
-Their agent answers in the asker's thread only if they approve, and only after
-the guards below have read the answer. The request ledger is the one source of
+direct message, with four buttons: Share answer, Allow for 1 hour, Deny, or
+Reply yourself (see [Reply yourself](#reply-yourself)). Their agent answers in
+the asker's thread only if they approve, and only after the guards below have
+read the answer. The request ledger is the one source of
 truth, so what Slack says, what the owner's and the asker's cards in Requests
 say, and what their Oryxa DM and agent chats say are all views of it: the owner
 may decide on either surface, and the first click wins. The design is
@@ -875,7 +877,7 @@ What happens, in order, and where each step is:
 | The router reads the delivery back from apps with a service token, matches the asker and each owner to members by a *confirmed* Slack email, and refuses what it must, telling only the asker: `not_member`, `owner_not_member`, `group_dm`, `external_channel`, `no_owner`, `too_many_asks` (an asker who already has 5 asks open, or a mention that names more than 5 people) | `internal/slackrouter` |
 | The words are screened before anyone is asked: credentials in them are masked first (`consentguard.Strip`), then one Jev request judges work, injection, plausibility for this asker, credential request, and whether each owner's department fits. It fails closed: no `TYPESAFE_API_KEY`, or a Jev that fails or is slow, refuses every mention as `screen_failed`. An asker who has given agents no standing grant is told to (`no_grant`). Words that ask for a credential are filed as an ask of kind `secret` | `slackrouter.NewJevScreen`, `NewAskerDirectory` |
 | `consentpolicy.Decide` says allow, needs consent or deny for each owner (a bypass needs a channel an administrator marked high priority, or the asker above the owner in the chart) and `CreateAsk` files one request per owner, from the asker's primary agent to theirs, held for the owner. The asker is told, alone, who was asked, with a link to Requests | `internal/interactions` |
-| `agents.interaction.requested.v1` reaches the surfaces worker: the owner gets a notice with three buttons, each carrying a ticket (an HMAC of the request, the owner, the notice and the choice), and a note lands in the asker's agent chat | `internal/surfaces`, `threads.Note` |
+| `agents.interaction.requested.v1` reaches the surfaces worker: the owner gets a notice with four buttons, each carrying a ticket (an HMAC of the request, the owner, the notice and the choice; Reply yourself's is of its own kind, below), and a note lands in the asker's agent chat | `internal/surfaces`, `threads.Note` |
 | The owner decides: a click reaches the router as a job and becomes `interactions.Consent(ticket, clicker, "slack")`, which decides only for a genuine, unexpired ticket, made for the member who clicked, on a request still pending; the card's `POST .../consent` is the same decision. The ledger's row lock picks the winner, and the loser sees who won. `decided.v1` has the notice updated in place, whichever surface decided | `interactions.Consent`, `surfaces` |
 | The owner's agent is woken to do the approved work, and answers with `interactions_respond`, alone and after its reads (see [Agent interactions toolbox](#agent-interactions-toolbox)) | `internal/interactiondelivery` |
 | The answer is read twice before its asker does: by the answer guard, at the owner's level, and then by the consent guard (`internal/consentguard`), which masks credentials at every level, holds a copy of 20 or more words of what the run read and any link when only a summary was allowed, and holds an answer that does not stand on what the run's tools returned, is not relevant, is about a denied topic, or could not be checked. Held, it waits in Requests for its owner, and the thread says only that it is held | `interactions.answer` |
@@ -926,6 +928,49 @@ and other tools keep their existing sources. Empty knowledge results alone hold
 substantive answers as `NO_SOURCES`; another verified tool result can still
 support an answer. Thresholds remain unchanged. No deployment enables this flag.
 See [the experiment's examples](../../docs/testing/consent-passage-sources.md).
+
+#### Reply yourself
+
+An owner may answer in their own words instead of their agent's: **Reply
+yourself** on the notice and on a held answer's review, or
+`POST .../agent-requests/{request}/reply` from Requests. It is one answer, not
+a conversation.
+
+- **In Slack** the button opens a modal, which Slack allows only with the
+  click's `trigger_id`, once and within three seconds, so apps opens it before
+  it answers the click: "Reply to Alex, who asked:" and the question, as the
+  message showed them, a box, and Send / Cancel. The button's ticket rides in
+  the modal's `private_metadata`. Send is checked by apps (an empty reply, or
+  one over 4000 characters, is shown as an error in the modal and kept
+  nowhere), kept as an inbound record of kind `reply` and announced as a click
+  is; the router hands it to `interactions.ReplyFromSlack`.
+- **The ticket** is of its own kind, `reply`, made for the stage it was sent at
+  (pending on a notice, in review on a review): a reply ticket never decides a
+  choice or a review, and no other ticket takes a reply. It must be genuine,
+  unexpired, made for the member who sent the reply, and the request still at
+  its stage.
+- **In the ledger** a pending request is approved (consent `reply`, no tools
+  or permissions) and completed with the owner's words in one transaction,
+  announced as `decided.v1` and then `completed.v1`. A held answer is dropped,
+  never sent, and the owner's words delivered in its place, with the review's
+  action `reply`. The row lock picks the first of a reply, a button in Slack,
+  the card and a review; the others see who won.
+- **The owner's agent never runs:** the inbound consumer wakes nobody for a
+  reply's approval, and the waker finds nothing to deliver.
+- **Guards:** the owner's words skip the consent guard's grounding and
+  relevance checks, which are about what an agent read. The answer guard still
+  reads them, at the level that masks secrets, and credentials are stripped as
+  in every answer; a reply is never held for its own writer's review.
+- **The asker** gets it as any answer: in the thread as "Raya replied:" and
+  her words, with nothing of an agent's; in the asking chat for a request made
+  in Oryxa. For a question that asked for a secret the thread is told only
+  "Answered privately", and the notice has no Reply yourself.
+- **The owner's message** becomes "You replied at …" and the words (not the
+  words, for a secret), or, when something else was decided first, says what.
+- **The JSON** says `result.written_by_owner: true`, `decision.consent: "reply"`
+  or `review.action: "reply"`, and both members' activity marks the answer
+  `written_by_owner`. Migrations 017 and 018 let the ledger's `consent` column
+  say `reply`.
 
 ### Answer guard
 

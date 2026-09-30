@@ -85,7 +85,7 @@ func TestTheOwnerOfAHeldAnswerIsSentItToReview(t *testing.T) {
 	want := map[string]any{
 		"asker_user_id": slackAsker, "question": "What is the launch date for Project Falcon?",
 		"reasons": []any{"irrelevant"}, "preview": heldText,
-		"tickets": map[string]any{"send": "t1.review.send.irq_1.review_irq_1", "withhold": "t1.review.withhold.irq_1.review_irq_1"},
+		"tickets": map[string]any{"send": "t1.review.send.irq_1.review_irq_1", "withhold": "t1.review.withhold.irq_1.review_irq_1", "reply": "t1.reply.review.irq_1.review_irq_1"},
 	}
 	if fmt.Sprint(review.Params) != fmt.Sprint(want) {
 		t.Fatalf("params = %v, want %v", review.Params, want)

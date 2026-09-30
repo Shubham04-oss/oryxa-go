@@ -3,9 +3,10 @@
 // mentioning it and answer its questions by clicking its buttons.
 //
 // Slack carries three things and nothing else: the entry (a mention), the
-// owner's notice (a message with three buttons) and the final answer. All the
-// deciding happens elsewhere. This package is the gateway between Slack and
-// the rest of Oryxa, and keeps to four jobs:
+// owner's notice (a message with three buttons, and Reply yourself, whose modal
+// takes the owner's own answer) and the final answer. All the deciding happens
+// elsewhere. This package is the gateway between Slack and the rest of Oryxa,
+// and keeps to four jobs:
 //
 //   - Ingress. Slack's events and clicks arrive at two static URLs, are
 //     verified by hooks with the v0 scheme, and come here as a hooks.Surface.
@@ -54,14 +55,36 @@
 //     sends no blocks removes them; 429 answers with Retry-After.
 //   - https://docs.slack.dev/reference/app-manifest: every key of manifest.yaml.
 //
+// And on 2026-10-01, for the modal of Reply yourself (reply.go):
+//   - https://docs.slack.dev/reference/methods/views.open: no scope is needed
+//     beyond the bot's token; trigger_id and view are its arguments; a trigger
+//     is refused as expired_trigger_id, invalid_trigger_id or
+//     exchanged_trigger_id.
+//   - https://docs.slack.dev/surfaces/modals: a trigger_id expires three
+//     seconds after it is sent; an empty 200 to a view_submission closes the
+//     modal, and {"response_action":"errors","errors":{block_id: message}}
+//     keeps it open with the message under that block.
+//   - https://docs.slack.dev/reference/interaction-payloads/block_actions-payload:
+//     trigger_id, and message, the message the click was on.
+//   - https://docs.slack.dev/reference/interaction-payloads/view-interactions-payload:
+//     view.callback_id, view.private_metadata and
+//     view.state.values[block_id][action_id].value.
+//   - https://docs.slack.dev/reference/views/modal-views: a title, submit and
+//     close of at most 24 characters, and private_metadata of at most 3000.
+//   - https://docs.slack.dev/reference/block-kit/block-elements/plain-text-input-element:
+//     max_length of at most 3000.
+//
 // Not confirmed, and to be checked against a real workspace: whether
 // app_uninstalled and tokens_revoked are subscribed under bot_events, whether
 // app_mention reaches the bot in a group DM and carries channel_type or
 // is_ext_shared_channel, which of team_id, context_team_id and
 // authorizations names the install for a delivery from a shared channel,
 // whether Slack's app-approval flow keeps the install link's state,
-// apps.uninstall's arguments, and that users.info carries is_email_confirmed
-// (a user object that does not say is taken as unconfirmed).
+// apps.uninstall's arguments, that users.info carries is_email_confirmed
+// (a user object that does not say is taken as unconfirmed), and that the
+// message a block_actions payload carries has the blocks as they were posted,
+// with the bot as its user (the modal of Reply yourself names who asked what
+// from them, and says less without them).
 package slackbot
 
 import (
@@ -125,6 +148,9 @@ const (
 	InboundMessage = "message"
 	// InboundAction is a click on a button of one of the bot's messages.
 	InboundAction = "action"
+	// InboundReply is an owner's own answer, sent from the modal the Reply
+	// yourself button of their notice or review opened (reply.go).
+	InboundReply = "reply"
 )
 
 var (
@@ -184,7 +210,7 @@ type Inbound struct {
 	ID             string
 	OrganizationID string
 	TeamID         string
-	// Kind is InboundMessage or InboundAction.
+	// Kind is InboundMessage, InboundAction or InboundReply.
 	Kind string
 	// EventID is Slack's id for a message's event; empty for a click.
 	EventID string
@@ -204,7 +230,9 @@ type Inbound struct {
 	// Mentions are the users the message @-mentions, the bot itself left out.
 	Mentions []string
 	// Text is what was typed, and ActionID and ActionValue what was clicked:
-	// a button's action and its opaque ticket.
+	// a button's action and its opaque ticket. A reply has all three: the
+	// owner's words, and the Reply yourself button and its ticket; its
+	// ChannelID and MessageTS are the message the button was on.
 	Text        string
 	ActionID    string
 	ActionValue string
@@ -447,8 +475,9 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 // The surface is what hooks serves at its aliases: a Surface, found by its
 // toolkit.
 var (
-	_ hooks.Surface  = (*Service)(nil)
-	_ hooks.Surfaces = (*Service)(nil)
+	_ hooks.Surface          = (*Service)(nil)
+	_ hooks.AnsweringSurface = (*Service)(nil)
+	_ hooks.Surfaces         = (*Service)(nil)
 )
 
 // Surface is how hooks finds the surface: it is the one toolkit's.

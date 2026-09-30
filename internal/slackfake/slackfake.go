@@ -140,6 +140,29 @@ type Reaction struct {
 	TeamID, Channel, TS, UserID, Name string
 }
 
+// View is a modal the fake was asked to open (views.open), as it was opened.
+type View struct {
+	ID     string
+	TeamID string
+	// TriggerID is the click's trigger it was opened with, and User the person
+	// who clicked, whom Slack shows it to.
+	TriggerID string
+	User      string
+	// View is the view as views.open sent it.
+	View map[string]any
+	At   time.Time
+}
+
+// triggerLife is how long Slack takes a click's trigger_id to open a modal.
+const triggerLife = 3 * time.Second
+
+// trigger is a click's trigger_id, as the fake issued it.
+type trigger struct {
+	user, team string
+	at         time.Time
+	used       bool
+}
+
 // Call is one Web API call, as the fake received it.
 type Call struct {
 	Method string
@@ -168,6 +191,8 @@ type Fake struct {
 	messages   []*Message
 	incoming   map[string]bool
 	reactions  []Reaction
+	views      []View
+	triggers   map[string]trigger
 	calls      []Call
 	failures   map[string][]failure
 	codes      map[string]string // authorization code -> team id; "" once spent
@@ -207,7 +232,7 @@ func New(t testing.TB, options ...Option) *Fake {
 		now: time.Now, clientID: DefaultClientID, clientSecret: DefaultClientSecret, signingSecret: DefaultSigningSecret,
 		workspaces: map[string]*Workspace{}, users: map[string]User{}, channels: map[string]Channel{},
 		failures: map[string][]failure{}, codes: map[string]string{}, spent: map[string]bool{},
-		incoming: map[string]bool{},
+		incoming: map[string]bool{}, triggers: map[string]trigger{},
 	}
 	for _, option := range options {
 		option(f)
@@ -345,13 +370,21 @@ func (f *Fake) Down(down bool) {
 	f.down = down
 }
 
-// Reset forgets the recorded calls, the messages and every injected failure.
-// Workspaces, users and channels stay.
+// Reset forgets the recorded calls, the messages, the modals opened and every
+// injected failure. Workspaces, users and channels stay.
 func (f *Fake) Reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls, f.messages, f.failures, f.down = nil, nil, map[string][]failure{}, false
 	f.incoming, f.reactions = map[string]bool{}, nil
+	f.views, f.triggers = nil, map[string]trigger{}
+}
+
+// Views answers the modals opened, oldest first.
+func (f *Fake) Views() []View {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.views)
 }
 
 // Calls answers the recorded calls, oldest first: all of them, or only those
@@ -508,8 +541,96 @@ func (f *Fake) handleLocked(method, token, basicUser, basicPassword string, args
 		return f.updateLocked(args)
 	case "reactions.add":
 		return f.reactLocked(workspace, args)
+	case "views.open":
+		return f.openViewLocked(workspace, args)
 	}
 	return fail("unknown_method")
+}
+
+// openViewLocked opens a modal for the click a trigger_id came from, as Slack
+// does: once for each trigger, within three seconds of the click, and only a
+// view that keeps Slack's limits. It needs no scope, as views.open needs none.
+func (f *Fake) openViewLocked(workspace *Workspace, args map[string]any) map[string]any {
+	id := str(args, "trigger_id")
+	issued, known := f.triggers[id]
+	switch {
+	case id == "":
+		return fail("invalid_arguments")
+	case !known || issued.team != workspace.TeamID:
+		return fail("invalid_trigger_id")
+	case issued.used:
+		return fail("exchanged_trigger_id")
+	case f.now().Sub(issued.at) > triggerLife:
+		return fail("expired_trigger_id")
+	}
+	view := objectArg(args, "view")
+	if view == nil || !viewKeepsLimits(view) {
+		return fail("invalid_arguments")
+	}
+	issued.used = true
+	f.triggers[id] = issued
+	f.sequence++
+	opened := View{ID: fmt.Sprintf("V%08d", f.sequence), TeamID: workspace.TeamID, TriggerID: id, User: issued.user, View: view, At: f.now()}
+	f.views = append(f.views, opened)
+	answered := map[string]any{"id": opened.ID, "team_id": workspace.TeamID}
+	for key, value := range view {
+		answered[key] = value
+	}
+	return map[string]any{"ok": true, "view": answered}
+}
+
+// viewKeepsLimits is whether a modal keeps what Slack holds a view to: its type,
+// a plain-text title, submit and close of 24 characters at most, private
+// metadata of 3000 and a callback id of 255, at most 100 blocks, and plain-text
+// inputs of at most 3000 characters.
+func viewKeepsLimits(view map[string]any) bool {
+	if view["type"] != "modal" {
+		return false
+	}
+	for _, name := range []string{"title", "submit", "close"} {
+		text, _ := view[name].(map[string]any)
+		if name == "title" && text == nil {
+			return false
+		}
+		if text != nil && (text["type"] != "plain_text" || len([]rune(fmt.Sprint(text["text"]))) > 24) {
+			return false
+		}
+	}
+	if metadata, _ := view["private_metadata"].(string); len([]rune(metadata)) > 3000 {
+		return false
+	}
+	if callback, _ := view["callback_id"].(string); len([]rune(callback)) > 255 {
+		return false
+	}
+	blocks, _ := view["blocks"].([]any)
+	if len(blocks) == 0 || len(blocks) > 100 {
+		return false
+	}
+	for _, block := range blocks {
+		object, _ := block.(map[string]any)
+		element, _ := object["element"].(map[string]any)
+		if object["type"] == "input" && element["type"] == "plain_text_input" {
+			if most, ok := element["max_length"].(float64); ok && (most < 1 || most > 3000) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// objectArg reads an argument that is a JSON object: as JSON in a JSON call, or
+// as a JSON string in a form's.
+func objectArg(args map[string]any, name string) map[string]any {
+	switch value := args[name].(type) {
+	case map[string]any:
+		return value
+	case string:
+		var decoded map[string]any
+		if json.Unmarshal([]byte(value), &decoded) == nil {
+			return decoded
+		}
+	}
+	return nil
 }
 
 func (f *Fake) reactLocked(workspace *Workspace, args map[string]any) map[string]any {
@@ -901,17 +1022,96 @@ func (f *Fake) Click(baseURL string, c Click) *http.Request {
 	if c.ActionTS == "" {
 		c.ActionTS = f.freshTS()
 	}
+	// The click's trigger opens a modal, once and for three seconds, and the
+	// message it was on comes with it as Slack keeps it: for one the bot
+	// posted, its blocks, with the bot as its user.
+	message := map[string]any{"type": "message", "ts": c.MessageTS, "text": "notice"}
+	f.mu.Lock()
+	f.triggers[c.TriggerID] = trigger{user: c.User, team: c.TeamID, at: f.now()}
+	for _, posted := range f.messages {
+		if posted.Channel == c.Channel && posted.TS == c.MessageTS && !posted.Ephemeral {
+			message["text"], message["blocks"] = posted.Text, posted.Blocks
+			if workspace, ok := f.workspaces[c.TeamID]; ok {
+				message["user"], message["bot_id"] = workspace.BotUserID, "B0FAKE"
+			}
+		}
+	}
 	payload, err := json.Marshal(map[string]any{
 		"type": "block_actions", "user": map[string]any{"id": c.User, "team_id": c.TeamID, "name": "someone"},
 		"api_app_id": "A0FAKEAPP", "token": "legacy",
 		"container":  map[string]any{"type": "message", "message_ts": c.MessageTS, "channel_id": c.Channel, "is_ephemeral": false},
 		"trigger_id": c.TriggerID, "team": map[string]any{"id": c.TeamID, "domain": "acme"},
 		"channel":      map[string]any{"id": c.Channel, "name": "directmessage"},
-		"message":      map[string]any{"type": "message", "ts": c.MessageTS, "text": "notice"},
+		"message":      message,
 		"response_url": "https://hooks.slack.com/actions/A0FAKEAPP/1/never-used",
 		"actions": []any{map[string]any{
 			"action_id": c.ActionID, "block_id": "consent", "value": c.Value, "type": "button", "action_ts": c.ActionTS,
 		}},
+	})
+	f.mu.Unlock()
+	if err != nil {
+		panic(err)
+	}
+	body := url.Values{"payload": {string(payload)}}.Encode()
+	return f.Signed(baseURL+InteractivityPath, "application/x-www-form-urlencoded", []byte(body))
+}
+
+// Submission is Send pressed on a modal the fake opened: a view_submission.
+type Submission struct {
+	// ViewID is the modal submitted; the last one opened when empty.
+	ViewID string
+	// User is who sends it; the one it was opened for when empty.
+	User string
+	// Values are what was typed into the modal's inputs, by block id and then
+	// action id, as its state carries them.
+	Values map[string]map[string]string
+	// PrivateMetadata, when set, is sent instead of what the modal was opened
+	// with, as a forged submission would.
+	PrivateMetadata *string
+}
+
+// Submit builds a signed view_submission delivery for the interactivity URL of
+// a modal the fake opened: form-encoded, with the JSON in its payload field,
+// carrying the view's callback id and private metadata back as Slack does.
+func (f *Fake) Submit(baseURL string, s Submission) *http.Request {
+	f.mu.Lock()
+	var opened *View
+	for index := range f.views {
+		if s.ViewID == "" || f.views[index].ID == s.ViewID {
+			opened = &f.views[index]
+		}
+	}
+	if opened == nil {
+		f.mu.Unlock()
+		panic("slackfake: no such modal was opened: " + s.ViewID)
+	}
+	view := *opened
+	f.mu.Unlock()
+	if s.User == "" {
+		s.User = view.User
+	}
+	values := map[string]any{}
+	for blockID, inputs := range s.Values {
+		block := map[string]any{}
+		for actionID, value := range inputs {
+			block[actionID] = map[string]any{"type": "plain_text_input", "value": value}
+		}
+		values[blockID] = block
+	}
+	metadata, _ := view.View["private_metadata"].(string)
+	if s.PrivateMetadata != nil {
+		metadata = *s.PrivateMetadata
+	}
+	payload, err := json.Marshal(map[string]any{
+		"type": "view_submission", "team": map[string]any{"id": view.TeamID, "domain": "acme"},
+		"user":       map[string]any{"id": s.User, "team_id": view.TeamID, "name": "someone"},
+		"api_app_id": "A0FAKEAPP", "token": "legacy", "trigger_id": f.nextID("trigger."),
+		"view": map[string]any{
+			"id": view.ID, "team_id": view.TeamID, "type": "modal", "callback_id": view.View["callback_id"],
+			"private_metadata": metadata, "title": view.View["title"], "blocks": view.View["blocks"],
+			"state": map[string]any{"values": values}, "hash": "1700000000.fake", "app_id": "A0FAKEAPP", "bot_id": "B0FAKE",
+		},
+		"response_urls": []any{},
 	})
 	if err != nil {
 		panic(err)

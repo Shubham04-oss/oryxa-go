@@ -58,6 +58,10 @@ type ActivityEntry struct {
 	Decision  string                     `json:"decision,omitempty"`
 	Consent   string                     `json:"consent,omitempty"`
 	DecidedBy *agents.InteractionDecider `json:"decided_by,omitempty"`
+	// WrittenByOwner is set on an answered entry whose answer the owner wrote
+	// themself (result.written_by_owner): their reply, instead of their agent's
+	// answer, whether the request was pending or its agent's answer was held.
+	WrittenByOwner bool `json:"written_by_owner,omitempty"`
 	// Lease is set on the two lease entries.
 	Lease *Lease `json:"lease,omitempty"`
 }
@@ -114,7 +118,9 @@ func requestEntries(actor agents.InteractionActor, request agents.Interaction) [
 		entries = append(entries, decided)
 	}
 	if result := request.Result; result != nil {
-		entries = append(entries, entry(ActivityAnswered, result.CompletedAt))
+		answered := entry(ActivityAnswered, result.CompletedAt)
+		answered.WrittenByOwner = result.WrittenByOwner
+		entries = append(entries, answered)
 	}
 	if request.SecretViewedAt != nil {
 		entries = append(entries, entry(ActivitySecretViewed, *request.SecretViewedAt))

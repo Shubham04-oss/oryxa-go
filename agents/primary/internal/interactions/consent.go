@@ -26,7 +26,9 @@ import (
 // button's ticket), or on the web (ConsentAsOwner): whichever comes first
 // decides, by the lock Store.Decide takes on the request, and the other finds
 // it decided (ErrAlreadyDecided). A choice only ever decides: it never
-// reviews an answer that was held.
+// reviews an answer that was held. Instead of choosing, the owner may answer
+// themself, in their own words (reply.go), which is no choice of these three:
+// it takes the same lock, and whichever of it and a choice comes first wins.
 const (
 	ChoiceSummary = "summary"
 	ChoiceAccess  = "access"
@@ -245,9 +247,14 @@ func plural(n int, unit string) string {
 	return fmt.Sprintf("%d %ss", n, unit)
 }
 
-// ConsentTickets are the tickets for the three buttons of one notice.
+// ConsentTickets are the tickets for the buttons of one notice: the three
+// choices, and Reply yourself.
 type ConsentTickets struct {
 	Summary, Access, Deny string
+	// Reply is the ticket of the Reply yourself button: a reply ticket
+	// (TicketReply) that lands only while the request is pending, which is
+	// what the notice shows.
+	Reply string
 	// ExpiresAt is when they stop working: when the request expires.
 	ExpiresAt time.Time
 }
@@ -276,12 +283,15 @@ func (service *Service) ConsentTickets(ctx context.Context, requestID, noticeID 
 	var made ConsentTickets
 	made.ExpiresAt = request.ExpiresAt.UTC()
 	for _, button := range []struct {
-		choice string
-		into   *string
-	}{{ChoiceSummary, &made.Summary}, {ChoiceAccess, &made.Access}, {ChoiceDeny, &made.Deny}} {
+		kind, choice string
+		into         *string
+	}{
+		{TicketConsent, ChoiceSummary, &made.Summary}, {TicketConsent, ChoiceAccess, &made.Access}, {TicketConsent, ChoiceDeny, &made.Deny},
+		{TicketReply, StatusPending, &made.Reply},
+	} {
 		ticket, err := service.tickets.Mint(TicketClaims{
 			RequestID: request.ID, OwnerUserID: request.Target.UserID, NoticeID: noticeID,
-			Kind: TicketConsent, Choice: button.choice, ExpiresAt: request.ExpiresAt,
+			Kind: button.kind, Choice: button.choice, ExpiresAt: request.ExpiresAt,
 		})
 		if err != nil {
 			return ConsentTickets{}, err

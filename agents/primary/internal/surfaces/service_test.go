@@ -33,7 +33,8 @@ func TestARequestedEventPostsTheOwnersNoticeWithTheThreeButtons(t *testing.T) {
 		t.Fatalf("params = %v", notice.Params)
 	}
 	tickets, _ := notice.Params["tickets"].(map[string]any)
-	if tickets["summary"] != "t1.summary.irq_1.notice_irq_1" || tickets["access"] != "t1.access.irq_1.notice_irq_1" || tickets["deny"] != "t1.deny.irq_1.notice_irq_1" || len(tickets) != 3 {
+	if tickets["summary"] != "t1.summary.irq_1.notice_irq_1" || tickets["access"] != "t1.access.irq_1.notice_irq_1" || tickets["deny"] != "t1.deny.irq_1.notice_irq_1" ||
+		tickets["reply"] != "t1.reply.pending.irq_1.notice_irq_1" || len(tickets) != 4 {
 		t.Fatalf("tickets = %v, want the ledger's for the notice's own id", tickets)
 	}
 	if got := h.ledger.tickets(); len(got) != 1 || got[0] != "irq_1/notice_irq_1" {

@@ -49,6 +49,11 @@ const (
 	ReviewSend       = "send"
 	ReviewSendMasked = "send_masked"
 	ReviewWithhold   = "withhold"
+	// ReviewReply is the addressed member answering in their own words instead
+	// of reviewing the answer held for them: their reply replaces it, and it is
+	// never sent (reply.go). It is recorded as a review, and is never one a
+	// review route or a review's button takes (validReview).
+	ReviewReply = "reply"
 
 	// ExpiredBeforeReview is the reason Oryxa records when it withholds an
 	// answer whose request expired while it waited in review.
@@ -140,13 +145,41 @@ func resultOf(input agents.InteractionResponseInput) agents.InteractionResult {
 // answer is what the ledger records for a response to request: what the answer
 // guard makes of it (guardedAnswer) and, for a request made from Slack, what the
 // consent guard makes of that (consentRead). actor is who is answering: the
-// member themself in their own session, or an agent in a run.
+// member themself in their own session, whose answer says it is theirs
+// (written_by_owner), or an agent in a run.
 func (service *Service) answer(ctx context.Context, actor agents.InteractionActor, request agents.Interaction, input agents.InteractionResponseInput) Answer {
 	answer := service.guardedAnswer(ctx, request, input)
-	if service.consentGuard == nil || request.Origin != OriginSlack || request.Requester.UserID == request.Target.UserID {
-		return answer
+	if service.consentGuard != nil && request.Origin == OriginSlack && request.Requester.UserID != request.Target.UserID {
+		answer = service.consentRead(ctx, actor, request, answer)
 	}
-	return service.consentRead(ctx, actor, request, answer)
+	if actor.Session == agents.SessionMember {
+		answer.writtenByOwner()
+	}
+	return answer
+}
+
+// writtenByOwner marks every version of an answer as its owner's own words:
+// the one delivered, or the two held for their review.
+func (answer *Answer) writtenByOwner() {
+	for _, result := range []*agents.InteractionResult{answer.Result, answer.heldResult(), answer.maskedResult()} {
+		if result != nil {
+			result.WrittenByOwner = true
+		}
+	}
+}
+
+func (answer *Answer) heldResult() *agents.InteractionResult {
+	if answer.Held == nil {
+		return nil
+	}
+	return &answer.Held.Result
+}
+
+func (answer *Answer) maskedResult() *agents.InteractionResult {
+	if answer.Held == nil {
+		return nil
+	}
+	return answer.Held.MaskedResult
 }
 
 // guardedAnswer is what the answer guard makes of a response to request. Without

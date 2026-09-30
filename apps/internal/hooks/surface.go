@@ -38,10 +38,22 @@ type Surface interface {
 	// Deliver records the key, in the transaction that records whatever the
 	// delivery became, so two copies of it racing write one record between
 	// them; the second is not an error. It must not call anything beyond its
-	// own store: the app is waiting for the answer, and the ingress has given
-	// it a deadline. An error is answered 5xx, so the app delivers again; a
-	// delivery that is safe to drop is nil.
+	// own store, but for what the app allows only while a delivery is fresh,
+	// such as Slack opening a modal for a click: the app is waiting for the
+	// answer, and the ingress has given it a deadline, which bounds that too.
+	// An error is answered 5xx, so the app delivers again; a delivery that is
+	// safe to drop is nil.
 	Deliver(ctx context.Context, kind, key string, header http.Header, body []byte, receivedAt time.Time) error
+}
+
+// AnsweringSurface is a surface whose deliveries can need an answer in the
+// response's body, as the submission of a Slack modal does, to say in the modal
+// what is wrong with what was typed. The ingress asks it rather than Deliver.
+type AnsweringSurface interface {
+	Surface
+	// DeliverAndAnswer is Deliver, and the JSON the 200 that answers the
+	// delivery carries: nil for none, as Deliver's success is answered.
+	DeliverAndAnswer(ctx context.Context, kind, key string, header http.Header, body []byte, receivedAt time.Time) (json.RawMessage, error)
 }
 
 // Surfaces finds a surface by its toolkit.

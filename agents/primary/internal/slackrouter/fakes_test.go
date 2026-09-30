@@ -223,6 +223,8 @@ type consentCall struct{ Ticket, Clicker, Surface string }
 
 type reviewCall struct{ Ticket, Clicker string }
 
+type replyCall struct{ Ticket, Sender, Text string }
+
 // fakeAsks is the consent core: it keeps each ask it made, and makes the same
 // one again for the same origin, as CreateAsk does.
 type fakeAsks struct {
@@ -232,11 +234,13 @@ type fakeAsks struct {
 	open    map[string]int
 	consent []consentCall
 	review  []reviewCall
+	replies []replyCall
 
 	createCalls, countCalls int
 	createErr, countErr     error
 	consentErr              error
 	reviewErr               error
+	replyErr                error
 	// onCreate, when set, is told of each ask as it is filed.
 	onCreate func(AskInput)
 }
@@ -286,6 +290,13 @@ func (asks *fakeAsks) Review(_ context.Context, ticket, clickerUserID string) er
 	defer asks.mu.Unlock()
 	asks.review = append(asks.review, reviewCall{ticket, clickerUserID})
 	return asks.reviewErr
+}
+
+func (asks *fakeAsks) Reply(_ context.Context, ticket, senderUserID, text string) error {
+	asks.mu.Lock()
+	defer asks.mu.Unlock()
+	asks.replies = append(asks.replies, replyCall{ticket, senderUserID, text})
+	return asks.replyErr
 }
 
 // fakeAuthority answers Outranks from a table of "asker>owner", and records
