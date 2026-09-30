@@ -333,23 +333,28 @@ other value is accepted, as it always was, and grants nothing.
 nothing grants a tool implicitly.
 
 **Jev chooses what a request made in a teamspace needs.** A request made in
-a teamspace that names no `requested_tools` gets them from Jev as it is
+a teamspace that omits `requested_tools` gets them from Jev as it is
 created (`interactions.Service.requestedTools`): one Choice over the
 requester's own words, the task and its context, and never anything of the
 member asked, between `none`, `knowledge`, `apps` and `apps_and_knowledge`.
 Its owner's approval then shows what would be read, and allows it or not.
-A choice with a confidence below 0.5 (`interactions.ToolsConfidence`) asks
-for none. Over four options that is a choice holding at least 62.5% of the
-probability: the least TypeSafe's guidance acts on at all, and acting on it
+A choice with a confidence below 0.5 (`interactions.ToolsConfidence`) falls
+back to requesting knowledge. Over four options, the threshold is a choice
+holding at least 62.5% of the probability: the least TypeSafe's guidance
+acts on at all, and acting on it
 is safe here because it only proposes what the owner approves in person.
 No Jev (`TYPESAFE_API_KEY` unset), one that does not answer within 3 seconds,
-and one that fails ask for none as well, and the request is made all the
-same. A requester who names tools keeps them as given. `tools_judged_by`
-says who chose: `requester`, `jev` (which may have chosen none), or `none`,
-nobody (a request made outside a teamspace that names none, or Jev unsure,
-unset, silent or failing). A request made before this has nobody on record,
-and the field is absent. Sent again under its `Idempotency-Key`, a request
-whose tools Jev chose is compared as it was sent, naming none.
+and one that fails request knowledge as well, and the request is made all the
+same. An omitted list outside a teamspace also requests knowledge. An explicit
+list, including an empty list for work without lookups, stays as given.
+`tools_judged_by` says who chose: `requester`, `jev` (which may have chosen
+none), or `none`,
+nobody (the knowledge fallback outside a teamspace, or Jev unsure,
+unset, silent or failing). Older `none` records may request no tools. A request
+made before this was kept has nobody on record, and the field is absent.
+Sent again under its `Idempotency-Key`, a request
+whose tools Jev chose is compared as it was sent, omitting them. A retry cannot
+change between omission and an explicit empty list under the same key.
 
 **Requests inside a teamspace, and who approves them.** A request may name the
 teamspace it belongs to (`teamspace_id`), which is how a teamspace side
@@ -2367,7 +2372,7 @@ The compose service has no secret of its own to fall back on, and binds `127.0.0
 | `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf, and to call apps' Slack API. Required with the Slack consent loop on |
 | `AGENTS_ALLOWED_ORIGINS` | unset | Origins, comma-separated, whose cookie-authenticated requests may start runs and change threads; the web app's. The first is also the origin the Slack acknowledgement links to |
 | `AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS` | `600` | Longest one run may take; 60–3600 seconds |
-| `TYPESAFE_API_KEY` | unset | TypeSafe's key, for Jev: a room's judgment of every message, what a request made in a teamspace that names no tools needs (see [Agent interactions toolbox](#agent-interactions-toolbox)), and the screen of what people ask in Slack. Unset, rooms fall back to rules, such a request asks for none, and with the Slack consent loop on every mention is refused and nobody is asked |
+| `TYPESAFE_API_KEY` | unset | TypeSafe's key, for Jev: a room's judgment of every message, what a request made in a teamspace that omits tools needs (see [Agent interactions toolbox](#agent-interactions-toolbox)), and the screen of what people ask in Slack. Unset, rooms fall back to rules, an omitted request tool list defaults to knowledge, and with the Slack consent loop on every mention is refused and nobody is asked |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | TypeSafe's API: HTTPS, or plain HTTP to this machine |
 | `AGENTS_PRIMARY_GUARDRAIL_ID` | unset | Bedrock guardrail that screens the member's conversation; unset turns screening off |
 | `AGENTS_PRIMARY_GUARDRAIL_VERSION` | unset | The guardrail's numbered version, required with its ID; never `DRAFT` |
