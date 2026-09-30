@@ -24,7 +24,9 @@ import {
   usePrimaryChatActivity,
   useRememberedChoice,
 } from "@/lib/threads/chat-choice"
+import type { PrimaryChat } from "@/lib/threads/chat-choice"
 import { itemsToChatMessages } from "@/lib/threads/chat-messages"
+import { threadListQueryOptions } from "@/lib/threads/client"
 import type { Item, Thread } from "@/lib/threads/client"
 
 // The Agents SDK's hooks stand in: `useAgent` hands back a socket the test
@@ -217,20 +219,27 @@ const LEO = "agt_leo"
 function ChatHost({
   remember = true,
   agent = LEO,
+  viewer = scope.userId,
+  initial,
 }: {
   remember?: boolean
   agent?: string | null
+  /** The member whose chat it is (same organization). */
+  viewer?: string
+  /** What the chat holds to begin with, when it is not a fresh chat. */
+  initial?: PrimaryChat
 }) {
+  const asViewer = { ...scope, userId: viewer }
   const [chat, dispatch] = useReducer(
     primaryChatReducer,
-    undefined,
-    initialPrimaryChat
+    initial,
+    (start) => start ?? initialPrimaryChat()
   )
-  useRememberedChoice(chat, remember ? scope : undefined, agent ?? undefined)
+  useRememberedChoice(chat, remember ? asViewer : undefined, agent ?? undefined)
   return (
     <AgentChat
       organizationId="org_1"
-      scope={remember ? scope : undefined}
+      scope={remember ? asViewer : undefined}
       agentId={agent ?? undefined}
       agentName="Leo"
       chat={chat}
@@ -1033,6 +1042,132 @@ describe("a conversation left alone", () => {
     comeBack(0, "focus")
     expect(onNewChat()).toBe(false)
     expect(rememberedChoice(scope, LEO)).toBe("th_1")
+  })
+})
+
+describe("a member who takes over the page", () => {
+  /** The list request, answered only when released. */
+  function holdMemberList() {
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const fetcher = vi.mocked(fetch)
+    const answer = fetcher.getMockImplementation()!
+    fetcher.mockImplementation(async (input, init) => {
+      const url = new URL(String(input), "http://localhost")
+      if (
+        url.pathname === "/v1/organizations/org_1/threads" &&
+        (init?.method ?? "GET") === "GET"
+      ) {
+        await gate
+      }
+      return answer(input, init)
+    })
+    return () => release()
+  }
+  const theirs = { ...scope, userId: "user_b" }
+
+  it("does not choose, show or publish a conversation from the last member's cached list, and waits for its own", async () => {
+    stubApi({ threads: [thread("th_b", "Your plan")] })
+    // The other member's list is warm in the cache the two share.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    client.setQueryData(threadListQueryOptions("org_1", "user_1").queryKey, [
+      thread("th_a", "Their plan"),
+    ])
+    const release = holdMemberList()
+    const activity = renderHook(() => usePrimaryChatActivity(theirs))
+    render(
+      <QueryClientProvider client={client}>
+        <ChatHost viewer="user_b" />
+      </QueryClientProvider>
+    )
+
+    await act(async () => {})
+    expect(screen.queryByText("Their plan")).toBeNull()
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(activity.result.current).toBeNull()
+    expect(rememberedChoice(scope, LEO)).toBeNull()
+
+    act(() => release())
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        "org_1~th_b"
+      )
+    )
+    expect(hooks.agentOptions.every((item) => item.name === "org_1~th_b")).toBe(
+      true
+    )
+    await waitFor(() =>
+      expect(activity.result.current).toEqual({
+        threadId: "th_b",
+        state: "idle",
+      })
+    )
+  })
+
+  it("shows and publishes no conversation, whatever its state names, until the member's own list has loaded", async () => {
+    stubApi({ threads: [thread("th_b", "Your plan")] })
+    const decided = primaryChatReducer(initialPrimaryChat(), {
+      type: "decide",
+      thread: "th_a",
+    })
+    const release = holdMemberList()
+    const activity = renderHook(() => usePrimaryChatActivity(theirs))
+    renderWithQueries(<ChatHost viewer="user_b" initial={decided} />)
+
+    await act(async () => {})
+    // The list is out: the chat is still opening, and says nothing.
+    expect(hooks.agentOptions).toHaveLength(0)
+    expect(activity.result.current).toBeNull()
+    expect(screen.getByText("Loading the conversation…")).toBeTruthy()
+    release()
+  })
+
+  it("keeps the list it makes a new conversation in under the member's own entry, and refreshes it when a run ends", async () => {
+    const calls = stubApi({ threads: [] })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <ChatHost />
+      </QueryClientProvider>
+    )
+    expect(
+      await screen.findByText("Ask anything to start a conversation.")
+    ).toBeTruthy()
+    type("Plan the launch")
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        "org_1~th_new"
+      )
+    )
+    const own = threadListQueryOptions("org_1", "user_1").queryKey
+    expect(
+      client.getQueryData<Thread[]>(own)?.map((item) => item.id)
+    ).toContain("th_new")
+    // Nothing was written to an entry that is not this member's.
+    expect(
+      client.getQueryData(threadListQueryOptions("org_1").queryKey)
+    ).toBeUndefined()
+
+    // A run that ends refreshes the member's list (a prefix invalidation).
+    open("org_1~th_new")
+    const listReads = () =>
+      calls.filter((call) => call === "GET /v1/organizations/org_1/threads")
+        .length
+    const before = listReads()
+    act(() =>
+      hooks.chatOptions?.onFinish({
+        isAbort: false,
+        isDisconnect: false,
+        isError: false,
+      })
+    )
+    await waitFor(() => expect(listReads()).toBeGreaterThan(before))
   })
 })
 

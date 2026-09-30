@@ -181,10 +181,13 @@ export function AgentChat({
 }) {
   const queryClient = useQueryClient()
   const hydrated = useHydrated()
-  const threads = useQuery({
-    ...threadListQueryOptions(organizationId),
-    enabled: hydrated,
-  })
+  // The list is this member's own entry in the cache: another member's
+  // (same organization, the page taken over without a reload) is never read.
+  const list = threadListQueryOptions(organizationId, scope?.userId)
+  const threads = useQuery({ ...list, enabled: hydrated })
+  // Nothing about a conversation is chosen, shown or published until this
+  // member's list has loaded.
+  const listed = threads.data !== undefined
   const threadId = shownThread(chat)
   const first = firstMessage(chat)
   const draft = chat.drafts[PRIMARY_DRAFT] ?? ""
@@ -208,14 +211,14 @@ export function AgentChat({
   const scopeOrganization = scope?.organizationId
   const scopeUser = scope?.userId
   useEffect(() => {
-    if (threadId === undefined) return
+    if (threadId === undefined || !listed) return
     publishPrimaryChatActivity(
       { threadId, state },
       scopeOrganization && scopeUser
         ? { organizationId: scopeOrganization, userId: scopeUser }
         : undefined
     )
-  }, [threadId, state, scopeOrganization, scopeUser])
+  }, [threadId, listed, state, scopeOrganization, scopeUser])
   useEffect(() => () => publishPrimaryChatActivity(null), [])
 
   // Once the list is here: the member's choice, else the latest conversation
@@ -265,13 +268,10 @@ export function AgentChat({
         clearTimeout(timer)
         // Gave up on it: the thread stays empty, and no title says so.
         if (gaveUp) return
-        queryClient.setQueryData<Thread[]>(
-          threadKeys.list(organizationId),
-          (list) => [
-            thread,
-            ...(list ?? []).filter((item) => item.id !== thread.id),
-          ]
-        )
+        queryClient.setQueryData<Thread[]>(list.queryKey, (held) => [
+          thread,
+          ...(held ?? []).filter((item) => item.id !== thread.id),
+        ])
         void queryClient.invalidateQueries({
           queryKey: threadKeys.list(organizationId),
         })
@@ -325,7 +325,7 @@ export function AgentChat({
     first && first.threadId === threadId && !first.taken ? first.text : null
 
   let body
-  if (threadId) {
+  if (threadId && listed) {
     body = (
       <Suspense
         fallback={

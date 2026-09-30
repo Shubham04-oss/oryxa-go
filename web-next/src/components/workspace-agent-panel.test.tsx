@@ -28,6 +28,7 @@ import {
   claimPrimaryChatRequest,
   rememberedChoice,
   requestPrimaryChat,
+  usePrimaryChatActivity,
   usePrimaryChatRequest,
 } from "@/lib/threads/chat-choice"
 import { itemsToChatMessages } from "@/lib/threads/chat-messages"
@@ -75,6 +76,8 @@ function json(body: unknown, status = 200): Response {
 
 type Seed = {
   threads?: Thread[]
+  /** Each member's own conversations, by user id, for a page more than one member uses in turn. */
+  lists?: Record<string, Thread[]>
   /** What each thread holds in Go. */
   items?: Record<string, Item[]>
   pending?: Record<string, string[]>
@@ -95,9 +98,11 @@ function stubGo(seed: Seed = {}) {
   let threads = seed.threads ?? []
   let made = 0
   let failing = 0
+  let viewer = VIEWER
   const calls: string[] = []
   let gate: Promise<void> | undefined
   let agentsGate: Promise<void> | undefined
+  let listGate: Promise<void> | undefined
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -128,13 +133,16 @@ function stubGo(seed: Seed = {}) {
           threads = [created, ...threads]
           return json(created, 201)
         }
-        return json({ threads })
+        await listGate
+        return json({ threads: seed.lists?.[viewer] ?? threads })
       }
       const detail = new RegExp(`^/v1/organizations/${ORG}/threads/([^/]+)$`)
       const found = detail.exec(path)
       if (found) {
         const id = decodeURIComponent(found[1])
-        const listed = threads.find((item) => item.id === id)
+        const listed = (seed.lists?.[viewer] ?? threads).find(
+          (item) => item.id === id
+        )
         if (!listed) {
           return json({ error: { code: "not_found", message: "no" } }, 404)
         }
@@ -171,6 +179,21 @@ function stubGo(seed: Seed = {}) {
     /** The next conversation to be started fails. */
     failNextCreate() {
       failing += 1
+    },
+    /** From now on the requests are another member's (their own conversations answer). */
+    as(userId: string) {
+      viewer = userId
+    },
+    /** Keeps the conversation list from answering until released. */
+    holdList() {
+      let release = () => {}
+      listGate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return () => {
+        listGate = undefined
+        release()
+      }
     },
     /** Keeps the agents list from answering until released. */
     holdAgents() {
@@ -423,6 +446,100 @@ describe("a first message on its way", () => {
       agentChats.named(chatName("th_new")).sendMessage
     ).toHaveBeenCalledExactlyOnceWith({ text: "Plan the launch" })
     await waitFor(() => expect(button().hasAttribute("disabled")).toBe(false))
+  })
+})
+
+describe("a member who takes over the page", () => {
+  const other = "user-other"
+  const otherScope = { organizationId: ORG, userId: other }
+
+  it("gets nothing of the last member's chat: not their conversation, draft, agents or files", async () => {
+    const go = stubGo({
+      lists: {
+        [VIEWER]: [thread("th_a", "Their plan")],
+        [other]: [thread("th_b", "Your plan")],
+      },
+    })
+    const reported = vi.fn()
+    const view = withQueries(panel({ onPrimaryThreadChange: reported }))
+    ;(await socketOn(chatName("th_a"))).open()
+    await screen.findByRole("group", { name: "Switch agent" })
+    type(leoBox(), "Their draft")
+    expect(reported).toHaveBeenLastCalledWith("th_a")
+    const sockets = roomSockets.all.length
+    const seen = renderHook(() => usePrimaryChatActivity(otherScope))
+
+    // Another tab signed in as someone else, and this one read the session
+    // again: same page, same cache, same organization.
+    go.as(other)
+    const releaseList = go.holdList()
+    const releaseAgents = go.holdAgents()
+    view.rerender(
+      panel({
+        onPrimaryThreadChange: reported,
+        directMessages: { viewerId: other, inbox, people },
+      })
+    )
+    await act(async () => {})
+    // Not their agents (Scout is theirs), their conversation or their files,
+    // and nothing for this member to hear of theirs.
+    expect(screen.queryByRole("group", { name: "Switch agent" })).toBeNull()
+    expect(screen.queryByText("Their plan")).toBeNull()
+    expect(reported).toHaveBeenLastCalledWith(null)
+    expect(seen.result.current).toBeNull()
+    expect(roomSockets.all).toHaveLength(sockets)
+    expect(screen.queryByDisplayValue("Their draft")).toBeNull()
+
+    // Their own list decides, once it has loaded.
+    act(() => {
+      releaseAgents()
+      releaseList()
+    })
+    ;(await socketOn(chatName("th_b"))).open()
+    expect(roomSockets.named(chatName("th_a"))).toHaveLength(
+      roomSockets.all.filter(
+        (socket) => socket.options.name === chatName("th_a")
+      ).length
+    )
+    expect(roomSockets.all.length).toBe(sockets + 1)
+    expect(leoBox().value).toBe("")
+    expect(reported).toHaveBeenLastCalledWith("th_b")
+    await waitFor(() =>
+      expect(seen.result.current).toEqual({ threadId: "th_b", state: "idle" })
+    )
+    // The last member's remembered choice stays theirs.
+    expect(rememberedChoice(otherScope, primary.id)).toBeNull()
+  })
+
+  it("does not carry the specialist they had open, or their direct messages' drafts", async () => {
+    const go = stubGo({ threads: [thread("th_a", "Their plan")] })
+    const view = withQueries(panel())
+    ;(await socketOn(chatName("th_a"))).open()
+    fireEvent.click(await screen.findByRole("button", { name: "Scout" }))
+    await screen.findByRole("textbox", { name: "Message Scout" })
+
+    go.as(other)
+    view.rerender(panel({ directMessages: { viewerId: other, inbox, people } }))
+    // Back to their own primary agent, not the last member's specialist.
+    expect(screen.queryByRole("textbox", { name: "Message Scout" })).toBeNull()
+    expect(
+      await screen.findByRole("textbox", { name: "Message Leo" })
+    ).toBeTruthy()
+  })
+
+  it("keeps a member's chat through a moment the session couldn't be read", async () => {
+    stubGo({ threads: [thread("th_a", "Their plan")] })
+    const view = withQueries(panel())
+    ;(await socketOn(chatName("th_a"))).open()
+    await screen.findByRole("group", { name: "Switch agent" })
+    type(leoBox(), "Still here")
+
+    // The session could not be read for a moment, then it was, unchanged.
+    view.rerender(
+      panel({ organizationId: undefined, directMessages: undefined })
+    )
+    view.rerender(panel())
+    expect(leoBox().value).toBe("Still here")
   })
 })
 

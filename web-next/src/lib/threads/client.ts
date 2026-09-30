@@ -522,9 +522,21 @@ export function retryUnlessRefused(
   return failureCount < 1
 }
 
-export function threadListQueryOptions(organizationId: string) {
+/**
+ * The member's conversations. Given `viewerId`, the entry is that member's
+ * own (`[...threadKeys.list(organizationId), viewerId]`), so a member who takes
+ * over a page that another one used (same organization, same cache) never
+ * reads the other's list; invalidating `threadKeys.list(organizationId)`
+ * still reaches it, being its prefix.
+ */
+export function threadListQueryOptions(
+  organizationId: string,
+  viewerId?: string
+) {
   return queryOptions({
-    queryKey: threadKeys.list(organizationId),
+    queryKey: viewerId
+      ? ([...threadKeys.list(organizationId), viewerId] as const)
+      : threadKeys.list(organizationId),
     queryFn: ({ signal }) => listThreads(organizationId, { signal }),
     retry: retryUnlessRefused,
   })

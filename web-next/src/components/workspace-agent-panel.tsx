@@ -105,6 +105,29 @@ const panelTabs: Array<{
   },
 ]
 
+/**
+ * The member's own agents. The entry is keyed by member as well as by
+ * organization, so a member who takes over the page another one used (same
+ * organization, same cache) never reads the last one's agents: their names,
+ * their specialists, and the primary agent's id the chat keeps its choices
+ * under. The key still starts with `agentKeys.agentList`, so what invalidates
+ * that list reaches it.
+ */
+function ownAgentsQueryOptions(
+  organizationId: string,
+  viewerId: string | undefined
+) {
+  const options = agentsQueryOptions(organizationId)
+  return {
+    ...options,
+    // Its query function reads no key, so the extra part only names the entry.
+    queryKey: [
+      ...options.queryKey,
+      viewerId ?? "",
+    ] as unknown as typeof options.queryKey,
+  }
+}
+
 export function WorkspaceAgentPanel({
   expanded,
   onExpand,
@@ -205,11 +228,11 @@ export function WorkspaceAgentPanel({
     Partial<Record<AgentPanelTab, HTMLButtonElement | null>>
   >({})
   const focusTabOnExpand = useRef(false)
+  const viewerId = directMessages?.viewerId
   const agents = useQuery({
-    ...agentsQueryOptions(organizationId ?? ""),
+    ...ownAgentsQueryOptions(organizationId ?? "", viewerId),
     enabled: Boolean(organizationId),
   })
-  const viewerId = directMessages?.viewerId
   // Whose choices the primary chat remembers for the session: this member's,
   // in this organization.
   const scope = useMemo<ChatScope | undefined>(
@@ -219,6 +242,28 @@ export function WorkspaceAgentPanel({
         : undefined,
     [organizationId, viewerId]
   )
+  // Whose page this is. Another member taking it over without a reload
+  // (another tab signed in as someone else, and this one read the session
+  // again) inherits nothing the last one held here: not the chat's
+  // conversation or its drafts, the specialist they had open, nor their
+  // direct messages' drafts. It is all reset in the render that first sees
+  // the new member, so no render shows the old one's. The same member seen
+  // again after the session was briefly unreadable keeps theirs.
+  const owner = scope ? `${scope.organizationId}~${scope.userId}` : undefined
+  const [ownedBy, setOwnedBy] = useState(owner)
+  if (owner && owner !== ownedBy) {
+    setOwnedBy(owner)
+    if (ownedBy) {
+      dispatch({ type: "reset" })
+      setAgentId(null)
+      setAgentsSide(null)
+      setSidePicked(false)
+      setSideReturnTo(null)
+      setSideDrafts({})
+      setDmView(dmPanelList)
+      setDmDrafts({})
+    }
+  }
   // On a teamspace page, its teammates: read as the page reads it (one
   // query, shared with the focused view), what the list knows shown at once.
   const queryClient = useQueryClient()
@@ -265,7 +310,9 @@ export function WorkspaceAgentPanel({
   // its files.
   const shown = shownThread(chat)
   useEffect(() => {
-    if (shown !== undefined) onPrimaryThreadChange?.(shown)
+    // Until the chat has a conversation it has none: the overview lists no
+    // files, and never the last member's.
+    onPrimaryThreadChange?.(shown ?? null)
   }, [shown, onPrimaryThreadChange])
 
   // The rest of the app asking the primary chat to open a conversation (Home
@@ -546,6 +593,7 @@ export function WorkspaceAgentPanel({
                   <AgentsView
                     organizationId={organizationId}
                     scope={scope}
+                    owner={owner}
                     chatAgent={chatAgent}
                     agents={agents.data}
                     agentId={agentId}
@@ -728,6 +776,7 @@ function AgentsTabSide({
 function AgentsView({
   organizationId,
   scope,
+  owner,
   chatAgent,
   agents,
   agentId,
@@ -745,6 +794,8 @@ function AgentsView({
 }: {
   organizationId?: string
   scope?: ChatScope
+  /** Whose page this is (see the panel): the chat is theirs, and a new one is made for the next member. */
+  owner?: string
   /** The primary agent's id once known: what its chat's remembered choices are kept under. */
   chatAgent?: string
   /** The member's agents, once read. */
@@ -822,6 +873,7 @@ function AgentsView({
         />
       ) : organizationId ? (
         <AgentChat
+          key={owner}
           organizationId={organizationId}
           scope={scope}
           agentId={chatAgent}
