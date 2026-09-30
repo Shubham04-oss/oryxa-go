@@ -73,9 +73,36 @@ a response naming a model over 100 characters is refused as malformed. The
 API key goes only over HTTPS: `TYPESAFE_BASE_URL` may use plain HTTP just to
 localhost, as tests do.
 
-Jev receives toolkit, trigger name, omission state, and at most a 48 KiB
-projection of the app payload. This projection never replaces or truncates the
-payload stored for the agent. Provider failures become a fallback digest at
+Jev receives toolkit, trigger name, omission state, and a projection of the
+app payload. The complete serialized JSON request is capped at 24 KiB, including
+the policy, both questions, model, metadata, and JSON escaping. Valid structured
+payloads are preserved when they fit. Larger payloads become a complete UTF-8
+text prefix with `truncated`, `original_bytes`, and `prefix_bytes` metadata.
+Malformed UTF-8 stops the prefix before the invalid byte. Toolkit and trigger
+names are limited to 256 bytes each, and configured models to 100 characters;
+invalid or oversized metadata fails locally without an HTTP request. None of
+these projections replaces or truncates the payload stored for the agent.
+
+The request shape follows the [TypeSafe System One API](https://docs.typesafe.ai/api):
+an object state and named Choice/Noul questions. TypeSafe's
+[model documentation](https://docs.typesafe.ai/models) currently lists 64k
+tokens per request and 32k for state plus the longest question. The 24 KiB wire
+cap provides conservative headroom; it is not a certified token limit or a
+substitute for the provider's tokenizer. The former 48 KiB raw-payload bound
+did not include JSON escaping or classification overhead. This was a concrete
+size-accounting gap, but it does not establish the cause of the reported HTTP
+400: that response body was discarded, so the original incident remains
+unattributed. No live provider call was used to validate this correction.
+
+Non-success responses retain the HTTP status and, when present, a sanitized
+diagnostic from the JSON `error` field. String errors and structured
+`error.code`, `error.type`, and `error.message` strings are supported. Diagnostics
+are limited to 256 characters and response parsing to 4 KiB; absent, malformed,
+oversized, or unsupported errors retain only the status. Controls and formatting
+characters are removed. Response `content`, `detail`, other fields, and raw
+request/response bodies are never used as diagnostic fallbacks.
+
+Provider failures become a fallback digest at
 `FallbackPriority` (0.4): the event stays durable and its soft deadline comes
 forward, but its pressure stays under the smallest target, so an outage cannot
 create one agent turn per webhook (unless `BATCHING_BATCH_SIZE=1` asks for
@@ -173,7 +200,8 @@ than the window.
 
 Found in review, and not yet addressed:
 
-- **Setting `TYPESAFE_API_KEY` is a data decision.** It sends up to 48 KiB of
-  every app payload — mail bodies, direct messages — to TypeSafe, for every
+- **Setting `TYPESAFE_API_KEY` is a data decision.** It sends a projection of
+  every app payload — mail bodies, direct messages — within a 24 KiB total
+  request to TypeSafe, for every
   organization, with no per-organization opt-in. Leave it unset until that
   sharing is approved.
