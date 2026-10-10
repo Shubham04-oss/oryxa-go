@@ -83,7 +83,7 @@ The plan, the contracts and the per-toolkit template are in [design/integrations
 | I-GITHUB, I-SLACK, I-GMAIL, I-GDRIVE, I-GCAL, I-NOTION | One toolkit each, in the plan's order | `apps/internal/integrations/<toolkit>/**` and nothing else | I-2A merged | See below. |
 
 **I-2A** branches from `slack/base`, not main, and opens its draft PR against `slack/base`.
-- The Slack stack changes `apps/internal/{httpserver,serviceconfig,hooks,postgres}` and already took apps migration `008`, so I-2A's migration is `009_native_triggers.sql`.
+- The Slack stack changes `apps/internal/{httpserver,serviceconfig,hooks,postgres}` and already took apps migration `008`, so I-2A's migration is `010_native_triggers.sql` (009 went to Slack's reply).
 - Retarget the PR to main after the Slack stack merges.
 
 **The toolkit lanes** follow the plan's work-package template. Each passes four gates:
