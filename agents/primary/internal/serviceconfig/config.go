@@ -92,6 +92,12 @@ type Config struct {
 	// refuses to start on without the ticket key, agents' service key and
 	// apps' URL, rather than run half of a loop that decides nothing.
 	SlackConsent bool
+	// SlackLinkedOnly trusts nothing but a member's Slack account link to say
+	// who a Slack user is (AGENTS_PRIMARY_SLACK_LINKED_ONLY, false unless
+	// set): an account matched by email alone asks nothing, decides nothing
+	// and is sent nothing in Slack. Off, the email still decides, and the
+	// router logs who would not pass with links alone.
+	SlackLinkedOnly bool
 	// SlackTicketKey signs the buttons on an owner's Slack notice
 	// (AGENTS_PRIMARY_SLACK_TICKET_KEY, 64 hexadecimal characters): 32 bytes,
 	// decoded. It is read only when SlackConsent is on.
@@ -275,6 +281,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	slackLinkedOnly, err := boolValue(getenv, "AGENTS_PRIMARY_SLACK_LINKED_ONLY", false)
+	if err != nil {
+		return Config{}, err
+	}
 	guardRelevanceCap, err := relevanceCap(getenv, "AGENTS_PRIMARY_GUARD_RELEVANCE_CAP")
 	if err != nil {
 		return Config{}, err
@@ -364,6 +374,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		GuardHoldOrgs:              guardHoldOrgs,
 		SlackConsent:               slackConsent,
 		SlackTicketKey:             slackTicketKey,
+		SlackLinkedOnly:            slackLinkedOnly,
 		SecretsKMSKeyID:            strings.TrimSpace(getenv("AGENTS_PRIMARY_SECRETS_KMS_KEY_ID")),
 		ConsentGuardrailIdentifier: consentGuardrailIdentifier,
 		ConsentGuardrailVersion:    consentGuardrailVersion,

@@ -1,0 +1,12 @@
+{
+  "text": "I asked <@U0MAYA> in Oryxa: their Slack account isn't linked to Oryxa, so I can't ask them here.",
+  "blocks": [
+    {
+      "text": {
+        "text": "I asked <@U0MAYA> in Oryxa: their Slack account isn't linked to Oryxa, so I can't ask them here.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}

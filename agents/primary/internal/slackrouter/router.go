@@ -79,6 +79,12 @@ type Deps struct {
 	// whose ask was made but whose job did not finish is routed again from the
 	// start, and the ask it made counts against its asker.
 	Asked Asked
+	// LinkedOnly trusts nothing but a member's Slack account link (Sign in
+	// with Slack, apps) to say who a Slack user is: an account whose email is
+	// a member's but who never linked it asks nothing, decides nothing and is
+	// sent nothing in Slack. Off, the email decides, and whether the link
+	// would have agreed is logged. AGENTS_PRIMARY_SLACK_LINKED_ONLY.
+	LinkedOnly bool
 	// Refused keeps the members' mentions that were refused, which count toward
 	// their limit of open asks for RefusedAskWindow. Without it a refusal costs
 	// its asker nothing, and they may ask again, and be screened again, at once.
@@ -123,7 +129,7 @@ func NewRouter(deps Deps) (*Router, error) {
 	return &Router{
 		deps:     deps,
 		logger:   logger,
-		resolver: &resolver{members: deps.Members, identities: deps.Identities, logger: logger},
+		resolver: &resolver{members: deps.Members, identities: deps.Identities, logger: logger, linkedOnly: deps.LinkedOnly},
 	}, nil
 }
 
@@ -189,9 +195,10 @@ func (router *Router) click(ctx context.Context, job Job, inbound Inbound) error
 	if err != nil {
 		return err
 	}
-	if !clicker.Member {
+	if !clicker.Member || clicker.NotLinked {
 		// Nobody who is not a member of the organization can be the owner a
-		// ticket names. The click is dropped without a word: the message the
+		// ticket names, nor, with only links trusted, an account its member
+		// never linked. The click is dropped without a word: the message the
 		// button is on is the owner's own.
 		return Permanent(fmt.Errorf("the click was not made by a member: %s", clicker.Why))
 	}
@@ -242,9 +249,10 @@ func (router *Router) reply(ctx context.Context, job Job, inbound Inbound) error
 	if err != nil {
 		return err
 	}
-	if !sender.Member {
+	if !sender.Member || sender.NotLinked {
 		// Nobody who is not a member of the organization can be the owner a
-		// ticket names; the modal was their own, and nothing is said to them.
+		// ticket names, nor an account its member never linked; the modal was
+		// their own, and nothing is said to them.
 		return Permanent(fmt.Errorf("the reply was not sent by a member: %s", sender.Why))
 	}
 	if err := router.deps.Asks.Reply(ctx, reply.Value, sender.Person.UserID, reply.Text); err != nil {

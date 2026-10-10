@@ -44,6 +44,27 @@ func (members *AuthMembers) ByEmail(ctx context.Context, organizationID, email s
 	return member, nil
 }
 
+// ByID implements Members.
+func (members *AuthMembers) ByID(ctx context.Context, organizationID, userID string) (Member, error) {
+	if strings.TrimSpace(organizationID) == "" || strings.TrimSpace(userID) == "" {
+		return Member{}, ErrNotMember
+	}
+	var member Member
+	err := members.database.Pool.QueryRow(ctx, `
+		SELECT u.id, u.email, u.display_name, m.role
+		FROM auth_users u
+		JOIN auth_memberships m ON m.user_id = u.id
+		WHERE m.organization_id = $1 AND u.id = $2`, organizationID, userID).
+		Scan(&member.UserID, &member.Email, &member.DisplayName, &member.Role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Member{}, ErrNotMember
+	}
+	if err != nil {
+		return Member{}, fmt.Errorf("read a member by id: %w", err)
+	}
+	return member, nil
+}
+
 // OrganizationName implements Members.
 func (members *AuthMembers) OrganizationName(ctx context.Context, organizationID string) (string, error) {
 	var name string

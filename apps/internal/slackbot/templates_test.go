@@ -79,6 +79,8 @@ var templateGoldens = []struct{ name, template, params string }{
 	{"status_failed", TemplateStatus, `{"state":"failed"}`},
 	{"refusal_not_member", TemplateRefusal, `{"reason":"not_member","organization_name":"Acme"}`},
 	{"refusal_owner_not_member", TemplateRefusal, `{"reason":"owner_not_member","user_id":"U0MAYA"}`},
+	{"refusal_not_linked", TemplateRefusal, `{"reason":"not_linked"}`},
+	{"refusal_owner_not_linked", TemplateRefusal, `{"reason":"owner_not_linked","user_id":"U0MAYA"}`},
 	{"refusal_group_dm", TemplateRefusal, `{"reason":"group_dm"}`},
 	{"refusal_external_channel", TemplateRefusal, `{"reason":"external_channel"}`},
 	{"refusal_no_owner", TemplateRefusal, `{"reason":"no_owner"}`},

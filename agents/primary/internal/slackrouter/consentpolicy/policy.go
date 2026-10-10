@@ -83,6 +83,18 @@ const (
 	// not refuse the rest; the asker is told who was not asked, and that the
 	// question looks like one for another team.
 	OwnerDepartment Reason = "owner_department"
+
+	// The two below come from Slack account links, and only when nothing but a
+	// link is trusted (AGENTS_PRIMARY_SLACK_LINKED_ONLY).
+
+	// NotLinked is an asker whose Slack account matches a member's email but
+	// was never linked to Oryxa by that member signing in to Slack as
+	// themself. Nobody is asked; the asker is told to link their account.
+	NotLinked Reason = "not_linked"
+	// OwnerNotLinked is a named member whose Slack account is not linked. They
+	// are still asked, in Oryxa alone, and nothing goes to them in Slack; the
+	// asker is told so. It refuses nothing.
+	OwnerNotLinked Reason = "owner_not_linked"
 )
 
 // AboutOneOwner reports whether the refusal is about one named person: it

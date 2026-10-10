@@ -132,6 +132,7 @@ func newSlackLoop(config slackLoopConfig) (*slackLoop, error) {
 		Authority:  slackrouter.NewChartAuthority(config.Context, config.Tokens),
 		Asked:      routerStore,
 		Refused:    routerStore,
+		LinkedOnly: config.Settings.SlackLinkedOnly,
 		OpenURL:    askLink(firstOrigin(settings.AllowedOrigins), config.InteractionStore),
 		// The router tells the asker who was asked: the surfaces worker never does.
 		SkipAck: false,

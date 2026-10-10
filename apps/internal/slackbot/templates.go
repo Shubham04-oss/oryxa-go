@@ -730,6 +730,10 @@ const (
 	RefusalImplausible     = "implausible"
 	RefusalNoGrant         = "no_grant"
 	RefusalOwnerDepartment = "owner_department"
+	// The link reasons: only an account its member linked to Oryxa, by
+	// signing in to Slack as themself, is theirs (link.go).
+	RefusalNotLinked      = "not_linked"
+	RefusalOwnerNotLinked = "owner_not_linked"
 )
 
 type refusalParams struct {
@@ -792,6 +796,14 @@ func renderRefusal(r renderer, raw json.RawMessage) (Rendered, error) {
 			return Rendered{}, err
 		}
 		line = "I didn't ask " + who + ": this looks like a question for another team."
+	case RefusalNotLinked:
+		line = "Link your Slack account to Oryxa first: in Oryxa, Settings → Slack → Link your account. Then ask again."
+	case RefusalOwnerNotLinked:
+		who, err := r.mention(person{UserID: p.UserID, Name: p.Name}, "They")
+		if err != nil {
+			return Rendered{}, err
+		}
+		line = "I asked " + who + " in Oryxa: their Slack account isn't linked to Oryxa, so I can't ask them here."
 	case RefusalInjection:
 		line = "I couldn't pass that request on safely, so I didn't ask anyone."
 	case RefusalImplausible:

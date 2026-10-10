@@ -435,6 +435,9 @@ type profileView struct {
 	IsBot      bool   `json:"is_bot"`
 	IsDeleted  bool   `json:"is_deleted"`
 	IsStranger bool   `json:"is_stranger"`
+	// LinkedMemberID is the member who linked this Slack account by signing in
+	// to Slack as them; empty for an account nobody linked.
+	LinkedMemberID string `json:"linked_member_id,omitempty"`
 }
 
 // Profiles reads the profiles of some users of the organization's workspace,
@@ -463,6 +466,7 @@ func (c *Client) Profiles(ctx context.Context, organizationID, _ string, userIDs
 			profiles = append(profiles, slackrouter.Profile{
 				UserID: profile.UserID, TeamID: profile.TeamID, Email: profile.Email, EmailConfirmed: profile.EmailConfirmed,
 				Name: profile.Name, Title: profile.Title, Guest: profile.IsGuest, Bot: profile.IsBot, Deleted: profile.IsDeleted, Stranger: profile.IsStranger,
+				LinkedMemberID: profile.LinkedMemberID,
 			})
 		}
 	}
