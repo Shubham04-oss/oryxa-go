@@ -143,22 +143,21 @@ func TestAHeldRequestTheOwnerRejectsReachesOnlyTheRequester(t *testing.T) {
 	}
 }
 
-// TestADelegatedTeamspaceRequestWakesItsAgentAsBefore: a specialist its
-// owner contributed with automatic delegation is woken to decide it, reading
-// the request alone, exactly as a request outside a teamspace is.
-func TestADelegatedTeamspaceRequestWakesItsAgentAsBefore(t *testing.T) {
+// TestADelegatedTeamspaceRequestNoLongerWakesItsAgent: a request to a
+// specialist its owner contributed with automatic delegation is still the
+// specialist's to decide, but only in a conversation its member started: its
+// delivery wakes nobody, as a request held for its owner's does, and the
+// request waits.
+func TestADelegatedTeamspaceRequestNoLongerWakesItsAgent(t *testing.T) {
 	store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_requested", KindTargetRequested, 1)}}
 	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent)}}
-	runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusRejected) }}
+	runs := &fakeAgentRuns{}
 	waker := NewWaker(store, runs, requests, standsStill(), nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(runs.calls) != 1 || runs.calls[0].reach != managedagents.DeliveryReport || len(store.done) != 1 {
-		t.Fatalf("calls=%+v done=%v, want one run reading the request alone that decided", runs.calls, store.done)
-	}
-	if message := runs.calls[0].input.Message; !strings.Contains(message, "interactions_decide") || strings.Contains(message, "themself") {
-		t.Fatalf("a delegated request was not asked to decide: %s", message)
+	if len(runs.calls) != 0 || len(store.done) != 1 || requests.get("irq_1").Status != interactions.StatusPending {
+		t.Fatalf("calls=%+v done=%v, want no run, the delivery done, the request pending", runs.calls, store.done)
 	}
 }
 
@@ -237,9 +236,10 @@ func TestTheOwnerApprovedWordingFollowsWhoDecided(t *testing.T) {
 
 // TestTheWakerReadsATeamspaceRequestAgainBeforeWakingItsAgent: a request
 // made in a teamspace is read again before its own delivery or its
-// approval's wakes the agent. One held for its owner, or closed, wakes
-// nobody and its delivery is done; one that could not be read is retried;
-// and without a way to read it at all, it wakes nobody.
+// approval's is finished, and an approval's wakes the agent only if it still
+// stands. Its own delivery wakes nobody either way; one held for its owner, or
+// closed, wakes nobody and its delivery is done; one that could not be read is
+// retried; and without a way to read it at all, it wakes nobody.
 func TestTheWakerReadsATeamspaceRequestAgainBeforeWakingItsAgent(t *testing.T) {
 	approvedDelivery := testDelivery("evt_approved", KindTargetApproved, 2)
 	approvedDelivery.Status = interactions.StatusApproved
@@ -252,7 +252,7 @@ func TestTheWakerReadsATeamspaceRequestAgainBeforeWakingItsAgent(t *testing.T) {
 		woken    bool
 		done     bool
 	}{
-		{"its own delivery, still standing", testDelivery("evt_requested", KindTargetRequested, 1), delegated, &fakeStanding{}, true, true},
+		{"its own delivery, still standing", testDelivery("evt_requested", KindTargetRequested, 1), delegated, &fakeStanding{}, false, true},
 		{"its own delivery, now held", testDelivery("evt_requested", KindTargetRequested, 1), delegated, &fakeStanding{verdict: interactions.VerdictHeld}, false, true},
 		{"its own delivery, closed", testDelivery("evt_requested", KindTargetRequested, 1), delegated, &fakeStanding{verdict: interactions.VerdictClosed}, false, true},
 		{"its approval, closed", approvedDelivery, decidedBy(delegated, byTheMember), &fakeStanding{verdict: interactions.VerdictClosed}, false, true},
@@ -281,13 +281,12 @@ func TestTheWakerReadsATeamspaceRequestAgainBeforeWakingItsAgent(t *testing.T) {
 	}
 }
 
-// TestOnlyARequestItsAgentMayDecideWakesItToDecide: an agent is woken to
-// decide a new request only where its member's standing rules let it — a
-// specialist they contributed to a teamspace with automatic delegation, still
-// seated so — and that run reads and decides the one request alone. A request
-// made outside any teamspace, whatever approval an older build stored for it,
-// and one held for its owner, wake nobody: their member decides them.
-func TestOnlyARequestItsAgentMayDecideWakesItToDecide(t *testing.T) {
+// TestNoNewRequestWakesItsAgentWhoeverMayDecideIt: a new request's delivery
+// wakes nobody, whether its agent may decide it (a specialist with automatic
+// delegation, decided in a conversation its member started), it is held for
+// its owner, or it was made outside any teamspace, whatever approval an older
+// build stored for it.
+func TestNoNewRequestWakesItsAgentWhoeverMayDecideIt(t *testing.T) {
 	outside := requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent)
 	outside.TeamspaceID = ""
 	outsideHeld := requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner)
@@ -296,7 +295,7 @@ func TestOnlyARequestItsAgentMayDecideWakesItToDecide(t *testing.T) {
 		request agents.Interaction
 		woken   bool
 	}{
-		"a specialist its member let decide":                   {requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), true},
+		"a specialist its member let decide":                   {requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent), false},
 		"a request held for its owner":                         {requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner), false},
 		"a request made outside any teamspace":                 {outsideHeld, false},
 		"one an older build stored outside any as its agent's": {outside, false},
@@ -309,13 +308,6 @@ func TestOnlyARequestItsAgentMayDecideWakesItToDecide(t *testing.T) {
 		}
 		if woken := len(runs.calls) == 1; woken != testCase.woken || len(store.done) != 1 {
 			t.Fatalf("%s: runs %+v, done %v; want woken %t, its delivery done", name, runs.calls, store.done, testCase.woken)
-		}
-		if !testCase.woken {
-			continue
-		}
-		deciding := runs.calls[0]
-		if deciding.reach != managedagents.DeliveryReport || deciding.input.Delivery.Purpose != agents.DeliveryDecides {
-			t.Fatalf("%s: the deciding run was %+v, want it reading and deciding its request alone", name, deciding)
 		}
 	}
 }

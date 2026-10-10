@@ -17,6 +17,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
+	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
@@ -541,7 +542,9 @@ func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, 
 }
 
 // Decide records a decision an agent makes, through its interactions tool:
-// the addressed agent's own, or its member's primary agent mediating. A
+// the addressed agent's own, or its member's primary agent mediating, and
+// only in a run its member started (memberauth.RunOrigin): no agent decides
+// anything in a run nobody is watching. A
 // request held for its owner (HeldForOwner), every one made outside a
 // teamspace among them, is never an agent's to decide, whichever agent asks,
 // and one made in a teamspace is read again first (agentMayDecide): held for
@@ -573,6 +576,14 @@ func (service *Service) decide(ctx context.Context, actor agents.InteractionActo
 	}
 	if !asOwner && actor.Session == agents.SessionMember {
 		return agents.Interaction{}, fmt.Errorf("%w: a member decides in their own session as the owner, not as an agent", ErrForbidden)
+	}
+	if !asOwner && memberauth.RunOrigin(ctx) != agentsv1.StartedByMember {
+		// Nobody is watching a run its member did not start: an app trigger, a
+		// schedule, a team, or a delivery of another member's request. What
+		// steers it is text somebody else wrote, which must never decide what
+		// another member may have. Such a request waits for its member, or for
+		// their agent in a conversation they started.
+		return agents.Interaction{}, fmt.Errorf("%w: an agent decides a request only in a conversation its member started; tell your member it is waiting for them", ErrForbidden)
 	}
 	request, err := service.Get(ctx, actor, id)
 	if err != nil {

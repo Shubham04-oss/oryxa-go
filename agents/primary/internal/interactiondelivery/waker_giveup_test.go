@@ -87,7 +87,6 @@ func TestADeliveryWaitsForItsDisabledAgent(t *testing.T) {
 		waits    bool
 	}{
 		"approved work":       {approvedDelivery(maxAttempts - 1), interactions.StatusApproved, true},
-		"a new request":       {testDelivery("evt_requested", KindTargetRequested, 1), interactions.StatusPending, true},
 		"an outcome's report": {report, interactions.StatusCompleted, false},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -121,15 +120,12 @@ func TestADeliveryWaitsForItsDisabledAgent(t *testing.T) {
 	}
 }
 
-// TestOnlyApprovedWorkIsClosedWhenDropped: a new request whose deciding run
-// kept failing stays pending, for its member to decide or to expire, and
-// one that run approved before failing is left for the approval's own
-// delivery to work; a report whose run kept failing changes nothing about
-// its request; and a request answered meanwhile is left answered.
+// TestOnlyApprovedWorkIsClosedWhenDropped: a report whose run kept failing
+// changes nothing about its request, and a request answered meanwhile is left
+// answered. (A new request starts no run to fail.)
 func TestOnlyApprovedWorkIsClosedWhenDropped(t *testing.T) {
 	report := testDelivery("evt_completed", KindRequesterCompleted, 3)
 	report.RecipientUserID, report.RecipientAgentID, report.Status = "user_a", "agt_a", interactions.StatusCompleted
-	requested := testDelivery("evt_requested", KindTargetRequested, 1)
 	for name, testCase := range map[string]struct {
 		delivery Delivery
 		status   string
@@ -137,10 +133,8 @@ func TestOnlyApprovedWorkIsClosedWhenDropped(t *testing.T) {
 		answered string
 		want     string
 	}{
-		"a new request":                  {requested, interactions.StatusPending, "", interactions.StatusPending},
-		"a new request approved at last": {requested, interactions.StatusPending, interactions.StatusApproved, interactions.StatusApproved},
-		"an outcome's report":            {report, interactions.StatusCompleted, "", interactions.StatusCompleted},
-		"approved work answered too":     {approvedDelivery(0), interactions.StatusApproved, interactions.StatusCompleted, interactions.StatusCompleted},
+		"an outcome's report":        {report, interactions.StatusCompleted, "", interactions.StatusCompleted},
+		"approved work answered too": {approvedDelivery(0), interactions.StatusApproved, interactions.StatusCompleted, interactions.StatusCompleted},
 	} {
 		t.Run(name, func(t *testing.T) {
 			requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable(testCase.status)}}

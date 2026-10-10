@@ -510,11 +510,6 @@ func (waker *Waker) recheck(ctx context.Context, delivery Delivery, request agen
 	return request, false
 }
 
-// heldForOwner is a new request only the addressed agent's member may
-// decide. Nothing in it is the agent's to act on yet, so its delivery is
-// completed without a run: the member decides in their own session, and an
-// approval arrives as a delivery of its own, which wakes the agent to do the
-// work.
 // forTheTarget is whether a delivery asks the addressed agent to decide or
 // to work, rather than tell the member who asked how it went. Its request's
 // expiry settles it, one way or the other.
@@ -522,8 +517,17 @@ func forTheTarget(kind string) bool {
 	return kind == KindTargetRequested || kind == KindTargetApproved
 }
 
-func heldForOwner(delivery Delivery, request agents.Interaction) bool {
-	return delivery.Kind == KindTargetRequested && interactions.HeldForOwner(request)
+// heldForOwner is a new request, which no run the waker starts decides.
+// Nothing in it is the agent's to act on yet, so its delivery is completed
+// without a run: the member decides in their own session, or their agent does
+// in a conversation they started, and an approval arrives as a delivery of its
+// own, which wakes the agent to do the work. That holds for a request its
+// agent may decide (one made in a teamspace to a specialist with automatic
+// delegation) as much as for one held for its owner: a delivery is a run
+// nobody is watching, steered by another member's words, and the ledger
+// refuses a decision from one (interactions.Service.Decide).
+func heldForOwner(delivery Delivery, _ agents.Interaction) bool {
+	return delivery.Kind == KindTargetRequested
 }
 
 // deliverySatisfied is whether what a delivery asks of its agent is done, or no

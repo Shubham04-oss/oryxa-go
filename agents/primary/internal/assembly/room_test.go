@@ -146,6 +146,54 @@ func TestNoUnwatchedRunHoldsTheMembersRequests(t *testing.T) {
 	}
 }
 
+// TestOnlyAMembersOwnConversationCanDecideARequest: no toolset a run nobody
+// is watching starts from offers interactions_decide, whatever it delivers
+// and for whatever purpose; the toolboxes of a conversation the member
+// started still do, and the ledger accepts a decision from that run alone.
+func TestOnlyAMembersOwnConversationCanDecideARequest(t *testing.T) {
+	krude := builtKrude(t)
+	offersDecide := func(toolboxes []agents.Toolbox, state agent.ReadonlyContext) bool {
+		for _, toolbox := range toolboxes {
+			// Only the interactions toolbox holds the member's requests; the
+			// others are the member's apps and knowledge, whose tools are
+			// listed from their servers.
+			if toolbox.Name != agents.InteractionsToolboxName && toolbox.Name != agents.RoomToolboxName {
+				continue
+			}
+			offered, err := toolbox.Toolset.Tools(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, one := range offered {
+				if one.Name() == "interactions_decide" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for name, toolboxes := range map[string][]agents.Toolbox{
+		"an app wake-up, a trigger or a workflow": krude.unattended,
+		"an unwatched run kept from the apps":     krude.unattendedQuiet,
+		"a turn in a room":                        krude.room,
+	} {
+		if offersDecide(toolboxes, withState(map[string]any{})) {
+			t.Errorf("%s is offered interactions_decide", name)
+		}
+	}
+	for _, reach := range []DeliveryReach{DeliveryReads, DeliveryApps, DeliveryQuiet, DeliveryReport} {
+		for _, purpose := range []string{agents.DeliveryDecides, agents.DeliveryWorks, agents.DeliveryReports, ""} {
+			state := withState(agents.DeliveryState(agents.Delivery{RequestID: "irq_1", Purpose: purpose}))
+			if offersDecide(krude.toolboxesFor(reach), state) {
+				t.Errorf("a delivery at reach %d for %q is offered interactions_decide", reach, purpose)
+			}
+		}
+	}
+	if !offersDecide(krude.toolboxes, withState(map[string]any{})) {
+		t.Fatal("a member's own conversation is not offered interactions_decide")
+	}
+}
+
 // TestATurnInARoomAnswersFromTheRoomAlone: Krude and a specialist taking a
 // turn in a room are offered, from their first model call, the one tool
 // that files what they cannot answer with their member, and nothing else:

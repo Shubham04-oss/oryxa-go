@@ -157,7 +157,7 @@ func TestNoAgentDecidesAnOwnerFirstRequest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, decideErr := service.Decide(context.Background(), autoSpecialist, created.ID, approve)
+		_, decideErr := service.Decide(inMemberChat(), autoSpecialist, created.ID, approve)
 		if !held {
 			if read.Approval != ApprovalAgent || decideErr != nil {
 				t.Fatalf("an agent's to answer: approval %q, the agent's decision %v", read.Approval, decideErr)
