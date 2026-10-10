@@ -172,6 +172,11 @@ type ProfileView struct {
 	IsDeleted  bool      `json:"is_deleted"`
 	IsStranger bool      `json:"is_stranger"`
 	FetchedAt  time.Time `json:"fetched_at"`
+	// LinkedMemberID is the member who linked this Slack account, by signing
+	// in to Slack as them while signed in to Oryxa (link.go): the one match
+	// an admin of the workspace cannot make by changing an email. Read fresh,
+	// never from the day's cache, and absent for a person nobody linked.
+	LinkedMemberID string `json:"linked_member_id,omitempty"`
 }
 
 // ProfilesView answers the people Slack knows, and the ids it does not.
@@ -208,6 +213,10 @@ func (s *Service) Profiles(ctx context.Context, organizationID string, userIDs [
 	for _, profile := range cached {
 		byID[profile.UserID] = profile
 	}
+	linked, err := s.linkedMembers(ctx, install, ids)
+	if err != nil {
+		return ProfilesView{}, err
+	}
 	view := ProfilesView{Profiles: make([]ProfileView, 0, len(ids)), Missing: []string{}}
 	for _, id := range ids {
 		profile, ok := byID[id]
@@ -224,7 +233,7 @@ func (s *Service) Profiles(ctx context.Context, organizationID string, userIDs [
 		view.Profiles = append(view.Profiles, ProfileView{
 			UserID: profile.UserID, TeamID: profile.TeamID, Email: profile.Email, EmailConfirmed: profile.EmailConfirmed,
 			Name: profile.Name, Title: profile.Title, IsGuest: profile.IsGuest, IsBot: profile.IsBot, IsDeleted: profile.IsDeleted, IsStranger: profile.IsStranger,
-			FetchedAt: profile.FetchedAt,
+			FetchedAt: profile.FetchedAt, LinkedMemberID: linked[profile.UserID],
 		})
 	}
 	return view, nil

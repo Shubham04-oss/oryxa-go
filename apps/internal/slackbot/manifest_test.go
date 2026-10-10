@@ -114,7 +114,7 @@ func TestTheManifestIsPinned(t *testing.T) {
 	if got, want := manifest.Settings.Interactivity.RequestURL, productionBase+"/v1/apps/slack/interactivity"; got != want || !manifest.Settings.Interactivity.IsEnabled {
 		t.Errorf("interactivity = %s (enabled %v), want %s", got, manifest.Settings.Interactivity.IsEnabled, want)
 	}
-	if want := []string{productionBase + "/v1/apps/slack/install/callback"}; !reflect.DeepEqual(manifest.OAuthConfig.RedirectURLs, want) {
+	if want := []string{productionBase + "/v1/apps/slack/install/callback", productionBase + "/v1/apps/slack/link/callback"}; !reflect.DeepEqual(manifest.OAuthConfig.RedirectURLs, want) {
 		t.Errorf("redirect URLs = %v, want %v", manifest.OAuthConfig.RedirectURLs, want)
 	}
 
@@ -171,6 +171,9 @@ func TestTheManifestAndTheCodeAgree(t *testing.T) {
 	}
 	if service.RedirectURI() != manifest.OAuthConfig.RedirectURLs[0] {
 		t.Errorf("an install redirects to %s, the manifest registers %s", service.RedirectURI(), manifest.OAuthConfig.RedirectURLs[0])
+	}
+	if service.LinkRedirectURI() != manifest.OAuthConfig.RedirectURLs[1] {
+		t.Errorf("a link redirects to %s, the manifest registers %s", service.LinkRedirectURI(), manifest.OAuthConfig.RedirectURLs[1])
 	}
 }
 

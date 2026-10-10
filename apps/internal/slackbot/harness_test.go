@@ -63,6 +63,9 @@ type memoryStore struct {
 	mu        sync.Mutex
 	installs  map[string]Install
 	flows     map[string]InstallFlow
+	linkFlows map[string]LinkFlow
+	// links are keyed by team and Slack user.
+	links     map[string]Link
 	inbound   map[string]Inbound
 	handled   map[string]bool
 	events    []domain.Event
@@ -88,7 +91,79 @@ func newMemoryStore() *memoryStore {
 		installs: map[string]Install{}, flows: map[string]InstallFlow{}, inbound: map[string]Inbound{},
 		handled: map[string]bool{}, posts: map[string]Post{}, profiles: map[string]Profile{},
 		marks: map[string]MarkedChannel{}, endpoints: map[string]hooks.Endpoint{},
+		linkFlows: map[string]LinkFlow{}, links: map[string]Link{},
 	}
+}
+
+func (m *memoryStore) InsertLinkFlow(_ context.Context, flow LinkFlow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.linkFlows[flow.StateHash] = flow
+	return nil
+}
+
+func (m *memoryStore) ConsumeLinkFlow(_ context.Context, stateHash string, now time.Time) (LinkFlow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	flow, ok := m.linkFlows[stateHash]
+	if !ok || flow.ConsumedAt != nil || !flow.ExpiresAt.After(now) {
+		return LinkFlow{}, domain.ErrNotFound
+	}
+	flow.ConsumedAt = &now
+	m.linkFlows[stateHash] = flow
+	return flow, nil
+}
+
+func (m *memoryStore) SaveLink(_ context.Context, link Link) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := link.TeamID + "/" + link.SlackUserID
+	if held, ok := m.links[key]; ok && held.MemberID != link.MemberID {
+		return ErrLinkTaken
+	}
+	for other, held := range m.links {
+		if held.TeamID == link.TeamID && held.MemberID == link.MemberID && held.SlackUserID != link.SlackUserID {
+			delete(m.links, other)
+		}
+	}
+	m.links[key] = link
+	return nil
+}
+
+func (m *memoryStore) LinkForMember(_ context.Context, organizationID, memberID string) (Link, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, link := range m.links {
+		if link.OrganizationID == organizationID && link.MemberID == memberID {
+			return link, nil
+		}
+	}
+	return Link{}, domain.ErrNotFound
+}
+
+func (m *memoryStore) LinksForSlackUsers(_ context.Context, teamID string, userIDs []string) ([]Link, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var found []Link
+	for _, id := range userIDs {
+		if link, ok := m.links[teamID+"/"+id]; ok {
+			found = append(found, link)
+		}
+	}
+	return found, nil
+}
+
+func (m *memoryStore) DeleteLink(_ context.Context, organizationID, memberID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	removed := false
+	for key, link := range m.links {
+		if link.OrganizationID == organizationID && link.MemberID == memberID {
+			delete(m.links, key)
+			removed = true
+		}
+	}
+	return removed, nil
 }
 
 func (m *memoryStore) failure() error {

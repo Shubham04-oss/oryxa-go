@@ -29,12 +29,14 @@ type fakeSlack struct {
 	channelIDs   []string
 	callback     slackbot.InstallCallback
 	completion   slackbot.InstallCompletion
-	inboundID    string
-	profileUsers []string
-	channelID    string
-	post         slackbot.PostRequest
-	update       slackbot.UpdateRequest
-	calls        []string
+	// linkCompletion is what CompleteLink answers.
+	linkCompletion slackbot.LinkCompletion
+	inboundID      string
+	profileUsers   []string
+	channelID      string
+	post           slackbot.PostRequest
+	update         slackbot.UpdateRequest
+	calls          []string
 }
 
 func (f *fakeSlack) record(name string) { f.calls = append(f.calls, name) }
@@ -61,6 +63,30 @@ func (f *fakeSlack) CompleteInstall(_ context.Context, callback slackbot.Install
 	f.record("complete")
 	f.callback = callback
 	return f.completion, f.err
+}
+
+func (f *fakeSlack) LinkStatus(_ context.Context, credentials authclient.Credentials, organizationID string) (slackbot.LinkView, error) {
+	f.record("link-status")
+	f.credentials, f.organization = credentials, organizationID
+	return slackbot.LinkView{Linked: true, TeamID: "T0ACME", SlackUserID: "U0ADA"}, f.err
+}
+
+func (f *fakeSlack) StartLink(_ context.Context, credentials authclient.Credentials, organizationID, returnTo string) (slackbot.LinkStart, error) {
+	f.record("link-start")
+	f.credentials, f.organization, f.returnTo = credentials, organizationID, returnTo
+	return slackbot.LinkStart{SignInURL: "https://slack.com/openid/connect/authorize?state=s"}, f.err
+}
+
+func (f *fakeSlack) CompleteLink(_ context.Context, callback slackbot.InstallCallback) (slackbot.LinkCompletion, error) {
+	f.record("link-complete")
+	f.callback = callback
+	return f.linkCompletion, f.err
+}
+
+func (f *fakeSlack) Unlink(_ context.Context, credentials authclient.Credentials, organizationID string) error {
+	f.record("unlink")
+	f.credentials, f.organization = credentials, organizationID
+	return f.err
 }
 
 func (f *fakeSlack) Channels(_ context.Context, credentials authclient.Credentials, organizationID string) (slackbot.ChannelsView, error) {

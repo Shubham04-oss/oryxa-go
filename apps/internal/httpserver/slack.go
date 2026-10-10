@@ -21,6 +21,11 @@ type SlackService interface {
 	Channels(ctx context.Context, credentials authclient.Credentials, organizationID string) (slackbot.ChannelsView, error)
 	SetHighPriority(ctx context.Context, credentials authclient.Credentials, organizationID string, channelIDs []string) (slackbot.ChannelsView, error)
 
+	LinkStatus(ctx context.Context, credentials authclient.Credentials, organizationID string) (slackbot.LinkView, error)
+	StartLink(ctx context.Context, credentials authclient.Credentials, organizationID, returnTo string) (slackbot.LinkStart, error)
+	CompleteLink(ctx context.Context, callback slackbot.InstallCallback) (slackbot.LinkCompletion, error)
+	Unlink(ctx context.Context, credentials authclient.Credentials, organizationID string) error
+
 	Inbound(ctx context.Context, id string) (slackbot.InboundView, error)
 	Profiles(ctx context.Context, organizationID string, userIDs []string) (slackbot.ProfilesView, error)
 	Channel(ctx context.Context, organizationID, channelID string) (slackbot.ChannelView, error)
@@ -75,6 +80,10 @@ func (server *Server) routeSlack(slack *Slack) {
 	server.handle("DELETE /v1/organizations/{organizationID}/apps/slack/install", server.slackUninstall)
 	server.handle("GET /v1/organizations/{organizationID}/apps/slack/channels", server.slackChannels)
 	server.handle("PUT /v1/organizations/{organizationID}/apps/slack/channels", server.slackSetChannels)
+	server.handle("GET "+slackbot.LinkCallbackPath, server.slackLinkCallback)
+	server.handle("GET /v1/organizations/{organizationID}/apps/slack/link", server.slackLinkStatus)
+	server.handle("POST /v1/organizations/{organizationID}/apps/slack/link", server.slackStartLink)
+	server.handle("DELETE /v1/organizations/{organizationID}/apps/slack/link", server.slackUnlink)
 	if server.services != nil {
 		server.handle("GET /v1/internal/apps/slack/inbound/{id}", server.slackInbound)
 		server.handle("POST /v1/internal/apps/slack/profiles", server.slackProfiles)
@@ -221,6 +230,84 @@ func (server *Server) slackInstallCallback(writer http.ResponseWriter, request *
 		"installed": true, "organization_id": completion.OrganizationID,
 		"team": map[string]string{"id": completion.TeamID, "name": completion.TeamName},
 	})
+}
+
+// ---- A member's own Slack link: any member, with a session ----
+
+// slackLinkStatus answers the caller's own Slack link.
+func (server *Server) slackLinkStatus(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	view, err := server.slack.LinkStatus(request.Context(), credentials, request.PathValue("organizationID"))
+	if err != nil {
+		server.slackFailed(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
+}
+
+// slackStartLink makes the caller's link to Sign in with Slack. With
+// return_to, the browser is sent there when the link ends.
+func (server *Server) slackStartLink(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	var body struct {
+		ReturnTo string `json:"return_to"`
+	}
+	if request.ContentLength != 0 && !server.decode(writer, request, &body) {
+		return
+	}
+	start, err := server.slack.StartLink(request.Context(), credentials, request.PathValue("organizationID"), body.ReturnTo)
+	if err != nil {
+		server.slackFailed(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, start)
+}
+
+func (server *Server) slackUnlink(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	if err := server.slack.Unlink(request.Context(), credentials, request.PathValue("organizationID")); err != nil {
+		server.slackFailed(writer, request, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+// slackLinkCallback is where Sign in with Slack sends a member's browser back.
+// As for an install, it answers the page the link named, saying how it went,
+// or JSON when it named none.
+func (server *Server) slackLinkCallback(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Referrer-Policy", "no-referrer")
+	if !server.callbacks.Allow(clientIP(request)) {
+		server.logger.WarnContext(request.Context(), "apps request rate limited", "path", request.URL.Path)
+		writeError(writer, http.StatusTooManyRequests, "rate_limited", "too many requests; retry")
+		return
+	}
+	query := request.URL.Query()
+	completion, err := server.slack.CompleteLink(request.Context(), slackbot.InstallCallback{
+		State: query.Get("state"), Code: query.Get("code"), Error: query.Get("error"),
+	})
+	var failed *slackbot.InstallFailure
+	switch {
+	case errors.As(err, &failed) && failed.ReturnTo != "":
+		sendBackFromSlack(writer, request, failed.ReturnTo, url.Values{"slack_link": {"error"}, "slack_link_error": {failed.Reason}})
+		return
+	case err != nil:
+		server.slackFailed(writer, request, err)
+		return
+	case completion.ReturnTo != "":
+		sendBackFromSlack(writer, request, completion.ReturnTo, url.Values{"slack_link": {"linked"}})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"linked": true, "organization_id": completion.OrganizationID, "team_id": completion.TeamID})
 }
 
 // sendBackFromSlack redirects the browser to a page the install allowed, with
