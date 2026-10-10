@@ -27,6 +27,16 @@ type fakeS3 struct {
 	// before behaving, standing in for another writer taking the version.
 	rejectPuts int
 	puts       int
+	// streamed are objects served from a generated body instead of objects,
+	// so a test can offer one larger than it wants to hold in memory.
+	streamed map[string]streamedObject
+}
+
+// streamedObject is size zero bytes, with ContentLength declared or not, as
+// S3 omits it on some responses.
+type streamedObject struct {
+	size     int64
+	declared bool
 }
 
 type fakeObject struct {
@@ -62,6 +72,16 @@ func (fake *fakeS3) PutObject(_ context.Context, input *s3.PutObjectInput, _ ...
 }
 
 func (fake *fakeS3) GetObject(_ context.Context, input *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	if stream, ok := fake.streamed[aws.ToString(input.Key)]; ok {
+		output := &s3.GetObjectOutput{
+			Body:        io.NopCloser(io.LimitReader(zeros{}, stream.size)),
+			ContentType: aws.String("application/octet-stream"),
+		}
+		if stream.declared {
+			output.ContentLength = aws.Int64(stream.size)
+		}
+		return output, nil
+	}
 	object, ok := fake.objects[aws.ToString(input.Key)]
 	if !ok {
 		return nil, &s3types.NoSuchKey{}
@@ -108,6 +128,14 @@ func (fake *fakeS3) HeadObject(_ context.Context, input *s3.HeadObjectInput, _ .
 		LastModified: aws.Time(object.modified),
 		Metadata:     map[string]string{"origin": "test"},
 	}, nil
+}
+
+// zeros reads as an endless run of zero bytes.
+type zeros struct{}
+
+func (zeros) Read(buffer []byte) (int, error) {
+	clear(buffer)
+	return len(buffer), nil
 }
 
 func newTestService(t *testing.T, fake *fakeS3) *Service {
@@ -188,6 +216,54 @@ func TestLoadReturnsLatestThenSpecificVersion(t *testing.T) {
 	if got := string(first.Part.InlineData.Data); got != "first" {
 		t.Fatalf("version 1 is %q, want %q", got, "first")
 	}
+}
+
+func TestSaveRefusesAnArtifactOverTheLimit(t *testing.T) {
+	fake := newFakeS3()
+	service := newTestService(t, fake)
+
+	_, err := service.Save(context.Background(), &artifact.SaveRequest{
+		AppName: "krude", UserID: "user-owner", SessionID: "session-1", FileName: "huge.bin",
+		Part: genai.NewPartFromBytes(make([]byte, MaxArtifactBytes+1), "application/octet-stream"),
+	})
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("error is %v, want ErrTooLarge", err)
+	}
+	if fake.puts != 0 || len(fake.objects) != 0 {
+		t.Fatalf("an oversized save wrote %d time(s): %v", fake.puts, objectKeys(fake.objects))
+	}
+}
+
+func TestLoadRefusesAnArtifactOverTheLimit(t *testing.T) {
+	load := func(service *Service) error {
+		_, err := service.Load(context.Background(), &artifact.LoadRequest{
+			AppName: "krude", UserID: "user-owner", SessionID: "session-1", FileName: "huge.bin", Version: 1,
+		})
+		return err
+	}
+	const key = "krude/user-owner/session-1/huge.bin/1"
+	for name, stream := range map[string]streamedObject{
+		// Refused from its declared length, before a byte is read.
+		"declared length": {size: MaxArtifactBytes + 1, declared: true},
+		// No length to go by: the bounded read stops one byte past the limit.
+		"undeclared length": {size: MaxArtifactBytes + 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeS3()
+			fake.streamed = map[string]streamedObject{key: stream}
+			if err := load(newTestService(t, fake)); !errors.Is(err, ErrTooLarge) {
+				t.Fatalf("error is %v, want ErrTooLarge", err)
+			}
+		})
+	}
+
+	t.Run("exactly at the limit", func(t *testing.T) {
+		fake := newFakeS3()
+		fake.streamed = map[string]streamedObject{key: {size: MaxArtifactBytes}}
+		if err := load(newTestService(t, fake)); err != nil {
+			t.Fatalf("an artifact of exactly MaxArtifactBytes failed to load: %v", err)
+		}
+	})
 }
 
 func TestLoadMissingArtifactIsNotExist(t *testing.T) {

@@ -49,12 +49,25 @@ const (
 	saveRetryMaxDelay  = time.Second
 
 	defaultMIMEType = "application/octet-stream"
+
+	// MaxArtifactBytes is the most one artifact version may hold, written or
+	// read. Load holds a whole artifact in memory, so without a bound one
+	// oversized object could take the process down. The largest artifact
+	// Oryxa writes is a document edited in Docs, which the documents route
+	// caps at 50 MiB; screenshots stop at 10 MiB and sandbox files at what one
+	// read moves. 64 MiB keeps every one of those with room to spare.
+	MaxArtifactBytes = 64 << 20
 )
 
 // ErrVersionConflict reports that Save could not claim a version within its
 // retry budget because concurrent writers kept taking the one it picked. It
 // is always wrapped, so test for it with errors.Is; the save can be retried.
 var ErrVersionConflict = errors.New("artifact version conflict")
+
+// ErrTooLarge reports an artifact over MaxArtifactBytes: a save is refused
+// before anything is written, and a load before the object is read into
+// memory. It is always wrapped, so test for it with errors.Is.
+var ErrTooLarge = errors.New("artifact too large")
 
 type s3API interface {
 	PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
@@ -112,6 +125,10 @@ func (service *Service) Save(ctx context.Context, request *artifact.SaveRequest)
 		return nil, fmt.Errorf("request validation failed: %w", err)
 	}
 	content, mimeType := partBytes(request.Part)
+	if len(content) > MaxArtifactBytes {
+		return nil, fmt.Errorf("save artifact %q: %d bytes is over the %d-byte limit: %w",
+			request.FileName, len(content), MaxArtifactBytes, ErrTooLarge)
+	}
 
 	var lastErr error
 	for attempt := range maxSaveAttempts {
@@ -181,9 +198,17 @@ func (service *Service) Load(ctx context.Context, request *artifact.LoadRequest)
 		return nil, fmt.Errorf("get artifact: %w", err)
 	}
 	defer output.Body.Close()
-	content, err := io.ReadAll(output.Body)
+	// The declared length refuses an oversized object without reading it; the
+	// limited read refuses one whose length was not declared, or was wrong.
+	if length := aws.ToInt64(output.ContentLength); length > MaxArtifactBytes {
+		return nil, fmt.Errorf("artifact %q: %d bytes is over the %d-byte limit: %w", key, length, MaxArtifactBytes, ErrTooLarge)
+	}
+	content, err := io.ReadAll(io.LimitReader(output.Body, MaxArtifactBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read artifact %q: %w", key, err)
+	}
+	if len(content) > MaxArtifactBytes {
+		return nil, fmt.Errorf("artifact %q is over the %d-byte limit: %w", key, MaxArtifactBytes, ErrTooLarge)
 	}
 	mimeType := defaultMIMEType
 	if output.ContentType != nil && *output.ContentType != "" {
