@@ -549,6 +549,18 @@ type Asked interface {
 	MarkAsked(ctx context.Context, inboundID, askID string) error
 }
 
+// Refused keeps the members' mentions that were refused as a whole, so that a
+// refusal counts toward its asker's limit of open asks for RefusedAskWindow.
+// Store implements it.
+type Refused interface {
+	// MarkRefused records that the member askerUserID's mention, the job
+	// inboundID, was refused.
+	MarkRefused(ctx context.Context, inboundID, askerUserID string) error
+	// CountRefused is how many of the member's mentions were refused within the
+	// last window, leaving out the job exceptInboundID.
+	CountRefused(ctx context.Context, organizationID, askerUserID, exceptInboundID string, window time.Duration) (int, error)
+}
+
 type permanentError struct{ err error }
 
 func (e *permanentError) Error() string { return e.err.Error() }

@@ -79,6 +79,10 @@ type Deps struct {
 	// whose ask was made but whose job did not finish is routed again from the
 	// start, and the ask it made counts against its asker.
 	Asked Asked
+	// Refused keeps the members' mentions that were refused, which count toward
+	// their limit of open asks for RefusedAskWindow. Without it a refusal costs
+	// its asker nothing, and they may ask again, and be screened again, at once.
+	Refused Refused
 	// OpenURL is the page of Oryxa's web app that shows an ask, for the link in
 	// the asker's acknowledgement. Without it the acknowledgement has no link.
 	// It must be a page on an origin apps has been told is the web app's.

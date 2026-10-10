@@ -614,3 +614,65 @@ func TestWorkerOverTheStore(t *testing.T) {
 		t.Fatalf("the handler saw %v, want %v", seen, want)
 	}
 }
+
+// TestTheStoreCountsAMembersRecentRefusals: a refused job counts for its asker,
+// in its organization, within the window, once however often it is marked, and
+// never for the job being routed; what is older than the window, another
+// member's or another organization's does not.
+func TestTheStoreCountsAMembersRecentRefusals(t *testing.T) {
+	store, database, organizationID := openTestStore(t)
+	ctx := context.Background()
+	otherOrganization := organizationID + "_other"
+	for _, job := range []Job{
+		testJob(organizationID, "in_refused_1"), testJob(organizationID, "in_refused_2"), testJob(organizationID, "in_refused_old"),
+		testJob(organizationID, "in_someone_else"), testJob(otherOrganization, "in_other_org"), testJob(organizationID, "in_asked"),
+	} {
+		job.InboundID = organizationID + "_" + job.InboundID
+		if _, err := store.Enqueue(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id := func(name string) string { return organizationID + "_" + name }
+	for inboundID, asker := range map[string]string{
+		"in_refused_1": "usr_ada", "in_refused_2": "usr_ada", "in_refused_old": "usr_ada",
+		"in_someone_else": "usr_raya", "in_other_org": "usr_ada",
+	} {
+		if err := store.MarkRefused(ctx, id(inboundID), asker); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A retry marks its job again, and is still one refusal, kept at its first time.
+	var first time.Time
+	if err := database.Pool.QueryRow(ctx, `SELECT refused_at FROM agents_primary.slack_jobs WHERE inbound_id=$1`, id("in_refused_1")).Scan(&first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkRefused(ctx, id("in_refused_1"), "usr_ada"); err != nil {
+		t.Fatal(err)
+	}
+	var again time.Time
+	if err := database.Pool.QueryRow(ctx, `SELECT refused_at FROM agents_primary.slack_jobs WHERE inbound_id=$1`, id("in_refused_1")).Scan(&again); err != nil || !again.Equal(first) {
+		t.Fatalf("a second mark moved the refusal from %s to %s (%v)", first, again, err)
+	}
+	if _, err := database.Pool.Exec(ctx, `UPDATE agents_primary.slack_jobs SET refused_at=now()-interval '2 hours' WHERE inbound_id=$1`, id("in_refused_old")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		organizationID, asker, except string
+		want                          int
+	}{
+		{organizationID, "usr_ada", id("in_asked"), 2},
+		{organizationID, "usr_ada", id("in_refused_2"), 1},
+		{organizationID, "usr_raya", id("in_asked"), 1},
+		{organizationID, "usr_sam", id("in_asked"), 0},
+		{otherOrganization, "usr_ada", id("in_asked"), 1},
+	} {
+		got, err := store.CountRefused(ctx, test.organizationID, test.asker, test.except, RefusedAskWindow)
+		if err != nil || got != test.want {
+			t.Errorf("CountRefused(%s, %s, except %s) = %d, %v; want %d", test.organizationID, test.asker, test.except, got, err, test.want)
+		}
+	}
+	if got, err := store.CountRefused(ctx, organizationID, "usr_ada", id("in_asked"), 3*time.Hour); err != nil || got != 3 {
+		t.Fatalf("over three hours: %d, %v; want the old refusal too", got, err)
+	}
+}

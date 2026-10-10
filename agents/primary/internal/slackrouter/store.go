@@ -166,6 +166,34 @@ func (store *Store) MarkAsked(ctx context.Context, inboundID, askID string) erro
 	return nil
 }
 
+// MarkRefused records that the member askerUserID's mention was refused as a
+// whole. A job refused again, on a retry, keeps the time of its first refusal.
+func (store *Store) MarkRefused(ctx context.Context, inboundID, askerUserID string) error {
+	_, err := store.database.Pool.Exec(ctx, `
+		UPDATE agents_primary.slack_jobs SET refused_user_id=$2, refused_at=COALESCE(refused_at, now())
+		WHERE inbound_id=$1`, inboundID, askerUserID)
+	if err != nil {
+		return fmt.Errorf("record the refusal of a Slack job: %w", err)
+	}
+	return nil
+}
+
+// CountRefused is how many of the member's mentions in the organization were
+// refused within the last window, leaving out the job exceptInboundID, which is
+// the one being routed: a retry of a mention does not count against itself.
+func (store *Store) CountRefused(ctx context.Context, organizationID, askerUserID, exceptInboundID string, window time.Duration) (int, error) {
+	var refused int
+	err := store.database.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM agents_primary.slack_jobs
+		WHERE organization_id=$1 AND refused_user_id=$2 AND refused_at IS NOT NULL
+		  AND refused_at > now()-make_interval(secs => $3) AND inbound_id<>$4`,
+		organizationID, askerUserID, window.Seconds(), exceptInboundID).Scan(&refused)
+	if err != nil {
+		return 0, fmt.Errorf("count the asker's refused Slack asks: %w", err)
+	}
+	return refused, nil
+}
+
 // Purge removes jobs handled longer ago than age. apps purges an inbound row
 // after seven days, so a job kept that long is past the point where the same
 // one could be recorded again.
