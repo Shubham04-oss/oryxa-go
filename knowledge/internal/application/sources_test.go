@@ -68,7 +68,13 @@ func registration() RegisterInput {
 // can shape, for the provider-source registration path files never takes.
 func githubRegistrar(t *testing.T, store *fakeStore, caller domain.OrgMembership, apps *fakeApps) *Service {
 	t.Helper()
-	extractor := &fakeExtractor{provider: "github"}
+	return registrarWith(t, store, caller, apps, &fakeExtractor{provider: "github"})
+}
+
+// registrarWith builds the same service around an extractor the test names,
+// so one that reads through apps can stand in for a mounted reader.
+func registrarWith(t *testing.T, store *fakeStore, caller domain.OrgMembership, apps *fakeApps, extractor sources.Extractor) *Service {
+	t.Helper()
 	return New(Dependencies{
 		Store:      store,
 		Directory:  &fakeDirectory{membership: caller},
@@ -78,12 +84,42 @@ func githubRegistrar(t *testing.T, store *fakeStore, caller domain.OrgMembership
 	}, Config{})
 }
 
+// appsReader is the extractor a toolkit has once an apps reader is mounted
+// for it: whatever a Composio-backed source is read by, a reader for an
+// Oryxa one, and a check that asks apps for a single item of the target
+// before anything is registered on it.
+type appsReader struct {
+	*fakeExtractor
+	checked []sources.Request
+	// checkErr is what the check answers instead, and checkCalls how many
+	// times it was asked.
+	checkErr   error
+	checkCalls int
+}
+
+func (reader *appsReader) ReadsThroughApps() bool { return true }
+
+func (reader *appsReader) Check(_ context.Context, request sources.Request) error {
+	reader.checkCalls++
+	reader.checked = append(reader.checked, request)
+	return reader.checkErr
+}
+
 // usableConnection is a connection registration accepts: active, for
 // github, and the caller's own.
 func usableConnection() domain.AppConnection {
 	return domain.AppConnection{
 		ID: "apc_1", Toolkit: "github", Status: "active", MemberID: "user-1", ComposioAccountID: "ca_1",
 	}
+}
+
+// oryxaConnection is the same connection signed in for through Oryxa rather
+// than Composio, which is what apps answers for one of a member's own: the
+// broker says who holds the credential, and no Composio account does.
+func oryxaConnection() domain.AppConnection {
+	connection := usableConnection()
+	connection.Broker, connection.ComposioAccountID = appsv1.BrokerOryxa, ""
+	return connection
 }
 
 func githubRegistration() RegisterInput {
@@ -252,20 +288,59 @@ func TestRegisterSourceOnAnOryxaConnectionNeedsAReaderThatUsesApps(t *testing.T)
 }
 
 // TestRegisterSourceAcceptsAnOryxaConnectionOnceItsExtractorReadsThroughApps
-// proves appsReaders is what 2B flips per toolkit: nothing else about
-// registration needs to change for a toolkit whose reader moves off
-// Composio.
+// proves what 2B mounts per toolkit: nothing else about registration needs to
+// change for a toolkit whose reader moves off Composio.
 func TestRegisterSourceAcceptsAnOryxaConnectionOnceItsExtractorReadsThroughApps(t *testing.T) {
-	appsReaders["github"] = true
-	defer delete(appsReaders, "github")
-
 	store := newFakeStore()
-	connection := usableConnection()
-	connection.Broker = "oryxa"
-	service := githubRegistrar(t, store, member(), &fakeApps{connection: connection})
+	reader := &appsReader{fakeExtractor: &fakeExtractor{provider: "github"}}
+	service := registrarWith(t, store, member(), &fakeApps{connection: oryxaConnection()}, reader)
+
+	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration())
+	if err != nil {
+		t.Fatalf("RegisterSource() error = %v, want nil once github reads through apps", err)
+	}
+	if source.ConnectionID != "apc_1" || source.ComposioAccountID != "" {
+		t.Fatalf("source = %+v, want it registered on the member's own connection", source)
+	}
+}
+
+// TestRegisterSourceAsksAppsWhetherTheMemberCanReadTheTarget is the plan's
+// Checker at the one moment it is worth anything: before the source exists, so
+// a target the member cannot read is refused instead of standing there being
+// refused on every pass and holding the target against anyone who can.
+func TestRegisterSourceAsksAppsWhetherTheMemberCanReadTheTarget(t *testing.T) {
+	store := newFakeStore()
+	reader := &appsReader{fakeExtractor: &fakeExtractor{provider: "github"}}
+	service := registrarWith(t, store, member(), &fakeApps{connection: oryxaConnection()}, reader)
 
 	if _, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration()); err != nil {
-		t.Fatalf("RegisterSource() error = %v, want nil once github reads through apps", err)
+		t.Fatalf("RegisterSource() error = %v", err)
+	}
+	if reader.checkCalls != 1 {
+		t.Fatalf("asked %d times, want the check once", reader.checkCalls)
+	}
+	checked := reader.checked[0]
+	if checked.Source.Target["repository"] != "acme/api" || checked.Source.ConnectionID != "apc_1" {
+		t.Fatalf("checked %+v, want the target and connection the source was registered on", checked.Source)
+	}
+	// Read as the member registering it, on the caller's own credentials, as
+	// every pass of it will be.
+	if checked.Credential.AccessToken != "t" || checked.Credential.Name != "Authorization" {
+		t.Fatalf("checked with %+v, want the caller's own bearer token", checked.Credential)
+	}
+}
+
+func TestRegisterSourceStoresNothingWhenAppsRefusesTheTarget(t *testing.T) {
+	store := newFakeStore()
+	reader := &appsReader{fakeExtractor: &fakeExtractor{provider: "github"}, checkErr: domain.ErrNotFound}
+	service := registrarWith(t, store, member(), &fakeApps{connection: oryxaConnection()}, reader)
+
+	_, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("RegisterSource() error = %v, want ErrNotFound", err)
+	}
+	if len(store.sources) != 0 {
+		t.Fatalf("store holds %d sources, want none", len(store.sources))
 	}
 }
 
@@ -538,5 +613,22 @@ func TestAlreadyHandledIsTrueOnlyAfterMarkHandled(t *testing.T) {
 	already, err = service.AlreadyHandled(context.Background(), "evt_1")
 	if err != nil || !already {
 		t.Fatalf("AlreadyHandled(after) = %v, %v, want true", already, err)
+	}
+}
+
+// A Composio source on a toolkit with an apps reader mounted beside it is
+// registered as it was before: no member-token check, so a caller whose
+// credentials carry no bearer token still registers it.
+func TestRegisterSourceOnAComposioConnectionSkipsTheAppsCheck(t *testing.T) {
+	store := newFakeStore()
+	reader := &appsReader{fakeExtractor: &fakeExtractor{provider: "github"}}
+	service := registrarWith(t, store, member(), &fakeApps{connection: usableConnection()}, reader)
+
+	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Agent t"}, "org_1", githubRegistration())
+	if err != nil {
+		t.Fatalf("RegisterSource() error = %v", err)
+	}
+	if source.ComposioAccountID != "ca_1" || reader.checkCalls != 0 {
+		t.Fatalf("source = %+v after %d checks, want a Composio source and no check", source, reader.checkCalls)
 	}
 }
