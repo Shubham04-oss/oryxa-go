@@ -327,7 +327,13 @@ func renderOwnerNotice(r renderer, raw json.RawMessage) (Rendered, error) {
 	if err != nil {
 		return Rendered{}, err
 	}
-	for name, ticket := range map[string]string{"summary": p.Tickets.Summary, "access": p.Tickets.Access, "deny": p.Tickets.Deny} {
+	required := map[string]string{"summary": p.Tickets.Summary, "deny": p.Tickets.Deny}
+	if p.AnswerBy != AnswerByOwner {
+		// An ask that needs the owner's own answer offers no access, and has no
+		// ticket for it.
+		required["access"] = p.Tickets.Access
+	}
+	for name, ticket := range required {
 		if err := checkTicket(name, ticket); err != nil {
 			return Rendered{}, err
 		}
@@ -343,6 +349,9 @@ func renderOwnerNotice(r renderer, raw json.RawMessage) (Rendered, error) {
 	case AnswerByOwner:
 		if p.Tickets.Reply == "" {
 			return Rendered{}, invalid("an ask that needs the owner's own answer has a reply ticket")
+		}
+		if p.Tickets.Access != "" {
+			return Rendered{}, invalid("an ask that needs the owner's own answer has no access ticket")
 		}
 		return Rendered{
 			Text: asker + " is asking you a question through Oryxa.",
