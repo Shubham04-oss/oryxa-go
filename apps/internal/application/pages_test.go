@@ -242,3 +242,16 @@ func TestConnectionTargetsOverAComposioConnectionAreUnchanged(t *testing.T) {
 		t.Fatalf("composio was proxied %d times", len(h.composio.proxied))
 	}
 }
+
+// A Composio connection is never read through the pages route, even for a
+// toolkit whose integration has a reader.
+func TestPagesRefuseAComposioConnection(t *testing.T) {
+	t.Parallel()
+	h, own := newToolHarness(t)
+	h.composioConnection("apc_composio", "user-1", "acme")
+	_, err := h.service.Pages(context.Background(), memberToken, "org_1", "apc_composio",
+		integration.PageRequest{Target: map[string]string{integration.TargetReader: "issues"}})
+	if !errors.Is(err, domain.ErrNotConnectable) || len(own.allCalls()) != 0 {
+		t.Fatalf("Pages = %v after %d calls, want not connectable and nothing read", err, len(own.allCalls()))
+	}
+}

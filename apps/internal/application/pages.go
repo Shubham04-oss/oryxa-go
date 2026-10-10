@@ -27,7 +27,8 @@ import (
 // readerSession is the connection's own reader, as its integration carries
 // it, or why there is none.
 func (s *Service) readerFor(toolkit string) (integration.Reader, bool) {
-	if s.oryxa == nil {
+	// A toolkit not switched on (APPS_ORYXA_TOOLKITS) has no reader served.
+	if s.oryxa == nil || !s.oryxa.enabled[toolkit] {
 		return nil, false
 	}
 	registered, ok := s.oryxa.Integrations.Lookup(toolkit)
@@ -106,7 +107,8 @@ func (s *Service) Pages(
 		return integration.Page{}, err
 	}
 	reader, ok := s.readerFor(connection.Toolkit)
-	if !ok {
+	if !ok || !connection.Oryxa() {
+		// A Composio connection is read through Composio's proxy, never here.
 		return integration.Page{}, noReader(connection.Toolkit)
 	}
 	name := strings.TrimSpace(request.Target[integration.TargetReader])
