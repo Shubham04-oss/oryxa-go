@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/kms"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/kmscall"
 )
 
 // clockSkewLeeway tolerates modest disagreement between the signer's and the
@@ -207,6 +209,10 @@ func (verifier *Verifier) publicKey(ctx context.Context, keyID string) (*ecdsa.P
 		return key, nil
 	}
 
+	// The lock is held across this call, so a stuck one would hold up every
+	// verification; it is bounded.
+	ctx, cancel := kmscall.Context(ctx)
+	defer cancel()
 	output, err := verifier.keys.GetPublicKey(ctx, &kms.GetPublicKeyInput{KeyId: &keyID})
 	if err != nil {
 		return nil, err

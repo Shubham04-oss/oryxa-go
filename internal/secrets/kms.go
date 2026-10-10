@@ -6,6 +6,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/kmscall"
 )
 
 type KMSAPI interface {
@@ -27,6 +29,8 @@ func (k KMSDataKeys) GenerateDataKey(ctx context.Context, keyID string, encrypti
 	if k.Client == nil || keyID == "" {
 		return nil, nil, fmt.Errorf("kms client and key ID are required")
 	}
+	ctx, cancel := kmscall.Context(ctx)
+	defer cancel()
 	output, err := k.Client.GenerateDataKey(ctx, &kms.GenerateDataKeyInput{
 		KeyId:             &keyID,
 		KeySpec:           types.DataKeySpecAes256,
@@ -42,6 +46,8 @@ func (k KMSDataKeys) DecryptDataKey(ctx context.Context, ciphertext []byte, encr
 	if k.Client == nil || k.KeyID == "" {
 		return nil, fmt.Errorf("kms client and key ID are required")
 	}
+	ctx, cancel := kmscall.Context(ctx)
+	defer cancel()
 	output, err := k.Client.Decrypt(ctx, &kms.DecryptInput{
 		CiphertextBlob:    ciphertext,
 		EncryptionContext: encryptionContext,

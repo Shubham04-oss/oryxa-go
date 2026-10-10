@@ -12,6 +12,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/kmscall"
 )
 
 // SignAPI is the KMS surface a Signer needs.
@@ -71,6 +73,8 @@ func (signer Signer) Token(ctx context.Context, audience, purpose string) (strin
 	}
 
 	signingInput := headerSegment + "." + base64.RawURLEncoding.EncodeToString(claims)
+	ctx, cancel := kmscall.Context(ctx)
+	defer cancel()
 	output, err := signer.Client.Sign(ctx, &kms.SignInput{
 		KeyId:            &signer.KeyID,
 		Message:          []byte(signingInput),
