@@ -3,9 +3,14 @@ import type { AgentRequest } from "@/lib/agents/agent-requests"
 import { clockTime } from "./time-format"
 import {
   DENY,
+  LET_MY_AGENT_ANSWER,
+  REPLY_COUNTER_FROM,
+  REPLY_YOURSELF,
+  SEND_REPLY,
   SHARE_ANSWER,
   consentChoicePending,
   consentChoices,
+  consentWords,
   decisionLine,
   denyName,
   expiresPhrase,
@@ -14,8 +19,12 @@ import {
   isExpired,
   isOpenToDecide,
   isSummaryRuleHold,
+  letMyAgentAnswerName,
   originLabel,
   readsLine,
+  replyLength,
+  replyProblem,
+  replyYourselfName,
   requestTitle,
   shareAnswerName,
   sideOf,
@@ -28,10 +37,12 @@ import {
   ASKER,
   NOW,
   OWNER,
+  REPLIED_AT,
   agentRequest,
   approvedRequest,
   answer,
   reader,
+  repliedRequest,
   slackRequest,
 } from "./request-card-fixtures"
 
@@ -44,7 +55,7 @@ function decidedBy(
   request: AgentRequest,
   by: NonNullable<AgentRequest["decision"]>["decided_by"],
   decision: "approved" | "rejected" = "approved",
-  consent?: "summary" | "access"
+  consent?: "summary" | "access" | "reply"
 ): AgentRequest {
   return {
     ...request,
@@ -280,6 +291,40 @@ describe("how a request was decided", () => {
         owner
       )
     ).toBe("This request was closed before it was decided.")
+  })
+
+  it("says a reply as a reply, where, by whom and when, and never as an approval", () => {
+    const replied = (surface: string, consent: "reply" = "reply") =>
+      decidedBy(
+        slackRequest(),
+        { kind: "member", user_id: OWNER, surface },
+        "approved",
+        consent
+      )
+
+    expect(decisionLine(replied("web"), owner)).toBe(
+      `Replied in Oryxa by you at ${at}.`
+    )
+    expect(decisionLine(replied("slack"), asker)).toBe(
+      `Replied in Slack by Ada at ${at}.`
+    )
+    expect(decisionLine(replied("slack"), owner)).not.toMatch(/Approved/)
+    expect(
+      winnerLine(
+        {
+          request_id: "irq_slack",
+          status: "completed",
+          revision: 3,
+          decision: "approved",
+          consent: "reply",
+          decided_by: { kind: "member", user_id: OWNER, surface: "slack" },
+          decided_at: decidedAt,
+        },
+        slackRequest(),
+        owner
+      )
+    ).toBe(`Replied in Slack by you at ${at}.`)
+    expect(consentWords("reply")).toBe("Replied in their own words.")
   })
 })
 
@@ -586,6 +631,127 @@ describe("where a request stands", () => {
       readsLine(slackRequest({ requested_tools: [] }), owner)
     ).toBeUndefined()
   })
+
+  it("waits for a reply, not a choice, when the ask needs the owner's own judgment", () => {
+    const first = (request: AgentRequest) => ({
+      ...request,
+      answer_by: "owner" as const,
+    })
+
+    expect(statusOf(first(slackRequest()), owner)).toEqual({
+      tone: "waiting",
+      text: "Waiting for your reply.",
+    })
+    expect(statusOf(first(agentRequest()), owner).text).toBe(
+      "Waiting for your reply."
+    )
+    expect(statusOf(first(slackRequest()), asker)).toEqual({
+      tone: "waiting",
+      text: "Waiting for Ada to reply.",
+    })
+    expect(statusOf(first(agentRequest()), asker).text).toBe(
+      "Waiting for Ada to reply."
+    )
+    // The agent is to answer, said or not, and nothing changes.
+    for (const answer_by of ["agent", undefined] as const) {
+      const request = slackRequest({ answer_by })
+      expect(statusOf(request, owner).text).toBe("Waiting for your choice.")
+      expect(statusOf(request, asker).text).toBe("Waiting for Ada to decide.")
+    }
+    // Once it has been let through, it is worked on as any request is.
+    expect(statusOf(first(approvedRequest("summary")), asker).text).toBe(
+      "Ada's agent is working on it…"
+    )
+    const late = first(slackRequest({ expires_at: "2026-09-29T12:10:00Z" }))
+    expect(statusOf(late, asker).text).toBe("Expired before Ada replied.")
+    expect(statusOf(late, owner).text).toBe("Expired.")
+  })
+
+  it("says who replied, where and when, in place of Answered", () => {
+    const done = repliedRequest("Launch is on 12 October.")
+    const sent = `Sent in Oryxa at ${clockTime(REPLIED_AT)}.`
+
+    expect(statusOf(done, owner)).toEqual({
+      tone: "done",
+      text: "You replied.",
+      detail: sent,
+    })
+    expect(statusOf(done, asker)).toEqual({
+      tone: "done",
+      text: "Ada replied.",
+      detail: sent,
+    })
+  })
+
+  it("tells the owner their reply took the place of a held answer, and not the asker", () => {
+    const replaced = repliedRequest("Call me instead.", "review")
+    const when = clockTime(REPLIED_AT)
+
+    expect(statusOf(replaced, owner).detail).toBe(
+      `Sent in Oryxa at ${when}, in place of Krude's answer.`
+    )
+    expect(statusOf(replaced, asker).detail).toBe(`Sent in Oryxa at ${when}.`)
+    expect(statusOf(replaced, asker).text).toBe("Ada replied.")
+  })
+
+  it("adds what the guard hid to the owner's reply, and keeps it from the asker", () => {
+    const masked = repliedRequest("The password is hunter2.", "decision", {
+      guard: { state: "masked", kinds: ["PASSWORD"] },
+    })
+
+    expect(statusOf(masked, owner).detail).toBe(
+      `Sent in Oryxa at ${clockTime(REPLIED_AT)}. Shared with a password hidden.`
+    )
+    expect(statusOf(masked, asker).detail).toBe(
+      `Sent in Oryxa at ${clockTime(REPLIED_AT)}.`
+    )
+  })
+
+  it("names where a reply was sent from, and says nothing it does not know", () => {
+    const from = (surface?: string) => {
+      const done = repliedRequest("Yes.")
+      return statusOf(
+        {
+          ...done,
+          decision: {
+            ...done.decision!,
+            decided_by: { kind: "member", user_id: OWNER, surface },
+          },
+        },
+        asker
+      ).detail
+    }
+    const when = clockTime(REPLIED_AT)
+
+    expect(from("slack")).toBe(`Sent in Slack at ${when}.`)
+    expect(from(undefined)).toBe(`Sent at ${when}.`)
+    // Without a time or a place there is nothing to say of it.
+    const bare = repliedRequest("Yes.")
+    expect(
+      statusOf(
+        {
+          ...bare,
+          decision: {
+            ...bare.decision!,
+            decided_at: "",
+            decided_by: undefined,
+          },
+        },
+        asker
+      )
+    ).toEqual({ tone: "done", text: "Ada replied." })
+  })
+
+  it("still says Answered for an answer the agent wrote, whoever was to answer", () => {
+    const done = approvedRequest("summary", {
+      answer_by: "owner",
+      status: "completed",
+      result: answer("Launch is on 12 October."),
+    })
+
+    expect(statusOf(done, owner).text).toBe("Answered.")
+    expect(statusOf(done, asker).text).toBe("Answered.")
+  })
 })
 
 describe("the owner's choices", () => {
@@ -628,5 +794,46 @@ describe("the owner's choices", () => {
     expect(
       consentChoices.map((choice) => consentChoicePending(choice.choice))
     ).toEqual(["Sharing…", "Allowing…", "Denying…"])
+  })
+})
+
+describe("replying yourself", () => {
+  it("has its words, and names its buttons by whose request they are about", () => {
+    expect(REPLY_YOURSELF).toBe("Reply yourself")
+    expect(SEND_REPLY).toBe("Send reply")
+    expect(LET_MY_AGENT_ANSWER).toBe("Let my agent answer")
+    expect(replyYourselfName("Raya")).toBe("Reply yourself to Raya's request")
+    expect(letMyAgentAnswerName("Raya")).toBe(
+      "Let my agent answer Raya's request"
+    )
+    // The visible words are in each name, for whoever speaks them.
+    expect(replyYourselfName("Raya")).toContain(REPLY_YOURSELF)
+    expect(letMyAgentAnswerName("Raya")).toContain(LET_MY_AGENT_ANSWER)
+    // Someone who asks of themselves is "you", not "you's".
+    expect(replyYourselfName("you")).toBe("Reply yourself to your request")
+  })
+
+  it("counts characters as Go does: trimmed, in code points", () => {
+    expect(replyLength("")).toBe(0)
+    expect(replyLength("  \n\t ")).toBe(0)
+    expect(replyLength("  Yes.  ")).toBe(4)
+    expect(replyLength("😀😀")).toBe(2)
+    expect(replyLength("é".normalize("NFD"))).toBe(2)
+  })
+
+  it("takes one to 4,000 characters of trimmed text, and says what is wrong otherwise", () => {
+    expect(replyProblem("")).toBe("Write your reply first.")
+    expect(replyProblem("   ")).toBe("Write your reply first.")
+    expect(replyProblem("a")).toBeUndefined()
+    expect(replyProblem("a".repeat(4000))).toBeUndefined()
+    expect(replyProblem(`  ${"a".repeat(4000)}  `)).toBeUndefined()
+    expect(replyProblem("😀".repeat(4000))).toBeUndefined()
+    expect(replyProblem("a".repeat(4001))).toBe(
+      "That is too long: a reply holds at most 4,000 characters."
+    )
+  })
+
+  it("shows how many characters it has from the last 500", () => {
+    expect(REPLY_COUNTER_FROM).toBe(3500)
   })
 })

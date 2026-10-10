@@ -32,6 +32,8 @@ Each domain lists its calls, then its query options.
   - the Slack consent loop's calls: `consentAgentRequest` (the owner's
     choice, `summary`, `access` or `deny`; a choice that lost the race to a
     click in Slack throws `AgentRequestAlreadyDecided`, carrying the winner),
+    `replyToAgentRequest` (the owner answers in their own words, for a
+    pending request or a held answer; it loses the same race the same way),
     `revokeAgentLease`, `listAgentActivity`, and a credential's three calls,
     `shareAgentRequestSecret`, `openAgentRequestSecret` (once; a second open
     is `isSecretGone`) and `revokeAgentRequestSecret`;
@@ -71,7 +73,7 @@ Call the matching helper from the mutation's `onSuccess`. The helpers are in
 | Mutation | Helper | What it does |
 | --- | --- | --- |
 | `updateAgent` | `afterUpdateAgent` | caches the agent; agent list |
-| `decideAgentRequest` / `respondToAgentRequest` | `afterDecideAgentRequest` / `afterRespondToAgentRequest` | caches the request; both boxes |
+| `decideAgentRequest` / `respondToAgentRequest` / `replyToAgentRequest` | `afterDecideAgentRequest` / `afterRespondToAgentRequest` / `afterReplyToAgentRequest` | caches the request; both boxes |
 | `updateOrganizationAgent` | `afterUpdateOrganizationAgent` | caches it |
 
 ## What a page must handle
@@ -92,6 +94,18 @@ Call the matching helper from the mutation's `onSuccess`. The helpers are in
   `withheld`, which Oryxa also does when it expires in review. The target
   member's reads carry the held answer while it is in review (`held`); the
   requester reads no `result` or `guard` in `review` or `withheld`.
+- **Replying yourself, and who answers.** `replyToAgentRequest` (`POST
+  …/agent-requests/{id}/reply {text}`, the target member in their own
+  session; an agent's token is refused) answers a pending request, or
+  replaces a held answer, with the owner's own words, 1 to
+  `REPLY_MAX_CHARACTERS` characters. Their agent never runs: the answer's
+  `result.written_by_owner` is true for the owner and the asker, and the
+  request records `decision.consent: "reply"` (answered while pending) or
+  `review.action: "reply"` (replaced a held answer). `isOwnerWritten` reads
+  any of the three. A request's `answer_by` is `owner` when Jev judged, at
+  creation, that answering needs the owner's own judgment, so nothing runs
+  their agent until they choose to let it (`needsOwnerReply`), and absent or
+  `agent` otherwise.
 - **Strict bodies.** Every body is decoded strictly, nested objects too: an
   unknown field is a 400. The calls copy only the fields each handler reads,
   so passing a whole agent is safe. Calling `apiRequest` directly bypasses
