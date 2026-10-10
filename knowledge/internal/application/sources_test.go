@@ -615,3 +615,20 @@ func TestAlreadyHandledIsTrueOnlyAfterMarkHandled(t *testing.T) {
 		t.Fatalf("AlreadyHandled(after) = %v, %v, want true", already, err)
 	}
 }
+
+// A Composio source on a toolkit with an apps reader mounted beside it is
+// registered as it was before: no member-token check, so a caller whose
+// credentials carry no bearer token still registers it.
+func TestRegisterSourceOnAComposioConnectionSkipsTheAppsCheck(t *testing.T) {
+	store := newFakeStore()
+	reader := &appsReader{fakeExtractor: &fakeExtractor{provider: "github"}}
+	service := registrarWith(t, store, member(), &fakeApps{connection: usableConnection()}, reader)
+
+	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Agent t"}, "org_1", githubRegistration())
+	if err != nil {
+		t.Fatalf("RegisterSource() error = %v", err)
+	}
+	if source.ComposioAccountID != "ca_1" || reader.checkCalls != 0 {
+		t.Fatalf("source = %+v after %d checks, want a Composio source and no check", source, reader.checkCalls)
+	}
+}

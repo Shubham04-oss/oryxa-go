@@ -149,8 +149,10 @@ func (s *Service) register(ctx context.Context, credentials authclient.Credentia
 	// would be refused on every pass, and would hold the placement against
 	// anyone who can, so it is asked now, while a member is present to be
 	// told. Files is asked for the listing every pass of it would make, and
-	// an apps-backed source for a single item of the target it names.
-	if checker, ok := extractor.(sources.Checker); ok && (provider == filesProvider || readsThroughApps(extractor)) {
+	// an apps-backed source for a single item of the target it names. A
+	// Composio source is not asked, as before the apps reader was mounted.
+	if checker, ok := extractor.(sources.Checker); ok &&
+		(provider == filesProvider || (readsThroughApps(extractor) && source.ComposioAccountID == "")) {
 		credential, err := memberCredential(credentials)
 		if err != nil {
 			return domain.Source{}, err
