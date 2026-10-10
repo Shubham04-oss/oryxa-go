@@ -288,7 +288,21 @@ type ownerNoticeParams struct {
 		Deny    string `json:"deny"`
 		Reply   string `json:"reply"`
 	} `json:"tickets"`
+	// AnswerBy is AnswerByOwner for an ask that needs the owner's own answer,
+	// which has a Reply yourself ticket; empty, or "agent", otherwise.
+	AnswerBy string `json:"answer_by"`
 }
+
+// Who is to answer an ask, as the owner's notice is told (the ledger's
+// answer_by).
+const (
+	AnswerByOwner = "owner"
+	AnswerByAgent = "agent"
+)
+
+// letAgentLabel is the summary choice's word on a notice that leads with Reply
+// yourself: the owner lets their agent answer instead of answering themself.
+const letAgentLabel = "Let my agent answer"
 
 // renderOwnerNotice is the owner's notice, in a direct message: who is asking,
 // what, and three buttons, and a fourth, Reply yourself, when it has a ticket
@@ -296,6 +310,11 @@ type ownerNoticeParams struct {
 // on the card in Oryxa, which holds the rest. The buttons' words are the card's,
 // from web-next/src/components/request-card-format.ts (Share answer, Allow for
 // 1 hour, Deny, Reply yourself): keep the two the same.
+//
+// An ask that needs the owner's own answer (answer_by "owner") leads with
+// Reply yourself, then Let my agent answer, which is the summary choice, then
+// Deny, as the card does for it: no Allow for 1 hour, since what it asks is the
+// owner's to say, not their agent's to look up.
 func renderOwnerNotice(r renderer, raw json.RawMessage) (Rendered, error) {
 	var p ownerNoticeParams
 	if err := decodeParams(raw, &p); err != nil {
@@ -313,21 +332,44 @@ func renderOwnerNotice(r renderer, raw json.RawMessage) (Rendered, error) {
 			return Rendered{}, err
 		}
 	}
+	if p.Tickets.Reply != "" {
+		if err := checkTicket("reply", p.Tickets.Reply); err != nil {
+			return Rendered{}, err
+		}
+	}
+	question := quoted(r.shown(p.Question, maxQuestionRunes))
+	switch p.AnswerBy {
+	case "", AnswerByAgent:
+	case AnswerByOwner:
+		if p.Tickets.Reply == "" {
+			return Rendered{}, invalid("an ask that needs the owner's own answer has a reply ticket")
+		}
+		return Rendered{
+			Text: asker + " is asking you a question through Oryxa.",
+			Blocks: []any{
+				section(asker + " is asking you through Oryxa, and it needs your own answer:\n" + question),
+				actionsBlock("consent",
+					button(ActionReply, replyLabel, p.Tickets.Reply),
+					button(ActionSummary, letAgentLabel, p.Tickets.Summary),
+					button(ActionDeny, "Deny", p.Tickets.Deny),
+				),
+			},
+		}, nil
+	default:
+		return Rendered{}, invalid("answer_by is owner or agent")
+	}
 	buttons := []any{
 		button(ActionSummary, "Share answer", p.Tickets.Summary),
 		button(ActionAccess, "Allow for 1 hour", p.Tickets.Access),
 		button(ActionDeny, "Deny", p.Tickets.Deny),
 	}
 	if p.Tickets.Reply != "" {
-		if err := checkTicket("reply", p.Tickets.Reply); err != nil {
-			return Rendered{}, err
-		}
 		buttons = append(buttons, button(ActionReply, replyLabel, p.Tickets.Reply))
 	}
 	return Rendered{
 		Text: asker + " is asking you a question through Oryxa.",
 		Blocks: []any{
-			section(asker + " is asking you through Oryxa:\n" + quoted(r.shown(p.Question, maxQuestionRunes))),
+			section(asker + " is asking you through Oryxa:\n" + question),
 			actionsBlock("consent", buttons...),
 		},
 	}, nil

@@ -178,3 +178,41 @@ func TestAnAnswerTheOwnerWroteIsTheirsWhateverLetItGo(t *testing.T) {
 		}
 	}
 }
+
+// TestAnAskThatNeedsTheOwnersOwnAnswerLeadsWithReplyYourself: an owner-first
+// ask's notice asks apps for the notice that leads with Reply yourself, with
+// every ticket; an ordinary ask's says nothing of who answers; and an ask of a
+// secret, which has no Reply yourself, never leads with it.
+func TestAnAskThatNeedsTheOwnersOwnAnswerLeadsWithReplyYourself(t *testing.T) {
+	for _, test := range []struct {
+		name, answerBy, kind, want string
+		replyTicket                bool
+	}{
+		{"owner-first", interactions.AnswerByOwner, interactions.AskQuestion, interactions.AnswerByOwner, true},
+		{"for the agent", interactions.AnswerByAgent, interactions.AskQuestion, "", true},
+		{"from before answer_by", "", interactions.AskQuestion, "", true},
+		{"a secret", interactions.AnswerByOwner, interactions.AskSecret, "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t)
+			ask := baseAsk()
+			ask.Kind = test.kind
+			h.ledger.putAsk(ask)
+			request := pendingRequest()
+			request.AnswerBy = test.answerBy
+			h.ledger.put(request)
+			h.mustPass("irq_1")
+			notice := h.api.sentWith(templateOwnerNotice)
+			if len(notice) != 1 {
+				t.Fatalf("posted %v, want the notice", templates(h.api.sent()))
+			}
+			if got := notice[0].param("answer_by"); got != test.want {
+				t.Fatalf("answer_by = %q, want %q", got, test.want)
+			}
+			tickets, _ := notice[0].Params["tickets"].(map[string]any)
+			if (tickets["reply"] != nil) != test.replyTicket || tickets["summary"] == nil || tickets["deny"] == nil {
+				t.Fatalf("tickets = %v", tickets)
+			}
+		})
+	}
+}

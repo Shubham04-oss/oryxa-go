@@ -14,12 +14,15 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 )
 
-// fakeJev answers every question it is asked with one choice, fails, or
-// never answers, and keeps what it was asked.
+// fakeJev answers every Choice question it is asked with one choice, and every
+// Noul with one probability of yes, fails, or never answers, and keeps what it
+// was asked.
 type fakeJev struct {
 	choice     string
 	confidence float64
-	err        error
+	// yes is the probability every Noul question is answered with.
+	yes float64
+	err error
 	// silent never answers: it returns when the call's context ends, as a
 	// Jev that does not answer in time does.
 	silent bool
@@ -36,10 +39,27 @@ func (fake *fakeJev) Ask(ctx context.Context, request jev.Request) (jev.Result, 
 		return jev.Result{}, fake.err
 	}
 	answers := map[string]jev.Answer{}
-	for id := range request.Questions {
+	for id, question := range request.Questions {
+		if question.Type == jev.TypeNoul {
+			answers[id] = jev.Answer{Type: jev.TypeNoul, Noul: fake.yes}
+			continue
+		}
 		answers[id] = jev.Answer{Type: jev.TypeChoice, Choice: fake.choice, Confidence: fake.confidence, Probabilities: map[string]float64{fake.choice: 1}}
 	}
 	return jev.Result{Model: "jev-test", Answers: answers}, nil
+}
+
+// askedAboutTools is how many of the calls fake took asked what answering
+// needs: Jev is asked who answers every request, but what it needs only of
+// one made in a teamspace that names no tools.
+func (fake *fakeJev) askedAboutTools() int {
+	asked := 0
+	for _, request := range fake.asked {
+		if _, ok := request.Questions[toolsQuestionID]; ok {
+			asked++
+		}
+	}
+	return asked
 }
 
 // jevService is the ledger over B's teamspace seats, asking ask what a
@@ -139,7 +159,8 @@ func TestJevUnavailableDefaultsToKnowledge(t *testing.T) {
 }
 
 // TestARequesterKeepsTheToolsTheyNamed: tools the requester names are asked
-// for as they were given, in a teamspace or not, and Jev is never asked.
+// for as they were given, in a teamspace or not, and Jev is never asked what
+// answering needs.
 func TestARequesterKeepsTheToolsTheyNamed(t *testing.T) {
 	judge := &fakeJev{choice: "apps_and_knowledge", confidence: 0.99}
 	service, _ := jevService(t, judge.Ask, time.Second)
@@ -149,8 +170,8 @@ func TestARequesterKeepsTheToolsTheyNamed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(created.RequestedTools, []string{agents.KnowledgeToolboxName, "calendar_lookup"}) || created.ToolsJudgedBy != ToolsJudgedByRequester || len(judge.asked) != 0 {
-		t.Fatalf("requested_tools=%v judged by %q after %d questions, want the requester's own, unasked", created.RequestedTools, created.ToolsJudgedBy, len(judge.asked))
+	if !slices.Equal(created.RequestedTools, []string{agents.KnowledgeToolboxName, "calendar_lookup"}) || created.ToolsJudgedBy != ToolsJudgedByRequester || judge.askedAboutTools() != 0 {
+		t.Fatalf("requested_tools=%v judged by %q after %d questions about tools, want the requester's own, unasked", created.RequestedTools, created.ToolsJudgedBy, judge.askedAboutTools())
 	}
 }
 
@@ -166,15 +187,15 @@ func TestExplicitlyToolFreeRequestsSkipJev(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if created.RequestedTools == nil || len(created.RequestedTools) != 0 || created.ToolsJudgedBy != ToolsJudgedByRequester || len(judge.asked) != 0 {
-				t.Fatalf("requested_tools=%#v judged by %q after %d questions, want explicit [] and Jev unasked", created.RequestedTools, created.ToolsJudgedBy, len(judge.asked))
+			if created.RequestedTools == nil || len(created.RequestedTools) != 0 || created.ToolsJudgedBy != ToolsJudgedByRequester || judge.askedAboutTools() != 0 {
+				t.Fatalf("requested_tools=%#v judged by %q after %d questions about tools, want explicit [] and Jev unasked", created.RequestedTools, created.ToolsJudgedBy, judge.askedAboutTools())
 			}
 			if stored := repo.requests[created.ID]; stored.RequestedTools == nil || len(stored.RequestedTools) != 0 || stored.ToolsJudgedBy != ToolsJudgedByRequester {
 				t.Fatalf("stored request = %+v, want explicit [] judged by requester", stored)
 			}
 			again, err := service.Create(context.Background(), requester, "member-token", "key", input)
-			if err != nil || again.ID != created.ID || len(judge.asked) != 0 {
-				t.Fatalf("explicit [] retry = %+v, %v after %d Jev questions", again, err, len(judge.asked))
+			if err != nil || again.ID != created.ID || judge.askedAboutTools() != 0 || len(judge.asked) != 1 {
+				t.Fatalf("explicit [] retry = %+v, %v after %d Jev calls, %d about tools; want the one who-answers call of the first", again, err, len(judge.asked), judge.askedAboutTools())
 			}
 			input.RequestedTools = nil
 			if _, err := service.Create(context.Background(), requester, "member-token", "key", input); !errors.Is(err, ErrIdempotencyConflict) {
@@ -185,7 +206,8 @@ func TestExplicitlyToolFreeRequestsSkipJev(t *testing.T) {
 }
 
 // TestAnOmittedToolListOutsideATeamspaceDefaultsToKnowledge: a request made
-// outside any teamspace that omits tools requests knowledge, without Jev.
+// outside any teamspace that omits tools requests knowledge, without asking
+// Jev what it needs.
 func TestAnOmittedToolListOutsideATeamspaceDefaultsToKnowledge(t *testing.T) {
 	judge := &fakeJev{choice: "apps", confidence: 0.99}
 	service, _ := jevService(t, judge.Ask, time.Second)
@@ -195,8 +217,8 @@ func TestAnOmittedToolListOutsideATeamspaceDefaultsToKnowledge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(created.RequestedTools, []string{agents.KnowledgeToolboxName}) || created.ToolsJudgedBy != ToolsJudgedByNone || len(judge.asked) != 0 {
-		t.Fatalf("requested_tools=%v judged by %q after %d questions, want knowledge fallback, unasked", created.RequestedTools, created.ToolsJudgedBy, len(judge.asked))
+	if !slices.Equal(created.RequestedTools, []string{agents.KnowledgeToolboxName}) || created.ToolsJudgedBy != ToolsJudgedByNone || judge.askedAboutTools() != 0 {
+		t.Fatalf("requested_tools=%v judged by %q after %d questions about tools, want knowledge fallback, unasked", created.RequestedTools, created.ToolsJudgedBy, judge.askedAboutTools())
 	}
 }
 

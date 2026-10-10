@@ -34,6 +34,9 @@ type ownerNoticeParams struct {
 	AskerName   string        `json:"asker_name,omitempty"`
 	Question    string        `json:"question"`
 	Tickets     noticeTickets `json:"tickets"`
+	// AnswerBy is "owner" for an ask that needs the owner's own answer, whose
+	// notice leads with Reply yourself; left out otherwise.
+	AnswerBy string `json:"answer_by,omitempty"`
 }
 
 // noticeTickets are the values of the notice's buttons: the three choices, and
@@ -155,7 +158,8 @@ func (p *pass) askerParams(ctx context.Context) (userID, name string, err error)
 // whose tickets the ledger makes for it, and a fourth, Reply yourself, which
 // opens a modal for their own answer. An ask of a secret has no Reply yourself:
 // its owner shares the secret once, in Oryxa, and nothing they write is put in
-// Slack.
+// Slack. An ask that needs the owner's own answer (interactions.OwnerFirst)
+// leads with Reply yourself instead, and apps renders it so.
 func (p *pass) sendNotice(ctx context.Context) error {
 	request := p.request
 	owner, err := p.member(ctx, request.Target.UserID)
@@ -183,14 +187,20 @@ func (p *pass) sendNotice(ctx context.Context) error {
 		return err
 	}
 	buttons := noticeTickets{Summary: tickets.Summary, Access: tickets.Access, Deny: tickets.Deny}
+	answerBy := ""
 	if p.ask.Kind != interactions.AskSecret {
 		buttons.Reply = tickets.Reply
+		if interactions.OwnerFirst(request) {
+			// It needs the owner's own answer: the notice leads with Reply
+			// yourself, and offers to let their agent answer after it.
+			answerBy = interactions.AnswerByOwner
+		}
 	}
 	posted, sent, err := p.send(ctx, roleNotice, slackrouter.Post{
 		Target:   directTarget(owner.slackUserID),
 		Template: templateOwnerNotice,
 		Params: ownerNoticeParams{
-			AskerUserID: askerUser, AskerName: askerWord, Question: request.Task, Tickets: buttons,
+			AskerUserID: askerUser, AskerName: askerWord, Question: request.Task, Tickets: buttons, AnswerBy: answerBy,
 		},
 	})
 	if err != nil || !sent {

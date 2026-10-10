@@ -292,7 +292,14 @@ type Interaction struct {
 	// teamspace that omitted them needs, and "none" for the knowledge fallback
 	// when neither chose. Older "none" records may ask for no tools. It is
 	// absent from a request made before it was kept.
-	ToolsJudgedBy        string               `json:"tools_judged_by,omitempty"`
+	ToolsJudgedBy string `json:"tools_judged_by,omitempty"`
+	// AnswerBy is who is to answer, as Jev judged it when the request was
+	// made: "owner" when answering needs the addressed member's own judgment
+	// (an approval, a plan, a commitment, an opinion), so their agent never
+	// runs for it until they let it, and "agent" when their agent can answer
+	// from what they may read. It is absent from a request made before it was
+	// kept, which reads as "agent".
+	AnswerBy             string               `json:"answer_by,omitempty"`
 	RequestedPermissions []string             `json:"requested_permissions"`
 	Status               string               `json:"status"`
 	Decision             *InteractionDecision `json:"decision,omitempty"`

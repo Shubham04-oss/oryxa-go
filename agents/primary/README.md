@@ -972,6 +972,33 @@ a conversation.
   `written_by_owner`. Migrations 017 and 018 let the ledger's `consent` column
   say `reply`.
 
+#### Owner-first asks
+
+Some asks need the owner's own judgment, which no search of what they may read
+answers: approve this, will you have it done by Friday, what do you think.
+When a request is made, Jev judges whether it is one
+(`interactions/answer_by.go`): one yes-or-no question over the requester's own
+words, the task and its context, and nothing of the member asked. For a request
+made in a teamspace that names no tools it is asked in the same call as what
+the request needs.
+
+- **`answer_by`** on the request JSON is `"owner"` when Jev's yes is at least
+  0.7 (`AnswerByOwnerThreshold`), and `"agent"` otherwise, or when Jev is not
+  configured, fails, is late or answers something unusable. A request made
+  before migration 019 has none, which reads as `"agent"`; nothing is
+  backfilled. An ask of a secret is never asked about: it is `"agent"`.
+- **An owner-first request waits for its owner.** It is stored with approval
+  `owner` whatever its teamspace seat says, `HeldForOwner` holds it, so no
+  agent decides it and its `requested` delivery wakes nobody, and a Slack ask
+  is approved by no lease and no bypass (`Bypass` refuses it). The owner's
+  agent runs only once the owner picks **Let my agent answer**, which is the
+  approval (`…/decision`) or, for a Slack ask, the summary consent. Reply
+  yourself and Deny work as for any request.
+- **The owner's Slack notice leads with Reply yourself**, then Let my agent
+  answer and Deny, with no Allow for 1 hour; surfaces sends apps'
+  `owner_notice` `answer_by: "owner"`. The asker's side is unchanged: the web
+  reads `answer_by` and the status to say whom it waits for.
+
 ### Answer guard
 
 Every answer one member's agent gives another member is read, before that

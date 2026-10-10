@@ -63,17 +63,34 @@ var toolsOf = map[string][]string{
 	"apps_and_knowledge": {agents.AppsToolboxName, agents.KnowledgeToolboxName},
 }
 
-// requestedTools is what a new request asks for, and who chose it: the
-// requester's own tools as they gave them; for one made in a teamspace that
-// omits them, what Jev judges it needs; otherwise the knowledge fallback.
-func (service *Service) requestedTools(ctx context.Context, input agents.InteractionCreateInput) ([]string, string) {
+// judgeRequest is what a new request asks for, who chose it, and who is to
+// answer it. The tools are the requester's own as they gave them; for one made
+// in a teamspace that omits them, what Jev judges it needs; otherwise the
+// knowledge fallback. Who answers is always Jev's to judge (answer_by.go).
+// Jev is asked once, within jevTimeout, with both questions when the tools are
+// its to choose, and each answer is read on its own: one that cannot be used
+// leaves the other standing.
+func (service *Service) judgeRequest(ctx context.Context, input agents.InteractionCreateInput) ([]string, string, string) {
+	judgeTools := input.RequestedTools == nil && input.TeamspaceID != ""
+	tools, judgedBy := knowledgeFallback()
 	if input.RequestedTools != nil {
-		return input.RequestedTools, ToolsJudgedByRequester
+		tools, judgedBy = input.RequestedTools, ToolsJudgedByRequester
 	}
-	if input.TeamspaceID == "" {
-		return knowledgeFallback()
+	if service.jev == nil {
+		return tools, judgedBy, AnswerByAgent
 	}
-	return service.judgeTools(ctx, input)
+	questions := map[string]jev.Question{answerByQuestionID: answerByQuestion()}
+	if judgeTools {
+		questions[toolsQuestionID] = toolsQuestion()
+	}
+	asking, cancel := context.WithTimeout(ctx, service.jevTimeout)
+	defer cancel()
+	result, err := service.jev(asking, jev.Request{State: toolsStateOf(input), Questions: questions})
+	answerBy := service.answerByFrom(ctx, result, err)
+	if judgeTools {
+		tools, judgedBy = service.toolsFrom(ctx, result, err)
+	}
+	return tools, judgedBy, answerBy
 }
 
 // knowledgeFallback requests knowledge without claiming a requester or
@@ -82,19 +99,10 @@ func knowledgeFallback() ([]string, string) {
 	return []string{agents.KnowledgeToolboxName}, ToolsJudgedByNone
 }
 
-// judgeTools asks Jev which toolboxes answering a request needs, within
-// jevTimeout. No Jev, no answer in time, a failure, an answer naming no
-// offered option, or one not sure enough defaults to knowledge.
-func (service *Service) judgeTools(ctx context.Context, input agents.InteractionCreateInput) ([]string, string) {
-	if service.jev == nil {
-		return knowledgeFallback()
-	}
-	asking, cancel := context.WithTimeout(ctx, service.jevTimeout)
-	defer cancel()
-	result, err := service.jev(asking, jev.Request{
-		State:     toolsStateOf(input),
-		Questions: map[string]jev.Question{toolsQuestionID: toolsQuestion()},
-	})
+// toolsFrom reads which toolboxes answering a request needs from Jev's result.
+// A failure, an answer naming no offered option, or one not sure enough
+// defaults to knowledge.
+func (service *Service) toolsFrom(ctx context.Context, result jev.Result, err error) ([]string, string) {
 	if err != nil {
 		// Jev's errors name its status or the call's failure, never what
 		// it was sent.
