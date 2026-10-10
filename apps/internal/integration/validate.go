@@ -827,6 +827,9 @@ func (v *validator) readers() {
 			}
 			kindsSeen[kind] = true
 		}
+		for j, post := range reader.ReadPOSTs {
+			v.readPost(index(path+".read_posts", j), post)
+		}
 		v.schema(path+".target_schema", reader.TargetSchema)
 		v.scopes(path+".scopes", reader.Scopes)
 	}

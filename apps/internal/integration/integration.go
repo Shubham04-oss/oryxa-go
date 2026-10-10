@@ -220,6 +220,12 @@ type ReaderSpec struct {
 	Kinds        []string        `json:"kinds"`
 	TargetSchema json.RawMessage `json:"target_schema"`
 	Scopes       []string        `json:"scopes"`
+	// ReadPOSTs are the POST paths under api_base this reader may call, for
+	// the APIs that read through a POST (Notion's query, a search endpoint).
+	// Its session refuses every other method before anything is sent, as a
+	// read tool's does. It is additive to the pinned shape: a reader that
+	// declares none reads with GET and HEAD alone.
+	ReadPOSTs []string `json:"read_posts,omitempty"`
 }
 
 // Trigger kinds: how a trigger's events arrive.
@@ -244,9 +250,20 @@ type TriggerSpec struct {
 	Scopes        []string        `json:"scopes"`
 }
 
+// TargetReader is the PageRequest.Target key that names the reader a page is
+// for, as ReaderSpec.Name.
+const TargetReader = "reader"
+
+// MaxPageBytes bounds one page, in either direction: the request that asks
+// for it and the answer that carries it. A page is a document payload, so it
+// is measured in mebibytes rather than in kilobytes as an event's is; an
+// item that does not fit is one page too many, and the reader carries on
+// from the cursor it answered.
+const MaxPageBytes = 6 << 20
+
 // PageRequest asks a reader for one page of one target.
 type PageRequest struct {
-	// Target always carries "reader", the ReaderSpec it is for.
+	// Target always carries TargetReader, the ReaderSpec it is for.
 	Target    map[string]string `json:"target"`
 	Cursor    string            `json:"cursor,omitempty"`
 	Watermark *time.Time        `json:"watermark,omitempty"`

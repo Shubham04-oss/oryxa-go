@@ -1,0 +1,20 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.acme.example/repos/acme/api/issues?state=open"
+      },
+      "response": {
+        "status": 429,
+        "body": {
+          "message": "slow down"
+        }
+      }
+    }
+  ],
+  "arguments": {
+    "repo": "acme/api",
+    "state": "open"
+  }
+}

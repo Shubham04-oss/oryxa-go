@@ -230,31 +230,42 @@ func TestOryxaUpkeepDoesNothingWhereItIsNotConfigured(t *testing.T) {
 
 // Composio's key cannot act through a connection Composio does not hold, so
 // every Composio path refuses an Oryxa connection, saying so, rather than
-// calling Composio with an account it never had.
+// calling Composio with an account it never had. The paths Oryxa's own
+// integrations answer are not Composio paths: they answer from the registry,
+// and are covered beside this.
 func TestComposioPathsRefuseAnOryxaConnection(t *testing.T) {
 	t.Parallel()
 	h := newOryxaHarness(t, "github")
 	connection := h.oryxaConnection("apc_oryxa", "user-1", "github", domain.ConnectionActive, integration.KindOAuth2Code)
 	connection.AutoSubscribe = true
 	h.store.connections[connection.ID] = connection
+	// A tool Composio knows and the registry does not, which is the whole of
+	// GitHub's own integration today: it declares how to sign in, and phase 2
+	// gives it tools.
 	h.composio.tools["GITHUB_LIST_ISSUES"] = composio.Tool{
 		Slug: "GITHUB_LIST_ISSUES", Toolkit: "github", Name: "List issues", Tags: []string{"readOnlyHint"},
 	}
 	ctx := context.Background()
 
 	checks := map[string]error{}
-	_, checks["running a tool"] = h.service.RunTool(ctx, memberToken, "org_1", RunToolInput{Tool: "GITHUB_LIST_ISSUES"})
-	_, checks["running a tool on the named connection"] = h.service.RunTool(ctx, memberToken, "org_1",
+	// The registry has no such tool, so Composio is the only route and it
+	// cannot act through this connection.
+	_, checks["running a tool the registry does not carry"] = h.service.RunTool(ctx, memberToken, "org_1",
+		RunToolInput{Tool: "GITHUB_LIST_ISSUES"})
+	_, checks["running it on the named connection"] = h.service.RunTool(ctx, memberToken, "org_1",
 		RunToolInput{Tool: "GITHUB_LIST_ISSUES", ConnectionID: connection.ID})
-	_, checks["an agent searching its tools"] = h.service.SearchTools(ctx, agentToken, "org_1", "github", "issues", 10)
 	_, checks["reading the app's API"] = h.service.Proxy(ctx, memberToken, "org_1", ProxyInput{Toolkit: "github", Endpoint: "/user/repos"})
-	_, checks["listing its targets"] = h.service.ConnectionTargets(ctx, memberToken, "org_1", connection.ID)
-	_, checks["subscribing a trigger"] = h.service.CreateTrigger(ctx, memberToken, "org_1",
-		TriggerInput{ConnectionID: connection.ID, Trigger: "GITHUB_STAR_ADDED_EVENT"})
 	for name, err := range checks {
 		if !errors.Is(err, domain.ErrNotConnectable) {
 			t.Errorf("%s = %v, want not connectable", name, err)
 		}
+	}
+	// A subscription is asked of the connection's own integration, which
+	// declares no events yet, so the answer is that this connection has no
+	// such event rather than that it is Composio's business.
+	if _, err := h.service.CreateTrigger(ctx, memberToken, "org_1",
+		TriggerInput{ConnectionID: connection.ID, Trigger: "GITHUB_STAR_ADDED_EVENT"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("subscribing a trigger = %v, want not found", err)
 	}
 	h.service.subscribeConnections(ctx)
 

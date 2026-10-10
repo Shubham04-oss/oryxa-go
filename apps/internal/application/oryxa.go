@@ -41,6 +41,12 @@ type Signin interface {
 	PutClient(ctx context.Context, input signin.ClientInput) (signin.ClientView, bool, error)
 	GetClient(ctx context.Context, organizationID, client string) (signin.ClientView, error)
 	RemoveClient(ctx context.Context, organizationID, client string) (bool, error)
+	// Session is what an integration calls its app with, as one active
+	// connection: the credential placed in the innermost transport, the
+	// connection's own fields, and a Token for the SDKs with no client hook.
+	// A read tool's session refuses every method but GET, HEAD and that
+	// tool's own read_posts, before anything is sent.
+	Session(ctx context.Context, connectionID string, options ...signin.SessionOption) (integration.Session, error)
 }
 
 // Hooks is the webhook ingress's endpoints: *hooks.Service.
@@ -49,11 +55,32 @@ type Hooks interface {
 	Rotate(ctx context.Context, id string, secret secrets.Secret) (hooks.Created, error)
 	OrganizationEndpoint(ctx context.Context, organizationID, toolkit string) (hooks.Endpoint, error)
 	DeploymentEndpoint(ctx context.Context, toolkit string) (hooks.Endpoint, string, error)
+	// EndpointsForConnection answers a connection's endpoints, oldest first,
+	// each with the app's own id for the subscription delivering to it, so a
+	// subscription can be removed at the app and its endpoint deleted.
+	EndpointsForConnection(ctx context.Context, connectionID string) ([]hooks.Endpoint, error)
+	// SetRemote records the app's id for the subscription delivering to an
+	// endpoint, once Subscribe answered it.
+	SetRemote(ctx context.Context, id, remoteID string, expiresAt *time.Time) error
 	Delete(ctx context.Context, id string) error
 	DeleteForConnection(ctx context.Context, connectionID string) ([]hooks.Endpoint, error)
 	RevealVerificationToken(ctx context.Context, id string) (secrets.Secret, error)
 	SweepExpired(ctx context.Context) (int64, error)
 	URL(endpointID string) string
+}
+
+// PushRouting finds the live subscriptions of an integration's triggers that a
+// verified webhook delivery is for. *postgres.Store is one.
+type PushRouting interface {
+	// OwnSubscriptionsForEndpoint is every live subscription to trigger on one
+	// connection, with the organization the connection belongs to. It is a
+	// connection endpoint's whole reach, since the endpoint belongs to that
+	// connection.
+	OwnSubscriptionsForEndpoint(ctx context.Context, connectionID, organizationID, trigger string) ([]hooks.Subscription, error)
+	// OwnSubscriptionsForAccount is every live subscription to trigger on a
+	// toolkit's connections whose own account ref is accountRef, narrowed to
+	// one organization when organizationID is not "".
+	OwnSubscriptionsForAccount(ctx context.Context, toolkit, organizationID, accountRef, trigger string) ([]hooks.Subscription, error)
 }
 
 // Integrations are Oryxa's own integrations, by toolkit:
@@ -79,6 +106,32 @@ type OryxaStore interface {
 	// registration, or Oryxa's default with organizationID "", without
 	// opening anything sealed. signin.ErrNoClient when there is none.
 	LiveOAuthClient(ctx context.Context, organizationID, client string) (signin.OAuthClient, error)
+	// PushRouting is how the webhook ingress finds the subscription a
+	// verified delivery is for. It is the same store, and is asked for
+	// separately because it answers about integrations' triggers rather than
+	// about a connection or a member.
+	PushRouting
+	// CreateOwnTrigger records a subscription made through an integration and
+	// writes event. It is CreateTrigger without a Composio instance: asking
+	// again for the same connection, event and config answers the one that
+	// exists, with false, and writes nothing. It refuses with
+	// domain.ErrNotConnected unless the connection is still active, as
+	// CreateTrigger does.
+	CreateOwnTrigger(ctx context.Context, subscription OwnSubscription, event domain.Event) (OwnSubscription, bool, error)
+	// OwnSubscription reads one of an organization's subscriptions to an
+	// integration's event, and answers false rather than ErrNotFound when the
+	// trigger is Composio's, which is how a caller tells the two apart.
+	OwnSubscription(ctx context.Context, organizationID, id string) (OwnSubscription, bool, error)
+	// ClaimPolls claims up to limit active polled subscriptions of an
+	// integration's triggers whose next poll is due at now, oldest first, by
+	// moving their next poll to claimUntil, so no other replica takes them
+	// meanwhile. It is the lease the refresh lease and the auto-subscribe
+	// claim are both: FOR UPDATE SKIP LOCKED keeps two claiming statements
+	// apart, and the moved time keeps them apart once one has committed.
+	ClaimPolls(ctx context.Context, now, claimUntil time.Time, limit int) ([]OwnSubscription, error)
+	// SavePoll records where a polled subscription's last poll got to and when
+	// it is next due, which is what releases the claim.
+	SavePoll(ctx context.Context, id, cursor string, next time.Time) error
 }
 
 // Oryxa is Oryxa's own sign-in, as apps is given it.
@@ -114,6 +167,9 @@ type DefaultClient struct {
 type oryxaBroker struct {
 	Oryxa
 	enabled map[string]bool
+	// tools is every tool the registered integrations declare, by slug, which
+	// is what a run consults before Composio is asked anything.
+	tools map[string]ownTool
 	// redirectHost is RedirectURI's hostname, lower case: where the state
 	// cookie lives. A cookie is scoped to a host, not a port.
 	redirectHost string
@@ -155,6 +211,11 @@ func newOryxaBroker(oryxa *Oryxa) (*oryxaBroker, error) {
 			return nil, fmt.Errorf("oryxa's default OAuth client %s needs its client id and secret", client.Client)
 		}
 	}
+	// The registry is fixed for the life of the process, so the tool index is
+	// built once: a run reads it before it asks Composio for a tool. Only the
+	// switched-on toolkits are indexed, so with APPS_ORYXA_TOOLKITS empty (as
+	// in production) every run is routed to Composio exactly as before.
+	broker.tools = indexTools(oryxa.Integrations, broker.enabled)
 	return broker, nil
 }
 
@@ -184,9 +245,9 @@ func errNotOnOryxa(toolkit string) error {
 	return fmt.Errorf("%s is not switched on for Oryxa's own sign-in: %w", toolkit, domain.ErrNotConnectable)
 }
 
-// errOryxaNotYet is what a Composio path answers for an Oryxa connection.
-// Its integration's tools, reads, targets and triggers arrive with phase 2;
-// until then nothing can act through it but its own sign-in.
+// errOryxaNotYet is what a path that has no Oryxa route of its own answers
+// for an Oryxa connection: nothing outside this package can act through one
+// yet, and the tool and reader paths answer from the registry instead.
 func errOryxaNotYet(toolkit string) error {
 	return fmt.Errorf("%s is connected through Oryxa's own sign-in, whose tools, reads, targets and triggers are not available yet: %w",
 		toolkit, domain.ErrNotConnectable)
@@ -313,20 +374,4 @@ func expiredProse(reason string) string {
 		return "the app no longer accepts the credential"
 	}
 	return "the app no longer accepts the connection"
-}
-
-// HookSubscriptions answers which of apps' trigger subscriptions a verified
-// delivery is for. Oryxa's own integrations have no triggers until phase 2,
-// so it answers none: every verified delivery is acknowledged, deduplicated
-// and recorded, and nothing is published.
-type HookSubscriptions struct{}
-
-var _ hooks.Subscriptions = HookSubscriptions{}
-
-func (HookSubscriptions) ForEndpoint(context.Context, hooks.Endpoint, string) ([]hooks.Subscription, error) {
-	return nil, nil
-}
-
-func (HookSubscriptions) ForAccount(context.Context, string, string, string, string) ([]hooks.Subscription, error) {
-	return nil, nil
 }

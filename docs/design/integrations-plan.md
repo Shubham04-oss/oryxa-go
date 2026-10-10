@@ -488,7 +488,7 @@ func Conformance(t *testing.T, i integration.Integration, testdata string)
 
 | WP | Delivers | Owns, exclusively |
 |---|---|---|
-| 2A | The runtime: registry-first tool routing, the pages route, the poll worker, push subscriptions through `hooks`, the harness, `cmd/check`, `_template`, and the SDK modules (go-github, slack-go) added up front | `apps/internal/integration/**`; `apps/internal/integrations/{registry.go,_template/**,google/**}`; `apps/internal/{application,httpserver}/**`; `apps/internal/postgres/triggers.go`; `…/migrations/008_native_triggers.sql` (triggers gain `broker`, `cursor`, `next_poll_at` and a lease; the Composio instance index skips `''`); `go.mod`; `go.sum` |
+| 2A | The runtime: registry-first tool routing, the pages route, the poll worker, push subscriptions through `hooks`, the harness, `cmd/check`, `_template`, and the SDK modules (go-github, slack-go) added up front | `apps/internal/integration/**`; `apps/internal/integrations/{registry.go,_template/**,google/**}`; `apps/internal/{application,httpserver}/**`; `apps/internal/postgres/triggers.go`; `…/migrations/010_native_triggers.sql` (triggers gain `broker`, `cursor`, `next_poll_at` and a lease; the Composio instance index skips `''`); `go.mod`; `go.sum` |
 | 2B | Knowledge's `apps` extractor | `knowledge/internal/sources/apps.go`, `knowledge/internal/appsclient/**`, `knowledge/internal/application/{connected,sources}.go`, `knowledge/{mount,service}.go` |
 | 2C… | One integration per toolkit, built in parallel | `apps/internal/integrations/<toolkit>/**` |
 

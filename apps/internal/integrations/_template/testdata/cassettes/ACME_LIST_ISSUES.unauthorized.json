@@ -1,0 +1,20 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.acme.example/repos/acme/api/issues?state=open"
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "message": "the token has expired"
+        }
+      }
+    }
+  ],
+  "arguments": {
+    "repo": "acme/api",
+    "state": "open"
+  }
+}

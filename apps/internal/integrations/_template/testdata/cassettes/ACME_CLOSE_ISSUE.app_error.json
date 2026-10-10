@@ -1,0 +1,23 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "PATCH",
+        "url": "https://api.acme.example/repos/acme/api/issues/7",
+        "body": {
+          "state": "closed"
+        }
+      },
+      "response": {
+        "status": 422,
+        "body": {
+          "message": "the issue is already closed"
+        }
+      }
+    }
+  ],
+  "arguments": {
+    "repo": "acme/api",
+    "number": 7
+  }
+}
