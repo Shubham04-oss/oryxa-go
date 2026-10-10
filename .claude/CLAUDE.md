@@ -70,8 +70,8 @@ and look again at the next checkpoint.
 
 ## Rules that still hold
 
-- One task, one branch, one PR against main. Never merge or deploy; the
-  owner does.
+- One task, one branch, one PR against main. a1 and macmini never merge or
+  deploy; macbookpro reviews and merges, at the owner's direction.
 - Stay inside your item's files. Commit after each step.
 - What you changed, what you found and what's left goes in the PR and on the
   board, not only in your own session, so the next agent can see it.
