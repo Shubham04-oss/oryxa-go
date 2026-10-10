@@ -55,6 +55,7 @@ var templateGoldens = []struct{ name, template, params string }{
 	{"owner_notice", TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"When is the launch?\nAnd who signs it off?",` + tickets + `}`},
 	{"owner_notice_asker_by_name", TemplateOwnerNotice, `{"asker_name":"Alex Kim","question":"Can I see the dev keys?",` + tickets + `}`},
 	{"owner_notice_with_reply", TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"When is the launch?\nAnd who signs it off?",` + ticketsWithReply + `}`},
+	{"owner_notice_owner_first", TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"Can you approve the launch budget?","answer_by":"owner",` + ticketsWithReply + `}`},
 	{"notice_settled_summary", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"approved_summary",` + decided + `}`},
 	{"notice_settled_access", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"approved_access",` + decided + `}`},
 	{"notice_settled_denied", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"denied",` + decided + `}`},
@@ -188,6 +189,60 @@ func TestTheOwnerNoticeHasOnlyTheAskerTheQuestionAndThreeButtons(t *testing.T) {
 	// A notification says who, and not what.
 	if strings.Contains(rendered.Text, "launch") || !strings.Contains(rendered.Text, "<@U0ASKER>") {
 		t.Fatalf("text = %q", rendered.Text)
+	}
+}
+
+// TestAnOwnerFirstNoticeLeadsWithReplyYourself: a notice for an ask that needs
+// the owner's own answer has the same asker and question, says it needs their
+// answer, and offers Reply yourself first, then Let my agent answer (the summary
+// choice's ticket), then Deny, unstyled; no Allow for 1 hour. "agent" is the
+// notice every ask had before.
+func TestAnOwnerFirstNoticeLeadsWithReplyYourself(t *testing.T) {
+	h := newHarness(t)
+	params := `{"asker_user_id":"U0ASKER","question":"Can you approve the launch budget?","answer_by":"owner",` +
+		`"tickets":{"summary":"t1.a.b","access":"t1.c.d","deny":"t1.e.f","reply":"t1.g.h"}}`
+	rendered := h.renderOK(TemplateOwnerNotice, params)
+	var blocks []map[string]any
+	raw, _ := json.Marshal(rendered.Blocks)
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != 2 || blocks[0]["type"] != "section" || blocks[1]["type"] != "actions" || blocks[1]["block_id"] != "consent" {
+		t.Fatalf("blocks = %s", raw)
+	}
+	if text := blocks[0]["text"].(map[string]any)["text"].(string); text != "<@U0ASKER> is asking you through Oryxa, and it needs your own answer:\n> Can you approve the launch budget?" {
+		t.Fatalf("the notice says %q", text)
+	}
+	buttons := blocks[1]["elements"].([]any)
+	want := []struct{ label, action, value string }{
+		{"Reply yourself", ActionReply, "t1.g.h"},
+		{"Let my agent answer", ActionSummary, "t1.a.b"},
+		{"Deny", ActionDeny, "t1.e.f"},
+	}
+	if len(buttons) != len(want) {
+		t.Fatalf("buttons = %s", raw)
+	}
+	for i, want := range want {
+		button := buttons[i].(map[string]any)
+		label := button["text"].(map[string]any)["text"]
+		if button["type"] != "button" || label != want.label || button["action_id"] != want.action || button["value"] != want.value {
+			t.Errorf("button %d = %v, want %+v", i, button, want)
+		}
+		if _, styled := button["style"]; styled {
+			t.Errorf("button %d is styled", i)
+		}
+	}
+	if strings.Contains(string(raw), "t1.c.d") || strings.Contains(string(raw), "Allow for 1 hour") {
+		t.Errorf("an owner-first notice offers access: %s", raw)
+	}
+	if strings.Contains(rendered.Text, "budget") || !strings.Contains(rendered.Text, "<@U0ASKER>") {
+		t.Fatalf("text = %q", rendered.Text)
+	}
+
+	ordinary := renderedJSON(t, h.renderOK(TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"When is the launch?\nAnd who signs it off?",`+ticketsWithReply+`}`))
+	asAgent := renderedJSON(t, h.renderOK(TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"When is the launch?\nAnd who signs it off?","answer_by":"agent",`+ticketsWithReply+`}`))
+	if ordinary != asAgent {
+		t.Fatalf("answer_by agent changed the notice:\n%s\nwant\n%s", asAgent, ordinary)
 	}
 }
 
@@ -378,6 +433,8 @@ func TestParamsAreCheckedAgainstTheirTemplate(t *testing.T) {
 		"a bypass for no reason":               {TemplateBypassNotice, `{"asker_name":"a","question":"q","reason":"because"}`},
 		"a private note with params":           {TemplatePrivateNote, `{"text":"x"}`},
 		"a reply ticket with a space in it":    {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","tickets":{"summary":"a","access":"b","deny":"c","reply":"d e"}}`},
+		"an owner-first notice with no reply":  {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","answer_by":"owner",` + tickets + `}`},
+		"a notice answered by nobody known":    {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","answer_by":"team",` + ticketsWithReply + `}`},
 		"a reply said of an approval":          {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"q","decision":"approved_summary","decided_by_name":"Raya","reply":"mine"}`},
 		"a reply said of a review that sent":   {TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"q","outcome":"sent","reply":"mine"}`},
 		"a replied notice with no question":    {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","decision":"replied","reply":"mine"}`},

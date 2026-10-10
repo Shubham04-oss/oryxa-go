@@ -187,8 +187,10 @@ type Config struct {
 	// be read again and is held for them rather than decided by an agent.
 	Tokens memberauth.TokenSource
 	// Jev judges which of its target's toolboxes a request made in a
-	// teamspace that names none needs (judgeTools); (*jev.Client).Ask is it.
-	// Without it, no TYPESAFE_API_KEY, such a request asks for none.
+	// teamspace that names none needs, and whether answering any request
+	// needs its owner's own judgment (judgeRequest); (*jev.Client).Ask is it.
+	// Without it, no TYPESAFE_API_KEY, such a request asks for knowledge, and
+	// every request may be answered by its owner's agent.
 	Jev func(context.Context, jev.Request) (jev.Result, error)
 	// JevTimeout bounds asking Jev; DefaultJevTimeout when zero.
 	JevTimeout time.Duration
@@ -344,8 +346,14 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 		return agents.Interaction{}, err
 	}
 	// Only once the request is known to be one that may be made is Jev
-	// asked what it needs; whatever Jev says, or fails to, it is made.
-	tools, toolsJudgedBy := service.requestedTools(ctx, input)
+	// asked what it needs and who is to answer it; whatever Jev says, or
+	// fails to, it is made.
+	tools, toolsJudgedBy, answerBy := service.judgeRequest(ctx, input)
+	if answerBy == AnswerByOwner {
+		// It needs its owner's own judgment, so they decide it, whatever their
+		// seat would let an agent decide.
+		approval = ApprovalOwner
+	}
 	id, err := newID("irq_")
 	if err != nil {
 		return agents.Interaction{}, err
@@ -376,7 +384,7 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 			UserEmail: target.OwnerEmail, UserDisplayName: target.OwnerDisplayName,
 		},
 		Purpose: input.Purpose, Task: input.Task, Context: nonNilContext(input.Context),
-		RequestedTools: nonNilStrings(tools), ToolsJudgedBy: toolsJudgedBy, RequestedPermissions: nonNilStrings(input.RequestedPermissions),
+		RequestedTools: nonNilStrings(tools), ToolsJudgedBy: toolsJudgedBy, AnswerBy: answerBy, RequestedPermissions: nonNilStrings(input.RequestedPermissions),
 		Status: StatusPending, Revision: 1, ExpiresAt: now.Add(expires), CreatedAt: now, UpdatedAt: now,
 		Origin: OriginAgent,
 	}
@@ -451,9 +459,11 @@ func namedByRequester(stored agents.Interaction) []string {
 // so does one naming none. A request made outside any teamspace is held
 // whatever it names: no standing rule of its member's lets an agent decide
 // what is asked of it there, so the "agent" an older build stored for every
-// such request decides nothing.
+// such request decides nothing. An owner-first request (OwnerFirst) is held
+// wherever it was made, whatever its approval says: it needs its owner's own
+// judgment, so no agent decides it and none runs for it until they let one.
 func HeldForOwner(request agents.Interaction) bool {
-	return request.TeamspaceID == "" || request.Approval != ApprovalAgent
+	return request.TeamspaceID == "" || request.Approval != ApprovalAgent || OwnerFirst(request)
 }
 
 // approval is who decides a new request, which follows the target's standing

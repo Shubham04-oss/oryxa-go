@@ -140,6 +140,13 @@ func (service *Service) CreateAsk(ctx context.Context, input AskInput) (AskResul
 	if err != nil {
 		return AskResult{}, err
 	}
+	// Who is to answer is judged once, for every owner the message asks: it is
+	// the same question to each. A secret is the owner's to share whatever Jev
+	// would say, and nothing they write goes to Slack, so it is not asked.
+	answerBy := AnswerByAgent
+	if input.Kind != AskSecret {
+		answerBy = service.judgeAnswerBy(ctx, toolsState{Request: toolsRequest{Task: truncateRunes(input.Question, jevMaxTaskRunes)}})
+	}
 	now := service.now().UTC()
 	ask := Ask{
 		ID: askID, OrganizationID: input.OrganizationID, Origin: OriginSlack,
@@ -164,7 +171,7 @@ func (service *Service) CreateAsk(ctx context.Context, input AskInput) (AskResul
 				UserEmail: owner.Email, UserDisplayName: owner.DisplayName,
 			},
 			Purpose: slackPurpose, Task: input.Question, Context: []agents.InteractionContextItem{},
-			RequestedTools: []string{agents.KnowledgeToolboxName}, ToolsJudgedBy: ToolsJudgedByRequester,
+			RequestedTools: []string{agents.KnowledgeToolboxName}, ToolsJudgedBy: ToolsJudgedByRequester, AnswerBy: answerBy,
 			RequestedPermissions: []string{PermissionConsentSummary, PermissionConsentAccess},
 			Status:               StatusPending, Revision: 1, ExpiresAt: now.Add(expires), CreatedAt: now, UpdatedAt: now,
 		}
@@ -175,6 +182,11 @@ func (service *Service) CreateAsk(ctx context.Context, input AskInput) (AskResul
 		}
 		if owner.Bypass != "" {
 			item.Bypass = &BypassDecision{Reason: owner.Bypass, Input: decisionUnderStanding(request, bypassApproved)}
+		}
+		if OwnerFirst(request) {
+			// It needs the owner's own judgment, which no access they gave and
+			// no channel's standing can give for them: it waits for them.
+			item.OnLease, item.Bypass = nil, nil
 		}
 		items = append(items, item)
 	}
@@ -317,6 +329,9 @@ func (service *Service) Bypass(ctx context.Context, requestID, reason string) (a
 	}
 	if !asksConsent(request) {
 		return agents.Interaction{}, fmt.Errorf("%w: this request does not ask for consent", ErrInvalid)
+	}
+	if OwnerFirst(request) {
+		return agents.Interaction{}, fmt.Errorf("%w: this request needs its owner's own answer, so nothing approves it for them", ErrInvalid)
 	}
 	input := decisionUnderStanding(request, bypassApproved)
 	if err := validateDecision(request, input); err != nil {

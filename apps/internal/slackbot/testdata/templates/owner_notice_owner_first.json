@@ -1,0 +1,48 @@
+{
+  "text": "<@U0ASKER> is asking you a question through Oryxa.",
+  "blocks": [
+    {
+      "text": {
+        "text": "<@U0ASKER> is asking you through Oryxa, and it needs your own answer:\n> Can you approve the launch budget?",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "consent",
+      "elements": [
+        {
+          "action_id": "reply",
+          "text": {
+            "emoji": false,
+            "text": "Reply yourself",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.reply.sig"
+        },
+        {
+          "action_id": "consent_summary",
+          "text": {
+            "emoji": false,
+            "text": "Let my agent answer",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.summary.sig"
+        },
+        {
+          "action_id": "consent_deny",
+          "text": {
+            "emoji": false,
+            "text": "Deny",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "t1.deny.sig"
+        }
+      ],
+      "type": "actions"
+    }
+  ]
+}
