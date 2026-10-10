@@ -143,7 +143,37 @@ jobs:
         # already has; auth's own tests migrate them into this fresh one.
         run: go test -count=1 ./auth/internal/postgres/
       - name: Test
-        run: go test -count=1 ./...
+        id: test
+        # The JSON events are kept for the step below. What prints is what
+        # plain `go test` would: each package's result as it finishes, then
+        # the output of every test that failed.
+        run: |
+          set -o pipefail
+          status=0
+          go test -count=1 -json ./... | tee "$RUNNER_TEMP/go-test.json" |
+            jq -rj --unbuffered 'select(.Test == null and .Output != null and (.Output | test("^(PASS|FAIL)\\n$") | not)) | .Output' || status=$?
+          if [ "$status" -ne 0 ]; then
+            jq -rjs '[.[] | select(.Test != null and .Action == "fail") | [.Package, .Test]] as $failed
+              | .[] | select(.Test != null and .Output != null and ([.Package, .Test] | IN($failed[]))) | .Output' \
+              "$RUNNER_TEMP/go-test.json"
+          fi
+          exit "$status"
+      - name: Database suites ran
+        # Every *_TEST_DATABASE_URL is set above, so a test that skips naming
+        # one means a suite read a variable this job does not set, and has
+        # been passing without running. Fail rather than let it go quiet.
+        if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
+        run: |
+          skipped=$(jq -rs '
+            [.[] | select(.Test != null and .Action == "output" and (.Output | test("[A-Z_]+_TEST_DATABASE_URL"))) | [.Package, .Test]] as $named
+            | [.[] | select(.Test != null and .Action == "skip") | [.Package, .Test]] | unique
+            | map(select(IN($named[]))) | .[] | "\(.[0]) \(.[1])"' "$RUNNER_TEMP/go-test.json")
+          if [ -n "$skipped" ]; then
+            echo "::error::These database tests skipped for want of a *_TEST_DATABASE_URL; set it in the Database step:"
+            echo "$skipped"
+            exit 1
+          fi
+          echo "No database test skipped for want of its database."
 
   web:
     name: Web
