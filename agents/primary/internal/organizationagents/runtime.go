@@ -30,6 +30,8 @@ type RuntimeConfig struct {
 	Prices     *pricing.Table
 	Logger     *slog.Logger
 	RunTimeout time.Duration
+	// Drain is the process's (threads.Config.Drain).
+	Drain *threads.Drain
 }
 
 // Runtime executes one isolated synthesis turn. It uses the common run
@@ -65,7 +67,7 @@ func (runtime *Runtime) Synthesize(ctx context.Context, definition teamspaces.Or
 		AppName: "organization_" + safeName(definition.ID), Agent: built,
 		Sessions: runtime.config.Sessions, Artifacts: runtime.config.Artifacts,
 		Runs: runtime.config.Runs, Prices: runtime.config.Prices,
-		Logger: runtime.config.Logger, RunTimeout: runtime.config.RunTimeout,
+		Logger: runtime.config.Logger, RunTimeout: runtime.config.RunTimeout, Drain: runtime.config.Drain,
 		InitialState: map[string]any{
 			primaryagents.AgentIDKey: definition.ID, primaryagents.AgentNameKey: definition.Name,
 			primaryagents.AgentKindKey: "organization",

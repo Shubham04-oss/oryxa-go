@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -377,7 +378,7 @@ func TestServeDrainsRequestsBeforeStoppingWorkers(t *testing.T) {
 	var logs bytes.Buffer
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, listener, []mounted{{name: "slow", service: service}}, 5*time.Second, slog.New(slog.NewJSONHandler(&logs, nil)))
+		done <- serve(ctx, listener, []mounted{{name: "slow", service: service}}, 5*time.Second, time.Second, slog.New(slog.NewJSONHandler(&logs, nil)))
 	}()
 
 	responded := make(chan string, 1)
@@ -428,7 +429,7 @@ func TestServeReportsAWorkerThatStopsEarly(t *testing.T) {
 	go func() {
 		done <- serve(ctx, listener, []mounted{{name: "quitter", service: Service{Workers: []Worker{func(context.Context) {
 			close(stopped)
-		}}}}}, time.Second, slog.New(slog.NewJSONHandler(&logs, nil)))
+		}}}}}, time.Second, time.Second, slog.New(slog.NewJSONHandler(&logs, nil)))
 	}()
 	<-stopped
 	deadline := time.Now().Add(2 * time.Second)
@@ -528,4 +529,71 @@ func (buffer *safeBuffer) String() string {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 	return buffer.buffer.String()
+}
+
+// TestShutdownDrainsWorkInFlightBeforeTheWorkersStop: told to stop, the host
+// first asks each service to drain, given the drain's time and no more, while
+// its workers still run; only once the drain returns are the workers stopped.
+func TestShutdownDrainsWorkInFlightBeforeTheWorkersStop(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var workerStopped atomic.Bool
+	type drained struct {
+		budget        time.Duration
+		workerRunning bool
+	}
+	drains := make(chan drained, 1)
+	service := Service{
+		Workers: []Worker{func(ctx context.Context) {
+			<-ctx.Done()
+			workerStopped.Store(true)
+		}},
+		Drain: func(ctx context.Context) {
+			deadline, _ := ctx.Deadline()
+			budget := time.Until(deadline)
+			<-ctx.Done()
+			drains <- drained{budget: budget, workerRunning: !workerStopped.Load()}
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- serve(ctx, listener, []mounted{{name: "agents", service: service}}, time.Second, 100*time.Millisecond, slog.New(slog.DiscardHandler))
+	}()
+	time.Sleep(20 * time.Millisecond)
+	started := time.Now()
+	cancel()
+	select {
+	case got := <-drains:
+		if got.budget <= 0 || got.budget > 100*time.Millisecond || !got.workerRunning {
+			t.Fatalf("the drain had %s with the worker running %t, want at most 100ms with it running", got.budget, got.workerRunning)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the service was never asked to drain")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !workerStopped.Load() {
+		t.Fatal("the worker was not stopped after the drain")
+	}
+	if took := time.Since(started); took > 2*time.Second {
+		t.Fatalf("shutting down took %s", took)
+	}
+}
+
+func TestTheDrainTimeoutIsConfigured(t *testing.T) {
+	for value, want := range map[string]time.Duration{"": 20 * time.Second, "90s": 90 * time.Second} {
+		config, err := ConfigFromEnv(func(key string) string {
+			if key == "ORYXA_DRAIN_TIMEOUT" {
+				return value
+			}
+			return ""
+		})
+		if err != nil || config.DrainTimeout != want {
+			t.Errorf("ORYXA_DRAIN_TIMEOUT=%q: %s, %v; want %s", value, config.DrainTimeout, err, want)
+		}
+	}
 }

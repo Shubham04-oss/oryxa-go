@@ -110,6 +110,10 @@ type Item struct {
 	// RunID and Usage describe a run.
 	RunID string          `json:"run_id,omitempty"`
 	Usage *agentsv1.Usage `json:"usage,omitempty"`
+	// Interrupted marks a run that failed because Oryxa was restarting
+	// (ErrInterrupted, ErrDraining): not of its own doing, and worth starting
+	// again.
+	Interrupted bool `json:"interrupted,omitempty"`
 }
 
 // streamItems is what one event a run yields shows the member while the run

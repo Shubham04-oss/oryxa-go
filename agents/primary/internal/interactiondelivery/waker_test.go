@@ -206,7 +206,9 @@ type fakeRun struct {
 	id        string
 	onExecute func()
 	fail      bool
-	discarded bool
+	// interrupted fails the run as a drain's deadline does.
+	interrupted bool
+	discarded   bool
 }
 
 func (run *fakeRun) ID() string { return run.id }
@@ -216,10 +218,10 @@ func (run *fakeRun) Execute(_ context.Context, emit func(threads.Item) error) {
 		run.onExecute()
 	}
 	itemType := threads.ItemRunCompleted
-	if run.fail {
+	if run.fail || run.interrupted {
 		itemType = threads.ItemRunFailed
 	}
-	_ = emit(threads.Item{Type: itemType, RunID: run.id})
+	_ = emit(threads.Item{Type: itemType, RunID: run.id, Interrupted: run.interrupted})
 }
 
 func (run *fakeRun) Discard(context.Context, string) { run.discarded = true }
@@ -238,7 +240,9 @@ type fakeAgentRuns struct {
 	next      int
 	onExecute func()
 	fail      bool
-	err       error
+	// interrupted has every run end as a drain's deadline ends it.
+	interrupted bool
+	err         error
 }
 
 func (runs *fakeAgentRuns) StartUnattendedRun(_ context.Context, member threads.Member, agentID, threadID string, input threads.RunInput, reach managedagents.UnattendedProfile) (managedagents.StartedRun, error) {
@@ -253,8 +257,35 @@ func (runs *fakeAgentRuns) StartUnattendedRun(_ context.Context, member threads.
 		threadID = "thread_1"
 	}
 	return managedagents.StartedRun{ThreadID: threadID, Run: &fakeRun{
-		id: "run_" + time.Now().Format("150405.000000000"), onExecute: runs.onExecute, fail: runs.fail,
+		id: "run_" + time.Now().Format("150405.000000000"), onExecute: runs.onExecute, fail: runs.fail, interrupted: runs.interrupted,
 	}}, nil
+}
+
+// TestARestartNeverCountsAgainstADelivery: a delivery whose run a restart
+// interrupted, or which could not start because the process was draining, is
+// given back to be run by the next process, counting as no attempt; the same
+// run failing of its own counts.
+func TestARestartNeverCountsAgainstADelivery(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		runs   *fakeAgentRuns
+		failed bool
+	}{
+		"interrupted at the drain's deadline": {&fakeAgentRuns{interrupted: true}, false},
+		"refused, the process draining":       {&fakeAgentRuns{err: threads.ErrDraining}, false},
+		"failed of its own":                   {&fakeAgentRuns{fail: true}, true},
+	} {
+		delivery := testDelivery("evt_1", KindTargetApproved, 1)
+		delivery.Status = interactions.StatusApproved
+		store := &fakeDeliveries{pending: []Delivery{delivery}}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable(interactions.StatusApproved)}}
+		if err := NewWaker(store, testCase.runs, requests, standsStill(), nil).WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		failed, released := store.released["evt_1"]
+		if !released || failed != testCase.failed || len(store.done) != 0 || len(store.dropped) != 0 {
+			t.Errorf("%s: released=%v done=%v dropped=%v, want released, counted %t", name, store.released, store.done, store.dropped, testCase.failed)
+		}
+	}
 }
 
 func testDelivery(eventID, kind string, revision int64) Delivery {

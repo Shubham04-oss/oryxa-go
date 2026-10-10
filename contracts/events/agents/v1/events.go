@@ -544,4 +544,8 @@ type RunFailed struct {
 	Models         []ModelUsage `json:"models"`
 	DurationMillis int64        `json:"duration_millis"`
 	FailedAt       time.Time    `json:"failed_at"`
+	// Interrupted is a run its process stopped as it was replaced, at the end
+	// of the drain a deploy gives it: not a failure of its own. Absent
+	// otherwise, and from an older build's events.
+	Interrupted bool `json:"interrupted,omitempty"`
 }

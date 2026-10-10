@@ -319,6 +319,12 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 		logger.InfoContext(ctx, "interaction delivery waits for the agent conversation", "reason", err)
 		waker.release(ctx, delivery, false, err.Error(), logger)
 		return
+	case threads.Interrupted(err):
+		// The process is stopping: the next one runs it, and this attempt
+		// counts for nothing.
+		logger.InfoContext(ctx, "interaction delivery waits for the next process", "reason", err)
+		waker.release(ctx, delivery, false, err.Error(), logger)
+		return
 	case errors.Is(err, managedagents.ErrDisabled) && forTheTarget(delivery.Kind):
 		// A member may turn their agent on again, so what it was asked to
 		// decide or do is not given up: the delivery waits for it,
@@ -350,12 +356,19 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 		"interaction_tools", agents.DeliveryTools(purpose(delivery.Kind)))
 
 	var ended string
+	interrupted := false
 	started.Run.Execute(ctx, func(item threads.Item) error {
 		if item.Type == threads.ItemRunCompleted || item.Type == threads.ItemRunFailed {
-			ended = item.Type
+			ended, interrupted = item.Type, item.Interrupted
 		}
 		return nil
 	})
+	if interrupted {
+		// The process stopped it as it was replaced: the next one runs it
+		// again, and this attempt counts for nothing.
+		waker.release(ctx, delivery, false, "interaction delivery run was interrupted by a restart", logger)
+		return
+	}
 	if ended != threads.ItemRunCompleted {
 		waker.release(ctx, delivery, true, "interaction delivery run did not complete", logger)
 		return
