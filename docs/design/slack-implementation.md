@@ -47,7 +47,7 @@ This is the plan as the planner wrote it against #125's branch (`4c658cb`). Its 
 
 **Surfaces, router, web.**
 - `surfaces`: `surface_jobs`, `surface_links(request_id, role, channel_id, ts)`; consumes `agents.interaction.*`, re-reads the ledger: requested→`owner_notice` DM + ephemeral `ask_ack`; decided→`chat.update`; completed→`answer` ("From Raya's agent · approved by Raya (AI summary only)"); held→`status` in the thread and `held_review` in the owner's DM (why, the masked-first preview, Send / Send masked / Don't send), replaced by `held_review_settled` once reviewed. Never a secret.
-- `slackrouter`: `slack_jobs`, `slack_identities` (lower(email) vs `auth_users`⋈`auth_memberships`; full members of the install's team). Refusals: `not_member`, `owner_not_member`, `group_dm`, `external_channel`, `no_owner`, `too_many_asks` (>5 open).
+- `slackrouter`: `slack_jobs`, `slack_identities` (lower(email) vs `auth_users`⋈`auth_memberships`; full members of the install's team). Refusals: `not_member`, `owner_not_member`, `group_dm`, `external_channel`, `no_owner`, `too_many_asks` (>5 open, a member's mention refused in the last hour counting as one: `slack_jobs.refused_user_id`/`refused_at`).
 - realtime: `agents.interaction.*` → `POST {worker}/internal/realtime/requests`, signed as the purge over `"requests."+ts+"."+body`; ids-only body → `DirectMessageAgent(org~a~b).noteRequest` + both `InboxAgent`s; cards read Go as the member; the 10 s poll stays.
 - API: `GET …/agent-requests?box=&origin=&ask_id=`, `GET …/agent-requests/activity`; secrets `PUT …/{id}/secret {value, ttl_seconds≤3600}` (owner), `GET` (asker, once), `DELETE`; `agents.interaction.secret.viewed.v1`.
 

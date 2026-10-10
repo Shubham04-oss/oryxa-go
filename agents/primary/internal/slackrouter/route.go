@@ -5,12 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/slackrouter/consentpolicy"
 )
 
 // appMention is the one Slack event the router turns into an ask.
 const appMention = "app_mention"
+
+// RefusedAskWindow is how long a member's refused mention counts toward their
+// limit of open asks (consentpolicy.MaxOpenAsks), as if it were an ask still
+// open: an asker refused five times within it is refused again, as too many
+// asks, until the oldest refusal is older. A refusal for being at the limit is
+// not counted, so asking again while there only waits out the window, and does
+// not extend it.
+const RefusedAskWindow = time.Hour
 
 // mention routes a message that mentioned the bot: who asks, who is asked,
 // what the policy says, and then either a refusal to the asker or the ask.
@@ -102,6 +111,13 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 		if openAsks, err = router.deps.Asks.CountOpenAsks(ctx, job.OrganizationID, asker.Person.UserID); err != nil {
 			return fmt.Errorf("count the asker's open asks: %w", err)
 		}
+		if router.deps.Refused != nil {
+			refused, err := router.deps.Refused.CountRefused(ctx, job.OrganizationID, asker.Person.UserID, job.InboundID, RefusedAskWindow)
+			if err != nil {
+				return fmt.Errorf("count the asker's refused asks: %w", err)
+			}
+			openAsks += refused
+		}
 	}
 
 	facts := consentpolicy.Facts{
@@ -117,9 +133,15 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	if decision := consentpolicy.Decide(gate); decision.Outcome == consentpolicy.Deny {
 		switch {
 		case decision.Reason == consentpolicy.NoOwner && selfNamed:
+			router.noteRefused(ctx, job, asker, decision.Reason)
 			return router.refuse(ctx, job, mention, "", RefusalParams{Reason: decision.Reason, Hint: "self"})
 		case decision.Reason == consentpolicy.TooManyAsks && ownersNamed > consentpolicy.MaxOwners:
+			router.noteRefused(ctx, job, asker, decision.Reason)
 			return router.refuse(ctx, job, mention, "", RefusalParams{Reason: decision.Reason, Hint: "too_many_people"})
+		case decision.Reason != consentpolicy.TooManyAsks:
+			// A refusal for being at the limit is the limit at work, and is not
+			// one more against it.
+			router.noteRefused(ctx, job, asker, decision.Reason)
 		}
 		return router.refuseAsk(ctx, job, mention, decision.Reason)
 	}
@@ -130,6 +152,7 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 		for _, owner := range owners {
 			left = append(left, leftOut{person: owner, reason: consentpolicy.OwnerNotMember})
 		}
+		router.noteRefused(ctx, job, asker, consentpolicy.OwnerNotMember)
 		return router.tellNotAsked(ctx, job, mention, left)
 	}
 
@@ -153,6 +176,7 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	if reason, err := router.departments(ctx, job, asker, owners, &input); err != nil {
 		return err
 	} else if reason != "" {
+		router.noteRefused(ctx, job, asker, reason)
 		return router.refuseAsk(ctx, job, mention, reason)
 	}
 	screened, err := router.screen(ctx, job, input)
@@ -161,6 +185,7 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	}
 	facts.Screen, gate.Screen = screened.Verdict, screened.Verdict
 	if decision := consentpolicy.Decide(gate); decision.Outcome == consentpolicy.Deny {
+		router.noteRefused(ctx, job, asker, decision.Reason)
 		return router.refuseAsk(ctx, job, mention, decision.Reason)
 	}
 
@@ -186,6 +211,7 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 			// who was not asked, and why.
 			skipped = append(skipped, leftOut{person: owner, reason: decision.Reason})
 		case decision.Outcome == consentpolicy.Deny:
+			router.noteRefused(ctx, job, asker, decision.Reason)
 			return router.refuseAsk(ctx, job, mention, decision.Reason)
 		case decision.Outcome == consentpolicy.Allow:
 			bypass := decision.Bypass
@@ -197,6 +223,7 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 	if len(asked) == 0 {
 		// Everyone named is left out, and telling the asker so is the whole
 		// outcome of the job.
+		router.noteRefused(ctx, job, asker, skipped[0].reason)
 		return router.tellNotAsked(ctx, job, mention, skipped)
 	}
 
@@ -393,6 +420,22 @@ func (router *Router) refuseAsk(ctx context.Context, job Job, mention *Mention, 
 		params.OrganizationName = router.organizationName(ctx, job.OrganizationID)
 	}
 	return router.refuse(ctx, job, mention, "", params)
+}
+
+// noteRefused records that a member's mention ended without an ask, for reason,
+// so that it counts toward their limit of open asks for RefusedAskWindow.
+// Someone who is not a member has no limit to count it toward, and a mention
+// refused because it could not be screened is Oryxa's failure, not the asker's,
+// so neither is recorded. Failing to record it costs the count one refusal, and
+// refuses nobody: the asker is still told why not.
+func (router *Router) noteRefused(ctx context.Context, job Job, asker resolved, reason consentpolicy.Reason) {
+	if router.deps.Refused == nil || !asker.Member || reason == consentpolicy.ScreenFailed {
+		return
+	}
+	if err := router.deps.Refused.MarkRefused(ctx, job.InboundID, asker.Person.UserID); err != nil {
+		router.logger.WarnContext(ctx, "could not record a refused mention against its asker's limit",
+			"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "error", err)
+	}
 }
 
 // leftOut is a named person who is not asked, and why: one of the refusals

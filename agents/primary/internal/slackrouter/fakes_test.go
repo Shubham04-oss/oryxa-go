@@ -416,6 +416,62 @@ func (asked *fakeAsked) MarkAsked(_ context.Context, inboundID, askID string) er
 	return nil
 }
 
+// fakeRefused keeps refused mentions in memory, each when it was refused, and
+// counts them as the store does: one member's, in one organization, within the
+// window, leaving out the job being routed.
+type fakeRefused struct {
+	mu      sync.Mutex
+	marked  map[string]refusedMark
+	now     func() time.Time
+	markErr error
+	counted []refusedCount
+}
+
+type refusedMark struct {
+	organizationID, askerUserID string
+	at                          time.Time
+}
+
+type refusedCount struct {
+	askerUserID, exceptInboundID string
+	window                       time.Duration
+}
+
+func (refused *fakeRefused) MarkRefused(_ context.Context, inboundID, askerUserID string) error {
+	refused.mu.Lock()
+	defer refused.mu.Unlock()
+	if refused.markErr != nil {
+		return refused.markErr
+	}
+	if refused.marked == nil {
+		refused.marked = map[string]refusedMark{}
+	}
+	if _, ok := refused.marked[inboundID]; !ok {
+		refused.marked[inboundID] = refusedMark{organizationID: testOrg, askerUserID: askerUserID, at: refused.clock()}
+	}
+	return nil
+}
+
+func (refused *fakeRefused) CountRefused(_ context.Context, organizationID, askerUserID, exceptInboundID string, window time.Duration) (int, error) {
+	refused.mu.Lock()
+	defer refused.mu.Unlock()
+	refused.counted = append(refused.counted, refusedCount{askerUserID: askerUserID, exceptInboundID: exceptInboundID, window: window})
+	count := 0
+	for inboundID, mark := range refused.marked {
+		if inboundID != exceptInboundID && mark.organizationID == organizationID && mark.askerUserID == askerUserID && mark.at.After(refused.clock().Add(-window)) {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (refused *fakeRefused) clock() time.Time {
+	if refused.now != nil {
+		return refused.now()
+	}
+	return time.Now()
+}
+
 // harness is a router wired to fakes, with a workspace of members already in
 // it. Every Slack user in it belongs to team T1 and every member to org_1.
 type harness struct {
@@ -426,6 +482,7 @@ type harness struct {
 	asks       *fakeAsks
 	authority  *fakeAuthority
 	asked      *fakeAsked
+	refused    *fakeRefused
 	screen     *fakeScreen
 	directory  *fakeDirectory
 	router     *Router
@@ -437,7 +494,7 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{
 		t: t, slack: newFakeSlack(), members: &fakeMembers{}, identities: &fakeIdentities{},
 		asks: &fakeAsks{open: map[string]int{}}, authority: &fakeAuthority{outranks: map[string]bool{}},
-		asked: &fakeAsked{}, screen: newFakeScreen(),
+		asked: &fakeAsked{}, refused: &fakeRefused{}, screen: newFakeScreen(),
 		directory: &fakeDirectory{teams: map[string][]string{}, noGrant: map[string]bool{}},
 	}
 	h.slack.channels[testChannel] = ChannelInfo{ID: testChannel}
@@ -450,7 +507,7 @@ func newHarness(t *testing.T) *harness {
 func (h *harness) rebuild() {
 	router, err := NewRouter(Deps{
 		Slack: h.slack, Members: h.members, Identities: h.identities, Asks: h.asks,
-		Authority: h.authority, Asked: h.asked, Screen: h.screen, Directory: h.directory,
+		Authority: h.authority, Asked: h.asked, Refused: h.refused, Screen: h.screen, Directory: h.directory,
 	})
 	if err != nil {
 		h.t.Fatal(err)
