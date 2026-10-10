@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 
@@ -780,4 +781,41 @@ func toolkitsOf(index map[string]ownTool) []string {
 		toolkits = append(toolkits, tool.Toolkit)
 	}
 	return slices.Compact(slices.Sorted(slices.Values(toolkits)))
+}
+
+// With no toolkit switched on — production's APPS_ORYXA_TOOLKITS="" — the
+// registry routes nothing, so a Composio connection runs exactly as before,
+// and the poll worker does not run even for a subscription that exists.
+func TestNothingRoutesOrPollsWithNoToolkitSwitchedOn(t *testing.T) {
+	t.Parallel()
+	own := newTestIntegration()
+	registry := integration.NewRegistry()
+	if err := registry.Register(own); err != nil {
+		t.Fatal(err)
+	}
+	off := newOryxaHarnessWith(t, registry)
+	off.composio.tools["ACME_LIST_ISSUES"] = composio.Tool{Slug: "ACME_LIST_ISSUES", Toolkit: "acme"}
+	route, err := off.service.routeTool(context.Background(), "ACME_LIST_ISSUES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.hasOwn || off.composio.toolReads != 1 {
+		t.Fatalf("with no toolkit on, route = %+v after %d composio reads", route, off.composio.toolReads)
+	}
+
+	h, own := newToolHarness(t)
+	h.oryxaConnection("apc_oryxa", "user-1", "acme", domain.ConnectionActive, integration.KindAPIToken)
+	ctx := context.Background()
+	trigger, err := h.service.CreateTrigger(ctx, memberToken, "org_1", TriggerInput{ConnectionID: "apc_oryxa", Trigger: "ACME_ISSUE_EVENT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	due := testClock.Add(pollEvery)
+	h.due(trigger.ID, "", due)
+	h.service.now = func() time.Time { return due }
+	h.service.oryxa.enabled = map[string]bool{}
+	h.service.pollTriggers(ctx)
+	if calls := own.pollCalls(); len(calls) != 0 {
+		t.Fatalf("polled with no toolkit on: %+v", calls)
+	}
 }

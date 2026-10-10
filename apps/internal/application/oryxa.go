@@ -212,8 +212,10 @@ func newOryxaBroker(oryxa *Oryxa) (*oryxaBroker, error) {
 		}
 	}
 	// The registry is fixed for the life of the process, so the tool index is
-	// built once: a run reads it before it asks Composio for a tool.
-	broker.tools = indexTools(oryxa.Integrations)
+	// built once: a run reads it before it asks Composio for a tool. Only the
+	// switched-on toolkits are indexed, so with APPS_ORYXA_TOOLKITS empty (as
+	// in production) every run is routed to Composio exactly as before.
+	broker.tools = indexTools(oryxa.Integrations, broker.enabled)
 	return broker, nil
 }
 

@@ -31,20 +31,20 @@ type ownTool struct {
 	Run     integration.ToolFunc
 }
 
-// indexTools is every tool the registered integrations declare, by slug.
+// indexTools is every tool the switched-on integrations declare, by slug.
 //
 // The registry is what a run consults first, so it has to answer by slug
 // alone: the toolkit prefix in a tool's name is Composio's spelling, and a
 // toolkit whose slug is not simply the name's first word — googledrive,
 // googlecalendar — would not be found by reading it.
-func indexTools(registry Integrations) map[string]ownTool {
+func indexTools(registry Integrations, enabled map[string]bool) map[string]ownTool {
 	index := map[string]ownTool{}
 	if registry == nil {
 		return index
 	}
 	for _, toolkit := range registry.Toolkits() {
 		registered, ok := registry.Lookup(toolkit)
-		if !ok {
+		if !ok || !enabled[toolkit] {
 			continue
 		}
 		functions := registered.Tools()

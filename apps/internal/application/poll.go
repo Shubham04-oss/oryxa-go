@@ -51,7 +51,9 @@ const (
 // pollTriggers is one pass over the polled subscriptions that are due. It is
 // called from RunOryxa's upkeep and answers how many events it published.
 func (s *Service) pollTriggers(ctx context.Context) {
-	if s.oryxa == nil {
+	// No toolkit switched on (APPS_ORYXA_TOOLKITS empty, as in production)
+	// means no poll worker: not even the claim query runs.
+	if s.oryxa == nil || len(s.oryxa.enabled) == 0 {
 		return
 	}
 	now := s.now().UTC()
