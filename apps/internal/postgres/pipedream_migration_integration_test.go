@@ -24,6 +24,10 @@ func TestPipedreamMigrationWidensTheBrokerAndCountsActionsByIt(t *testing.T) {
 		WHERE id = $1`, pipedream.ID); err != nil {
 		t.Fatalf("a Pipedream connection = %v", err)
 	}
+	// Running a Pipedream action names the account, so the store must read it.
+	if read, err := store.Connection(ctx, "org_1", pipedream.ID); err != nil || read.PipedreamAccountID != "apn_1" {
+		t.Fatalf("read back = %+v, %v", read, err)
+	}
 	if _, err := store.pool.Exec(ctx, `UPDATE apps_connections SET broker = 'nango' WHERE id = $1`, composio.ID); err == nil {
 		t.Fatal("an unknown broker was stored")
 	}

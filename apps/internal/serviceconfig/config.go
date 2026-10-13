@@ -64,6 +64,10 @@ type Config struct {
 	// APPS_TOOLKIT_BROKERS, a comma list of toolkit=broker, such as
 	// github=composio,linear=pipedream. Existing connections keep theirs.
 	ToolkitBrokers map[string]string
+	// PipedreamDenyActions are Pipedream action keys agents are never
+	// offered nor allowed to run, such as gmail-delete-email:
+	// APPS_PIPEDREAM_DENY_ACTIONS, a comma list.
+	PipedreamDenyActions []string
 	// SigninKMSKeyID is the KMS key Oryxa's sign-in seals credentials and
 	// webhook secrets with, bound to service oryxa-apps:
 	// APPS_SIGNIN_KMS_KEY_ID. Required once a toolkit is switched on.
@@ -140,6 +144,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		EventBridgeEndpoint:   endpointOr(getenv, "EVENTBRIDGE_ENDPOINT", genericEndpoint),
 		SQSEndpoint:           endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
 		EventsQueueURL:        strings.TrimSpace(getenv("APPS_EVENTS_QUEUE_URL")),
+		PipedreamDenyActions:  splitList(getenv("APPS_PIPEDREAM_DENY_ACTIONS")),
 		NoAutoSubscribe:       !autoSubscribe,
 	}
 	if config.AuthURL == "" || config.ComposioAPIKey == "" || config.PublicBaseURL == "" {

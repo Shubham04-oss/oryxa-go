@@ -18,7 +18,7 @@ const connectionColumns = `id, organization_id, member_id, toolkit, broker,
 		WHERE credential.connection_id = apps_connections.id), '') AS credential_kind,
 	auth_config_id, composio_user_id,
 	composio_account_id, status, status_reason, label, return_to, auto_subscribe, auto_subscribed_at,
-	auto_subscribe_attempts, created_at, updated_at, connected_at, removed_at`
+	auto_subscribe_attempts, created_at, updated_at, connected_at, removed_at, pipedream_account_id`
 
 // brokerOf is the broker a connection is stored under: Composio's unless it
 // says otherwise, as every connection made before Oryxa's sign-in is.
@@ -426,15 +426,16 @@ func queryConnections(ctx context.Context, db querier, sql string, args ...any) 
 func scanConnection(rows pgx.Rows) (domain.Connection, error) {
 	var connection domain.Connection
 	var status string
-	var composioAccountID *string
+	var composioAccountID, pipedreamAccountID *string
 	if err := rows.Scan(&connection.ID, &connection.OrganizationID, &connection.MemberID, &connection.Toolkit,
 		&connection.Broker, &connection.CredentialKind, &connection.AuthConfigID, &connection.ComposioUserID, &composioAccountID, &status, &connection.StatusReason,
 		&connection.Label, &connection.ReturnTo, &connection.AutoSubscribe, &connection.AutoSubscribedAt,
 		&connection.AutoSubscribeAttempts, &connection.CreatedAt, &connection.UpdatedAt,
-		&connection.ConnectedAt, &connection.RemovedAt); err != nil {
+		&connection.ConnectedAt, &connection.RemovedAt, &pipedreamAccountID); err != nil {
 		return domain.Connection{}, fmt.Errorf("scan connection: %w", err)
 	}
 	connection.ComposioAccountID = text(composioAccountID)
+	connection.PipedreamAccountID = text(pipedreamAccountID)
 	connection.Status = domain.ConnectionStatus(status)
 	connection.CreatedAt = connection.CreatedAt.UTC()
 	connection.UpdatedAt = connection.UpdatedAt.UTC()

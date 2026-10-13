@@ -48,6 +48,9 @@ type Config struct {
 	// ToolkitBrokers pins a toolkit's new connects to a broker, whatever
 	// brokerFor would otherwise choose: APPS_TOOLKIT_BROKERS.
 	ToolkitBrokers map[string]string
+	// PipedreamDeny are Pipedream action keys agents are never offered nor
+	// allowed to run: APPS_PIPEDREAM_DENY_ACTIONS.
+	PipedreamDeny []string
 }
 
 type Dependencies struct {
@@ -89,6 +92,10 @@ type Service struct {
 
 	toolsMu sync.Mutex
 	tools   map[string]cachedTool
+	// pipedreamActions holds each Pipedream app's agent-ready actions for a
+	// while, under toolsMu, so resolving a PD_ slug costs no listing.
+	pipedreamActions map[string]cachedPipedreamActions
+	pipedreamDeny    map[string]bool
 	// triggers holds each app's trigger definitions for a while, so checking
 	// a subscription against the event it names costs no catalog walk.
 	triggers *triggerCatalog
@@ -120,6 +127,12 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		wait:           sleep,
 		tools:          map[string]cachedTool{},
 		subscribeWake:  make(chan struct{}, 1),
+
+		pipedreamActions: map[string]cachedPipedreamActions{},
+		pipedreamDeny:    map[string]bool{},
+	}
+	for _, key := range config.PipedreamDeny {
+		service.pipedreamDeny[strings.TrimSpace(key)] = true
 	}
 	if service.logger == nil {
 		service.logger = slog.New(slog.DiscardHandler)

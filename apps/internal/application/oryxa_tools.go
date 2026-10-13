@@ -139,15 +139,23 @@ type toolRoute struct {
 	// which names the toolkit a member's own connection may be checked for.
 	own    ownTool
 	hasOwn bool
+	// pipedream is the Pipedream action a PD_ slug names, or nil.
+	pipedream *pipedreamAction
 }
 
-// routeTool answers the route for a slug. A slug the registry does not have
-// is read from Composio, which is the same read a run without a route makes.
-func (s *Service) routeTool(ctx context.Context, slug string) (toolRoute, error) {
+// routeTool answers the route for a slug, for one member. A PD_ slug is
+// resolved against the member's own Pipedream connections, since only they
+// say which apps' actions the member can have. A slug the registry does not
+// have is otherwise read from Composio, which is the same read a run without
+// a route makes.
+func (s *Service) routeTool(ctx context.Context, organizationID, memberID, slug string) (toolRoute, error) {
 	if own, ok := s.oryxaTool(slug); ok {
 		return toolRoute{
 			slug: slug, toolkit: own.Toolkit, readOnly: own.Spec.ReadOnly, own: own, hasOwn: true,
 		}, nil
+	}
+	if s.pipedream != nil && strings.HasPrefix(slug, pipedreamPrefix) {
+		return s.pipedreamRoute(ctx, organizationID, memberID, slug)
 	}
 	tool, err := s.composioTool(ctx, slug)
 	if err != nil {
