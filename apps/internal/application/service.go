@@ -109,6 +109,12 @@ type Service struct {
 	// defaultsSaved says Oryxa's own OAuth apps have all been saved once.
 	defaultsMu    sync.Mutex
 	defaultsSaved bool
+
+	// pipedreamAppCatalog is Pipedream's catalog, held for a day.
+	pipedreamAppCatalog pipedreamCatalog
+	// pipedreamCheckedAt is when the maintenance sweep last checked every
+	// Pipedream account's health; it does so once a day.
+	pipedreamCheckedAt time.Time
 }
 
 func New(dependencies Dependencies, config Config) (*Service, error) {

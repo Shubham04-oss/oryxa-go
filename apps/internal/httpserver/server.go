@@ -44,7 +44,8 @@ type appsService interface {
 	OfferedTools(ctx context.Context, credentials authclient.Credentials, organizationID string) (application.OfferPolicy, error)
 	Connect(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ConnectInput) (domain.Connection, string, error)
 	BrokerFor(ctx context.Context, toolkit string) (string, error)
-	ConnectPipedream(ctx context.Context, toolkit string) error
+	ConnectPipedream(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ConnectInput) (domain.Connection, string, error)
+	CompletePipedreamConnection(ctx context.Context, state, status string) (application.Completion, error)
 	CompleteConnection(ctx context.Context, state, status, accountID string) (application.Completion, error)
 	Connections(ctx context.Context, credentials authclient.Credentials, organizationID, toolkit string, organization bool) ([]domain.Connection, error)
 	Connection(ctx context.Context, credentials authclient.Credentials, organizationID, id string) (domain.Connection, error)
@@ -112,6 +113,7 @@ func New(service appsService, config Config, logger *slog.Logger) *Server {
 	server.handle("GET /v1/apps/catalog/{toolkit}/tools", server.catalogTools)
 	server.handle("GET /v1/apps/catalog/{toolkit}/triggers", server.catalogTriggers)
 	server.handle("GET /v1/apps/connect/callback", server.completeConnection)
+	server.handle("GET /v1/apps/connect/pipedream/callback", server.completePipedreamConnection)
 	server.handle("POST /v1/apps/webhooks/composio", server.receiveWebhook)
 	server.handle("GET /v1/organizations/{organizationID}/apps/offer", server.offeredTools)
 	server.handle("GET /v1/organizations/{organizationID}/apps/connections", server.listConnections)
@@ -289,10 +291,6 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 		server.handleError(writer, request, err)
 		return
 	}
-	if broker == domain.BrokerPipedream {
-		server.handleError(writer, request, server.service.ConnectPipedream(request.Context(), body.Toolkit))
-		return
-	}
 	if broker == domain.BrokerOryxa {
 		server.connectOryxa(writer, request, credentials, application.ConnectInput{
 			Toolkit: body.Toolkit, ReturnTo: body.ReturnTo, Alias: body.Alias, AutoSubscribe: body.AutoSubscribe,
@@ -304,7 +302,11 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 		writeError(writer, http.StatusBadRequest, "invalid_request", "kind and fields are for connecting through broker oryxa")
 		return
 	}
-	connection, redirectURL, err := server.service.Connect(request.Context(), credentials, request.PathValue("organizationID"),
+	connect := server.service.Connect
+	if broker == domain.BrokerPipedream {
+		connect = server.service.ConnectPipedream
+	}
+	connection, redirectURL, err := connect(request.Context(), credentials, request.PathValue("organizationID"),
 		application.ConnectInput{
 			Toolkit: body.Toolkit, ReturnTo: body.ReturnTo, Alias: body.Alias,
 			AutoSubscribe: body.AutoSubscribe,
@@ -322,6 +324,18 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 func (server *Server) completeConnection(writer http.ResponseWriter, request *http.Request) {
 	query := request.URL.Query()
 	completion, err := server.service.CompleteConnection(request.Context(), query.Get("state"), query.Get("status"), query.Get("connected_account_id"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	server.sendBack(writer, request, completion)
+}
+
+// completePipedreamConnection is where Pipedream's hosted connect sends the
+// member's browser back, answered as completeConnection answers Composio's.
+func (server *Server) completePipedreamConnection(writer http.ResponseWriter, request *http.Request) {
+	query := request.URL.Query()
+	completion, err := server.service.CompletePipedreamConnection(request.Context(), query.Get("state"), query.Get("status"))
 	if err != nil {
 		server.handleError(writer, request, err)
 		return

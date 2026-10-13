@@ -113,6 +113,11 @@ locals {
       APPS_SIGNIN_REDIRECT_URI = "${local.app_url}/v1/apps/oauth/callback"
       APPS_ORYXA_TOOLKITS      = ""
 
+      # Pipedream Connect's environment. Production accounts live apart from
+      # development's; apps reads it only once pipedream_ready puts its three
+      # secrets (secrets.tf) on the task.
+      PIPEDREAM_ENVIRONMENT = "production"
+
       # The Slack consent loop (docs/design/slack-implementation.md;
       # deploy/README.md, "The Slack bot"), all of it waiting for
       # slack_app_ready. Apps refuses to start with the surface on and no valid

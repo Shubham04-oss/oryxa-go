@@ -299,6 +299,26 @@ describe("WorkspaceTools", () => {
     expect(screen.queryByRole("button", { name: "Connect Zoom" })).toBeNull()
   })
 
+  it("says quietly when an app connects through Pipedream", async () => {
+    fakeFetch(
+      ({ method, path }) => {
+        if (method !== "GET" || path !== "/v1/apps/catalog/zoom")
+          return undefined
+        const zoom = previewToolkits.find((item) => item.toolkit === "zoom")
+        return json({ ...zoom, connectable: true, broker: "pipedream" })
+      },
+      catalog(),
+      connections({ connections: [] })
+    )
+    render(<WorkspaceTools organizationId="org-1" />)
+    expect(await screen.findByRole("heading", { name: "Zoom" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Zoom details" }))
+    expect(await screen.findByText("Connects through Pipedream")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Gmail details" }))
+    // Composio's apps say nothing about where they connect.
+    expect(screen.queryByText("Connects through Pipedream")).toBeNull()
+  })
+
   it("withdraws connection actions when refreshing a cached offer fails", async () => {
     let unavailable = false
     fakeFetch(

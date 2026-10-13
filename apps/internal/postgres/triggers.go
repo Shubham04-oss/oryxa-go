@@ -15,7 +15,7 @@ import (
 )
 
 const triggerColumns = `id, organization_id, member_id, connection_id, toolkit, slug, config,
-	composio_trigger_id, status, status_reason, kind, manual_setup, delivery_count, last_delivery_at,
+	composio_trigger_id, COALESCE(pipedream_trigger_id, ''), status, status_reason, kind, manual_setup, delivery_count, last_delivery_at,
 	created_at, updated_at`
 
 // CreateTrigger records a trigger, unless a live one already answers the
@@ -209,7 +209,7 @@ func scanTrigger(rows pgx.Rows) (domain.Trigger, error) {
 	var status string
 	var lastDelivery *time.Time
 	if err := rows.Scan(&trigger.ID, &trigger.OrganizationID, &trigger.MemberID, &trigger.ConnectionID,
-		&trigger.Toolkit, &trigger.Slug, &config, &trigger.ComposioTriggerID, &status, &trigger.StatusReason,
+		&trigger.Toolkit, &trigger.Slug, &config, &trigger.ComposioTriggerID, &trigger.PipedreamTriggerID, &status, &trigger.StatusReason,
 		&trigger.Kind, &trigger.ManualSetup, &trigger.DeliveryCount, &lastDelivery,
 		&trigger.CreatedAt, &trigger.UpdatedAt); err != nil {
 		return domain.Trigger{}, fmt.Errorf("scan trigger: %w", err)

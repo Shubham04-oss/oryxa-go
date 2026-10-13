@@ -44,30 +44,21 @@ func (s *Service) brokerFor(ctx context.Context, toolkit string) (string, error)
 		// Pipedream now would split one app across two brokers.
 		return "", composioError("read the app", err)
 	}
-	apps, err := s.pipedream.ListApps(ctx, toolkit)
+	catalog, err := s.pipedreamCatalog(ctx)
 	if err != nil {
-		return "", fmt.Errorf("read Pipedream's apps: %w", err)
+		return "", err
 	}
-	for _, app := range apps {
-		if app.Slug == toolkit {
-			return domain.BrokerPipedream, nil
-		}
+	if _, ok := catalog.bySlug[toolkit]; ok {
+		return domain.BrokerPipedream, nil
 	}
 	// Neither has it: Composio's connect refuses it as not connectable.
 	return domain.BrokerComposio, nil
 }
 
 // errPipedreamOff is what a connect routed to Pipedream answers while this
-// deployment has no Pipedream, or none that can connect yet.
+// deployment has no Pipedream.
 func errPipedreamOff(toolkit string) error {
 	return fmt.Errorf("%s connects through Pipedream, which is not available here yet: %w", toolkit, domain.ErrNotConnectable)
-}
-
-// ConnectPipedream starts a connect through Pipedream. Phase 0 has no
-// Pipedream connect yet, so every one is refused as not connectable rather
-// than falling through to another broker.
-func (s *Service) ConnectPipedream(_ context.Context, toolkit string) error {
-	return errPipedreamOff(toolkit)
 }
 
 // errNotComposio is what a Composio path answers for a connection Composio

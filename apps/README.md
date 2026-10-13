@@ -322,9 +322,23 @@ connection keeps the broker it was made through, and every Composio path
 refuses a connection that is not Composio's (`Connection.Composio()`), so
 moving an app never sends an old connection to the wrong broker.
 
-Pipedream is phase 0: the broker, the columns (`012_pipedream.sql`) and the
-`Pipedream` port exist, and no Pipedream client is wired in yet. A connect
-routed to it is refused as `not_connectable`.
+Pipedream is on when `PIPEDREAM_CLIENT_ID`, `PIPEDREAM_CLIENT_SECRET` and
+`PIPEDREAM_PROJECT_ID` are all set (`PIPEDREAM_ENVIRONMENT` is `development`
+unless it says `production`); without them a connect routed to it is refused
+as `not_connectable`. A connect records the pending connection and answers
+Pipedream's hosted page for the app. Pipedream sends the browser back to
+`GET /v1/apps/connect/pipedream/callback`, which proves nothing by itself, so
+apps reads the member's accounts back and activates the connection with the
+newest one made since the connect began that no connection already records,
+trying five times a second apart; the same `app_connection` and `status`
+return to the web app as Composio's callback. Removing one deletes its
+triggers and its account at Pipedream; a member who leaves is deleted there
+too once nothing of theirs is live. Once a day the maintenance sweep reads
+every account, at most 2,000 every five minutes, and marks one Pipedream
+can no longer use as expired. The catalog lists Composio's apps, then the
+Pipedream apps Composio has no match for (compared without case, `_` or `-`,
+plus a few aliases), from a copy of Pipedream's catalog held for a day; each
+entry says its `broker`. Tools and triggers through Pipedream come later.
 
 ## The Slack surface
 
