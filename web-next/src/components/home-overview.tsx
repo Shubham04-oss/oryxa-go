@@ -488,7 +488,6 @@ function HomeDesk({
                     <small className="home-work-status">
                       <ThinkingOrb
                         size={20}
-                        theme="dark"
                         state="working"
                         aria-hidden="true"
                       />
@@ -510,7 +509,6 @@ function HomeDesk({
                       {work.running && (
                         <ThinkingOrb
                           size={20}
-                          theme="dark"
                           state="working"
                           aria-hidden="true"
                         />

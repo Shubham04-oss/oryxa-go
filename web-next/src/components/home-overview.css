@@ -1,6 +1,6 @@
 .workspace-canvas:has(> .home-overview) {
   overflow-y: auto;
-  scrollbar-color: #555555 #1e1e1e;
+  scrollbar-color: var(--border-strong) var(--canvas);
 }
 .home-overview {
   width: min(760px, calc(100% - 48px));
@@ -13,11 +13,11 @@
   padding: 14px 0 0;
 }
 .home-overview .workspace-composer {
-  background: #1e1e1e;
-  border-color: #393939;
+  background: var(--canvas);
+  border-color: var(--tone-393939);
 }
 .home-overview .workspace-composer:focus-within {
-  border-color: #777;
+  border-color: var(--tone-777777);
 }
 .home-overview .workspace-composer textarea {
   font-size: 12px;
@@ -26,7 +26,7 @@
   min-width: 0;
   padding: 18px 20px;
   border-radius: 14px;
-  background: var(--workspace-base, #111111);
+  background: var(--workspace-base, var(--base));
 }
 .home-card > header {
   display: flex;
@@ -58,15 +58,15 @@
   padding: 3px 0;
   border: 0;
   background: none;
-  color: var(--workspace-muted, #999999);
+  color: var(--workspace-muted, var(--text-muted));
   font-size: 11px;
 }
 .home-card > header button:not(:disabled):hover,
 .home-quiet button:not(:disabled):hover {
-  color: var(--workspace-text, #f2f2f2);
+  color: var(--workspace-text, var(--text));
 }
 .home-overview button:focus-visible {
-  outline: 2px solid #aaa;
+  outline: 2px solid var(--tone-aaaaaa);
   outline-offset: 3px;
 }
 .home-card ul {
@@ -98,7 +98,7 @@
 }
 .home-row small {
   display: block;
-  color: var(--workspace-muted, #999999);
+  color: var(--workspace-muted, var(--text-muted));
   font-size: 11px;
   line-height: 1.45;
 }
@@ -108,11 +108,11 @@
   gap: 5px;
 }
 .home-row > button:not(:disabled):hover span {
-  color: #fff;
+  color: var(--tone-ffffff);
 }
 .home-quiet {
   margin: 0;
-  color: var(--workspace-muted, #999999);
+  color: var(--workspace-muted, var(--text-muted));
   font-size: 11px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -123,7 +123,7 @@
 .home-card .home-recents {
   margin-top: 14px;
   padding-top: 5px;
-  border-top: 1px solid #2c2c2c;
+  border-top: 1px solid var(--tone-2c2c2c);
 }
 .home-recents .home-row > button,
 .home-recents .home-row > div {
@@ -138,15 +138,15 @@
 .home-needs > .workspace-request-card,
 .home-request-group > .workspace-request-card {
   margin-top: 14px;
-  border-color: #333333;
-  background: #111111;
+  border-color: var(--tone-333333);
+  background: var(--base);
 }
 .home-request-group {
   margin-top: 18px;
 }
 .home-request-group h3 {
   margin: 0;
-  color: #999999;
+  color: var(--text-muted);
   font-size: 11px;
   font-weight: 500;
 }
@@ -169,7 +169,7 @@
 }
 .home-setup .home-row + .home-row,
 .home-access-row + .home-access-row {
-  border-top: 1px solid #2c2c2c;
+  border-top: 1px solid var(--tone-2c2c2c);
 }
 .home-empty {
   padding: 2px 2px;

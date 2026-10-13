@@ -198,7 +198,7 @@ function AnswerCheckSection({ organizationId }: { organizationId: string }) {
         ))}
       </div>
       {(preferences.regulated || preferences.relevance === "hold") && (
-        <div className="mt-4 grid gap-1 border-t border-[#383838] pt-4">
+        <div className="mt-4 grid gap-1 border-t border-[var(--tone-383838)] pt-4">
           {preferences.regulated && (
             <p className="workspace-settings-hint">
               Your organization is regulated: health, HR and pay details wait
@@ -264,7 +264,7 @@ function AnswerCheckRow({
   ]
 
   return (
-    <div className="border-t border-[#383838] py-4 first:border-t-0 first:pt-0 last:pb-0">
+    <div className="border-t border-[var(--tone-383838)] py-4 first:border-t-0 first:pt-0 last:pb-0">
       <fieldset
         role="radiogroup"
         aria-labelledby={`${id}-title`}
@@ -274,7 +274,7 @@ function AnswerCheckRow({
       >
         <legend
           id={`${id}-title`}
-          className="mb-2 p-0 text-[13px] font-[590] text-[#eee]"
+          className="mb-2 p-0 text-[13px] font-[590] text-[var(--tone-eeeeee)]"
         >
           {title}
         </legend>
@@ -283,10 +283,10 @@ function AnswerCheckRow({
             <label
               key={option.choice}
               className={cn(
-                "flex items-start gap-2.5 rounded-lg border border-[#454545] px-3 py-2.5 has-[:checked]:border-[#8a8a8a] has-[:checked]:bg-[#2f2f2f] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-[#8a8a8a]",
+                "flex items-start gap-2.5 rounded-lg border border-[var(--tone-454545)] px-3 py-2.5 has-[:checked]:border-[var(--tone-8a8a8a)] has-[:checked]:bg-[var(--tone-2f2f2f)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-[var(--tone-8a8a8a)]",
                 option.disabled
                   ? "cursor-not-allowed opacity-50"
-                  : "cursor-pointer hover:bg-[#2b2b2b]"
+                  : "cursor-pointer hover:bg-[var(--tone-2b2b2b)]"
               )}
             >
               <input
@@ -300,19 +300,19 @@ function AnswerCheckRow({
                 aria-describedby={
                   option.detail ? `${id}-${option.choice}-detail` : undefined
                 }
-                className="mt-0.5 accent-[#b5b5b5]"
+                className="mt-0.5 accent-[var(--tone-b5b5b5)]"
               />
               <span className="grid min-w-0 gap-0.5">
                 <span
                   id={`${id}-${option.choice}-label`}
-                  className="text-[13px] text-[#eee]"
+                  className="text-[13px] text-[var(--tone-eeeeee)]"
                 >
                   {option.label}
                 </span>
                 {option.detail && (
                   <span
                     id={`${id}-${option.choice}-detail`}
-                    className="text-xs leading-snug text-[#999]"
+                    className="text-xs leading-snug text-[var(--text-muted)]"
                   >
                     {option.detail}
                   </span>

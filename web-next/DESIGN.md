@@ -14,16 +14,25 @@ not permission to copy every incidental value into a new component.
 
 ## 1. Visual foundation
 
-| Role | Color | Use |
-| --- | --- | --- |
-| Base surface | `#111111` | Page surround, naked sidebars, chat background, auth inset |
-| Main surface | `#1e1e1e` | Central canvas, settings content, auth page |
-| Cards and side panels | `#111111` | Compact cards and agent/navigation panels |
-| Quiet border | around `#353535` | Interior controls/cards only |
-| Primary text | around `#f2f2f2` | Titles and essential labels |
-| Muted text | around `#999999` | Secondary information |
+| Role | Token | Dark | Light | Use |
+| --- | --- | --- | --- | --- |
+| Base surface | `--base` | `#111111` | `#f4f4f4` | Page surround, naked sidebars, chat background, auth inset |
+| Main surface | `--canvas` | `#1e1e1e` | `#ffffff` | Central canvas, settings content, auth page |
+| Cards and side panels | `--base` | `#111111` | `#f4f4f4` | Compact cards and agent/navigation panels |
+| Quiet border | `--border-quiet` | `#353535` | `#e6e6e6` | Interior controls/cards only |
+| Primary text | `--text` | `#f2f2f2` | `#111111` | Titles and essential labels |
+| Muted text | `--text-muted` | `#999999` | `#737373` | Secondary information |
 
-- Keep the product dark, nearly monochrome, and low-noise. Reserve color for
+- Two themes, one set of roles. Dark is the workspace as it has always been;
+  light takes oryxa-platform's light roles. The profile menu's Theme item moves
+  from System to Light to Dark (System follows the device), and next-themes
+  keeps the choice in the browser. Every colour is a token in `src/theme.css`,
+  the only place a colour is written: use a role token, or a `tone-<hex>`
+  token that already exists, never a literal. A `tone-<hex>` is the colour
+  that is `<hex>` in dark, carried to light by the same mapping (surfaces to
+  whites and light greys, borders to soft greys, text to dark greys, tints
+  keeping their hue).
+- Keep the product nearly monochrome and low-noise. Reserve color for
   app logos, planet/user/agent avatars, validation, and genuinely meaningful
   status. Do not introduce a new accent color for decoration.
 - Use Geist Variable for UI type. Prefer the existing compact type scale:

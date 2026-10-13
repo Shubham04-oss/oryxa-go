@@ -612,7 +612,7 @@ function NotSentMessages({
         return (
           <Fragment key={message.id}>
             <p
-              className="workspace-agent-message shadow-[inset_0_0_0_1px_#6b3b39]"
+              className="workspace-agent-message shadow-[inset_0_0_0_1px_var(--tone-6b3b39)]"
               data-from="member"
               data-status="not-sent"
               id={textId}

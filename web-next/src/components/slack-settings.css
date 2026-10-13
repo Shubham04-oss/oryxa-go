@@ -17,13 +17,13 @@
   min-width: 0;
 }
 .workspace-slack-card strong {
-  color: #f3f3f3;
+  color: var(--tone-f3f3f3);
   font-size: 14px;
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 .workspace-slack-card small {
-  color: #999;
+  color: var(--text-muted);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -33,18 +33,18 @@
   align-items: center;
   min-height: 22px;
   padding: 3px 9px;
-  border: 1px solid #4a4a4a;
+  border: 1px solid var(--tone-4a4a4a);
   border-radius: 999px;
-  background: #303030;
-  color: #aaa;
+  background: var(--tone-303030);
+  color: var(--tone-aaaaaa);
   font-size: 10px;
   font-weight: 500;
   line-height: 1;
 }
 .workspace-slack-status[data-status="active"] {
-  border-color: #385c49;
-  background: #263a2e;
-  color: #b9e6c6;
+  border-color: var(--tone-385c49);
+  background: var(--tone-263a2e);
+  color: var(--tone-b9e6c6);
 }
 
 .workspace-slack-actions {
@@ -57,7 +57,7 @@
 .workspace-slack-lock {
   display: inline-block;
   margin-right: 6px;
-  color: #999;
+  color: var(--text-muted);
   vertical-align: -1px;
 }
 
