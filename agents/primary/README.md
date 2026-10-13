@@ -1677,6 +1677,23 @@ its stream sets its own write deadline just past that, since the host sets
 none for this service. A member who stops listening stops the run: its context
 is the request's.
 
+**Deploys.** Every run in the process is tracked by one `threads.Drain`. When
+the process is told to stop, the host calls the agents service's `Drain`
+first (`ORYXA_DRAIN_TIMEOUT`, 20 s by default), alongside draining requests
+and before stopping workers:
+- no new run starts: `StartRun` answers `threads.ErrDraining`, which the API
+  serves as `503 restarting`;
+- runs already going finish as they would have;
+- a run still going at the deadline is stopped with `threads.ErrInterrupted`.
+  It is recorded `interrupted` (not `failed`), its `agents.run.failed.v1`
+  says `interrupted: true`, and its stream ends `run_failed` with
+  `interrupted: true` and "Oryxa restarted while Krude was working on this…
+  Send your message again."
+
+The interaction waker and the wake-up waker give an interrupted or refused
+run's work back uncounted, so the next process runs it again. The drain and
+the rest of shutdown must fit the container's ECS `stopTimeout`.
+
 **Artifacts.** A file a run keeps — a browser screenshot, something the
 sandbox saved — shows as an `artifact` item, and the artifacts route serves
 it to the thread's member. It is served from the app's own origin, so it can

@@ -168,6 +168,10 @@ type Config struct {
 	// carry its stable id and renameable display identity without changing
 	// ADK's machine name.
 	InitialState map[string]any
+	// Drain is the process's: every thread service in it shares one, so that
+	// stopping the process lets every run in it finish, or interrupts it. Nil
+	// tracks nothing, and a stopping process cuts its runs short.
+	Drain *Drain
 }
 
 // Service is the run API.
@@ -185,6 +189,7 @@ type Service struct {
 	runTimeout     time.Duration
 	lease          time.Duration
 	initialState   map[string]any
+	drain          *Drain
 }
 
 // New returns the service.
@@ -224,6 +229,7 @@ func New(config Config) (*Service, error) {
 		runTimeout:   cmp.Or(config.RunTimeout, defaultRunTimeout),
 		lease:        cmp.Or(config.Lease, defaultLease),
 		initialState: cloneState(config.InitialState),
+		drain:        config.Drain,
 	}, nil
 }
 

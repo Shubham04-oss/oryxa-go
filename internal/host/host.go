@@ -59,6 +59,12 @@ type Service struct {
 	// Close releases what the service opened for itself. It runs after the
 	// service's workers have stopped.
 	Close func()
+	// Drain, when set, is the first thing the host calls on the way down,
+	// alongside draining requests: the service starts no new long-running
+	// work, such as an agent run, and lets what is going finish until ctx
+	// ends, then stops what is left. It returns once nothing is going. Its
+	// workers keep running meanwhile, and are stopped after it returns.
+	Drain func(ctx context.Context)
 }
 
 // Definition is how the host builds one service.
@@ -164,6 +170,13 @@ type Config struct {
 	// ShutdownTimeout bounds each stage of the way down: draining requests,
 	// then waiting for workers.
 	ShutdownTimeout time.Duration
+	// DrainTimeout is how long work in flight (Service.Drain), such as an
+	// agent run, has to finish once the process is told to stop, before what
+	// is left is interrupted. Requests drain alongside it, so a run streamed
+	// in a request ends with it. ORYXA_DRAIN_TIMEOUT; the whole way down must
+	// fit in what the platform allows before it kills the process (ECS's
+	// stopTimeout).
+	DrainTimeout time.Duration
 }
 
 // ConfigFromEnv reads the process configuration.
@@ -204,6 +217,11 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	}
 	config.DatabaseMaxConns = int32(maxConns)
 	if config.ShutdownTimeout, err = durationValue(getenv, "ORYXA_SHUTDOWN_TIMEOUT", 30*time.Second); err != nil {
+		return Config{}, err
+	}
+	// 20 seconds, with a run's interruption and the workers after it, fits in
+	// ECS's default 30 second stopTimeout.
+	if config.DrainTimeout, err = durationValue(getenv, "ORYXA_DRAIN_TIMEOUT", 20*time.Second); err != nil {
 		return Config{}, err
 	}
 	return config, nil

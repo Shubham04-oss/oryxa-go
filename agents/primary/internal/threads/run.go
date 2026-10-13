@@ -161,6 +161,10 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 			return nil, fmt.Errorf("%w: %s", ErrInvalid, err)
 		}
 	}
+	if service.drain.Draining() {
+		// The process is stopping: the run starts on the one that replaces it.
+		return nil, ErrDraining
+	}
 	startedBy := cmp.Or(input.StartedBy, agentsv1.StartedByMember)
 	if startedBy != agentsv1.StartedByMember && startedBy != agentsv1.StartedByTrigger && startedBy != agentsv1.StartedByTeam && startedBy != agentsv1.StartedByWorkflow && startedBy != agentsv1.StartedByOrganization {
 		return nil, fmt.Errorf("%w: a run is started by a member, trigger, team coordinator, workflow or organization agent", ErrInvalid)
@@ -377,6 +381,16 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 		runContext = memberauth.WithAccessToken(runContext, run.member.AccessToken)
 	}
 
+	if err := service.drain.begin(run, cancel); err != nil {
+		// Started just as the process began to stop: it ends at once, as
+		// interrupted, and whoever started it may start it again.
+		run.finish(ctx, counter, err)
+		send := func(item Item) { _ = emit(item) }
+		send(Item{Type: ItemRunFailed, RunID: run.id, At: time.Now().UTC(), Error: memberFacing(err, service.runTimeout), Interrupted: true})
+		return
+	}
+	defer service.drain.end(run)
+
 	stopLease := run.holdThread(ctx, cancel)
 	defer stopLease()
 	gone := false
@@ -392,14 +406,16 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	send(Item{Type: ItemRunStarted, RunID: run.id, At: time.Now().UTC()})
 
 	failure := run.drive(runContext, send)
-	if failure == nil && runContext.Err() != nil {
-		failure = context.Cause(runContext)
+	if cause := context.Cause(runContext); runContext.Err() != nil && (failure == nil || Interrupted(cause)) {
+		// A drain's interruption is why the run ended, whatever the model
+		// call it cut short reported.
+		failure = cause
 	}
 	stopLease()
 
 	run.finish(ctx, counter, failure)
 	if failure != nil {
-		send(Item{Type: ItemRunFailed, RunID: run.id, At: time.Now().UTC(), Error: memberFacing(failure, service.runTimeout)})
+		send(Item{Type: ItemRunFailed, RunID: run.id, At: time.Now().UTC(), Error: memberFacing(failure, service.runTimeout), Interrupted: Interrupted(failure)})
 		return
 	}
 	total := counter.Total()
@@ -653,14 +669,21 @@ func (run *Run) finish(ctx context.Context, counter *usage.Counter, failure erro
 	} else {
 		reason := bounded(failure.Error(), maxFailureRunes)
 		outcome.Status = runstore.StatusFailed
+		if Interrupted(failure) {
+			outcome.Status = runstore.StatusInterrupted
+		}
 		outcome.Error = reason
 		detailType = agentsv1.RunFailedDetailType
 		detail = agentsv1.RunFailed{
 			RunID: run.id, SessionID: run.threadID, UserID: run.member.UserID, OrganizationID: run.member.OrganizationID,
 			StartedBy: run.startedBy, Error: reason, Usage: total, Cost: cost, Models: models,
-			DurationMillis: duration, FailedAt: now,
+			DurationMillis: duration, FailedAt: now, Interrupted: Interrupted(failure),
 		}
-		service.logger.WarnContext(ctx, "run failed", "run_id", run.id, "thread_id", run.threadID, "error", reason)
+		if Interrupted(failure) {
+			service.logger.InfoContext(ctx, "run interrupted: Oryxa is restarting", "run_id", run.id, "thread_id", run.threadID)
+		} else {
+			service.logger.WarnContext(ctx, "run failed", "run_id", run.id, "thread_id", run.threadID, "error", reason)
+		}
 	}
 
 	finishContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
@@ -707,6 +730,8 @@ func (service *Service) price(byModel map[string]agentsv1.Usage) ([]agentsv1.Mod
 // act on, never the error itself, which the run's record keeps.
 func memberFacing(failure error, timeout time.Duration) string {
 	switch {
+	case Interrupted(failure):
+		return "Oryxa restarted while Krude was working on this, so it stopped. Send your message again."
 	case errors.Is(failure, context.DeadlineExceeded):
 		return fmt.Sprintf("Krude took longer than %s and was stopped.", timeout)
 	case errors.Is(failure, errLeaseLost):
