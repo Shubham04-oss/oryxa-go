@@ -306,7 +306,7 @@ describe("a request decided elsewhere", () => {
     focusManager.setFocused(true)
 
     await screen.findByText(
-      `Approved in Slack by you at ${clockTime("2026-09-29T12:02:00Z")}. Summary only.`
+      `Approved in Slack by you at ${clockTime("2026-09-29T12:02:00Z")}. Answer shared.`
     )
     expect(
       screen.queryByRole("group", { name: /Choose what Krude/ })
