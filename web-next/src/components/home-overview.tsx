@@ -10,7 +10,6 @@ import { useHydrated } from "@tanstack/react-router"
 import { ThinkingOrb } from "thinking-orbs"
 import { AgentComposer } from "./agent-composer"
 import { RequestCard } from "./request-card"
-import { IdentityAvatar } from "./workspace-avatar"
 import { activitySentence, repliedRequestIds } from "./requests-activity-format"
 import {
   activityQueryOptions,

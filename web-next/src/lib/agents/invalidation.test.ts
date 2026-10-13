@@ -198,7 +198,6 @@ describe("agent mutation helpers", () => {
     expect(invalidated(queryClient)).toEqual(["executions", "moreExecutions"])
   })
 
-  it("cache a decided or answered request and refresh both boxes", async () => {
   it("cache a decided, answered or replied-to request and refresh both boxes", async () => {
     const request = { id: "irq_1", status: "approved" } as AgentRequest
     for (const after of [
