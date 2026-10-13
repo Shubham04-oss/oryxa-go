@@ -132,6 +132,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		WebhookSecret:       config.ComposioWebhookSecret,
 		NoAutoSubscribe:     config.NoAutoSubscribe,
 		OryxaToolkits:       config.OryxaToolkits,
+		ToolkitBrokers:      config.ToolkitBrokers,
 		SigninRedirectURI:   config.SigninRedirectURI,
 		DefaultOAuthClients: defaults,
 	})

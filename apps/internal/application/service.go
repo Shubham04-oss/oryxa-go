@@ -45,12 +45,17 @@ type Config struct {
 	// that would rather they chose sets this, and a member can always say so
 	// per connection.
 	NoAutoSubscribe bool
+	// ToolkitBrokers pins a toolkit's new connects to a broker, whatever
+	// brokerFor would otherwise choose: APPS_TOOLKIT_BROKERS.
+	ToolkitBrokers map[string]string
 }
 
 type Dependencies struct {
 	Store     Store
 	Directory Directory
 	Composio  Composio
+	// Pipedream is Pipedream Connect, or nil when this deployment has none.
+	Pipedream Pipedream
 	Policy    PolicySource
 	// Oryxa is Oryxa's own sign-in, when this deployment has one: signin,
 	// hooks and the integrations. Without it every Oryxa request is refused.
@@ -63,15 +68,18 @@ type Dependencies struct {
 type PolicySource = policy.Provider
 
 type Service struct {
-	store         Store
-	directory     Directory
-	composio      Composio
-	policy        PolicySource
-	logger        *slog.Logger
-	now           func() time.Time
-	publicBaseURL string
-	returnOrigins []*url.URL
-	webhookSecret string
+	store     Store
+	directory Directory
+	composio  Composio
+	pipedream Pipedream
+	policy    PolicySource
+	// toolkitBrokers are the deployment's per-toolkit broker overrides.
+	toolkitBrokers map[string]string
+	logger         *slog.Logger
+	now            func() time.Time
+	publicBaseURL  string
+	returnOrigins  []*url.URL
+	webhookSecret  string
 	// autoSubscribe says a newly connected app is subscribed to everything it
 	// can deliver.
 	autoSubscribe bool
@@ -98,18 +106,20 @@ type Service struct {
 
 func New(dependencies Dependencies, config Config) (*Service, error) {
 	service := &Service{
-		store:         dependencies.Store,
-		directory:     dependencies.Directory,
-		composio:      dependencies.Composio,
-		policy:        dependencies.Policy,
-		logger:        dependencies.Logger,
-		now:           dependencies.Clock,
-		publicBaseURL: strings.TrimRight(config.PublicBaseURL, "/"),
-		webhookSecret: config.WebhookSecret,
-		autoSubscribe: !config.NoAutoSubscribe,
-		wait:          sleep,
-		tools:         map[string]cachedTool{},
-		subscribeWake: make(chan struct{}, 1),
+		store:          dependencies.Store,
+		directory:      dependencies.Directory,
+		composio:       dependencies.Composio,
+		pipedream:      dependencies.Pipedream,
+		policy:         dependencies.Policy,
+		toolkitBrokers: config.ToolkitBrokers,
+		logger:         dependencies.Logger,
+		now:            dependencies.Clock,
+		publicBaseURL:  strings.TrimRight(config.PublicBaseURL, "/"),
+		webhookSecret:  config.WebhookSecret,
+		autoSubscribe:  !config.NoAutoSubscribe,
+		wait:           sleep,
+		tools:          map[string]cachedTool{},
+		subscribeWake:  make(chan struct{}, 1),
 	}
 	if service.logger == nil {
 		service.logger = slog.New(slog.DiscardHandler)

@@ -26,8 +26,11 @@ func (store *Store) StartAction(ctx context.Context, action domain.Action) (doma
 		actions, err := queryActions(ctx, tx, `
 			INSERT INTO apps_actions (
 				id, organization_id, member_id, connection_id, toolkit, tool, read_only, agent,
-				idempotency_key, status, created_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', $10)
+				idempotency_key, status, created_at, broker
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', $10,
+				-- The broker the run goes through is its connection's, which
+				-- is what usage is counted by.
+				COALESCE((SELECT broker FROM apps_connections WHERE id = $4), 'composio'))
 			ON CONFLICT (organization_id, member_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 			RETURNING `+actionColumns,
 			action.ID, action.OrganizationID, action.MemberID, action.ConnectionID, action.Toolkit, action.Tool,

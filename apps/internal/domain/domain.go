@@ -100,6 +100,9 @@ const (
 	// BrokerOryxa is Oryxa's own sign-in: apps keeps the credential, sealed,
 	// and a toolkit takes this route only once APPS_ORYXA_TOOLKITS names it.
 	BrokerOryxa = "oryxa"
+	// BrokerPipedream is Pipedream Connect: Pipedream holds the credential and
+	// runs the calls, for the toolkits neither Oryxa nor Composio serves.
+	BrokerPipedream = "pipedream"
 )
 
 // CheckBroker normalizes and checks a broker; empty is Composio.
@@ -107,10 +110,10 @@ func CheckBroker(broker string) (string, error) {
 	switch broker = strings.ToLower(strings.TrimSpace(broker)); broker {
 	case "", BrokerComposio:
 		return BrokerComposio, nil
-	case BrokerOryxa:
-		return BrokerOryxa, nil
+	case BrokerOryxa, BrokerPipedream:
+		return broker, nil
 	}
-	return "", errors.Join(ErrInvalid, errors.New("a broker is composio or oryxa"))
+	return "", errors.Join(ErrInvalid, errors.New("a broker is composio, oryxa or pipedream"))
 }
 
 // ConnectionStatus is where a connection is in its life.
@@ -135,8 +138,8 @@ type Connection struct {
 	OrganizationID string
 	MemberID       string
 	Toolkit        string
-	// Broker is who holds the credential: BrokerComposio or BrokerOryxa. An
-	// empty Broker is Composio's.
+	// Broker is who holds the credential: BrokerComposio, BrokerOryxa or
+	// BrokerPipedream. An empty Broker is Composio's.
 	Broker string
 	// CredentialKind is the kind of credential an Oryxa connection holds
 	// (oauth2_code, api_token, basic, oauth2_client_credentials), once it
@@ -176,6 +179,13 @@ type Connection struct {
 // Oryxa says the connection was made through Oryxa's own sign-in, so none of
 // Composio's paths may act through it.
 func (connection Connection) Oryxa() bool { return connection.Broker == BrokerOryxa }
+
+// Composio says Composio holds the connection's credential, which is the only
+// case in which a Composio path may act through it. Guarding Composio's paths
+// on this rather than on !Oryxa() keeps every other broker out of them.
+func (connection Connection) Composio() bool {
+	return connection.Broker == "" || connection.Broker == BrokerComposio
+}
 
 // ConnectionQuery narrows a listing. An org admin may list the organization's
 // connections; anyone else lists their own.

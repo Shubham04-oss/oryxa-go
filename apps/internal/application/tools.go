@@ -177,6 +177,9 @@ func (s *Service) RunTool(ctx context.Context, credentials authclient.Credential
 		}
 		return s.runOwnTool(ctx, caller, connection, route.own, key, arguments, input.OnlyReads)
 	}
+	if !connection.Composio() {
+		return ToolRun{}, errNotComposio(connection)
+	}
 	return s.runComposioTool(ctx, caller, organizationID, connection, route.slug, key, input.IdempotencyKey, input.OnlyReads, arguments)
 }
 

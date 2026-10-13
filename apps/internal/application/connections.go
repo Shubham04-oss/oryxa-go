@@ -248,9 +248,9 @@ func (s *Service) CompleteConnection(ctx context.Context, state, reportedStatus,
 	if err != nil {
 		return Completion{}, err
 	}
-	if connection.Oryxa() {
-		// An Oryxa sign-in comes back through its own callback; Composio's
-		// never finishes one.
+	if !connection.Composio() {
+		// Every other broker's connect comes back through its own callback;
+		// Composio's never finishes one.
 		return Completion{}, domain.ErrNotFound
 	}
 	if reportedAccountID != "" && reportedAccountID != connection.ComposioAccountID {
@@ -423,6 +423,11 @@ func (s *Service) remove(ctx context.Context, connection domain.Connection, reas
 	}
 	if connection.Oryxa() {
 		return s.removeOryxa(ctx, connection, reason)
+	}
+	if !connection.Composio() {
+		// Deleting at Composio would leave the account alive wherever it
+		// really is, while recording it removed.
+		return errNotComposio(connection)
 	}
 	triggers, err := s.store.Triggers(ctx, connection.OrganizationID, TriggerQuery{ConnectionID: connection.ID})
 	if err != nil {

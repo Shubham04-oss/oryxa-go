@@ -556,6 +556,9 @@ func (fake *fakeComposio) Toolkits(context.Context, composio.ToolkitQuery) (comp
 func (fake *fakeComposio) Toolkit(_ context.Context, slug string) (composio.Toolkit, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	if fake.toolkitsErr != nil {
+		return composio.Toolkit{}, fake.toolkitsErr
+	}
 	toolkit, ok := fake.toolkits[slug]
 	if !ok {
 		return composio.Toolkit{}, composio.ErrNotFound

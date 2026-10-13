@@ -35,6 +35,8 @@ type fakeService struct {
 	listedScope  bool
 	listedKit    string
 	offer        application.OfferPolicy
+	// broker is what BrokerFor answers; empty is Composio.
+	broker string
 
 	connection domain.Connection
 	targets    []application.Target
@@ -89,6 +91,17 @@ func (fake *fakeService) Connect(_ context.Context, credentials authclient.Crede
 		return domain.Connection{}, "", fake.err
 	}
 	return fake.connection, fake.redirect, nil
+}
+
+func (fake *fakeService) BrokerFor(context.Context, string) (string, error) {
+	if fake.broker == "" {
+		return domain.BrokerComposio, nil
+	}
+	return fake.broker, nil
+}
+
+func (fake *fakeService) ConnectPipedream(_ context.Context, toolkit string) error {
+	return fmt.Errorf("%s connects through Pipedream: %w", toolkit, domain.ErrNotConnectable)
 }
 
 func (fake *fakeService) CompleteConnection(_ context.Context, state, status, accountID string) (application.Completion, error) {
