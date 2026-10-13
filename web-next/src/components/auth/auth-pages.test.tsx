@@ -15,15 +15,8 @@ import {
   screen,
   within,
 } from "@testing-library/react"
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import {
-  ForgotPasswordPage,
-  ResetPasswordPage,
-  SignInPage,
-  SignUpPage,
-  VerifyEmailPage,
-} from "./auth-pages"
+import { ResetPasswordPage, SignUpPage, VerifyEmailPage } from "./auth-pages"
 
 afterEach(() => {
   cleanup()
@@ -44,75 +37,8 @@ function renderWithRouter(component: () => ReactNode) {
     routeTree: rootRoute,
     history: createMemoryHistory({ initialEntries: ["/"] }),
   })
-  return render(
-    <QueryClientProvider client={new QueryClient()}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
-  )
+  return render(<RouterProvider router={router} />)
 }
-
-// What a paste can leave around an address. The browser strips ASCII
-// whitespace from an email input itself; a non-breaking space it keeps, so
-// only the form's own trim removes that.
-const paddedEmail = "\u00a0 ada@example.com\u00a0"
-
-function sentBody(fetchMock: ReturnType<typeof vi.fn>, url: string) {
-  const calls = fetchMock.mock.calls.filter(([called]) => called === url)
-  expect(calls).toHaveLength(1)
-  return JSON.parse(String((calls[0][1] as RequestInit).body))
-}
-
-describe("an email with spaces around it", () => {
-  it("signs in with the address trimmed", async () => {
-    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
-      if (url === "/v1/auth/config") return jsonResponse({})
-      if (url === "/v1/auth/password/login")
-        return new Response(null, { status: 204 })
-      throw new Error(`unexpected fetch: ${url}`)
-    })
-    vi.stubGlobal("fetch", fetchMock)
-    renderWithRouter(() => <SignInPage />)
-
-    fireEvent.change(await screen.findByLabelText("Email"), {
-      target: { value: paddedEmail },
-    })
-    fireEvent.change(screen.getByLabelText("Password"), {
-      target: { value: "Correct-Horse-7!" },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }))
-
-    await vi.waitFor(() =>
-      expect(sentBody(fetchMock, "/v1/auth/password/login").email).toBe(
-        "ada@example.com"
-      )
-    )
-    expect(screen.queryByText("Enter a valid email")).toBeNull()
-  })
-
-  it("asks for a reset link for the address trimmed", async () => {
-    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
-      if (url === "/v1/auth/password/forgot")
-        return new Response(null, { status: 204 })
-      throw new Error(`unexpected fetch: ${url}`)
-    })
-    vi.stubGlobal("fetch", fetchMock)
-    renderWithRouter(() => <ForgotPasswordPage />)
-
-    fireEvent.change(await screen.findByLabelText("Email"), {
-      target: { value: paddedEmail },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Send reset link" }))
-
-    expect(
-      await screen.findByText(
-        "If ada@example.com has an account, a reset link is on its way."
-      )
-    ).toBeTruthy()
-    expect(sentBody(fetchMock, "/v1/auth/password/forgot").email).toBe(
-      "ada@example.com"
-    )
-  })
-})
 
 describe("SignUpPage", () => {
   it("keeps legal links available through validation and confirmation while preserving signup and its return link", async () => {

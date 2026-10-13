@@ -22,6 +22,7 @@ export function AgentComposer({
   streaming = false,
   onStop,
   status,
+  leading,
   onFocus,
   onBlur,
 }: {
@@ -36,6 +37,8 @@ export function AgentComposer({
   streaming?: boolean
   onStop?: () => void
   status?: ReactNode
+  /** A control inside the pill, before the field: a side conversation's "who this goes to". */
+  leading?: ReactNode
   onFocus?: () => void
   onBlur?: () => void
 }) {
@@ -49,9 +52,9 @@ export function AgentComposer({
   const [multiline, setMultiline] = useState(false)
 
   // Sized here rather than by react-textarea-autosize, which measures only
-  // when the value or the window changes: opened in a column still
-  // widening (the old side panel, from its rail), it measured too early,
-  // wrapped the placeholder, and kept that tall height once it was full width.
+  // when the value or the window changes: opened with the panel, it measured
+  // while the panel was still widening from its rail, wrapped the
+  // placeholder, and kept that tall height once the panel was full width.
   const fit = useCallback(() => {
     const textarea = textareaRef.current
     if (!textarea) return
@@ -105,7 +108,9 @@ export function AgentComposer({
       <div
         className="workspace-composer workspace-agent-composer-field"
         data-multiline={multiline ? "true" : "false"}
+        data-leading={leading ? "true" : undefined}
       >
+        {leading}
         <textarea
           ref={textareaRef}
           rows={1}

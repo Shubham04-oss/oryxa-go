@@ -50,7 +50,7 @@ function loadEditorScript(serverUrl: string): Promise<void> {
   return loaded
 }
 
-/** The established Office editor fills the file viewer. */
+/** The established Office editor fills the active work panel. */
 export function OfficeEditor({
   organizationId,
   threadId,

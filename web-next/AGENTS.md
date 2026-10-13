@@ -34,9 +34,7 @@ there in the same task.
 
 ## Realtime
 
-Every conversation surface is a Durable Object. The page has one, the
-primary agent's chat; the teamspace rooms, side conversations and DMs were
-archived on 2026-09-30 (their Durable Objects stay in the Worker). Read
-[REALTIME.md](REALTIME.md)
+Every conversation surface (an agent chat, a teamspace room, a side
+conversation, a DM) is a Durable Object. Read [REALTIME.md](REALTIME.md)
 before building or changing one: which object, where its truth lives, and
 what the Worker checks before a member may open it.

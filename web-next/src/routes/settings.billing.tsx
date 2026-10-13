@@ -13,7 +13,7 @@ export const Route = createFileRoute("/settings/billing")({
   beforeLoad: ({ search }) => {
     throw redirect({
       to: "/",
-      search: { org: search.organization_id, view: "billing" },
+      search: { org: search.organization_id, view: "billing", dm: undefined },
       replace: true,
     })
   },

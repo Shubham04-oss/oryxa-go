@@ -4,7 +4,6 @@ import { ApiError } from "@/lib/api/client"
 import {
   requestCardAnswer,
   requestCardPollInterval,
-  requestCardState,
   requestCardStatus,
 } from "./requests"
 
@@ -59,67 +58,6 @@ describe("request cards", () => {
     expect(
       requestCardAnswer({ status: "failed", result } as AgentRequest)
     ).toBe("Held summary\n\nPrivate content")
-  })
-
-  it("says who an ask that needs its owner's own reply waits on, and who replied", () => {
-    const pending = { status: "pending", answer_by: "owner" } as AgentRequest
-    const replied = {
-      status: "completed",
-      result: { summary: "Yes.", content: "", written_by_owner: true },
-    } as AgentRequest
-
-    expect(requestCardState(pending, "asked", "Ada")).toBe(
-      "Waiting for Ada to reply"
-    )
-    expect(requestCardState(pending, "asked")).toBe(
-      "Waiting for the owner to reply"
-    )
-    expect(requestCardState(replied, "answered", "Ada")).toBe("Ada replied")
-    expect(requestCardState(replied, "answered")).toBe("The owner replied")
-    // The decision alone says the same, when the answer carries no mark.
-    expect(
-      requestCardState(
-        {
-          status: "completed",
-          result: { summary: "Yes.", content: "" },
-          decision: { consent: "reply" },
-        } as AgentRequest,
-        "answered",
-        "Ada"
-      )
-    ).toBe("Ada replied")
-  })
-
-  it("keeps the agent's words for everything else, and the conversation's own note before the request is read", () => {
-    expect(
-      requestCardState({ status: "pending" } as AgentRequest, "asked", "Ada")
-    ).toBe("Waiting for approval")
-    expect(
-      requestCardState(
-        { status: "pending", answer_by: "agent" } as AgentRequest,
-        "asked",
-        "Ada"
-      )
-    ).toBe("Waiting for approval")
-    expect(
-      requestCardState(
-        { status: "completed" } as AgentRequest,
-        "answered",
-        "Ada"
-      )
-    ).toBe("Answered")
-    // Once it is being worked on it is the agent's, whoever was to answer.
-    expect(
-      requestCardState(
-        { status: "approved", answer_by: "owner" } as AgentRequest,
-        "asked",
-        "Ada"
-      )
-    ).toBe("Approved · working")
-    expect(requestCardState(undefined, "asked", "Ada")).toBe(
-      "Waiting for approval"
-    )
-    expect(requestCardState(undefined, undefined)).toBe("Request filed")
   })
 
   it("avoids repeating a summary that is the full answer", () => {

@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { clockTime } from "./time-format"
+import { clockTime } from "./direct-message-format"
 import {
   activityIcon,
   activitySentence,
   openableRows,
-  repliedRequestIds,
 } from "./requests-activity-format"
 import {
   ASKER,
@@ -49,8 +48,8 @@ describe("what Activity says", () => {
     expect(
       both({ ...decided, decision: "approved", consent: "summary" })
     ).toEqual({
-      owner: "You approved Raya's request in Slack. Answer shared.",
-      asker: "Ada approved your request in Slack. Answer shared.",
+      owner: "You approved Raya's request in Slack. Summary only.",
+      asker: "Ada approved your request in Slack. Summary only.",
     })
     expect(
       both({ ...decided, decision: "approved", consent: "access" }).owner
@@ -159,90 +158,6 @@ describe("what Activity says", () => {
     })
   })
 
-  it("says an owner replied, as a reply and not as an approval", () => {
-    const replied = {
-      kind: "decided" as const,
-      at: "2026-09-29T12:31:00Z",
-      decision: "approved" as const,
-      consent: "reply" as const,
-    }
-
-    expect(
-      both({ ...replied, decided_by: { kind: "member", surface: "web" } })
-    ).toEqual({
-      owner: "You replied to Raya's request in Oryxa.",
-      asker: "Ada replied to your request in Oryxa.",
-    })
-    expect(
-      both({ ...replied, decided_by: { kind: "member", surface: "slack" } })
-    ).toEqual({
-      owner: "You replied to Raya's request in Slack.",
-      asker: "Ada replied to your request in Slack.",
-    })
-    expect(both({ ...replied }).owner).toBe("You replied to Raya's request.")
-    const sentence = both({
-      ...replied,
-      decided_by: { kind: "member", surface: "web" },
-    })
-    expect(JSON.stringify(sentence)).not.toMatch(/approved|Answer shared/i)
-  })
-
-  it("says it was the owner's reply, and not their agent's answer, that reached the asker", () => {
-    const answered = {
-      kind: "answered" as const,
-      at: "2026-09-29T12:31:00Z",
-      status: "completed" as const,
-      request_id: "irq_slack",
-    }
-    const replied = new Set(["irq_slack"])
-    const read = (role: "owner" | "asker", requests: ReadonlySet<string>) =>
-      activitySentence(
-        role === "owner"
-          ? { ...answered, role, with_user_id: ASKER }
-          : { ...answered, role, with_user_id: OWNER },
-        role === "owner" ? owner : asker,
-        requests
-      )
-
-    expect(read("owner", replied)).toBe("Your reply reached Raya.")
-    expect(read("asker", replied)).toBe("Ada's reply reached you.")
-    // An answer of another request, or of one not known to be a reply, is the agent's.
-    expect(read("owner", new Set(["irq_other"]))).toBe(
-      "Your agent answered Raya."
-    )
-    expect(read("asker", new Set())).toBe("Ada's agent answered you.")
-    // A reply cannot have failed: a failed answer is still the agent's.
-    expect(
-      activitySentence(
-        { ...answered, status: "failed", role: "owner", with_user_id: ASKER },
-        owner,
-        replied
-      )
-    ).toBe("Your agent couldn't answer Raya.")
-  })
-
-  it("knows the requests that were replied to from their decisions, and from nothing else", () => {
-    const entries = [
-      activityEntry({ kind: "answered", request_id: "irq_a" }),
-      activityEntry({ kind: "decided", consent: "reply", request_id: "irq_a" }),
-      activityEntry({
-        kind: "decided",
-        consent: "summary",
-        request_id: "irq_b",
-      }),
-      activityEntry({ kind: "answered", request_id: "irq_b" }),
-      activityEntry({
-        kind: "decided",
-        consent: "reply",
-        request_id: undefined,
-      }),
-      activityEntry({ kind: "asked", request_id: "irq_c" }),
-    ]
-
-    expect([...repliedRequestIds(entries)]).toEqual(["irq_a"])
-    expect(repliedRequestIds([]).size).toBe(0)
-  })
-
   it("says a secret was opened, and access given and ended", () => {
     expect(both({ kind: "secret_viewed", at: "2026-09-29T12:20:00Z" })).toEqual(
       {
@@ -303,10 +218,6 @@ describe("how an entry reads at a glance", () => {
       })
     ).toBe("denied")
     expect(icon({ kind: "answered" })).toBe("answered")
-    // A reply is an answer, not a click on Approve.
-    expect(
-      icon({ kind: "decided", decision: "approved", consent: "reply" })
-    ).toBe("answered")
     expect(icon({ kind: "secret_viewed" })).toBe("secret")
     expect(icon({ kind: "lease_given" })).toBe("access")
     expect(icon({ kind: "lease_revoked" })).toBe("access-ended")

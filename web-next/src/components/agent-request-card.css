@@ -22,9 +22,3 @@
 .workspace-agent-request .workspace-agent-markdown {
   font-size: 12px;
 }
-/* What the owner wrote themselves, as they wrote it. */
-.workspace-agent-request-reply {
-  margin: 0;
-  font-size: 12px;
-  white-space: pre-wrap;
-}

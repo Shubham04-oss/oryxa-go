@@ -94,7 +94,7 @@ export function approvedRequest(
   })
 }
 
-/** An ordinary request an agent filed: no consent choices, and decided with Share answer or Deny. */
+/** An ordinary request an agent filed: no consent choices, and decided with Approve or Decline. */
 export function agentRequest(
   overrides: Partial<AgentRequest> = {}
 ): AgentRequest {
@@ -108,47 +108,6 @@ export function agentRequest(
     requested_permissions: [],
     ...overrides,
   })
-}
-
-/** When the owner replied, in the requests `repliedRequest` makes. */
-export const REPLIED_AT = "2026-09-29T12:31:00Z"
-
-/**
- * A request its owner answered in their own words (`POST …/reply`): straight
- * from pending (`decision`, which records `consent: "reply"`), or in place of
- * an answer that was held for their review (`review`, `action: "reply"`).
- * Either way the answer carries `written_by_owner`.
- */
-export function repliedRequest(
-  text: string,
-  how: "decision" | "review" = "decision",
-  overrides: Partial<AgentRequest> = {}
-): AgentRequest {
-  const by = { kind: "member", user_id: OWNER, surface: "web" }
-  const base =
-    how === "decision"
-      ? slackRequest({
-          decision: {
-            decision: "approved",
-            message: "",
-            allowed_tools: [],
-            granted_permissions: [],
-            decided_at: REPLIED_AT,
-            decided_by: by,
-            consent: "reply",
-          },
-        })
-      : approvedRequest("summary", {
-          review: { action: "reply", decided_by: by, decided_at: REPLIED_AT },
-        })
-  return {
-    ...base,
-    status: "completed",
-    revision: 4,
-    result: { ...answer(text), written_by_owner: true },
-    guard: { state: "clear" },
-    ...overrides,
-  }
 }
 
 /** An answer, as a request's result holds it. */

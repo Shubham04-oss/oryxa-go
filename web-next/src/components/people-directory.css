@@ -1,0 +1,141 @@
+/* Team → People: the organization's people, to message (DESIGN.md §3). A
+   conversation's own look is in direct-messages.css. */
+.workspace-people-directory {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 760px);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 26px 28px;
+}
+.workspace-people-search {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 10px;
+  height: 42px;
+  padding: 0 13px;
+  border: 1px solid #3e3e3e;
+  border-radius: 12px;
+  background: #272727;
+  color: #979797;
+}
+.workspace-people-search:focus-within { border-color: #777; }
+.workspace-people-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #eee;
+  font-size: 13px;
+}
+.workspace-people-search input::placeholder {
+  color: #858585;
+}
+.workspace-people-directory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 20px 0 0;
+  padding: 0 0 8px;
+  overflow: auto;
+  list-style: none;
+}
+.workspace-people-directory-list button {
+  --presence-ring: #252525;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 70px;
+  padding: 12px 14px;
+  border: 1px solid #393939;
+  border-radius: 14px;
+  background: #252525;
+  color: #ddd;
+  text-align: left;
+  transition: background 180ms ease, border-color 180ms ease;
+}
+.workspace-people-directory-list button:hover {
+  --presence-ring: #2b2b2b;
+  border-color: #565656;
+  background: #2b2b2b;
+}
+.workspace-people-directory-list .workspace-avatar {
+  width: 41px;
+  height: 41px;
+}
+.workspace-people-directory-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+}
+.workspace-people-directory-list strong {
+  overflow: hidden;
+  color: #f2f2f2;
+  font-size: 14px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-people-directory-list small {
+  overflow: hidden;
+  color: #989898;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The row's action, drawn as a quiet pill; the whole row is the button. */
+.workspace-people-message {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid #454545;
+  border-radius: 999px;
+  color: #d6d6d6;
+  font-size: 12px;
+}
+.workspace-people-directory-list button:hover .workspace-people-message {
+  border-color: #e9e9e9;
+  background: #e9e9e9;
+  color: #1e1e1e;
+}
+.workspace-people-directory-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin: 35px 0;
+  color: #999;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+.workspace-people-directory-empty p { margin: 0; }
+@media (max-width: 800px) {
+  .workspace-people-directory {
+    padding: 15px 16px 24px;
+  }
+  .workspace-people-directory-list {
+    margin-top: 13px;
+  }
+  .workspace-people-directory-list button {
+    gap: 12px;
+    padding: 11px 12px;
+  }
+  /* The row itself says "Message" to a screen reader; on a phone the pill
+     shrinks to its icon so the name keeps its room. */
+  .workspace-people-message {
+    justify-content: center;
+    width: 32px;
+    padding: 0;
+  }
+  .workspace-people-message span { display: none; }
+}

@@ -15,7 +15,7 @@ import {
   focusManager,
 } from "@tanstack/react-query"
 import { RequestsCanvas, RequestsView } from "./requests-view"
-import { clockTime } from "./time-format"
+import { clockTime } from "./direct-message-format"
 import {
   ASKER,
   NOW,
@@ -306,7 +306,7 @@ describe("a request decided elsewhere", () => {
     focusManager.setFocused(true)
 
     await screen.findByText(
-      `Approved in Slack by you at ${clockTime("2026-09-29T12:02:00Z")}. Answer shared.`
+      `Approved in Slack by you at ${clockTime("2026-09-29T12:02:00Z")}. Summary only.`
     )
     expect(
       screen.queryByRole("group", { name: /Choose what Krude/ })

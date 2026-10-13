@@ -17,12 +17,11 @@ import {
 } from "lucide-react"
 import { AgentsNotice } from "./agents-parts"
 import { agentsErrorMessage } from "./agents-format"
-import { clockTime, dayLabel, fullTime } from "./time-format"
+import { clockTime, dayLabel } from "./direct-message-format"
 import {
   activityIcon,
   activitySentence,
   openableRows,
-  repliedRequestIds,
 } from "./requests-activity-format"
 import type { ActivityIcon } from "./requests-activity-format"
 import {
@@ -32,6 +31,7 @@ import {
 } from "./requests-view-queries"
 import { shortName } from "./request-card-format"
 import type { Reader } from "./request-card-format"
+import { fullTime } from "./teamspace-format"
 import { isLeaseLive, revokeAgentLease } from "@/lib/agents/agent-requests"
 import type { AgentActivityEntry } from "@/lib/agents/agent-requests"
 import { isUnavailableHere } from "@/lib/agents/policy"
@@ -151,7 +151,6 @@ export function RequestsActivity({
   const now = Date.now()
   const reader: Reader = { viewerId, nameOf: people.nameOf, now }
   const openable = openableRows(entries)
-  const replied = repliedRequestIds(entries)
 
   return (
     <div className="workspace-requests-activity">
@@ -179,7 +178,7 @@ export function RequestsActivity({
                     <EntryIcon icon={activityIcon(entry)} />
                   </span>
                   <span className="workspace-requests-activity-text">
-                    {activitySentence(entry, reader, replied)}
+                    {activitySentence(entry, reader)}
                   </span>
                   <span className="workspace-requests-activity-actions">
                     {canEnd && (

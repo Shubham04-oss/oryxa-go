@@ -161,50 +161,6 @@
 .workspace-request-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 .workspace-request-actions[data-align="start"] { justify-content: flex-start; }
 
-/* Reply yourself (request-card-reply.tsx): the owner's own words. The quieter
-   way in sits under a request's choices as a text button; the field follows
-   the chat composer, a pill at one line that softens as its text wraps. */
-.workspace-request-quiet { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
-.workspace-request-reply { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.workspace-request-reply-box { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.workspace-request-reply-field {
-  display: flex;
-  min-width: 0;
-  padding: 3px 14px;
-  border: 1px solid #3a3a3a;
-  border-radius: 999px;
-  background: #1c1c1c;
-  transition: border-radius 160ms ease, border-color 160ms ease;
-}
-.workspace-request-reply-field:focus-within { border-color: #8a8a8a; }
-.workspace-request-reply-field[data-multiline="true"] { padding-block: 7px; border-radius: 18px; }
-.workspace-request-reply-field[data-invalid="true"] { border-color: #a36b6b; }
-.workspace-request-reply-field textarea {
-  flex: 1;
-  box-sizing: border-box;
-  min-width: 0;
-  padding: 4px 0;
-  border: 0;
-  outline: none;
-  resize: none;
-  background: transparent;
-  color: #f1f1f1;
-  font: inherit;
-  font-size: 12px;
-  line-height: 18px;
-}
-.workspace-request-reply-field[data-multiline="true"] textarea { padding-block: 0; }
-/* The field's own border is the focus mark, as the composer's is: the shell's
-   ring for a textarea would draw a square inside the pill. */
-.workspace-shell .workspace-request-reply-field textarea:focus-visible { outline: none; }
-.workspace-request-reply-field textarea::placeholder { color: #8a8a8a; }
-.workspace-request-reply-field textarea:read-only { opacity: 0.7; }
-.workspace-request-reply-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; margin: 0 14px; color: #8d8d8d; font-size: 11px; line-height: 1.45; }
-.workspace-request-reply-meta > span:first-child { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
-.workspace-request-reply-count { flex: none; margin-left: auto; font-variant-numeric: tabular-nums; }
-.workspace-request-reply-count[data-over="true"] { color: #e4aaa6; }
-.workspace-request-reply-detail { margin: 0 14px; color: #8d8d8d; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-
 /* An answer held for review, and one that was shared. */
 .workspace-request-held,
 .workspace-request-shared { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -222,8 +178,6 @@
   overflow-wrap: anywhere;
 }
 .workspace-request-answer[data-masked="true"] { color: #a9a9a9; }
-/* The owner's own words are shown as they wrote them: line breaks kept. */
-.workspace-request-answer[data-by="owner"] { white-space: pre-wrap; }
 .workspace-request-answer[data-folded="true"] { max-height: 7.5em; overflow: hidden; }
 .workspace-request-held-label { margin: 2px 0 -2px; color: #8d8d8d; font-size: 11px; line-height: 1.4; }
 
@@ -303,13 +257,6 @@
   .workspace-request-note input,
   .workspace-request-secret-form input[type="password"],
   .workspace-request-secret-value input,
-  .workspace-request-secret-lifetime select,
-  .workspace-request-reply-field textarea { font-size: 16px; line-height: 22px; }
+  .workspace-request-secret-lifetime select { font-size: 16px; }
   .workspace-request-choice { min-height: 48px; }
-  /* Reply yourself: the field takes the width, the buttons stack with the
-     action that matters on top (Send reply, then the others in their order). */
-  .workspace-request-quiet .workspace-agent-text-button { min-height: 40px; font-size: 12px; }
-  .workspace-request-reply .workspace-request-actions { flex-direction: column-reverse; align-items: stretch; }
-  .workspace-request-reply .workspace-request-actions[data-first="true"] { flex-direction: column; }
-  .workspace-request-reply .workspace-agent-pill { min-height: 44px; }
 }

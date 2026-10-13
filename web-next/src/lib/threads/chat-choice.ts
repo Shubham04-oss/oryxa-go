@@ -3,17 +3,15 @@ import type { Thread } from "./client"
 import type { ScreenContext } from "@/lib/agents/screen-context"
 
 // Which conversation the primary agent's chat opens, and how the rest of the
-// app (a link, for one) asks it to open a particular conversation or a new one.
+// app (Home, for one) asks it to open a particular conversation or a new one.
 //
 // A mounted chat stays where the member left it. On remount or reload,
 // their last view in this tab reopens for five minutes (including New chat),
-// then the newest conversation waiting on their approval, then New chat (the
-// desk).
+// then the newest conversation waiting on their approval, then New chat.
 // Server update times never imply the member was recently present.
 //
 // The chat also says what it is doing (`publishPrimaryChatActivity`), so a
-// page beside the chat (the desk, the sidebar's Recent list) can show that
-// the agent is working or waiting.
+// page outside the panel can show that the agent is working or waiting.
 
 /** Whose chat a choice or a request belongs to. */
 export type ChatScope = { organizationId: string; userId: string }
@@ -137,27 +135,6 @@ export function recentNewView(
   )
 }
 
-/**
- * Whether a chat still choosing will most likely reopen a conversation: the
- * member left one in this tab less than five minutes ago. A page shows that
- * conversation loading meanwhile, rather than a blank chat it would leave a
- * moment later. (The rules still decide: the conversation may be gone.)
- */
-export function reopensConversation(
-  scope: ChatScope | undefined,
-  agentId: string | undefined,
-  now = Date.now()
-): boolean {
-  if (!scope || !agentId) return false
-  const view = rememberedView(scope, agentId)
-  return (
-    view !== null &&
-    view.choice !== NEW_CHAT &&
-    view.leftAt <= now &&
-    now - view.leftAt < FRESH_CONVERSATION_MS
-  )
-}
-
 /** Recent view (including explicit New), otherwise newest pending among five recent chats, otherwise New. */
 export async function openingThread({
   threads,
@@ -181,7 +158,7 @@ export async function openingThread({
   return history.find((_, index) => held[index])?.id ?? null
 }
 
-/** Record leaves and activity only while this view is visible; a hidden chat never extends the grace. */
+/** Record leaves and activity only while this view is visible; hidden panels never extend the grace. */
 export function useRememberedView(
   thread: string | null | undefined,
   scope: ChatScope | undefined,
@@ -244,7 +221,7 @@ export function useRememberedView(
 /**
  * How many requests carrying a message may wait for the chat to take them.
  * The chat takes them as soon as it can, so only one that never reads them (no
- * chat, an agents list that never answers) fills this; the request after that
+ * panel, an agents list that never answers) fills this; the request after that
  * is refused, and no older one is pushed out to make room.
  */
 export const MAX_WAITING_MESSAGES = 20
@@ -264,12 +241,12 @@ function announce() {
 }
 
 /**
- * Asks the primary chat to open `target`. The caller brings the chat into the
- * center itself; the chat switches to the conversation, or to a new one and
+ * Asks the agent panel's primary chat to open `target`. The caller opens the
+ * panel itself; the chat switches to the conversation, or to a new one and
  * sends `message` as its first message, and remembers the choice.
  *
  * Each request waits until the chat claims it, however many are made before
- * it does (the shell takes none until the member's agents have loaded), and
+ * it does (the panel takes none until the member's agents have loaded), and
  * the chat gets them in the order they were made. A message past
  * `MAX_WAITING_MESSAGES` is refused: it still waits its turn, marked `refused`
  * so the chat shows it as not sent instead of sending it.
@@ -293,8 +270,8 @@ export function requestPrimaryChat(
 /**
  * Claims a request for whoever acts on it: true the first time for each `id`,
  * false after. A claimed request is gone from the queue, so however often the
- * shell renders, or the page mounts it again, a request is never acted on
- * twice; and one made before the shell mounted is still there to claim.
+ * panel renders, or the page mounts it again, a request is never acted on
+ * twice; and one made before the panel mounted is still there to claim.
  */
 export function claimPrimaryChatRequest(id: number): boolean {
   if (!waiting.some((request) => request.id === id)) return false
@@ -412,7 +389,7 @@ export function usePrimaryChatActivity(
   )
 }
 
-// What the shell holds for the primary chat, in one reducer: the
+// What the agent panel holds for the primary chat, in one reducer: the
 // conversation it is on, the requests and first messages waiting their turn,
 // the first messages that could not be sent, and every agent's draft. Keeping
 // it in one place is what lets every step be named by the request it belongs

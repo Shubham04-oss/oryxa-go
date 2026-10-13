@@ -4,7 +4,7 @@
 // back. The words follow the request card's (request-card-format.ts).
 import { consentWords, shortName } from "./request-card-format"
 import type { Reader } from "./request-card-format"
-import { clockTime } from "./time-format"
+import { clockTime } from "./direct-message-format"
 import type { AgentActivityEntry } from "@/lib/agents/agent-requests"
 
 /** What sort of thing an entry is, for its icon. */
@@ -68,12 +68,6 @@ function decidedSentence(
           : by?.surface === "web"
             ? " in Oryxa"
             : ""
-      // An owner who answered in their own words decided by doing so.
-      if (entry.consent === "reply") {
-        return owner
-          ? `You replied to ${other}'s request${where}.`
-          : `${other} replied to your request${where}.`
-      }
       const consent = entry.consent ? ` ${consentWords(entry.consent)}` : ""
       if (owner) {
         return rejected
@@ -87,32 +81,10 @@ function decidedSentence(
   }
 }
 
-/**
- * The requests whose owner answered in their own words, read from the
- * `decided` entries among `entries`: an `answered` entry says no more than
- * that an answer was given, and whose words it was is only in the decision.
- */
-export function repliedRequestIds(
-  entries: readonly AgentActivityEntry[]
-): Set<string> {
-  return new Set(
-    entries.flatMap((entry) =>
-      entry.kind === "decided" && entry.consent === "reply" && entry.request_id
-        ? [entry.request_id]
-        : []
-    )
-  )
-}
-
-/**
- * One entry of Activity, as a sentence, for the reader. `replied` is the
- * requests whose owner replied themselves (`repliedRequestIds`): their
- * answers were not their agent's.
- */
+/** One entry of Activity, as a sentence, for the reader. */
 export function activitySentence(
   entry: AgentActivityEntry,
-  reader: Reader,
-  replied?: ReadonlySet<string>
+  reader: Reader
 ): string {
   const owner = entry.role === "owner"
   const other = shortName(reader, entry.with_user_id)
@@ -128,11 +100,6 @@ export function activitySentence(
         return owner
           ? `Your agent couldn't answer ${other}.`
           : `${other}'s agent couldn't answer you.`
-      }
-      if (entry.request_id && replied?.has(entry.request_id)) {
-        return owner
-          ? `Your reply reached ${other}.`
-          : `${other}'s reply reached you.`
       }
       return owner
         ? `Your agent answered ${other}.`
@@ -164,7 +131,6 @@ export function activityIcon(entry: AgentActivityEntry): ActivityIcon {
     case "asked":
       return "asked"
     case "decided":
-      if (entry.consent === "reply") return "answered"
       return entry.decision === "rejected" ||
         entry.decided_by?.kind === "system"
         ? "denied"

@@ -1,32 +1,20 @@
-/* The sidebar's Recent list (agent-chat-history.tsx): the member's
-   conversations, newest first, each a quiet two-line row with delete on
-   hover or focus (DESIGN.md §2). */
-.workspace-chat-history { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -4px; padding: 0 4px; color: #8d8d8d; font-size: 11px; scrollbar-color: #3a3a3a transparent; scrollbar-width: thin; }
+.workspace-chat-history { flex: 0 0 auto; margin-bottom: 4px; color: #999; font-size: 11px; }
 .workspace-chat-history button { cursor: pointer; border: 0; background: transparent; color: inherit; font: inherit; }
 .workspace-chat-history button:disabled { cursor: default; opacity: .45; }
-.workspace-chat-history button:focus-visible { outline: 2px solid #aaa; outline-offset: -2px; border-radius: 8px; }
-.workspace-chat-history ul { list-style: none; margin: 0; padding: 0; }
-.workspace-chat-history li { position: relative; display: flex; align-items: center; border-radius: 9px; }
-.workspace-chat-history li:hover,
-.workspace-chat-history li:focus-within { background: #1b1b1b; }
-.workspace-chat-history li[data-current="true"] { background: #262626; }
-.workspace-chat-history-open { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 10px 7px 12px; text-align: left; }
-.workspace-chat-history-title { width: 100%; overflow: hidden; color: #cfcfcf; font-size: 12.5px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-chat-history li[data-current="true"] .workspace-chat-history-title { color: #f3f3f3; }
-.workspace-chat-history-meta { display: block; min-height: 15px; font-size: 10.5px; line-height: 1.4; }
-.workspace-chat-history-waiting { color: #d9d9d9; }
-.workspace-chat-history-working { display: inline-flex; align-items: center; gap: 5px; color: #bdbdbd; }
-.workspace-chat-history-working canvas { flex: none; }
-.workspace-chat-history-delete { display: grid; flex: none; place-items: center; width: 28px; min-height: 30px; margin-right: 4px; border-radius: 7px; }
-@media (hover: hover) and (min-width: 801px) {
-  .workspace-chat-history li:not(:hover, :focus-within) .workspace-chat-history-delete { opacity: 0; }
-}
-.workspace-chat-history-delete:hover:not(:disabled) { background: #2a2a2a; color: #f2f2f2; }
-.workspace-chat-history-confirm { display: flex; flex-shrink: 0; gap: 8px; padding-right: 10px; color: #d6d6d6; }
-.workspace-chat-history-confirm button,
-.workspace-chat-history-note button { text-decoration: underline; text-underline-offset: 3px; }
-.workspace-chat-history-note { margin: 0; padding: 6px 12px; line-height: 1.45; }
-@media (max-width: 800px) {
-  .workspace-chat-history-open { padding-block: 9px; }
-  .workspace-chat-history-delete { width: 38px; min-height: 40px; }
-}
+.workspace-chat-history button:focus-visible { outline: 1px solid #999; outline-offset: -1px; border-radius: 6px; }
+.workspace-chat-history-toggle { display: flex; align-items: center; gap: 5px; padding: 5px 0; }
+.workspace-chat-history-toggle svg { transition: transform .15s; transform: rotate(-90deg); }
+.workspace-chat-history-toggle svg[data-expanded="true"] { transform: rotate(0); }
+.workspace-chat-history-list { max-height: 190px; overflow-y: auto; }
+.workspace-chat-history-list ul { list-style: none; margin: 0; padding: 0; }
+.workspace-chat-history-list li { display: flex; align-items: center; gap: 4px; border-radius: 7px; }
+.workspace-chat-history-open { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: flex-start; gap: 2px; padding: 7px 8px; text-align: left; }
+.workspace-chat-history-open > span:first-child { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #d6d6d6; }
+.workspace-chat-history-open[aria-current="true"], .workspace-chat-history-list li:hover { background: #1e1e1e; border-radius: 7px; }
+.workspace-chat-history-meta { font-size: 10px; }
+.workspace-chat-history-delete { display: grid; place-items: center; width: 30px; min-height: 32px; flex-shrink: 0; }
+.workspace-chat-history-confirm { display: flex; flex-shrink: 0; gap: 6px; padding-right: 8px; }
+.workspace-chat-history-confirm button, .workspace-chat-history-note button { text-decoration: underline; text-underline-offset: 3px; }
+.workspace-chat-history-note { padding: 7px 8px; margin: 0; }
+.workspace-agent-new.workspace-agent-new-chat { display: inline-flex; align-items: center; justify-content: center; width: auto; gap: 5px; padding: 0 9px; border-radius: 15px; white-space: nowrap; font-size: 11px; }
+@media (max-width: 800px) { .workspace-chat-history-delete { width: 38px; min-height: 38px; } .workspace-chat-history-list { max-height: min(190px, 24dvh); } }

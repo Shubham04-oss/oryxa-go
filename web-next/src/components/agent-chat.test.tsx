@@ -15,10 +15,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useReducer, useState } from "react"
 import type { ReactElement } from "react"
 import { AgentChat } from "./agent-chat"
-import type { BlankChat } from "./agent-chat"
-import { PrimaryChatHistory } from "./agent-chat-history"
-import { AgentComposer } from "./agent-composer"
-import { ConversationHeader } from "./conversation-header"
+import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import {
   initialPrimaryChat,
   primaryChatReducer,
@@ -261,18 +258,16 @@ const scope = { organizationId: "org_1", userId: "user_1" }
 const LEO = "agt_leo"
 
 /**
- * The chat as the shell mounts it, holding its state in the reducer the shell
- * uses, under the conversation's header (its title and New chat) and, when
- * asked, beside the sidebar's Recent list. `agent` is the primary agent's id,
- * or null while the agents list is out.
+ * The chat as the panel mounts it, holding its state in the reducer the panel
+ * uses. `agent` is the primary agent's id, or null while the agents list is
+ * out.
  */
 function ChatHost({
   remember = true,
   agent = LEO,
   viewer = scope.userId,
   initial,
-  history = false,
-  desk = false,
+  inOverview = false,
 }: {
   remember?: boolean
   agent?: string | null
@@ -280,65 +275,26 @@ function ChatHost({
   viewer?: string
   /** What the chat holds to begin with, when it is not a fresh chat. */
   initial?: PrimaryChat
-  /** The sidebar's Recent list is shown too. */
-  history?: boolean
-  /** A desk stands for the blank chat, as the shell's does. */
-  desk?: boolean
+  /** The focused Agent overview is open. */
+  inOverview?: boolean
 }) {
-  const asViewer = remember ? { ...scope, userId: viewer } : undefined
+  const asViewer = { ...scope, userId: viewer }
   const [chat, dispatch] = useReducer(
     primaryChatReducer,
     initial,
     (start) => start ?? initialPrimaryChat()
   )
   return (
-    <>
-      <ConversationHeader
-        organizationId="org_1"
-        scope={asViewer}
-        chat={chat}
-        dispatch={dispatch}
-      />
-      {history && (
-        <PrimaryChatHistory
-          organizationId="org_1"
-          scope={asViewer}
-          chat={chat}
-          dispatch={dispatch}
-          current
-        />
-      )}
-      <AgentChat
-        organizationId="org_1"
-        scope={asViewer}
-        agentId={agent ?? undefined}
-        agentName="Leo"
-        chat={chat}
-        dispatch={dispatch}
-        onComposingChange={vi.fn()}
-        renderBlank={desk ? (blank) => <Desk {...blank} /> : undefined}
-      />
-    </>
-  )
-}
-
-/** A desk as the shell's stands for the blank chat: its composer, the unsent messages and the notice. */
-function Desk(blank: BlankChat) {
-  return (
-    <section aria-label="Desk">
-      <AgentComposer
-        label="Start a new conversation"
-        value={blank.draft}
-        onChange={blank.onDraftChange}
-        onSubmit={blank.onSubmit}
-      />
-      {blank.notSent && (
-        <div role="log" aria-label="Messages not sent">
-          {blank.notSent}
-        </div>
-      )}
-      {blank.notice && <p role="alert">{blank.notice}</p>}
-    </section>
+    <AgentChat
+      organizationId="org_1"
+      scope={remember ? asViewer : undefined}
+      agentId={agent ?? undefined}
+      agentName="Leo"
+      chat={chat}
+      dispatch={dispatch}
+      inOverview={inOverview}
+      onComposingChange={vi.fn()}
+    />
   )
 }
 
@@ -1475,6 +1431,27 @@ describe("the primary chat's activity", () => {
   })
 })
 
+describe("WorkspaceAgentPanel", () => {
+  it("names the member's primary agent and hides the switcher with one agent", async () => {
+    stubApi({ threads: [] })
+    renderWithQueries(
+      <WorkspaceAgentPanel
+        expanded
+        onExpand={vi.fn()}
+        onCollapse={vi.fn()}
+        organizationId="org_1"
+      />
+    )
+    expect(
+      await screen.findByRole("textbox", { name: "Message Leo" })
+    ).toBeTruthy()
+    expect(screen.queryByRole("group", { name: "Switch agent" })).toBeNull()
+    expect(
+      within(screen.getByRole("tab", { name: "Agents" })).getByLabelText("Leo")
+    ).toBeTruthy()
+  })
+})
+
 describe("primary chat history actions", () => {
   it.each([403, 404])(
     "hides retained approval markers after a %i refusal without restoring canonical cache data",
@@ -1498,13 +1475,14 @@ describe("primary chat history actions", () => {
         return answer(input, init)
       })
       const view = renderWithQueries(
-        <ChatHost history initial={{ ...initialPrimaryChat(), thread: null }} />
+        <ChatHost initial={{ ...initialPrimaryChat(), thread: null }} />
       )
       await screen.findByText("Ask anything to start a conversation.")
       view.client.setQueryData(
         threadKeys.detail(scope.organizationId, waiting.id),
         retained
       )
+      fireEvent.click(screen.getByRole("button", { name: "History" }))
       await screen.findByRole("button", {
         name: /Untitled chat.*Needs approval/,
       })
@@ -1533,7 +1511,7 @@ describe("primary chat history actions", () => {
     )
     stubApi({ threads: history, rememberLatest: false })
     const view = renderWithQueries(
-      <ChatHost history initial={{ ...initialPrimaryChat(), thread: null }} />
+      <ChatHost initial={{ ...initialPrimaryChat(), thread: null }} />
     )
     const detail = (index: number): ThreadDetail => ({
       ...history[index],
@@ -1555,6 +1533,7 @@ describe("primary chat history actions", () => {
       detail(7)
     )
     await screen.findByText("Ask anything to start a conversation.")
+    fireEvent.click(screen.getByRole("button", { name: "History" }))
     expect(
       await screen.findByRole("button", { name: /Chat 5.*Needs approval/ })
     ).toBeTruthy()
@@ -1575,8 +1554,9 @@ describe("primary chat history actions", () => {
       thread: null,
       unsent: [{ id: 30, text: "Still waiting", notice: "Offline." }],
     }
-    renderWithQueries(<ChatHost history initial={initial} />)
+    renderWithQueries(<ChatHost initial={initial} />)
     fireEvent.change(composer(), { target: { value: "Keep my draft" } })
+    fireEvent.click(screen.getByRole("button", { name: "History" }))
     fireEvent.click(await screen.findByRole("button", { name: /Earlier.*ago/ }))
     await waitFor(() =>
       expect(hooks.agentOptions.map((item) => item.name)).toContain(
@@ -1608,10 +1588,11 @@ describe("primary chat history actions", () => {
       updated_at: new Date(now - i * 1000).toISOString(),
     })).reverse()
     const calls = stubApi({ threads: history, rememberLatest: false })
-    renderWithQueries(<ChatHost history />)
+    renderChat()
     expect(
       await screen.findByText("Ask anything to start a conversation.")
     ).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "History" }))
     expect(screen.getAllByRole("listitem")).toHaveLength(20)
     const details = calls.filter((call) =>
       /^GET \/v1\/organizations\/org_1\/threads\//.test(call)
@@ -1633,172 +1614,5 @@ describe("primary chat history actions", () => {
       await screen.findByText("Ask anything to start a conversation.")
     ).toBeTruthy()
     expect(rememberedChoice(scope, LEO)).toBeNull()
-  })
-})
-
-describe("the chat in the center, with a desk for no conversation", () => {
-  const desk = () => screen.queryByRole("region", { name: "Desk" })
-  const deskBox = () =>
-    screen.getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Start a new conversation",
-    })
-
-  it("shows the desk with no conversation open, and makes its first message a conversation of its own, sent once", async () => {
-    const calls = stubApi({ threads: [thread("th_old", "Old", 6 * HOUR)] })
-    renderWithQueries(<ChatHost desk />)
-    expect(await screen.findByRole("region", { name: "Desk" })).toBeTruthy()
-    // The desk stands for the blank chat: no invitation or composer of its own.
-    expect(
-      screen.queryByText("Ask anything to start a conversation.")
-    ).toBeNull()
-    expect(screen.queryByRole("textbox", { name: "Message Leo" })).toBeNull()
-    expect(hooks.agentOptions).toHaveLength(0)
-
-    fireEvent.change(deskBox(), { target: { value: "  Plan the launch  " } })
-    fireEvent.keyDown(deskBox(), { key: "Enter" })
-    // The desk gives way to the conversation being made, the message in it.
-    expect(desk()).toBeNull()
-    expect(
-      screen.getByRole("log").querySelector('[data-from="member"]')?.textContent
-    ).toBe("Plan the launch")
-    await waitFor(() =>
-      expect(calls).toContain("POST /v1/organizations/org_1/threads")
-    )
-    await waitFor(() =>
-      expect(hooks.agentOptions.map((item) => item.name)).toContain(
-        "org_1~th_new"
-      )
-    )
-    open("org_1~th_new")
-    expect(hooks.sendMessage).toHaveBeenCalledExactlyOnceWith({
-      text: "Plan the launch",
-    })
-    open("org_1~th_new")
-    expect(hooks.sendMessage).toHaveBeenCalledOnce()
-    // The composer gave its words up.
-    expect((composer() as HTMLTextAreaElement).value).toBe("")
-  })
-
-  it("keeps one draft for the desk and the conversations, as one composer did", async () => {
-    stubApi({ threads: [thread("th_1", "Plan the launch")] })
-    renderWithQueries(<ChatHost desk />)
-    await waitFor(() =>
-      expect(hooks.agentOptions.map((item) => item.name)).toContain(
-        "org_1~th_1"
-      )
-    )
-    open("org_1~th_1")
-    fireEvent.change(composer(), { target: { value: "Half a thought" } })
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
-    expect(deskBox().value).toBe("Half a thought")
-  })
-
-  it("puts the messages that were not sent, and why the chat left a conversation, on the desk", async () => {
-    stubApi({ threads: [], gone: ["th_new"] })
-    renderWithQueries(<ChatHost desk />)
-    await screen.findByRole("region", { name: "Desk" })
-    fireEvent.change(deskBox(), { target: { value: "Plan the launch" } })
-    fireEvent.keyDown(deskBox(), { key: "Enter" })
-
-    // Its conversation went before the message got in: back to the desk,
-    // with the words as not sent, Retry, Edit and Dismiss.
-    expect(
-      await screen.findByText("Not sent. That conversation no longer exists.")
-    ).toBeTruthy()
-    const unsent = screen.getByRole("log", { name: "Messages not sent" })
-    expect(within(unsent).getByText("Plan the launch")).toBeTruthy()
-    expect(desk()).toBeTruthy()
-    expect(deskBox().value).toBe("")
-    fireEvent.click(within(unsent).getByRole("button", { name: "Edit" }))
-    expect(deskBox().value).toBe("Plan the launch")
-    expect(hooks.sendMessage).not.toHaveBeenCalled()
-  })
-
-  it("says on the desk that the conversation it opened is gone", async () => {
-    stubApi({ threads: [thread("th_1", "Plan the launch")], gone: ["th_1"] })
-    renderWithQueries(<ChatHost desk />)
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "That conversation no longer exists."
-    )
-    expect(desk()).toBeTruthy()
-  })
-
-  it("shows nothing while the member's agents load, then the desk, when nothing is to reopen", async () => {
-    stubApi({
-      threads: [thread("th_1", "Old", 6 * HOUR)],
-      rememberLatest: false,
-    })
-    function AgentArrives() {
-      const [agent, setAgent] = useState<string | null>(null)
-      return (
-        <>
-          <button type="button" onClick={() => setAgent(LEO)}>
-            Agents loaded
-          </button>
-          <ChatHost desk agent={agent} />
-        </>
-      )
-    }
-    renderWithQueries(<AgentArrives />)
-    await act(async () => {})
-    // Neither a desk it may leave nor a conversation it may not open.
-    expect(desk()).toBeNull()
-    expect(screen.queryByText("Loading the conversation…")).toBeNull()
-    expect(screen.queryByRole("textbox")).toBeNull()
-
-    fireEvent.click(screen.getByRole("button", { name: "Agents loaded" }))
-    expect(await screen.findByRole("region", { name: "Desk" })).toBeTruthy()
-    expect(hooks.agentOptions).toHaveLength(0)
-  })
-
-  it("shows the conversation loading, not the desk, while it reopens the one the member just left", async () => {
-    stubApi({ threads: [thread("th_1", "Plan the launch")] })
-    const release = holdMemberList()
-    renderWithQueries(<ChatHost desk />)
-    expect(await screen.findByText("Loading the conversation…")).toBeTruthy()
-    expect(desk()).toBeNull()
-    // What the member types meanwhile goes with them into the conversation.
-    fireEvent.change(composer(), { target: { value: "Quick question" } })
-
-    act(() => release())
-    await waitFor(() =>
-      expect(hooks.agentOptions.map((item) => item.name)).toContain(
-        "org_1~th_1"
-      )
-    )
-    expect(desk()).toBeNull()
-    expect((composer() as HTMLTextAreaElement).value).toBe("Quick question")
-  })
-
-  it("opens the newest conversation waiting on the member from the desk it showed while it checked", async () => {
-    const items: Item[] = [
-      { type: "message", id: "ev_1", author: "member", text: "Email Sam" },
-      {
-        type: "confirmation",
-        id: "ev_2",
-        call_id: "call_1",
-        tool_call_id: "tool_1",
-        tool: "send_email",
-        arguments: { to: "sam@example.com" },
-        status: "pending",
-      },
-    ]
-    stubApi({
-      threads: [thread("th_1", "Email Sam", 6 * HOUR)],
-      items,
-      pending: ["call_1"],
-    })
-    hooks.chat.messages = itemsToChatMessages(items)
-    renderWithQueries(<ChatHost desk />)
-    await waitFor(() =>
-      expect(hooks.agentOptions.map((item) => item.name)).toContain(
-        "org_1~th_1"
-      )
-    )
-    open("org_1~th_1")
-    expect(
-      await screen.findByRole("group", { name: "Confirm Send email" })
-    ).toBeTruthy()
-    expect(desk()).toBeNull()
   })
 })

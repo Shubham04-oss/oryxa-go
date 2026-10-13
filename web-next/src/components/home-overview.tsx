@@ -7,19 +7,16 @@ import {
   useQueryClient,
 } from "@tanstack/react-query"
 import { useHydrated } from "@tanstack/react-router"
+import { ThinkingOrb } from "thinking-orbs"
 import { AgentComposer } from "./agent-composer"
-import type { BlankChat } from "./agent-chat"
-import { agentIdentity } from "./agents-format"
-import { PrimaryAgentPaused } from "./primary-agent-paused"
 import { RequestCard } from "./request-card"
-import { IdentityAvatar } from "./workspace-avatar"
-import { activitySentence, repliedRequestIds } from "./requests-activity-format"
+import { activitySentence } from "./requests-activity-format"
 import {
   activityQueryOptions,
   refreshRequests,
   usePeopleNames,
 } from "./requests-view-queries"
-import { clockTime } from "./time-format"
+import { clockTime } from "./direct-message-format"
 import { ApiError } from "@/lib/api/client"
 import {
   AGENT_REQUESTS_POLL_MS,
@@ -27,7 +24,7 @@ import {
   agentRequestsQueryOptions,
 } from "@/lib/agents/queries"
 import { isUnavailableHere } from "@/lib/agents/policy"
-import { isOwnerWritten, revokeAgentLease } from "@/lib/agents/agent-requests"
+import { revokeAgentLease } from "@/lib/agents/agent-requests"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
 import { getAgentGrant } from "@/lib/auth/settings"
 import { slackKeys } from "@/lib/apps/slack"
@@ -45,21 +42,6 @@ import { authorizedData, homeRead } from "@/lib/home/queries"
 import "./home-overview.css"
 
 const requestLimit = 100
-
-/**
- * The member's Inbox as the desk reads it, scoped to them. The sidebar's
- * Requests count reads the same entry, so the two never disagree and share
- * one read.
- */
-export function deskInboxQueryOptions(
-  organizationId: string,
-  viewerId: string
-) {
-  return homeRead(
-    agentRequestsQueryOptions(organizationId, "inbox", requestLimit),
-    viewerId
-  )
-}
 
 /** Only owner decisions and held-answer reviews actually wait on this member. */
 function waitsOnMember(request: AgentRequest, viewerId: string, now: number) {
@@ -117,26 +99,13 @@ function conversationTitle(title?: string) {
   return title?.trim() ?? ""
 }
 
-/** The member's primary agent, as the desk names it. */
-type DeskAgent = { id: string; name: string; status: "active" | "disabled" }
-
 type HomeProps = {
   organizationId?: string
   viewerId?: string
   primaryChatActivity?: PrimaryChatActivity | null
-  /**
-   * The primary chat with no conversation open, whose blank state this desk
-   * is: its composer starts a conversation of its own with the draft the chat
-   * keeps, beside the messages that were not sent. Without it the desk keeps
-   * its own draft and hands a message to `onNewChat`.
-   */
-  chat?: BlankChat
-  /** The member's primary agent, once known: named on the composer, with Resume while paused. */
-  agent?: DeskAgent
   onNewChat?: (message?: string) => void
   onOpenRequests: (requestId?: string) => void
-  /** Shows every conversation (the sidebar's Recent list). */
-  onOpenHistory?: () => void
+  onOpenAgent: () => void
   onOpenConversation?: (threadId: string) => void
   onOpenTools: () => void
   onOpenKnowledge: () => void
@@ -158,11 +127,9 @@ function HomeDesk({
   organizationId,
   viewerId,
   primaryChatActivity,
-  chat,
-  agent,
   onNewChat,
   onOpenRequests,
-  onOpenHistory,
+  onOpenAgent,
   onOpenConversation,
   onOpenKnowledge,
   onOpenSlack,
@@ -173,16 +140,13 @@ function HomeDesk({
   const org = organizationId ?? ""
   const viewer = viewerId ?? ""
   const queryClient = useQueryClient()
-  const [ownDraft, setOwnDraft] = useState("")
-  const draft = chat ? chat.draft : ownDraft
-  const setDraft = chat ? chat.onDraftChange : setOwnDraft
-  const canStart = Boolean(chat ?? onNewChat)
+  const [draft, setDraft] = useState("")
   const [showAccess, setShowAccess] = useState(false)
   const [leaseProblem, setLeaseProblem] = useState("")
   const [now, setNow] = useState(() => Date.now())
   const poll = { enabled, refetchInterval: AGENT_REQUESTS_POLL_MS }
   const inbox = useQuery({
-    ...deskInboxQueryOptions(org, viewer),
+    ...homeRead(agentRequestsQueryOptions(org, "inbox", requestLimit), viewer),
     ...poll,
   })
   const sent = useQuery({
@@ -326,7 +290,7 @@ function HomeDesk({
         title:
           conversationTitle(
             detail?.title ||
-              conversations.find((thread) => thread.id === threadId)?.title
+              conversations.find((chat) => chat.id === threadId)?.title
           ) || "Current conversation",
         pending,
       },
@@ -334,14 +298,44 @@ function HomeDesk({
   })
   const waitingWithoutId =
     primaryChatActivity?.state === "waiting" && !openThreadId
+  const running =
+    primaryChatActivity?.state === "running" ? primaryChatActivity : null
+  const activityTitle =
+    conversationTitle(
+      conversations.find(
+        (thread) => thread.id === primaryChatActivity?.threadId
+      )?.title
+    ) || "Current conversation"
+  const agentWork = [
+    ...(running
+      ? [
+          {
+            threadId: running.threadId,
+            title: running.threadId ? activityTitle : "Starting conversation",
+            detail: "Working",
+            running: true,
+          },
+        ]
+      : []),
+    ...conversations
+      .filter(
+        (thread) =>
+          conversationTitle(thread.title).length > 0 &&
+          thread.id !== running?.threadId
+      )
+      .slice(0, running ? 2 : 3)
+      .map((thread) => ({
+        threadId: thread.id,
+        title: conversationTitle(thread.title),
+        detail: relativeTime(thread.updated_at),
+        running: false,
+      })),
+  ].slice(0, 3)
   const people = usePeopleNames(org, viewer, enabled)
   const sharedIds = new Set(
     sharedAnswers.slice(0, 3).map((request) => request.id)
   )
-  const activityRows = authorizedData(activity) ?? []
-  // Answers the member gave in their own words are not "their agent's".
-  const replied = repliedRequestIds(activityRows)
-  const sharedActivity = activityRows
+  const sharedActivity = (authorizedData(activity) ?? [])
     .filter(
       (entry) =>
         entry.role === "owner" &&
@@ -355,11 +349,6 @@ function HomeDesk({
         rows.findIndex((row) => row.request_id === entry.request_id) === index
     )
     .slice(0, 3)
-  const ownerReplied =
-    sharedAnswers.slice(0, 3).some(isOwnerWritten) ||
-    sharedActivity.some(
-      (entry) => entry.request_id && replied.has(entry.request_id)
-    )
   const slackStatus = authorizedData(slack)
   const corpusRows = authorizedData(corpora)
   const agentGrant = authorizedData(grant)
@@ -442,65 +431,90 @@ function HomeDesk({
 
   return (
     <div className="home-overview">
-      <section
-        className="home-card home-agent"
-        aria-label="Your agent"
-        data-screen-context-kind={agent ? "primary_agent" : undefined}
-        data-screen-context-id={agent?.id}
-        data-screen-context-name={agent?.name}
-      >
+      <section className="home-card home-agent" aria-label="Your agent">
         <header>
-          <h2 className="home-agent-name">
-            {agent && (
-              <span className="home-agent-face" aria-hidden="true">
-                <IdentityAvatar identity={agentIdentity(agent)} />
-              </span>
-            )}
-            {agent?.name || "Your agent"}
-          </h2>
+          <h2>Your agent</h2>
+          <div>
+            <button
+              type="button"
+              disabled={!onNewChat}
+              onClick={() => onNewChat?.()}
+            >
+              New chat
+            </button>
+            <button
+              type="button"
+              onClick={onOpenAgent}
+              aria-label="All conversations"
+            >
+              All
+            </button>
+          </div>
         </header>
-        {agent?.status === "disabled" && organizationId && (
-          <PrimaryAgentPaused organizationId={organizationId} agent={agent} />
-        )}
         <AgentComposer
           label="Start a new conversation"
           placeholder="Ask your agent…"
           value={draft}
           onChange={setDraft}
-          sendDisabled={!enabled || !canStart}
+          sendDisabled={!enabled || !onNewChat}
           status={
             !enabled
               ? "Sign in to start a conversation."
-              : !canStart
+              : !onNewChat
                 ? "Conversation shortcuts are unavailable."
                 : undefined
           }
           onSubmit={(message) => {
-            if (chat) {
-              chat.onSubmit(message)
-              return
-            }
             onNewChat?.(message)
-            setOwnDraft("")
+            setDraft("")
           }}
-          onFocus={() => chat?.onComposingChange(true)}
-          onBlur={() => chat?.onComposingChange(false)}
         />
-        {chat?.notSent && (
-          <div
-            className="home-unsent"
-            role="log"
-            aria-label="Messages not sent"
-          >
-            {chat.notSent}
-          </div>
-        )}
-        {chat?.notice && (
-          <p className="home-quiet home-notice" role="alert">
-            {chat.notice}
-          </p>
-        )}
         {enabled && <ReadNotice name="conversations" query={threads} />}
+        {agentWork.length > 0 && (
+          <ul className="home-recents" aria-label="Recent conversations">
+            {agentWork.map((work) => (
+              <li key={work.threadId ?? "starting"} className="home-row">
+                {work.threadId === null ? (
+                  <div role="status">
+                    <span>{work.title}</span>
+                    <small className="home-work-status">
+                      <ThinkingOrb
+                        size={20}
+                        theme="dark"
+                        state="working"
+                        aria-hidden="true"
+                      />
+                      {work.detail}
+                    </small>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!onOpenConversation}
+                    onClick={() => {
+                      if (work.threadId) onOpenConversation?.(work.threadId)
+                    }}
+                  >
+                    <span>{work.title}</span>
+                    <small
+                      className={work.running ? "home-work-status" : undefined}
+                    >
+                      {work.running && (
+                        <ThinkingOrb
+                          size={20}
+                          theme="dark"
+                          state="working"
+                          aria-hidden="true"
+                        />
+                      )}
+                      {work.detail}
+                    </small>
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
       {enabled && (
         <>
@@ -518,17 +532,17 @@ function HomeDesk({
               {waitingRequests.slice(0, 3).map(requestCard)}
               {waitingChats.length > 0 && (
                 <ul aria-label="Tool confirmations">
-                  {waitingChats.map((waiting) => (
-                    <li key={waiting.id} className="home-row">
+                  {waitingChats.map((chat) => (
+                    <li key={chat.id} className="home-row">
                       <button
                         type="button"
                         disabled={!onOpenConversation}
-                        onClick={() => onOpenConversation?.(waiting.id)}
+                        onClick={() => onOpenConversation?.(chat.id)}
                       >
-                        <span>{waiting.title}</span>
+                        <span>{chat.title}</span>
                         <small>
-                          {waiting.pending > 0
-                            ? `${waiting.pending} tool confirmation${waiting.pending === 1 ? "" : "s"}`
+                          {chat.pending > 0
+                            ? `${chat.pending} tool confirmation${chat.pending === 1 ? "" : "s"}`
                             : "Needs confirmation"}{" "}
                           · Open chat to decide
                         </small>
@@ -570,11 +584,9 @@ function HomeDesk({
                 {outsideConfirmationCoverage
                   ? "Older chats may still need you."
                   : "The check is not complete."}
-                {onOpenHistory && (
-                  <button type="button" onClick={onOpenHistory}>
-                    All conversations
-                  </button>
-                )}
+                <button type="button" onClick={onOpenAgent}>
+                  All conversations
+                </button>
               </p>
             )}
           {inboxRows.length >= requestLimit && (
@@ -676,7 +688,7 @@ function HomeDesk({
               )}
               {(sharedAnswers.length > 0 || sharedActivity.length > 0) && (
                 <div className="home-request-group">
-                  <h3>{ownerReplied ? "Answers sent" : "Your agent shared"}</h3>
+                  <h3>Your agent shared</h3>
                   {sharedAnswers.slice(0, 3).map(requestCard)}
                   {sharedActivity.length > 0 && (
                     <ul>
@@ -687,15 +699,11 @@ function HomeDesk({
                             onClick={() => onOpenRequests(entry.request_id)}
                           >
                             <span>
-                              {activitySentence(
-                                entry,
-                                {
-                                  viewerId: viewer,
-                                  nameOf: people.nameOf,
-                                  now,
-                                },
-                                replied
-                              )}
+                              {activitySentence(entry, {
+                                viewerId: viewer,
+                                nameOf: people.nameOf,
+                                now,
+                              })}
                             </span>
                             <small>
                               {relativeTime(entry.at)} · Open request
