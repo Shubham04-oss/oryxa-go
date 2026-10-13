@@ -98,7 +98,7 @@ func (runtime *Runtime) Synthesize(ctx context.Context, definition teamspaces.Or
 		return Result{}, err
 	}
 	var output, runError string
-	completed := false
+	completed, restarted := false, false
 	run.Execute(ctx, func(item threads.Item) error {
 		switch item.Type {
 		case threads.ItemMessage:
@@ -108,10 +108,14 @@ func (runtime *Runtime) Synthesize(ctx context.Context, definition teamspaces.Or
 		case threads.ItemRunCompleted:
 			completed = true
 		case threads.ItemRunFailed:
-			runError = item.Error
+			runError, restarted = item.Error, item.Interrupted
 		}
 		return nil
 	})
+	if restarted {
+		// The process's drain stopped it: not the synthesis's failure (Processor.retry).
+		return Result{}, threads.ErrInterrupted
+	}
 	if !completed {
 		if runError == "" {
 			runError = "organization-agent run did not complete"
