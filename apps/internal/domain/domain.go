@@ -153,8 +153,11 @@ type Connection struct {
 	// ComposioAccountID is Composio's connected account, known once a link
 	// was created.
 	ComposioAccountID string
-	Status            ConnectionStatus
-	StatusReason      string
+	// PipedreamAccountID is Pipedream's account, known once a Pipedream
+	// connection finished connecting.
+	PipedreamAccountID string
+	Status             ConnectionStatus
+	StatusReason       string
 	// Label identifies the connected account to the member, such as
 	// github_red-castle.
 	Label string

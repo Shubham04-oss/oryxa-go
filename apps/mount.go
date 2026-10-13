@@ -127,14 +127,15 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		})
 	}
 	service, err := New(dependencies, Config{
-		PublicBaseURL:       config.PublicBaseURL,
-		AllowedOrigins:      config.AllowedOrigins,
-		WebhookSecret:       config.ComposioWebhookSecret,
-		NoAutoSubscribe:     config.NoAutoSubscribe,
-		OryxaToolkits:       config.OryxaToolkits,
-		ToolkitBrokers:      config.ToolkitBrokers,
-		SigninRedirectURI:   config.SigninRedirectURI,
-		DefaultOAuthClients: defaults,
+		PublicBaseURL:        config.PublicBaseURL,
+		AllowedOrigins:       config.AllowedOrigins,
+		WebhookSecret:        config.ComposioWebhookSecret,
+		NoAutoSubscribe:      config.NoAutoSubscribe,
+		OryxaToolkits:        config.OryxaToolkits,
+		ToolkitBrokers:       config.ToolkitBrokers,
+		PipedreamDenyActions: config.PipedreamDenyActions,
+		SigninRedirectURI:    config.SigninRedirectURI,
+		DefaultOAuthClients:  defaults,
 	})
 	if err != nil {
 		return host.Service{}, err

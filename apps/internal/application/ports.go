@@ -241,12 +241,35 @@ type PipedreamComponent struct {
 	Version     string
 	// Props are the component's props, as Pipedream describes them.
 	Props json.RawMessage
+	// ReadOnlyHint and DestructiveHint are the component's own annotations,
+	// nil when it declares none. They are kept as declared, not defaulted,
+	// because only an explicit read-only mark lets an action run unconfirmed.
+	ReadOnlyHint    *bool
+	DestructiveHint *bool
 }
 
 type PipedreamRunRequest struct {
 	ExternalUserID  string
 	ComponentKey    string
 	ConfiguredProps map[string]any
+}
+
+// PipedreamActionError is what RunAction answers when the action ran and
+// failed, in its own code or at the app, as opposed to Pipedream itself
+// failing. Its message is the app's, which a caller needs to try again
+// differently. RunAction answers an error wrapping domain.ErrRateLimited when
+// Pipedream itself is rate limiting.
+type PipedreamActionError struct {
+	Message string
+	// Origin is where Pipedream attributes the failure, such as upstream_api.
+	Origin string
+	// UpstreamStatus is what the app's API answered on the action's last
+	// call, when there was one; 429 means the app is rate limiting.
+	UpstreamStatus int
+}
+
+func (err *PipedreamActionError) Error() string {
+	return "the pipedream action failed (" + err.Origin + "): " + err.Message
 }
 
 // PipedreamRunResult is what an action exported and returned.

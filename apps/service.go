@@ -95,6 +95,8 @@ type Config struct {
 	OryxaToolkits []string
 	// ToolkitBrokers pins toolkits' new connects to a broker.
 	ToolkitBrokers map[string]string
+	// PipedreamDenyActions are Pipedream action keys agents never see.
+	PipedreamDenyActions []string
 	// SigninRedirectURI is the one OAuth callback registered with every app.
 	SigninRedirectURI string
 	// DefaultOAuthClients are Oryxa's own OAuth apps, which Oryxa's sign-in
@@ -149,6 +151,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		WebhookSecret:   config.WebhookSecret,
 		NoAutoSubscribe: config.NoAutoSubscribe,
 		ToolkitBrokers:  config.ToolkitBrokers,
+		PipedreamDeny:   config.PipedreamDenyActions,
 	})
 	if err != nil {
 		return nil, err

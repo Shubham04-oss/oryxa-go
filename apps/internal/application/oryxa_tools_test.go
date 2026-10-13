@@ -721,7 +721,7 @@ func TestRoutePrefersTheRegistryOverComposio(t *testing.T) {
 	h, _ := newToolHarness(t)
 	ctx := context.Background()
 
-	route, err := h.service.routeTool(ctx, "ACME_LIST_ISSUES")
+	route, err := h.service.routeTool(ctx, "org_1", "user-1", "ACME_LIST_ISSUES")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -731,7 +731,7 @@ func TestRoutePrefersTheRegistryOverComposio(t *testing.T) {
 	if h.composio.toolReads != 0 {
 		t.Fatalf("composio was asked for the tool %d times", h.composio.toolReads)
 	}
-	route, err = h.service.routeTool(ctx, "ACME_CREATE_AN_ISSUE")
+	route, err = h.service.routeTool(ctx, "org_1", "user-1", "ACME_CREATE_AN_ISSUE")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,14 +739,14 @@ func TestRoutePrefersTheRegistryOverComposio(t *testing.T) {
 		t.Fatalf("a write's route = %+v", route)
 	}
 	h.composio.tools["NOTION_QUERY"] = composio.Tool{Slug: "NOTION_QUERY", Toolkit: "notion"}
-	route, err = h.service.routeTool(ctx, "NOTION_QUERY")
+	route, err = h.service.routeTool(ctx, "org_1", "user-1", "NOTION_QUERY")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if route.hasOwn || route.toolkit != "notion" {
 		t.Fatalf("a composio tool's route = %+v", route)
 	}
-	if _, err := h.service.routeTool(ctx, "ACME_NO_SUCH_TOOL"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := h.service.routeTool(ctx, "org_1", "user-1", "ACME_NO_SUCH_TOOL"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("a slug neither knows = %v, want not found", err)
 	}
 }
@@ -795,7 +795,7 @@ func TestNothingRoutesOrPollsWithNoToolkitSwitchedOn(t *testing.T) {
 	}
 	off := newOryxaHarnessWith(t, registry)
 	off.composio.tools["ACME_LIST_ISSUES"] = composio.Tool{Slug: "ACME_LIST_ISSUES", Toolkit: "acme"}
-	route, err := off.service.routeTool(context.Background(), "ACME_LIST_ISSUES")
+	route, err := off.service.routeTool(context.Background(), "org_1", "user-1", "ACME_LIST_ISSUES")
 	if err != nil {
 		t.Fatal(err)
 	}
