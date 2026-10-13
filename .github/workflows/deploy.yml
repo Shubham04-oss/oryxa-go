@@ -62,7 +62,7 @@ jobs:
             exit 0
           fi
           # Keep these exclusions aligned with CI's Changes step.
-          docs='^docs/|^README\.md$|^[^/]+/README\.md$'
+          docs='^docs/|^\.claude/|^README\.md$|^[^/]+/README\.md$'
           docs+='|^(agents/primary|contracts/http|deploy/runner|test/cmd/chaos)/README\.md$'
           docs+='|^web-next/src/lib/(agents|apps|threads)/README\.md$'
           docs+='|^(tasks|notion-api-research-2026-03-11)\.md$|^knowledge/TODO\.md$|^web-next/(AGENTS|DESIGN|REALTIME|PARITY)\.md$'
