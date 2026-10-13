@@ -32,7 +32,9 @@ func (s *Service) MemberRemoved(ctx context.Context, event authv1.MemberRemoved)
 }
 
 func (s *Service) removeAll(ctx context.Context, organizationID, memberID, reason string) error {
-	connections, err := s.store.Connections(ctx, organizationID, domain.ConnectionQuery{MemberID: memberID})
+	// Removed connections are listed too, so a retry after a Pipedream user
+	// could not be deleted still knows the member had one there.
+	connections, err := s.store.Connections(ctx, organizationID, domain.ConnectionQuery{MemberID: memberID, Statuses: everyStatus})
 	if err != nil {
 		return err
 	}
@@ -44,7 +46,10 @@ func (s *Service) removeAll(ctx context.Context, organizationID, memberID, reaso
 			failures = append(failures, err)
 		}
 	}
-	return errors.Join(failures...)
+	if len(failures) > 0 {
+		return errors.Join(failures...)
+	}
+	return s.forgetPipedreamUsers(ctx, organizationID, connections)
 }
 
 // AlreadyHandled says whether a bus event has already been acted on. It
@@ -67,8 +72,8 @@ const handledRetention = 7 * 24 * time.Hour
 const maintenanceEvery = 15 * time.Minute
 
 // RunMaintenance sweeps until ctx is cancelled: it fails connections whose
-// member never came back from Composio, and forgets deliveries old enough
-// never to be retried.
+// member never came back from Composio or Pipedream, forgets deliveries old
+// enough never to be retried, and once a day checks Pipedream's accounts.
 func (s *Service) RunMaintenance(ctx context.Context) {
 	for {
 		s.maintain(ctx)
@@ -113,4 +118,5 @@ func (s *Service) maintain(ctx context.Context) {
 	} else if forgotten > 0 {
 		s.logger.InfoContext(ctx, "handled deliveries forgotten", "count", forgotten)
 	}
+	s.checkPipedreamHealth(ctx)
 }

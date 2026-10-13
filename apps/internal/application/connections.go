@@ -60,38 +60,11 @@ var userSuppliedSchemes = []string{"API_KEY", "BEARER_TOKEN", "BASIC"}
 // has an auth config for the app, asks Composio for a link, and records the
 // pending connection. The member finishes in their browser, at RedirectURL.
 func (s *Service) Connect(ctx context.Context, credentials authclient.Credentials, organizationID string, input ConnectInput) (domain.Connection, string, error) {
-	caller, err := s.caller(ctx, credentials, organizationID)
+	start, err := s.startConnect(ctx, credentials, organizationID, input)
 	if err != nil {
 		return domain.Connection{}, "", err
 	}
-	if caller.Agent {
-		return domain.Connection{}, "", fmt.Errorf("an agent cannot connect an app: %w", domain.ErrForbidden)
-	}
-	toolkit, err := domain.CheckToolkit(input.Toolkit)
-	if err != nil {
-		return domain.Connection{}, "", err
-	}
-	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
-		return domain.Connection{}, "", err
-	}
-	if err := s.allowEmployeeConnect(ctx, organizationID, caller.Role.IsOrgAdmin()); err != nil {
-		return domain.Connection{}, "", err
-	}
-	autoSubscribe, err := s.defaultAutoSubscribe(ctx, organizationID)
-	if err != nil {
-		return domain.Connection{}, "", err
-	}
-	if err := s.allowConnect(organizationID, caller.UserID); err != nil {
-		return domain.Connection{}, "", err
-	}
-	if err := s.oneCurrentConnection(ctx, organizationID, caller.UserID, toolkit); err != nil {
-		return domain.Connection{}, "", err
-	}
-	returnTo := strings.TrimSpace(input.ReturnTo)
-	if returnTo != "" && !s.returnAllowed(returnTo) {
-		return domain.Connection{}, "", fmt.Errorf("return_to is not an allowed page: %w", domain.ErrInvalid)
-	}
-	config, err := s.authConfig(ctx, toolkit)
+	config, err := s.authConfig(ctx, start.toolkit)
 	if err != nil {
 		return domain.Connection{}, "", err
 	}
@@ -100,7 +73,7 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	if err != nil {
 		return domain.Connection{}, "", err
 	}
-	userID := domain.ComposioUserID(organizationID, caller.UserID)
+	userID := domain.ComposioUserID(organizationID, start.memberID)
 	link, err := s.composio.CreateConnectLink(ctx, composio.LinkRequest{
 		AuthConfigID: config.AuthConfigID,
 		UserID:       userID,
@@ -111,35 +84,10 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 		return domain.Connection{}, "", composioError("start the connection", err)
 	}
 
-	id, err := newID("apc")
+	connection := start.connection(organizationID, s.now().UTC())
+	connection.AuthConfigID, connection.ComposioUserID, connection.ComposioAccountID = config.AuthConfigID, userID, link.ConnectedAccountID
+	connection, err = s.recordPending(ctx, connection, stateHash)
 	if err != nil {
-		return domain.Connection{}, "", err
-	}
-	now := s.now().UTC()
-	connection := domain.Connection{
-		ID: id, OrganizationID: organizationID, MemberID: caller.UserID, Toolkit: toolkit,
-		AuthConfigID: config.AuthConfigID, ComposioUserID: userID, ComposioAccountID: link.ConnectedAccountID,
-		Status: domain.ConnectionPending, ReturnTo: returnTo, AutoSubscribe: autoSubscribe,
-		CreatedAt: now, UpdatedAt: now,
-	}
-	if input.AutoSubscribe != nil {
-		// Recorded either way; whether it is ever acted on is a separate
-		// question, decided at subscribe time by s.autoSubscribe. The
-		// deployment switch (APPS_AUTO_SUBSCRIBE=false) is a kill switch, not
-		// a default it merely falls back to: off means nothing is
-		// auto-subscribed, whatever this connection asked for.
-		connection.AutoSubscribe = *input.AutoSubscribe
-	}
-	// Announced as it starts, so what follows — connected or failed — is
-	// always the end of something the bus saw begin.
-	event, err := s.event(appsv1.ConnectionInitiatedDetailType, appsv1.ConnectionInitiated{
-		ConnectionID: id, OrganizationID: organizationID, MemberID: caller.UserID,
-		Toolkit: toolkit, InitiatedAt: now,
-	})
-	if err != nil {
-		return domain.Connection{}, "", err
-	}
-	if err := s.store.CreateConnection(ctx, connection, stateHash, event); err != nil {
 		// A concurrent connect may have won the one-current-connection slot
 		// after our preflight. Do not leave the losing provider account alive
 		// and untracked with standing access to the member's app.
@@ -147,14 +95,101 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 		defer cancel()
 		if cleanupErr := s.composio.DeleteConnectedAccount(cleanup, link.ConnectedAccountID, true); cleanupErr != nil {
 			s.logger.ErrorContext(ctx, "revoke unrecorded app connection",
-				"organization_id", organizationID, "member_id", caller.UserID,
-				"toolkit", toolkit, "error", cleanupErr)
+				"organization_id", organizationID, "member_id", start.memberID,
+				"toolkit", start.toolkit, "error", cleanupErr)
 		}
 		return domain.Connection{}, "", err
 	}
-	s.logger.InfoContext(ctx, "app connection started",
-		"connection_id", id, "organization_id", organizationID, "toolkit", toolkit)
 	return connection, link.RedirectURL, nil
+}
+
+// connectStart is what a connect through Composio or Pipedream has settled
+// before it asks its broker for anything.
+type connectStart struct {
+	memberID, toolkit, returnTo string
+	autoSubscribe               bool
+}
+
+// startConnect checks everything a connect through Composio or Pipedream must
+// pass before its broker is called: who is asking, whether the app and the
+// return page are allowed, and that the member has no current connection to
+// the app already.
+func (s *Service) startConnect(ctx context.Context, credentials authclient.Credentials, organizationID string, input ConnectInput) (connectStart, error) {
+	caller, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return connectStart{}, err
+	}
+	if caller.Agent {
+		return connectStart{}, fmt.Errorf("an agent cannot connect an app: %w", domain.ErrForbidden)
+	}
+	toolkit, err := domain.CheckToolkit(input.Toolkit)
+	if err != nil {
+		return connectStart{}, err
+	}
+	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
+		return connectStart{}, err
+	}
+	if err := s.allowEmployeeConnect(ctx, organizationID, caller.Role.IsOrgAdmin()); err != nil {
+		return connectStart{}, err
+	}
+	autoSubscribe, err := s.defaultAutoSubscribe(ctx, organizationID)
+	if err != nil {
+		return connectStart{}, err
+	}
+	if err := s.allowConnect(organizationID, caller.UserID); err != nil {
+		return connectStart{}, err
+	}
+	if err := s.oneCurrentConnection(ctx, organizationID, caller.UserID, toolkit); err != nil {
+		return connectStart{}, err
+	}
+	returnTo := strings.TrimSpace(input.ReturnTo)
+	if returnTo != "" && !s.returnAllowed(returnTo) {
+		return connectStart{}, fmt.Errorf("return_to is not an allowed page: %w", domain.ErrInvalid)
+	}
+	if input.AutoSubscribe != nil {
+		// Recorded either way; whether it is ever acted on is a separate
+		// question, decided at subscribe time by s.autoSubscribe. The
+		// deployment switch (APPS_AUTO_SUBSCRIBE=false) is a kill switch, not
+		// a default it merely falls back to: off means nothing is
+		// auto-subscribed, whatever this connection asked for.
+		autoSubscribe = *input.AutoSubscribe
+	}
+	return connectStart{memberID: caller.UserID, toolkit: toolkit, returnTo: returnTo, autoSubscribe: autoSubscribe}, nil
+}
+
+// connection is the pending connection a started connect records, before
+// anything its broker answered is added to it.
+func (start connectStart) connection(organizationID string, now time.Time) domain.Connection {
+	return domain.Connection{
+		OrganizationID: organizationID, MemberID: start.memberID, Toolkit: start.toolkit,
+		Status: domain.ConnectionPending, ReturnTo: start.returnTo, AutoSubscribe: start.autoSubscribe,
+		CreatedAt: now, UpdatedAt: now,
+	}
+}
+
+// recordPending gives a pending connection its id and records it with the
+// hash of its callback's state, announcing that it began.
+func (s *Service) recordPending(ctx context.Context, connection domain.Connection, stateHash string) (domain.Connection, error) {
+	id, err := newID("apc")
+	if err != nil {
+		return domain.Connection{}, err
+	}
+	connection.ID = id
+	// Announced as it starts, so what follows — connected or failed — is
+	// always the end of something the bus saw begin.
+	event, err := s.event(appsv1.ConnectionInitiatedDetailType, appsv1.ConnectionInitiated{
+		ConnectionID: id, OrganizationID: connection.OrganizationID, MemberID: connection.MemberID,
+		Toolkit: connection.Toolkit, Broker: eventBroker(connection), InitiatedAt: connection.CreatedAt,
+	})
+	if err != nil {
+		return domain.Connection{}, err
+	}
+	if err := s.store.CreateConnection(ctx, connection, stateHash, event); err != nil {
+		return domain.Connection{}, err
+	}
+	s.logger.InfoContext(ctx, "app connection started", "connection_id", id,
+		"organization_id", connection.OrganizationID, "toolkit", connection.Toolkit)
+	return connection, nil
 }
 
 // authConfig is the auth config the project connects toolkit with, found or
@@ -424,6 +459,9 @@ func (s *Service) remove(ctx context.Context, connection domain.Connection, reas
 	if connection.Oryxa() {
 		return s.removeOryxa(ctx, connection, reason)
 	}
+	if connection.Pipedream() {
+		return s.removePipedream(ctx, connection, reason)
+	}
 	if !connection.Composio() {
 		// Deleting at Composio would leave the account alive wherever it
 		// really is, while recording it removed.
@@ -443,11 +481,17 @@ func (s *Service) remove(ctx context.Context, connection domain.Connection, reas
 			return composioError("remove the connected account", err)
 		}
 	}
+	return s.recordRemoved(ctx, connection, reason)
+}
+
+// recordRemoved records a connection removed, with its triggers, once its
+// broker no longer holds its account.
+func (s *Service) recordRemoved(ctx context.Context, connection domain.Connection, reason string) error {
 	now := s.now().UTC()
 	removed, err := s.store.RemoveConnection(ctx, connection.ID, reason, now, func(removed domain.Connection, _ []domain.Trigger) ([]domain.Event, error) {
 		event, err := s.event(appsv1.ConnectionRemovedDetailType, appsv1.ConnectionRemoved{
 			ConnectionID: removed.ID, OrganizationID: removed.OrganizationID, MemberID: removed.MemberID,
-			Toolkit: removed.Toolkit, Reason: reason, RemovedAt: now,
+			Toolkit: removed.Toolkit, Broker: eventBroker(removed), Reason: reason, RemovedAt: now,
 		})
 		if err != nil {
 			return nil, err

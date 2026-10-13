@@ -37,6 +37,10 @@ type fakeService struct {
 	offer        application.OfferPolicy
 	// broker is what BrokerFor answers; empty is Composio.
 	broker string
+	// pipedreamInput is what ConnectPipedream was asked, and pipedreamCallback
+	// the state and status CompletePipedreamConnection was.
+	pipedreamInput    application.ConnectInput
+	pipedreamCallback [2]string
 
 	connection domain.Connection
 	targets    []application.Target
@@ -100,8 +104,20 @@ func (fake *fakeService) BrokerFor(context.Context, string) (string, error) {
 	return fake.broker, nil
 }
 
-func (fake *fakeService) ConnectPipedream(_ context.Context, toolkit string) error {
-	return fmt.Errorf("%s connects through Pipedream: %w", toolkit, domain.ErrNotConnectable)
+func (fake *fakeService) ConnectPipedream(_ context.Context, credentials authclient.Credentials, organizationID string, input application.ConnectInput) (domain.Connection, string, error) {
+	fake.credentials, fake.organization, fake.pipedreamInput = credentials, organizationID, input
+	if fake.err != nil {
+		return domain.Connection{}, "", fake.err
+	}
+	return fake.connection, fake.redirect, nil
+}
+
+func (fake *fakeService) CompletePipedreamConnection(_ context.Context, state, status string) (application.Completion, error) {
+	fake.pipedreamCallback = [2]string{state, status}
+	if fake.err != nil {
+		return application.Completion{}, fake.err
+	}
+	return fake.completion, nil
 }
 
 func (fake *fakeService) CompleteConnection(_ context.Context, state, status, accountID string) (application.Completion, error) {
@@ -436,6 +452,40 @@ func TestConnectCallbackSendsTheBrowserBack(t *testing.T) {
 	query := target.Query()
 	if query.Get("app_connection") != "apc_1" || query.Get("status") != "active" || query.Get("tab") != "connected" {
 		t.Fatalf("query = %v", query)
+	}
+}
+
+// Pipedream's callback sends the browser back with the same two parameters
+// as Composio's, so the web app reads either the same way.
+func TestPipedreamCallbackSendsTheBrowserBack(t *testing.T) {
+	t.Parallel()
+	fake := &fakeService{completion: application.Completion{
+		Connection: domain.Connection{ID: "apc_1", Broker: domain.BrokerPipedream, Status: domain.ConnectionFailed},
+		ReturnTo:   "https://app.oryxa.test/apps",
+	}}
+	server := newServer(t, fake)
+
+	recorder := call(server, http.MethodGet, "/v1/apps/connect/pipedream/callback?state=opaque&status=failed", "")
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
+	}
+	if fake.pipedreamCallback != [2]string{"opaque", "failed"} || fake.connectInput.Toolkit != "" {
+		t.Fatalf("callback arguments = %v, Composio's = %+v", fake.pipedreamCallback, fake.connectInput)
+	}
+	target, err := url.Parse(recorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := target.Query()
+	if target.Host != "app.oryxa.test" || query.Get("app_connection") != "apc_1" || query.Get("status") != "failed" {
+		t.Fatalf("location = %q", target)
+	}
+
+	// A state nobody is waiting on is not found, and nothing redirects.
+	fake.err = domain.ErrNotFound
+	recorder = call(server, http.MethodGet, "/v1/apps/connect/pipedream/callback?state=stale", "")
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("stale = %d: %s", recorder.Code, recorder.Body)
 	}
 }
 

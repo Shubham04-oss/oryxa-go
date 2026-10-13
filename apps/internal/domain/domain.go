@@ -190,6 +190,9 @@ func (connection Connection) Composio() bool {
 	return connection.Broker == "" || connection.Broker == BrokerComposio
 }
 
+// Pipedream says Pipedream Connect holds the connection's credential.
+func (connection Connection) Pipedream() bool { return connection.Broker == BrokerPipedream }
+
 // ConnectionQuery narrows a listing. An org admin may list the organization's
 // connections; anyone else lists their own.
 type ConnectionQuery struct {
@@ -201,7 +204,8 @@ type ConnectionQuery struct {
 
 // ComposioUserID is the Composio user a member is in one organization. It is
 // stable, so the same member reconnecting finds their own accounts, and it
-// differs per organization, so nothing crosses between them.
+// differs per organization, so nothing crosses between them. Pipedream files
+// the member's accounts under the same id, as its external user.
 func ComposioUserID(organizationID, memberID string) string {
 	return "oryxa." + organizationID + "." + memberID
 }
@@ -225,8 +229,11 @@ type Trigger struct {
 	Slug              string
 	Config            json.RawMessage
 	ComposioTriggerID string
-	Status            TriggerStatus
-	StatusReason      string
+	// PipedreamTriggerID is the deployed Pipedream trigger behind a trigger
+	// on a Pipedream connection.
+	PipedreamTriggerID string
+	Status             TriggerStatus
+	StatusReason       string
 	// Kind is what the catalog said when this was subscribed: webhook, which
 	// the app pushes, or poll, which arrives on Composio's own interval.
 	Kind string

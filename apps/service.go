@@ -31,6 +31,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/slackbot"
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
+	"github.com/Shubham04-oss/oryxa-go/internal/pipedream"
 )
 
 // Name is what this service calls itself: to the bus when it publishes, and
@@ -48,6 +49,9 @@ type Dependencies struct {
 	Directory application.Directory
 	// Composio is the API every app is reached through. Required.
 	Composio application.Composio
+	// Pipedream is Pipedream Connect, for the apps neither Composio nor
+	// Oryxa's own sign-in serves, or nil when this deployment has none.
+	Pipedream *pipedream.Client
 	// Policy is the applied workspace file, when workspace is mounted.
 	Policy application.PolicySource
 	// Sink is where published events go. Without one, apps still works and
@@ -138,14 +142,20 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	case len(config.OryxaToolkits) > 0 || len(config.DefaultOAuthClients) > 0:
 		return nil, errors.New("apps: Oryxa's sign-in is given toolkits or default OAuth apps, and is not configured")
 	}
-	app, err := application.New(application.Dependencies{
+	applicationDependencies := application.Dependencies{
 		Store:     dependencies.Store,
 		Directory: dependencies.Directory,
 		Composio:  dependencies.Composio,
 		Policy:    dependencies.Policy,
 		Oryxa:     oryxa,
 		Logger:    logger,
-	}, application.Config{
+	}
+	if dependencies.Pipedream != nil {
+		// Only when there is one: a nil client in the interface would read as
+		// a Pipedream that panics.
+		applicationDependencies.Pipedream = pipedreamPort{client: dependencies.Pipedream}
+	}
+	app, err := application.New(applicationDependencies, application.Config{
 		PublicBaseURL:   config.PublicBaseURL,
 		ReturnOrigins:   config.AllowedOrigins,
 		WebhookSecret:   config.WebhookSecret,

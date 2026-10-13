@@ -27,6 +27,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
+	"github.com/Shubham04-oss/oryxa-go/internal/pipedream"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
@@ -76,6 +77,16 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	if err != nil {
 		return host.Service{}, err
 	}
+	var pipedreamClient *pipedream.Client
+	if config.Pipedream != nil {
+		if pipedreamClient, err = pipedream.New(*config.Pipedream); err != nil {
+			return host.Service{}, err
+		}
+		logger.Info("Pipedream Connect is configured: apps neither Oryxa nor Composio serves connect through it",
+			"environment", config.Pipedream.Environment)
+	} else {
+		logger.Info("Pipedream Connect is not configured (PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET and PIPEDREAM_PROJECT_ID are not set): no app connects through it")
+	}
 	eventClient := eventbridge.NewFromConfig(platform.AWS, func(options *eventbridge.Options) {
 		if config.EventBridgeEndpoint != "" {
 			options.BaseEndpoint = aws.String(config.EventBridgeEndpoint)
@@ -108,6 +119,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Store:     store,
 		Directory: directory,
 		Composio:  client,
+		Pipedream: pipedreamClient,
 		Sink:      publisher,
 		Verifier:  platform.EventAuth.Verifier(),
 		Logger:    logger,

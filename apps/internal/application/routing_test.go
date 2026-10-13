@@ -142,11 +142,14 @@ func TestAnExistingConnectionKeepsItsBroker(t *testing.T) {
 	}
 }
 
-func TestConnectPipedreamIsNotConnectableYet(t *testing.T) {
+func TestConnectPipedreamIsNotConnectableWithoutAPipedream(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	if err := h.service.ConnectPipedream(context.Background(), "linear"); !errors.Is(err, domain.ErrNotConnectable) {
+	if _, _, err := h.service.ConnectPipedream(context.Background(), memberToken, "org_1", ConnectInput{Toolkit: "linear"}); !errors.Is(err, domain.ErrNotConnectable) {
 		t.Fatalf("ConnectPipedream() = %v, want not connectable", err)
+	}
+	if len(h.store.connections) != 0 {
+		t.Fatal("a connection was recorded")
 	}
 }
 
@@ -170,7 +173,6 @@ func TestAPipedreamConnectionNeverReachesComposio(t *testing.T) {
 	_, refused["CreateTrigger"] = h.service.CreateTrigger(ctx, memberToken, "org_1", TriggerInput{
 		ConnectionID: connection.ID, Trigger: "GITHUB_STAR_ADDED_EVENT", Config: json.RawMessage(`{}`),
 	})
-	refused["RemoveConnection"] = h.service.RemoveConnection(ctx, memberToken, "org_1", connection.ID)
 	for path, err := range refused {
 		// The guard's own words, so no earlier refusal passes for it.
 		if !errors.Is(err, domain.ErrNotConnectable) || !strings.Contains(err.Error(), "connected through pipedream") {

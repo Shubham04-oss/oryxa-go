@@ -26,6 +26,13 @@ type Store interface {
 	// and writes event. It answers false, changing nothing, if the
 	// connection is no longer pending.
 	ActivateConnection(ctx context.Context, id, label string, now time.Time, event domain.Event) (domain.Connection, bool, error)
+	// ActivatePipedreamConnection is ActivateConnection for a Pipedream
+	// connection, recording the account it was read back as. ErrConflict if
+	// another connection already records that account.
+	ActivatePipedreamConnection(ctx context.Context, id, accountID, label string, now time.Time, event domain.Event) (domain.Connection, bool, error)
+	// PipedreamConnections pages through every organization's active
+	// Pipedream connections that have an account, in id order after afterID.
+	PipedreamConnections(ctx context.Context, afterID string, limit int) ([]domain.Connection, error)
 	// FailConnection marks a pending connection failed, clears its state and
 	// writes event. It answers false, writing nothing, if the connection is
 	// no longer pending.
@@ -167,6 +174,10 @@ type Composio interface {
 //
 // externalUserID is the user Pipedream files a member's accounts under, one
 // per member per organization, as Composio's user is.
+//
+// An implementation answers an error that errors.Is domain.ErrNotFound for
+// something Pipedream does not have, so deleting what is already gone can be
+// told from a failure.
 type Pipedream interface {
 	// CreateConnectToken starts a member's connect: the short-lived token and
 	// the link their browser opens to finish it.
@@ -200,6 +211,8 @@ type PipedreamTokenRequest struct {
 	ErrorRedirectURI   string
 	// WebhookURI is told when the account was made or failed.
 	WebhookURI string
+	// ExpiresIn is how long the token lives; zero is Pipedream's default.
+	ExpiresIn time.Duration
 }
 
 type PipedreamConnectToken struct {

@@ -118,6 +118,18 @@ export function ConnectionWorkspace(props: {
       />
     )
   }
+  if (!props.preview && props.connection.broker === "pipedream") {
+    // Apps refuses a Pipedream connection's events, indexing and runs until
+    // they arrive in a later phase, so none is offered.
+    return (
+      <div className="workspace-tool-workspace">
+        <p className="workspace-tool-preview-note">
+          Connected through Pipedream. Events, indexing and runs for this app
+          are not available yet.
+        </p>
+      </div>
+    )
+  }
   return <ComposioWorkspace {...props} />
 }
 

@@ -772,6 +772,11 @@ export function WorkspaceTools({
                               {toolkit.description && (
                                 <p>{toolkit.description}</p>
                               )}
+                              {toolkit.broker === "pipedream" && (
+                                <span className="workspace-tool-card-note">
+                                  Connects through Pipedream
+                                </span>
+                              )}
                               {connectable && (
                                 <button
                                   type="button"

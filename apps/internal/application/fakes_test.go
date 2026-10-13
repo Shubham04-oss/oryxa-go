@@ -113,6 +113,42 @@ func (store *fakeStore) ActivateConnection(_ context.Context, id, label string, 
 	return connection, true, nil
 }
 
+func (store *fakeStore) ActivatePipedreamConnection(_ context.Context, id, accountID, label string, now time.Time, event domain.Event) (domain.Connection, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	connection := store.connections[id]
+	if connection.Status != domain.ConnectionPending || !connection.Pipedream() {
+		return connection, false, nil
+	}
+	for _, other := range store.connections {
+		if other.PipedreamAccountID == accountID {
+			return domain.Connection{}, false, domain.ErrConflict
+		}
+	}
+	connection.Status, connection.Label, connection.PipedreamAccountID = domain.ConnectionActive, label, accountID
+	connection.UpdatedAt, connection.ConnectedAt = now, &now
+	store.connections[id] = connection
+	store.clearState(id)
+	store.events = append(store.events, event)
+	return connection, true, nil
+}
+
+func (store *fakeStore) PipedreamConnections(_ context.Context, afterID string, limit int) ([]domain.Connection, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var listed []domain.Connection
+	for _, connection := range store.connections {
+		if connection.Pipedream() && connection.Status == domain.ConnectionActive && connection.PipedreamAccountID != "" && connection.ID > afterID {
+			listed = append(listed, connection)
+		}
+	}
+	sort.Slice(listed, func(i, j int) bool { return listed[i].ID < listed[j].ID })
+	if len(listed) > limit {
+		listed = listed[:limit]
+	}
+	return listed, nil
+}
+
 func (store *fakeStore) FailConnection(_ context.Context, id, reason string, now time.Time, event domain.Event) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
