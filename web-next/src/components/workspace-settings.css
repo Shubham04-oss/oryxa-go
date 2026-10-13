@@ -481,12 +481,17 @@
   height: 34px;
   place-items: center;
   border-radius: 8px;
-  background: var(--tone-f7f7f7);
-  color: var(--tone-333333);
+  background: var(--logo-tile);
+  box-shadow: inset 0 0 0 1px var(--logo-tile-border);
+  color: var(--logo-ink);
 }
 .workspace-settings-tool-icon svg {
   width: 19px;
   height: 19px;
+}
+.workspace-settings-tool-icon svg[fill="#FFFFFF"],
+.workspace-settings-tool-icon svg[fill="#ffffff"] {
+  filter: invert(1);
 }
 .workspace-settings-org-mark {
   display: grid;

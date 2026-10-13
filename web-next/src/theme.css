@@ -212,6 +212,11 @@
   --tone-ff9d9d: #ff9d9d;
   --tone-ffffff: #ffffff;
   --tone-cc7777: #cc7777;
+  /* Integration logos sit on a white tile in both themes, so every brand
+     mark keeps its own colour (dark marks such as GitHub's stay visible). */
+  --logo-tile: #ffffff;
+  --logo-tile-border: transparent;
+  --logo-ink: #222222;
   color-scheme: dark;
 }
 
@@ -423,5 +428,8 @@
   --tone-ff9d9d: #710000;
   --tone-ffffff: #0f0f0f;
   --tone-cc7777: #9a2a2a;
+  --logo-tile: #ffffff;
+  --logo-tile-border: var(--border-quiet);
+  --logo-ink: #222222;
   color-scheme: light;
 }

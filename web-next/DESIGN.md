@@ -32,6 +32,9 @@ not permission to copy every incidental value into a new component.
   that is `<hex>` in dark, carried to light by the same mapping (surfaces to
   whites and light greys, borders to soft greys, text to dark greys, tints
   keeping their hue).
+- Integration logos sit on a white tile in both themes (`--logo-tile`, with a
+  quiet edge in light), so every brand keeps its own colour and dark marks
+  such as GitHub's or Notion's stay visible; a white mark is inverted on it.
 - Keep the product nearly monochrome and low-noise. Reserve color for
   app logos, planet/user/agent avatars, validation, and genuinely meaningful
   status. Do not introduce a new accent color for decoration.

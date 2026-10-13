@@ -241,13 +241,17 @@
 }
 .workspace-knowledge-document-error { color: var(--tone-f0a8a8) !important; }
 .workspace-knowledge-app-icon {
-  border-color: transparent;
-  background: var(--tone-f5f5f5);
-  color: var(--tone-222222);
+  border-color: var(--logo-tile-border);
+  background: var(--logo-tile);
+  color: var(--logo-ink);
   font-size: 15px;
   font-weight: 700;
 }
 .workspace-knowledge-app-icon svg { width: 18px; height: 18px; }
+.workspace-knowledge-app-icon svg[fill="#FFFFFF"],
+.workspace-knowledge-app-icon svg[fill="#ffffff"],
+.workspace-knowledge-chip-icon svg[fill="#FFFFFF"],
+.workspace-knowledge-chip-icon svg[fill="#ffffff"] { filter: invert(1); }
 .workspace-knowledge-status {
   display: inline-flex;
   flex: none;
@@ -382,12 +386,17 @@
   text-overflow: ellipsis;
 }
 .workspace-knowledge-chip-icon {
-  display: inline-flex;
+  display: inline-grid;
   flex: none;
-  width: 11px;
-  height: 11px;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  border-radius: 4px;
+  background: var(--logo-tile);
+  box-shadow: inset 0 0 0 1px var(--logo-tile-border);
+  color: var(--logo-ink);
 }
-.workspace-knowledge-chip-icon svg { width: 100%; height: 100%; }
+.workspace-knowledge-chip-icon svg { width: 9px; height: 9px; }
 .workspace-knowledge-citation-index {
   display: grid;
   flex: none;
