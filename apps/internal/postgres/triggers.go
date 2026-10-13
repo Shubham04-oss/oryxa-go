@@ -86,6 +86,87 @@ func (store *Store) CreateTrigger(ctx context.Context, trigger domain.Trigger, e
 	return result, created, err
 }
 
+// CreatePipedreamTrigger records a trigger deployed at Pipedream with its
+// sealed signing key. It is keyed, as an Oryxa subscription is, on own_key:
+// one live trigger per connection, event and config, so two requests racing
+// to subscribe the same thing record one and the loser reads it back. Like
+// CreateTrigger it refuses once the connection is no longer active.
+func (store *Store) CreatePipedreamTrigger(ctx context.Context, trigger domain.Trigger, sealedKey []byte, event domain.Event) (domain.Trigger, bool, error) {
+	var result domain.Trigger
+	created := false
+	key := application.OwnKey(trigger.ConnectionID, trigger.Slug, trigger.Config)
+	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status FROM apps_connections WHERE id = $1 FOR SHARE`,
+			trigger.ConnectionID).Scan(&status); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("create trigger: the connection does not exist: %w", domain.ErrNotConnected)
+			}
+			return fmt.Errorf("create trigger: read the connection: %w", err)
+		}
+		if status != string(domain.ConnectionActive) {
+			return fmt.Errorf("create trigger: the connection is %s: %w", status, domain.ErrNotConnected)
+		}
+		triggers, err := queryTriggers(ctx, tx, `
+			INSERT INTO apps_triggers (
+				id, organization_id, member_id, connection_id, toolkit, slug, config,
+				composio_trigger_id, own_key, broker, pipedream_trigger_id, pipedream_signing_key,
+				status, status_reason, kind, manual_setup, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, '', $8, 'pipedream', $9, $10, $11, '', $12, false, $13, $13)
+			ON CONFLICT (own_key) WHERE status <> 'removed' AND own_key <> '' DO NOTHING
+			RETURNING `+triggerColumns,
+			trigger.ID, trigger.OrganizationID, trigger.MemberID, trigger.ConnectionID, trigger.Toolkit,
+			trigger.Slug, []byte(trigger.Config), key, trigger.PipedreamTriggerID, sealedKey,
+			string(trigger.Status), trigger.Kind, trigger.CreatedAt)
+		if err != nil {
+			return mapWriteError("create trigger", err)
+		}
+		if len(triggers) == 1 {
+			result, created = triggers[0], true
+			return insertEvents(ctx, tx, event)
+		}
+		existing, err := queryTriggers(ctx, tx, `
+			SELECT `+triggerColumns+`
+			FROM apps_triggers
+			WHERE own_key = $1 AND status <> 'removed'`, key)
+		if err != nil {
+			return err
+		}
+		if len(existing) == 0 {
+			return fmt.Errorf("create trigger: the conflicting subscription vanished mid-transaction: %w", domain.ErrConflict)
+		}
+		result = existing[0]
+		return nil
+	})
+	return result, created, err
+}
+
+// PipedreamTrigger reads a Pipedream trigger by apps' own id, in whichever
+// organization it is, with its sealed signing key: a delivery names only the
+// trigger, and its signature is what proves it.
+func (store *Store) PipedreamTrigger(ctx context.Context, id string) (domain.Trigger, []byte, error) {
+	rows, err := store.pool.Query(ctx, `
+		SELECT `+triggerColumns+`, pipedream_signing_key
+		FROM apps_triggers
+		WHERE id = $1 AND pipedream_trigger_id IS NOT NULL`, id)
+	if err != nil {
+		return domain.Trigger{}, nil, mapWriteError("read a Pipedream trigger", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return domain.Trigger{}, nil, fmt.Errorf("read a Pipedream trigger: %w", err)
+		}
+		return domain.Trigger{}, nil, domain.ErrNotFound
+	}
+	var sealed []byte
+	trigger, err := scanTrigger(rows, &sealed)
+	if err != nil {
+		return domain.Trigger{}, nil, err
+	}
+	return trigger, sealed, nil
+}
+
 // Trigger reads one of an organization's triggers, whatever its status.
 func (store *Store) Trigger(ctx context.Context, organizationID, id string) (domain.Trigger, error) {
 	triggers, err := queryTriggers(ctx, store.pool, `
@@ -203,15 +284,17 @@ func queryTriggers(ctx context.Context, db querier, sql string, args ...any) ([]
 	return triggers, nil
 }
 
-func scanTrigger(rows pgx.Rows) (domain.Trigger, error) {
+// scanTrigger reads triggerColumns, then into extra whatever a query selects
+// after them.
+func scanTrigger(rows pgx.Rows, extra ...any) (domain.Trigger, error) {
 	var trigger domain.Trigger
 	var config []byte
 	var status string
 	var lastDelivery *time.Time
-	if err := rows.Scan(&trigger.ID, &trigger.OrganizationID, &trigger.MemberID, &trigger.ConnectionID,
+	if err := rows.Scan(append([]any{&trigger.ID, &trigger.OrganizationID, &trigger.MemberID, &trigger.ConnectionID,
 		&trigger.Toolkit, &trigger.Slug, &config, &trigger.ComposioTriggerID, &trigger.PipedreamTriggerID, &status, &trigger.StatusReason,
 		&trigger.Kind, &trigger.ManualSetup, &trigger.DeliveryCount, &lastDelivery,
-		&trigger.CreatedAt, &trigger.UpdatedAt); err != nil {
+		&trigger.CreatedAt, &trigger.UpdatedAt}, extra...)...); err != nil {
 		return domain.Trigger{}, fmt.Errorf("scan trigger: %w", err)
 	}
 	trigger.Config = json.RawMessage(config)

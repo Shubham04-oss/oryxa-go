@@ -51,6 +51,10 @@ type Config struct {
 	// PipedreamDeny are Pipedream action keys agents are never offered nor
 	// allowed to run: APPS_PIPEDREAM_DENY_ACTIONS.
 	PipedreamDeny []string
+	// PipedreamMinPoll is the shortest interval a polling Pipedream trigger
+	// is deployed with, since every poll costs credits:
+	// APPS_PIPEDREAM_MIN_POLL_SECONDS. Zero is the default, fifteen minutes.
+	PipedreamMinPoll time.Duration
 }
 
 type Dependencies struct {
@@ -59,7 +63,10 @@ type Dependencies struct {
 	Composio  Composio
 	// Pipedream is Pipedream Connect, or nil when this deployment has none.
 	Pipedream Pipedream
-	Policy    PolicySource
+	// Sealer seals Pipedream triggers' signing keys. Without one, a Pipedream
+	// connection cannot subscribe to its app's events.
+	Sealer Sealer
+	Policy PolicySource
 	// Oryxa is Oryxa's own sign-in, when this deployment has one: signin,
 	// hooks and the integrations. Without it every Oryxa request is refused.
 	Oryxa  *Oryxa
@@ -96,6 +103,13 @@ type Service struct {
 	// while, under toolsMu, so resolving a PD_ slug costs no listing.
 	pipedreamActions map[string]cachedPipedreamActions
 	pipedreamDeny    map[string]bool
+	// pipedreamTriggers is pipedreamActions for each app's triggers.
+	pipedreamTriggers map[string]cachedPipedreamActions
+	pipedreamMinPoll  time.Duration
+	sealer            Sealer
+	// pipedreamKeys holds opened signing keys briefly, so a burst of
+	// deliveries, forged or not, does not make a KMS call each.
+	pipedreamKeys openedKeys
 	// triggers holds each app's trigger definitions for a while, so checking
 	// a subscription against the event it names costs no catalog walk.
 	triggers *triggerCatalog
@@ -136,6 +150,13 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 
 		pipedreamActions: map[string]cachedPipedreamActions{},
 		pipedreamDeny:    map[string]bool{},
+
+		pipedreamTriggers: map[string]cachedPipedreamActions{},
+		pipedreamMinPoll:  config.PipedreamMinPoll,
+		sealer:            dependencies.Sealer,
+	}
+	if service.pipedreamMinPoll <= 0 {
+		service.pipedreamMinPoll = DefaultPipedreamMinPoll
 	}
 	for _, key := range config.PipedreamDeny {
 		service.pipedreamDeny[strings.TrimSpace(key)] = true

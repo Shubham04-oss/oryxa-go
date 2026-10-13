@@ -338,7 +338,21 @@ every account, at most 2,000 every five minutes, and marks one Pipedream
 can no longer use as expired. The catalog lists Composio's apps, then the
 Pipedream apps Composio has no match for (compared without case, `_` or `-`,
 plus a few aliases), from a copy of Pipedream's catalog held for a day; each
-entry says its `broker`. Tools and triggers through Pipedream come later.
+entry says its `broker`.
+
+A Pipedream connection's events are its app's Pipedream triggers, offered as
+`PD_` slugs at `GET /v1/apps/catalog/{toolkit}/triggers` with their props as
+a config schema; one whose props reload or need options fetched remotely is
+left out. Subscribing deploys the trigger for the member, on their account,
+delivering to `POST /v1/apps/webhooks/pipedream/{triggerID}`; a polling one
+polls no more often than `APPS_PIPEDREAM_MIN_POLL_SECONDS` (15 minutes by
+default). Its signing key is kept sealed with the vault key
+(`APPS_SIGNIN_KMS_KEY_ID`, without which these subscriptions are refused). A
+delivery is checked against that key (`x-pd-signature`, five minutes either
+way), deduplicated on its `id` or else its bytes, and published as
+`apps.trigger.received.v1` exactly as a Composio one is. Connecting through
+Pipedream subscribes to nothing by itself: every deployed trigger costs
+credits for as long as it runs.
 
 ## The Slack surface
 

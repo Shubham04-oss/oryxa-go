@@ -319,6 +319,43 @@ describe("WorkspaceTools", () => {
     expect(screen.queryByText("Connects through Pipedream")).toBeNull()
   })
 
+  it("offers a Pipedream connection's events, and not yet its indexing", async () => {
+    const state = {
+      connections: [connection({ id: "apc_pd", broker: "pipedream" })],
+    }
+    fakeFetch(catalog(), connections(state), ({ method, path }) => {
+      if (method === "GET" && path === "/v1/apps/catalog/github/triggers")
+        return json({
+          triggers: [
+            {
+              trigger: "PD_GITHUB_NEW_ISSUE",
+              name: "New Issue",
+              description: "An issue is opened.",
+              toolkit: "github",
+              kind: "poll",
+            },
+          ],
+          next_cursor: null,
+        })
+      if (method === "GET" && path === `${org}/apps/triggers`)
+        return json({ triggers: [] })
+      return undefined
+    })
+    render(<WorkspaceTools organizationId="org-1" />)
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Expand GitHub connection" })
+    )
+    expect(
+      await screen.findByText(
+        "No events watched yet. Choose an event below to start."
+      )
+    ).toBeTruthy()
+    expect(
+      screen.getByText(/Indexing and runs for this app are not available yet/)
+    ).toBeTruthy()
+    expect(screen.queryByRole("tab", { name: "Indexing" })).toBeNull()
+  })
+
   it("withdraws connection actions when refreshing a cached offer fails", async () => {
     let unavailable = false
     fakeFetch(

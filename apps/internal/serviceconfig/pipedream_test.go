@@ -4,7 +4,26 @@ import (
 	"maps"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestPipedreamPollFloorIsWholePositiveSeconds(t *testing.T) {
+	t.Parallel()
+	if unset, err := FromEnv(environment(required())); err != nil || unset.PipedreamMinPoll != 0 {
+		t.Fatalf("unset = %v, %v; want zero, apps' default", unset.PipedreamMinPoll, err)
+	}
+	values := required()
+	values["APPS_PIPEDREAM_MIN_POLL_SECONDS"] = "1800"
+	if set, err := FromEnv(environment(values)); err != nil || set.PipedreamMinPoll != 30*time.Minute {
+		t.Fatalf("1800 = %v, %v", set.PipedreamMinPoll, err)
+	}
+	for _, value := range []string{"0", "-5", "15m", "1.5"} {
+		values["APPS_PIPEDREAM_MIN_POLL_SECONDS"] = value
+		if _, err := FromEnv(environment(values)); err == nil {
+			t.Errorf("%q was accepted", value)
+		}
+	}
+}
 
 func TestPipedreamIsOnOnlyWithAllThreeCredentials(t *testing.T) {
 	t.Parallel()

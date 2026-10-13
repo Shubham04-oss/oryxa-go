@@ -58,6 +58,7 @@ type appsService interface {
 	Triggers(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]domain.Trigger, error)
 	RemoveTrigger(ctx context.Context, credentials authclient.Credentials, organizationID, id string) error
 	ReceiveWebhook(ctx context.Context, header http.Header, body []byte) error
+	ReceivePipedreamWebhook(ctx context.Context, triggerID string, header http.Header, body io.Reader) error
 }
 
 type Config struct {
@@ -115,6 +116,7 @@ func New(service appsService, config Config, logger *slog.Logger) *Server {
 	server.handle("GET /v1/apps/connect/callback", server.completeConnection)
 	server.handle("GET /v1/apps/connect/pipedream/callback", server.completePipedreamConnection)
 	server.handle("POST /v1/apps/webhooks/composio", server.receiveWebhook)
+	server.handle("POST "+application.PipedreamWebhookPrefix+"{triggerID}", server.receivePipedreamWebhook)
 	server.handle("GET /v1/organizations/{organizationID}/apps/offer", server.offeredTools)
 	server.handle("GET /v1/organizations/{organizationID}/apps/connections", server.listConnections)
 	server.handle("POST /v1/organizations/{organizationID}/apps/connections", server.connect)
@@ -581,6 +583,23 @@ func (server *Server) receiveWebhook(writer http.ResponseWriter, request *http.R
 	// it: it logs the delivery as failed and sends it again, so every event
 	// arrived four times.
 	writer.WriteHeader(http.StatusOK)
+}
+
+// receivePipedreamWebhook takes a deployed Pipedream trigger's delivery. The
+// application reads the body, capped, only once the trigger is known.
+func (server *Server) receivePipedreamWebhook(writer http.ResponseWriter, request *http.Request) {
+	err := server.service.ReceivePipedreamWebhook(request.Context(), request.PathValue("triggerID"), request.Header, request.Body)
+	switch {
+	case err == nil:
+		writer.WriteHeader(http.StatusOK)
+	case errors.Is(err, application.ErrDeliveryTooLarge):
+		writeError(writer, http.StatusRequestEntityTooLarge, "invalid_request", "the delivery is too large")
+	case errors.Is(err, application.ErrUnverified):
+		server.logger.WarnContext(request.Context(), "unverified Pipedream delivery refused", "error", err)
+		writeError(writer, http.StatusUnauthorized, "unauthorized", "the delivery is not signed by Pipedream")
+	default:
+		server.handleError(writer, request, err)
+	}
 }
 
 func (server *Server) credentials(writer http.ResponseWriter, request *http.Request) (authclient.Credentials, bool) {

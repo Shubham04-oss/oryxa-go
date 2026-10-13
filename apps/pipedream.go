@@ -166,7 +166,7 @@ func (port pipedreamPort) RunAction(ctx context.Context, request application.Pip
 }
 
 func (port pipedreamPort) DeployTrigger(ctx context.Context, request application.PipedreamDeployRequest) (application.PipedreamDeployedTrigger, error) {
-	deployed, err := port.client.DeployTrigger(ctx, request.ComponentKey, request.ExternalUserID, request.ConfiguredProps, request.WebhookURL, 0)
+	deployed, err := port.client.DeployTrigger(ctx, request.ComponentKey, request.ExternalUserID, request.ConfiguredProps, request.WebhookURL, request.Timer)
 	if err != nil {
 		return application.PipedreamDeployedTrigger{}, pipedreamError(err)
 	}

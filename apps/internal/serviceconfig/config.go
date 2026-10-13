@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/slackbot"
@@ -69,6 +70,11 @@ type Config struct {
 	// offered nor allowed to run, such as gmail-delete-email:
 	// APPS_PIPEDREAM_DENY_ACTIONS, a comma list.
 	PipedreamDenyActions []string
+	// PipedreamMinPoll is the shortest interval a polling Pipedream trigger
+	// is deployed with, since every poll costs credits:
+	// APPS_PIPEDREAM_MIN_POLL_SECONDS, a whole number of seconds. Zero, when
+	// unset, is apps' default of fifteen minutes.
+	PipedreamMinPoll time.Duration
 	// Pipedream is Pipedream Connect's project, or nil when this deployment
 	// has none: PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET and
 	// PIPEDREAM_PROJECT_ID, all three or none; PIPEDREAM_ENVIRONMENT,
@@ -178,6 +184,13 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	if config.Pipedream, err = readPipedream(getenv); err != nil {
 		return Config{}, err
+	}
+	if value := strings.TrimSpace(getenv("APPS_PIPEDREAM_MIN_POLL_SECONDS")); value != "" {
+		seconds, err := strconv.Atoi(value)
+		if err != nil || seconds <= 0 {
+			return Config{}, errors.New("APPS_PIPEDREAM_MIN_POLL_SECONDS must be a positive whole number of seconds")
+		}
+		config.PipedreamMinPoll = time.Duration(seconds) * time.Second
 	}
 	if err := readOryxa(getenv, &config); err != nil {
 		return Config{}, err
