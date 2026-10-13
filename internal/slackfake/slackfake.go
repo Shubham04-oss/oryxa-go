@@ -200,10 +200,10 @@ type Fake struct {
 	// were exchanged for: who signed in, each.
 	signIns      map[string]signIn
 	signInTokens map[string]signIn
-	spent      map[string]bool
-	tweak      func(map[string]any)
-	sequence   int
-	down       bool
+	spent        map[string]bool
+	tweak        func(map[string]any)
+	sequence     int
+	down         bool
 }
 
 type failure struct {

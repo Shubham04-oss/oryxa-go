@@ -77,9 +77,9 @@ func (f *fakeSlack) StartLink(_ context.Context, credentials authclient.Credenti
 	return slackbot.LinkStart{SignInURL: "https://slack.com/openid/connect/authorize?state=s"}, f.err
 }
 
-func (f *fakeSlack) CompleteLink(_ context.Context, callback slackbot.InstallCallback) (slackbot.LinkCompletion, error) {
+func (f *fakeSlack) CompleteLink(_ context.Context, credentials authclient.Credentials, callback slackbot.InstallCallback) (slackbot.LinkCompletion, error) {
 	f.record("link-complete")
-	f.callback = callback
+	f.credentials, f.callback = credentials, callback
 	return f.linkCompletion, f.err
 }
 

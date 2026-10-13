@@ -23,7 +23,7 @@ type SlackService interface {
 
 	LinkStatus(ctx context.Context, credentials authclient.Credentials, organizationID string) (slackbot.LinkView, error)
 	StartLink(ctx context.Context, credentials authclient.Credentials, organizationID, returnTo string) (slackbot.LinkStart, error)
-	CompleteLink(ctx context.Context, callback slackbot.InstallCallback) (slackbot.LinkCompletion, error)
+	CompleteLink(ctx context.Context, credentials authclient.Credentials, callback slackbot.InstallCallback) (slackbot.LinkCompletion, error)
 	Unlink(ctx context.Context, credentials authclient.Credentials, organizationID string) error
 
 	Inbound(ctx context.Context, id string) (slackbot.InboundView, error)
@@ -291,8 +291,14 @@ func (server *Server) slackLinkCallback(writer http.ResponseWriter, request *htt
 		writeError(writer, http.StatusTooManyRequests, "rate_limited", "too many requests; retry")
 		return
 	}
+	// The browser's own session, checked against the member who began the
+	// link; having none is the service's to refuse, with the page to go back to.
+	credentials := authclient.Credentials{Authorization: request.Header.Get("Authorization")}
+	if cookie, err := request.Cookie(authclient.AccessCookieName); err == nil && credentials.Authorization == "" {
+		credentials.AccessCookie = cookie.Value
+	}
 	query := request.URL.Query()
-	completion, err := server.slack.CompleteLink(request.Context(), slackbot.InstallCallback{
+	completion, err := server.slack.CompleteLink(request.Context(), credentials, slackbot.InstallCallback{
 		State: query.Get("state"), Code: query.Get("code"), Error: query.Get("error"),
 	})
 	var failed *slackbot.InstallFailure

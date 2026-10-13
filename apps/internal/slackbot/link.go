@@ -176,6 +176,9 @@ func (s *Service) StartLink(ctx context.Context, credentials authclient.Credenti
 const (
 	FailureWrongTeam = "wrong_team"
 	FailureTaken     = "taken"
+	// FailureSession is a sign-in that came back to a browser not signed in to
+	// Oryxa as the member who began the link.
+	FailureSession = "session"
 )
 
 // LinkCompletion is a link that finished.
@@ -194,8 +197,10 @@ type LinkCompletion struct {
 // (openid.connect.userInfo), and keeps the pair when it is a user of the
 // workspace the flow was for, and of the organization's install still. The
 // failures are InstallFailures, and name the page to go back to once the state
-// is found.
-func (s *Service) CompleteLink(ctx context.Context, callback InstallCallback) (LinkCompletion, error) {
+// is found. credentials are the browser's own Oryxa session, which must be the
+// member who began the link: else anyone could send a coworker their own
+// sign-in URL and have the coworker's Slack account linked to them.
+func (s *Service) CompleteLink(ctx context.Context, credentials authclient.Credentials, callback InstallCallback) (LinkCompletion, error) {
 	if callback.State == "" {
 		return LinkCompletion{}, failure(FailureState, "", fmt.Errorf("the link carries no state: %w", domain.ErrInvalid))
 	}
@@ -209,6 +214,15 @@ func (s *Service) CompleteLink(ctx context.Context, callback InstallCallback) (L
 	returnTo := ""
 	if flow.ReturnTo != "" && s.config.ReturnAllowed != nil && s.config.ReturnAllowed(flow.ReturnTo) {
 		returnTo = flow.ReturnTo
+	}
+	caller, err := s.member(ctx, credentials, flow.OrganizationID)
+	switch {
+	case errors.Is(err, domain.ErrUnavailable):
+		return LinkCompletion{}, failure(FailureUnavailable, returnTo, err)
+	case err != nil || caller.UserID != flow.MemberID:
+		s.logger.WarnContext(ctx, "a Slack link was refused: the browser is not signed in as the member who began it",
+			"organization_id", flow.OrganizationID, "member_id", flow.MemberID)
+		return LinkCompletion{}, failure(FailureSession, returnTo, fmt.Errorf("sign in to Oryxa as the member who began the link: %w", domain.ErrForbidden))
 	}
 	switch {
 	case callback.Error != "":

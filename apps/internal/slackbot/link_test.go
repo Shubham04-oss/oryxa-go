@@ -26,10 +26,11 @@ func (h *harness) startLink(who string) (LinkStart, string) {
 	return start, link.Query().Get("state")
 }
 
-// signIn is Slack's redirect once someone signed in as userID of teamID.
-func (h *harness) signIn(state, teamID, userID string) (LinkCompletion, error) {
+// signIn is Slack's redirect, to who's browser, once someone signed in as
+// userID of teamID.
+func (h *harness) signIn(who, state, teamID, userID string) (LinkCompletion, error) {
 	h.t.Helper()
-	return h.service.CompleteLink(context.Background(), InstallCallback{State: state, Code: h.fake.IssueSignInCode(teamID, userID)})
+	return h.service.CompleteLink(context.Background(), bearer(who), InstallCallback{State: state, Code: h.fake.IssueSignInCode(teamID, userID)})
 }
 
 // linkedOf is who Slack users are linked to, as the internal profile read
@@ -75,7 +76,7 @@ func TestAMemberLinksTheirSlackAccountBySigningInAsThemself(t *testing.T) {
 		t.Fatalf("flow = %+v", flow)
 	}
 
-	completion, err := h.signIn(state, install.TeamID, "U0MEMBER")
+	completion, err := h.signIn("member", state, install.TeamID, "U0MEMBER")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +102,7 @@ func TestAnEmailChangeDoesNotMoveALink(t *testing.T) {
 	h.fake.AddUser(slackfake.User{ID: "U0MEMBER", Name: "member", Email: "member@acme.test"})
 	h.fake.AddUser(slackfake.User{ID: "U0EVIL", Name: "admin's alt", Email: "member@acme.test"})
 	_, state := h.startLink("member")
-	if _, err := h.signIn(state, install.TeamID, "U0MEMBER"); err != nil {
+	if _, err := h.signIn("member", state, install.TeamID, "U0MEMBER"); err != nil {
 		t.Fatal(err)
 	}
 	if linked := h.linkedOf("U0MEMBER", "U0EVIL"); linked["U0MEMBER"] != "user-member" || linked["U0EVIL"] != "" {
@@ -119,17 +120,17 @@ func TestALinkIsRefusedForAnotherWorkspaceOrAnAccountAnotherMemberLinked(t *test
 	h.fake.AddUser(slackfake.User{ID: "U0OWNER", Name: "owner", Email: "owner@acme.test"})
 
 	_, state := h.startLink("member")
-	_, err := h.signIn(state, "T0OTHER", "U0OTHER")
+	_, err := h.signIn("member", state, "T0OTHER", "U0OTHER")
 	if reason := failureReason(t, err); reason != FailureWrongTeam {
 		t.Fatalf("another workspace: %s", reason)
 	}
 
 	_, state = h.startLink("owner")
-	if _, err := h.signIn(state, install.TeamID, "U0OWNER"); err != nil {
+	if _, err := h.signIn("owner", state, install.TeamID, "U0OWNER"); err != nil {
 		t.Fatal(err)
 	}
 	_, state = h.startLink("member")
-	_, err = h.signIn(state, install.TeamID, "U0OWNER")
+	_, err = h.signIn("member", state, install.TeamID, "U0OWNER")
 	var failed *InstallFailure
 	if !errors.As(err, &failed) || failed.Reason != FailureTaken || failed.ReturnTo != testWebURL+"/settings" {
 		t.Fatalf("an account another member linked: %v", err)
@@ -142,24 +143,44 @@ func TestALinkIsRefusedForAnotherWorkspaceOrAnAccountAnotherMemberLinked(t *test
 	}
 }
 
+// TestALinkFinishesOnlyInTheBrowserOfTheMemberWhoBeganIt: a sign-in URL sent
+// to a coworker, who signs in to Slack as themself, links nothing: their
+// browser is not signed in to Oryxa as the member who began it, or at all.
+func TestALinkFinishesOnlyInTheBrowserOfTheMemberWhoBeganIt(t *testing.T) {
+	h := newHarness(t)
+	install := h.installFor(testOrg)
+	_, state := h.startLink("member")
+	if _, err := h.signIn("owner", state, install.TeamID, "U0OWNER"); failureReason(t, err) != FailureSession {
+		t.Fatalf("another member's browser: %v", err)
+	}
+	_, state = h.startLink("member")
+	if _, err := h.service.CompleteLink(context.Background(), authclient.Credentials{},
+		InstallCallback{State: state, Code: h.fake.IssueSignInCode(install.TeamID, "U0OWNER")}); failureReason(t, err) != FailureSession {
+		t.Fatalf("a browser signed in to nothing: %v", err)
+	}
+	if linked := h.linkedOf("U0OWNER"); linked["U0OWNER"] != "" {
+		t.Fatalf("the owner's account was linked to %q", linked["U0OWNER"])
+	}
+}
+
 // TestALinkStateWorksOnceAndNotForLong: a sign-in comes back once; again, or
 // after the flow's ten minutes, it links nothing.
 func TestALinkStateWorksOnceAndNotForLong(t *testing.T) {
 	h := newHarness(t)
 	install := h.installFor(testOrg)
 	_, state := h.startLink("member")
-	if _, err := h.signIn(state, install.TeamID, "U0MEMBER"); err != nil {
+	if _, err := h.signIn("member", state, install.TeamID, "U0MEMBER"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.signIn(state, install.TeamID, "U0MEMBER"); failureReason(t, err) != FailureState {
+	if _, err := h.signIn("member", state, install.TeamID, "U0MEMBER"); failureReason(t, err) != FailureState {
 		t.Fatalf("a state used twice: %v", err)
 	}
 	_, late := h.startLink("owner")
 	h.clock.Advance(FlowLifetime + 1)
-	if _, err := h.signIn(late, install.TeamID, "U0OWNER"); failureReason(t, err) != FailureState {
+	if _, err := h.signIn("owner", late, install.TeamID, "U0OWNER"); failureReason(t, err) != FailureState {
 		t.Fatalf("an expired state: %v", err)
 	}
-	if _, err := h.service.CompleteLink(context.Background(), InstallCallback{}); failureReason(t, err) != FailureState {
+	if _, err := h.service.CompleteLink(context.Background(), bearer("member"), InstallCallback{}); failureReason(t, err) != FailureState {
 		t.Fatalf("no state: %v", err)
 	}
 }
@@ -204,11 +225,11 @@ func TestUnlinkingAndRelinking(t *testing.T) {
 	h.fake.AddUser(slackfake.User{ID: "U0MEMBER", Name: "member", Email: "member@acme.test"})
 	h.fake.AddUser(slackfake.User{ID: "U0MEMBER2", Name: "member's new account", Email: "member@acme.test"})
 	_, state := h.startLink("member")
-	if _, err := h.signIn(state, install.TeamID, "U0MEMBER"); err != nil {
+	if _, err := h.signIn("member", state, install.TeamID, "U0MEMBER"); err != nil {
 		t.Fatal(err)
 	}
 	_, state = h.startLink("member")
-	if _, err := h.signIn(state, install.TeamID, "U0MEMBER2"); err != nil {
+	if _, err := h.signIn("member", state, install.TeamID, "U0MEMBER2"); err != nil {
 		t.Fatal(err)
 	}
 	if linked := h.linkedOf("U0MEMBER", "U0MEMBER2"); linked["U0MEMBER"] != "" || linked["U0MEMBER2"] != "user-member" {
