@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -52,8 +53,9 @@ type fakeService struct {
 	trigger     domain.Trigger
 	run         application.ToolRun
 
-	webhookHeader http.Header
-	webhookBody   []byte
+	webhookHeader      http.Header
+	webhookBody        []byte
+	pipedreamTriggerID string
 }
 
 func (fake *fakeService) Catalog(context.Context, application.CatalogQuery) ([]application.ToolkitView, string, error) {
@@ -211,6 +213,33 @@ func (fake *fakeService) RemoveTrigger(_ context.Context, credentials authclient
 func (fake *fakeService) ReceiveWebhook(_ context.Context, header http.Header, body []byte) error {
 	fake.webhookHeader, fake.webhookBody = header, body
 	return fake.err
+}
+
+func (fake *fakeService) ReceivePipedreamWebhook(_ context.Context, triggerID string, header http.Header, body io.Reader) error {
+	fake.webhookHeader, fake.pipedreamTriggerID = header, triggerID
+	return fake.err
+}
+
+// A Pipedream delivery names its trigger in the path, and each way it can be
+// refused answers its own status.
+func TestPipedreamDeliveriesAnswerByOutcome(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		err  error
+		want int
+	}{
+		"delivered":        {nil, http.StatusOK},
+		"unknown trigger":  {domain.ErrNotFound, http.StatusNotFound},
+		"bad signature":    {fmt.Errorf("%w: no signature matches", application.ErrUnverified), http.StatusUnauthorized},
+		"oversized body":   {application.ErrDeliveryTooLarge, http.StatusRequestEntityTooLarge},
+		"not a JSON event": {domain.ErrInvalid, http.StatusBadRequest},
+	} {
+		fake := &fakeService{err: test.err}
+		response := call(newServer(t, fake), http.MethodPost, "/v1/apps/webhooks/pipedream/apt_1", `{}`)
+		if response.Code != test.want || fake.pipedreamTriggerID != "apt_1" {
+			t.Fatalf("%s: status = %d, trigger = %q; want %d", name, response.Code, fake.pipedreamTriggerID, test.want)
+		}
+	}
 }
 
 func newServer(t *testing.T, fake *fakeService) *Server {

@@ -128,6 +128,11 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	if oryxa != nil {
 		dependencies.Signin, dependencies.Hooks, dependencies.Integrations = oryxa.signin, oryxa.hooks, oryxa.registry
 		dependencies.Slack = oryxa.slack
+		// Pipedream triggers' signing keys are sealed with the same vault key
+		// as every other secret apps keeps.
+		dependencies.Sealer = oryxa.sealer
+	} else if pipedreamClient != nil {
+		logger.Warn("APPS_SIGNIN_KMS_KEY_ID is not set: apps connected through Pipedream cannot subscribe to events, whose signing keys it seals")
 	}
 	if services != nil {
 		dependencies.Services = services
@@ -146,6 +151,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		OryxaToolkits:        config.OryxaToolkits,
 		ToolkitBrokers:       config.ToolkitBrokers,
 		PipedreamDenyActions: config.PipedreamDenyActions,
+		PipedreamMinPoll:     config.PipedreamMinPoll,
 		SigninRedirectURI:    config.SigninRedirectURI,
 		DefaultOAuthClients:  defaults,
 	})
@@ -188,6 +194,8 @@ type oryxaParts struct {
 	hooks    *hooks.Service
 	// slack is nil unless APPS_SLACK_SURFACE is on.
 	slack *slackbot.Service
+	// sealer is the KMS envelope everything here seals with.
+	sealer secrets.Envelope
 }
 
 // mountOryxa builds Oryxa's own sign-in and its webhook ingress on apps'
@@ -285,5 +293,5 @@ func mountOryxa(platform host.Platform, config serviceconfig.Config, store *post
 		logger.Info("Oryxa's own sign-in is on", "toolkits", strings.Join(config.OryxaToolkits, ","),
 			"redirect_uri", config.SigninRedirectURI, "webhook_base", config.PublicBaseURL+hooks.PathPrefix)
 	}
-	return &oryxaParts{registry: registry, signin: signinService, hooks: hooksService, slack: slack}, nil
+	return &oryxaParts{registry: registry, signin: signinService, hooks: hooksService, slack: slack, sealer: envelope}, nil
 }

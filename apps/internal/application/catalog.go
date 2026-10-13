@@ -175,6 +175,18 @@ func (s *Service) CatalogTriggers(ctx context.Context, slug, cursor string, limi
 	if limit <= 0 || limit > 50 {
 		limit = 50
 	}
+	if s.pipedream != nil {
+		// ponytail: the catalog answers by the broker a new connect would
+		// use, so a connection kept on another broker after a pin moved its
+		// app sees the new broker's events. Pass the broker if that matters.
+		broker, err := s.brokerFor(ctx, slug)
+		if err != nil {
+			return nil, "", err
+		}
+		if broker == domain.BrokerPipedream {
+			return s.pipedreamTriggerViews(ctx, slug, cursor, limit)
+		}
+	}
 	page, err := s.composio.TriggerTypes(ctx, composio.TriggerTypeQuery{Toolkits: []string{slug}, Cursor: cursor, Limit: limit})
 	if err != nil {
 		return nil, "", composioError("list the app's triggers", err)

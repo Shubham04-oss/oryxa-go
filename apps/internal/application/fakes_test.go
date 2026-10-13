@@ -35,6 +35,8 @@ type fakeStore struct {
 	// subscribeAttempts counts what ConnectionsAwaitingSubscribe has claimed,
 	// the way the column does.
 	subscribeAttempts map[string]int
+	// signingKeys are Pipedream triggers' sealed signing keys, by trigger.
+	signingKeys map[string][]byte
 }
 
 func newFakeStore() *fakeStore {
@@ -357,6 +359,38 @@ func (store *fakeStore) CreateTrigger(_ context.Context, trigger domain.Trigger,
 	store.triggers[trigger.ID] = trigger
 	store.events = append(store.events, event)
 	return trigger, true, nil
+}
+
+func (store *fakeStore) CreatePipedreamTrigger(_ context.Context, trigger domain.Trigger, sealedKey []byte, event domain.Event) (domain.Trigger, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if connection := store.connections[trigger.ConnectionID]; connection.Status != domain.ConnectionActive {
+		return domain.Trigger{}, false, domain.ErrNotConnected
+	}
+	key := OwnKey(trigger.ConnectionID, trigger.Slug, trigger.Config)
+	for _, existing := range store.triggers {
+		if existing.PipedreamTriggerID != "" && existing.Status != domain.TriggerRemoved &&
+			OwnKey(existing.ConnectionID, existing.Slug, existing.Config) == key {
+			return existing, false, nil
+		}
+	}
+	if store.signingKeys == nil {
+		store.signingKeys = map[string][]byte{}
+	}
+	store.triggers[trigger.ID] = trigger
+	store.signingKeys[trigger.ID] = sealedKey
+	store.events = append(store.events, event)
+	return trigger, true, nil
+}
+
+func (store *fakeStore) PipedreamTrigger(_ context.Context, id string) (domain.Trigger, []byte, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	trigger, ok := store.triggers[id]
+	if !ok || trigger.PipedreamTriggerID == "" {
+		return domain.Trigger{}, nil, domain.ErrNotFound
+	}
+	return trigger, store.signingKeys[id], nil
 }
 
 func (store *fakeStore) Trigger(_ context.Context, organizationID, id string) (domain.Trigger, error) {

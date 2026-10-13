@@ -16,6 +16,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 
@@ -52,6 +53,10 @@ type Dependencies struct {
 	// Pipedream is Pipedream Connect, for the apps neither Composio nor
 	// Oryxa's own sign-in serves, or nil when this deployment has none.
 	Pipedream *pipedream.Client
+	// Sealer seals Pipedream triggers' signing keys: the KMS envelope bound
+	// to service oryxa-apps. Without it, Pipedream connections cannot
+	// subscribe to their apps' events.
+	Sealer application.Sealer
 	// Policy is the applied workspace file, when workspace is mounted.
 	Policy application.PolicySource
 	// Sink is where published events go. Without one, apps still works and
@@ -101,6 +106,9 @@ type Config struct {
 	ToolkitBrokers map[string]string
 	// PipedreamDenyActions are Pipedream action keys agents never see.
 	PipedreamDenyActions []string
+	// PipedreamMinPoll is the shortest interval a polling Pipedream trigger
+	// is deployed with; zero is fifteen minutes.
+	PipedreamMinPoll time.Duration
 	// SigninRedirectURI is the one OAuth callback registered with every app.
 	SigninRedirectURI string
 	// DefaultOAuthClients are Oryxa's own OAuth apps, which Oryxa's sign-in
@@ -148,6 +156,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		Composio:  dependencies.Composio,
 		Policy:    dependencies.Policy,
 		Oryxa:     oryxa,
+		Sealer:    dependencies.Sealer,
 		Logger:    logger,
 	}
 	if dependencies.Pipedream != nil {
@@ -156,12 +165,13 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		applicationDependencies.Pipedream = pipedreamPort{client: dependencies.Pipedream}
 	}
 	app, err := application.New(applicationDependencies, application.Config{
-		PublicBaseURL:   config.PublicBaseURL,
-		ReturnOrigins:   config.AllowedOrigins,
-		WebhookSecret:   config.WebhookSecret,
-		NoAutoSubscribe: config.NoAutoSubscribe,
-		ToolkitBrokers:  config.ToolkitBrokers,
-		PipedreamDeny:   config.PipedreamDenyActions,
+		PublicBaseURL:    config.PublicBaseURL,
+		ReturnOrigins:    config.AllowedOrigins,
+		WebhookSecret:    config.WebhookSecret,
+		NoAutoSubscribe:  config.NoAutoSubscribe,
+		ToolkitBrokers:   config.ToolkitBrokers,
+		PipedreamDeny:    config.PipedreamDenyActions,
+		PipedreamMinPoll: config.PipedreamMinPoll,
 	})
 	if err != nil {
 		return nil, err

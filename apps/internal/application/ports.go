@@ -9,6 +9,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
+	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 )
 
 // Store is what the application needs of apps' own tables. Every write that
@@ -85,6 +86,15 @@ type Store interface {
 	Trigger(ctx context.Context, organizationID, id string) (domain.Trigger, error)
 	// TriggerByComposioID reads the live trigger a Composio instance backs.
 	TriggerByComposioID(ctx context.Context, composioTriggerID string) (domain.Trigger, error)
+	// CreatePipedreamTrigger records a trigger deployed at Pipedream, with its
+	// sealed signing key, and writes event. If a live one already exists for
+	// the same connection, event and config it answers that one instead, with
+	// false, and writes nothing.
+	CreatePipedreamTrigger(ctx context.Context, trigger domain.Trigger, sealedKey []byte, event domain.Event) (domain.Trigger, bool, error)
+	// PipedreamTrigger reads a trigger deployed at Pipedream by apps' own id,
+	// in any organization and whatever its status, with its sealed signing
+	// key. ErrNotFound for an id that is not a Pipedream trigger.
+	PipedreamTrigger(ctx context.Context, id string) (domain.Trigger, []byte, error)
 	// Triggers lists an organization's live triggers, optionally one
 	// member's or one connection's, newest first. TriggerQuery.IncludeRemoved
 	// also lists what was removed, for a caller that needs a connection's
@@ -200,6 +210,13 @@ type Pipedream interface {
 	Proxy(ctx context.Context, request PipedreamProxyRequest) (PipedreamProxyResponse, error)
 }
 
+// Sealer seals and opens one secret at a time: secrets.Envelope, bound to
+// service oryxa-apps.
+type Sealer interface {
+	Seal(ctx context.Context, binding secrets.Binding, plaintext []byte) (secrets.SealedData, error)
+	Open(ctx context.Context, binding secrets.Binding, sealed secrets.SealedData) ([]byte, error)
+}
+
 // PipedreamTokenRequest is what a connect token is made for.
 type PipedreamTokenRequest struct {
 	ExternalUserID string
@@ -297,6 +314,8 @@ type PipedreamDeployRequest struct {
 	ConfiguredProps map[string]any
 	// WebhookURL is where the deployed trigger delivers its events.
 	WebhookURL string
+	// Timer is how often a polling trigger polls; zero keeps its own.
+	Timer time.Duration
 }
 
 type PipedreamDeployedTrigger struct {

@@ -96,6 +96,9 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 		}
 		return s.subscribeOwn(ctx, connection, spec, config)
 	}
+	if connection.Pipedream() {
+		return s.subscribePipedream(ctx, connection, slug, config)
+	}
 	if !connection.Composio() {
 		return domain.Trigger{}, errNotComposio(connection)
 	}
@@ -213,7 +216,11 @@ func (s *Service) RemoveTrigger(ctx context.Context, credentials authclient.Cred
 	if own {
 		return s.unsubscribeOwn(ctx, trigger)
 	}
-	if err := s.composio.DeleteTrigger(ctx, trigger.ComposioTriggerID); err != nil && !errors.Is(err, composio.ErrNotFound) {
+	if trigger.PipedreamTriggerID != "" {
+		if err := s.unsubscribePipedream(ctx, trigger); err != nil {
+			return err
+		}
+	} else if err := s.composio.DeleteTrigger(ctx, trigger.ComposioTriggerID); err != nil && !errors.Is(err, composio.ErrNotFound) {
 		return composioError("unsubscribe the trigger", err)
 	}
 	now := s.now().UTC()

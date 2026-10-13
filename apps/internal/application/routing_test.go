@@ -170,9 +170,12 @@ func TestAPipedreamConnectionNeverReachesComposio(t *testing.T) {
 	})
 	_, refused["Proxy"] = h.service.Proxy(ctx, memberToken, "org_1", ProxyInput{Toolkit: "github", Endpoint: "/user"})
 	_, refused["ConnectionTargets"] = h.service.ConnectionTargets(ctx, memberToken, "org_1", connection.ID)
-	_, refused["CreateTrigger"] = h.service.CreateTrigger(ctx, memberToken, "org_1", TriggerInput{
+	// Its triggers are Pipedream's own, which this deployment has none of.
+	if _, err := h.service.CreateTrigger(ctx, memberToken, "org_1", TriggerInput{
 		ConnectionID: connection.ID, Trigger: "GITHUB_STAR_ADDED_EVENT", Config: json.RawMessage(`{}`),
-	})
+	}); !errors.Is(err, domain.ErrNotConnectable) || !strings.Contains(err.Error(), "through Pipedream") {
+		t.Errorf("CreateTrigger = %v, want Pipedream's refusal", err)
+	}
 	for path, err := range refused {
 		// The guard's own words, so no earlier refusal passes for it.
 		if !errors.Is(err, domain.ErrNotConnectable) || !strings.Contains(err.Error(), "connected through pipedream") {

@@ -44,6 +44,11 @@ type pipedreamAction struct {
 	// with the member's own account, which the agent never sees nor sets.
 	props   map[string]bool
 	appProp string
+	// poll says a trigger polls, which is what having a timer prop means, and
+	// pollSeconds is that timer's own default interval. Apps sets the timer,
+	// not the member.
+	poll        bool
+	pollSeconds int
 }
 
 type cachedPipedreamActions struct {
@@ -62,6 +67,8 @@ type pipedreamProp struct {
 	Hidden        bool   `json:"hidden"`
 	RemoteOptions bool   `json:"remoteOptions"`
 	ReloadProps   bool   `json:"reloadProps"`
+	// Default is read only for a timer, as {"intervalSeconds": n}.
+	Default json.RawMessage `json:"default"`
 }
 
 // pipedreamTypes are the prop types an agent can fill in one call, as JSON
@@ -105,6 +112,17 @@ func translatePipedreamAction(component PipedreamComponent) (pipedreamAction, st
 			return pipedreamAction{}, "a prop reloads the others"
 		case prop.Type == "app":
 			action.appProp = prop.Name
+			continue
+		case prop.Type == "$.interface.timer":
+			// Every poll costs credits, so the interval is apps' to choose
+			// and the member is not offered it.
+			action.poll = true
+			var timer struct {
+				IntervalSeconds int `json:"intervalSeconds"`
+			}
+			if json.Unmarshal(prop.Default, &timer) == nil {
+				action.pollSeconds = timer.IntervalSeconds
+			}
 			continue
 		case prop.Hidden || prop.Type == "alert" || strings.HasPrefix(prop.Type, "$."):
 			// Notes to a human and props Pipedream fills itself.
@@ -153,22 +171,39 @@ func firstNonEmpty(values ...string) string {
 // from a short-lived cache or from Pipedream. The deny list is applied here,
 // so a denied action is neither listed nor resolvable.
 func (s *Service) pipedreamActionsFor(ctx context.Context, app string) ([]pipedreamAction, error) {
+	return s.pipedreamComponentsFor(ctx, app, "actions", s.pipedreamActions, s.pipedream.ListActions, s.pipedreamDeny)
+}
+
+// pipedreamTriggersFor answers an app's triggers as a member subscribes to
+// them, translated by the same rules as actions, so a trigger whose props
+// cannot be set in one go is not offered either.
+func (s *Service) pipedreamTriggersFor(ctx context.Context, app string) ([]pipedreamAction, error) {
+	return s.pipedreamComponentsFor(ctx, app, "triggers", s.pipedreamTriggers, s.pipedream.ListTriggers, nil)
+}
+
+func (s *Service) pipedreamComponentsFor(
+	ctx context.Context,
+	app, kind string,
+	cache map[string]cachedPipedreamActions,
+	list func(context.Context, string) ([]PipedreamComponent, error),
+	deny map[string]bool,
+) ([]pipedreamAction, error) {
 	now := s.now()
 	s.toolsMu.Lock()
-	cached, ok := s.pipedreamActions[app]
+	cached, ok := cache[app]
 	s.toolsMu.Unlock()
 	if ok && now.Before(cached.expires) {
 		return cached.actions, nil
 	}
-	components, err := s.pipedream.ListActions(ctx, app)
+	components, err := list(ctx, app)
 	if err != nil {
-		return nil, pipedreamError("list the app's actions", err)
+		return nil, pipedreamError("list the app's "+kind, err)
 	}
 	actions := make([]pipedreamAction, 0, len(components))
 	slugs := map[string]int{}
 	dropped := map[string]int{}
 	for _, component := range components {
-		if s.pipedreamDeny[component.Key] {
+		if deny[component.Key] {
 			continue
 		}
 		action, reason := translatePipedreamAction(component)
@@ -193,10 +228,10 @@ func (s *Service) pipedreamActionsFor(ctx context.Context, app string) ([]pipedr
 		for _, count := range dropped {
 			total += count
 		}
-		s.logger.Info("pipedream actions not offered to agents", "app", app, "dropped", total, "kept", len(actions), "reasons", dropped)
+		s.logger.Info("pipedream components not offered", "app", app, "kind", kind, "dropped", total, "kept", len(actions), "reasons", dropped)
 	}
 	s.toolsMu.Lock()
-	s.pipedreamActions[app] = cachedPipedreamActions{actions: actions, expires: now.Add(toolCacheFor)}
+	cache[app] = cachedPipedreamActions{actions: actions, expires: now.Add(toolCacheFor)}
 	s.toolsMu.Unlock()
 	return actions, nil
 }
