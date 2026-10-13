@@ -477,14 +477,16 @@ is told (see [Wake-ups](#wake-ups)).
 there, so the run answers on the reduced agent (see [Wake-ups](#wake-ups)) and
 what it may reach follows what their own agent has already allowed:
 
-- **Deciding** on a new request reads the request alone, neither the
-  member's apps nor their knowledge, and only decides: its
-  `interactions_respond` refuses to answer (`agents.DeliveryDecides`), and
-  the run ends on its decision, approval or rejection. Nothing another member
-  wrote reaches anything of this member's before their agent has approved
-  it, and approved work always runs on its own, with exactly what the
-  approval allows. A request held for its owner is never delivered for
-  deciding at all.
+- **Deciding** is never a delivery's. No run nobody is watching decides a
+  request: a new request's delivery starts no run, whoever may decide it, and
+  `interactions.Service.Decide` refuses an agent's decision in any run its
+  member did not start (`memberauth.RunOrigin` is not `member`): an app
+  event, a schedule, a team, the organization agent, or a delivery. A request
+  its agent may decide (a specialist with automatic delegation) waits for that
+  agent in a conversation its member started, or for the member. A delivery's
+  interactions toolbox never offers `interactions_decide`. Nothing another
+  member wrote reaches anything of this member's before an approval, and
+  approved work always runs on its own, with exactly what the approval allows.
 - **Reporting** a rejection or a result back to the member who asked reads
   the request alone: neither their apps nor their knowledge.
 - **Doing approved work** runs with exactly the toolboxes its decision's
@@ -1846,11 +1848,10 @@ wakes Krude for each batch it hands over, as `batching.trigger-batch.ready.v1`
 
 Interaction wake-ups use a separate durable job table because they have a
 state machine rather than an app digest. The target's `requested` delivery is
-complete only after it records a decision; an `approved` delivery is complete
-only after it records a final result. A `requested` delivery for a request
-held for its owner is completed without a run, since no agent may decide it;
-the owner's approval arrives as the `approved` delivery, whose prompt says the
-owner approved it. Rejected and completed deliveries notify the requesting
+completed without a run, since no run nobody watches decides a request; an
+`approved` delivery is complete only after it records a final result. The
+approval arrives as the `approved` delivery, whose prompt says the owner
+approved it when they did. Rejected and completed deliveries notify the requesting
 agent. Jobs lease across replicas, retry failed runs three
 times, settle recorded revisions in order per request and recipient, and keep handled IDs
 for a week. If an earlier run already advanced the interaction, a later or

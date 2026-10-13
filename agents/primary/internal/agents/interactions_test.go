@@ -129,10 +129,10 @@ func TestInteractionCreatePreservesToolChoiceForTheLedger(t *testing.T) {
 
 // TestADeliveringToolboxHoldsOnlyItsOneRequest: a run delivering one
 // interaction is offered, from its first model call, exactly the
-// interactions tools its purpose uses: reading and deciding its request in
-// a run deciding it, reading and answering it in one doing the approved
-// work, and reading it alone in a report, or in a run that does not say
-// what it is for. It never has a tool that lists the member's other
+// interactions tools its purpose uses: reading and answering its request in
+// a run doing the approved work, and reading it alone in a report, in a run
+// that does not say what it is for, and in one for deciding it, since no run
+// nobody is watching decides a request. It never has a tool that lists the member's other
 // requests or starts new ones.
 func TestADeliveringToolboxHoldsOnlyItsOneRequest(t *testing.T) {
 	toolbox, err := InteractionToolbox(InteractionConfig{Service: &fakeInteractions{}, Delivering: true})
@@ -143,7 +143,7 @@ func TestADeliveringToolboxHoldsOnlyItsOneRequest(t *testing.T) {
 		t.Fatalf("the delivering toolbox is named %q, want %q", toolbox.Name, InteractionsToolboxName)
 	}
 	for purpose, want := range map[string][]string{
-		DeliveryDecides: {"interactions_get", "interactions_decide"},
+		DeliveryDecides: {"interactions_get"},
 		DeliveryWorks:   {"interactions_get", "interactions_respond"},
 		DeliveryReports: {"interactions_get"},
 		"":              {"interactions_get"},
@@ -228,11 +228,10 @@ func (service *pinnedInteractions) Respond(_ context.Context, _ InteractionActor
 	return Interaction{ID: id, Status: input.Status}, nil
 }
 
-// TestADeliveryRunDoesOnlyWhatItIsFor: a run delivering a new request
-// decides it and never answers it, so approved work always runs on its own
-// with exactly what its approval allows; a run doing approved work answers
-// and never decides; a report does neither; and a run that does not say
-// what it is for does neither either. Each reads its request.
+// TestADeliveryRunDoesOnlyWhatItIsFor: a run doing approved work answers and
+// never decides; a run for a new request neither decides nor answers it, since
+// no run nobody is watching decides; a report does neither; and a run that
+// does not say what it is for does neither either. Each reads its request.
 func TestADeliveryRunDoesOnlyWhatItIsFor(t *testing.T) {
 	calls := []*genai.FunctionCall{
 		{ID: "read", Name: "interactions_get", Args: map[string]any{"request_id": "irq_1"}},
@@ -240,7 +239,7 @@ func TestADeliveryRunDoesOnlyWhatItIsFor(t *testing.T) {
 		{ID: "answer", Name: "interactions_respond", Args: map[string]any{"request_id": "irq_1", "status": "completed", "summary": "Done.", "content": "From what I know."}},
 	}
 	for purpose, want := range map[string][]string{
-		DeliveryDecides: {"decide irq_1", "get irq_1"},
+		DeliveryDecides: {"get irq_1"},
 		DeliveryWorks:   {"get irq_1", "respond irq_1"},
 		DeliveryReports: {"get irq_1"},
 		"":              {"get irq_1"},
@@ -346,11 +345,10 @@ func (*recordingInteractions) Respond(_ context.Context, _ InteractionActor, id 
 	return Interaction{ID: id, Status: input.Status}, nil
 }
 
-// TestADeliveryRunEndsOnceItsAnswerIsRecorded: recording the answer, or a
-// decision, is the last thing a delivery run does. No model call follows to
-// tell a member who is not there what the ledger already holds, and a
-// delivery that approves work leaves it to a run of its own. A member's own
-// run carries on to say what it did.
+// TestADeliveryRunEndsOnceItsAnswerIsRecorded: recording the answer is the
+// last thing a delivery run does. No model call follows to tell a member who
+// is not there what the ledger already holds. A member's own run carries on to
+// say what it did.
 func TestADeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
 	answer := &genai.FunctionCall{ID: "answer", Name: "interactions_respond", Args: map[string]any{
 		"request_id": "irq_1", "status": "completed", "summary": "Reviewed.", "content": "The plan is ready.",
@@ -367,9 +365,8 @@ func TestADeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
 		calls      int
 	}{
 		"a delivery answering":         {true, DeliveryWorks, answer, 1},
-		"a delivery rejecting":         {true, DeliveryDecides, decision("rejected"), 1},
-		"a delivery approving":         {true, DeliveryDecides, decision("approved"), 1},
 		"the member's own run answers": {false, DeliveryWorks, answer, 2},
+		"the member's own run decides": {false, DeliveryWorks, decision("approved"), 2},
 	} {
 		t.Run(name, func(t *testing.T) {
 			toolbox, err := InteractionToolbox(InteractionConfig{Service: &recordingInteractions{}, Delivering: testCase.delivering})

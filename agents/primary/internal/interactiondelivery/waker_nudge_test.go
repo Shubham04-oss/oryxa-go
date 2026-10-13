@@ -52,17 +52,17 @@ func runWaker(t *testing.T, waker *Waker) func() {
 // hour away here, is only the backstop.
 func TestANudgedDeliveryStartsAtOnceWithoutThePoll(t *testing.T) {
 	store := &fakeDeliveries{}
-	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable("pending")}}
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": decidable("approved")}}
 	started := make(chan time.Time, 1)
 	runs := &fakeAgentRuns{onExecute: func() {
 		started <- time.Now()
-		requests.setStatus("irq_1", "approved")
+		requests.setStatus("irq_1", "completed")
 	}}
 	waker := NewWaker(store, runs, requests, Config{Interval: time.Hour, Lease: time.Minute, Standing: standsAlways{}}, nil)
 	stop := runWaker(t, waker)
 
 	recorded := time.Now()
-	store.record(testDelivery("evt_1", KindTargetRequested, 1))
+	store.record(testDelivery("evt_1", KindTargetApproved, 1))
 	waker.Nudge()
 	select {
 	case at := <-started:
@@ -131,7 +131,7 @@ func (run *gatedRun) Execute(ctx context.Context, emit func(threads.Item) error)
 	runs.started <- run.agentID
 	select {
 	case <-runs.gates[run.agentID]:
-		runs.requests.setStatus(runs.requestOf[run.agentID], interactions.StatusApproved)
+		runs.requests.setStatus(runs.requestOf[run.agentID], interactions.StatusCompleted)
 	case <-ctx.Done():
 	}
 	runs.mu.Lock()
@@ -142,9 +142,9 @@ func (run *gatedRun) Execute(ctx context.Context, emit func(threads.Item) error)
 
 func (*gatedRun) Discard(context.Context, string) {}
 
-// deliveryTo is a new request's delivery to its own recipient agent.
+// deliveryTo is an approved request's delivery to its own recipient agent.
 func deliveryTo(eventID, requestID, agentID string) Delivery {
-	delivery := testDelivery(eventID, KindTargetRequested, 1)
+	delivery := testDelivery(eventID, KindTargetApproved, 1)
 	delivery.RequestID, delivery.RecipientAgentID = requestID, agentID
 	return delivery
 }
@@ -160,7 +160,7 @@ func (standsAlways) Recheck(_ context.Context, request agents.Interaction) (agen
 func pendingRequests(ids ...string) *fakeRequests {
 	requests := &fakeRequests{requests: map[string]agents.Interaction{}}
 	for _, id := range ids {
-		request := decidable(interactions.StatusPending)
+		request := decidable(interactions.StatusApproved)
 		request.ID = id
 		requests.requests[id] = request
 	}

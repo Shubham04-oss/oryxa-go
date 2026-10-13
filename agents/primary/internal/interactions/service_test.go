@@ -289,15 +289,15 @@ func TestTargetOrPrimaryCanDecideWithinRequestedScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Decide(context.Background(), requester, created.ID, agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "No"}); !errors.Is(err, ErrForbidden) {
+	if _, err := service.Decide(inMemberChat(), requester, created.ID, agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "No"}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("requester decision error=%v", err)
 	}
-	if _, err := service.Decide(context.Background(), autoSpecialist, created.ID, agents.InteractionDecisionInput{
+	if _, err := service.Decide(inMemberChat(), autoSpecialist, created.ID, agents.InteractionDecisionInput{
 		Decision: DecisionApproved, Message: "Approved", AllowedTools: []string{"apps_write"},
 	}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("broadened decision error=%v", err)
 	}
-	approved, err := service.Decide(context.Background(), targetPrimary, created.ID, agents.InteractionDecisionInput{
+	approved, err := service.Decide(inMemberChat(), targetPrimary, created.ID, agents.InteractionDecisionInput{
 		Decision: DecisionApproved, Message: "Approved", AllowedTools: []string{"knowledge_search"}, GrantedPermissions: []string{"read:architecture"},
 	})
 	if err != nil || approved.Status != StatusApproved || approved.Decision == nil {

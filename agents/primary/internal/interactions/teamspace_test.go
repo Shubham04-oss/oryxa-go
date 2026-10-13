@@ -251,7 +251,7 @@ func TestARequestOutsideATeamspaceIsHeldForItsOwner(t *testing.T) {
 				t.Fatalf("%s, asking %s: created=%+v, want it held for its owner", name, asked, created)
 			}
 			for _, agent := range deciders {
-				if _, err := service.Decide(context.Background(), agent, created.ID, approve); !errors.Is(err, ErrForbidden) || !strings.Contains(err.Error(), "your member's own decision") {
+				if _, err := service.Decide(inMemberChat(), agent, created.ID, approve); !errors.Is(err, ErrForbidden) || !strings.Contains(err.Error(), "your member's own decision") {
 					t.Fatalf("%s: %s deciding a request to %s: error=%v, want ErrForbidden saying the member decides", name, agent.AgentID, asked, err)
 				}
 			}
@@ -267,7 +267,7 @@ func TestARequestOutsideATeamspaceIsHeldForItsOwner(t *testing.T) {
 	older := between("irq_older", "user_a", "agt_a", "user_b", "agt_b", "")
 	older.Approval = ApprovalAgent
 	repo.requests[older.ID] = older
-	if _, err := withoutSpaces.Decide(context.Background(), targetPrimary, older.ID, approve); !errors.Is(err, ErrForbidden) {
+	if _, err := withoutSpaces.Decide(inMemberChat(), targetPrimary, older.ID, approve); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("an agent deciding what an older build stored as its own: error=%v, want ErrForbidden", err)
 	}
 	if read, err := withoutSpaces.Get(context.Background(), inOwnSession(targetPrimary), older.ID); err != nil || read.Approval != ApprovalOwner || read.Status != StatusPending {
