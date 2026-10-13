@@ -213,6 +213,11 @@ func TestAnAskThatNeedsTheOwnersOwnAnswerLeadsWithReplyYourself(t *testing.T) {
 			if (tickets["reply"] != nil) != test.replyTicket || tickets["summary"] == nil || tickets["deny"] == nil {
 				t.Fatalf("tickets = %v", tickets)
 			}
+			// The ledger mints no access ticket for an owner-first request, so none is
+			// sent: not even an empty one.
+			if _, access := tickets["access"]; access == (test.answerBy == interactions.AnswerByOwner) {
+				t.Fatalf("tickets = %v, want an access ticket only for a request that is not owner-first", tickets)
+			}
 		})
 	}
 }

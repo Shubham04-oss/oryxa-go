@@ -44,9 +44,10 @@ func (h *harness) renderOK(template, params string) Rendered {
 }
 
 const (
-	tickets          = `"tickets":{"summary":"t1.summary.sig","access":"t1.access.sig","deny":"t1.deny.sig"}`
-	ticketsWithReply = `"tickets":{"summary":"t1.summary.sig","access":"t1.access.sig","deny":"t1.deny.sig","reply":"t1.reply.sig"}`
-	decided          = `"decided_by_user_id":"U0RAYA","decided_at":"2026-09-29T14:02:00Z"`
+	tickets           = `"tickets":{"summary":"t1.summary.sig","access":"t1.access.sig","deny":"t1.deny.sig"}`
+	ticketsWithReply  = `"tickets":{"summary":"t1.summary.sig","access":"t1.access.sig","deny":"t1.deny.sig","reply":"t1.reply.sig"}`
+	ticketsOwnerFirst = `"tickets":{"summary":"t1.summary.sig","deny":"t1.deny.sig","reply":"t1.reply.sig"}`
+	decided           = `"decided_by_user_id":"U0RAYA","decided_at":"2026-09-29T14:02:00Z"`
 )
 
 // The wording and the structure of every template, pinned. A change to what
@@ -55,7 +56,7 @@ var templateGoldens = []struct{ name, template, params string }{
 	{"owner_notice", TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"When is the launch?\nAnd who signs it off?",` + tickets + `}`},
 	{"owner_notice_asker_by_name", TemplateOwnerNotice, `{"asker_name":"Alex Kim","question":"Can I see the dev keys?",` + tickets + `}`},
 	{"owner_notice_with_reply", TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"When is the launch?\nAnd who signs it off?",` + ticketsWithReply + `}`},
-	{"owner_notice_owner_first", TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"Can you approve the launch budget?","answer_by":"owner",` + ticketsWithReply + `}`},
+	{"owner_notice_owner_first", TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"Can you approve the launch budget?","answer_by":"owner",` + ticketsOwnerFirst + `}`},
 	{"notice_settled_summary", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"approved_summary",` + decided + `}`},
 	{"notice_settled_access", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"approved_access",` + decided + `}`},
 	{"notice_settled_denied", TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"When is the launch?","decision":"denied",` + decided + `}`},
@@ -202,7 +203,7 @@ func TestTheOwnerNoticeHasOnlyTheAskerTheQuestionAndThreeButtons(t *testing.T) {
 func TestAnOwnerFirstNoticeLeadsWithReplyYourself(t *testing.T) {
 	h := newHarness(t)
 	params := `{"asker_user_id":"U0ASKER","question":"Can you approve the launch budget?","answer_by":"owner",` +
-		`"tickets":{"summary":"t1.a.b","access":"t1.c.d","deny":"t1.e.f","reply":"t1.g.h"}}`
+		`"tickets":{"summary":"t1.a.b","deny":"t1.e.f","reply":"t1.g.h"}}`
 	rendered := h.renderOK(TemplateOwnerNotice, params)
 	var blocks []map[string]any
 	raw, _ := json.Marshal(rendered.Blocks)
@@ -415,33 +416,34 @@ func TestLongTextIsCutAndSplitToWhatSlackTakes(t *testing.T) {
 func TestParamsAreCheckedAgainstTheirTemplate(t *testing.T) {
 	h := newHarness(t)
 	for name, test := range map[string]struct{ template, params string }{
-		"a notice with no question":            {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER",` + tickets + `}`},
-		"a notice with no asker":               {TemplateOwnerNotice, `{"question":"q",` + tickets + `}`},
-		"a notice with an asker that is no id": {TemplateOwnerNotice, `{"asker_user_id":"raya","question":"q",` + tickets + `}`},
-		"a notice with no tickets":             {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q"}`},
-		"a notice with one ticket missing":     {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","tickets":{"summary":"a","access":"b"}}`},
-		"a ticket with a space in it":          {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","tickets":{"summary":"a b","access":"b","deny":"c"}}`},
-		"a ticket too long for a button":       {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","tickets":{"summary":"` + strings.Repeat("a", 2001) + `","access":"b","deny":"c"}}`},
-		"a settled notice that is nothing":     {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"q","decision":"sulking"}`},
-		"a decision with no decider":           {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"q","decision":"denied"}`},
-		"a time that is none":                  {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"q","decision":"denied","decided_by_name":"Raya","decided_at":"soon"}`},
-		"an ack with no owners":                {TemplateAskAck, `{"owners":[]}`},
-		"an ack with too many owners":          {TemplateAskAck, `{"owners":[{"name":"a"},{"name":"b"},{"name":"c"},{"name":"d"},{"name":"e"},{"name":"f"}]}`},
-		"an owner with neither id nor name":    {TemplateAskAck, `{"owners":[{}]}`},
-		"an answer with no text":               {TemplateAnswer, `{"owner_name":"Raya","mode":"summary"}`},
-		"an answer with no owner":              {TemplateAnswer, `{"text":"t","mode":"summary"}`},
-		"an answer in no mode":                 {TemplateAnswer, `{"text":"t","owner_name":"Raya"}`},
-		"a bypass with a channel that is none": {TemplateBypassNotice, `{"asker_name":"a","question":"q","reason":"org_chart","channel_id":"general"}`},
-		"a bypass for no reason":               {TemplateBypassNotice, `{"asker_name":"a","question":"q","reason":"because"}`},
-		"a private note with params":           {TemplatePrivateNote, `{"text":"x"}`},
-		"a reply ticket with a space in it":    {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","tickets":{"summary":"a","access":"b","deny":"c","reply":"d e"}}`},
-		"an owner-first notice with no reply":  {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","answer_by":"owner",` + tickets + `}`},
-		"a notice answered by nobody known":    {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","answer_by":"team",` + ticketsWithReply + `}`},
-		"a reply said of an approval":          {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"q","decision":"approved_summary","decided_by_name":"Raya","reply":"mine"}`},
-		"a reply said of a review that sent":   {TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"q","outcome":"sent","reply":"mine"}`},
-		"a replied notice with no question":    {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","decision":"replied","reply":"mine"}`},
-		"a reply with no owner":                {TemplateAnswer, `{"text":"t","mode":"reply"}`},
-		"params with a NUL in them":            {TemplateStatus, "{\"state\":\"held\",\"owner_name\":\"a\\u0000b\"}"},
+		"a notice with no question":             {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER",` + tickets + `}`},
+		"a notice with no asker":                {TemplateOwnerNotice, `{"question":"q",` + tickets + `}`},
+		"a notice with an asker that is no id":  {TemplateOwnerNotice, `{"asker_user_id":"raya","question":"q",` + tickets + `}`},
+		"a notice with no tickets":              {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q"}`},
+		"a notice with one ticket missing":      {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","tickets":{"summary":"a","access":"b"}}`},
+		"a ticket with a space in it":           {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","tickets":{"summary":"a b","access":"b","deny":"c"}}`},
+		"a ticket too long for a button":        {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","tickets":{"summary":"` + strings.Repeat("a", 2001) + `","access":"b","deny":"c"}}`},
+		"a settled notice that is nothing":      {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"q","decision":"sulking"}`},
+		"a decision with no decider":            {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"q","decision":"denied"}`},
+		"a time that is none":                   {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"q","decision":"denied","decided_by_name":"Raya","decided_at":"soon"}`},
+		"an ack with no owners":                 {TemplateAskAck, `{"owners":[]}`},
+		"an ack with too many owners":           {TemplateAskAck, `{"owners":[{"name":"a"},{"name":"b"},{"name":"c"},{"name":"d"},{"name":"e"},{"name":"f"}]}`},
+		"an owner with neither id nor name":     {TemplateAskAck, `{"owners":[{}]}`},
+		"an answer with no text":                {TemplateAnswer, `{"owner_name":"Raya","mode":"summary"}`},
+		"an answer with no owner":               {TemplateAnswer, `{"text":"t","mode":"summary"}`},
+		"an answer in no mode":                  {TemplateAnswer, `{"text":"t","owner_name":"Raya"}`},
+		"a bypass with a channel that is none":  {TemplateBypassNotice, `{"asker_name":"a","question":"q","reason":"org_chart","channel_id":"general"}`},
+		"a bypass for no reason":                {TemplateBypassNotice, `{"asker_name":"a","question":"q","reason":"because"}`},
+		"a private note with params":            {TemplatePrivateNote, `{"text":"x"}`},
+		"a reply ticket with a space in it":     {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","tickets":{"summary":"a","access":"b","deny":"c","reply":"d e"}}`},
+		"an owner-first notice with no reply":   {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","answer_by":"owner",` + tickets + `}`},
+		"an owner-first notice offering access": {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","answer_by":"owner",` + ticketsWithReply + `}`},
+		"a notice answered by nobody known":     {TemplateOwnerNotice, `{"asker_user_id":"U0ASKER","question":"q","answer_by":"team",` + ticketsWithReply + `}`},
+		"a reply said of an approval":           {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","question":"q","decision":"approved_summary","decided_by_name":"Raya","reply":"mine"}`},
+		"a reply said of a review that sent":    {TemplateHeldReviewSettled, `{"asker_user_id":"U0ASKER","question":"q","outcome":"sent","reply":"mine"}`},
+		"a replied notice with no question":     {TemplateNoticeSettled, `{"asker_user_id":"U0ASKER","decision":"replied","reply":"mine"}`},
+		"a reply with no owner":                 {TemplateAnswer, `{"text":"t","mode":"reply"}`},
+		"params with a NUL in them":             {TemplateStatus, "{\"state\":\"held\",\"owner_name\":\"a\\u0000b\"}"},
 	} {
 		_, _, err := h.service.render(test.template, json.RawMessage(test.params))
 		if !errors.Is(err, domain.ErrInvalid) {

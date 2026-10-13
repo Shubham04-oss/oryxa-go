@@ -263,7 +263,8 @@ type ConsentTickets struct {
 // tells the owner of a request that it is waiting for them. The request is read
 // here, and its owner and expiry are the ledger's: a ticket names no one the
 // request does not. Only a request that asks for consent, and is still pending,
-// has buttons.
+// has buttons. An owner-first request (OwnerFirst) has no access ticket: what
+// it asks is its owner's to say, and their notice offers no access to give.
 func (service *Service) ConsentTickets(ctx context.Context, requestID, noticeID string) (ConsentTickets, error) {
 	if service.tickets == nil {
 		return ConsentTickets{}, fmt.Errorf("%w: no ticket key is set", ErrConsentUnavailable)
@@ -289,6 +290,9 @@ func (service *Service) ConsentTickets(ctx context.Context, requestID, noticeID 
 		{TicketConsent, ChoiceSummary, &made.Summary}, {TicketConsent, ChoiceAccess, &made.Access}, {TicketConsent, ChoiceDeny, &made.Deny},
 		{TicketReply, StatusPending, &made.Reply},
 	} {
+		if button.choice == ChoiceAccess && OwnerFirst(request) {
+			continue
+		}
 		ticket, err := service.tickets.Mint(TicketClaims{
 			RequestID: request.ID, OwnerUserID: request.Target.UserID, NoticeID: noticeID,
 			Kind: button.kind, Choice: button.choice, ExpiresAt: request.ExpiresAt,

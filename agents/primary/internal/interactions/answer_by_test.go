@@ -204,3 +204,42 @@ func TestARequestJSONSaysWhoAnswersOnlyOnceItIsKept(t *testing.T) {
 		}
 	}
 }
+
+// TestAnOwnerFirstAskHasNoAccessTicket: the notice of an ask that needs its
+// owner's own answer offers no access, so the ledger mints no ticket for it;
+// every other ask's notice has all four.
+func TestAnOwnerFirstAskHasNoAccessTicket(t *testing.T) {
+	for answerBy, access := range map[string]bool{"": true, AnswerByAgent: true, AnswerByOwner: false} {
+		service, repo := slackReplyService(t)
+		request := slackRequest("irq_slack")
+		request.AnswerBy = answerBy
+		repo.requests[request.ID] = request
+		tickets, err := service.ConsentTickets(context.Background(), request.ID, "ntc_1")
+		if err != nil {
+			t.Fatalf("answer_by %q: %v", answerBy, err)
+		}
+		if (tickets.Access != "") != access || tickets.Summary == "" || tickets.Deny == "" || tickets.Reply == "" {
+			t.Errorf("answer_by %q: tickets %+v, want an access ticket: %t", answerBy, tickets, access)
+		}
+	}
+}
+
+// TestTheBusIsToldWhoAnswers: a request's events carry answer_by as it was
+// judged, and none for a request made before it was kept.
+func TestTheBusIsToldWhoAnswers(t *testing.T) {
+	for _, answerBy := range []string{"", AnswerByAgent, AnswerByOwner} {
+		request := slackRequest("irq_slack")
+		request.AnswerBy = answerBy
+		event := changed(request)
+		if event.AnswerBy != answerBy {
+			t.Errorf("answer_by %q: the event says %q", answerBy, event.AnswerBy)
+		}
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "answer_by") != (answerBy != "") {
+			t.Errorf("answer_by %q encodes as %s", answerBy, encoded)
+		}
+	}
+}

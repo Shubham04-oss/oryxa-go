@@ -998,8 +998,12 @@ the request needs.
   yourself and Deny work as for any request.
 - **The owner's Slack notice leads with Reply yourself**, then Let my agent
   answer and Deny, with no Allow for 1 hour; surfaces sends apps'
-  `owner_notice` `answer_by: "owner"`. The asker's side is unchanged: the web
-  reads `answer_by` and the status to say whom it waits for.
+  `owner_notice` `answer_by: "owner"`, and the ledger mints no access ticket
+  for it. The asker's side is unchanged: the web reads `answer_by` and the
+  status to say whom it waits for.
+- **On the bus** every `agents.interaction.*.v1` event carries `answer_by`
+  (absent for older requests, read as `"agent"`), so a consumer never takes
+  an owner-first request for one an agent may decide.
 
 ### Answer guard
 
