@@ -53,6 +53,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/kmscall"
 )
 
 // ErrUnverified means an event's signature is missing, malformed, not the
@@ -240,7 +242,9 @@ func (signer *KMSSigner) Sign(source, detailType, eventID string, version int, o
 	// a verifier ages the signature by is the field the signature covers.
 	signedAt := signer.now().Unix()
 	sum := sha256.Sum256(canonical(source, detailType, eventID, version, occurredAt, signedAt, data))
-	output, err := signer.Client.Sign(context.Background(), &kms.SignInput{
+	ctx, cancel := kmscall.Context(context.Background())
+	defer cancel()
+	output, err := signer.Client.Sign(ctx, &kms.SignInput{
 		KeyId:            &signer.KeyID,
 		Message:          sum[:],
 		MessageType:      types.MessageTypeDigest,
@@ -469,7 +473,9 @@ func (verifier *Verifier) key(service string) (*ecdsa.PublicKey, error) {
 	if !ok {
 		return nil, fmt.Errorf("no key configured for %s", service)
 	}
-	output, err := verifier.kms.Client.GetPublicKey(context.Background(), &kms.GetPublicKeyInput{KeyId: &keyID})
+	ctx, cancel := kmscall.Context(context.Background())
+	defer cancel()
+	output, err := verifier.kms.Client.GetPublicKey(ctx, &kms.GetPublicKeyInput{KeyId: &keyID})
 	if err != nil {
 		return nil, err
 	}
