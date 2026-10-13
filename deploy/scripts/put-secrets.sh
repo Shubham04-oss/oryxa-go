@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Copies the secrets an operator holds into Secrets Manager, where the tasks
-# read them: COMPOSIO_API_KEY, and TYPESAFE_API_KEY, REALTIME_PURGE_SECRET,
-# APPS_DEFAULT_OAUTH_CLIENTS and APPS_HOOK_SECRETS when they are set, from the
+# read them: COMPOSIO_API_KEY, and TYPESAFE_API_KEY, the three PIPEDREAM_
+# values, REALTIME_PURGE_SECRET, APPS_DEFAULT_OAUTH_CLIENTS and
+# APPS_HOOK_SECRETS when they are set, from the
 # environment or the repository's .env; the last two, Oryxa's own sign-in's,
 # may also be typed at a hidden prompt. So may the Slack app's values,
 # APPS_SLACK_APP (the Client ID, Client Secret and Signing Secret, stored as
@@ -52,6 +53,16 @@ if [[ -n "$(value_of TYPESAFE_API_KEY)" ]]; then
   value_of TYPESAFE_API_KEY | put_secret "$(secret_id typesafe-api-key)"
   step "stored TYPESAFE_API_KEY"
 fi
+
+# Pipedream Connect's OAuth client and project (internal/pipedream), each
+# stored when it is set and skipped when it is not: nothing needs them until
+# pipedream_ready is on. Their containers exist whatever it says.
+for variable in PIPEDREAM_CLIENT_ID PIPEDREAM_CLIENT_SECRET PIPEDREAM_PROJECT_ID; do
+  if [[ -n "$(value_of "$variable")" ]]; then
+    value_of "$variable" | put_secret "$(secret_id "$(tr '[:upper:]_' '[:lower:]-' <<<"$variable")")"
+    step "stored $variable"
+  fi
+done
 
 # Realtime signs every purge it asks the web app's Worker for with this, and
 # checks the Worker's events with it; the Worker holds the same 64
