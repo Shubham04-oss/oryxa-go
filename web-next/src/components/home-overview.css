@@ -204,3 +204,233 @@
     padding: 14px;
   }
 }
+
+/* Today (DESIGN.md §3): naked sections, no cards. Briefs from the member's
+   apps and the teammates who need them side by side at the top, the composer
+   and their tools in the middle, their own stack underneath. */
+.home-today {
+  width: min(880px, calc(100% - 48px));
+  gap: 0;
+  margin-top: 36px;
+}
+.home-top,
+.home-stack {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 28px 48px;
+  align-items: start;
+}
+.home-stack {
+  margin-top: 44px;
+  padding-top: 28px;
+  border-top: 1px solid var(--border-quiet);
+}
+.home-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.home-column-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.home-column-head h2 {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.home-column-head div {
+  display: flex;
+  gap: 14px;
+}
+.home-column-head button,
+.home-more {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.home-more {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.home-column-head button:not(:disabled):hover,
+.home-more:not(:disabled):hover {
+  color: var(--text);
+}
+.home-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -10px;
+  padding: 0;
+  list-style: none;
+}
+.home-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+}
+button.home-item:not(:disabled):hover,
+div.home-item:hover {
+  background: var(--hover);
+}
+.home-item-mark {
+  display: grid;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+}
+.home-item-mark .workspace-avatar {
+  width: 26px;
+  height: 26px;
+}
+.home-item-mark .workspace-tool-logo {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.home-item-mark .workspace-tool-logo svg,
+.home-item-mark .workspace-tool-logo img {
+  width: 15px;
+  height: 15px;
+}
+.home-item-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.home-item-copy > span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.home-item-copy strong {
+  font-weight: 600;
+}
+.home-item-copy small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-item-copy .home-work-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.home-item-action {
+  flex: none;
+  align-self: center;
+  padding: 5px 12px;
+  border: 1px solid var(--border-quiet);
+  border-radius: 999px;
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+}
+.home-item-action:not(:disabled):hover {
+  border-color: var(--border-strong);
+}
+.home-compose {
+  width: min(600px, 100%);
+  margin: 44px auto 0;
+}
+.home-tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 8px;
+  margin-top: 14px;
+}
+.home-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 4px;
+  border: 1px solid var(--border-quiet);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+.home-tool .workspace-tool-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+}
+.home-tool .workspace-tool-logo svg,
+.home-tool .workspace-tool-logo img {
+  width: 12px;
+  height: 12px;
+}
+.home-tool-connect {
+  padding: 5px 12px;
+  border-style: dashed;
+  color: var(--text-muted);
+}
+.home-tool:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.home-tools > .home-quiet {
+  flex-basis: 100%;
+  text-align: center;
+}
+.home-setup-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin: 36px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.home-setup-line button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-soft);
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.home-setup-line button:not(:disabled):hover {
+  color: var(--text);
+}
+@media (max-width: 800px) {
+  .home-today {
+    width: calc(100% - 32px);
+    margin-top: 20px;
+  }
+  .home-top,
+  .home-stack {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .home-compose {
+    margin-top: 32px;
+  }
+}

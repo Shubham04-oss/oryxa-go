@@ -9,14 +9,20 @@ import {
 import { useHydrated } from "@tanstack/react-router"
 import { ThinkingOrb } from "thinking-orbs"
 import { AgentComposer } from "./agent-composer"
-import { RequestCard } from "./request-card"
-import { activitySentence, repliedRequestIds } from "./requests-activity-format"
-import {
-  activityQueryOptions,
-  refreshRequests,
-  usePeopleNames,
-} from "./requests-view-queries"
+import { firstName } from "./people-format"
+import { personIdentity } from "./teamspace-format"
+import { originLabel } from "./request-card-format"
+import { refreshRequests, usePeopleNames } from "./requests-view-queries"
 import { clockTime } from "./direct-message-format"
+import {
+  agentFilesOf,
+  agoPhrase,
+  briefsOf,
+  scheduleWords,
+} from "./today-format"
+import { ToolkitLogo } from "./workspace-tool-logo"
+import { toolkitIcon } from "./workspace-tools-data"
+import { IdentityAvatar } from "./workspace-avatar"
 import { ApiError } from "@/lib/api/client"
 import {
   AGENT_REQUESTS_POLL_MS,
@@ -24,7 +30,9 @@ import {
   agentRequestsQueryOptions,
 } from "@/lib/agents/queries"
 import { isUnavailableHere } from "@/lib/agents/policy"
-import { isOwnerWritten, revokeAgentLease } from "@/lib/agents/agent-requests"
+import { needsOwnerReply, revokeAgentLease } from "@/lib/agents/agent-requests"
+import { agentWorkflowsQueryOptions } from "@/lib/agents/queries"
+import { connectionsQueryOptions, toolkitName } from "@/lib/apps/client"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
 import { getAgentGrant } from "@/lib/auth/settings"
 import { slackKeys } from "@/lib/apps/slack"
@@ -32,6 +40,7 @@ import { corporaQueryOptions } from "@/lib/rag/client"
 import {
   retryUnlessRefused,
   threadApprovalQueryOptions,
+  threadDetailQueryOptions,
   threadListQueryOptions,
 } from "@/lib/threads/client"
 import { pendingConfirmationIds } from "@/lib/threads/timeline"
@@ -42,6 +51,11 @@ import { authorizedData, homeRead } from "@/lib/home/queries"
 import "./home-overview.css"
 
 const requestLimit = 100
+
+/** An app as its brand writes it ("GitHub"), else as the catalog does. */
+function appName(toolkit: string): string {
+  return toolkitIcon(toolkit)?.title || toolkitName(toolkit)
+}
 
 /** Only owner decisions and held-answer reviews actually wait on this member. */
 function waitsOnMember(request: AgentRequest, viewerId: string, now: number) {
@@ -86,15 +100,6 @@ function ReadNotice({ name, query }: { name: string; query: ReadState }) {
   return null
 }
 
-function relativeTime(timestamp: string) {
-  const time = Date.parse(timestamp)
-  if (!Number.isFinite(time)) return "Recent conversation"
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  }).format(time)
-}
-
 function conversationTitle(title?: string) {
   return title?.trim() ?? ""
 }
@@ -131,6 +136,7 @@ function HomeDesk({
   onOpenRequests,
   onOpenAgent,
   onOpenConversation,
+  onOpenTools,
   onOpenKnowledge,
   onOpenSlack,
   onOpenAccount,
@@ -149,17 +155,29 @@ function HomeDesk({
     ...homeRead(agentRequestsQueryOptions(org, "inbox", requestLimit), viewer),
     ...poll,
   })
-  const sent = useQuery({
-    ...homeRead(agentRequestsQueryOptions(org, "sent", requestLimit), viewer),
-    ...poll,
-  })
-  const activity = useQuery({
-    ...homeRead(activityQueryOptions(org, requestLimit), viewer),
-    ...poll,
-  })
   const threads = useQuery({
     ...homeRead(threadListQueryOptions(org, viewer), viewer),
     ...poll,
+  })
+  // The thread Krude writes in when the member's apps report something: the
+  // briefs. The list already holds it (Go answers every origin).
+  const updatesThreadId = (authorizedData(threads) ?? []).find(
+    (thread) => thread.origin === "wakeup"
+  )?.id
+  const updates = useQuery({
+    ...homeRead(threadDetailQueryOptions(org, updatesThreadId ?? ""), viewer),
+    enabled: enabled && Boolean(updatesThreadId),
+    refetchInterval: 30_000,
+  })
+  const connections = useQuery({
+    ...homeRead(connectionsQueryOptions(org), viewer),
+    enabled,
+    refetchInterval: 60_000,
+  })
+  const workflows = useQuery({
+    ...homeRead(agentWorkflowsQueryOptions(org), viewer),
+    enabled,
+    refetchInterval: 60_000,
   })
   const corpora = useQuery({
     ...homeRead(corporaQueryOptions(org), viewer),
@@ -252,17 +270,8 @@ function HomeDesk({
     },
   })
   const inboxRows = authorizedData(inbox) ?? []
-  const sentRows = (authorizedData(sent) ?? []).filter(
-    (request) => request.requester.user_id === viewer
-  )
   const waitingRequests = inboxRows.filter((request) =>
     waitsOnMember(request, viewer, now)
-  )
-  const sharedAnswers = inboxRows.filter(
-    (request) =>
-      request.target.user_id === viewer &&
-      request.status === "completed" &&
-      Boolean(request.result)
   )
   const conversations = chatHistory(authorizedData(threads) ?? [])
   // ADK stores confirmations in events, not reliable session metadata. Never
@@ -327,72 +336,49 @@ function HomeDesk({
       .map((thread) => ({
         threadId: thread.id,
         title: conversationTitle(thread.title),
-        detail: relativeTime(thread.updated_at),
+        detail: agoPhrase(thread.updated_at, now),
         running: false,
       })),
   ].slice(0, 3)
   const people = usePeopleNames(org, viewer, enabled)
-  const sharedIds = new Set(
-    sharedAnswers.slice(0, 3).map((request) => request.id)
+  const nameOf = (userId: string, fallback?: string) =>
+    people.nameOf(userId) || fallback?.trim() || "A teammate"
+
+  const updatesDetail = authorizedData(updates)
+  const briefs = updatesDetail ? briefsOf(updatesDetail) : []
+  const agentFiles = agentFilesOf(
+    confirmations.map((query) => authorizedData(query))
   )
-  const activityRows = authorizedData(activity) ?? []
-  // Answers the member gave in their own words are not "their agent's".
-  const replied = repliedRequestIds(activityRows)
-  const sharedActivity = activityRows
-    .filter(
-      (entry) =>
-        entry.role === "owner" &&
-        entry.kind === "answered" &&
-        entry.status === "completed" &&
-        entry.request_id &&
-        !sharedIds.has(entry.request_id)
-    )
-    .filter(
-      (entry, index, rows) =>
-        rows.findIndex((row) => row.request_id === entry.request_id) === index
-    )
+  const tools = [
+    ...new Set(
+      (authorizedData(connections) ?? [])
+        .filter((connection) => connection.status === "active")
+        .map((connection) => connection.toolkit)
+    ),
+  ]
+  const workflowRows = (authorizedData(workflows) ?? [])
+    .filter((workflow) => workflow.owner_user_id === viewer)
     .slice(0, 3)
-  const ownerReplied =
-    sharedAnswers.slice(0, 3).some(isOwnerWritten) ||
-    sharedActivity.some(
-      (entry) => entry.request_id && replied.has(entry.request_id)
-    )
-  const slackStatus = authorizedData(slack)
   const corpusRows = authorizedData(corpora)
+  const knowledgeRows = [...(corpusRows ?? [])]
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+    .slice(0, 3)
+
+  const slackStatus = authorizedData(slack)
   const agentGrant = authorizedData(grant)
   const setup = [
-    ...(slackStatus && slackStatus.status !== "active"
-      ? [
-          {
-            id: "slack",
-            title: "Connect Slack",
-            detail: slackStatus.can_manage
-              ? "Bring requests from your workspace into Oryxa."
-              : "Ask a workspace admin to connect Slack.",
-            open: slackStatus.can_manage ? onOpenSlack : undefined,
-            action: "Connect",
-          },
-        ]
+    ...(slackStatus && slackStatus.status !== "active" && slackStatus.can_manage
+      ? [{ id: "slack", title: "Connect Slack", open: onOpenSlack }]
       : []),
     ...(corpusRows && !corpusRows.some((base) => base.document_count > 0)
-      ? [
-          {
-            id: "knowledge",
-            title: "Add knowledge",
-            detail: "Give your agent something to look up.",
-            open: onOpenKnowledge,
-            action: "Add",
-          },
-        ]
+      ? [{ id: "knowledge", title: "Add knowledge", open: onOpenKnowledge }]
       : []),
     ...(agentGrant && !agentGrant.granted
       ? [
           {
             id: "grant",
-            title: "Enable background access",
-            detail: "Let your agent handle approved work while you’re away.",
+            title: "Turn on background access",
             open: onOpenAccount,
-            action: "Open Account",
           },
         ]
       : []),
@@ -407,58 +393,299 @@ function HomeDesk({
   )
   const completeConfirmationCoverage =
     threads.isSuccess && !outsideConfirmationCoverage && freshConfirmations
-  const settled = [
-    inbox,
-    sent,
-    activity,
-    threads,
-    leases,
-    corpora,
-    slack,
-    grant,
-  ].every((query) => query.isSuccess && !query.isFetching)
+  const settled = [inbox, threads, leases].every(
+    (query) => query.isSuccess && !query.isFetching
+  )
   const canSayQuiet =
     settled &&
     inboxRows.length < requestLimit &&
     completeConfirmationCoverage &&
     !needsMember
-  const hasDeskWork =
-    needsMember ||
-    activeLeases.length > 0 ||
-    sentRows.length > 0 ||
-    sharedAnswers.length > 0 ||
-    sharedActivity.length > 0
-  const requestCard = (request: AgentRequest) => (
-    <RequestCard
-      key={request.id}
-      organizationId={org}
-      viewerId={viewer}
-      request={request}
-    />
-  )
 
   return (
-    <div className="home-overview">
-      <section className="home-card home-agent" aria-label="Your agent">
-        <header>
-          <h2>Your agent</h2>
-          <div>
-            <button
-              type="button"
-              disabled={!onNewChat}
-              onClick={() => onNewChat?.()}
-            >
-              New chat
-            </button>
-            <button
-              type="button"
-              onClick={onOpenAgent}
-              aria-label="All conversations"
-            >
-              All
-            </button>
-          </div>
-        </header>
+    <div className="home-overview home-today">
+      {enabled && (
+        <div className="home-top">
+          <section className="home-column" aria-labelledby="home-briefs">
+            <header className="home-column-head">
+              <h2 id="home-briefs">From your apps</h2>
+              {updatesThreadId && (
+                <button
+                  type="button"
+                  disabled={!onOpenConversation}
+                  onClick={() => onOpenConversation?.(updatesThreadId)}
+                >
+                  All updates
+                </button>
+              )}
+            </header>
+            {updatesThreadId && <ReadNotice name="updates" query={updates} />}
+            {briefs.length > 0 ? (
+              <ul className="home-list">
+                {briefs.map((brief) => (
+                  <li key={brief.key}>
+                    <button
+                      type="button"
+                      className="home-item"
+                      disabled={!onOpenConversation}
+                      onClick={() =>
+                        updatesThreadId && onOpenConversation?.(updatesThreadId)
+                      }
+                    >
+                      <span className="home-item-mark">
+                        {brief.toolkits[0] ? (
+                          <ToolkitLogo
+                            toolkit={{
+                              toolkit: brief.toolkits[0],
+                              name: appName(brief.toolkits[0]),
+                            }}
+                          />
+                        ) : null}
+                      </span>
+                      <span className="home-item-copy">
+                        <span>{brief.text}</span>
+                        <small>
+                          {[
+                            brief.toolkits.map(appName).join(", "),
+                            agoPhrase(brief.at, now),
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </small>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              (!updatesThreadId || updates.isSuccess) &&
+              threads.isSuccess && (
+                <p className="home-quiet">
+                  {connections.isSuccess && tools.length === 0
+                    ? "Connect a tool and its news lands here."
+                    : "No updates from your apps yet."}
+                </p>
+              )
+            )}
+          </section>
+
+          <section className="home-column" aria-labelledby="home-teammates">
+            <header className="home-column-head">
+              <h2 id="home-teammates">Teammates</h2>
+              {waitingRequests.length > 0 && (
+                <button type="button" onClick={() => onOpenRequests()}>
+                  All requests
+                </button>
+              )}
+            </header>
+            <ReadNotice name="requests" query={inbox} />
+            {(needsMember || activeLeases.length > 0) && (
+              <ul className="home-list" aria-label="Needs you">
+                {waitingRequests.slice(0, 4).map((request) => {
+                  const asker = nameOf(
+                    request.requester.user_id,
+                    request.requester.user_display_name ||
+                      request.requester.user_email
+                  )
+                  const review = request.status === "review"
+                  const reply = !review && needsOwnerReply(request)
+                  return (
+                    <li key={request.id}>
+                      <div className="home-item">
+                        <span className="home-item-mark">
+                          <IdentityAvatar
+                            identity={personIdentity(
+                              request.requester.user_id,
+                              asker
+                            )}
+                          />
+                        </span>
+                        <span className="home-item-copy">
+                          <span>
+                            <strong>{firstName(asker)}</strong>{" "}
+                            {request.task.trim() || request.purpose.trim()}
+                          </span>
+                          <small>
+                            {review
+                              ? "Your agent’s answer is held for you"
+                              : reply
+                                ? "Needs your own reply"
+                                : "Waiting for your OK"}{" "}
+                            · {originLabel(request)} ·{" "}
+                            {agoPhrase(request.created_at, now)}
+                          </small>
+                        </span>
+                        <button
+                          type="button"
+                          className="home-item-action"
+                          aria-label={`${review ? "Review" : reply ? "Reply to" : "Decide on"} ${firstName(asker)}’s request`}
+                          onClick={() => onOpenRequests(request.id)}
+                        >
+                          {review ? "Review" : reply ? "Reply" : "Decide"}
+                        </button>
+                      </div>
+                    </li>
+                  )
+                })}
+                {waitingChats.map((chat) => (
+                  <li key={chat.id}>
+                    <div className="home-item">
+                      <span className="home-item-mark">
+                        <ThinkingOrb
+                          size={20}
+                          state="listening"
+                          aria-hidden="true"
+                        />
+                      </span>
+                      <span className="home-item-copy">
+                        <span>
+                          <strong>Your agent</strong> is waiting in {chat.title}
+                        </span>
+                        <small>
+                          {chat.pending > 0
+                            ? `${chat.pending} tool confirmation${chat.pending === 1 ? "" : "s"}`
+                            : "Needs confirmation"}
+                        </small>
+                      </span>
+                      <button
+                        type="button"
+                        className="home-item-action"
+                        disabled={!onOpenConversation}
+                        onClick={() => onOpenConversation?.(chat.id)}
+                      >
+                        Open
+                      </button>
+                    </div>
+                  </li>
+                ))}
+                {waitingWithoutId && (
+                  <li>
+                    <p className="home-quiet" role="status">
+                      Your current conversation needs confirmation. It will open
+                      when it is ready.
+                    </p>
+                  </li>
+                )}
+                {activeLeases
+                  .slice(0, showAccess ? undefined : 3)
+                  .map((lease) => {
+                    const owner =
+                      lease.role === "owner" && lease.owner_user_id === viewer
+                    const otherId = owner
+                      ? lease.asker_user_id
+                      : lease.owner_user_id
+                    const name = nameOf(otherId)
+                    return (
+                      <li key={lease.id}>
+                        <div className="home-item">
+                          <span className="home-item-mark">
+                            <IdentityAvatar
+                              identity={personIdentity(otherId, name)}
+                            />
+                          </span>
+                          <span className="home-item-copy">
+                            <span>
+                              {owner ? (
+                                <>
+                                  <strong>{firstName(name)}</strong> can ask
+                                  your agent
+                                </>
+                              ) : (
+                                <>
+                                  You can ask <strong>{firstName(name)}</strong>
+                                  ’s agent
+                                </>
+                              )}
+                            </span>
+                            <small>
+                              In one Slack thread · Until{" "}
+                              {clockTime(lease.expires_at)}
+                            </small>
+                          </span>
+                          {owner && lease.can_revoke && (
+                            <button
+                              className="home-item-action"
+                              type="button"
+                              disabled={endAccess.isPending}
+                              onClick={() => endAccess.mutate(lease.id)}
+                            >
+                              End access
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    )
+                  })}
+              </ul>
+            )}
+            {(activeLeases.length > 3 || leases.hasNextPage) && (
+              <button
+                className="home-more"
+                type="button"
+                disabled={leases.isFetchingNextPage}
+                onClick={() => {
+                  if (showAccess && leases.hasNextPage)
+                    void leases.fetchNextPage()
+                  else setShowAccess(!showAccess)
+                }}
+              >
+                {!showAccess
+                  ? "All access"
+                  : leases.hasNextPage
+                    ? leases.isFetchingNextPage
+                      ? "Loading access…"
+                      : "Load more access"
+                    : "Show less"}
+              </button>
+            )}
+            <ReadNotice name="open access" query={leases} />
+            {leaseProblem && (
+              <p className="home-quiet" role="alert">
+                {leaseProblem}
+              </p>
+            )}
+            {waitingRequests.length > 4 && (
+              <p className="home-quiet">
+                {waitingRequests.length - 4} more waiting in Requests.
+              </p>
+            )}
+            {checkedIds.map((id, index) => (
+              <ReadNotice
+                key={id}
+                name="tool confirmations"
+                query={confirmations[index]}
+              />
+            ))}
+            {threads.isSuccess &&
+              (outsideConfirmationCoverage || !freshConfirmations) && (
+                <p className="home-quiet">
+                  Tool confirmations are limited to your{" "}
+                  {checkedChats.length === 5 ? "five" : checkedChats.length}{" "}
+                  newest chat{checkedChats.length === 1 ? "" : "s"}
+                  {openThreadId ? " and the open chat" : ""}.{" "}
+                  {outsideConfirmationCoverage
+                    ? "Older chats may still need you."
+                    : "The check is not complete."}
+                  <button type="button" onClick={onOpenAgent}>
+                    All conversations
+                  </button>
+                </p>
+              )}
+            {inboxRows.length >= requestLimit && (
+              <p className="home-quiet">
+                Only the latest {requestLimit} requests were checked.
+              </p>
+            )}
+            {canSayQuiet && activeLeases.length === 0 && (
+              <p className="home-quiet home-empty">
+                Nothing needs you right now.
+              </p>
+            )}
+          </section>
+        </div>
+      )}
+
+      <section className="home-compose" aria-label="Your agent">
         <AgentComposer
           label="Start a new conversation"
           placeholder="Ask your agent…"
@@ -477,305 +704,249 @@ function HomeDesk({
             setDraft("")
           }}
         />
-        {enabled && <ReadNotice name="conversations" query={threads} />}
-        {agentWork.length > 0 && (
-          <ul className="home-recents" aria-label="Recent conversations">
-            {agentWork.map((work) => (
-              <li key={work.threadId ?? "starting"} className="home-row">
-                {work.threadId === null ? (
-                  <div role="status">
-                    <span>{work.title}</span>
-                    <small className="home-work-status">
-                      <ThinkingOrb
-                        size={20}
-                        state="working"
-                        aria-hidden="true"
-                      />
-                      {work.detail}
-                    </small>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={!onOpenConversation}
-                    onClick={() => {
-                      if (work.threadId) onOpenConversation?.(work.threadId)
-                    }}
-                  >
-                    <span>{work.title}</span>
-                    <small
-                      className={work.running ? "home-work-status" : undefined}
-                    >
-                      {work.running && (
-                        <ThinkingOrb
-                          size={20}
-                          state="working"
-                          aria-hidden="true"
-                        />
-                      )}
-                      {work.detail}
-                    </small>
-                  </button>
-                )}
-              </li>
+        {enabled && (
+          <div className="home-tools" aria-label="Your tools">
+            {tools.map((toolkit) => (
+              <button
+                key={toolkit}
+                type="button"
+                className="home-tool"
+                onClick={onOpenTools}
+              >
+                <ToolkitLogo toolkit={{ toolkit, name: appName(toolkit) }} />
+                <span>{appName(toolkit)}</span>
+              </button>
             ))}
-          </ul>
+            {connections.isSuccess && (
+              <button
+                type="button"
+                className="home-tool home-tool-connect"
+                onClick={onOpenTools}
+              >
+                {tools.length > 0 ? "+ Connect" : "Connect your tools"}
+              </button>
+            )}
+            <ReadNotice name="your tools" query={connections} />
+          </div>
         )}
       </section>
+
       {enabled && (
-        <>
-          <ReadNotice name="requests" query={inbox} />
-          {needsMember && (
-            <section className="home-card home-needs" aria-label="Needs you">
-              <header>
-                <h2>Needs you</h2>
-                {waitingRequests.length > 0 && (
-                  <button type="button" onClick={() => onOpenRequests()}>
-                    All requests
-                  </button>
-                )}
-              </header>
-              {waitingRequests.slice(0, 3).map(requestCard)}
-              {waitingChats.length > 0 && (
-                <ul aria-label="Tool confirmations">
-                  {waitingChats.map((chat) => (
-                    <li key={chat.id} className="home-row">
-                      <button
-                        type="button"
-                        disabled={!onOpenConversation}
-                        onClick={() => onOpenConversation?.(chat.id)}
-                      >
-                        <span>{chat.title}</span>
-                        <small>
-                          {chat.pending > 0
-                            ? `${chat.pending} tool confirmation${chat.pending === 1 ? "" : "s"}`
-                            : "Needs confirmation"}{" "}
-                          · Open chat to decide
-                        </small>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {waitingWithoutId && (
-                <p className="home-quiet" role="status">
-                  Your current conversation needs confirmation. It will open
-                  when it is ready.
-                </p>
-              )}
-              {waitingRequests.length > 3 && (
-                <p className="home-quiet">
-                  {waitingRequests.length - 3} more request
-                  {waitingRequests.length === 4 ? "" : "s"} need
-                  {waitingRequests.length === 4 ? "s" : ""} you. Open All
-                  requests to decide.
-                </p>
-              )}
-            </section>
-          )}
-          {checkedIds.map((id, index) => (
-            <ReadNotice
-              key={id}
-              name="tool confirmations"
-              query={confirmations[index]}
-            />
-          ))}
-          {threads.isSuccess &&
-            (outsideConfirmationCoverage || !freshConfirmations) && (
-              <p className="home-quiet">
-                Tool confirmations are limited to your{" "}
-                {checkedChats.length === 5 ? "five" : checkedChats.length}{" "}
-                newest chat{checkedChats.length === 1 ? "" : "s"}
-                {openThreadId ? " and the open chat" : ""}.{" "}
-                {outsideConfirmationCoverage
-                  ? "Older chats may still need you."
-                  : "The check is not complete."}
-                <button type="button" onClick={onOpenAgent}>
-                  All conversations
-                </button>
-              </p>
-            )}
-          {inboxRows.length >= requestLimit && (
-            <p className="home-quiet">
-              Only the latest {requestLimit} requests were checked.
-            </p>
-          )}
-          <ReadNotice name="open access" query={leases} />
-          {(activeLeases.length > 0 ||
-            (leases.isSuccess && leases.hasNextPage)) && (
-            <section className="home-card" aria-label="Open access">
-              <header>
-                <h2>Open access</h2>
-                {(activeLeases.length > 3 || leases.hasNextPage) && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAccess(!showAccess)}
-                  >
-                    {showAccess ? "Show less" : "All access"}
-                  </button>
-                )}
-              </header>
-              <ul>
-                {(showAccess ? activeLeases : activeLeases.slice(0, 3)).map(
-                  (lease) => {
-                    const owner =
-                      lease.role === "owner" && lease.owner_user_id === viewer
-                    const name =
-                      people.nameOf(
-                        owner ? lease.asker_user_id : lease.owner_user_id
-                      ) || "A teammate"
-                    return (
-                      <li key={lease.id} className="home-row home-access-row">
-                        <div>
-                          <span>
-                            {owner
-                              ? `${name} can ask your agent`
-                              : `You can ask ${name}’s agent`}
-                          </span>
-                          <small>
-                            In one Slack thread · Until{" "}
-                            {clockTime(lease.expires_at)}
-                          </small>
-                        </div>
-                        {owner && lease.can_revoke && (
-                          <button
-                            className="workspace-agent-pill"
-                            type="button"
-                            disabled={endAccess.isPending}
-                            onClick={() => endAccess.mutate(lease.id)}
-                          >
-                            End access
-                          </button>
-                        )}
-                      </li>
-                    )
-                  }
-                )}
-              </ul>
-              {showAccess && leases.hasNextPage && (
+        <div className="home-stack">
+          <section className="home-column" aria-labelledby="home-conversations">
+            <header className="home-column-head">
+              <h2 id="home-conversations">Conversations</h2>
+              <div>
                 <button
-                  className="workspace-agent-text-button"
                   type="button"
-                  disabled={leases.isFetchingNextPage}
-                  onClick={() => void leases.fetchNextPage()}
+                  disabled={!onNewChat}
+                  onClick={() => onNewChat?.()}
                 >
-                  {leases.isFetchingNextPage
-                    ? "Loading access…"
-                    : "Load more access"}
+                  New chat
                 </button>
-              )}
-            </section>
-          )}
-          {leaseProblem && (
-            <p className="home-quiet" role="alert">
-              {leaseProblem}
-            </p>
-          )}
-          <ReadNotice name="your requests" query={sent} />
-          <ReadNotice name="shared activity" query={activity} />
-          {(sentRows.length > 0 ||
-            sharedAnswers.length > 0 ||
-            sharedActivity.length > 0) && (
-            <section
-              className="home-card home-shared"
-              aria-label="Your requests and shared answers"
-            >
-              <header>
-                <h2>Your requests &amp; shared answers</h2>
-                <button type="button" onClick={() => onOpenRequests()}>
-                  All requests
+                <button
+                  type="button"
+                  onClick={onOpenAgent}
+                  aria-label="All conversations"
+                >
+                  All
                 </button>
-              </header>
-              {sentRows.length > 0 && (
-                <div className="home-request-group">
-                  <h3>You asked</h3>
-                  {sentRows.slice(0, 3).map(requestCard)}
-                </div>
-              )}
-              {(sharedAnswers.length > 0 || sharedActivity.length > 0) && (
-                <div className="home-request-group">
-                  <h3>{ownerReplied ? "Answers sent" : "Your agent shared"}</h3>
-                  {sharedAnswers.slice(0, 3).map(requestCard)}
-                  {sharedActivity.length > 0 && (
-                    <ul>
-                      {sharedActivity.map((entry) => (
-                        <li className="home-row" key={entry.request_id}>
-                          <button
-                            type="button"
-                            onClick={() => onOpenRequests(entry.request_id)}
-                          >
-                            <span>
-                              {activitySentence(
-                                entry,
-                                {
-                                  viewerId: viewer,
-                                  nameOf: people.nameOf,
-                                  now,
-                                },
-                                replied
-                              )}
-                            </span>
-                            <small>
-                              {relativeTime(entry.at)} · Open request
-                            </small>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-              {(sentRows.length >= requestLimit ||
-                (authorizedData(activity)?.length ?? 0) >= requestLimit) && (
-                <p className="home-quiet">
-                  Showing the latest requests and Slack activity. All requests
-                  has the full request view.
-                </p>
-              )}
-            </section>
-          )}
-          {canSayQuiet && (
-            <p className="home-quiet home-empty">
-              Nothing needs you right now.
-            </p>
-          )}
-          <ReadNotice name="Slack status" query={slack} />
-          <ReadNotice name="knowledge bases" query={corpora} />
-          <ReadNotice name="background access" query={grant} />
-          {setup.length > 0 && (
-            <section
-              className="home-card"
-              aria-label={
-                hasDeskWork ? "Finish setup" : "Set up your workspace"
-              }
-            >
-              <header>
-                <h2>
-                  {hasDeskWork ? "Finish setup" : "Set up your workspace"}
-                </h2>
-              </header>
-              <ul className="home-setup">
-                {setup.map((item) => (
-                  <li key={item.id} className="home-row home-setup-row">
-                    <div>
-                      <span>{item.title}</span>
-                      <small>{item.detail}</small>
-                    </div>
-                    {item.open && (
+              </div>
+            </header>
+            <ReadNotice name="conversations" query={threads} />
+            {agentWork.length > 0 ? (
+              <ul className="home-list" aria-label="Recent conversations">
+                {agentWork.map((work) => (
+                  <li key={work.threadId ?? "starting"}>
+                    {work.threadId === null ? (
+                      <div className="home-item" role="status">
+                        <span className="home-item-copy">
+                          <span>{work.title}</span>
+                          <small className="home-work-status">
+                            <ThinkingOrb
+                              size={20}
+                              state="working"
+                              aria-hidden="true"
+                            />
+                            {work.detail}
+                          </small>
+                        </span>
+                      </div>
+                    ) : (
                       <button
-                        className="workspace-agent-pill"
                         type="button"
-                        onClick={item.open}
+                        className="home-item"
+                        disabled={!onOpenConversation}
+                        onClick={() => {
+                          if (work.threadId) onOpenConversation?.(work.threadId)
+                        }}
                       >
-                        {item.action}
+                        <span className="home-item-copy">
+                          <span>{work.title}</span>
+                          <small
+                            className={
+                              work.running ? "home-work-status" : undefined
+                            }
+                          >
+                            {work.running && (
+                              <ThinkingOrb
+                                size={20}
+                                state="working"
+                                aria-hidden="true"
+                              />
+                            )}
+                            {work.detail}
+                          </small>
+                        </span>
                       </button>
                     )}
                   </li>
                 ))}
               </ul>
-            </section>
-          )}
-        </>
+            ) : (
+              threads.isSuccess && (
+                <p className="home-quiet">Your conversations land here.</p>
+              )
+            )}
+          </section>
+
+          <section className="home-column" aria-labelledby="home-knowledge">
+            <header className="home-column-head">
+              <h2 id="home-knowledge">Knowledge</h2>
+              <button type="button" onClick={onOpenKnowledge}>
+                All
+              </button>
+            </header>
+            <ReadNotice name="knowledge bases" query={corpora} />
+            {knowledgeRows.length > 0 ? (
+              <ul className="home-list">
+                {knowledgeRows.map((base) => (
+                  <li key={base.id}>
+                    <button
+                      type="button"
+                      className="home-item"
+                      onClick={onOpenKnowledge}
+                    >
+                      <span className="home-item-copy">
+                        <span>{base.name}</span>
+                        <small>
+                          {base.document_count} document
+                          {base.document_count === 1 ? "" : "s"} · Updated{" "}
+                          {agoPhrase(base.updated_at, now).replace(
+                            /^(Just|Yesterday)/,
+                            (word) => word.toLowerCase()
+                          )}
+                        </small>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              corpora.isSuccess && (
+                <p className="home-quiet">
+                  Nothing to look up yet.{" "}
+                  <button type="button" onClick={onOpenKnowledge}>
+                    Add knowledge
+                  </button>
+                </p>
+              )
+            )}
+          </section>
+
+          <section className="home-column" aria-labelledby="home-files">
+            <header className="home-column-head">
+              <h2 id="home-files">Files</h2>
+            </header>
+            {agentFiles.length > 0 ? (
+              <ul className="home-list">
+                {agentFiles.map((file) => (
+                  <li key={file.key}>
+                    <button
+                      type="button"
+                      className="home-item"
+                      disabled={!onOpenConversation}
+                      onClick={() => onOpenConversation?.(file.threadId)}
+                    >
+                      <span className="home-item-copy">
+                        <span>{file.name}</span>
+                        <small>
+                          {[
+                            conversationTitle(
+                              conversations.find(
+                                (chat) => chat.id === file.threadId
+                              )?.title
+                            ),
+                            agoPhrase(file.at, now),
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </small>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              confirmations.every((query) => query.isSuccess) && (
+                <p className="home-quiet">
+                  Files your agent makes in recent conversations land here.
+                </p>
+              )
+            )}
+          </section>
+
+          <section className="home-column" aria-labelledby="home-workflows">
+            <header className="home-column-head">
+              <h2 id="home-workflows">Recurring work</h2>
+            </header>
+            <ReadNotice name="recurring work" query={workflows} />
+            {workflowRows.length > 0 ? (
+              <ul className="home-list">
+                {workflowRows.map((workflow) => (
+                  <li key={workflow.id}>
+                    <div className="home-item">
+                      <span className="home-item-copy">
+                        <span>{workflow.name}</span>
+                        <small>
+                          {workflow.status === "disabled"
+                            ? "Paused"
+                            : workflow.schedule &&
+                                workflow.schedule.state === "enabled"
+                              ? scheduleWords(
+                                  workflow.schedule.expression,
+                                  workflow.schedule.timezone
+                                )
+                              : "Runs when you start it"}
+                        </small>
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              workflows.isSuccess && (
+                <p className="home-quiet">Nothing runs on a schedule yet.</p>
+              )
+            )}
+          </section>
+        </div>
+      )}
+
+      {/* Slack and background access only feed the setup line: a read that
+          failed or is not served here leaves its step out, quietly. */}
+      {enabled && setup.length > 0 && (
+        <p className="home-setup-line" aria-label="Finish setup">
+          <span>Finish setup:</span>
+          {setup.map((item, index) => (
+            <span key={item.id}>
+              {index > 0 && " · "}
+              <button type="button" disabled={!item.open} onClick={item.open}>
+                {item.title}
+              </button>
+            </span>
+          ))}
+        </p>
       )}
     </div>
   )

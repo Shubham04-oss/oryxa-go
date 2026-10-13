@@ -164,16 +164,15 @@ afterEach(() => {
 
 describe("Requests in the workspace shell", () => {
   it.each(["All", "row"])(
-    "opens Home's %s shortcut in Requests, selecting only a named shared-activity row",
+    "opens Home's %s shortcut in Requests, opening only the request a teammate row names",
     async (target) => {
       renderShell({ mode: "home" })
-      const card = await screen.findByRole("region", {
-        name:
-          target === "All" ? "Needs you" : "Your requests and shared answers",
+      const teammates = await screen.findByRole("region", {
+        name: "Teammates",
       })
       fireEvent.click(
-        within(card).getByRole("button", {
-          name: target === "All" ? "All requests" : /Your agent answered/,
+        await within(teammates).findByRole("button", {
+          name: target === "All" ? "All requests" : /^Decide on .*request$/,
         })
       )
 
@@ -185,8 +184,8 @@ describe("Requests in the workspace shell", () => {
         const opened = await screen.findByRole("region", {
           name: "Opened request",
         })
-        await within(opened).findByText(shared.task)
-        expect(within(opened).queryByText(waiting.task)).toBeNull()
+        await within(opened).findByText(waiting.task)
+        expect(within(opened).queryByText(shared.task)).toBeNull()
       } else {
         expect(
           screen.queryByRole("region", { name: "Opened request" })
