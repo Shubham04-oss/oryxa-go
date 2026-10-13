@@ -488,7 +488,11 @@ describe("a first message on its way", () => {
       agentChats.named(chatName("th_b")).sendMessage
     ).not.toHaveBeenCalled()
     expect(leoBox().value).toBe("")
-    expect(rememberedChoice(scope, primary.id)).toBe("th_b")
+    // The socket is made during render; the choice is saved in a passive
+    // effect that may flush after waitFor saw the socket.
+    await waitFor(() =>
+      expect(rememberedChoice(scope, primary.id)).toBe("th_b")
+    )
   })
 
   it("keeps the member from starting another conversation over it, until its conversation has it", async () => {
