@@ -25,6 +25,10 @@ const pipedreamCallbackPath = "/v1/apps/connect/pipedream/callback"
 // through Pipedream before its link stops working.
 const pipedreamTokenLifetime = 900 * time.Second
 
+// pipedreamClockSkew is how much older than its connection an account may
+// look and still be the one the member just made.
+const pipedreamClockSkew = 2 * time.Minute
+
 // everyStatus lists a member's connections whatever happened to them, so an
 // account recorded on any of them, even a removed one, is never claimed again.
 var everyStatus = []domain.ConnectionStatus{
@@ -145,12 +149,17 @@ func (s *Service) newPipedreamAccount(ctx context.Context, connection domain.Con
 			taken[other.PipedreamAccountID] = true
 		}
 	}
+	// Pipedream's clock and ours can disagree by a few seconds, so an account
+	// made just after the connect began may look older than the connection.
+	// The slack is safe: only this member's accounts for this app that no
+	// other connection records are candidates, and the newest one wins.
+	since := connection.CreatedAt.Add(-pipedreamClockSkew)
 	var newest PipedreamAccount
 	found := false
 	for _, account := range accounts {
 		if (account.ExternalUserID != "" && account.ExternalUserID != pipedreamUserID(connection)) ||
 			(account.App != "" && account.App != connection.Toolkit) ||
-			!account.CreatedAt.After(connection.CreatedAt) || taken[account.ID] {
+			!account.CreatedAt.After(since) || taken[account.ID] {
 			continue
 		}
 		if !found || account.CreatedAt.After(newest.CreatedAt) {

@@ -189,7 +189,7 @@ func TestPipedreamCallbackReadsTheAccountBack(t *testing.T) {
 	}
 	fake.accounts = []PipedreamAccount{
 		// Made before the connect began: an earlier attempt's.
-		{ID: "apn_before", ExternalUserID: memberUser, App: "linear", Name: "old@acme.test", CreatedAt: testClock.Add(-time.Minute)},
+		{ID: "apn_before", ExternalUserID: memberUser, App: "linear", Name: "old@acme.test", CreatedAt: testClock.Add(-10 * time.Minute)},
 		{ID: "apn_new", ExternalUserID: memberUser, App: "linear", Name: "ada@acme.test", CreatedAt: testClock.Add(time.Minute)},
 		{ID: "apn_recorded", ExternalUserID: memberUser, App: "linear", Name: "x@acme.test", CreatedAt: testClock.Add(2 * time.Minute)},
 		// Another member's, and another app's.
@@ -485,4 +485,23 @@ func jsonHas(t *testing.T, event domain.Event, field, value string) bool {
 
 func memberRemoved(memberID string) authv1.MemberRemoved {
 	return authv1.MemberRemoved{OrganizationID: "org_1", UserID: memberID}
+}
+
+func TestPipedreamCallbackToleratesClockSkew(t *testing.T) {
+	t.Parallel()
+	h, fake := pipedreamHarness(t)
+	connection, state := startPipedream(t, h, fake)
+	// Pipedream's clock runs a few seconds behind ours: the member's new
+	// account looks slightly older than the connection, and is still it.
+	fake.accounts = []PipedreamAccount{
+		{ID: "apn_skewed", ExternalUserID: memberUser, App: "linear", Name: "ada@acme.test", CreatedAt: testClock.Add(-5 * time.Second)},
+	}
+
+	completion, err := h.service.CompletePipedreamConnection(context.Background(), state, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := completion.Connection; got.ID != connection.ID || got.PipedreamAccountID != "apn_skewed" {
+		t.Fatalf("connection = %+v", got)
+	}
 }
