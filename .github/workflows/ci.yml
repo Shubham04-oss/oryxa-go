@@ -156,8 +156,10 @@ jobs:
           go test -count=1 -json ./... | tee "$RUNNER_TEMP/go-test.json" |
             jq -rj --unbuffered 'select(.Test == null and .Output != null and (.Output | test("^(PASS|FAIL)\\n$") | not)) | .Output' || status=$?
           if [ "$status" -ne 0 ]; then
-            jq -rjs '[.[] | select(.Test != null and .Action == "fail") | [.Package, .Test]] as $failed
-              | .[] | select(.Test != null and .Output != null and ([.Package, .Test] | IN($failed[]))) | .Output' \
+            # A test that never finished (a timeout's panic and goroutine dump
+            # land on it) has no pass, fail or skip, so it counts as failed.
+            jq -rjs '[.[] | select(.Test != null and (.Action == "pass" or .Action == "skip")) | [.Package, .Test]] as $passed
+              | .[] | select(.Test != null and .Output != null and ([.Package, .Test] | IN($passed[]) | not)) | .Output' \
               "$RUNNER_TEMP/go-test.json"
           fi
           exit "$status"
