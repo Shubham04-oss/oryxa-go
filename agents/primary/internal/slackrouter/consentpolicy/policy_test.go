@@ -259,6 +259,7 @@ func TestAnOwnerWhoDoesNotFitIsLeftOutWhoeverAsks(t *testing.T) {
 		OwnerNotMember: true, OwnerDepartment: true,
 		NotMember: false, GroupDM: false, ExternalChannel: false, NoOwner: false, TooManyAsks: false,
 		ScreenFailed: false, NotWork: false, Injection: false, Implausible: false, NoGrant: false,
+		NotLinked: false, OwnerNotLinked: false,
 	} {
 		if reason.AboutOneOwner() != want {
 			t.Errorf("%q.AboutOneOwner() = %v, want %v", reason, reason.AboutOneOwner(), want)
@@ -302,6 +303,7 @@ func TestReasonCodesAreTheContract(t *testing.T) {
 		ExternalChannel: "external_channel", NoOwner: "no_owner", TooManyAsks: "too_many_asks",
 		ScreenFailed: "screen_failed", NotWork: "not_work", Injection: "injection",
 		Implausible: "implausible", NoGrant: "no_grant", OwnerDepartment: "owner_department",
+		NotLinked: "not_linked", OwnerNotLinked: "owner_not_linked",
 	} {
 		if string(reason) != want {
 			t.Fatalf("reason %q, want %q", reason, want)

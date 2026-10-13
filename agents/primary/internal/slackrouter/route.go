@@ -72,6 +72,11 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 		return Permanent(errors.New("the message was written by a bot"))
 	}
 	router.logNotMember(ctx, job, "asker", asker)
+	if asker.NotLinked {
+		// Only a linked account asks: the asker is told to link theirs.
+		router.noteRefused(ctx, job, asker, consentpolicy.NotLinked)
+		return router.refuseAsk(ctx, job, mention, consentpolicy.NotLinked)
+	}
 
 	channel, err := router.channel(ctx, job, mention)
 	if err != nil {
@@ -255,6 +260,17 @@ func (router *Router) mention(ctx context.Context, job Job, inbound Inbound) err
 		"owners", len(asked), "bypassed", countBypassed(asked), "skipped", len(skipped))
 	if !router.deps.SkipAck {
 		router.acknowledge(ctx, job, mention, ask, asked)
+	}
+	// A named member whose Slack account is not linked is asked in Oryxa
+	// alone; the asker is told so, once for each.
+	for _, owner := range owners {
+		if !owner.NotLinked {
+			continue
+		}
+		if err := router.refuse(ctx, job, mention, owner.SlackUserID, RefusalParams{Reason: consentpolicy.OwnerNotLinked, UserID: owner.SlackUserID}); err != nil {
+			router.logger.WarnContext(ctx, "the asker was not told a named person is asked in Oryxa alone; the ask stands",
+				"inbound_id", job.InboundID, "organization_id", job.OrganizationID, "ask_id", ask.ID, "error", err)
+		}
 	}
 	if len(skipped) > 0 {
 		// The ask is made and is the job's outcome: a person who could not be

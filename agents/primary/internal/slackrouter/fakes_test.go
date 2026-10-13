@@ -160,6 +160,21 @@ func (members *fakeMembers) ByEmail(_ context.Context, organizationID, email str
 	return member, nil
 }
 
+func (members *fakeMembers) ByID(_ context.Context, organizationID, userID string) (Member, error) {
+	members.mu.Lock()
+	defer members.mu.Unlock()
+	members.asked = append(members.asked, "id:"+userID)
+	if members.err != nil {
+		return Member{}, members.err
+	}
+	for key, member := range members.members {
+		if strings.HasPrefix(key, organizationID+"|") && member.UserID == userID {
+			return member, nil
+		}
+	}
+	return Member{}, ErrNotMember
+}
+
 func (members *fakeMembers) OrganizationName(_ context.Context, organizationID string) (string, error) {
 	members.mu.Lock()
 	defer members.mu.Unlock()
@@ -487,6 +502,10 @@ type harness struct {
 	directory  *fakeDirectory
 	router     *Router
 	seq        int
+	// linkedOnly is the router's Deps.LinkedOnly, and logger its logger, set
+	// before rebuild.
+	linkedOnly bool
+	logger     *slog.Logger
 }
 
 func newHarness(t *testing.T) *harness {
@@ -508,6 +527,7 @@ func (h *harness) rebuild() {
 	router, err := NewRouter(Deps{
 		Slack: h.slack, Members: h.members, Identities: h.identities, Asks: h.asks,
 		Authority: h.authority, Asked: h.asked, Refused: h.refused, Screen: h.screen, Directory: h.directory,
+		LinkedOnly: h.linkedOnly, Logger: h.logger,
 	})
 	if err != nil {
 		h.t.Fatal(err)

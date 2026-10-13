@@ -430,6 +430,10 @@ An organization's owner or admin (a member's session, never an agent's):
 | `DELETE /v1/organizations/{org}/apps/slack/install` | Disconnect: `apps.uninstall` at Slack (best effort), the token discarded, the install ended |
 | `GET /v1/organizations/{org}/apps/slack/channels` | The private channels the bot is in, each with whether it can be marked, and the ones marked |
 | `PUT /v1/organizations/{org}/apps/slack/channels` | `{"high_priority": ["G…", …]}` makes exactly those the high-priority channels. Each must be a **private channel shared with nobody**, checked with Slack now; otherwise 400 and nothing changes |
+| `GET /v1/organizations/{org}/apps/slack/link` | **Any member**, in person: their own Slack link, `{"linked","team_id","slack_user_id","linked_at"}` (just `{"linked":false}` without one) |
+| `POST /v1/organizations/{org}/apps/slack/link` | `{"return_to"}` (optional, a page under `APPS_ALLOWED_ORIGINS`) answers `{"sign_in_url","expires_at"}`: **Sign in with Slack** (`https://slack.com/openid/connect/authorize`, scope `openid`, `team` the org's workspace) with a single-use state good for ten minutes. Needs the org's active install (otherwise `not_connected`) |
+| `GET /v1/apps/slack/link/callback` | Where Sign in with Slack sends the browser back. Spends the state, exchanges the code (`openid.connect.token`), asks `openid.connect.userInfo` who signed in, and keeps the link when that is a user of the org's workspace. Redirects to `return_to` with `slack_link=linked` or `slack_link=error&slack_link_error={state, denied, slack_refused, unavailable, wrong_team, taken}`, or answers JSON |
+| `DELETE /v1/organizations/{org}/apps/slack/link` | The member unlinks their own account. 204 whether or not there was one |
 
 The state binds the install to the organization and to the admin who asked; only
 its hash is kept. An install is refused, with nothing kept and no token
@@ -477,11 +481,27 @@ on. `mentions` leaves the bot out; `channel_type` and
 
 `POST /v1/internal/apps/slack/profiles` — `{"organization_id","user_ids":[…]}`
 (one to twenty) answers `{"profiles":[{"user_id","team_id","email","email_confirmed",
-"name","title","is_guest","is_bot","is_deleted","is_stranger","fetched_at"}],
+"name","title","is_guest","is_bot","is_deleted","is_stranger","fetched_at","linked_member_id"}],
 "missing":[…]}` from a 24-hour cache. `email_confirmed` is Slack's
 `is_email_confirmed`, false when Slack does not say: only a confirmed address
 is one to match a person to a member by. `is_stranger` is Slack's flag or a
 `team_id` that is not the workspace's; `missing` is people Slack does not know.
+`linked_member_id`, read fresh and never from the cache, is the member who
+linked this account by signing in to Slack as themself (see "Linking a Slack
+account" below); absent when nobody did. Unlike an email, which whoever
+administers the workspace can set, it can't be made by anyone but the member.
+
+**Linking a Slack account.** A member links their own Slack account once,
+from Oryxa: `POST …/apps/slack/link` sends them to Sign in with Slack, in the
+browser they're signed in to Oryxa in, and the account Slack says signed in is
+kept in `apps_slack_links` (migration 011). A workspace's user is linked to one
+member and a member to one user; linking another account replaces theirs, and
+an account another member linked is refused (`taken`). The Slack app registers
+the link callback as a second redirect URL (`manifest.yaml`). Agents' router
+trusts nothing but links when `AGENTS_PRIMARY_SLACK_LINKED_ONLY` is on, and
+until then only logs who would not pass. Not yet: dropping a member's link when
+they leave the organization (the router checks membership on every use), and
+the web app's Link button.
 
 `GET /v1/internal/apps/slack/channels/{id}?organization_id=` — read from Slack
 now, every time: `{"channel_id","name","is_private","is_shared","is_mpim","is_im",
@@ -562,7 +582,7 @@ have are 400.
 | `ask_ack` | a thread or one person in it | `owners` `[{user_id\|name}]` (1–5); `open_url` (a page of the web app, or nothing) | "Asked Raya and Maya · Open in Oryxa" |
 | `answer` | a thread or a direct message | `text`; `owner_name`; `mode` (`summary`, `access`, `lease`, `bypass`, `reply`) | The text, and "From Raya's agent · approved by Raya (AI summary only)"; for `reply`, the owner's own words, "Raya replied:" and the text. Names the owner and never mentions them |
 | `status` | a thread, one person in it, or a direct message | `state` (`waiting`, `working`, `held`, `denied`, `expired`, `failed`, `answered_elsewhere`); `owner_name` | One content-free line, such as "The answer is held for Raya's review." |
-| `refusal` | a thread or one person in it | `reason` (`not_member`, `owner_not_member`, `group_dm`, `external_channel`, `no_owner`, `too_many_asks`, `screen_failed`, `not_work`, `no_grant`, `owner_department`; `injection`, `implausible` and any other are a plain no); `organization_name`; `user_id` or `name` | Fixed wording, never the question |
+| `refusal` | a thread or one person in it | `reason` (`not_member`, `owner_not_member`, `group_dm`, `external_channel`, `no_owner`, `too_many_asks`, `screen_failed`, `not_work`, `no_grant`, `owner_department`, `not_linked`, `owner_not_linked`; `injection`, `implausible` and any other are a plain no); `organization_name`; `user_id` or `name` | Fixed wording, never the question |
 | `private_note` | a thread or one person in it | none | "Answered privately." |
 | `bypass_notice` | a direct message | asker; `question`; `reason` (`priority_channel`, `org_chart`); `channel_id` | Tells an owner at once that their agent answered without asking |
 | `held_review` | a direct message | asker; `question`; `reasons` (1–20 codes: `irrelevant`, `ungrounded`, `no_sources`, `copied`, `link`, `denied_topic`, `email`, `phone`, `address`, `off_topic`, `personal_life`, `health`, `hr`, `compensation`, `others_private`, `credentials`, `unchecked`, `policy`; any other is said as "Oryxa flagged it for your review."); `preview`; `masked`; `tickets` `{send, send_masked, withhold, reply}` (`send_masked` exactly when `masked`; `reply` optional); or `secret` with no preview and no tickets | The one message that shows a held answer, to its owner alone: the asker, the question, why it was held in plain words, the answer (its masked version when there is one, cut to 1,500 characters), and **Send**, **Send masked**, **Don't send**, and **Reply yourself** when there is a `reply` ticket. For a secret: no answer and no buttons, "Review it in Oryxa" |

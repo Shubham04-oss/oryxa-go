@@ -40,6 +40,8 @@ features:
 oauth_config:
   redirect_urls:
     - https://api.oryxa.in/v1/apps/slack/install/callback
+    # Where Sign in with Slack returns a member linking their own Slack account.
+    - https://api.oryxa.in/v1/apps/slack/link/callback
   scopes:
     bot:
       # The entry: people ask Oryxa by @-mentioning it in a channel it is in.

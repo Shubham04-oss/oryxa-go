@@ -522,6 +522,7 @@ func (store *Store) Purge(ctx context.Context, cutoffs slackbot.Cutoffs) (slackb
 	}{
 		{&purged.Inbound, `DELETE FROM apps_slack_inbound WHERE received_at < $1`, cutoffs.Inbound},
 		{&purged.Flows, `DELETE FROM apps_slack_install_flows WHERE expires_at < $1`, cutoffs.Flows},
+		{&purged.Flows, `DELETE FROM apps_slack_link_flows WHERE expires_at < $1`, cutoffs.Flows},
 		{&purged.Posts, `DELETE FROM apps_slack_posts WHERE claimed_at < $1`, cutoffs.Posts},
 		{&purged.Profiles, `DELETE FROM apps_slack_profiles WHERE fetched_at < $1`, cutoffs.Profiles},
 	} {
@@ -529,7 +530,7 @@ func (store *Store) Purge(ctx context.Context, cutoffs slackbot.Cutoffs) (slackb
 		if err != nil {
 			return purged, fmt.Errorf("purge Slack records: %w", err)
 		}
-		*step.count = tag.RowsAffected()
+		*step.count += tag.RowsAffected()
 	}
 	return purged, nil
 }

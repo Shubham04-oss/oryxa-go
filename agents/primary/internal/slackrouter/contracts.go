@@ -202,6 +202,11 @@ type Profile struct {
 	Bot      bool
 	Deleted  bool
 	Stranger bool
+	// LinkedMemberID is the member who linked this Slack account, by signing
+	// in to Slack as themself while signed in to Oryxa (apps' Sign in with
+	// Slack): the one match an admin of the workspace cannot make by changing
+	// an account's email. Empty for an account nobody linked.
+	LinkedMemberID string
 }
 
 // ChannelInfo is a Slack conversation as apps reads it now, never from a
@@ -319,6 +324,9 @@ type Members interface {
 	// email, compared without regard to case, or ErrNotMember. Someone who
 	// belongs to other organizations only is not a member of this one.
 	ByEmail(ctx context.Context, organizationID, email string) (Member, error)
+	// ByID returns the member of the organization with the user id, or
+	// ErrNotMember: someone a link names who has since left.
+	ByID(ctx context.Context, organizationID, userID string) (Member, error)
 	// OrganizationName is the organization's name, for a refusal that names it.
 	OrganizationName(ctx context.Context, organizationID string) (string, error)
 }

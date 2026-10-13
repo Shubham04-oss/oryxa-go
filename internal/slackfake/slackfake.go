@@ -196,10 +196,14 @@ type Fake struct {
 	calls      []Call
 	failures   map[string][]failure
 	codes      map[string]string // authorization code -> team id; "" once spent
-	spent      map[string]bool
-	tweak      func(map[string]any)
-	sequence   int
-	down       bool
+	// signIns are Sign in with Slack's codes, and signInTokens the tokens they
+	// were exchanged for: who signed in, each.
+	signIns      map[string]signIn
+	signInTokens map[string]signIn
+	spent        map[string]bool
+	tweak        func(map[string]any)
+	sequence     int
+	down         bool
 }
 
 type failure struct {
@@ -232,6 +236,7 @@ func New(t testing.TB, options ...Option) *Fake {
 		now: time.Now, clientID: DefaultClientID, clientSecret: DefaultClientSecret, signingSecret: DefaultSigningSecret,
 		workspaces: map[string]*Workspace{}, users: map[string]User{}, channels: map[string]Channel{},
 		failures: map[string][]failure{}, codes: map[string]string{}, spent: map[string]bool{},
+		signIns: map[string]signIn{}, signInTokens: map[string]signIn{},
 		incoming: map[string]bool{}, triggers: map[string]trigger{},
 	}
 	for _, option := range options {
@@ -333,6 +338,55 @@ func (f *Fake) IssueCode(teamID string) string {
 	code := fmt.Sprintf("code-%s-%d", strings.ToLower(teamID), f.sequence)
 	f.codes[code] = teamID
 	return code
+}
+
+// signIn is a person who signed in with Slack: a user of a workspace.
+type signIn struct{ teamID, userID string }
+
+// IssueSignInCode makes a Sign in with Slack code, as Slack does when a person
+// signs in as userID of the workspace teamID: the callback's ?code=, which
+// openid.connect.token exchanges once.
+func (f *Fake) IssueSignInCode(teamID, userID string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sequence++
+	code := fmt.Sprintf("signin-%s-%d", strings.ToLower(userID), f.sequence)
+	f.signIns[code] = signIn{teamID: teamID, userID: userID}
+	return code
+}
+
+// openIDTokenLocked exchanges a sign-in code, once, for a token, with the
+// client's credentials in the form, as openid.connect.token does.
+func (f *Fake) openIDTokenLocked(args map[string]any) map[string]any {
+	switch {
+	case str(args, "client_id") != f.clientID:
+		return fail("invalid_client_id")
+	case str(args, "client_secret") != f.clientSecret:
+		return fail("bad_client_secret")
+	}
+	code := str(args, "code")
+	who, ok := f.signIns[code]
+	if !ok {
+		return fail("invalid_code")
+	}
+	delete(f.signIns, code)
+	f.sequence++
+	token := fmt.Sprintf("xoxp-signin-%d", f.sequence)
+	f.signInTokens[token] = who
+	return map[string]any{"ok": true, "access_token": token, "token_type": "Bearer", "id_token": "header.payload.signature"}
+}
+
+// openIDUserLocked answers who a sign-in token is, as openid.connect.userInfo
+// does.
+func (f *Fake) openIDUserLocked(token string) map[string]any {
+	who, ok := f.signInTokens[token]
+	if !ok {
+		return fail("invalid_auth")
+	}
+	return map[string]any{
+		"ok": true, "sub": who.userID,
+		"https://slack.com/user_id": who.userID, "https://slack.com/team_id": who.teamID,
+	}
 }
 
 // ModifyOAuth changes what oauth.v2.access answers, before it is sent: to
@@ -495,8 +549,13 @@ func fail(code string) map[string]any { return map[string]any{"ok": false, "erro
 
 // handleLocked answers one method. The fake's lock is held.
 func (f *Fake) handleLocked(method, token, basicUser, basicPassword string, args map[string]any) map[string]any {
-	if method == "oauth.v2.access" {
+	switch method {
+	case "oauth.v2.access":
 		return f.oauthLocked(basicUser, basicPassword, args)
+	case "openid.connect.token":
+		return f.openIDTokenLocked(args)
+	case "openid.connect.userInfo":
+		return f.openIDUserLocked(token)
 	}
 	workspace := f.byTokenLocked(token)
 	switch {

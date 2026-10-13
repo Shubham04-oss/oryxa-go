@@ -364,6 +364,22 @@ type Store interface {
 	IsHighPriority(ctx context.Context, organizationID, teamID, channelID string) (bool, error)
 	ReplaceHighPriority(ctx context.Context, organizationID, teamID, actor string, channels []MarkedChannel, now time.Time) error
 
+	// InsertLinkFlow keeps a member's link in progress; ConsumeLinkFlow
+	// spends it, once, while it is unexpired.
+	InsertLinkFlow(ctx context.Context, flow LinkFlow) error
+	ConsumeLinkFlow(ctx context.Context, stateHash string, now time.Time) (LinkFlow, error)
+	// SaveLink keeps a member's link, replacing the one they had in that
+	// workspace. It is ErrLinkTaken, writing nothing, when the Slack user is
+	// linked to another member.
+	SaveLink(ctx context.Context, link Link) error
+	// LinkForMember reads a member's link in their organization.
+	LinkForMember(ctx context.Context, organizationID, memberID string) (Link, error)
+	// LinksForSlackUsers reads the links of a workspace's users; a user with
+	// none is left out.
+	LinksForSlackUsers(ctx context.Context, teamID string, userIDs []string) ([]Link, error)
+	// DeleteLink forgets a member's link, answering whether there was one.
+	DeleteLink(ctx context.Context, organizationID, memberID string) (bool, error)
+
 	// Purge forgets what is older than the cutoffs.
 	Purge(ctx context.Context, cutoffs Cutoffs) (Purged, error)
 }

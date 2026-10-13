@@ -1,0 +1,12 @@
+{
+  "text": "Link your Slack account to Oryxa first: in Oryxa, Settings → Slack → Link your account. Then ask again.",
+  "blocks": [
+    {
+      "text": {
+        "text": "Link your Slack account to Oryxa first: in Oryxa, Settings → Slack → Link your account. Then ask again.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ]
+}
