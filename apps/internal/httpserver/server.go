@@ -43,6 +43,8 @@ type appsService interface {
 	CatalogTriggers(ctx context.Context, toolkit, cursor string, limit int) ([]application.TriggerTypeView, string, error)
 	OfferedTools(ctx context.Context, credentials authclient.Credentials, organizationID string) (application.OfferPolicy, error)
 	Connect(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ConnectInput) (domain.Connection, string, error)
+	BrokerFor(ctx context.Context, toolkit string) (string, error)
+	ConnectPipedream(ctx context.Context, toolkit string) error
 	CompleteConnection(ctx context.Context, state, status, accountID string) (application.Completion, error)
 	Connections(ctx context.Context, credentials authclient.Credentials, organizationID, toolkit string, organization bool) ([]domain.Connection, error)
 	Connection(ctx context.Context, credentials authclient.Credentials, organizationID, id string) (domain.Connection, error)
@@ -215,7 +217,8 @@ func (server *Server) offeredTools(writer http.ResponseWriter, request *http.Req
 type connectionView struct {
 	ID      string `json:"id"`
 	Toolkit string `json:"toolkit"`
-	// Broker is composio or oryxa: who holds the connection's credential.
+	// Broker is composio, oryxa or pipedream: who holds the connection's
+	// credential.
 	Broker string `json:"broker"`
 	// CredentialKind is an Oryxa connection's credential kind (oauth2_code,
 	// api_token, basic, oauth2_client_credentials) once it holds one. Only a
@@ -269,8 +272,8 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 		// AutoSubscribe left out means the deployment's default, which is to
 		// subscribe to everything the app can deliver.
 		AutoSubscribe *bool `json:"auto_subscribe"`
-		// Broker is composio, the default, or oryxa; Kind and Fields are
-		// Oryxa's own sign-in's.
+		// Broker is composio, oryxa or pipedream; left out, the toolkit's own
+		// broker is chosen. Kind and Fields are Oryxa's own sign-in's.
 		Broker string            `json:"broker"`
 		Kind   string            `json:"kind"`
 		Fields map[string]string `json:"fields"`
@@ -279,8 +282,15 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	broker, err := domain.CheckBroker(body.Broker)
+	if err == nil && strings.TrimSpace(body.Broker) == "" {
+		broker, err = server.service.BrokerFor(request.Context(), body.Toolkit)
+	}
 	if err != nil {
 		server.handleError(writer, request, err)
+		return
+	}
+	if broker == domain.BrokerPipedream {
+		server.handleError(writer, request, server.service.ConnectPipedream(request.Context(), body.Toolkit))
 		return
 	}
 	if broker == domain.BrokerOryxa {

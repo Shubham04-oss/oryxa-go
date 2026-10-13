@@ -96,6 +96,9 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 		}
 		return s.subscribeOwn(ctx, connection, spec, config)
 	}
+	if !connection.Composio() {
+		return domain.Trigger{}, errNotComposio(connection)
+	}
 
 	// The connection's own app decides which events it can deliver, so a
 	// trigger belonging to another app is not found rather than refused:

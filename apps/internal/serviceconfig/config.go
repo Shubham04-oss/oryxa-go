@@ -59,6 +59,11 @@ type Config struct {
 	// APPS_ORYXA_TOOLKITS, a comma list. Empty means it is off, and every
 	// Oryxa request is refused.
 	OryxaToolkits []string
+	// ToolkitBrokers pins a toolkit's new connects to one broker, whatever
+	// the preference of Oryxa, then Composio, then Pipedream would choose:
+	// APPS_TOOLKIT_BROKERS, a comma list of toolkit=broker, such as
+	// github=composio,linear=pipedream. Existing connections keep theirs.
+	ToolkitBrokers map[string]string
 	// SigninKMSKeyID is the KMS key Oryxa's sign-in seals credentials and
 	// webhook secrets with, bound to service oryxa-apps:
 	// APPS_SIGNIN_KMS_KEY_ID. Required once a toolkit is switched on.
@@ -156,6 +161,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("APPS_ALLOWED_ORIGINS must list absolute origins")
 		}
 	}
+	if config.ToolkitBrokers, err = toolkitBrokers(getenv("APPS_TOOLKIT_BROKERS")); err != nil {
+		return Config{}, err
+	}
 	if err := readOryxa(getenv, &config); err != nil {
 		return Config{}, err
 	}
@@ -245,6 +253,28 @@ func loopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// toolkitBrokers reads APPS_TOOLKIT_BROKERS. A broker must be named: an
+// empty one would read as Composio, which is a default, not a pin.
+func toolkitBrokers(raw string) (map[string]string, error) {
+	var brokers map[string]string
+	for _, pair := range splitList(raw) {
+		toolkit, broker, _ := strings.Cut(pair, "=")
+		checkedToolkit, toolkitErr := domain.CheckToolkit(toolkit)
+		checkedBroker, brokerErr := domain.CheckBroker(broker)
+		if toolkitErr != nil || brokerErr != nil || strings.TrimSpace(broker) == "" {
+			return nil, fmt.Errorf("APPS_TOOLKIT_BROKERS must list toolkit=broker pairs, such as github=composio: %q is not one", pair)
+		}
+		if _, seen := brokers[checkedToolkit]; seen {
+			return nil, fmt.Errorf("APPS_TOOLKIT_BROKERS names %s twice", checkedToolkit)
+		}
+		if brokers == nil {
+			brokers = map[string]string{}
+		}
+		brokers[checkedToolkit] = checkedBroker
+	}
+	return brokers, nil
 }
 
 // readOryxa reads Oryxa's own sign-in's configuration. None of its messages

@@ -93,6 +93,8 @@ type Config struct {
 	// OryxaToolkits are the toolkits Oryxa's own sign-in is switched on for.
 	// Empty means off: every Oryxa request is refused.
 	OryxaToolkits []string
+	// ToolkitBrokers pins toolkits' new connects to a broker.
+	ToolkitBrokers map[string]string
 	// SigninRedirectURI is the one OAuth callback registered with every app.
 	SigninRedirectURI string
 	// DefaultOAuthClients are Oryxa's own OAuth apps, which Oryxa's sign-in
@@ -146,6 +148,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		ReturnOrigins:   config.AllowedOrigins,
 		WebhookSecret:   config.WebhookSecret,
 		NoAutoSubscribe: config.NoAutoSubscribe,
+		ToolkitBrokers:  config.ToolkitBrokers,
 	})
 	if err != nil {
 		return nil, err

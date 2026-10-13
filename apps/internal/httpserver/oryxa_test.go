@@ -221,6 +221,35 @@ func TestConnectSaysWhichBrokerTakesWhat(t *testing.T) {
 	}
 }
 
+// A connect that names no broker takes the toolkit's own, and one routed to
+// Pipedream is refused as not connectable rather than handed to Composio.
+func TestConnectWithoutABrokerTakesTheToolkitsOwn(t *testing.T) {
+	t.Parallel()
+	oryxa := &fakeOryxa{connected: application.OryxaConnect{Connection: domain.Connection{ID: "apc_1", Broker: domain.BrokerOryxa}}}
+	native := New(&fakeService{broker: domain.BrokerOryxa}, Config{Oryxa: oryxa}, nil)
+	recorder := call(native, http.MethodPost, "/v1/organizations/org_1/apps/connections", `{"toolkit":"github"}`, "Authorization", "Bearer member")
+	if recorder.Code != http.StatusCreated || oryxa.connectInput.Toolkit != "github" {
+		t.Fatalf("oryxa = %d %v: %s", recorder.Code, oryxa.connectInput, recorder.Body)
+	}
+
+	fake := &fakeService{broker: domain.BrokerPipedream}
+	server := New(fake, Config{Oryxa: &fakeOryxa{}}, nil)
+	for _, body := range []string{`{"toolkit":"linear"}`, `{"toolkit":"linear","broker":"pipedream"}`} {
+		recorder := call(server, http.MethodPost, "/v1/organizations/org_1/apps/connections", body, "Authorization", "Bearer member")
+		if recorder.Code != http.StatusUnprocessableEntity || errorCode(t, recorder) != "not_connectable" {
+			t.Fatalf("%s = %d: %s", body, recorder.Code, recorder.Body)
+		}
+	}
+	if fake.connectInput.Toolkit != "" {
+		t.Fatalf("Composio's connect ran for %v", fake.connectInput)
+	}
+	// A broker the caller names is kept, whatever the toolkit's own is.
+	recorder = call(server, http.MethodPost, "/v1/organizations/org_1/apps/connections", `{"toolkit":"linear","broker":"composio"}`, "Authorization", "Bearer member")
+	if recorder.Code != http.StatusCreated || fake.connectInput.Toolkit != "linear" {
+		t.Fatalf("composio = %d: %s", recorder.Code, recorder.Body)
+	}
+}
+
 func TestInvalidCredentialsNamesTheFieldAndNeverTheValue(t *testing.T) {
 	t.Parallel()
 	oryxa := &fakeOryxa{err: fmt.Errorf("connect github: %w", &domain.InvalidCredentials{Field: "token", Rule: "was refused by the app"})}

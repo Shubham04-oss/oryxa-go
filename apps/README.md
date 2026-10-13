@@ -179,7 +179,7 @@ refuses an OAuth connect sent to any other host than the redirect URI's
 That check reads the request's `Host`, which cloudflared forwards unchanged:
 the tunnel's ingress sets no `httpHostHeader`.
 
-Every connection's view carries `broker` (`composio` or `oryxa`) and, for an
+Every connection's view carries `broker` (`composio`, `oryxa` or `pipedream`) and, for an
 Oryxa connection holding a credential, `credential_kind`, which says whether
 it has a key to replace.
 
@@ -309,6 +309,22 @@ first):
 | Runs the daily health checks that are due (`signin.CheckDue`) | A connection the app refuses expires, announced with `refresh_rejected` or `credential_rejected` |
 | Tries again the revocations an app did not answer (`signin.RetryRevocations`) | A removed connection's credential is revoked, or forgotten after eight attempts |
 | Deletes webhook endpoints whose subscriptions lapsed (`hooks.SweepExpired`) | A lapsed endpoint answers as an unknown one |
+
+## Which broker serves an app
+
+Each app is served by exactly one broker. A connect that names no `broker`
+takes the app's own: Oryxa's sign-in if `APPS_ORYXA_TOOLKITS` names it, else
+Composio if Composio's catalog has it and can connect it, else
+**Pipedream Connect** if this deployment has Pipedream and Pipedream's catalog
+has it. `APPS_TOOLKIT_BROKERS` (`linear=pipedream,github=composio`) pins an
+app to a broker over all of that. This decides new connects only: a
+connection keeps the broker it was made through, and every Composio path
+refuses a connection that is not Composio's (`Connection.Composio()`), so
+moving an app never sends an old connection to the wrong broker.
+
+Pipedream is phase 0: the broker, the columns (`012_pipedream.sql`) and the
+`Pipedream` port exist, and no Pipedream client is wired in yet. A connect
+routed to it is refused as `not_connectable`.
 
 ## The Slack surface
 
@@ -878,7 +894,7 @@ needs an `Origin` in `APPS_ALLOWED_ORIGINS`.
 | `GET /v1/apps/catalog/{toolkit}/triggers` | The events an app can deliver |
 | `GET /v1/apps/connect/callback` | Where Composio returns a member's browser |
 | `POST /v1/apps/webhooks/composio` | Where Composio delivers events |
-| `POST /v1/organizations/{org}/apps/connections` | Start connecting an app; answers the link to send the member to. `auto_subscribe: false` connects without subscribing to its events. `broker: "oryxa"` with `kind` and `fields` connects through Oryxa's own sign-in |
+| `POST /v1/organizations/{org}/apps/connections` | Start connecting an app; answers the link to send the member to. `auto_subscribe: false` connects without subscribing to its events. `broker: "oryxa"` with `kind` and `fields` connects through Oryxa's own sign-in; without `broker`, the app's own is taken ([Which broker serves an app](#which-broker-serves-an-app)) |
 | `GET /v1/organizations/{org}/apps/connections` | The caller's connections, or with `?scope=organization` an admin's view of everyone's |
 | `GET /v1/organizations/{org}/apps/connections/{id}` | One connection |
 | `GET /v1/organizations/{org}/apps/connections/{id}/targets` | What the connection holds that can be indexed, read from the app itself |
@@ -985,7 +1001,7 @@ Apps uses `/internal/postgreskit`. Other services never read these tables.
 | `apps_connections` | A member's connection to an app: its Composio account, status and label, the hash of its pending round trip, and whether it has been subscribed to what the app delivers. A partial unique index permits one pending or active row per member and app |
 | `apps_auth_configs` | The auth config the project connects each app with, so two members agree on one |
 | `apps_triggers` | What a connection is subscribed to, the Composio instance behind it, how it delivers, and whether it ever has |
-| `apps_actions` | Tool runs, with the idempotency key a write can be replayed under |
+| `apps_actions` | Tool runs, with the idempotency key a write can be replayed under and the broker that ran each |
 | `apps_handled_events` | Webhook and bus deliveries already acted on, since both deliver at least once |
 | `apps_outbox` | Events written in the same transaction as the change they describe |
 | `apps_credentials` | An Oryxa connection's credential: each secret value sealed on its own, its kind, scopes, expiry, the refresh lease and the health-check schedule |
