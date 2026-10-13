@@ -101,6 +101,19 @@ variable "pipedream_ready" {
   default     = false
 }
 
+# Pipedream's development environment lets only the Pipedream workspace's own
+# members connect accounts: right for trying it in production before the plan
+# includes the production environment, and set in pipedream.auto.tfvars.json.
+variable "pipedream_environment" {
+  description = "The Pipedream Connect environment apps acts in: production, or development while only the workspace's own members should connect."
+  type        = string
+  default     = "production"
+  validation {
+    condition     = contains(["production", "development"], var.pipedream_environment)
+    error_message = "pipedream_environment is production or development."
+  }
+}
+
 resource "aws_secretsmanager_secret" "external" {
   for_each                = local.external_secrets
   name                    = "${local.name}/${each.value}"

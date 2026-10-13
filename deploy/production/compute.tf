@@ -116,7 +116,7 @@ locals {
       # Pipedream Connect's environment. Production accounts live apart from
       # development's; apps reads it only once pipedream_ready puts its three
       # secrets (secrets.tf) on the task.
-      PIPEDREAM_ENVIRONMENT = "production"
+      PIPEDREAM_ENVIRONMENT = var.pipedream_environment
 
       # The Slack consent loop (docs/design/slack-implementation.md;
       # deploy/README.md, "The Slack bot"), all of it waiting for
@@ -483,8 +483,10 @@ resource "aws_ecs_task_definition" "oryxa" {
         retries     = 3
         startPeriod = 90
       }
-      dependsOn        = [{ containerName = "otel", condition = "START" }]
-      stopTimeout      = 45
+      dependsOn = [{ containerName = "otel", condition = "START" }]
+      # The drain (ORYXA_DRAIN_TIMEOUT 20s), then requests and workers, can take
+      # about 100s when something hangs; 120 is Fargate's most.
+      stopTimeout      = 120
       logConfiguration = { logDriver = "awslogs", options = local.log_options["app"] }
     },
     {
