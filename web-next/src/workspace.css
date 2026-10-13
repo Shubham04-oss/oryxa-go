@@ -42,20 +42,22 @@
   display: flex;
   flex-direction: column;
   overflow: visible;
-  padding: 16px 4px 24px;
+  padding: 0 4px 24px;
   background: var(--workspace-base);
 }
 
 .workspace-shell[data-left="expanded"] .workspace-left {
-  padding: 16px 16px 24px 20px;
+  padding: 0 16px 24px 20px;
 }
 
+/* The header's 56px row, as the right panel's top is: both toggles sit level
+   with the page title, and both columns of tabs start at the same height. */
 .workspace-left-top {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 64px;
-  min-height: 64px;
+  height: 56px;
+  min-height: 56px;
 }
 
 .workspace-switcher { display: flex; align-items: center; gap: 5px; min-width: 0; }
