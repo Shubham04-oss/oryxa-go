@@ -4,9 +4,9 @@
 # runs only when the change touches what it checks (the changes job), so a
 # docs-only change runs nothing.
 #
-# Jobs run where the repository variable CI_RUNNER says: the self-hosted runner
-# in deploy/runner (["self-hosted","oryxa-mac"]), or GitHub's own machines when
-# it is unset.
+# Jobs run on the self-hosted runners on a1 (labels self-hosted, oryxa-go).
+# Those machines persist between jobs, so nothing here may assume a fresh
+# host: the database takes a free host port, and the image built is removed.
 
 name: CI
 
@@ -25,7 +25,7 @@ concurrency:
 jobs:
   changes:
     name: Changes
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    runs-on: [self-hosted, oryxa-go]
     timeout-minutes: 5
     outputs:
       go: ${{ steps.paths.outputs.go }}
@@ -86,7 +86,7 @@ jobs:
     name: Go
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    runs-on: [self-hosted, oryxa-go]
     timeout-minutes: 20
     services:
       # The same pgvector image docker-compose.yml runs locally.
@@ -96,7 +96,9 @@ jobs:
           POSTGRES_USER: oryxa
           POSTGRES_PASSWORD: oryxa
           POSTGRES_DB: oryxa
-        ports: ["5432:5432"]
+        # A free host port: two runners on one machine, and a1's own
+        # database, would clash on a fixed one.
+        ports: ["5432"]
         options: >-
           --health-cmd "pg_isready -U oryxa"
           --health-interval 5s
@@ -107,9 +109,8 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
-          # Skip the remote cache transfer on self-hosted runners; their local
-          # Go caches last for the lifetime of the runner container.
-          cache: ${{ !contains(vars.CI_RUNNER, 'self-hosted') }}
+          # Each runner's user keeps its own Go caches between jobs.
+          cache: false
       - name: gofmt
         run: |
           unformatted=$(gofmt -l $(git ls-files '*.go'))
@@ -123,12 +124,14 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Database
+        env:
+          PGPORT: ${{ job.services.postgres.ports['5432'] }}
         # Each service's integration tests run when their database is named,
         # and skip otherwise; here they share one, as they do on a laptop,
         # with the extensions infra/postgres/init gives a fresh local volume.
         run: |
           for service in AGENTS_PRIMARY APPS AUTH BATCHING BILLING FILES KNOWLEDGE OUTBOX POSTGRESKIT RAG REALTIME SLACK TEAMS WORKSPACE; do
-            echo "${service}_TEST_DATABASE_URL=postgres://oryxa:oryxa@localhost:5432/oryxa?sslmode=disable" >> "$GITHUB_ENV"
+            echo "${service}_TEST_DATABASE_URL=postgres://oryxa:oryxa@localhost:$PGPORT/oryxa?sslmode=disable" >> "$GITHUB_ENV"
           done
           docker exec -i "${{ job.services.postgres.id }}" psql -U oryxa -d oryxa -v ON_ERROR_STOP=1 < infra/postgres/init/001_extensions.sql
           # The schemas several test packages create at once. go test runs
@@ -179,7 +182,7 @@ jobs:
     name: Web
     needs: changes
     if: needs.changes.outputs.web == 'true'
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    runs-on: [self-hosted, oryxa-go]
     timeout-minutes: 15
     defaults:
       run:
@@ -218,7 +221,7 @@ jobs:
     name: Web next
     needs: changes
     if: needs.changes.outputs.web_next == 'true'
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    runs-on: [self-hosted, oryxa-go]
     timeout-minutes: 15
     defaults:
       run:
@@ -282,20 +285,23 @@ jobs:
     name: Image
     needs: changes
     if: needs.changes.outputs.go == 'true'
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    runs-on: [self-hosted, oryxa-go]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Build
-        run: docker build --tag oryxa:ci .
+        run: docker build --tag "oryxa:ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" .
+      - name: Remove the image
+        if: always()
+        run: docker image rm -f "oryxa:ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" || true
 
   tofu:
     name: OpenTofu
     needs: changes
     if: needs.changes.outputs.tofu == 'true'
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    # The providers are several hundred megabytes. From a cold cache on the
-    # Mac's runners they have taken over ten minutes to download.
+    runs-on: [self-hosted, oryxa-go]
+    # The providers are several hundred megabytes. From a cold cache on a
+    # self-hosted runner they have taken over ten minutes to download.
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
