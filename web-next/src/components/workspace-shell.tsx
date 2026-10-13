@@ -23,6 +23,7 @@ import {
 import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { FocusHeader } from "./agents-parts"
 import { PrimaryAgentFileViewer } from "./primary-agent-files"
+import { BrandChip } from "./brand-chip"
 import { HomeOverview } from "./home-overview"
 import { ThemeMenuItem } from "./theme-menu-item"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
@@ -1053,6 +1054,7 @@ function WorkspaceShellContent({
             </main>
           </>
         )}
+        <BrandChip />
       </div>
 
       <WorkspaceAgentPanel

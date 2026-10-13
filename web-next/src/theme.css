@@ -217,6 +217,8 @@
   --logo-tile: #ffffff;
   --logo-tile-border: transparent;
   --logo-ink: #222222;
+  /* The wordmark's square (BRAND.md gold-deep): the brand's one accent. */
+  --brand-gold: #d98e62;
   color-scheme: dark;
 }
 
@@ -431,5 +433,7 @@
   --logo-tile: #ffffff;
   --logo-tile-border: var(--border-quiet);
   --logo-ink: #222222;
+  /* The wordmark's square (BRAND.md gold-deep): the brand's one accent. */
+  --brand-gold: #d98e62;
   color-scheme: light;
 }

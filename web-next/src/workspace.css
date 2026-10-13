@@ -348,7 +348,53 @@
    this goes to") sits as far in as the send button does on the right. */
 .workspace-composer[data-leading="true"] { position: relative; padding-left: 6px; }
 
-.workspace-middle { display: flex; flex-direction: column; background: var(--workspace-base); }
+.workspace-middle { position: relative; display: flex; flex-direction: column; background: var(--workspace-base); }
+
+/* oryxa's wordmark on a tab of the shell rising from the canvas's bottom edge:
+   the surround's colour, rounded on top and square below, as the canvas is. */
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/inter-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+.workspace-brand-chip {
+  position: absolute;
+  z-index: 2;
+  bottom: 0;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 112px;
+  height: 38px;
+  padding: 2px 20px 0;
+  border-radius: 14px 14px 0 0;
+  background: var(--workspace-base);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+/* The canvas keeps the tab's height clear, so nothing scrolls under the mark. */
+.workspace-middle > .workspace-canvas,
+.workspace-middle > .workspace-focus { padding-bottom: 38px; }
+.workspace-wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  color: var(--text);
+  font-family: "Inter", var(--font-sans);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.055em;
+  line-height: 1;
+}
+.workspace-wordmark i {
+  display: inline-block;
+  width: 0.2em;
+  height: 0.2em;
+  margin-left: 0.1em;
+  border-radius: 0.14em;
+  background: var(--brand-gold);
+}
 .workspace-header {
   position: relative;
   display: flex;

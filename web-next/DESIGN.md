@@ -35,6 +35,11 @@ not permission to copy every incidental value into a new component.
 - Integration logos sit on a white tile in both themes (`--logo-tile`, with a
   quiet edge in light), so every brand keeps its own colour and dark marks
   such as GitHub's or Notion's stay visible; a white mark is inverted on it.
+- oryxa's wordmark (gtm/brand/BRAND.md: lowercase oryxa in Inter Bold, tight,
+  with the gold-deep `#d98e62` square) sits on a tab of the shell rising from
+  the bottom edge of the central canvas, rounded on top and square below as
+  the canvas is, at the scale of the sidebar's tabs. The canvas keeps its
+  height clear. Gold-deep is the brand's one accent; use it nowhere else.
 - Keep the product nearly monochrome and low-noise. Reserve color for
   app logos, planet/user/agent avatars, validation, and genuinely meaningful
   status. Do not introduce a new accent color for decoration.
