@@ -139,3 +139,9 @@ variable "memory_agent_engine" {
   type        = string
   default     = ""
 }
+
+variable "restore_snapshot_identifier" {
+  description = "An RDS snapshot to create the database from, for a restore only (e.g. oryxa-production-final). Null creates an empty database."
+  type        = string
+  default     = null
+}

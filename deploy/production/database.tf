@@ -72,6 +72,9 @@ resource "aws_db_instance" "main" {
   storage_type          = "gp3"
   storage_encrypted     = true
 
+  # Set only for a restore (deploy/README.md, "Restoring production"); ignored afterwards.
+  snapshot_identifier = var.restore_snapshot_identifier
+
   db_name  = "oryxa"
   username = "oryxa"
   password = random_password.database.result
@@ -102,6 +105,10 @@ resource "aws_db_instance" "main" {
   # RDS makes a log group of its own, with no expiry, for any it finds missing
   # when it starts exporting: hardening.tf declares them first.
   depends_on = [aws_cloudwatch_log_group.database]
+
+  lifecycle {
+    ignore_changes = [snapshot_identifier]
+  }
 }
 
 resource "aws_secretsmanager_secret" "database_url" {
