@@ -28,10 +28,10 @@ import {
   AGENT_REQUESTS_POLL_MS,
   agentKeys,
   agentRequestsQueryOptions,
+  agentWorkflowsQueryOptions,
 } from "@/lib/agents/queries"
 import { isUnavailableHere } from "@/lib/agents/policy"
 import { needsOwnerReply, revokeAgentLease } from "@/lib/agents/agent-requests"
-import { agentWorkflowsQueryOptions } from "@/lib/agents/queries"
 import { connectionsQueryOptions, toolkitName } from "@/lib/apps/client"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
 import { getAgentGrant } from "@/lib/auth/settings"
