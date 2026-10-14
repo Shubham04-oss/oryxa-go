@@ -1052,6 +1052,9 @@ func (server *Server) getOrganizationAgentContext(writer http.ResponseWriter, re
 		writeError(writer, http.StatusServiceUnavailable, "organization_agent_unavailable", "organization-agent synthesis is not configured")
 		return
 	}
+	if !server.canReadOrganizationSynthesis(writer, request, member) {
+		return
+	}
 	synthesis, err := server.organizationContext.Synthesis(request.Context(), member.OrganizationID)
 	if err != nil {
 		server.handleError(writer, request, err)
@@ -1073,12 +1076,38 @@ func (server *Server) listOrganizationAgentFollowUps(writer http.ResponseWriter,
 	if !ok {
 		return
 	}
+	if !server.canReadOrganizationSynthesis(writer, request, member) {
+		return
+	}
 	followUps, err := server.organizationContext.ListFollowUps(request.Context(), member.OrganizationID, limit)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"follow_ups": followUps})
+}
+
+// canReadOrganizationSynthesis lets only the organization's owners and admins
+// read the organization agent's synthesis and follow-ups. Both are built from
+// teamspace posts that only each team may read, so showing them org-wide
+// would hand one team's private work to everyone. ponytail: admins only until
+// per-team syntheses with their own audiences exist
+// (docs/design/live-layer/06-agent-isolation.md, L1 and I7).
+func (server *Server) canReadOrganizationSynthesis(writer http.ResponseWriter, request *http.Request, member threads.Member) bool {
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return false
+	}
+	agent, err := server.teamspaces.PreviewOrganizationAgent(request.Context(), teamspaceActorOf(member))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return false
+	}
+	if !agent.CanManage {
+		server.handleError(writer, request, teamspaces.ErrForbidden)
+		return false
+	}
+	return true
 }
 
 func (server *Server) createTeamspace(writer http.ResponseWriter, request *http.Request) {
