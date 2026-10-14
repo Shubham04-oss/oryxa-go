@@ -2462,6 +2462,9 @@ The compose service has no secret of its own to fall back on, and binds `127.0.0
 | `AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS` | `900` | Per-conversation sandbox lifetime; 60–28800 seconds |
 | `AGENTS_PRIMARY_BROWSER_ID` | `aws.browser.v1` | Built-in or provisioned AgentCore Browser identifier |
 | `AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS` | `900` | Per-conversation browser lifetime; 60–28800 seconds |
+| `AGENTS_PRIMARY_LIVE_BACKEND` | `agentcore` | Where the sandbox and browser tools run: `agentcore`, or `cloudflare` (the oryxa-edge Worker, docs/design/live-layer) for every organization |
+| `AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS` | unset | Organization ids, comma-separated, whose sandbox and browser run on Cloudflare while the backend above is still `agentcore`: the rollout |
+| `AGENTS_PRIMARY_EDGE_URL` | unset | The oryxa-edge Worker, such as `https://edge.oryxa.in`; required, with `AGENTS_PRIMARY_SERVICE_KEY_ID` to sign edge tokens, when any organization runs on Cloudflare |
 | `GOOGLE_CLOUD_PROJECT` | unset | Project whose Vertex AI serves Gemini; the agents require it |
 | `GOOGLE_CLOUD_LOCATION` | `global` | Vertex AI location: `global`, or the `us` or `eu` multi-region |
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | ADC credential file; locally `gcloud auth application-default login` supplies ADC |
