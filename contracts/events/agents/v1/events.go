@@ -447,7 +447,9 @@ type TeamspaceRoomAuthor struct {
 }
 
 type OrganizationAgentSynthesisUpdated struct {
-	OrganizationID    string    `json:"organization_id"`
+	OrganizationID string `json:"organization_id"`
+	// TeamspaceID is the synthesis's audience; empty for the organization-wide one.
+	TeamspaceID       string    `json:"teamspace_id,omitempty"`
 	AgentID           string    `json:"agent_id"`
 	Revision          int64     `json:"revision"`
 	SourceEntryID     string    `json:"source_entry_id"`

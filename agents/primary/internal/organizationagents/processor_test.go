@@ -28,13 +28,16 @@ type fakeDeliveryStore struct {
 	releasedFailed bool
 	// releaseContext is what the context the last release was made under said.
 	releaseContext error
+	// readTeamspaces is whose synthesis each read asked for.
+	readTeamspaces []string
 }
 
 func (*fakeDeliveryStore) Claim(context.Context, time.Duration, int) ([]Delivery, error) {
 	return nil, nil
 }
 
-func (store *fakeDeliveryStore) Synthesis(_ context.Context, _ string) (Synthesis, error) {
+func (store *fakeDeliveryStore) Synthesis(_ context.Context, _ string, teamspaceID string) (Synthesis, error) {
+	store.readTeamspaces = append(store.readTeamspaces, teamspaceID)
 	return store.previous, store.synthesisErr
 }
 
@@ -155,6 +158,11 @@ func TestProcessorSynthesizesAuthoritativeEntryAndBoundsFollowUps(t *testing.T) 
 	}
 	if store.result.FollowUps[1].Task != "ask privately" {
 		t.Fatalf("follow-up task=%q", store.result.FollowUps[1].Task)
+	}
+	// The run is shown only the synthesis of the teamspace the post was made
+	// in, never the organization-wide one or another team's (L1).
+	if len(store.readTeamspaces) != 1 || store.readTeamspaces[0] != delivery.TeamspaceID {
+		t.Fatalf("synthesis read for %q, want only %q", store.readTeamspaces, delivery.TeamspaceID)
 	}
 }
 

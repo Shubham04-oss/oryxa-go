@@ -1,6 +1,7 @@
 // Package teamspaces owns shared multi-user agent spaces bound to human teams.
-// One organization-owned agent holds the broad organizational context; each
-// teamspace is a shared work ledger for teammates and their bounded agents.
+// One organization-owned agent summarizes each teamspace for its own team and
+// proposes follow-ups; each teamspace is a shared work ledger for teammates
+// and their bounded agents.
 package teamspaces
 
 import (
@@ -31,8 +32,8 @@ const (
 // RequestStanding whenever it is decided or its agent woken): Request holds
 // each such request for the owner to approve or reject in their own session
 // before the specialist is woken; Automatic lets the specialist decide them
-// itself, and lets the organization agent start bounded work without another
-// approval. A request made outside any teamspace is not governed by it.
+// itself. The organization agent never starts work under either mode: it only
+// proposes follow-ups. A request made outside any teamspace is not governed by it.
 // Either way the specialist still runs as its owner and keeps the owner's
 // tool authorization and confirmation boundaries.
 type DelegationMode string

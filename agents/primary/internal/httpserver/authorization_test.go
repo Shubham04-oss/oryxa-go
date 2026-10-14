@@ -156,7 +156,7 @@ type authzRoute struct {
 	// the synthesis and its follow-ups are organization-level state, not a
 	// member-owned resource, so there is no per-user boundary for case 4 to
 	// check - only the organization one. Who in the organization may read
-	// them (its owners and admins) is TestOrganizationSynthesisNeedsAManager's.
+	// which of them (by audience) is TestOrganizationSynthesisAudiences'.
 	orgOnly bool
 	// identity reads back, from the harness, the (organization, user) the
 	// relevant fake most recently recorded - exactly what the handler
@@ -494,6 +494,10 @@ var authzRoutes = []authzRoute{
 		path: "/v1/organizations/org_1/teamspaces/tsp_other/entries", malformedQuery: "?limit=abc", identity: lastTeamspaceActor,
 	},
 	{
+		pattern: "GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/synthesis", method: http.MethodGet,
+		path: "/v1/organizations/org_1/teamspaces/tsp_other/synthesis", identity: lastTeamspaceActor,
+	},
+	{
 		pattern: "POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", method: http.MethodPost,
 		path: "/v1/organizations/org_1/teamspaces/tsp_other/entries", body: "{}", malformedBody: unknownField, identity: lastTeamspaceActor,
 	},
@@ -550,8 +554,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 70 {
-		t.Fatalf("authzRoutes has %d entries, want 70 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 71 {
+		t.Fatalf("authzRoutes has %d entries, want 71 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {

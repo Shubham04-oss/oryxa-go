@@ -178,9 +178,13 @@ type Teamspaces interface {
 	ListEntries(context.Context, teamspaces.Actor, string, int) ([]teamspaces.Entry, error)
 }
 
+// OrganizationAgentContext reads the organization agent's output by audience;
+// the handlers decide which audience the caller is in before calling it.
 type OrganizationAgentContext interface {
-	Synthesis(context.Context, string) (organizationagents.Synthesis, error)
-	ListFollowUps(context.Context, string, int) ([]organizationagents.FollowUp, error)
+	// Synthesis reads a teamspace's synthesis, or with an empty teamspace id
+	// the organization-wide one.
+	Synthesis(ctx context.Context, organizationID, teamspaceID string) (organizationagents.Synthesis, error)
+	ListFollowUps(ctx context.Context, organizationID string, audience organizationagents.Audience, limit int) ([]organizationagents.FollowUp, error)
 }
 
 // Preferences keeps what a member chose about Krude's updates from their
@@ -385,6 +389,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("PATCH /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents/{agentID}", server.updateTeamspaceContribution)
 	server.handle("DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents/{agentID}", server.deleteTeamspaceContribution)
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.listTeamspaceEntries)
+	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/synthesis", server.getTeamspaceSynthesis)
 	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.publishTeamspaceEntry)
 	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/messages", server.postRoomMessage)
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/messages", server.readRoom)
@@ -1058,10 +1063,9 @@ func (server *Server) getOrganizationAgentContext(writer http.ResponseWriter, re
 		writeError(writer, http.StatusServiceUnavailable, "organization_agent_unavailable", "organization-agent synthesis is not configured")
 		return
 	}
-	if !server.canReadOrganizationSynthesis(writer, request, member) {
-		return
-	}
-	synthesis, err := server.organizationContext.Synthesis(request.Context(), member.OrganizationID)
+	// The organization-wide synthesis uses only inputs every member may read,
+	// so every member may read it; team-built ones are getTeamspaceSynthesis's.
+	synthesis, err := server.organizationContext.Synthesis(request.Context(), member.OrganizationID, "")
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -1082,10 +1086,12 @@ func (server *Server) listOrganizationAgentFollowUps(writer http.ResponseWriter,
 	if !ok {
 		return
 	}
-	if !server.canReadOrganizationSynthesis(writer, request, member) {
+	// A follow-up has the audience of the teamspace it came from.
+	audience, ok := server.synthesisAudience(writer, request, member)
+	if !ok {
 		return
 	}
-	followUps, err := server.organizationContext.ListFollowUps(request.Context(), member.OrganizationID, limit)
+	followUps, err := server.organizationContext.ListFollowUps(request.Context(), member.OrganizationID, audience, limit)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -1093,27 +1099,66 @@ func (server *Server) listOrganizationAgentFollowUps(writer http.ResponseWriter,
 	writeJSON(writer, http.StatusOK, map[string]any{"follow_ups": followUps})
 }
 
-// canReadOrganizationSynthesis lets only the organization's owners and admins
-// read the organization agent's synthesis and follow-ups. Both are built from
-// teamspace posts that only each team may read, so showing them org-wide
-// would hand one team's private work to everyone. ponytail: admins only until
-// per-team syntheses with their own audiences exist
-// (docs/design/live-layer/06-agent-isolation.md, L1 and I7).
-func (server *Server) canReadOrganizationSynthesis(writer http.ResponseWriter, request *http.Request, member threads.Member) bool {
-	if server.teamspaces == nil {
-		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
-		return false
+// getTeamspaceSynthesis reads one teamspace's synthesis. It is built from
+// posts only that team may read, so only its members and the organization's
+// owners and admins may read it.
+func (server *Server) getTeamspaceSynthesis(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
 	}
-	agent, err := server.teamspaces.PreviewOrganizationAgent(request.Context(), teamspaceActorOf(member))
+	if server.organizationContext == nil {
+		writeError(writer, http.StatusServiceUnavailable, "organization_agent_unavailable", "organization-agent synthesis is not configured")
+		return
+	}
+	teamspaceID := request.PathValue("teamspaceID")
+	audience, ok := server.synthesisAudience(writer, request, member)
+	if !ok {
+		return
+	}
+	if !audience.All && !slices.Contains(audience.Teamspaces, teamspaceID) {
+		server.handleError(writer, request, teamspaces.ErrForbidden)
+		return
+	}
+	synthesis, err := server.organizationContext.Synthesis(request.Context(), member.OrganizationID, teamspaceID)
 	if err != nil {
 		server.handleError(writer, request, err)
-		return false
+		return
 	}
-	if !agent.CanManage {
-		server.handleError(writer, request, teamspaces.ErrForbidden)
-		return false
+	writeJSON(writer, http.StatusOK, synthesis)
+}
+
+// synthesisAudience is which teamspaces' syntheses and follow-ups the member
+// may read: every one for an organization owner or admin, otherwise those of
+// the teams they belong to now (docs/design/live-layer/06-agent-isolation.md,
+// L1). Managing a team without belonging to it is not enough, as for its
+// entries.
+func (server *Server) synthesisAudience(writer http.ResponseWriter, request *http.Request, member threads.Member) (organizationagents.Audience, bool) {
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return organizationagents.Audience{}, false
 	}
-	return true
+	actor := teamspaceActorOf(member)
+	agent, err := server.teamspaces.PreviewOrganizationAgent(request.Context(), actor)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return organizationagents.Audience{}, false
+	}
+	if agent.CanManage {
+		return organizationagents.Audience{All: true}, true
+	}
+	spaces, err := server.teamspaces.List(request.Context(), actor)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return organizationagents.Audience{}, false
+	}
+	audience := organizationagents.Audience{Teamspaces: []string{}}
+	for _, space := range spaces {
+		if space.IsMember {
+			audience.Teamspaces = append(audience.Teamspaces, space.ID)
+		}
+	}
+	return audience, true
 }
 
 func (server *Server) createTeamspace(writer http.ResponseWriter, request *http.Request) {

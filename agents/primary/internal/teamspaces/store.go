@@ -78,8 +78,8 @@ func defaultOrganizationAgent(organizationID, organizationName string) Organizat
 	}
 	return OrganizationAgent{
 		OrganizationID: organizationID, Name: name,
-		Description:  "Coordinates shared organizational context and synthesizes work published by team members and their agents.",
-		Instructions: "Maintain organization-wide context from shared teamspace entries. Delegate bounded work to member agents, preserve attribution, and never assume a member's identity, connections, or private context.",
+		Description:  "Summarizes the work each team publishes in its teamspace, for that team.",
+		Instructions: "Keep each teamspace's synthesis current from the entries its team publishes: summarize, record decisions, risks and open questions, and propose follow-ups for people to pick up. You have no tools and cannot assign or start work. Preserve attribution, and never assume a member's identity, connections, or private context.",
 		Status:       StatusActive,
 	}
 }

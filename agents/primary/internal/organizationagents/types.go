@@ -1,6 +1,9 @@
-// Package organizationagents turns attributed teamspace publications into a
-// durable organization-wide synthesis owned by the singleton organization
-// agent. It never receives member-private context or credentials.
+// Package organizationagents turns attributed teamspace publications into
+// durable syntheses owned by the singleton organization agent. Every synthesis
+// has an audience: a teamspace's is built only from that teamspace's posts and
+// is read only by its team (and organization admins); the organization-wide one
+// uses only inputs every member may read. It never receives member-private
+// context or credentials.
 package organizationagents
 
 import (
@@ -29,15 +32,18 @@ type Result struct {
 }
 
 type Synthesis struct {
-	OrganizationID string    `json:"organization_id"`
-	AgentID        string    `json:"agent_id"`
-	Revision       int64     `json:"revision"`
-	Summary        string    `json:"summary"`
-	Decisions      []string  `json:"decisions"`
-	Risks          []string  `json:"risks"`
-	OpenQuestions  []string  `json:"open_questions"`
-	SourceEntryID  string    `json:"source_entry_id,omitempty"`
-	UpdatedAt      time.Time `json:"updated_at,omitzero"`
+	OrganizationID string `json:"organization_id"`
+	// TeamspaceID is the synthesis's audience: that teamspace's team, or, when
+	// empty, every member of the organization.
+	TeamspaceID   string    `json:"teamspace_id,omitempty"`
+	AgentID       string    `json:"agent_id"`
+	Revision      int64     `json:"revision"`
+	Summary       string    `json:"summary"`
+	Decisions     []string  `json:"decisions"`
+	Risks         []string  `json:"risks"`
+	OpenQuestions []string  `json:"open_questions"`
+	SourceEntryID string    `json:"source_entry_id,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at,omitzero"`
 }
 
 type FollowUp struct {
@@ -54,6 +60,15 @@ type FollowUp struct {
 }
 
 const FollowUpProposed = "proposed"
+
+// Audience is whose follow-ups a read returns. A follow-up has the audience of
+// the teamspace it came from. The zero value sees nothing.
+type Audience struct {
+	// All is an organization owner or admin, who reads every teamspace's.
+	All bool
+	// Teamspaces are the teamspaces whose team the reader belongs to.
+	Teamspaces []string
+}
 
 // Delivery is the content-minimal EventBridge job. The worker loads the
 // authoritative entry, teamspace, organization agent, and synthesis itself.

@@ -1505,8 +1505,9 @@ directory, but never its instructions, conversations, connections, or
 credentials. A whisperer follows the relevant teamspace context, privately
 advises its own member, can use that member's specialists for bounded work,
 and publishes only deliberate, attributed output into shared space. The
-organization agent consumes shared output and maintains the broad organization
-context; it does not replace or impersonate members' primary agents.
+organization agent summarizes each teamspace's shared output for that team and
+proposes follow-ups; it has no tools, cannot assign or start work, and does not
+replace or impersonate members' primary agents.
 
 The on-demand `teamspaces` toolbox makes that participation executable rather
 than merely descriptive. `teamspaces_list` shows only spaces where the current
@@ -1574,15 +1575,30 @@ memory, private conversation, app connection, toolbox, or external-action
 tool. It returns a strict JSON snapshot—summary, decisions, risks, open
 questions, and proposed follow-ups—and the service atomically advances that
 snapshot, records proposals, marks the delivery handled, and writes a
-content-minimal lifecycle event. Replaying an EventBridge delivery or worker
-transaction cannot create a second revision or duplicate proposal.
+content-minimal lifecycle event (with the synthesis's `teamspace_id`).
+Replaying an EventBridge delivery or worker transaction cannot create a second
+revision or duplicate proposal.
+
+Every synthesis has an audience. A publication is readable only by its team,
+so it advances only **its teamspace's** synthesis, and the run sees only that
+synthesis: one team's posts never reach another team's synthesis or the
+organization-wide one. A teamspace's synthesis, and every follow-up proposed
+from it, is readable by that team's current members and by organization owners
+and admins; managing a team without belonging to it is not enough, as for its
+entries. The **organization-wide** synthesis uses only inputs every member may
+read, so every member may read it; today no such input exists, so it stays at
+revision zero until organization-visible sources arrive (Layer C, C2). The
+single organization-wide syntheses written before audiences existed mixed
+every team's posts; migration `003_synthesis_audiences.sql` moved them to
+`organization_agent_syntheses_legacy`, which no route reads.
 
 | Route | What it does |
 | --- | --- |
 | `GET /v1/organizations/{org}/organization-agent` | Gets or lazily creates the organization's singleton coordinating agent |
 | `PATCH /v1/organizations/{org}/organization-agent` | Lets an organization owner or admin change that agent's name, instructions, or lifecycle status |
-| `GET /v1/organizations/{org}/organization-agent/context` | Reads the latest durable shared synthesis; an untouched organization returns revision zero. **Organization owners and admins only** (403 otherwise): it is built from team-only teamspace posts |
-| `GET /v1/organizations/{org}/organization-agent/follow-ups` | Lists proposed follow-ups; these are auditable proposals, not claims of executed work. **Organization owners and admins only**, for the same reason |
+| `GET /v1/organizations/{org}/organization-agent/context` | Reads the organization-wide synthesis, built only from inputs every member may read; any member. Revision zero until such inputs exist |
+| `GET /v1/organizations/{org}/organization-agent/follow-ups` | Lists proposed follow-ups (auditable proposals, not executed work), each with its source `teamspace_id`: those of the caller's teams, or every one for an owner or admin |
+| `GET /v1/organizations/{org}/teamspaces/{space}/synthesis` | Reads that teamspace's synthesis (`teamspace_id` set; revision zero when untouched). Its team's members and organization owners and admins only (403 otherwise) |
 | `GET /v1/organizations/{org}/teamspaces` | Lists spaces whose human teams are currently visible to the member |
 | `POST /v1/organizations/{org}/teamspaces` | Creates one shared work space for a team the caller manages and binds the organization agent |
 | `GET /v1/organizations/{org}/teamspaces/{space}` | Reads the organization agent, live whisperer roster, and safe contributed-specialist handles |
