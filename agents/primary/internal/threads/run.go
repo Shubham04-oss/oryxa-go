@@ -512,10 +512,11 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 	// would hand that text what Krude already knows.
 	var recalling memory.Service
 	if service.memory != nil && (profile.ReadsMemory || profile.WritesMemory) {
-		scoped, err := service.memory.For(adkmemory.Scope{
-			OrganizationID: run.member.OrganizationID,
-			UserID:         run.member.UserID,
-		})
+		scope, err := memoryScope(run.member)
+		if err != nil {
+			return err
+		}
+		scoped, err := service.memory.For(scope)
 		if err != nil {
 			return fmt.Errorf("scope memory to the member's organization: %w", err)
 		}
@@ -559,6 +560,25 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 		}
 	}
 	return failure
+}
+
+// memoryScope is whose memory a run reads and writes: the member's, in the
+// organization, and the answering agent's own pool unless it is the primary.
+// The primary's scope carries no agent, so it is unchanged and keeps every
+// memory it already has; any other agent's pool is its own, so a specialist's
+// memory never steers the primary or the reverse (L4).
+func memoryScope(member Member) (adkmemory.Scope, error) {
+	scope := adkmemory.Scope{OrganizationID: member.OrganizationID, UserID: member.UserID}
+	if runprofile.RoleOf(member.AgentKind) == runprofile.Primary {
+		return scope, nil
+	}
+	// Without its id a specialist would fall into the primary's pool, the
+	// leak this scope exists to close, so it gets no run rather than that.
+	if strings.TrimSpace(member.AgentID) == "" {
+		return adkmemory.Scope{}, fmt.Errorf("scope memory: a %s agent has no id", member.AgentKind)
+	}
+	scope.AgentID = member.AgentID
+	return scope, nil
 }
 
 // rememberTimeout bounds handing a finished conversation to memory, which

@@ -135,6 +135,28 @@ func TestMemoryBankScopesEveryCallByOrganization(t *testing.T) {
 	}
 }
 
+// TestMemoryBankScopeOfThePrimaryIsUnchanged pins the primary's scope to what
+// it was before agents had pools of their own: any extra key, even an empty
+// one, would hide every memory it already has. A specialist adds its id.
+func TestMemoryBankScopeOfThePrimaryIsUnchanged(t *testing.T) {
+	bank := bankWith(&fakeBank{})
+	primary := Scope{OrganizationID: "org-acme", UserID: "user-1"}
+	specialist := Scope{OrganizationID: "org-acme", UserID: "user-1", AgentID: "agt_researcher"}
+	for _, scope := range []Scope{primary, specialist} {
+		if err := bank.Write(context.Background(), scope, conversation(t, "user-1", "the migration ships in March")); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+
+	sent := bank.api.(*fakeBank)
+	if got, want := sent.generated[0].GetScope(), map[string]string{"organization_id": "org-acme", "user_id": "user-1"}; !sameScope(got, want) {
+		t.Fatalf("primary scope = %v, want %v", got, want)
+	}
+	if got, want := sent.generated[1].GetScope(), map[string]string{"organization_id": "org-acme", "user_id": "user-1", "agent_id": "agt_researcher"}; !sameScope(got, want) {
+		t.Fatalf("specialist scope = %v, want %v", got, want)
+	}
+}
+
 // TestMemoryBankSendsTheConversationItself covers the reason this backend
 // does not use ADK's: threads live in PostgreSQL, so there is no agent
 // engine session for Memory Bank to read and the turns have to be sent.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -1200,6 +1201,69 @@ func TestACompletedRunIsRemembered(t *testing.T) {
 	}
 	if slices.Contains(second.said, "the migration ships in March") {
 		t.Fatalf("the second run sent the whole thread again: %q", second.said)
+	}
+}
+
+// TestEachAgentRemembersInItsOwnScope is L4: a member's specialist writes
+// into a pool of its own, not the primary's, and the primary's scope is
+// exactly what it always was, so the memories it already has stay its own.
+func TestEachAgentRemembersInItsOwnScope(t *testing.T) {
+	bank := &rememberingBank{}
+	remembering, err := adkmemory.New(bank)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("noted", genai.RoleModel), nil
+	}}
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: usage.Counted(llm), Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := newFakeRuns()
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(),
+		Runs: runs, Prices: prices, RunTimeout: time.Minute, Memory: remembering,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{t: t, service: service, runs: runs, model: llm}
+
+	primary := asha
+	primary.AgentID, primary.AgentKind = "agt_primary", "primary"
+	specialist := asha
+	specialist.AgentID, specialist.AgentKind = "agt_researcher", "specialist"
+	for _, member := range []Member{primary, specialist} {
+		created, err := service.Create(context.Background(), member)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.run(member, created.ID, RunInput{Message: "the migration ships in March"})
+	}
+
+	if len(bank.written) != 2 {
+		t.Fatalf("memory was written %d times, want once per agent", len(bank.written))
+	}
+	wantPrimary := map[string]string{"organization_id": asha.OrganizationID, "user_id": asha.UserID}
+	if got := bank.written[0].scope.Fields(); !maps.Equal(got, wantPrimary) {
+		t.Fatalf("primary scope = %v, want it unchanged: %v", got, wantPrimary)
+	}
+	wantSpecialist := map[string]string{"organization_id": asha.OrganizationID, "user_id": asha.UserID, "agent_id": "agt_researcher"}
+	if got := bank.written[1].scope.Fields(); !maps.Equal(got, wantSpecialist) {
+		t.Fatalf("specialist scope = %v, want its own pool: %v", got, wantSpecialist)
+	}
+
+	// A specialist with no id would land in the primary's pool, so it gets
+	// no run instead.
+	anonymous := asha
+	anonymous.AgentKind = "specialist"
+	if _, err := memoryScope(anonymous); err == nil {
+		t.Fatal("a specialist with no id was given a memory scope")
 	}
 }
 
