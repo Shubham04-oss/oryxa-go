@@ -90,6 +90,31 @@ describe("the Python kernel", () => {
   }, 20_000);
 });
 
+// On Cloudflare a container's hostname is 64 characters, one more than a DNS
+// label, so looking it up fails; the kernel must listen without ever doing
+// so.
+it("starts when the container's hostname can't be looked up", async () => {
+  const port = 20_000 + Math.floor(Math.random() * 20_000);
+  const patched = spawn(
+    "python3",
+    [
+      "-c",
+      "import socket\n" +
+        "def fail(*args, **kwargs): raise UnicodeError('label too long')\n" +
+        "socket.getfqdn = fail\nsocket.gethostbyaddr = fail\n" +
+        `import runpy; runpy.run_path(${JSON.stringify(join(CONTAINER, "kernel.py"))}, run_name="__main__")`,
+    ],
+    { env: { ...process.env, ORYXA_PY_KERNEL_PORT: String(port), ORYXA_WORKSPACE: workspace }, stdio: "ignore" },
+  );
+  running.push({ port, process: patched });
+  let healthy = false;
+  for (let attempt = 0; attempt < 50 && !healthy; attempt++) {
+    healthy = await fetch(`http://127.0.0.1:${port}/health`).then((response) => response.ok, () => false);
+    if (!healthy) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  expect(healthy).toBe(true);
+}, 15_000);
+
 describe("the JavaScript and TypeScript kernel", () => {
   it("keeps declarations from one cell to the next, across languages", async () => {
     await cell(node, "const prices = [10, 20]; let total = 0;", { language: "javascript" });

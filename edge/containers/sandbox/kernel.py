@@ -24,7 +24,8 @@ import tempfile
 import threading
 import time
 import traceback
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+from socketserver import ThreadingTCPServer
 
 KERNEL_PORT = int(os.environ.get("ORYXA_PY_KERNEL_PORT", "8899"))
 WORKSPACE = os.environ.get("ORYXA_WORKSPACE", "/workspace")
@@ -176,7 +177,13 @@ def main():
     os.makedirs(WORKSPACE, exist_ok=True)
     os.chdir(WORKSPACE)
     sys.path.insert(0, WORKSPACE)
-    server = ThreadingHTTPServer(("0.0.0.0", KERNEL_PORT), Handler)
+    # socketserver, not http.server's HTTPServer: that one looks up the
+    # container's hostname at startup, and on Cloudflare the hostname is 64
+    # characters, one more than a DNS label, so it fails and the kernel never
+    # listens.
+    ThreadingTCPServer.allow_reuse_address = True
+    ThreadingTCPServer.daemon_threads = True
+    server = ThreadingTCPServer(("0.0.0.0", KERNEL_PORT), Handler)
     server.serve_forever()
 
 
