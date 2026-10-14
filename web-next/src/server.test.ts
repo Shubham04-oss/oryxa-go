@@ -478,3 +478,57 @@ describe("security headers", () => {
     ).toContain("connect-src 'self' ws://localhost:3003")
   })
 })
+
+describe("a room on the live layer", () => {
+  const live = `${app}/live/org_sim/rooms/teamspace/tsp_1/call/join`
+
+  function joinRequest() {
+    return new Request(live, {
+      method: "POST",
+      headers: {
+        Origin: app,
+        Cookie: cookie,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    })
+  }
+
+  it("asks Go who the member is, then hands the call to the edge naming them", async () => {
+    const edge = vi.fn(async () => json({ callId: "call_1" }, 200))
+    fetchMock.mockImplementation(async () =>
+      json({ membership: { user_id: "usr_ada" } }, 200)
+    )
+    const response = await worker.fetch(
+      joinRequest() as Parameters<typeof worker.fetch>[0],
+      { ...env, EDGE: { fetch: edge } as unknown as Fetcher }
+    )
+
+    expect(response.status).toBe(200)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "http://go.test/v1/organizations/org_sim"
+    )
+    const sent = (edge.mock.calls[0] as unknown as [Request] | undefined)?.[0]
+    expect(sent?.headers.get("x-oryxa-member")).toBe(
+      '{"org":"org_sim","member":"usr_ada"}'
+    )
+  })
+
+  it("refuses an agent's session before the edge", async () => {
+    const edge = vi.fn()
+    fetchMock.mockImplementation(async () =>
+      json({ agent: true, membership: { user_id: "usr_ada" } }, 200)
+    )
+    const response = await worker.fetch(
+      joinRequest() as Parameters<typeof worker.fetch>[0],
+      { ...env, EDGE: { fetch: edge } as unknown as Fetcher }
+    )
+    expect(response.status).toBe(403)
+    expect(edge).not.toHaveBeenCalled()
+  })
+
+  it("answers a path that names no room 404", async () => {
+    const response = await send(new Request(`${app}/live/org_sim/nope`))
+    expect(response.status).toBe(404)
+  })
+})
