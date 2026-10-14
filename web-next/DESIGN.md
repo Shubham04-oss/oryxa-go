@@ -201,6 +201,17 @@ not permission to copy every incidental value into a new component.
   and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
   sit **above** the work panel. The panel's top area belongs to the selected
   view's heading and state, not the tab strip.
+  - **A teamspace** (founder's redesign, 14 Oct 2026) opens under a faint
+    band of the harbour scene, its name a title (28px) beside its planet,
+    with its status, team and how many people. Its room is the main tile
+    (on the base), and its work the side tile, the tabs a segmented control
+    whose selected tab is the raised tile.
+  - **The teamspaces list** is a title with the counts (active, paused, in
+    all) under the same faint band, segmented status filters and a search,
+    and the teamspaces as a grid of cards: planet, status, name, purpose,
+    team and when it was last updated, how many people. For a member who
+    can open one, the last card opens a new teamspace, drawn as the ship's
+    lines on deep sea.
 - Expanding the primary agent's chat uses Agent overview as focused work:
   the same mounted conversation sits on the left, and the overview occupies
   the work panel. The right rail offers only DMs and Teams in this state.
