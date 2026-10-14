@@ -1,0 +1,22 @@
+{
+  "publicKeys": [
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgc2Co9LHJ5RaOwUspi6Ir6TMOnG0yWeRYDuy6TQQo2eybjQF4a29zg2LQPQyhVkCykDjIDDyLgyi/JSj/er1+w=="
+  ],
+  "issuedAt": 1800000000,
+  "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJlZGdlIiwiYXVkIjoiYWdlbnRzIiwib3JnIjoib3JnXzEiLCJ0ZWFtIjoidGVhbV8xIiwicm9vbSI6eyJraW5kIjoidGVhbXNwYWNlIiwiaWQiOiJyb29tXzEifSwibWVtYmVyIjoidXNyXzEiLCJhZ2VudCI6IiIsInJ1biI6IiIsInNjb3BlcyI6WyJjYWxsOnNwZWFrIl0sInByaXZhdGUiOmZhbHNlLCJpYXQiOjE4MDAwMDAwMDAsImV4cCI6MTgwMDAwMDA2MCwianRpIjoiYzNhZGI3NzgtNWEyNi00MmY0LWExZTktNGFiMzZkZDE2MTdlIn0.v6aR8fGYhJ0pLHCMUMuDowJUMUEjBn4xRllCRFPzOuLjq1E9FqoxEP1LVVF0bJTFowlm5w3CJ27-FmkiKEhSfg",
+  "request": {
+    "dispatchId": "dsp_fixture",
+    "org": "org_1",
+    "team": "team_1",
+    "room": {
+      "kind": "teamspace",
+      "id": "room_1"
+    },
+    "call": "call_1",
+    "member": "usr_1",
+    "request": "What's on my calendar?",
+    "transcriptContext": [
+      "Asha: Krude?"
+    ]
+  }
+}
