@@ -6,28 +6,32 @@ The integrations service ([README.md](README.md)) is built a piece a day by an a
 
 | Routine | When | What it does | Rules |
 |---|---|---|---|
-| **integrations-loop** (builder) | Daily, 20:30 UTC (02:00 IST) | Takes the next ready issue from the queue (or fixes review comments first), builds it on a `loop/<issue>-<slug>` branch, tests it, pushes, opens one PR, and waits for CI | [loop-agent.md](loop-agent.md) |
-| **integrations-review** (macbookpro) | Twice daily, 04:00 and 16:00 UTC (09:30 and 21:30 IST) | Reviews every open `loop` PR: merges the good ones, sends the rest back with numbered fixes, and reports anything that needs the owner | The prompt in the routine ([§ The reviewer's prompt](#the-reviewers-prompt)) |
+| **integrations-loop** (builder) | Every 2 hours, day and night: :30 past even UTC hours (00:30, 02:30 … 22:30 UTC; 06:00, 08:00 … IST) | Takes the next ready issue from the queue (or fixes review comments first), builds it on a `loop/<issue>-<slug>` branch, tests it, pushes, opens one PR, and waits for CI | [loop-agent.md](loop-agent.md) |
+| **integrations-review** (macbookpro) | Every 2 hours, an hour after the builder: :30 past odd UTC hours (01:30, 03:30 … 23:30 UTC) | Reviews every open `loop` PR: merges the good ones, sends the rest back with numbered fixes, and reports anything that needs the owner | The prompt in the routine ([§ The reviewer's prompt](#the-reviewers-prompt)) |
 
 Both check out `Shubham04-oss/oryxa-go` and `Shubham04-oss/oryxa-platform`, and both act through the **Claude GitHub App** with the owner's GitHub identity.
 
 ```
  GitHub issues (label loop)          ┌───────────── Anthropic cloud ─────────────┐
-   P0 … P6, "Depends on #N"   ──────▶│ integrations-loop (daily)                 │
+   P0 … P6, "Depends on #N"   ──────▶│ integrations-loop (every 2 h)             │
                                      │   build → test → push loop/* → open PR    │
  PR (label loop) ◀───────────────────│                                           │
-   CI (GitHub, a1 runners)           │ integrations-review (twice daily)         │
+   CI (GitHub, a1 runners)           │ integrations-review (every 2 h, offset 1h)│
    ◀──── merge / request changes ────│   review → merge or numbered fixes        │
                                      └───────────────────────────────────────────┘
  main ──▶ CD deploys (the service ships switched off: INTEGRATIONS_ENABLED)
 ```
 
-A day in the loop:
-1. **02:00 IST:** the builder runs. If any loop PR has review comments or failing CI, it fixes that first. Otherwise it takes the lowest-numbered ready issue.
+A cycle in the loop, every two hours, day and night:
+1. **:30 past an even UTC hour:** the builder runs.
+   - It first resumes a run paused for usage, or fixes review comments and failing CI.
+   - Otherwise it takes the lowest-numbered ready issue.
+   - It opens or updates one PR.
 2. **The PR's CI** runs on GitHub, using a1's two existing CI runners.
-3. **09:30 IST:** the reviewer merges it, or comments numbered fixes.
-4. **Next night:** the builder applies the fixes, or moves on.
-5. **21:30 IST:** a second review pass catches anything late.
+3. **An hour later:** the reviewer merges it, or comments numbered fixes.
+4. **An hour after that:** the builder applies the fixes, or moves on.
+
+At most one issue per builder run, and **backpressure** (3 open loop PRs means no new work) keeps the reviewer from falling behind. Runs can overlap: the builder skips an issue another run is on (`loop:in-progress` with activity in the last 3 hours).
 
 ## The queue
 
@@ -38,6 +42,16 @@ A day in the loop:
   - `phase:P0`–`phase:P6`: the phases in the design, §18.
 - **Order:** the builder takes the lowest-numbered ready issue whose `Depends on #N` issues are all closed. P0 and P1 are #283–#301.
 - **Adding work:** macbookpro opens the next phase's issues when the current one is nearly done. The reviewer flags this when fewer than 3 ready issues remain. Anyone can add an issue in the same format: a title, the scope, `**Acceptance:**`, `Depends on #N`, and the labels.
+
+## Usage limits
+
+Both routines run on the owner's plan, so both keep **at least 5% of the 5-hour usage window free**:
+- They check usage before starting and before each big step.
+- At 5% or less left, or on a usage-limit error, they stop cleanly.
+  - **The builder** pushes its work (a draft PR if it has none) and leaves a `Paused for usage` handoff note, so its next run resumes there ([loop-agent.md](loop-agent.md), § Usage limits).
+  - **The reviewer** finishes or skips the PR it's on and reports what it didn't reach.
+- Neither waits inside a run for the window to reset. **The two-hourly schedule is the retry.**
+- **If paused runs keep showing up,** usage is too tight for this cadence. Make the builder's schedule sparser (for example `30 */4 * * *`) with `RemoteTrigger update`, after changing it here first.
 
 ## Safety
 
@@ -79,7 +93,7 @@ Nothing here is set up yet. Whoever sets it up, the owner or an agent in a Claud
 ```json
 {
   "name": "integrations-loop",
-  "cron_expression": "30 20 * * *",
+  "cron_expression": "30 */2 * * *",
   "enabled": true,
   "job_config": {
     "ccr": {
@@ -110,7 +124,7 @@ Nothing here is set up yet. Whoever sets it up, the owner or an agent in a Claud
 
 The same shape, with these differences:
 - `"name": "integrations-review"`;
-- `"cron_expression": "0 4,16 * * *"`;
+- `"cron_expression": "30 1-23/2 * * *"`;
 - `"model": "claude-opus-5-5"`;
 - **only** the `oryxa-go` source;
 - `allowed_tools` without `WebFetch`;
@@ -125,7 +139,7 @@ The same shape, with these differences:
 ### 4. Changing them later
 
 - **Edit the prompts here first, then update the routine,** so this file stays the source of truth.
-- **Schedules are UTC:** 20:30 UTC = 02:00 IST; 04:00 and 16:00 UTC = 09:30 and 21:30 IST.
+- **Schedules are UTC:** the builder runs at :30 past even hours, the reviewer at :30 past odd hours; IST is UTC+5:30. The minimum interval a routine allows is one hour.
 - **Deleting** a routine is only possible at <https://claude.ai/code/routines>.
 
 ## Debugging a run
@@ -141,10 +155,12 @@ The reviewer routine's prompt is kept here so it can be recreated:
 ```text
 You are macbookpro, the lead agent for Shubham04-oss/oryxa-go. The owner has authorized you to review and merge the integrations loop agent's pull requests on this schedule. Start every GitHub post with [agent:macbookpro]. Never print tokens or secrets.
 
+Usage: the owner's plan has a 5-hour usage window; keep at least 5% of it free. Check usage (the /usage command, or the usage the session shows) before starting and before each PR review. At 5% or less left, or on any usage-limit or rate-limit error: stop starting new reviews, finish or abandon the current one without merging half-checked work, and end with a report naming the PRs you didn't reach. They wait for your next run in two hours. Never wait inside the run for the window to reset.
+
 The rules the loop follows are in docs/design/integrations/loop-agent.md; the design it builds is docs/design/integrations/README.md; how the loop runs is docs/design/integrations/operations.md. Read all three first.
 
 1. List open loop PRs: gh pr list --label loop --state open --json number,title,headRefName,mergeable,statusCheckRollup,reviewDecision,updatedAt. If none, report "no loop PRs" and go to step 5.
-2. Review each, oldest first: gh pr view, gh pr diff, and the linked issue. Look only for what decides the outcome, not polish:
+2. Skip draft PRs: they are builder runs paused for usage, not ready for review. Review each other PR, oldest first: gh pr view, gh pr diff, and the linked issue. Look only for what decides the outcome, not polish:
    - correctness against the issue's acceptance criteria and the design;
    - security (block on any): weakened egress handles, verification, SSRF checks, grants or the effect gate; secrets in code, logs or testdata; cross-org data access; code copied from Nango, Airbyte, Pipedream or n8n;
    - scope: only integrations/**, docs/design/integrations/**, or apps/ files the issue names; nothing under .github/;
