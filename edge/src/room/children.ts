@@ -320,6 +320,19 @@ export class Children {
     );
   }
 
+  // memberRemoved stops what a member removed from the room ran in it:
+  // their browsers, which hold their logins, and their private sandbox.
+  async memberRemoved(member: string): Promise<void> {
+    const rows = this.sql
+      .exec<ChildRow>(
+        "SELECT * FROM children WHERE status = 'running' AND ((kind = 'browser' AND member = ?) OR (kind = 'sandbox' AND name = ?))",
+        member,
+        `private-${member}`,
+      )
+      .toArray();
+    for (const row of rows) await this.stopChild(row, "member removed from the room");
+  }
+
   // sweep stops children idle past their limit.
   async sweep(): Promise<void> {
     const now = Date.now();

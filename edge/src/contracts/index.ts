@@ -75,6 +75,7 @@ export const SCOPES = [
   "call:speak",
   "log:write",
   "log:read",
+  "room:members",
 ] as const;
 export const Scope = z.enum(SCOPES);
 export type Scope = z.infer<typeof Scope>;
@@ -409,3 +410,69 @@ export const ErrorBody = z.strictObject({
   }),
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;
+
+// ---- Room membership (A18) ----
+
+export const MAX_ROOM_MEMBERS = 1000;
+const MemberId = z.string().min(1).max(128);
+
+// MembersRequest is PUT …/members: a full replace (members) or a change
+// (add/remove), never both.
+export const MembersRequest = z
+  .strictObject({
+    members: z.array(MemberId).max(MAX_ROOM_MEMBERS).optional(),
+    add: z.array(MemberId).max(MAX_ROOM_MEMBERS).optional(),
+    remove: z.array(MemberId).max(MAX_ROOM_MEMBERS).optional(),
+  })
+  .refine((body) => (body.members !== undefined) !== (body.add !== undefined || body.remove !== undefined), {
+    message: "send members (a replace) or add/remove (a change), not both",
+  });
+export type MembersRequest = z.infer<typeof MembersRequest>;
+
+export const MembersResponse = z.strictObject({ members: z.array(z.string()) });
+export type MembersResponse = z.infer<typeof MembersResponse>;
+
+function memberPair(a: string, b: string): [string, string] {
+  if (!a || !b || a === b || a.includes("_") || b.includes("_") || !validId(a) || !validId(b)) {
+    throw new Error("a conversation needs two distinct member ids without _");
+  }
+  return a < b ? [a, b] : [b, a];
+}
+
+function checkedRoomId(id: string): string {
+  if (!validId(id)) throw new Error("room id too long");
+  return id;
+}
+
+// directRoomId is the edge room id of two members' direct message: their
+// ids sorted, joined by "_" (Go: DirectRoomID).
+export function directRoomId(memberA: string, memberB: string): string {
+  const [a, b] = memberPair(memberA, memberB);
+  return checkedRoomId(`${a}_${b}`);
+}
+
+// sideRoomId is a side conversation's: teamspace, then the members sorted
+// (Go: SideRoomID).
+export function sideRoomId(teamspaceId: string, memberA: string, memberB: string): string {
+  if (!teamspaceId || !validId(teamspaceId)) throw new Error("invalid teamspace id");
+  const [a, b] = memberPair(memberA, memberB);
+  return checkedRoomId(`${teamspaceId}_${a}_${b}`);
+}
+
+// conversationMembers returns the two members a dm or side room's id names,
+// or null when the id isn't one in canonical form.
+export function conversationMembers(room: Room): [string, string] | null {
+  const parts = room.id.split("_");
+  try {
+    if (room.kind === "dm" && parts.length === 2) {
+      return directRoomId(parts[0]!, parts[1]!) === room.id ? memberPair(parts[0]!, parts[1]!) : null;
+    }
+    if (room.kind === "side" && parts.length >= 3) {
+      const [a, b] = [parts[parts.length - 2]!, parts[parts.length - 1]!];
+      return sideRoomId(parts.slice(0, -2).join("_"), a, b) === room.id ? memberPair(a, b) : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}

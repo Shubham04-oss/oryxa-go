@@ -50,6 +50,9 @@ var fixtureTypes = map[string]func() any{
 	"log.append.request.json":            func() any { return new(AppendEventRequest) },
 	"log.response.json":                  func() any { return new(LogResponse) },
 	"children.response.json":             func() any { return new(ChildrenResponse) },
+	"members.replace.request.json":       func() any { return new(MembersRequest) },
+	"members.change.request.json":        func() any { return new(MembersRequest) },
+	"members.response.json":              func() any { return new(MembersResponse) },
 	"error.json":                         func() any { return new(ErrorBody) },
 	"error.retryable.json":               func() any { return new(ErrorBody) },
 }
@@ -151,5 +154,38 @@ func TestHasScope(t *testing.T) {
 	claims := TokenClaims{Scopes: []Scope{ScopeSandboxExec}}
 	if !claims.HasScope(ScopeSandboxExec) || claims.HasScope(ScopeBrowserDrive) {
 		t.Fatal("HasScope is wrong")
+	}
+}
+
+func TestConversationRoomIDs(t *testing.T) {
+	a, b := "6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f", "0a1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f"
+	direct, err := DirectRoomID(a, b)
+	if err != nil || direct != b+"_"+a {
+		t.Fatalf("DirectRoomID = %q, %v", direct, err)
+	}
+	if again, _ := DirectRoomID(b, a); again != direct {
+		t.Error("the order of the members changed the room")
+	}
+	if members, err := ParseDirectRoomID(direct); err != nil || members != [2]string{b, a} {
+		t.Errorf("ParseDirectRoomID = %v, %v", members, err)
+	}
+	side, err := SideRoomID("tsp_Ab-c_d9", a, b)
+	if err != nil || side != "tsp_Ab-c_d9_"+b+"_"+a {
+		t.Fatalf("SideRoomID = %q, %v", side, err)
+	}
+	if teamspace, members, err := ParseSideRoomID(side); err != nil || teamspace != "tsp_Ab-c_d9" || members != [2]string{b, a} {
+		t.Errorf("ParseSideRoomID = %q %v %v", teamspace, members, err)
+	}
+	for name, bad := range map[string]func() error{
+		"same member":     func() error { _, err := DirectRoomID(a, a); return err },
+		"underscore":      func() error { _, err := DirectRoomID("usr_1", b); return err },
+		"unsorted direct": func() error { _, err := ParseDirectRoomID(a + "_" + b); return err },
+		"three parts":     func() error { _, err := ParseDirectRoomID("x_y_z"); return err },
+		"unsorted side":   func() error { _, _, err := ParseSideRoomID("tsp_1_" + a + "_" + b); return err },
+		"no teamspace":    func() error { _, err := SideRoomID("", a, b); return err },
+	} {
+		if bad() == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }
