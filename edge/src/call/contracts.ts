@@ -144,7 +144,10 @@ export type VoiceFrame =
   | { type: "voice.speaking"; utteranceId: string; text: string }
   | { type: "voice.audio"; utteranceId: string; seq: number; format: "mp3"; data: string; last: boolean }
   | { type: "voice.stop"; utteranceId: string; reason: "barge_in" | "dismissed" | "call_ended" }
-  | { type: "voice.state"; present: boolean; name: string };
+  | { type: "voice.state"; present: boolean; name: string }
+  // voice.private is an answer for one member only, sent to their own
+  // sockets: the work agent used their access to find it.
+  | { type: "voice.private"; dispatchId: string; text: string };
 
 // ---- room log event types ----
 

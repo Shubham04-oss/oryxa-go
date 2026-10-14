@@ -235,7 +235,7 @@ export class RoomDO extends DurableObject<Env> {
 
   // callOp is the call's RPC entry, for the Worker's RealtimeKit webhook and
   // the room's VoiceDO; nothing outside this Worker reaches it.
-  async callOp(op: CallOp): Promise<void> {
+  async callOp(op: CallOp): Promise<unknown> {
     return handleCallOp(this.callRoom(), op);
   }
 

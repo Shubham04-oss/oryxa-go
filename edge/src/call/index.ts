@@ -315,24 +315,30 @@ async function revoke(provider: ReturnType<typeof callProvider>, call: CallRow, 
 // the room's VoiceDO. Nothing outside this Worker can send one.
 export type CallOp =
   | { type: "webhook"; event: RealtimeKitEvent; deliveryId: string; callId: string }
-  | { type: "agentSegment"; callId: string; segmentId: string; text: string; at: number; name: string };
+  | { type: "agentSegment"; callId: string; segmentId: string; text: string; at: number; name: string }
+  // present answers who is in the call now, by member id.
+  | { type: "present"; callId: string };
 
-export async function handleCallOp(ctx: CallRoom, op: CallOp): Promise<void> {
+export async function handleCallOp(ctx: CallRoom, op: CallOp): Promise<unknown> {
   const identity = ctx.room.identity();
-  if (!identity) return;
+  if (!identity) return undefined;
   const store = new CallStore(ctx.sql);
+  if (op.type === "present") {
+    const call = store.byId(op.callId);
+    return call && call.ended_at === null ? store.present(op.callId).map((row) => row.member) : [];
+  }
   if (op.type === "agentSegment") {
     recordAgentSegment(ctx, store, op.callId, op.segmentId, op.text, op.at, op.name);
-    return;
+    return undefined;
   }
   // A delivery is marked done only once it is applied: RealtimeKit sends a
   // failed one again, and a retry of one that worked is dropped.
-  if (store.seenWebhook(op.deliveryId)) return;
+  if (store.seenWebhook(op.deliveryId)) return undefined;
   const event = op.event;
   const call = store.byId(op.callId);
   if (!call) {
     console.warn(JSON.stringify({ msg: "realtimekit webhook for an unknown call", event: event.event, callId: op.callId }));
-    return;
+    return undefined;
   }
   await serialized(ctx.room, async () => {
     switch (event.event) {
@@ -353,6 +359,7 @@ export async function handleCallOp(ctx: CallRoom, op: CallOp): Promise<void> {
     }
   });
   store.markWebhook(op.deliveryId);
+  return undefined;
 }
 
 // roomForMeeting reads the room and call back out of a meeting's title.

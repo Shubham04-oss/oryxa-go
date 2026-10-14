@@ -403,6 +403,40 @@ describe("dispatching real work (B5)", () => {
     live.close();
   });
 
+  it("keeps an answer found with a member's own access private when others are in the call", async () => {
+    const room = await newRoom("usr_a", "usr_b");
+    const { callId } = await join("usr_a", room, "Asha");
+    await join("usr_b", room, "Ben");
+    reply = () => ({ kind: "dispatch", request: "What's in my inbox?", acknowledgement: "Checking." });
+    const asha = await listen("usr_a", room);
+    const ben = await listen("usr_b", room);
+    await say("usr_a", room, callId, "Krude, what's in my inbox?");
+    await waitFor(() => dispatched, (all) => all.length === 1, "the dispatch");
+
+    const result = {
+      dispatchId: dispatched[0]!.dispatchId, org: "org_1", room: { kind: "teamspace", id: room }, call: callId, member: "usr_a",
+      threadId: "thr_side", runId: "run_1", status: "completed", text: "Your landlord wrote about the lease.",
+    };
+    const fromGo = await call(`/v1/rooms/teamspace/${room}/voice/result`, {
+      method: "POST",
+      body: JSON.stringify(result),
+      tokenOptions: { room: { kind: "teamspace", id: room }, member: "usr_a", scopes: ["call:speak"] },
+    });
+    expect(fromGo.status).toBe(202);
+    await waitFor(() => asha.frames, (all) => all.some((frame) => frame.type === "voice.private"), "Asha's private answer");
+    await waitFor(
+      () => ben.frames,
+      (all) => all.some((frame) => frame.type === "voice.speaking" && frame.text === "Asha, I've sent you that answer privately."),
+      "the spoken pointer",
+    );
+    const everythingBenGot = JSON.stringify(ben.frames);
+    expect(everythingBenGot).not.toContain("landlord");
+    expect(JSON.stringify(await log("usr_b", room))).not.toContain("landlord");
+    expect((await log("usr_a", room)).find((event) => event.type === "voice.result")).toMatchObject({ private: true });
+    asha.close();
+    ben.close();
+  });
+
   it("sends a dispatch a deploy interrupted again, once", async () => {
     const room = await newRoom("usr_a");
     const { callId } = await join("usr_a", room);
@@ -490,6 +524,23 @@ describe("RealtimeKit's webhooks", () => {
     expect(((await (await asMember("usr_a", room, "/call")).json()) as { call: unknown }).call).toBeNull();
     expect((await send(await key.sign(body))).status).toBe(200);
     expect((await log("usr_a", room)).filter((event) => event.type === "call.ended")).toHaveLength(1);
+  });
+
+  it("finds a recording's call by its file name, whatever RealtimeKit adds to the prefix", async () => {
+    const key = await rsaKey();
+    const room = await newRoom("usr_a");
+    const { callId } = await join("usr_a", room);
+    const file = `${recordingPrefix(`oryxa:org_1:teamspace:${room}:${callId}`)}_1760430000.mp4`;
+    const body = JSON.stringify({ event: "recording.statusUpdate", recording: { id: "rec_1", status: "RECORDING", outputFileName: file } });
+    const response = await handleRealtimeKitWebhook(
+      new Request("https://edge.test/v1/webhooks/realtimekit", {
+        method: "POST",
+        body,
+        headers: { "rtk-signature": await key.sign(body), "rtk-uuid": "dlv_rec" },
+      }),
+      { ...env, REALTIMEKIT_WEBHOOK_PUBLIC_KEY: key.pem } as Env,
+    );
+    expect(await response.json()).toEqual({ ok: true });
   });
 
   it("ignores a webhook for a meeting that isn't an Oryxa call", async () => {

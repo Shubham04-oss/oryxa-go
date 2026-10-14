@@ -164,15 +164,27 @@ export class VoiceDO extends DurableObject<Env> {
     this.sql.exec("UPDATE voice_dispatches SET status = ? WHERE id = ?", result.status, row.id);
     const generation = this.generation;
     if (result.status === "completed" && result.text) {
-      const answer = spoken(result.text);
+      // The work agent used the member's own access. Until the room-audience
+      // guard (Layer C) checks an answer against everyone listening, it is
+      // spoken only when the member who asked is alone in the call; otherwise
+      // it goes to them privately, and the room hears only that it did.
+      const present = ((await this.room(call).callOp({ type: "present", callId: call.callId })) as string[] | undefined) ?? [];
+      const alone = present.every((member) => member === row.member);
       this.room(call).append({
         actor: { type: "agent", id: "voice", onBehalfOf: row.member },
         run: null,
         type: CALL_EVENTS.result,
         summary: `${agentName(this.env)} answered ${row.name}: ${result.text}`,
-        data: { callId: call.callId, dispatchId: row.id, threadId: result.threadId, runId: result.runId, text: result.text },
+        data: { callId: call.callId, dispatchId: row.id, threadId: result.threadId, runId: result.runId, text: result.text, spoken: alone },
+        private: !alone,
       });
-      this.ctx.waitUntil(this.speak(call, answer.cut ? `${answer.text} The rest is in the room.` : answer.text, row.member, generation));
+      if (alone) {
+        const answer = spoken(result.text);
+        this.ctx.waitUntil(this.speak(call, answer.cut ? `${answer.text} The rest is in the room.` : answer.text, row.member, generation));
+      } else {
+        this.sendTo(row.member, { type: "voice.private", dispatchId: row.id, text: result.text });
+        this.ctx.waitUntil(this.speak(call, `${row.name}, I've sent you that answer privately.`, row.member, generation));
+      }
     } else {
       this.room(call).append({
         actor: { type: "agent", id: "voice", onBehalfOf: row.member },
@@ -316,6 +328,18 @@ export class VoiceDO extends DurableObject<Env> {
     const call = this.call();
     pair[1].send(JSON.stringify({ type: "voice.state", present: Boolean(call?.present), name: agentName(this.env) } satisfies VoiceFrame));
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  // sendTo sends a frame to one member's sockets only.
+  private sendTo(member: string, frame: VoiceFrame): void {
+    const message = JSON.stringify(frame);
+    for (const socket of this.ctx.getWebSockets(member)) {
+      try {
+        socket.send(message);
+      } catch {
+        // A socket closing mid-send is dropped by the runtime.
+      }
+    }
   }
 
   private broadcast(frame: VoiceFrame): void {

@@ -62,8 +62,10 @@ function titleOf(event: RealtimeKitEvent): string | undefined {
   if (event.meeting?.title) return event.meeting.title;
   const file = event.recording?.outputFileName;
   if (!file) return undefined;
+  // RealtimeKit may add to the prefix; the call id is read by its own shape.
   const parts = file.split(".");
-  return parts.length >= 5 ? parts.slice(0, 5).join(":") : undefined;
+  const callId = /^call_[0-9a-f]{32}/.exec(parts[4] ?? "")?.[0];
+  return parts.length >= 5 && callId ? [...parts.slice(0, 4), callId].join(":") : undefined;
 }
 
 export async function handleRealtimeKitWebhook(request: Request, env: Env): Promise<Response> {
