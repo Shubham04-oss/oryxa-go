@@ -23,7 +23,9 @@ export function SandboxTerminal({
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
-    let disposed = false
+    // An object, so the async work below sees the cleanup's change.
+    const life = { disposed: false }
+    const gone = () => life.disposed
     let socket: WebSocket | undefined
     const cleanups: (() => void)[] = []
     setStatus("connecting")
@@ -33,7 +35,7 @@ export function SandboxTerminal({
         import("@xterm/xterm"),
         import("@xterm/addon-fit"),
       ])
-      if (disposed || !host.current) return
+      if (gone() || !host.current) return
       const styles = getComputedStyle(host.current)
       const terminal = new Terminal({
         cursorBlink: true,
@@ -58,15 +60,20 @@ export function SandboxTerminal({
           rows: terminal.rows,
         })
       } catch {
-        if (!disposed) setStatus("failed")
+        if (!gone()) setStatus("failed")
         return
       }
-      if (disposed) return
+      if (gone()) return
       const url = new URL(link.url)
       url.protocol = url.protocol === "http:" ? "ws:" : "wss:"
       url.searchParams.set("cols", String(terminal.cols))
       url.searchParams.set("rows", String(terminal.rows))
-      socket = new WebSocket(url)
+      try {
+        socket = new WebSocket(url)
+      } catch {
+        setStatus("failed")
+        return
+      }
       socket.binaryType = "arraybuffer"
       const decoder = new TextDecoder()
       socket.addEventListener("open", () => {
@@ -81,7 +88,7 @@ export function SandboxTerminal({
         )
       })
       socket.addEventListener("close", () => {
-        if (!disposed) setStatus("closed")
+        if (!gone()) setStatus("closed")
       })
       const input = terminal.onData((data) => {
         if (socket?.readyState === WebSocket.OPEN) socket.send(data)
@@ -101,7 +108,7 @@ export function SandboxTerminal({
     })()
 
     return () => {
-      disposed = true
+      life.disposed = true
       socket?.close()
       for (const cleanup of cleanups.reverse()) cleanup()
     }
@@ -126,7 +133,10 @@ export function SandboxTerminal({
               ? "Couldn't open a shell in this sandbox."
               : "The shell closed."}
           {status !== "connecting" && (
-            <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+            <button
+              type="button"
+              onClick={() => setAttempt((value) => value + 1)}
+            >
               Open a new shell
             </button>
           )}

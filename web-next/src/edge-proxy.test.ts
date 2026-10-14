@@ -199,10 +199,13 @@ describe("a room's sandboxes and browsers", () => {
       ["POST", "/browser/br_1/resume"],
     ]
     for (const [method, rest] of allowed) {
-      const { request, live } = liveRequest(`/live/org_1/rooms/thread/th_1${rest}`, {
-        method,
-        body: method === "POST" ? "{}" : undefined,
-      })
+      const { request, live } = liveRequest(
+        `/live/org_1/rooms/thread/th_1${rest}`,
+        {
+          method,
+          body: method === "POST" ? "{}" : undefined,
+        }
+      )
       expect((await handleLive(request, env, live, member)).status).toBe(200)
     }
     const refused: [string, string][] = [
@@ -213,11 +216,16 @@ describe("a room's sandboxes and browsers", () => {
       ["GET", "/sandbox/../files"],
     ]
     for (const [method, rest] of refused) {
-      const { request, live } = liveRequest(`/live/org_1/rooms/thread/th_1${rest}`, {
-        method,
-        body: method === "POST" ? "{}" : undefined,
-      })
-      expect((await handleLive(request, env, live, member)).status).not.toBe(200)
+      const { request, live } = liveRequest(
+        `/live/org_1/rooms/thread/th_1${rest}`,
+        {
+          method,
+          body: method === "POST" ? "{}" : undefined,
+        }
+      )
+      expect((await handleLive(request, env, live, member)).status).not.toBe(
+        200
+      )
     }
     expect(fetch).toHaveBeenCalledTimes(allowed.length)
   })

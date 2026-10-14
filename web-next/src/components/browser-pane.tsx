@@ -12,7 +12,15 @@ import type { LiveRoom } from "@/lib/live/client"
 export const HANDOFF_POLL_MS = 5_000
 
 function handoffKey(organizationId: string, room: LiveRoom, browser: string) {
-  return ["live", organizationId, room.kind, room.id, "browser", browser, "handoff"] as const
+  return [
+    "live",
+    organizationId,
+    room.kind,
+    room.id,
+    "browser",
+    browser,
+    "handoff",
+  ] as const
 }
 
 function elapsed(ms: number | undefined): string | undefined {
@@ -36,7 +44,16 @@ export function BrowserPane({
   const [mode, setMode] = useState<"tab" | "full">("tab")
   const [note, setNote] = useState("")
   const live = useQuery({
-    queryKey: ["live", organizationId, room.kind, room.id, "browser", browser, "view", mode],
+    queryKey: [
+      "live",
+      organizationId,
+      room.kind,
+      room.id,
+      "browser",
+      browser,
+      "view",
+      mode,
+    ],
     queryFn: () => openLiveView(organizationId, room, browser, mode),
     staleTime: Infinity,
     retry: false,
@@ -49,7 +66,13 @@ export function BrowserPane({
   const asked = handoff.data?.active === true
   const back = useMutation({
     mutationFn: (success: boolean) =>
-      handBack(organizationId, room, browser, success, note.trim() || undefined),
+      handBack(
+        organizationId,
+        room,
+        browser,
+        success,
+        note.trim() || undefined
+      ),
     onSuccess: () => {
       setMode("tab")
       setNote("")
@@ -79,7 +102,11 @@ export function BrowserPane({
             </span>
           </div>
           {mode === "tab" ? (
-            <button type="button" className="live-button" onClick={() => setMode("full")}>
+            <button
+              type="button"
+              className="live-button"
+              onClick={() => setMode("full")}
+            >
               Take over
             </button>
           ) : (
@@ -129,7 +156,11 @@ export function BrowserPane({
               key={live.data.url}
               className="browser-live-frame"
               src={live.data.url}
-              title={mode === "full" ? "The browser, under your control" : "The agent's browser, live"}
+              title={
+                mode === "full"
+                  ? "The browser, under your control"
+                  : "The agent's browser, live"
+              }
               allow="clipboard-read; clipboard-write"
             />
             <a

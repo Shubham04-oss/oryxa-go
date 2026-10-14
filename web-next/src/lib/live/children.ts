@@ -28,7 +28,11 @@ export type FileEntry = {
   size?: number
 }
 
-export type FileList = { path: string; entries: FileEntry[]; truncated?: boolean }
+export type FileList = {
+  path: string
+  entries: FileEntry[]
+  truncated?: boolean
+}
 
 export type FileContent = {
   path: string
@@ -184,14 +188,20 @@ const ROOM_ID = /^[A-Za-z0-9_-]{1,128}$/
  * names it by the thread (edgeclient.SafeID), hashing an id the edge can't
  * take; such a thread has no room a page can name, so none is offered.
  */
-export function threadRoom(threadId: string | null | undefined): LiveRoom | undefined {
-  return threadId && ROOM_ID.test(threadId) ? { kind: "thread", id: threadId } : undefined
+export function threadRoom(
+  threadId: string | null | undefined
+): LiveRoom | undefined {
+  return threadId && ROOM_ID.test(threadId)
+    ? { kind: "thread", id: threadId }
+    : undefined
 }
 
 /** How a child is named to a member. */
 export function childLabel(child: LiveChild, viewerId?: string): string {
   if (child.kind === "browser") {
-    return child.member && child.member === viewerId ? "Your browser" : "Browser"
+    return child.member && child.member === viewerId
+      ? "Your browser"
+      : "Browser"
   }
   if (child.name === "shared") return "Shared sandbox"
   if (child.name.startsWith("private-")) return "Your private sandbox"

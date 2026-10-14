@@ -2,7 +2,7 @@
 // tiles, each opening as a pane; and the run log, as it happens. The edge
 // shows a member only what they may see: a private sandbox or browser only
 // to its member.
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeft, Globe, Hand, SquareTerminal } from "lucide-react"
 import { BrowserPane, HANDOFF_POLL_MS } from "./browser-pane"
@@ -34,13 +34,17 @@ export function useRoomChildren(
     enabled: active,
     retry: false,
   })
-  const log = useRoomLog(organizationId, room, { enabled: active && children.isSuccess })
+  const log = useRoomLog(organizationId, room, {
+    enabled: active && children.isSuccess,
+  })
   const lastChildEvent = [...log.events]
     .reverse()
     .find((event) => /^(sandbox|browser)\./.test(event.type))?.seq
   useEffect(() => {
     if (lastChildEvent === undefined || !room) return
-    void queryClient.invalidateQueries({ queryKey: childKey(organizationId, room) })
+    void queryClient.invalidateQueries({
+      queryKey: childKey(organizationId, room),
+    })
   }, [lastChildEvent, organizationId, room?.kind, room?.id, queryClient])
   return { children, log }
 }
@@ -54,11 +58,24 @@ function ChildIcon({ child }: { child: LiveChild }) {
 }
 
 /** A running browser is asked whether its agent wants a hand. */
-function useAskedForHand(organizationId: string, room: LiveRoom, child: LiveChild) {
+function useAskedForHand(
+  organizationId: string,
+  room: LiveRoom,
+  child: LiveChild
+) {
   const watch = child.kind === "browser" && child.status === "running"
   const handoff = useQuery({
-    queryKey: ["live", organizationId, room.kind, room.id, "browser", child.name, "handoff"],
-    queryFn: ({ signal }) => readHandoff(organizationId, room, child.name, signal),
+    queryKey: [
+      "live",
+      organizationId,
+      room.kind,
+      room.id,
+      "browser",
+      child.name,
+      "handoff",
+    ],
+    queryFn: ({ signal }) =>
+      readHandoff(organizationId, room, child.name, signal),
     enabled: watch,
     refetchInterval: watch ? HANDOFF_POLL_MS : false,
     retry: false,
@@ -190,7 +207,11 @@ export function LivePane({
         <small>{child.status === "running" ? "Running" : "Stopped"}</small>
       </header>
       {child.kind === "sandbox" ? (
-        <SandboxPane organizationId={organizationId} room={room} sandbox={child.name} />
+        <SandboxPane
+          organizationId={organizationId}
+          room={room}
+          sandbox={child.name}
+        />
       ) : (
         <BrowserPane
           organizationId={organizationId}
@@ -231,21 +252,87 @@ export function LiveActivity({
     .slice(-limit)
     .reverse()
   if (shown.length === 0) {
-    return <p className="live-quiet">What agents do here shows up as they do it.</p>
+    return (
+      <p className="live-quiet">What agents do here shows up as they do it.</p>
+    )
   }
   return (
     <ol className="live-activity" aria-label="Run log">
       {shown.map((event) => (
         <li key={event.seq} data-private={event.private ? "true" : undefined}>
-          <span className="live-activity-who">{actorLabel(event, viewerId)}</span>
+          <span className="live-activity-who">
+            {actorLabel(event, viewerId)}
+          </span>
           <span className="live-activity-what">{event.summary}</span>
           <small>
             {timeAgo(event.at)}
-            {duration(event.durationMs) ? ` · ${duration(event.durationMs)}` : ""}
+            {duration(event.durationMs)
+              ? ` · ${duration(event.durationMs)}`
+              : ""}
             {event.private ? " · only you" : ""}
           </small>
         </li>
       ))}
     </ol>
+  )
+}
+
+/**
+ * A room's live work in one place, for a teamspace's Live tab: its
+ * sandboxes and browsers, the open one, and the run log.
+ */
+export function RoomLive({
+  organizationId,
+  room,
+  viewerId,
+}: {
+  organizationId: string
+  room: LiveRoom
+  viewerId?: string
+}) {
+  const [open, setOpen] = useState<LiveChild | null>(null)
+  const { children, log } = useRoomChildren(organizationId, room)
+
+  if (open) {
+    return (
+      <LivePane
+        organizationId={organizationId}
+        room={room}
+        child={open}
+        viewerId={viewerId}
+        onBack={() => setOpen(null)}
+      />
+    )
+  }
+  if (children.isPending)
+    return <p className="live-quiet">Looking for live work…</p>
+  if (children.isError) {
+    return (
+      <p className="live-quiet">
+        Nothing live here yet. When an agent runs code or browses for this room,
+        it shows up here.
+      </p>
+    )
+  }
+  return (
+    <div className="live-room">
+      {children.data.length === 0 ? (
+        <p className="live-quiet">
+          No sandbox or browser yet. When an agent runs code or browses for this
+          room, it shows up here.
+        </p>
+      ) : (
+        <LiveChildren
+          organizationId={organizationId}
+          room={room}
+          viewerId={viewerId}
+          onOpen={setOpen}
+        />
+      )}
+      <section className="live-children" aria-label="Run log">
+        <p className="workspace-eyebrow">Run log</p>
+        <LiveActivity events={log.events} viewerId={viewerId} />
+      </section>
+    </div>
   )
 }

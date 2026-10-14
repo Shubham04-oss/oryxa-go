@@ -47,14 +47,26 @@ export function SandboxPane({
       </div>
       <div className="live-pane-body">
         {tab === "Files" && (
-          <SandboxFiles organizationId={organizationId} room={room} sandbox={sandbox} />
+          <SandboxFiles
+            organizationId={organizationId}
+            room={room}
+            sandbox={sandbox}
+          />
         )}
         {tab === "Preview" && (
-          <SandboxPreview organizationId={organizationId} room={room} sandbox={sandbox} />
+          <SandboxPreview
+            organizationId={organizationId}
+            room={room}
+            sandbox={sandbox}
+          />
         )}
         {tab === "Terminal" && (
           <Suspense fallback={<p className="live-quiet">Opening a shell…</p>}>
-            <SandboxTerminal organizationId={organizationId} room={room} sandbox={sandbox} />
+            <SandboxTerminal
+              organizationId={organizationId}
+              room={room}
+              sandbox={sandbox}
+            />
           </Suspense>
         )}
       </div>
@@ -81,11 +93,30 @@ function SandboxFiles({
   const [path, setPath] = useState("")
   const [open, setOpen] = useState<FileEntry | null>(null)
   const files = useQuery({
-    queryKey: ["live", organizationId, room.kind, room.id, "sandbox", sandbox, "files", path],
-    queryFn: ({ signal }) => listFiles(organizationId, room, sandbox, path, signal),
+    queryKey: [
+      "live",
+      organizationId,
+      room.kind,
+      room.id,
+      "sandbox",
+      sandbox,
+      "files",
+      path,
+    ],
+    queryFn: ({ signal }) =>
+      listFiles(organizationId, room, sandbox, path, signal),
   })
   const content = useQuery({
-    queryKey: ["live", organizationId, room.kind, room.id, "sandbox", sandbox, "file", open?.path],
+    queryKey: [
+      "live",
+      organizationId,
+      room.kind,
+      room.id,
+      "sandbox",
+      sandbox,
+      "file",
+      open?.path,
+    ],
     queryFn: () => readFile(organizationId, room, sandbox, open?.path ?? ""),
     enabled: open !== null,
   })
@@ -96,7 +127,11 @@ function SandboxFiles({
     return (
       <div className="sandbox-file">
         <div className="sandbox-file-bar">
-          <button type="button" className="live-link" onClick={() => setOpen(null)}>
+          <button
+            type="button"
+            className="live-link"
+            onClick={() => setOpen(null)}
+          >
             Files
           </button>
           <ChevronRight size={13} aria-hidden="true" />
@@ -110,9 +145,13 @@ function SandboxFiles({
           <p className="live-quiet" role="alert">
             {file?.error ?? "Couldn't read this file."}
           </p>
-        ) : file.encoding === "base64" && file.mimeType?.startsWith("image/") ? (
+        ) : file.encoding === "base64" &&
+          file.mimeType?.startsWith("image/") ? (
           <div className="sandbox-file-image">
-            <img src={`data:${file.mimeType};base64,${file.content ?? ""}`} alt={open.name} />
+            <img
+              src={`data:${file.mimeType};base64,${file.content ?? ""}`}
+              alt={open.name}
+            />
           </div>
         ) : file.encoding === "base64" ? (
           <p className="live-quiet">
@@ -169,15 +208,17 @@ function SandboxFiles({
           {[...files.data.entries]
             .sort(
               (a, b) =>
-                Number(b.type === "directory") - Number(a.type === "directory") ||
-                a.name.localeCompare(b.name)
+                Number(b.type === "directory") -
+                  Number(a.type === "directory") || a.name.localeCompare(b.name)
             )
             .map((entry) => (
               <li key={entry.path}>
                 <button
                   type="button"
                   onClick={() =>
-                    entry.type === "directory" ? setPath(entry.path) : setOpen(entry)
+                    entry.type === "directory"
+                      ? setPath(entry.path)
+                      : setOpen(entry)
                   }
                 >
                   {entry.type === "directory" ? (
@@ -186,7 +227,9 @@ function SandboxFiles({
                     <FileKindBadge name={entry.name} size="small" />
                   )}
                   <span>{entry.name}</span>
-                  <small>{entry.type === "directory" ? "" : formatSize(entry.size)}</small>
+                  <small>
+                    {entry.type === "directory" ? "" : formatSize(entry.size)}
+                  </small>
                 </button>
               </li>
             ))}
@@ -210,7 +253,8 @@ function SandboxPreview({
 }) {
   const [port, setPort] = useState("3000")
   const preview = useMutation({
-    mutationFn: (value: number) => openPreview(organizationId, room, sandbox, value),
+    mutationFn: (value: number) =>
+      openPreview(organizationId, room, sandbox, value),
   })
   const number = Number(port)
   const valid = Number.isInteger(number) && number >= 1 && number <= 65535
@@ -232,8 +276,16 @@ function SandboxPreview({
             onChange={(event) => setPort(event.target.value.replace(/\D/g, ""))}
           />
         </label>
-        <button type="submit" className="live-button" disabled={!valid || preview.isPending}>
-          {preview.isPending ? "Opening…" : preview.data ? "Reload" : "Open preview"}
+        <button
+          type="submit"
+          className="live-button"
+          disabled={!valid || preview.isPending}
+        >
+          {preview.isPending
+            ? "Opening…"
+            : preview.data
+              ? "Reload"
+              : "Open preview"}
         </button>
         {preview.data && (
           <a
