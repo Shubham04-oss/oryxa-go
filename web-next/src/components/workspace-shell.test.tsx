@@ -437,7 +437,7 @@ describe("WorkspaceShell navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("expanded")
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
+    fireEvent.click(screen.getByRole("button", { name: "Library" }))
     fireEvent.click(screen.getByRole("button", { name: "My workspace" }))
     expect(shell?.getAttribute("data-right")).toBe("expanded")
     fireEvent.click(
@@ -450,9 +450,9 @@ describe("WorkspaceShell navigation", () => {
   it("uses the header title without repeating page introductions", () => {
     render(<WorkspaceShell />)
 
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
+    fireEvent.click(screen.getByRole("button", { name: "Library" }))
     expect(
-      screen.getByRole("heading", { name: "Knowledge bases", level: 1 })
+      screen.getByRole("heading", { name: "Library", level: 1 })
     ).toBeTruthy()
     expect(screen.queryByText("Knowledge your team can build on.")).toBeNull()
 
@@ -550,7 +550,7 @@ describe("WorkspaceShell navigation", () => {
       within(homeNavigation).getByRole("button", { name: "My workspace" })
     ).toBeTruthy()
     expect(
-      within(homeNavigation).getByRole("button", { name: "Knowledge bases" })
+      within(homeNavigation).getByRole("button", { name: "Library" })
     ).toBeTruthy()
     expect(
       within(teamNavigation).queryByRole("button", { name: "My workspace" })
@@ -910,7 +910,7 @@ describe("WorkspaceShell navigation", () => {
         organizationRole="member"
       />
     )
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
+    fireEvent.click(screen.getByRole("button", { name: "Library" }))
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Open Product handbook" })
@@ -920,13 +920,13 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
     expect(screen.getByText("Knowledge base")).toBeTruthy()
     expect(
-      screen.queryByRole("heading", { name: "Knowledge bases", level: 1 })
+      screen.queryByRole("heading", { name: "Library", level: 1 })
     ).toBeNull()
     expect(await screen.findByText("Design principles")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "All knowledge bases" }))
     expect(
-      screen.getByRole("heading", { name: "Knowledge bases", level: 1 })
+      screen.getByRole("heading", { name: "Library", level: 1 })
     ).toBeTruthy()
     expect(
       screen.getByRole("button", { name: "Open Product handbook" })
@@ -935,11 +935,11 @@ describe("WorkspaceShell navigation", () => {
 
   it("shows no example knowledge bases without a workspace", () => {
     render(<WorkspaceShell />)
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
+    fireEvent.click(screen.getByRole("button", { name: "Library" }))
     expect(
       screen.getByText(/Sign in to a workspace to see its knowledge bases/)
     ).toBeTruthy()
-    const canvas = screen.getByRole("main", { name: "Knowledge bases canvas" })
+    const canvas = screen.getByRole("main", { name: "Library canvas" })
     expect(within(canvas).queryByRole("button", { name: /^Open / })).toBeNull()
     expect(
       within(canvas).queryByRole("button", { name: "New knowledge base" })

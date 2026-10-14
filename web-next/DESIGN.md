@@ -106,7 +106,7 @@ not permission to copy every incidental value into a new component.
 
   | Tile | Pages |
   | --- | --- |
-  | Home | My workspace, Knowledge bases, Tools |
+  | Home | My workspace, Library, Tools |
   | Team | Teamspaces, People, then up to three visible recent conversations |
   | Agents | Agent overview, Requests, Multi-agent teams, Specialists |
 
@@ -220,6 +220,11 @@ not permission to copy every incidental value into a new component.
   (Organisation, People & invitations, Teams, Billing) and Connections (Tool
   access, Sign-in apps, Slack, Email), on one tile, the open page the raised
   tile.
+- **Library** (was Knowledge bases; founder's redesign, 14 Oct 2026). Each
+  collection is a filled tile on the canvas, with no outline, and lifts to
+  the raised tile on hover; search, the source list, an open document and an
+  answer are tiles too. The code keeps the corpus names; only what a member
+  reads says Library.
 - Expanding the primary agent's chat uses Agent overview as focused work:
   the same mounted conversation sits on the left, and the overview occupies
   the work panel. The right rail offers only DMs and Teams in this state.
