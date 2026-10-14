@@ -112,6 +112,27 @@ Each agent decides or answers **only its own** requests (fixes L7). The member c
 | I9 | **Small details:** one display name with rename propagation, one primary thread namespace, primary instructions, per-agent model tier, Slack attribution, ID prefixes | GO + UI | `internal/managedagents`, `internal/agents`, the Slack templates (apps), web-next agent settings | I1 |
 | I10 | **Tests:** a test per leak (L1–L8) that fails today and passes after; role × mode profile tests; cross-agent memory and artifact attacks | TEST + each lane | `test/live/agents/**`, Go tests beside each change | all |
 
+## Status and tests per leak (I10, 2026-10-14)
+
+I0–I9 are merged; I9's single primary thread namespace is deferred until A7 lands (see #255). Each leak has a Go test that fails on the code before its fix:
+
+| Leak | Fixed by | Test |
+|---|---|---|
+| L1 | I0 #218, I7 #249 | `httpserver.TestOrganizationSynthesisAudiences`; `organizationagents.TestStoreLifecycle` (DB) |
+| L2 | I2 #251, I3 #254 | `apps/internal/application.TestASpecialistRunsOnlyWhatItWasGranted` |
+| L3 | I1 #244 | `runprofile.TestOnlyAMembersOwnTurnIsFull`, `TestTheTableIsPinned` |
+| L4 | I4 #246 | `adkmemory.TestMemoryDoesNotCrossAgents` |
+| L5 | I6 #247 | `assembly.TestTheGuardrailScreensASpecialistAndTheOrganizationAgent` |
+| L6 | I5 #248 | `s3artifact.TestMemberFilesStayInTheirOrganization` |
+| L7 | I8 #253 | `interactions.TestOnlyTheTargetCanDecideWithinRequestedScope` |
+| L8 | I7 #249 | `teamspaces.TestTheOrganizationAgentPromisesOnlyWhatItCanDo` |
+
+Still open:
+- the browser and sandbox are not covered by specialist grants;
+- rag does not enforce grants;
+- guard policy is per member, not per agent;
+- `test/live/agents` attacks across real agents have not been written.
+
 ## How it fits the live layer
 
 - It **runs in parallel** with Baselines A and B: different code (`agents/primary` internals vs `edge/`). The one shared file is `assembly.go`: **A6 owns only the sandbox and browser block, and I1 owns toolbox selection.** Agree the split in Discussions before both start.
