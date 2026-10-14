@@ -21,6 +21,8 @@ export default defineConfig({
         plugins: [
           cloudflareTest({
             wrangler: { configPath: "./wrangler.jsonc" },
+            // Workers AI (the call agent's voice) is remote; tests fake it.
+            remoteBindings: false,
             miniflare: {
               bindings: {
                 AGENTS_TOKEN_PUBLIC_KEYS: JSON.stringify([spki]),
