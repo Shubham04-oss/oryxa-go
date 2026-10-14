@@ -108,14 +108,14 @@ describe("Slack among Settings' sections", () => {
     ])
   })
 
-  it("is not offered to a member", () => {
+  it("is offered to a member too, who links their own account there", () => {
     showSettings({ role: "member", initialPage: "email" })
 
     expect(
       within(
         screen.getByRole("navigation", { name: "Settings sections" })
-      ).queryByRole("button", { name: "Slack" })
-    ).toBeNull()
+      ).getByRole("button", { name: "Slack" })
+    ).toBeTruthy()
   })
 
   it("opens the page from its entry", async () => {
