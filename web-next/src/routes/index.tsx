@@ -85,7 +85,7 @@ function Home() {
   if (sessionEnded) {
     const destination = `${window.location.pathname}${window.location.search}${window.location.hash}`
     return (
-      <AuthShell>
+      <AuthShell scene="ships">
         <h1>Your session has ended.</h1>
         <p className="auth-subtitle">Sign in again to continue your work.</p>
         <Link
@@ -210,7 +210,13 @@ function NewWorkspace({ session }: { session: Session }) {
   }
 
   return (
-    <AuthShell>
+    <AuthShell
+      scene="harbour"
+      caption={{
+        line: "Every crew needs a harbour.",
+        sub: "Yours is ready in a few seconds.",
+      }}
+    >
       <h1>Make room for your work.</h1>
       <p className="auth-subtitle">
         Name your workspace to bring your people and agents together.

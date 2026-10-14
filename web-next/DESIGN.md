@@ -492,10 +492,16 @@ not permission to copy every incidental value into a new component.
 - Use real integration logos where recognizable. Keep them legible against the
   dark UI, often on a small light tile. Do not substitute a generic UI icon
   for a known brand.
-- Auth is the one expressive screen: full `#1e1e1e` page, compact `#111111`
-  form inset toward the right, and a small detailed live pixel cyclone behind
-  it. It has no decorative card shadow. The Google option uses the full-color
-  Google mark. Keep the motion subtle and honor reduced-motion preferences.
+- Auth is the one expressive screen (founder's redesign, 14 Oct 2026): a
+  painted brand scene (from the site and gtm/brand, in `public/scenes/`) as
+  one rounded tile on the left, and the wordmark and form on the base to its
+  right. Each page has its scene: sign-in the ships, sign-up the crow's nest,
+  check-your-inbox the sea of bottles, password reset the deck, a failed or
+  used link the locked sea gate, an invitation and a new workspace the
+  harbour. Words on a scene are white (`--on-scene`) over a deep-sea shade at
+  its foot; no text sits on the painting anywhere else. On a phone the scene
+  is a band across the top that fades into the page. The Google option uses
+  the full-color Google mark.
 
 ## 5. Small screens and keyboard
 
