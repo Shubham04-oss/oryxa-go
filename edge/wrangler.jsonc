@@ -75,13 +75,22 @@
         "ENVIRONMENT": "staging",
         "EDGE_PUBLIC_URL": "https://edge-staging.oryxa.in",
         "SANDBOX_INSTANCE": "standard-1",
-        // A dedicated test key, for edge/DEPLOY.md's check; never in production.
-        "AGENTS_TOKEN_PUBLIC_KEYS": "[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqtvQb0ZpfBSXWZnRipeubHTIJ8ZU2bdTqq9XOoB1SBUzz8fCsBcIzn0ZT11ZthtfGZM9dvubZEJrkGAqoe4Phw==\"]",
-        "REALTIMEKIT_ACCOUNT_ID": "",
-        "REALTIMEKIT_APP_ID": "",
-        "REALTIMEKIT_WEBHOOK_PUBLIC_KEY": "",
+        // The test key (edge/DEPLOY.md's check) and the staging agents key
+        // (alias/oryxa-staging-agents-primary in ap-south-1, the a1 dev stack). Never in production.
+        "AGENTS_TOKEN_PUBLIC_KEYS": "[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqtvQb0ZpfBSXWZnRipeubHTIJ8ZU2bdTqq9XOoB1SBUzz8fCsBcIzn0ZT11ZthtfGZM9dvubZEJrkGAqoe4Phw==\", \"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEIUW7m/GXYVWtDOhJlgPWpJLzcrqvV87OhkL87F0jYv5iRD1NY2Qow6wyOAubs1GFjHVW8q/y9ldPyvxCHDzJg==\"]",
+        "REALTIMEKIT_ACCOUNT_ID": "f50cbb237cd6f0ab48cc3679f727d132",
+        "REALTIMEKIT_APP_ID": "df0175c0-6741-43ca-ad7e-a8f89cab3951",
+        "REALTIMEKIT_WEBHOOK_PUBLIC_KEY": "-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqw8f8Gu20kj0k85HuM89
+YH6E8rbQhZKgR2GRZt8PUlFowD5XYPQV8jaz3BHNJqzkkrLHaQM6snEEggtcoDH8
+nzw7IIwW4MxDuxGXPG3v83301k4xkiZkH2F6moKr4LptTcPDJYTzKCuzCsihMel9
+rWVkk7Po3oGW+f3UQ72alNkyxr2ZsVmC63Csg/b4N9N771cm8JrVReCTCe46g1ce
+YT+0+ef8j0TNNzg7XdD0U1oxgM9W0Z6ckCRi76XDjWABnWM0GijsJrDQ1SzTiu1u
+L30rSQz/w6E6HZeo5BX84w0JIb50qdCKt8zAyUFZyBv7WnxyiwyXuYcPvD/OdEwv
+fQIDAQAB
+-----END PUBLIC KEY-----",
         "VOICE_AGENT_NAME": "Krude",
-        "AGENTS_URL": "https://api-staging.oryxa.in"
+        "AGENTS_URL": "https://agents-staging.oryxa.in"
       },
       "routes": [{ "pattern": "edge-staging.oryxa.in", "custom_domain": true }]
     }
