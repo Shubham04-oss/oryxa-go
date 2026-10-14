@@ -95,7 +95,7 @@ type NavigationItem = {
 const navigation: Record<PrimaryMode, NavigationItem[]> = {
   home: [
     { key: "overview", label: "My workspace", icon: LayoutGrid },
-    { key: "knowledge", label: "Knowledge bases", icon: Sparkles },
+    { key: "knowledge", label: "Library", icon: Sparkles },
     { key: "tools", label: "Tools", icon: Puzzle },
   ],
   team: [
@@ -134,7 +134,7 @@ const headings: Record<Section, string> = {
   specialists: "Specialists",
   requests: "Requests",
   people: "People",
-  knowledge: "Knowledge bases",
+  knowledge: "Library",
   tools: "Tools",
 }
 
