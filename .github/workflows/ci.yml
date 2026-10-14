@@ -31,6 +31,7 @@ jobs:
       go: ${{ steps.paths.outputs.go }}
       web: ${{ steps.paths.outputs.web }}
       web_next: ${{ steps.paths.outputs.web_next }}
+      edge: ${{ steps.paths.outputs.edge }}
       tofu: ${{ steps.paths.outputs.tofu }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -60,7 +61,7 @@ jobs:
           fi
           grep -q '^\.github/' <<<"$files" && all=true
           if [ "$all" = true ]; then
-            printf 'go=true\nweb=true\nweb_next=true\ntofu=true\n' >> "$GITHUB_OUTPUT"
+            printf 'go=true\nweb=true\nweb_next=true\nedge=true\ntofu=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Only known documentation paths skip builds. Other Markdown can
@@ -75,9 +76,11 @@ jobs:
           # services, contracts, infra, tests and the Dockerfile.
           has() { grep -q -E "$1" <<<"$code" && echo true || echo false; }
           {
-            echo "go=$(grep -v -E '^(web/|web-next/|deploy/)' <<<"$code" | grep -q . && echo true || echo false)"
+            echo "go=$(grep -v -E '^(web/|web-next/|edge/|deploy/)' <<<"$code" | grep -q . && echo true || echo false)"
             echo "web=$(has '^web/')"
             echo "web_next=$(has '^web-next/')"
+            # The edge also checks the contract fixtures it shares with Go.
+            echo "edge=$(has '^(edge/|contracts/edge/)')"
             echo "tofu=$(has '^deploy/production/')"
           } >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
@@ -280,6 +283,36 @@ jobs:
             find "$RUNNER_TEMP/worker" -type f ! -name '*.map' -exec wc -c {} + | sort -rn | sed -n '1,12p'
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          WRANGLER_SEND_METRICS: "false"
+
+  edge:
+    name: Edge
+    needs: changes
+    if: needs.changes.outputs.edge == 'true'
+    runs-on: [self-hosted, oryxa-go]
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: edge
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 26
+      - name: pnpm
+        run: npm install --global pnpm@12.4.2
+      - run: pnpm install --frozen-lockfile
+      - name: Types
+        run: pnpm typecheck
+      - name: Tests
+        # The contract project reads the fixtures Go's tests read; the
+        # workers project runs the Durable Objects in workerd.
+        run: pnpm test --maxWorkers=4 --testTimeout=20000
+      - name: Wrangler dry run
+        # Validates the bindings, Durable Objects and migrations without
+        # uploading anything.
+        run: pnpm exec wrangler deploy --dry-run
         env:
           WRANGLER_SEND_METRICS: "false"
 
