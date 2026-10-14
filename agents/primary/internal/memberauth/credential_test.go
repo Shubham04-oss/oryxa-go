@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"google.golang.org/adk/v2/auth"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 )
 
 // fakeTokenSource records every call it gets and answers with a fixed token,
@@ -53,6 +55,27 @@ func TestCredentialAppliesTheCtxTokenAndNeverCallsTheSource(t *testing.T) {
 	}
 	if tokens.calls != 0 {
 		t.Errorf("token source was called %d times, want 0: a member's own token must never ask for an agent token", tokens.calls)
+	}
+}
+
+// TestASpecialistNeverPresentsTheMembersToken: in its member's own turn a
+// specialist still calls apps with its own agent token, which carries its
+// grant, since the member's token would reach past it (I3).
+func TestASpecialistNeverPresentsTheMembersToken(t *testing.T) {
+	tokens := &fakeTokenSource{token: "specialist-token"}
+	specialist := Agent{ID: "agt_writer", Role: runprofile.Specialist, Grant: `{"apps":["gmail"]}`}
+	ctx := withMember(context.Background(), Member{UserID: "user-1", OrganizationID: "org-1", Agent: specialist})
+	ctx = WithAccessToken(ctx, "member-own-token")
+
+	credential, err := NewCredentialProvider(tokens).Credential(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := applyHeader(t, credential).Get("Authorization"); got != "Bearer specialist-token" {
+		t.Errorf("Authorization = %q, want the specialist's own token", got)
+	}
+	if len(tokens.agents) != 1 || tokens.agents[0] != specialist {
+		t.Errorf("token asked for %+v, want %+v", tokens.agents, specialist)
 	}
 }
 

@@ -131,6 +131,11 @@ func TestBearerPrefersTheMembersOwnToken(t *testing.T) {
 func TestASpecialistsRunAsksForTheSpecialistsToken(t *testing.T) {
 	for state, want := range map[*fakeState]Agent{
 		{"organization_id": "org-1", "managed_agent_id": "agt_writer", "managed_agent_kind": "specialist"}: {ID: "agt_writer", Role: runprofile.Specialist},
+		{"organization_id": "org-1", "managed_agent_id": "agt_writer", "managed_agent_kind": "specialist", GrantStateKey: `{"apps":["gmail"]}`}: {
+			ID: "agt_writer", Role: runprofile.Specialist, Grant: `{"apps":["gmail"]}`,
+		},
+		// Only a specialist's token carries a grant.
+		{"organization_id": "org-1", "managed_agent_id": "agt_krude", "managed_agent_kind": "primary", GrantStateKey: `{"apps":[]}`}: {ID: "agt_krude", Role: runprofile.Primary},
 		{"organization_id": "org-1"}: {},
 	} {
 		ctx := &fakeReadonlyContext{

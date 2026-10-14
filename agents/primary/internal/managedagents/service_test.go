@@ -3,6 +3,8 @@ package managedagents
 import (
 	"context"
 	"errors"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -10,8 +12,11 @@ import (
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/session"
 
+	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
@@ -66,6 +71,9 @@ func (repo *fakeRepository) Update(_ context.Context, _ Scope, id string, input 
 	}
 	if input.Status != nil {
 		definition.Status = *input.Status
+	}
+	if input.Grant != nil {
+		definition.Grant = input.Grant
 	}
 	repo.agents[id] = definition
 	return definition, nil
@@ -134,6 +142,67 @@ func TestUpdateCanRenameThePrimaryButNeedsARealChange(t *testing.T) {
 	_, err = service.Update(context.Background(), Scope{OrganizationID: "org_1", UserID: "user_1"}, repo.primary.ID, UpdateInput{})
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("empty update error = %v", err)
+	}
+}
+
+// TestASpecialistsGrantIsNormalizedAndOnlyASpecialistHasOne: a grant is
+// stored as apps compares it, refused when apps could never match it or
+// when it grants a write to every app at once, and the primary has none to
+// set. A specialist that never had one reads every app.
+func TestASpecialistsGrantIsNormalizedAndOnlyASpecialistHasOne(t *testing.T) {
+	repo := newFakeRepository()
+	service := &Service{repository: repo}
+	scope := Scope{OrganizationID: "org_1", UserID: "user_1"}
+	specialist, err := service.Create(context.Background(), scope, CreateInput{Name: "Mail", Instructions: "Triage mail."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant := specialist.SpecialistGrant(); !slices.Equal(grant.Apps, []string{runprofile.AllApps}) || grant.Writes() {
+		t.Fatalf("a specialist with no grant reaches %+v, want every app read-only", grant)
+	}
+
+	updated, err := service.Update(context.Background(), scope, specialist.ID, UpdateInput{Grant: &runprofile.Grant{
+		Apps: []string{" Gmail ", "gmail", "*"}, Tools: []string{"gmail_fetch_emails"}, WriteApps: []string{"GMAIL"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := runprofile.Grant{Apps: []string{"gmail", "*"}, Tools: []string{"GMAIL_FETCH_EMAILS"}, WriteApps: []string{"gmail"}, WriteTools: []string{}}
+	if !reflect.DeepEqual(*updated.Grant, want) {
+		t.Fatalf("stored grant = %+v, want %+v", *updated.Grant, want)
+	}
+
+	for name, grant := range map[string]runprofile.Grant{
+		"a write to every app":    {Apps: []string{"*"}, WriteApps: []string{"*"}},
+		"a tool apps cannot name": {Apps: []string{"gmail"}, Tools: []string{"send email!"}},
+		"an app apps cannot name": {Apps: []string{"g mail"}},
+	} {
+		if _, err := service.Update(context.Background(), scope, specialist.ID, UpdateInput{Grant: &grant}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: error = %v, want invalid", name, err)
+		}
+	}
+	if _, err := service.Update(context.Background(), scope, repo.primary.ID, UpdateInput{Grant: &want}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a grant for the primary: error = %v, want invalid", err)
+	}
+}
+
+// TestASpecialistsRunCarriesItsGrant: every run of a specialist writes its
+// grant as it is now into the session, where its agent token is asked for
+// from; the primary's carries none.
+func TestASpecialistsRunCarriesItsGrant(t *testing.T) {
+	grant := runprofile.Grant{Apps: []string{"gmail"}, WriteTools: []string{"GMAIL_SEND_EMAIL"}}
+	for definition, want := range map[*Definition]string{
+		{ID: "agt_sales", Kind: KindSpecialist, Grant: &grant}: `{"apps":["gmail"],"tools":null,"write_apps":null,"write_tools":["GMAIL_SEND_EMAIL"]}`,
+		{ID: "agt_old", Kind: KindSpecialist}:                  `{"apps":["*"],"tools":[],"write_apps":[],"write_tools":[]}`,
+		{ID: "agt_primary", Kind: KindPrimary}:                 "",
+	} {
+		state, err := runState(*definition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := state[memberauth.GrantStateKey].(string); got != want || state[primaryagents.AgentIDKey] != definition.ID {
+			t.Errorf("%s: the run's state = %v, want the grant %q", definition.ID, state, want)
+		}
 	}
 }
 

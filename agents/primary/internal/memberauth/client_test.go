@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -170,6 +171,38 @@ func TestAgentTokensAreCachedPerAgent(t *testing.T) {
 	}
 	if len(requests) != 3 {
 		t.Fatalf("requests = %v, want one per distinct agent", requests)
+	}
+}
+
+// TestASpecialistsTokenCarriesItsGrantAsItIsNow: the grant goes to auth with
+// the specialist, and a changed grant mints a new token rather than reusing
+// the one minted under the old.
+func TestASpecialistsTokenCarriesItsGrantAsItIsNow(t *testing.T) {
+	signer, _ := newTestSigner(t)
+	var grants []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Grant json.RawMessage `json:"grant"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		grants = append(grants, string(body.Grant))
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "token-" + strconv.Itoa(len(grants)), "expires_in": 3600})
+	}))
+	defer server.Close()
+	client := NewAuthClient(AuthClientConfig{BaseURL: server.URL, Signer: signer})
+
+	reads := Agent{ID: "agt_writer", Role: runprofile.Specialist, Grant: `{"apps":["gmail"]}`}
+	writes := Agent{ID: "agt_writer", Role: runprofile.Specialist, Grant: `{"apps":["gmail"],"write_apps":["gmail"]}`}
+	for _, step := range []struct {
+		agent Agent
+		want  string
+	}{{reads, "token-1"}, {reads, "token-1"}, {writes, "token-2"}} {
+		if token, _, err := client.AgentToken(context.Background(), "user-1", step.agent); err != nil || token != step.want {
+			t.Fatalf("AgentToken(%s) = %q, %v; want %q", step.agent.Grant, token, err, step.want)
+		}
+	}
+	if len(grants) != 2 || grants[0] != reads.Grant || grants[1] != writes.Grant {
+		t.Fatalf("auth was sent the grants %q", grants)
 	}
 }
 

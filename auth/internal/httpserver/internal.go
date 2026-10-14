@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -63,15 +64,21 @@ func (server *Server) mintAgentToken(writer http.ResponseWriter, request *http.R
 	// agent and role name the agent the token acts as, with the edge
 	// token's claim names. A caller that names neither gets the primary.
 	var input struct {
-		UserID string `json:"user_id"`
-		Agent  string `json:"agent"`
-		Role   string `json:"role"`
+		UserID string          `json:"user_id"`
+		Agent  string          `json:"agent"`
+		Role   string          `json:"role"`
+		Grant  json.RawMessage `json:"grant"`
 	}
 	if err := readJSON(request, &input); err != nil || strings.TrimSpace(input.UserID) == "" {
 		writeError(writer, http.StatusBadRequest, "user_id is required")
 		return
 	}
-	identity := domain.AgentIdentity{Agent: strings.TrimSpace(input.Agent), Role: input.Role}
+	// A specialist's grant is carried as sent, for apps to enforce.
+	if len(input.Grant) > 0 && (len(input.Grant) > domain.MaxAgentGrantBytes || !isJSONObject(input.Grant)) {
+		writeError(writer, http.StatusBadRequest, "grant must be a JSON object")
+		return
+	}
+	identity := domain.AgentIdentity{Agent: strings.TrimSpace(input.Agent), Role: input.Role, Grant: input.Grant}
 	if identity.Role == "" {
 		identity.Role = domain.AgentRolePrimary
 	}
@@ -86,4 +93,9 @@ func (server *Server) mintAgentToken(writer http.ResponseWriter, request *http.R
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"access_token": accessToken, "expires_in": expiresIn})
+}
+
+func isJSONObject(raw json.RawMessage) bool {
+	var object map[string]json.RawMessage
+	return json.Unmarshal(raw, &object) == nil && object != nil
 }

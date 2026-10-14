@@ -56,8 +56,9 @@ type organizationResponse struct {
 	Agent bool `json:"agent"`
 	// AgentClaims name which agent an agent token acts as.
 	AgentClaims struct {
-		Agent string `json:"agent"`
-		Role  string `json:"role"`
+		Agent string             `json:"agent"`
+		Role  string             `json:"role"`
+		Grant *domain.AgentGrant `json:"grant"`
 	} `json:"agent_claims"`
 }
 
@@ -110,6 +111,7 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 		Agent:          decoded.Agent,
 		AgentID:        decoded.AgentClaims.Agent,
 		AgentRole:      agentRole(decoded.Agent, decoded.AgentClaims.Role),
+		AgentGrant:     decoded.AgentClaims.Grant,
 	}, nil
 }
 

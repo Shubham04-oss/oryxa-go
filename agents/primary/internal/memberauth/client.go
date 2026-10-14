@@ -95,9 +95,10 @@ func (c *AuthClient) AgentToken(ctx context.Context, userID string, agent Agent)
 	if agent.Role == "" {
 		agent.Role = runprofile.Primary
 	}
-	// One agent's token must never be handed to another, so the cache is
-	// keyed by both. NUL cannot appear in either ID.
-	key := userID + "\x00" + agent.ID + "\x00" + string(agent.Role)
+	// One agent's token must never be handed to another, nor one minted under
+	// a grant since changed, so the cache is keyed by all of them. NUL cannot
+	// appear in any.
+	key := userID + "\x00" + agent.ID + "\x00" + string(agent.Role) + "\x00" + agent.Grant
 
 	c.mu.Lock()
 	if cached, ok := c.cache[key]; ok && c.now().Before(cached.expiresAt.Add(-tokenRefreshWindow)) {
@@ -139,9 +140,10 @@ func (c *AuthClient) AgentToken(ctx context.Context, userID string, agent Agent)
 
 // agentTokenRequestBody's agent and role are the edge token's claim names.
 type agentTokenRequestBody struct {
-	UserID string `json:"user_id"`
-	Agent  string `json:"agent,omitempty"`
-	Role   string `json:"role"`
+	UserID string          `json:"user_id"`
+	Agent  string          `json:"agent,omitempty"`
+	Role   string          `json:"role"`
+	Grant  json.RawMessage `json:"grant,omitempty"`
 }
 
 type agentTokenResponseBody struct {
@@ -158,7 +160,11 @@ func (c *AuthClient) requestToken(ctx context.Context, userID string, agent Agen
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("memberauth: sign service token: %w", err)
 	}
-	body, err := json.Marshal(agentTokenRequestBody{UserID: userID, Agent: agent.ID, Role: string(agent.Role)})
+	requested := agentTokenRequestBody{UserID: userID, Agent: agent.ID, Role: string(agent.Role)}
+	if agent.Grant != "" {
+		requested.Grant = json.RawMessage(agent.Grant)
+	}
+	body, err := json.Marshal(requested)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("memberauth: encode agent token request: %w", err)
 	}

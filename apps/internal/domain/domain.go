@@ -6,7 +6,9 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -93,6 +95,66 @@ type OrgMembership struct {
 	// and primary, specialist or organization), when Agent is set.
 	AgentID   string
 	AgentRole string
+	// AgentGrant is what a specialist's token may reach (I3); nil is the
+	// default grant, every app, read-only.
+	AgentGrant *AgentGrant
+}
+
+// AgentGrant is what a member lets a specialist reach in their apps, as
+// agents' runprofile.Grant names it and auth carries it on the token.
+type AgentGrant struct {
+	// Apps are the toolkits it may reach, or "*" for every one.
+	Apps []string `json:"apps"`
+	// Tools, when any, are the only tools it may run, with WriteTools.
+	Tools []string `json:"tools"`
+	// WriteApps and WriteTools are where it may change things.
+	WriteApps  []string `json:"write_apps"`
+	WriteTools []string `json:"write_tools"`
+}
+
+// MayReach refuses a specialist an app its grant does not name. Every other
+// caller reaches every app its member does.
+func (m OrgMembership) MayReach(toolkit string) error {
+	if !m.specialist() {
+		return nil
+	}
+	grant := m.grant()
+	if !slices.Contains(grant.Apps, "*") && !slices.ContainsFunc(grant.Apps, equalFold(toolkit)) {
+		return fmt.Errorf("this agent has not been given %s; its owner can grant it in the agent's settings: %w", toolkit, ErrForbidden)
+	}
+	return nil
+}
+
+// MayRun refuses a specialist a tool its grant does not allow: one outside
+// its apps or tools, or a write it was not given.
+func (m OrgMembership) MayRun(toolkit, tool string, readOnly bool) error {
+	if !m.specialist() {
+		return nil
+	}
+	if err := m.MayReach(toolkit); err != nil {
+		return err
+	}
+	grant := m.grant()
+	if len(grant.Tools) > 0 && !slices.ContainsFunc(grant.Tools, equalFold(tool)) && !slices.ContainsFunc(grant.WriteTools, equalFold(tool)) {
+		return fmt.Errorf("this agent has not been given %s; its owner can grant it in the agent's settings: %w", tool, ErrForbidden)
+	}
+	if !readOnly && !slices.ContainsFunc(grant.WriteApps, equalFold(toolkit)) && !slices.ContainsFunc(grant.WriteTools, equalFold(tool)) {
+		return fmt.Errorf("%s changes things, and this agent may only read %s; its owner can grant it writes in the agent's settings: %w", tool, toolkit, ErrForbidden)
+	}
+	return nil
+}
+
+func (m OrgMembership) specialist() bool { return m.Agent && m.AgentRole == "specialist" }
+
+func (m OrgMembership) grant() AgentGrant {
+	if m.AgentGrant == nil {
+		return AgentGrant{Apps: []string{"*"}}
+	}
+	return *m.AgentGrant
+}
+
+func equalFold(want string) func(string) bool {
+	return func(value string) bool { return strings.EqualFold(value, want) }
 }
 
 // Brokers: who holds a connection's credential.

@@ -17,6 +17,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 )
 
@@ -101,7 +102,7 @@ func answer(t *testing.T, built agent.Agent) string {
 // one. A specialist and the organization agent answer on the lite model.
 func TestTheGuardrailScreensASpecialistAndTheOrganizationAgent(t *testing.T) {
 	krude, screens := guardedKrude(t, "gr-1")
-	specialist, err := krude.Managed(agents.ManagedSpec{ID: "agt_s", Name: "Scout", Instructions: "Answer."})
+	specialist, err := krude.Managed(agents.ManagedSpec{ID: "agt_s", Name: "Scout", Instructions: "Answer."}, runprofile.DefaultGrant())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestTheGuardrailLeavesCompactionAlone(t *testing.T) {
 
 func TestWithoutAGuardrailEveryModelAnswersAsItIs(t *testing.T) {
 	krude, screens := guardedKrude(t, "")
-	specialist, err := krude.Managed(agents.ManagedSpec{ID: "agt_s", Name: "Scout", Instructions: "Answer."})
+	specialist, err := krude.Managed(agents.ManagedSpec{ID: "agt_s", Name: "Scout", Instructions: "Answer."}, runprofile.DefaultGrant())
 	if err != nil {
 		t.Fatal(err)
 	}

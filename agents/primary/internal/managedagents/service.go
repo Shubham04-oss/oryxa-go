@@ -2,9 +2,12 @@ package managedagents
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -15,6 +18,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
@@ -204,7 +208,7 @@ func (service *Service) Create(ctx context.Context, scope Scope, input CreateInp
 }
 
 func (service *Service) Update(ctx context.Context, scope Scope, id string, input UpdateInput) (Definition, error) {
-	if input.Name == nil && input.Description == nil && input.Instructions == nil && input.Status == nil {
+	if input.Name == nil && input.Description == nil && input.Instructions == nil && input.Status == nil && input.Grant == nil {
 		return Definition{}, fmt.Errorf("%w: send at least one field to change", ErrInvalid)
 	}
 	current, err := service.repository.Get(ctx, scope, id)
@@ -231,6 +235,16 @@ func (service *Service) Update(ctx context.Context, scope Scope, id string, inpu
 			return Definition{}, fmt.Errorf("%w: status must be active or disabled", ErrInvalid)
 		}
 		current.Status = *input.Status
+	}
+	if input.Grant != nil {
+		if current.Kind != KindSpecialist {
+			return Definition{}, fmt.Errorf("%w: only a specialist has a grant; the primary reaches all you do", ErrInvalid)
+		}
+		grant, err := cleanGrant(*input.Grant)
+		if err != nil {
+			return Definition{}, err
+		}
+		input.Grant = &grant
 	}
 	if err := validateDefinition(current); err != nil {
 		return Definition{}, err
@@ -400,20 +414,39 @@ func (service *Service) engineIn(definition Definition, profile UnattendedProfil
 	if profile == RoomSeat && unattended == nil {
 		return nil, errors.New("managed agents: a turn in a room needs the reduced agent built for it, and none is wired")
 	}
+	state, err := runState(definition)
+	if err != nil {
+		return nil, err
+	}
 	engine, err := threads.New(threads.Config{
 		AppName: application, Agent: built, Unattended: unattended, UnattendedTools: runprofile.Toolset(profile),
 		Sessions: service.sessions, Artifacts: service.artifacts, Memory: service.memory, Runs: service.runs,
 		Prices: service.prices, Logger: service.logger, Drain: service.drain,
-		InitialState: map[string]any{
-			primaryagents.AgentIDKey:   definition.ID,
-			primaryagents.AgentNameKey: definition.Name,
-			primaryagents.AgentKindKey: string(definition.Kind),
-		},
+		InitialState: state,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return engine, nil
+}
+
+// runState is what every run of the agent starts by writing into its
+// session: who it is, and a specialist's grant as it is now, which the agent
+// token the run asks for carries (memberauth).
+func runState(definition Definition) (map[string]any, error) {
+	state := map[string]any{
+		primaryagents.AgentIDKey:   definition.ID,
+		primaryagents.AgentNameKey: definition.Name,
+		primaryagents.AgentKindKey: string(definition.Kind),
+	}
+	if definition.Kind == KindSpecialist {
+		grant, err := json.Marshal(definition.SpecialistGrant())
+		if err != nil {
+			return nil, fmt.Errorf("encode the agent's grant: %w", err)
+		}
+		state[memberauth.GrantStateKey] = string(grant)
+	}
+	return state, nil
 }
 
 func validateDefinition(definition Definition) error {
@@ -431,6 +464,58 @@ func validateDefinition(definition Definition) error {
 	default:
 		return nil
 	}
+}
+
+// maxGrantEntries bounds each of a grant's lists.
+const maxGrantEntries = 200
+
+// Slugs as apps checks them (apps/internal/domain).
+var (
+	toolkitSlug = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+	toolSlug    = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_]{0,127}$`)
+)
+
+// cleanGrant normalizes a grant as apps compares it, toolkits lowercase and
+// tools uppercase, without duplicates, and refuses what apps could never
+// match. Only Apps may be AllApps: a write is always named.
+func cleanGrant(grant runprofile.Grant) (runprofile.Grant, error) {
+	clean := func(field string, values []string, upper, all bool) ([]string, error) {
+		if len(values) > maxGrantEntries {
+			return nil, fmt.Errorf("%w: a grant's %s hold at most %d entries", ErrInvalid, field, maxGrantEntries)
+		}
+		cleaned := []string{}
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			pattern := toolkitSlug
+			if upper {
+				value, pattern = strings.ToUpper(value), toolSlug
+			} else {
+				value = strings.ToLower(value)
+			}
+			if !(all && value == runprofile.AllApps) && !pattern.MatchString(value) {
+				return nil, fmt.Errorf("%w: %q is not one of the grant's %s", ErrInvalid, value, field)
+			}
+			if !slices.Contains(cleaned, value) {
+				cleaned = append(cleaned, value)
+			}
+		}
+		return cleaned, nil
+	}
+	var err error
+	var cleaned runprofile.Grant
+	if cleaned.Apps, err = clean("apps", grant.Apps, false, true); err != nil {
+		return runprofile.Grant{}, err
+	}
+	if cleaned.Tools, err = clean("tools", grant.Tools, true, false); err != nil {
+		return runprofile.Grant{}, err
+	}
+	if cleaned.WriteApps, err = clean("write_apps", grant.WriteApps, false, false); err != nil {
+		return runprofile.Grant{}, err
+	}
+	if cleaned.WriteTools, err = clean("write_tools", grant.WriteTools, true, false); err != nil {
+		return runprofile.Grant{}, err
+	}
+	return cleaned, nil
 }
 
 func cleanLine(value string) string { return strings.Join(strings.Fields(value), " ") }

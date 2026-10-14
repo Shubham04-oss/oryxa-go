@@ -411,7 +411,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			}
 			return krude.Managed(agents.ManagedSpec{
 				ID: definition.ID, Name: definition.Name, Description: definition.Description, Instructions: definition.Instructions,
-			})
+			}, definition.SpecialistGrant())
 		},
 		// What answers when nobody is watching the run: the same agent with
 		// the reduced toolboxes and no memory, and without the member's apps
@@ -434,7 +434,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 				if definition.Kind == managedagents.KindPrimary {
 					return krude.Delivering(deliveryReach(profile)), nil
 				}
-				return krude.ManagedDelivering(spec, deliveryReach(profile))
+				return krude.ManagedDelivering(spec, deliveryReach(profile), definition.SpecialistGrant())
 			}
 			withApps := profile.ReadsApps()
 			if definition.Kind == managedagents.KindPrimary {
@@ -443,7 +443,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 				}
 				return krude.UnattendedQuiet, nil
 			}
-			return krude.ManagedUnattended(spec, withApps)
+			return krude.ManagedUnattended(spec, withApps, definition.SpecialistGrant())
 		},
 		Sessions: sessions, Artifacts: krude.Artifacts, Memory: krude.Memory,
 		Runs: runstore.New(platform.Database), Prices: priceTable, Logger: logger, Drain: runDrain,

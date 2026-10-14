@@ -29,6 +29,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/ragclient"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
@@ -141,6 +142,10 @@ type Krude struct {
 	toolboxes       []agents.Toolbox
 	unattended      []agents.Toolbox
 	unattendedQuiet []agents.Toolbox
+	// readOnlyApps is the apps toolbox with its reads alone, which a
+	// specialist granted no writes gets in place of the full one; nil
+	// without the apps service.
+	readOnlyApps *agents.Toolbox
 	// room is what a turn in a room has: filing what it cannot answer from
 	// the room with its member, and nothing else.
 	room []agents.Toolbox
@@ -312,6 +317,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		})
 		if err == nil {
 			unattended = append(unattended, readOnly)
+			krude.readOnlyApps = &readOnly
 		}
 	}
 	if settings.RagURL != "" {
@@ -441,26 +447,47 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	return krude, nil
 }
 
-// Managed builds one persistent specialist from a stored definition. It is
-// cheap and side-effect free: heavyweight clients and toolboxes are shared
-// with the assembled primary agent.
-func (krude *Krude) Managed(spec agents.ManagedSpec) (agent.Agent, error) {
-	return agents.Managed(krude.router, krude.toolboxes, krude.Memory != nil, spec)
+// Managed builds one persistent specialist from a stored definition, with
+// the primary's toolboxes as far as grant lets it reach the member's apps
+// (granted). It is cheap and side-effect free: heavyweight clients and
+// toolboxes are shared with the assembled primary agent.
+func (krude *Krude) Managed(spec agents.ManagedSpec, grant runprofile.Grant) (agent.Agent, error) {
+	return agents.Managed(krude.router, krude.granted(krude.toolboxes, grant), krude.Memory != nil, spec)
 }
 
 // ManagedUnattended builds the same specialist for a run nobody is watching:
-// the reduced toolboxes Krude itself gets when it is woken, and no memory,
-// because what steers such a run is text somebody else wrote. withApps says
-// whether the run may read the member's connected apps; a turn in a room has
-// ManagedRoom, and an interaction's delivery ManagedDelivering. The agent
-// answers to the same name as the attended one, which is what binds the two
-// in a run.
-func (krude *Krude) ManagedUnattended(spec agents.ManagedSpec, withApps bool) (agent.Agent, error) {
+// the reduced toolboxes Krude itself gets when it is woken, as far as grant
+// reaches, and no memory, because what steers such a run is text somebody
+// else wrote. withApps says whether the run may read the member's connected
+// apps; a turn in a room has ManagedRoom, and an interaction's delivery
+// ManagedDelivering. The agent answers to the same name as the attended one,
+// which is what binds the two in a run.
+func (krude *Krude) ManagedUnattended(spec agents.ManagedSpec, withApps bool, grant runprofile.Grant) (agent.Agent, error) {
 	toolboxes := krude.unattendedQuiet
 	if withApps {
 		toolboxes = krude.unattended
 	}
-	return agents.Managed(krude.router, toolboxes, false, spec)
+	return agents.Managed(krude.router, krude.granted(toolboxes, grant), false, spec)
+}
+
+// granted is toolboxes as far as a specialist's grant reaches into the
+// member's apps: without the apps toolbox when it names no app, and with
+// the apps' reads alone when it grants no write. Which apps, tools and
+// writes it may use within that, apps enforces on its agent token.
+func (krude *Krude) granted(toolboxes []agents.Toolbox, grant runprofile.Grant) []agents.Toolbox {
+	result := []agents.Toolbox{}
+	for _, box := range toolboxes {
+		if box.Name == agents.AppsToolboxName {
+			if !grant.ReachesApps() || (!grant.Writes() && krude.readOnlyApps == nil) {
+				continue
+			}
+			if !grant.Writes() {
+				box = *krude.readOnlyApps
+			}
+		}
+		result = append(result, box)
+	}
+	return result
 }
 
 // ManagedRoom builds the specialist for its turn in a room, as Room is
@@ -510,9 +537,9 @@ func (krude *Krude) Delivering(reach DeliveryReach) agent.Agent {
 }
 
 // ManagedDelivering is the specialist for a run that delivers one
-// interaction, as Delivering is Krude.
-func (krude *Krude) ManagedDelivering(spec agents.ManagedSpec, reach DeliveryReach) (agent.Agent, error) {
-	return agents.ManagedDelivering(krude.router, krude.toolboxesFor(reach), spec, krude.deliveryThinking)
+// interaction, as Delivering is Krude, as far as grant reaches.
+func (krude *Krude) ManagedDelivering(spec agents.ManagedSpec, reach DeliveryReach, grant runprofile.Grant) (agent.Agent, error) {
+	return agents.ManagedDelivering(krude.router, krude.granted(krude.toolboxesFor(reach), grant), spec, krude.deliveryThinking)
 }
 
 // DeliveryToolboxNames are the names of the toolboxes a run delivering one

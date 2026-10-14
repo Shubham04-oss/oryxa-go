@@ -17,10 +17,14 @@ func (store *Store) BindAgentToken(ctx context.Context, tokenHash, userID string
 		if _, err := tx.Exec(ctx, `DELETE FROM auth_agent_token_identities WHERE expires_at<=now()`); err != nil {
 			return err
 		}
+		var grant any
+		if len(identity.Grant) > 0 {
+			grant = string(identity.Grant)
+		}
 		_, err := tx.Exec(ctx, `
-			INSERT INTO auth_agent_token_identities (token_hash, user_id, agent_id, role, expires_at)
-			VALUES ($1, $2, $3, $4, $5)
-			ON CONFLICT (token_hash) DO NOTHING`, tokenHash, userID, identity.Agent, identity.Role, expiresAt)
+			INSERT INTO auth_agent_token_identities (token_hash, user_id, agent_id, role, expires_at, app_grant)
+			VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+			ON CONFLICT (token_hash) DO NOTHING`, tokenHash, userID, identity.Agent, identity.Role, expiresAt, grant)
 		if err != nil {
 			return mapWriteError("bind agent token", err)
 		}
@@ -32,11 +36,13 @@ func (store *Store) BindAgentToken(ctx context.Context, tokenHash, userID string
 // tokenHash acts as, or domain.ErrNotFound when it has no live binding.
 func (store *Store) AgentTokenIdentity(ctx context.Context, tokenHash, userID string) (domain.AgentIdentity, error) {
 	var identity domain.AgentIdentity
+	var grant []byte
 	err := store.pool.QueryRow(ctx, `
-		SELECT agent_id, role FROM auth_agent_token_identities
-		WHERE token_hash = $1 AND user_id = $2 AND expires_at > now()`, tokenHash, userID).Scan(&identity.Agent, &identity.Role)
+		SELECT agent_id, role, app_grant FROM auth_agent_token_identities
+		WHERE token_hash = $1 AND user_id = $2 AND expires_at > now()`, tokenHash, userID).Scan(&identity.Agent, &identity.Role, &grant)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.AgentIdentity{}, domain.ErrNotFound
 	}
+	identity.Grant = grant
 	return identity, err
 }

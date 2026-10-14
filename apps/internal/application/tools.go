@@ -62,6 +62,9 @@ func (s *Service) SearchTools(ctx context.Context, credentials authclient.Creden
 	if err != nil {
 		return nil, err
 	}
+	if err := caller.MayReach(toolkit); err != nil {
+		return nil, err
+	}
 	if err := s.allowToolkit(ctx, organizationID, toolkit); err != nil {
 		return nil, err
 	}
@@ -164,6 +167,10 @@ func (s *Service) RunTool(ctx context.Context, credentials authclient.Credential
 	if input.OnlyReads && !route.readOnly {
 		return ToolRun{}, fmt.Errorf("%s changes things, so it runs only once the member confirms: %w", route.slug, domain.ErrNotReadOnly)
 	}
+	// A specialist runs only what its owner granted it, whatever it was told.
+	if err := caller.MayRun(route.toolkit, route.slug, route.readOnly); err != nil {
+		return ToolRun{}, err
+	}
 	key := ""
 	if !route.readOnly {
 		if key, err = domain.CheckIdempotencyKey(input.IdempotencyKey); err != nil {
@@ -212,6 +219,10 @@ func (s *Service) runComposioTool(
 	// and still needs its idempotency key.
 	if onlyReads && !tool.ReadOnly() {
 		return ToolRun{}, fmt.Errorf("%s changes things, so it runs only once the member confirms: %w", tool.Slug, domain.ErrNotReadOnly)
+	}
+	// Checked again on Composio's own mark, as onlyReads is just above.
+	if err := caller.MayRun(tool.Toolkit, tool.Slug, tool.ReadOnly()); err != nil {
+		return ToolRun{}, err
 	}
 	if !tool.ReadOnly() && key == "" {
 		if key, err = domain.CheckIdempotencyKey(idempotencyKey); err != nil {
