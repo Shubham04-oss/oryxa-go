@@ -60,6 +60,25 @@ func (store *memoryStore) Rooms(_ context.Context, org, member string, teamspace
 	return found, nil
 }
 
+func (store *memoryStore) Exists(_ context.Context, membership Membership) (bool, error) {
+	for _, row := range store.rows {
+		if row.Org == membership.Org && row.Room == membership.Room && row.Member == membership.Member {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (store *memoryStore) InTeamspace(_ context.Context, org, teamspace string) ([]Membership, error) {
+	var found []Membership
+	for _, row := range store.rows {
+		if row.Org == org && row.TeamspaceID == teamspace {
+			found = append(found, row)
+		}
+	}
+	return found, nil
+}
+
 func (store *memoryStore) ForgetOrganization(_ context.Context, org string) error {
 	store.rows = slices.DeleteFunc(store.rows, func(row Membership) bool { return row.Org == org })
 	return nil
@@ -112,7 +131,7 @@ var (
 
 func TestAdmitPushesAnAddWithAMemberlessToken(t *testing.T) {
 	pusher, store, tokens, seen := newPusher(t)
-	if err := pusher.Admit(context.Background(), Membership{Org: "org_1", Room: teamspaceRoom, Member: "usr_a", TeamspaceID: "tsp_eng"}); err != nil {
+	if err := pusher.Admit(context.Background(), Membership{Org: "org_1", Room: teamspaceRoom, Member: "usr_a", TeamspaceID: "tsp_eng"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := (*seen)[0]; got.Path != "/v1/rooms/teamspace/tsp_eng/members" || !slices.Equal(got.Body.Add, []string{"usr_a"}) || got.Body.Members != nil {
@@ -136,7 +155,7 @@ func TestLeavingATeamRemovesItsTeamspaceRoomsOnly(t *testing.T) {
 		{Org: "org_1", Room: threadRoom, Member: "usr_a"},
 		{Org: "org_1", Room: teamspaceRoom, Member: "usr_b", TeamspaceID: "tsp_eng"},
 	} {
-		if err := pusher.Admit(ctx, membership); err != nil {
+		if err := pusher.Admit(ctx, membership, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -167,8 +186,8 @@ func TestLeavingATeamRemovesItsTeamspaceRoomsOnly(t *testing.T) {
 func TestLeavingTheOrganizationRemovesEveryRoom(t *testing.T) {
 	pusher, store, _, seen := newPusher(t)
 	ctx := context.Background()
-	_ = pusher.Admit(ctx, Membership{Org: "org_1", Room: threadRoom, Member: "usr_a"})
-	_ = pusher.Admit(ctx, Membership{Org: "org_1", Room: teamspaceRoom, Member: "usr_a", TeamspaceID: "tsp_eng"})
+	_ = pusher.Admit(ctx, Membership{Org: "org_1", Room: threadRoom, Member: "usr_a"}, nil)
+	_ = pusher.Admit(ctx, Membership{Org: "org_1", Room: teamspaceRoom, Member: "usr_a", TeamspaceID: "tsp_eng"}, nil)
 	*seen = nil
 	if err := pusher.MemberLeftOrganization(ctx, "org_1", "usr_a"); err != nil {
 		t.Fatal(err)
@@ -202,11 +221,105 @@ func TestAdmitRefusesWhatIsntAMembership(t *testing.T) {
 		{Org: "org_1", Room: threadRoom},
 		{Org: "org_1", Room: edgev1.Room{Kind: "lobby", ID: "x"}, Member: "usr_a"},
 	} {
-		if err := pusher.Admit(context.Background(), membership); err == nil {
+		if err := pusher.Admit(context.Background(), membership, nil); err == nil {
 			t.Errorf("admitted %+v", membership)
 		}
 	}
 	if len(*seen) != 0 {
 		t.Error("pushed an invalid membership")
 	}
+}
+
+func TestDeletingATeamspaceEmptiesItsRooms(t *testing.T) {
+	pusher, store, _, seen := newPusher(t)
+	ctx := context.Background()
+	_ = pusher.Admit(ctx, Membership{Org: "org_1", Room: teamspaceRoom, Member: "usr_a", TeamspaceID: "tsp_eng"}, nil)
+	_ = pusher.Admit(ctx, Membership{Org: "org_1", Room: teamspaceRoom, Member: "usr_b", TeamspaceID: "tsp_eng"}, nil)
+	_ = pusher.Admit(ctx, Membership{Org: "org_1", Room: sideRoom, Member: "usr_a", TeamspaceID: "tsp_eng"}, nil)
+	_ = pusher.Admit(ctx, Membership{Org: "org_1", Room: threadRoom, Member: "usr_a"}, nil)
+	*seen = nil
+	if err := pusher.TeamspaceDeleted(ctx, "org_1", "tsp_eng"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*seen) != 3 {
+		t.Fatalf("pushed %+v", *seen)
+	}
+	for _, push := range *seen {
+		if len(push.Body.Remove) != 1 || push.Body.Add != nil {
+			t.Errorf("pushed %+v", push)
+		}
+	}
+	if len(store.rows) != 1 || store.rows[0].Room != threadRoom {
+		t.Errorf("remembered %v", store.rows)
+	}
+}
+
+func TestDeletingATeamEmptiesItsTeamspacesRooms(t *testing.T) {
+	pusher, store, _, _ := newPusher(t)
+	ctx := context.Background()
+	_ = pusher.Admit(ctx, Membership{Org: "org_1", Room: teamspaceRoom, Member: "usr_a", TeamspaceID: "tsp_eng"}, nil)
+	if err := pusher.TeamDeleted(ctx, "org_1", "team_eng"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.rows) != 0 {
+		t.Errorf("remembered %v", store.rows)
+	}
+}
+
+// A removal that lands while the add is still on its way would be undone by
+// it; Admit notices the membership is gone and removes the member again.
+func TestARemovalDuringAdmissionIsNotUndone(t *testing.T) {
+	pusher, store, _, seen := newPusher(t)
+	ctx := context.Background()
+	membership := Membership{Org: "org_1", Room: teamspaceRoom, Member: "usr_a", TeamspaceID: "tsp_eng"}
+	racing := &racingEdge{Caller: pusher.edge, onAdd: func() {
+		// The member leaves the team while their add is in flight.
+		if err := pusher.MemberLeftTeam(ctx, "org_1", "team_eng", "usr_a"); err != nil {
+			t.Error(err)
+		}
+	}}
+	pusher.edge = racing
+	err := pusher.Admit(ctx, membership, nil)
+	if !errors.Is(err, ErrNoLongerMember) {
+		t.Fatalf("err = %v", err)
+	}
+	var last pushed
+	for _, push := range *seen {
+		last = push
+	}
+	if !slices.Equal(last.Body.Remove, []string{"usr_a"}) {
+		t.Errorf("the last push was %+v, want the member removed", last)
+	}
+	if len(store.rows) != 0 {
+		t.Errorf("remembered %v", store.rows)
+	}
+}
+
+func TestAdmissionIsUndoneWhenAccessIsGoneByTheTimeItLands(t *testing.T) {
+	pusher, store, _, seen := newPusher(t)
+	err := pusher.Admit(context.Background(), Membership{Org: "org_1", Room: teamspaceRoom, Member: "usr_a", TeamspaceID: "tsp_eng"},
+		func(context.Context) bool { return false })
+	if !errors.Is(err, ErrNoLongerMember) || len(store.rows) != 0 {
+		t.Fatalf("err %v, rows %v", err, store.rows)
+	}
+	if got := (*seen)[len(*seen)-1]; !slices.Equal(got.Body.Remove, []string{"usr_a"}) {
+		t.Errorf("last push %+v", got)
+	}
+}
+
+// racingEdge runs onAdd once, after an add reaches the edge and before it
+// answers.
+type racingEdge struct {
+	Caller
+	onAdd func()
+}
+
+func (edge *racingEdge) Do(ctx context.Context, call edgeclient.Call, out any) error {
+	err := edge.Caller.Do(ctx, call, out)
+	if request, ok := call.Body.(edgev1.MembersRequest); ok && len(request.Add) > 0 && edge.onAdd != nil {
+		onAdd := edge.onAdd
+		edge.onAdd = nil
+		onAdd()
+	}
+	return err
 }

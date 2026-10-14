@@ -13,11 +13,12 @@ import (
 // token names them, until Go adds them again.
 
 // MembersRequest is PUT …/members: either Members, a full replace, or Add
-// and Remove, a change. Members and Add/Remove can't be mixed.
+// and Remove, a change. Members and Add/Remove can't be mixed. Members is a
+// pointer so that a replace with nobody is sent as [] rather than left out.
 type MembersRequest struct {
-	Members []string `json:"members,omitempty"`
-	Add     []string `json:"add,omitempty"`
-	Remove  []string `json:"remove,omitempty"`
+	Members *[]string `json:"members,omitempty"`
+	Add     []string  `json:"add,omitempty"`
+	Remove  []string  `json:"remove,omitempty"`
 }
 
 // MembersResponse answers PUT and GET …/members with the room's members

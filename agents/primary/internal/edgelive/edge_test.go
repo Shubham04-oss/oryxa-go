@@ -321,6 +321,17 @@ func (m *memoryMemberships) Rooms(_ context.Context, org, member string, _ []str
 	return found, nil
 }
 func (m *memoryMemberships) ForgetOrganization(context.Context, string) error { return nil }
+func (m *memoryMemberships) Exists(_ context.Context, row edgemembers.Membership) (bool, error) {
+	for _, each := range m.rows {
+		if each == row {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+func (m *memoryMemberships) InTeamspace(context.Context, string, string) ([]edgemembers.Membership, error) {
+	return nil, nil
+}
 
 // Go's pusher sets a room's members; a removed member's own agent token is
 // then refused (A18).
@@ -334,7 +345,7 @@ func TestGoSetsARoomsMembers(t *testing.T) {
 	}
 	ctx := context.Background()
 	for _, member := range []string{"usr_m1", "usr_m2"} {
-		if err := pusher.Admit(ctx, edgemembers.Membership{Org: target.Org, Room: target.Room, Member: member}); err != nil {
+		if err := pusher.Admit(ctx, edgemembers.Membership{Org: target.Org, Room: target.Room, Member: member}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

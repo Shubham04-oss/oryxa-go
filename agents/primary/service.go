@@ -765,7 +765,17 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			secretShares.Forget,
 		}
 		forgetTeamMember := teamspaceStore.ForgetTeamMember
+		forgetTeam := teamspaceStore.ForgetTeam
 		if edgeMembers != nil {
+			// A deleted team's teamspace rooms on the edge are emptied first,
+			// while its teamspaces can still be found; a failure fails the
+			// event, which comes again with nothing yet forgotten.
+			forgetTeam = func(ctx context.Context, organizationID, teamID string) error {
+				if err := edgeMembers.TeamDeleted(ctx, organizationID, teamID); err != nil {
+					return err
+				}
+				return teamspaceStore.ForgetTeam(ctx, organizationID, teamID)
+			}
 			// Out of the team's teamspace rooms on the edge too, whatever
 			// became of the teamspace cleanup: each is retried on redelivery.
 			independent = append(independent, edgeMembers.Forget)
@@ -775,7 +785,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			}
 		}
 		consumer.
-			WithTeamForgetter(teamspaceStore.ForgetTeam).
+			WithTeamForgetter(forgetTeam).
 			WithTeamMemberForgetter(forgetTeamMember).
 			WithOrganizationSynthesisRecorder(organizationStore)
 		if slack != nil {

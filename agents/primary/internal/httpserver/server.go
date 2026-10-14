@@ -1235,7 +1235,20 @@ func (server *Server) deleteTeamspace(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
 		return
 	}
-	if err := server.teamspaces.Delete(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID")); err != nil {
+	id := request.PathValue("teamspaceID")
+	// Its rooms on the edge are emptied first (A18), so a failure there
+	// leaves the teamspace to delete again; if the delete then fails,
+	// members are let back in when they next open a room.
+	if server.edgeMembers != nil {
+		if space, err := server.teamspaces.Get(request.Context(), teamspaceActorOf(member), id); err == nil && space.CanManage {
+			if err := server.edgeMembers.TeamspaceDeleted(request.Context(), member.OrganizationID, id); err != nil {
+				server.logger.WarnContext(request.Context(), "empty a deleted teamspace's edge rooms", "organization_id", member.OrganizationID, "error", err)
+				writeError(writer, http.StatusServiceUnavailable, "edge_unavailable", "the teamspace's live rooms could not be closed; try again")
+				return
+			}
+		}
+	}
+	if err := server.teamspaces.Delete(request.Context(), teamspaceActorOf(member), id); err != nil {
 		server.handleError(writer, request, err)
 		return
 	}

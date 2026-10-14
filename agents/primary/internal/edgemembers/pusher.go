@@ -38,6 +38,8 @@ type Memberships interface {
 	Record(context.Context, Membership) error
 	Forget(context.Context, Membership) error
 	Rooms(ctx context.Context, org, member string, teamspaceIDs []string) ([]Membership, error)
+	InTeamspace(ctx context.Context, org, teamspaceID string) ([]Membership, error)
+	Exists(context.Context, Membership) (bool, error)
 	ForgetOrganization(ctx context.Context, org string) error
 }
 
@@ -77,24 +79,44 @@ func (pusher *Pusher) push(ctx context.Context, org string, room edgev1.Room, ch
 	}, &edgev1.MembersResponse{})
 }
 
+// ErrNoLongerMember reports an admission undone because the member stopped
+// being allowed in while it was being pushed.
+var ErrNoLongerMember = errors.New("edgemembers: the member may no longer be in this room")
+
 // Admit makes membership's member one of its room's members on the edge,
-// and remembers it. The caller has checked that they may be; this trusts it.
-func (pusher *Pusher) Admit(ctx context.Context, membership Membership) error {
+// and remembers it. The caller has checked that they may be.
+//
+// The edge's add can land after a removal that ran meanwhile (the add is
+// retried for a while), which would let the member back in with nothing
+// left in Go to ever take them out. So once the add is done, Admit checks
+// again: that the membership is still remembered, and, with stillMay, that
+// the caller's access check still passes. If either fails it removes the
+// member again and reports ErrNoLongerMember.
+func (pusher *Pusher) Admit(ctx context.Context, membership Membership, stillMay func(context.Context) bool) error {
 	if !edgev1.ValidID(membership.Org) || membership.Member == "" {
 		return errors.New("edgemembers: a membership needs an organization and a member")
 	}
 	if err := membership.Room.Validate(); err != nil {
 		return err
 	}
-	// Remembered first: a removal racing this admission then finds the room,
-	// and the worst case is a removal pushed for a member never added.
+	// Remembered first: a removal racing this admission then finds the room.
 	if err := pusher.store.Record(ctx, membership); err != nil {
 		return err
 	}
 	if err := pusher.push(ctx, membership.Org, membership.Room, edgev1.MembersRequest{Add: []string{membership.Member}}); err != nil {
 		return fmt.Errorf("admit a member to the edge room: %w", err)
 	}
-	return nil
+	kept, err := pusher.store.Exists(ctx, membership)
+	if err != nil {
+		return err
+	}
+	if kept && (stillMay == nil || stillMay(ctx)) {
+		return nil
+	}
+	if err := pusher.remove(ctx, []Membership{membership}, "lost access while being admitted"); err != nil {
+		return err
+	}
+	return ErrNoLongerMember
 }
 
 // remove takes member out of each room in memberships, forgetting each one
@@ -136,6 +158,36 @@ func (pusher *Pusher) MemberLeftTeam(ctx context.Context, org, teamID, member st
 		return err
 	}
 	return pusher.remove(ctx, memberships, "left the team")
+}
+
+// TeamspaceDeleted removes every member Go admitted to a teamspace's rooms,
+// its side conversations included, and forgets them.
+func (pusher *Pusher) TeamspaceDeleted(ctx context.Context, org, teamspaceID string) error {
+	memberships, err := pusher.store.InTeamspace(ctx, org, teamspaceID)
+	if err != nil {
+		return err
+	}
+	return pusher.remove(ctx, memberships, "the teamspace was deleted")
+}
+
+// TeamDeleted removes everyone from the rooms of the teamspaces bound to a
+// team. It must run before those teamspaces are forgotten, while they can
+// still be found.
+func (pusher *Pusher) TeamDeleted(ctx context.Context, org, teamID string) error {
+	if pusher.teamspaces == nil {
+		return nil
+	}
+	ids, err := pusher.teamspaces(ctx, org, teamID)
+	if err != nil {
+		return fmt.Errorf("find the team's teamspaces: %w", err)
+	}
+	var failures []error
+	for _, id := range ids {
+		if err := pusher.TeamspaceDeleted(ctx, org, id); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 // MemberLeftOrganization removes member from every room they were admitted

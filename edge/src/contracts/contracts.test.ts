@@ -46,6 +46,7 @@ const fixtures: Record<string, z.ZodType> = {
   "log.response.json": c.LogResponse,
   "children.response.json": c.ChildrenResponse,
   "members.replace.request.json": c.MembersRequest,
+  "members.empty.request.json": c.MembersRequest,
   "members.change.request.json": c.MembersRequest,
   "members.response.json": c.MembersResponse,
   "error.json": c.ErrorBody,

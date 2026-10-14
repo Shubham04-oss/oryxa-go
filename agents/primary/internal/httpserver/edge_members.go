@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 
@@ -14,9 +15,11 @@ import (
 // member may be in the room the way its own routes do, then tells the edge.
 const edgeAdmitPath = "POST /v1/organizations/{organizationID}/edge/rooms/{kind}/{id}/admit"
 
-// EdgeMembers admits a member the server has checked (*edgemembers.Pusher).
+// EdgeMembers admits a member the server has checked, and empties a deleted
+// teamspace's rooms (*edgemembers.Pusher).
 type EdgeMembers interface {
-	Admit(context.Context, edgemembers.Membership) error
+	Admit(ctx context.Context, membership edgemembers.Membership, stillMay func(context.Context) bool) error
+	TeamspaceDeleted(ctx context.Context, org, teamspaceID string) error
 }
 
 func (server *Server) routeEdgeMembers() {
@@ -45,42 +48,46 @@ func (server *Server) edgeAdmit(writer http.ResponseWriter, request *http.Reques
 	ctx := request.Context()
 	membership := edgemembers.Membership{Org: member.OrganizationID, Room: room, Member: member.UserID}
 
-	notFound := func() { writeError(writer, http.StatusNotFound, "not_found", "no such room") }
-	seesTeamspace := func(id string) bool {
+	seesTeamspace := func(ctx context.Context, id string) bool {
 		if server.teamspaces == nil {
 			return false
 		}
 		_, err := server.teamspaces.Get(ctx, teamspaceActorOf(member), id)
 		return err == nil
 	}
+	// may is the access check, run before the admission and again after it,
+	// so a removal that lands in between isn't undone (Pusher.Admit).
+	var may func(context.Context) bool
 	switch room.Kind {
 	case edgev1.RoomThread:
-		if _, err := server.threads.Get(ctx, member, room.ID); err != nil {
-			notFound()
-			return
+		may = func(ctx context.Context) bool {
+			_, err := server.threads.Get(ctx, member, room.ID)
+			return err == nil
 		}
 	case edgev1.RoomTeamspace:
-		if !seesTeamspace(room.ID) {
-			notFound()
-			return
-		}
 		membership.TeamspaceID = room.ID
+		may = func(ctx context.Context) bool { return seesTeamspace(ctx, room.ID) }
 	case edgev1.RoomDM:
 		members, err := edgev1.ParseDirectRoomID(room.ID)
-		if err != nil || !slices.Contains(members[:], member.UserID) {
-			notFound()
-			return
-		}
+		may = func(context.Context) bool { return err == nil && slices.Contains(members[:], member.UserID) }
 	case edgev1.RoomSide:
 		teamspace, members, err := edgev1.ParseSideRoomID(room.ID)
-		if err != nil || !slices.Contains(members[:], member.UserID) || !seesTeamspace(teamspace) {
-			notFound()
-			return
-		}
 		membership.TeamspaceID = teamspace
+		may = func(ctx context.Context) bool {
+			return err == nil && slices.Contains(members[:], member.UserID) && seesTeamspace(ctx, teamspace)
+		}
+	}
+	if may == nil || !may(ctx) {
+		writeError(writer, http.StatusNotFound, "not_found", "no such room")
+		return
 	}
 
-	if err := server.edgeMembers.Admit(ctx, membership); err != nil {
+	err := server.edgeMembers.Admit(ctx, membership, may)
+	if errors.Is(err, edgemembers.ErrNoLongerMember) {
+		writeError(writer, http.StatusNotFound, "not_found", "no such room")
+		return
+	}
+	if err != nil {
 		server.logger.WarnContext(ctx, "admit a member to an edge room", "organization_id", member.OrganizationID, "room_kind", string(room.Kind), "error", err)
 		writeError(writer, http.StatusServiceUnavailable, "edge_unavailable", "the room could not be opened; try again")
 		return

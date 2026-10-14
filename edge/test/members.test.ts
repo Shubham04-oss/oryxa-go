@@ -75,6 +75,12 @@ describe("setting members", () => {
     expect((await readAs("usr_c")).status).toBe(200);
   });
 
+  it("empties the room on a replace with nobody", async () => {
+    await push({ members: ["usr_a"] });
+    expect(await (await push({ members: [] })).json()).toEqual({ members: [] });
+    expect((await readAs("usr_a")).status).toBe(403);
+  });
+
   it("adds and removes, and logs the change", async () => {
     await push({ members: ["usr_a"] });
     expect(await (await push({ add: ["usr_b"], remove: ["usr_a"] })).json()).toEqual({ members: ["usr_b"] });

@@ -98,6 +98,44 @@ func (store *Store) Rooms(ctx context.Context, org, member string, teamspaceIDs 
 	return memberships, rows.Err()
 }
 
+// Exists reports whether membership is still kept: a removal that ran in
+// the meantime forgot it.
+func (store *Store) Exists(ctx context.Context, membership Membership) (bool, error) {
+	var exists bool
+	err := store.database.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM agents_primary.edge_room_members
+		WHERE organization_id = $1 AND room_kind = $2 AND room_id = $3 AND member_id = $4)`,
+		membership.Org, string(membership.Room.Kind), membership.Room.ID, membership.Member).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check an edge room member: %w", err)
+	}
+	return exists, nil
+}
+
+// InTeamspace lists every membership of a teamspace's rooms: its room and
+// its side conversations, whoever the member.
+func (store *Store) InTeamspace(ctx context.Context, org, teamspaceID string) ([]Membership, error) {
+	rows, err := store.database.Pool.Query(ctx, `
+		SELECT room_kind, room_id, member_id FROM agents_primary.edge_room_members
+		WHERE organization_id = $1 AND teamspace_id = $2
+		ORDER BY room_kind, room_id, member_id`, org, teamspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list a teamspace's edge rooms: %w", err)
+	}
+	defer rows.Close()
+	var memberships []Membership
+	for rows.Next() {
+		membership := Membership{Org: org, TeamspaceID: teamspaceID}
+		var kind string
+		if err := rows.Scan(&kind, &membership.Room.ID, &membership.Member); err != nil {
+			return nil, err
+		}
+		membership.Room.Kind = edgev1.RoomKind(kind)
+		memberships = append(memberships, membership)
+	}
+	return memberships, rows.Err()
+}
+
 // ForgetOrganization drops every membership in org, as when it is deleted.
 func (store *Store) ForgetOrganization(ctx context.Context, org string) error {
 	_, err := store.database.Pool.Exec(ctx, `DELETE FROM agents_primary.edge_room_members WHERE organization_id = $1`, org)

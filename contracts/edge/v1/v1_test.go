@@ -51,6 +51,7 @@ var fixtureTypes = map[string]func() any{
 	"log.response.json":                  func() any { return new(LogResponse) },
 	"children.response.json":             func() any { return new(ChildrenResponse) },
 	"members.replace.request.json":       func() any { return new(MembersRequest) },
+	"members.empty.request.json":         func() any { return new(MembersRequest) },
 	"members.change.request.json":        func() any { return new(MembersRequest) },
 	"members.response.json":              func() any { return new(MembersResponse) },
 	"error.json":                         func() any { return new(ErrorBody) },
@@ -187,5 +188,14 @@ func TestConversationRoomIDs(t *testing.T) {
 		if bad() == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// A replace with nobody must reach the edge as [], not as no field at all,
+// which the edge refuses.
+func TestAnEmptyReplaceIsSent(t *testing.T) {
+	encoded, _ := json.Marshal(MembersRequest{Members: &[]string{}})
+	if string(encoded) != `{"members":[]}` {
+		t.Fatalf("encoded %s", encoded)
 	}
 }

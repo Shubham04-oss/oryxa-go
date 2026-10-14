@@ -48,8 +48,17 @@ func TestStoreKeepsWhatWasPushed(t *testing.T) {
 	if err != nil || len(inTeamspace) != 1 || inTeamspace[0] != teamspace {
 		t.Fatalf("teamspace rooms = %v, %v", inTeamspace, err)
 	}
+	if exists, err := store.Exists(ctx, teamspace); err != nil || !exists {
+		t.Fatalf("Exists = %v, %v", exists, err)
+	}
+	if rooms, err := store.InTeamspace(ctx, org, "tsp_x"); err != nil || len(rooms) != 1 || rooms[0] != teamspace {
+		t.Fatalf("InTeamspace = %v, %v", rooms, err)
+	}
 	if err := store.Forget(ctx, teamspace); err != nil {
 		t.Fatal(err)
+	}
+	if exists, _ := store.Exists(ctx, teamspace); exists {
+		t.Error("a forgotten membership still exists")
 	}
 	if left, _ := store.Rooms(ctx, org, "usr_a", nil); len(left) != 1 || left[0] != thread {
 		t.Errorf("left = %v", left)
