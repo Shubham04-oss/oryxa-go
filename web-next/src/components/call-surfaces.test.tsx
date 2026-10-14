@@ -70,6 +70,14 @@ function view(overrides: Partial<CallView> = {}): CallView {
   }
 }
 
+function device(
+  deviceId: string,
+  kind: MediaDeviceKind,
+  label: string
+): MediaDeviceInfo {
+  return { deviceId, kind, label, groupId: "g", toJSON: () => ({}) }
+}
+
 function fakeMedia() {
   const tiles: CallTile[] = [
     {
@@ -103,6 +111,21 @@ function fakeMedia() {
     setCamera: vi.fn(async () => undefined),
     setScreen: vi.fn(async () => undefined),
     leave: vi.fn(async () => undefined),
+    devices: vi.fn(async () => ({
+      microphones: [
+        device("mic-1", "audioinput", "MacBook mic"),
+        device("mic-2", "audioinput", "AirPods"),
+      ],
+      cameras: [device("cam-1", "videoinput", "FaceTime camera")],
+      speakers: [device("spk-1", "audiooutput", "MacBook speakers")],
+      current: {
+        audioinput: "mic-1",
+        videoinput: "cam-1",
+        audiooutput: "spk-1",
+      },
+    })),
+    setDevice: vi.fn(async () => undefined),
+    onDevicesChange: () => () => undefined,
     say: (segment) => heard?.(segment),
   }
   return media
@@ -518,5 +541,32 @@ describe("a parley in a teamspace", () => {
     await waitFor(() => expect(requests("/call/join", "POST")).toHaveLength(1))
     const [, init] = requests("/call/join", "POST")[0] ?? []
     expect(JSON.parse(String(init?.body))).toEqual({ name: "Ada Brennan" })
+  })
+
+  it("lets the member choose their microphone, camera and speaker", async () => {
+    const media = fakeMedia()
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    fireEvent.click(within(page).getByRole("button", { name: "Devices" }))
+
+    const picker = await within(page).findByRole("dialog", { name: "Devices" })
+    const microphone = await within(picker).findByRole("combobox", {
+      name: "Microphone",
+    })
+    expect(within(picker).getByDisplayValue("MacBook mic")).toBe(microphone)
+    expect(
+      within(picker).getByRole("combobox", { name: "Camera" })
+    ).toBeTruthy()
+    expect(
+      within(picker).getByRole("combobox", { name: "Speaker" })
+    ).toBeTruthy()
+
+    fireEvent.change(microphone, { target: { value: "mic-2" } })
+    await waitFor(() => expect(media.setDevice).toHaveBeenCalledWith("mic-2"))
   })
 })
