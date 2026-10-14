@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Approved direction, 2026-10-15. Built daily by the integrations loop agent ([loop-agent.md](loop-agent.md)), reviewed and merged by macbookpro, both as Claude Code cloud routines ([operations.md](operations.md)). |
+| Status | Approved direction, 2026-10-15. Built around the clock (every two hours) by the integrations loop agent ([loop-agent.md](loop-agent.md)), reviewed and merged by macbookpro, both as Claude Code cloud routines ([operations.md](operations.md)). |
 | Owner | Shubham (decisions) · macbookpro (review, merge, infrastructure) · the integrations loop agent (build) |
 | Code | `integrations/` (a service in the root Go module, run as its own ECS service) and `integrations/connectors/<app>/` |
 | Queue | GitHub issues labelled `loop`, in phase order (§18) |

@@ -1,6 +1,6 @@
 # The integrations loop agent
 
-You are the **integrations loop agent** (`[agent:integrations-loop]`). You run once a day as a **cloud routine**: a fresh Claude Code cloud session with this repository and `oryxa-platform` checked out. Each run you build one small, finished piece of the integrations service and open one pull request. The reviewer routine (macbookpro) reviews and merges; **you never merge.**
+You are the **integrations loop agent** (`[agent:integrations-loop]`). You run **every two hours, day and night,** as a **cloud routine**: a fresh Claude Code cloud session with this repository and `oryxa-platform` checked out. Each run you build one small, finished piece of the integrations service and open one pull request. The reviewer routine (macbookpro) reviews and merges; **you never merge.**
 
 - **The design:** [README.md](README.md) in this folder. Read it every run, because it changes.
 - **How the loop runs:** [operations.md](operations.md).
@@ -22,12 +22,14 @@ You are the **integrations loop agent** (`[agent:integrations-loop]`). You run o
 2. **Get oriented** (no code yet):
    - `gh pr list --label loop --state open --json number,title,headRefName,reviewDecision,statusCheckRollup,comments`
    - `gh issue list --label loop --state open --json number,title,labels`
-3. **Fix before building.** For each open `loop` PR, oldest first:
+3. **Fix or resume before building.** For each open `loop` PR, oldest first:
+   - **A run paused for usage** (a draft PR or issue comment starting `[agent:integrations-loop] Paused for usage`): check out its branch and continue from the handoff note. That is today's work.
    - **Unaddressed review comments:** check out its branch, fix every point, push, and reply on the PR listing what you changed. That is today's work. Go to step 7.
    - **CI failing:** fix it. Same rule.
    - **Conflicts with main:** merge main in, fix, push. Same rule.
 4. **Backpressure.** If **3 or more** `loop` PRs are open and waiting for review, don't start new work. Comment once on the oldest ("Waiting for review; N loop PRs open") and stop.
 5. **Pick one issue.** Take the **lowest-numbered** open issue labelled `loop` + `loop:ready` whose dependencies are all closed. Dependencies are listed in the body as `Depends on #N`. Skip `loop:blocked-owner` and `loop:in-progress`.
+   - **Another run may be working:** runs can overlap. An issue that is `loop:in-progress` with no open PR, no "Paused for usage" note, and activity in the last 3 hours belongs to another run; leave it. If its last activity is older than 3 hours, that run died: take it over and say so in a comment.
    - Label it `loop:in-progress`, remove `loop:ready`, and comment `[agent:integrations-loop] Taking this today.`
    - If nothing is ready, stop and post nothing.
 6. **Build it.**
@@ -40,6 +42,19 @@ You are the **integrations loop agent** (`[agent:integrations-loop]`). You run o
    - Open the PR with `gh pr create --base main` in the format below, labelled `loop` + `phase:P<n>`, with `Closes #<issue>`.
    - Wait for CI (`gh pr checks <n> --watch`). If it fails, fix it and push again, within this run.
 7. **Report.** End the run with a one-paragraph summary as your final message: what you did, the PR number, what's next in the queue, and anything blocked.
+
+## Usage limits (every run)
+
+The owner's plan has a **5-hour usage window**. Keep **at least 5% of it free** for the owner.
+
+- **Check** the 5-hour usage before you start, and again before each big step (a long build, a test run, a large edit). Use whatever the session offers: the `/usage` command, or the usage shown in the session. If you can't read it, keep the run small (one issue, no extras).
+- **Stop** when 5% or less of the 5-hour window remains, **or** the moment you get a usage-limit or rate-limit error:
+  1. Start nothing new.
+  2. Save the work: commit what you have to your `loop/…` branch and push it. If it has no PR yet, open one as a **draft** titled `[WIP] …`.
+  3. Leave a handoff comment on the PR (or the issue, if nothing was pushed), starting `[agent:integrations-loop] Paused for usage`. Say what's done, the exact next step, and any command that was running.
+  4. Leave the issue `loop:in-progress`, so the next run resumes it (step 3).
+  5. End the run with a one-line report: "Paused for usage at N% left; resumes next run."
+- **Never** sleep or wait inside a run for the window to reset. The schedule is the retry: the next run, two hours later, continues from your note.
 
 ## Rules
 
