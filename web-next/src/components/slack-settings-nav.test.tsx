@@ -82,6 +82,32 @@ describe("Slack among Settings' sections", () => {
     }
   })
 
+  it("sits under Connections, after You and Workspace", () => {
+    showSettings({ role: "owner", initialPage: "email" })
+
+    const sections = screen.getByRole("navigation", {
+      name: "Settings sections",
+    })
+    expect(
+      Array.from(sections.children, (item) => item.textContent.trim())
+    ).toEqual([
+      "You",
+      "Account",
+      "Workspace",
+      "Organisation",
+      "People & invitations",
+      "Teams",
+      "Billing",
+      "Connections",
+      "Tool access",
+      ...(screen.queryByRole("button", { name: "Sign-in apps" })
+        ? ["Sign-in apps"]
+        : []),
+      "Slack",
+      "Email",
+    ])
+  })
+
   it("is not offered to a member", () => {
     showSettings({ role: "member", initialPage: "email" })
 

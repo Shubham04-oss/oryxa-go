@@ -212,6 +212,14 @@ not permission to copy every incidental value into a new component.
     team and when it was last updated, how many people. For a member who
     can open one, the last card opens a new teamspace, drawn as the ship's
     lines on deep sea.
+- **People, Agents and Settings as tiles** (founder's redesign, 14 Oct
+  2026). People is a grid of cards (the person, their presence, what you
+  share, Message). On the Agents pages the primary agent, the stats, teams,
+  specialists and workflows are filled tiles on the canvas, with no
+  outlines. Settings' menu is three groups, You (Account), Workspace
+  (Organisation, People & invitations, Teams, Billing) and Connections (Tool
+  access, Sign-in apps, Slack, Email), on one tile, the open page the raised
+  tile.
 - Expanding the primary agent's chat uses Agent overview as focused work:
   the same mounted conversation sits on the left, and the overview occupies
   the work panel. The right rail offers only DMs and Teams in this state.
