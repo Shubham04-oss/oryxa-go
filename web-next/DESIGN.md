@@ -254,6 +254,9 @@ not permission to copy every incidental value into a new component.
     agent is a tile with no camera, marked Listening or Speaking.
   - **Recording:** while it is on, everyone in the call sees who turned it
     on, and when.
+  - **In a DM:** the same strip, or a "Parley" button when none runs, sits
+    above the conversation in its reading column. The call is the DM's own
+    room on the edge. A DM whose ids the edge can't name offers no parley.
 - **A specialist's access** (I3, I9). Its page has an Access tab with two
   cards:
   - **Model:** Lite or Main, as two tiles, with the chosen one raised.

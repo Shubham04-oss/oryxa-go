@@ -709,3 +709,22 @@
 .workspace-teamspace-focus > .call-strip {
   margin: 0 16px;
 }
+
+/* In a DM the parley sits above the conversation, in its reading column. */
+.workspace-dm-parley {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  padding: 12px var(--dm-gutter, 28px) 0;
+}
+.workspace-dm-parley:empty {
+  display: none;
+}
+.workspace-dm-parley .call-strip {
+  align-self: stretch;
+  margin: 0;
+}
+.workspace-dm-parley .workspace-teamspace-parley {
+  margin-left: 0;
+}

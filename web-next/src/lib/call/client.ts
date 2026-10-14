@@ -1,8 +1,7 @@
 // A room's call (B1–B5, edge/src/call): one RealtimeKit meeting per room.
 // A page reaches it through the Worker (lib/live), which names the member
 // to the edge. The shapes are edge/src/call/contracts.ts's.
-import { apiRequest } from "@/lib/api/client"
-import { livePath } from "@/lib/live/client"
+import { liveRequest } from "@/lib/live/client"
 import type { LiveRoom } from "@/lib/live/client"
 
 export type CallParticipant = { member: string; name: string; joinedAt: string }
@@ -53,8 +52,10 @@ export async function readCall(
   room: LiveRoom,
   signal?: AbortSignal
 ): Promise<CallView | null> {
-  const answer = await apiRequest<{ call: CallView | null }>(
-    livePath(organizationId, room, "/call"),
+  const answer = await liveRequest<{ call: CallView | null }>(
+    organizationId,
+    room,
+    "/call",
     { signal }
   )
   return answer.call
@@ -66,7 +67,7 @@ export function joinCall(
   room: LiveRoom,
   name?: string
 ): Promise<JoinAnswer> {
-  return apiRequest<JoinAnswer>(livePath(organizationId, room, "/call/join"), {
+  return liveRequest<JoinAnswer>(organizationId, room, "/call/join", {
     method: "POST",
     body: name ? { name } : {},
   })
@@ -74,18 +75,18 @@ export function joinCall(
 
 /** Leaves; the last to leave ends the call. */
 export function leaveCall(organizationId: string, room: LiveRoom) {
-  return apiRequest<{ left: boolean }>(
-    livePath(organizationId, room, "/call/leave"),
-    { method: "POST", body: {} }
-  )
+  return liveRequest<{ left: boolean }>(organizationId, room, "/call/leave", {
+    method: "POST",
+    body: {},
+  })
 }
 
 /** Ends the call for everyone. */
 export function endCall(organizationId: string, room: LiveRoom) {
-  return apiRequest<{ ended: boolean }>(
-    livePath(organizationId, room, "/call/end"),
-    { method: "POST", body: {} }
-  )
+  return liveRequest<{ ended: boolean }>(organizationId, room, "/call/end", {
+    method: "POST",
+    body: {},
+  })
 }
 
 export function sendTranscript(
@@ -94,8 +95,10 @@ export function sendTranscript(
   callId: string,
   segments: TranscriptSegment[]
 ) {
-  return apiRequest<{ accepted: number }>(
-    livePath(organizationId, room, "/call/transcript"),
+  return liveRequest<{ accepted: number }>(
+    organizationId,
+    room,
+    "/call/transcript",
     { method: "POST", body: { callId, segments } }
   )
 }
@@ -105,8 +108,10 @@ export function setRecording(
   room: LiveRoom,
   on: boolean
 ) {
-  return apiRequest<{ recording: RecordingState }>(
-    livePath(organizationId, room, "/call/recording"),
+  return liveRequest<{ recording: RecordingState }>(
+    organizationId,
+    room,
+    "/call/recording",
     { method: "POST", body: { on } }
   )
 }
@@ -117,10 +122,10 @@ export function setAgentPresent(
   room: LiveRoom,
   present: boolean
 ) {
-  return apiRequest<{ call: CallView }>(
-    livePath(organizationId, room, "/call/agent"),
-    { method: "POST", body: { present } }
-  )
+  return liveRequest<{ call: CallView }>(organizationId, room, "/call/agent", {
+    method: "POST",
+    body: { present },
+  })
 }
 
 /** The voice frames every client in the call plays (`/voice/live`). */

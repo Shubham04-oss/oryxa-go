@@ -5,6 +5,9 @@
 // DESIGN.md §3, "Direct messages", says how it reads. A request between the
 // two people (an agent asked the other's, from Oryxa or Slack) has a quiet
 // line of its own in the log (REALTIME.md, "Request notes").
+import { useHasCalls } from "./call-provider"
+import { ParleyButton, ParleyStrip } from "./call-surfaces"
+import { directRoom } from "@/lib/live/rooms"
 import { useEffect, useMemo, useRef } from "react"
 import type { ReactNode } from "react"
 import { ArrowLeft } from "lucide-react"
@@ -172,6 +175,9 @@ export function DirectMessageConversation({
 }) {
   const { messages, status } = dm
   const name = peer.name
+  const hasCalls = useHasCalls()
+  // A parley between the two of them is the DM's own room on the edge.
+  const parleyRoom = viewerId ? directRoom(viewerId, peer.id) : undefined
   const short = peer.short
   const shellOpensRequests = useOpenRequest()
   const openRequest = onOpenRequest ?? shellOpensRequests
@@ -283,6 +289,26 @@ export function DirectMessageConversation({
           </div>
         </div>
       )}
+      {layout === "canvas" &&
+        hasCalls &&
+        organizationId &&
+        viewerId &&
+        parleyRoom && (
+          <div className="workspace-dm-parley">
+            <ParleyButton
+              organizationId={organizationId}
+              room={parleyRoom}
+              roomName={name}
+              member={viewerId}
+            />
+            <ParleyStrip
+              organizationId={organizationId}
+              room={parleyRoom}
+              roomName={name}
+              member={viewerId}
+            />
+          </div>
+        )}
       <div className="workspace-dm-log-wrap">
         <div
           className="workspace-dm-log"
