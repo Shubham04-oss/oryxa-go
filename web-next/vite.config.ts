@@ -6,7 +6,7 @@ import viteReact from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 import agents from "agents/vite"
 
-const config = defineConfig(({ mode }) => {
+const config = defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, process.cwd(), "")
   const target = env.ORYXA_URL || "http://localhost:8080"
   // The Worker (src/server.ts, wrangler.jsonc) runs the SSR environment, so
@@ -15,7 +15,13 @@ const config = defineConfig(({ mode }) => {
   // settings, and the Worker's tests mock the Agents SDK.
   const worker = process.env.VITEST
     ? []
-    : [...agents(), cloudflare({ viteEnvironment: { name: "ssr" } })]
+    : [
+        ...agents(),
+        cloudflare({
+          viteEnvironment: { name: "ssr" },
+          config: remoteEdge(command, env),
+        }),
+      ]
   const plugins = [...worker, tailwindcss(), tanstackStart(), viteReact()]
 
   if (env.VITE_SHOW_DEVTOOLS === "true") plugins.unshift(devtools())
@@ -31,5 +37,30 @@ const config = defineConfig(({ mode }) => {
     plugins,
   }
 })
+
+/**
+ * `WEB_NEXT_REMOTE_EDGE=1 vite dev` makes the EDGE binding reach the deployed
+ * `oryxa-edge-staging` instead of only a `wrangler dev` of it on this
+ * machine, for running calls and the live panes against staging (B8). It
+ * needs Cloudflare credentials here (`wrangler login` or
+ * CLOUDFLARE_API_TOKEN). Without the switch, and in every build, the
+ * binding is as wrangler.jsonc has it.
+ */
+type ConfigCustomizer = Extract<
+  NonNullable<NonNullable<Parameters<typeof cloudflare>[0]>["config"]>,
+  (...args: never[]) => unknown
+>
+
+function remoteEdge(
+  command: string,
+  env: Record<string, string>
+): ConfigCustomizer | undefined {
+  if (command !== "serve" || env.WEB_NEXT_REMOTE_EDGE !== "1") return undefined
+  return (worker) => {
+    worker.services = worker.services?.map((service) =>
+      service.binding === "EDGE" ? { ...service, remote: true } : service
+    )
+  }
+}
 
 export default config
