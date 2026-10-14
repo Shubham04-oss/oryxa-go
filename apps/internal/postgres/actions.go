@@ -11,7 +11,7 @@ import (
 )
 
 const actionColumns = `id, organization_id, member_id, connection_id, toolkit, tool, read_only, agent,
-	idempotency_key, status, result, error, log_id, created_at, finished_at`
+	agent_id, agent_role, idempotency_key, status, result, error, log_id, created_at, finished_at`
 
 // StartAction records a tool run as running. An idempotency key is unique
 // per member per organization: a retry under the same key finds the run
@@ -26,15 +26,15 @@ func (store *Store) StartAction(ctx context.Context, action domain.Action) (doma
 		actions, err := queryActions(ctx, tx, `
 			INSERT INTO apps_actions (
 				id, organization_id, member_id, connection_id, toolkit, tool, read_only, agent,
-				idempotency_key, status, created_at, broker
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', $10,
+				agent_id, agent_role, idempotency_key, status, created_at, broker
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $11, $12, $9, 'running', $10,
 				-- The broker the run goes through is its connection's, which
 				-- is what usage is counted by.
 				COALESCE((SELECT broker FROM apps_connections WHERE id = $4), 'composio'))
 			ON CONFLICT (organization_id, member_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 			RETURNING `+actionColumns,
 			action.ID, action.OrganizationID, action.MemberID, action.ConnectionID, action.Toolkit, action.Tool,
-			action.ReadOnly, action.Agent, nullable(action.IdempotencyKey), action.CreatedAt)
+			action.ReadOnly, action.Agent, nullable(action.IdempotencyKey), action.CreatedAt, action.AgentID, action.AgentRole)
 		if err != nil {
 			return mapWriteError("start action", err)
 		}
@@ -115,7 +115,7 @@ func scanAction(rows pgx.Rows) (domain.Action, error) {
 	// json.RawMessage that Result carries while a run is unfinished.
 	var result []byte
 	if err := rows.Scan(&action.ID, &action.OrganizationID, &action.MemberID, &action.ConnectionID, &action.Toolkit,
-		&action.Tool, &action.ReadOnly, &action.Agent, &idempotencyKey, &status, &result, &action.Error,
+		&action.Tool, &action.ReadOnly, &action.Agent, &action.AgentID, &action.AgentRole, &idempotencyKey, &status, &result, &action.Error,
 		&action.LogID, &action.CreatedAt, &action.FinishedAt); err != nil {
 		return domain.Action{}, fmt.Errorf("scan action: %w", err)
 	}

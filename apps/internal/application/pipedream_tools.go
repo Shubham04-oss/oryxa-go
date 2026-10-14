@@ -359,7 +359,7 @@ func (s *Service) runPipedreamTool(
 	}
 	started, created, err := s.store.StartAction(ctx, domain.Action{
 		ID: id, OrganizationID: connection.OrganizationID, MemberID: caller.UserID, ConnectionID: connection.ID,
-		Toolkit: connection.Toolkit, Tool: action.slug, ReadOnly: action.readOnly, Agent: caller.Agent,
+		Toolkit: connection.Toolkit, Tool: action.slug, ReadOnly: action.readOnly, Agent: caller.Agent, AgentID: caller.AgentID, AgentRole: caller.AgentRole,
 		IdempotencyKey: key, Status: domain.ActionRunning, CreatedAt: s.now().UTC(),
 	})
 	if err != nil {

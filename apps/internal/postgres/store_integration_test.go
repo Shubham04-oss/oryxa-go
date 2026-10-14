@@ -673,14 +673,14 @@ func TestStartActionIdempotencyKeyAnswersTheFirstRunAndDoesNotCollideAcrossMembe
 	key := "idem_" + randomHex(8)
 	action := domain.Action{
 		ID: "act_" + randomHex(8), OrganizationID: "org_1", MemberID: "member_1", ConnectionID: connection.ID,
-		Toolkit: "github", Tool: "GITHUB_CREATE_AN_ISSUE", Agent: true, IdempotencyKey: key, CreatedAt: testClock,
+		Toolkit: "github", Tool: "GITHUB_CREATE_AN_ISSUE", Agent: true, AgentID: "agt_writer", AgentRole: "specialist", IdempotencyKey: key, CreatedAt: testClock,
 	}
 	first, started, err := store.StartAction(ctx, action)
 	if err != nil || !started {
 		t.Fatalf("StartAction() = %+v, %v, %v, want started", first, started, err)
 	}
-	if first.Status != domain.ActionRunning {
-		t.Fatalf("StartAction() status = %s, want running", first.Status)
+	if first.Status != domain.ActionRunning || first.AgentID != "agt_writer" || first.AgentRole != "specialist" {
+		t.Fatalf("StartAction() = %+v, want running, naming its agent", first)
 	}
 
 	retry := action

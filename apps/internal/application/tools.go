@@ -224,7 +224,7 @@ func (s *Service) runComposioTool(
 	}
 	started, created, err := s.store.StartAction(ctx, domain.Action{
 		ID: id, OrganizationID: organizationID, MemberID: caller.UserID, ConnectionID: connection.ID,
-		Toolkit: tool.Toolkit, Tool: tool.Slug, ReadOnly: tool.ReadOnly(), Agent: caller.Agent,
+		Toolkit: tool.Toolkit, Tool: tool.Slug, ReadOnly: tool.ReadOnly(), Agent: caller.Agent, AgentID: caller.AgentID, AgentRole: caller.AgentRole,
 		IdempotencyKey: key, Status: domain.ActionRunning, CreatedAt: s.now().UTC(),
 	})
 	if err != nil {
@@ -394,13 +394,13 @@ func (s *Service) actionEvent(action domain.Action) (*domain.Event, error) {
 		event, err = s.event(appsv1.ActionCompletedDetailType, appsv1.ActionCompleted{
 			ActionID: action.ID, ConnectionID: action.ConnectionID, OrganizationID: action.OrganizationID,
 			MemberID: action.MemberID, Toolkit: action.Toolkit, Tool: action.Tool, ReadOnly: action.ReadOnly,
-			Agent: action.Agent, FinishedAt: finishedAt,
+			Agent: action.Agent, AgentID: action.AgentID, AgentRole: action.AgentRole, FinishedAt: finishedAt,
 		})
 	} else {
 		event, err = s.event(appsv1.ActionFailedDetailType, appsv1.ActionFailed{
 			ActionID: action.ID, ConnectionID: action.ConnectionID, OrganizationID: action.OrganizationID,
 			MemberID: action.MemberID, Toolkit: action.Toolkit, Tool: action.Tool, ReadOnly: action.ReadOnly,
-			Agent: action.Agent, Error: eventReason(action), FinishedAt: finishedAt,
+			Agent: action.Agent, AgentID: action.AgentID, AgentRole: action.AgentRole, Error: eventReason(action), FinishedAt: finishedAt,
 		})
 	}
 	if err != nil {

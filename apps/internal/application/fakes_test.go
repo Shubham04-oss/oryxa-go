@@ -824,7 +824,7 @@ func newHarness(t *testing.T) harness {
 			otherToken.Authorization:      {OrganizationID: "org_1", UserID: "user-2", Role: domain.OrgRoleMember},
 			adminToken.Authorization:      {OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin},
 			agentToken.Authorization:      {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember, Agent: true},
-			specialistToken.Authorization: {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember, Agent: true},
+			specialistToken.Authorization: {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember, Agent: true, AgentID: "agt_writer", AgentRole: "specialist"},
 			adminAgentToken.Authorization: {OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin, Agent: true},
 		}},
 		Composio: fake,
