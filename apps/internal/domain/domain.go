@@ -89,6 +89,10 @@ type OrgMembership struct {
 	// Agent says the caller is an agent acting for this member. An agent may
 	// use the member's connections, but never make or remove one.
 	Agent bool
+	// AgentID and AgentRole name which of the member's agents it is (agt_…,
+	// and primary, specialist or organization), when Agent is set.
+	AgentID   string
+	AgentRole string
 }
 
 // Brokers: who holds a connection's credential.
@@ -268,6 +272,8 @@ type Action struct {
 	Tool           string
 	ReadOnly       bool
 	Agent          bool
+	AgentID        string
+	AgentRole      string
 	IdempotencyKey string
 	Status         ActionStatus
 	// Result is what the app answered, kept for a write so a replay can

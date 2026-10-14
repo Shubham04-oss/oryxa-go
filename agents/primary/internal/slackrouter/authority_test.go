@@ -39,7 +39,7 @@ type fakeTokens struct {
 	minted  []string
 }
 
-func (tokens *fakeTokens) AgentToken(_ context.Context, userID string) (string, time.Time, error) {
+func (tokens *fakeTokens) AgentToken(_ context.Context, userID string, _ memberauth.Agent) (string, time.Time, error) {
 	tokens.minted = append(tokens.minted, userID)
 	if tokens.err != nil {
 		return "", time.Time{}, tokens.err

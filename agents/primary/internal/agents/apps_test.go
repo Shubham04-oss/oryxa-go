@@ -146,7 +146,7 @@ type fakeAppsTokens struct {
 	calls []string
 }
 
-func (f *fakeAppsTokens) AgentToken(_ context.Context, userID string) (string, time.Time, error) {
+func (f *fakeAppsTokens) AgentToken(_ context.Context, userID string, _ memberauth.Agent) (string, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, userID)

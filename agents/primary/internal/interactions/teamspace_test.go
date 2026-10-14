@@ -55,7 +55,7 @@ type fakeTokens struct {
 	users []string
 }
 
-func (tokens *fakeTokens) AgentToken(_ context.Context, userID string) (string, time.Time, error) {
+func (tokens *fakeTokens) AgentToken(_ context.Context, userID string, _ memberauth.Agent) (string, time.Time, error) {
 	tokens.users = append(tokens.users, userID)
 	if tokens.err != nil {
 		return "", time.Time{}, tokens.err

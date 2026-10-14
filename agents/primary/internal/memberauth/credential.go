@@ -14,9 +14,12 @@ import (
 // is not present to carry their own — a trigger or a schedule acting on
 // their behalf. The token is still the member's own identity (its subject is
 // the member), issued through the agent app client under their standing
-// grant; AuthClient implements it against auth's internal endpoint.
+// grant; AuthClient implements it against auth's internal endpoint. The
+// token names agent, the one of the member's agents it acts as, so apps and
+// rag can tell a specialist from the primary; a caller that is not a run of
+// one agent passes the zero Agent, the primary.
 type TokenSource interface {
-	AgentToken(ctx context.Context, userID string) (token string, expiresAt time.Time, err error)
+	AgentToken(ctx context.Context, userID string, agent Agent) (token string, expiresAt time.Time, err error)
 }
 
 // CredentialProvider is the ADK auth.CredentialProvider a member-authenticated
@@ -50,7 +53,7 @@ func (p *CredentialProvider) Credential(ctx context.Context) (auth.Credential, e
 	if p.Tokens == nil {
 		return nil, errors.New("memberauth: this run carries no member access token, and no agent token source is configured")
 	}
-	token, _, err := p.Tokens.AgentToken(ctx, member.UserID)
+	token, _, err := p.Tokens.AgentToken(ctx, member.UserID, member.Agent)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +76,7 @@ func Bearer(ctx agent.ReadonlyContext, tokens TokenSource) (Member, string, erro
 	if tokens == nil {
 		return Member{}, "", errors.New("this run cannot act for the member: it carries no token of theirs, and none can be minted here")
 	}
-	token, _, err := tokens.AgentToken(ctx, member.UserID)
+	token, _, err := tokens.AgentToken(ctx, member.UserID, member.Agent)
 	if err != nil {
 		return Member{}, "", err
 	}

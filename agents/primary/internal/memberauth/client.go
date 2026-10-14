@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
@@ -36,10 +37,10 @@ type AuthClientConfig struct {
 }
 
 // AuthClient implements TokenSource by calling auth's internal agent-token
-// endpoint. It caches each user's token until tokenRefreshWindow before it
-// expires, and is safe for concurrent use: concurrent callers for the same
-// user who all find no usable cached token share a single request rather
-// than each firing their own.
+// endpoint. It caches each user's token for each agent until
+// tokenRefreshWindow before it expires, and is safe for concurrent use:
+// concurrent callers for the same user and agent who all find no usable
+// cached token share a single request rather than each firing their own.
 type AuthClient struct {
 	baseURL string
 	http    *http.Client
@@ -87,17 +88,23 @@ func NewAuthClient(config AuthClientConfig) *AuthClient {
 }
 
 // AgentToken implements TokenSource.
-func (c *AuthClient) AgentToken(ctx context.Context, userID string) (string, time.Time, error) {
+func (c *AuthClient) AgentToken(ctx context.Context, userID string, agent Agent) (string, time.Time, error) {
 	if userID == "" {
 		return "", time.Time{}, fmt.Errorf("memberauth: user id is required")
 	}
+	if agent.Role == "" {
+		agent.Role = runprofile.Primary
+	}
+	// One agent's token must never be handed to another, so the cache is
+	// keyed by both. NUL cannot appear in either ID.
+	key := userID + "\x00" + agent.ID + "\x00" + string(agent.Role)
 
 	c.mu.Lock()
-	if cached, ok := c.cache[userID]; ok && c.now().Before(cached.expiresAt.Add(-tokenRefreshWindow)) {
+	if cached, ok := c.cache[key]; ok && c.now().Before(cached.expiresAt.Add(-tokenRefreshWindow)) {
 		c.mu.Unlock()
 		return cached.token, cached.expiresAt, nil
 	}
-	if req, ok := c.inflight[userID]; ok {
+	if req, ok := c.inflight[key]; ok {
 		c.mu.Unlock()
 		select {
 		case <-req.done:
@@ -107,22 +114,22 @@ func (c *AuthClient) AgentToken(ctx context.Context, userID string) (string, tim
 		}
 	}
 	req := &tokenRequest{done: make(chan struct{})}
-	c.inflight[userID] = req
+	c.inflight[key] = req
 	c.mu.Unlock()
 
-	req.token, req.expiresAt, req.err = c.requestToken(ctx, userID)
+	req.token, req.expiresAt, req.err = c.requestToken(ctx, userID, agent)
 
 	c.mu.Lock()
-	delete(c.inflight, userID)
+	delete(c.inflight, key)
 	if req.err == nil {
 		// Drop tokens that have expired, so the cache holds only members
 		// agents are acting for now.
-		for cachedUser, cached := range c.cache {
+		for cachedKey, cached := range c.cache {
 			if !c.now().Before(cached.expiresAt) {
-				delete(c.cache, cachedUser)
+				delete(c.cache, cachedKey)
 			}
 		}
-		c.cache[userID] = cachedToken{token: req.token, expiresAt: req.expiresAt}
+		c.cache[key] = cachedToken{token: req.token, expiresAt: req.expiresAt}
 	}
 	c.mu.Unlock()
 	close(req.done)
@@ -130,8 +137,11 @@ func (c *AuthClient) AgentToken(ctx context.Context, userID string) (string, tim
 	return req.token, req.expiresAt, req.err
 }
 
+// agentTokenRequestBody's agent and role are the edge token's claim names.
 type agentTokenRequestBody struct {
 	UserID string `json:"user_id"`
+	Agent  string `json:"agent,omitempty"`
+	Role   string `json:"role"`
 }
 
 type agentTokenResponseBody struct {
@@ -139,8 +149,8 @@ type agentTokenResponseBody struct {
 	ExpiresIn   int64  `json:"expires_in"`
 }
 
-// requestToken calls auth once, uncached, for userID's agent token.
-func (c *AuthClient) requestToken(ctx context.Context, userID string) (string, time.Time, error) {
+// requestToken calls auth once, uncached, for userID's token for agent.
+func (c *AuthClient) requestToken(ctx context.Context, userID string, agent Agent) (string, time.Time, error) {
 	if c.baseURL == "" {
 		return "", time.Time{}, fmt.Errorf("memberauth: AUTH_URL is not configured")
 	}
@@ -148,7 +158,7 @@ func (c *AuthClient) requestToken(ctx context.Context, userID string) (string, t
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("memberauth: sign service token: %w", err)
 	}
-	body, err := json.Marshal(agentTokenRequestBody{UserID: userID})
+	body, err := json.Marshal(agentTokenRequestBody{UserID: userID, Agent: agent.ID, Role: string(agent.Role)})
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("memberauth: encode agent token request: %w", err)
 	}

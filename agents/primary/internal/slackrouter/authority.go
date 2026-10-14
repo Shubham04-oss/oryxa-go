@@ -42,7 +42,7 @@ func (authority *ChartAuthority) Outranks(ctx context.Context, organizationID st
 	if asker.UserID == "" || askerEmail == "" || ownerEmail == "" || askerEmail == ownerEmail {
 		return false, nil
 	}
-	token, _, err := authority.tokens.AgentToken(ctx, asker.UserID)
+	token, _, err := authority.tokens.AgentToken(ctx, asker.UserID, memberauth.Agent{})
 	switch {
 	case errors.Is(err, memberauth.ErrGrantRequired):
 		return false, nil

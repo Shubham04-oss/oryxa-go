@@ -9,6 +9,8 @@ import (
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/session"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 )
 
 // fakeState is a minimal session.ReadonlyState, the same shape agents_test.go
@@ -122,8 +124,32 @@ func TestBearerPrefersTheMembersOwnToken(t *testing.T) {
 	}
 }
 
+// TestASpecialistsRunAsksForTheSpecialistsToken: a session running a
+// specialist resolves to a member whose agent is that specialist, and the
+// token minted for its run names it; Krude's own session, with no kind,
+// asks as the primary.
+func TestASpecialistsRunAsksForTheSpecialistsToken(t *testing.T) {
+	for state, want := range map[*fakeState]Agent{
+		{"organization_id": "org-1", "managed_agent_id": "agt_writer", "managed_agent_kind": "specialist"}: {ID: "agt_writer", Role: runprofile.Specialist},
+		{"organization_id": "org-1"}: {},
+	} {
+		ctx := &fakeReadonlyContext{
+			StrictContextMock: agent.NewStrictContextMock(context.Background()),
+			userID:            "user-1",
+			state:             *state,
+		}
+		tokens := &fakeTokenSource{token: "agent-token"}
+		if _, _, err := Bearer(ctx, tokens); err != nil {
+			t.Fatal(err)
+		}
+		if len(tokens.agents) != 1 || tokens.agents[0] != want {
+			t.Fatalf("token asked for %+v, want %+v", tokens.agents, want)
+		}
+	}
+}
+
 type staticTokens string
 
-func (tokens staticTokens) AgentToken(context.Context, string) (string, time.Time, error) {
+func (tokens staticTokens) AgentToken(context.Context, string, Agent) (string, time.Time, error) {
 	return string(tokens), time.Now().Add(time.Hour), nil
 }

@@ -545,6 +545,16 @@ func (server *Server) organization(writer http.ResponseWriter, request *http.Req
 	}
 	if server.isAgentToken(authenticated.Claims) {
 		response["agent"] = true
+		identity := domain.AgentIdentity{Role: domain.AgentRolePrimary}
+		if server.config.AgentGrants != nil {
+			rawToken, _, _ := server.requestToken(request)
+			identity, err = server.config.AgentGrants.AgentIdentity(request.Context(), authenticated.Claims.Subject, rawToken)
+			if err != nil {
+				server.handleError(writer, err)
+				return
+			}
+		}
+		response["agent_claims"] = identity
 	}
 	writeJSON(writer, http.StatusOK, response)
 }

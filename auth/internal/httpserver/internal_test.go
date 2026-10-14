@@ -63,6 +63,30 @@ func TestMintAgentTokenSucceeds(t *testing.T) {
 	}
 }
 
+// TestMintAgentTokenBindsTheNamedAgent: a request naming an agent mints a
+// token bound to it; one naming none (an older agents) gets the primary; an
+// unknown role is refused.
+func TestMintAgentTokenBindsTheNamedAgent(t *testing.T) {
+	services := fakeServiceVerifier{claims: serviceauth.Claims{Service: "agents", Purpose: "agent"}}
+	for body, want := range map[string]domain.AgentIdentity{
+		`{"user_id":"member-1","agent":"agt_writer","role":"specialist"}`: {Agent: "agt_writer", Role: domain.AgentRoleSpecialist},
+		`{"user_id":"member-1"}`: {Role: domain.AgentRolePrimary},
+	} {
+		agentGrants := &fakeAgentGrants{mintAccessToken: "access-token-1", mintExpiresIn: 3600}
+		response := httptest.NewRecorder()
+		internalHandler(agentGrants, services).ServeHTTP(response, mintRequest(body, "svc-token"))
+		if response.Code != http.StatusOK || agentGrants.mintIdentity != want {
+			t.Fatalf("%s: status = %d, identity = %+v, want %+v", body, response.Code, agentGrants.mintIdentity, want)
+		}
+	}
+	agentGrants := &fakeAgentGrants{}
+	response := httptest.NewRecorder()
+	internalHandler(agentGrants, services).ServeHTTP(response, mintRequest(`{"user_id":"member-1","role":"root"}`, "svc-token"))
+	if response.Code != http.StatusBadRequest || agentGrants.mintUserID != "" {
+		t.Fatalf("unknown role: status = %d, minted for %q", response.Code, agentGrants.mintUserID)
+	}
+}
+
 func TestMintAgentTokenAnswersNotFoundWithoutGrant(t *testing.T) {
 	agentGrants := &fakeAgentGrants{mintErr: domain.ErrNotFound}
 	services := fakeServiceVerifier{claims: serviceauth.Claims{Service: "agents", Purpose: "agent"}}

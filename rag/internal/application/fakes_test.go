@@ -54,6 +54,9 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 		return domain.OrgMembership{}, domain.ErrNotFound
 	}
 	membership.Agent = agent
+	if agent {
+		membership.AgentID, membership.AgentRole = "agt_"+token, "specialist"
+	}
 	return membership, nil
 }
 

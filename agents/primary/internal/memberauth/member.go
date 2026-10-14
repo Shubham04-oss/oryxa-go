@@ -22,6 +22,8 @@ import (
 	"errors"
 
 	"google.golang.org/adk/v2/agent"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 )
 
 // organizationStateKey is the ADK session state key internal/adksession
@@ -31,11 +33,29 @@ import (
 // low-level package pulls in neither's dependencies for one string.
 const organizationStateKey = "organization_id"
 
+// agentIDStateKey and agentKindStateKey are the session state keys naming
+// the persistent agent a session runs (agents.AgentIDKey and AgentKindKey),
+// literals for the same reason.
+const (
+	agentIDStateKey   = "managed_agent_id"
+	agentKindStateKey = "managed_agent_kind"
+)
+
+// Agent is which of the member's agents acts: its ID (agt_…, oag_…; empty
+// for a primary that has none) and its role. An agent token is minted for,
+// and names, exactly one Agent. The zero Agent is asked for as the primary.
+type Agent struct {
+	ID   string
+	Role runprofile.Role
+}
+
 // Member is who an agent is acting for: a session's own user, in the
 // organization its state names.
 type Member struct {
 	UserID         string
 	OrganizationID string
+	// Agent is the agent acting for them, from the session's state.
+	Agent Agent
 }
 
 // The errors below reach the model as a tool's error, so each says in plain
@@ -86,7 +106,22 @@ func MemberFromSession(ctx agent.ReadonlyContext) (Member, error) {
 	if organizationID == "" {
 		return Member{}, ErrNoMember
 	}
-	return Member{UserID: userID, OrganizationID: organizationID}, nil
+	agentID, _ := stateString(ctx, agentIDStateKey)
+	kind, _ := stateString(ctx, agentKindStateKey)
+	member := Member{UserID: userID, OrganizationID: organizationID, Agent: Agent{ID: agentID}}
+	if kind != "" {
+		member.Agent.Role = runprofile.RoleOf(kind)
+	}
+	return member, nil
+}
+
+func stateString(ctx agent.ReadonlyContext, key string) (string, bool) {
+	value, err := ctx.ReadonlyState().Get(key)
+	if err != nil {
+		return "", false
+	}
+	text, ok := value.(string)
+	return text, ok
 }
 
 // contextKey namespaces this package's context values so they cannot

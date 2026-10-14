@@ -333,6 +333,26 @@ func TestMemberAndOwnedAgentsShareTheSameConnection(t *testing.T) {
 	}
 }
 
+// TestAToolRunNamesTheAgentThatRanIt: a specialist's run is recorded, and
+// announced, as that specialist's, not merely as "an agent".
+func TestAToolRunNamesTheAgentThatRanIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	tool := h.readTool()
+	h.activeConnection("apc_gmail", "user-1", "github", "ca_shared")
+
+	run, err := h.service.RunTool(context.Background(), specialistToken, "org_1", RunToolInput{Tool: tool.Slug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !run.Action.Agent || run.Action.AgentID != "agt_writer" || run.Action.AgentRole != "specialist" {
+		t.Fatalf("the action is %+v, want it to name agt_writer, a specialist", run.Action)
+	}
+	if recorded := h.store.actions[run.Action.ID]; recorded.AgentID != "agt_writer" || recorded.AgentRole != "specialist" {
+		t.Fatalf("the stored action is %+v", recorded)
+	}
+}
+
 func TestRunToolSaysWhenTheAppIsNotUsable(t *testing.T) {
 	t.Parallel()
 	for name, testCase := range map[string]struct {

@@ -173,3 +173,23 @@ type AgentGrant struct {
 	CreatedAt             time.Time
 	RefreshedAt           *time.Time
 }
+
+// AgentIdentity is which of a member's agents an agent token acts as: its
+// agent ID (agt_…, oag_…; empty for a primary that has none) and its role,
+// one of AgentRolePrimary, AgentRoleSpecialist or AgentRoleOrganization —
+// the same names as agents' runprofile.Role and the edge token's "agent".
+type AgentIdentity struct {
+	Agent string `json:"agent,omitempty"`
+	Role  string `json:"role"`
+}
+
+const (
+	AgentRolePrimary      = "primary"
+	AgentRoleSpecialist   = "specialist"
+	AgentRoleOrganization = "organization"
+)
+
+// ValidAgentRole reports whether role is one an agent token may carry.
+func ValidAgentRole(role string) bool {
+	return role == AgentRolePrimary || role == AgentRoleSpecialist || role == AgentRoleOrganization
+}

@@ -249,7 +249,7 @@ type TriggerDisabled struct {
 }
 
 // ActionCompleted is a tool that ran and succeeded in a member's app. Agent
-// says an agent ran it for the member.
+// says an agent ran it for the member; AgentID and AgentRole say which.
 type ActionCompleted struct {
 	ActionID       string    `json:"action_id"`
 	ConnectionID   string    `json:"connection_id"`
@@ -259,6 +259,8 @@ type ActionCompleted struct {
 	Tool           string    `json:"tool"`
 	ReadOnly       bool      `json:"read_only"`
 	Agent          bool      `json:"agent"`
+	AgentID        string    `json:"agent_id,omitempty"`
+	AgentRole      string    `json:"agent_role,omitempty"`
 	FinishedAt     time.Time `json:"finished_at"`
 }
 
@@ -273,6 +275,8 @@ type ActionFailed struct {
 	Tool           string    `json:"tool"`
 	ReadOnly       bool      `json:"read_only"`
 	Agent          bool      `json:"agent"`
+	AgentID        string    `json:"agent_id,omitempty"`
+	AgentRole      string    `json:"agent_role,omitempty"`
 	Error          string    `json:"error"`
 	FinishedAt     time.Time `json:"finished_at"`
 }

@@ -54,6 +54,11 @@ type organizationResponse struct {
 		Role   string `json:"role"`
 	} `json:"membership"`
 	Agent bool `json:"agent"`
+	// AgentClaims name which agent an agent token acts as.
+	AgentClaims struct {
+		Agent string `json:"agent"`
+		Role  string `json:"role"`
+	} `json:"agent_claims"`
 }
 
 // Membership answers what the caller is in an organization, and whether they
@@ -103,7 +108,18 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 		UserID:         decoded.Membership.UserID,
 		Role:           domain.OrgRole(decoded.Membership.Role),
 		Agent:          decoded.Agent,
+		AgentID:        decoded.AgentClaims.Agent,
+		AgentRole:      agentRole(decoded.Agent, decoded.AgentClaims.Role),
 	}, nil
+}
+
+// agentRole is an agent caller's role; an agent whose token names none is
+// the primary.
+func agentRole(agent bool, role string) string {
+	if agent && role == "" {
+		return "primary"
+	}
+	return role
 }
 
 func authError(status int) error {

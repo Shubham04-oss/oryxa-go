@@ -41,6 +41,9 @@ type fakeAgentGrants struct {
 	mintExpiresIn   int
 	mintErr         error
 	mintUserID      string
+	mintIdentity    domain.AgentIdentity
+
+	identity domain.AgentIdentity
 }
 
 func (fake *fakeAgentGrants) Status(_ context.Context, _ string) (domain.AgentGrant, error) {
@@ -62,9 +65,13 @@ func (fake *fakeAgentGrants) Revoke(_ context.Context, userID string) error {
 	return fake.revokeErr
 }
 
-func (fake *fakeAgentGrants) MintToken(_ context.Context, userID string) (string, int, error) {
-	fake.mintUserID = userID
+func (fake *fakeAgentGrants) MintToken(_ context.Context, userID string, identity domain.AgentIdentity) (string, int, error) {
+	fake.mintUserID, fake.mintIdentity = userID, identity
 	return fake.mintAccessToken, fake.mintExpiresIn, fake.mintErr
+}
+
+func (fake *fakeAgentGrants) AgentIdentity(_ context.Context, _, _ string) (domain.AgentIdentity, error) {
+	return fake.identity, nil
 }
 
 // The rest of authService's methods, so a request that reaches the handler
@@ -315,6 +322,25 @@ func TestOrganizationResponseCarriesAgentOnlyForAgentTokens(t *testing.T) {
 	agentHandler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"agent":true`) {
 		t.Fatalf("agent response = %d %s, want 200 with \"agent\":true", response.Code, response.Body)
+	}
+	if !strings.Contains(response.Body.String(), `"agent_claims":{"role":"primary"}`) {
+		t.Fatalf("agent response = %s, want the primary's claims when grants are off", response.Body)
+	}
+
+	// With grants on, the claims are the ones the token was minted with.
+	specialistHandler := New(
+		fakeVerifier{claims: authn.Claims{Subject: "member-1", ClientID: agentClientID}},
+		&fakeAuthFlow{}, &fakePasswordAuth{},
+		&fakeAuthService{organization: organization, membership: membership},
+		Config{AllowedOrigins: []string{"https://app.example.com"}, AgentClientID: agentClientID,
+			AgentGrants: &fakeAgentGrants{identity: domain.AgentIdentity{Agent: "agt_writer", Role: domain.AgentRoleSpecialist}}},
+	)
+	request = httptest.NewRequest(http.MethodGet, "/v1/organizations/org-1", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	response = httptest.NewRecorder()
+	specialistHandler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"agent_claims":{"agent":"agt_writer","role":"specialist"}`) {
+		t.Fatalf("specialist response = %d %s, want its agent claims", response.Code, response.Body)
 	}
 }
 

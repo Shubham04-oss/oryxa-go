@@ -43,7 +43,7 @@ func (reader *AskerDirectory) Teams(ctx context.Context, organizationID string, 
 	if reader == nil || reader.directory == nil || reader.tokens == nil || asker.UserID == "" {
 		return nil, nil
 	}
-	token, _, err := reader.tokens.AgentToken(ctx, asker.UserID)
+	token, _, err := reader.tokens.AgentToken(ctx, asker.UserID, memberauth.Agent{})
 	switch {
 	case errors.Is(err, memberauth.ErrGrantRequired):
 		return nil, ErrNoGrant

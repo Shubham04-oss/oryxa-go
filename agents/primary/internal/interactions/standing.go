@@ -93,7 +93,7 @@ func (service *Service) memberToken(ctx context.Context, userID string) (string,
 	if service.tokens == nil {
 		return "", errNoMemberToken
 	}
-	token, _, err := service.tokens.AgentToken(ctx, userID)
+	token, _, err := service.tokens.AgentToken(ctx, userID, memberauth.Agent{})
 	if errors.Is(err, memberauth.ErrGrantRequired) {
 		return "", fmt.Errorf("%w: %w", errNoMemberToken, err)
 	}
