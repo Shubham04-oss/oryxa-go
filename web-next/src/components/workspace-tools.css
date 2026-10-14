@@ -29,7 +29,7 @@
   color: var(--tone-f6f6f6);
   font-size: clamp(23px, 2.4vw, 31px);
   font-weight: 620;
-  letter-spacing: -0.045em;
+  letter-spacing: -0.02em;
   line-height: 1.2;
 }
 .workspace-tools-discover-head p {

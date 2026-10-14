@@ -15,7 +15,7 @@
   color: var(--tone-f3f3f3);
   font-size: clamp(21px, 2.5vw, 27px);
   font-weight: 650;
-  letter-spacing: -0.045em;
+  letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
