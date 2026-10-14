@@ -484,3 +484,85 @@ div.home-item:hover {
 .home-glance .home-quiet {
   padding: 2px;
 }
+
+/* My workspace (founder's redesign, 14 Oct 2026): one calm centred column
+   under a faint scene, the greeting first, what needs you as one tile, and
+   "Pick up where you left off" as a row of cards that scrolls sideways. */
+.workspace-canvas:has(> .home-today:not(.home-glance)) { position: relative; }
+.home-scene {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 240px;
+  border-radius: inherit;
+  background: var(--scene-sea) center 58% / cover no-repeat;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .45) 45%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .45) 45%, transparent 100%);
+  opacity: var(--scene-band-opacity);
+  pointer-events: none;
+}
+.home-today:not(.home-glance) > :not(.home-scene) { position: relative; }
+.home-today:not(.home-glance) {
+  width: min(760px, calc(100% - 48px));
+  margin-top: 96px;
+}
+.home-hello { margin-bottom: 28px; }
+.home-hello h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -.03em;
+  line-height: 1.15;
+}
+.home-hello p {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.home-today:not(.home-glance) .home-top {
+  grid-template-columns: minmax(0, 1fr);
+}
+.home-today:not(.home-glance) .home-top .home-column {
+  padding: 14px 14px 10px;
+  border-radius: 18px;
+  background: var(--base);
+}
+.home-today:not(.home-glance) .home-top .home-list { margin: 0 -4px; }
+.home-today:not(.home-glance) .home-compose { margin-top: 24px; }
+.home-row-title {
+  margin: 32px 0 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.home-today:not(.home-glance) .home-stack {
+  display: grid;
+  grid-auto-columns: 236px;
+  grid-auto-flow: column;
+  grid-template-columns: none;
+  gap: 10px;
+  margin: 0 -24px;
+  padding: 0 24px 12px;
+  border-top: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-padding: 0 24px;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: thin;
+  /* The next card shows faded at the edge: the row goes on. */
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent);
+}
+@media (max-width: 800px) {
+  .home-today:not(.home-glance) { margin-top: 56px; }
+  .home-hello h2 { font-size: 26px; }
+}
+.home-today:not(.home-glance) .home-stack .home-column {
+  scroll-snap-align: start;
+  min-height: 150px;
+  padding: 12px 12px 8px;
+  border-radius: 16px;
+  background: var(--base);
+}
+.home-today:not(.home-glance) .home-stack .home-list { margin: 0 -4px; }
+.home-today:not(.home-glance) .home-stack .home-item { padding: 7px 6px; }
