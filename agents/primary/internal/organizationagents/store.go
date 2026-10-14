@@ -86,16 +86,20 @@ func (store *Store) Claim(ctx context.Context, lease time.Duration, limit int) (
 	})
 }
 
-func (store *Store) Synthesis(ctx context.Context, organizationID string) (Synthesis, error) {
+const synthesisColumns = `organization_id, teamspace_id, agent_id, revision, summary,
+	decisions, risks, open_questions, source_entry_id, updated_at`
+
+// Synthesis reads the synthesis for one audience: a teamspace's, or, with an
+// empty teamspaceID, the organization-wide one.
+func (store *Store) Synthesis(ctx context.Context, organizationID, teamspaceID string) (Synthesis, error) {
 	var synthesis Synthesis
 	var decisions, risks, questions []byte
-	err := store.database.Pool.QueryRow(ctx, `SELECT organization_id, agent_id, revision, summary,
-		decisions, risks, open_questions, source_entry_id, updated_at
-		FROM agents_primary.organization_agent_syntheses WHERE organization_id=$1`, organizationID).
-		Scan(&synthesis.OrganizationID, &synthesis.AgentID, &synthesis.Revision, &synthesis.Summary,
+	err := store.database.Pool.QueryRow(ctx, `SELECT `+synthesisColumns+`
+		FROM agents_primary.organization_agent_syntheses WHERE organization_id=$1 AND teamspace_id=$2`, organizationID, teamspaceID).
+		Scan(&synthesis.OrganizationID, &synthesis.TeamspaceID, &synthesis.AgentID, &synthesis.Revision, &synthesis.Summary,
 			&decisions, &risks, &questions, &synthesis.SourceEntryID, &synthesis.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return emptySynthesis(organizationID), nil
+		return emptySynthesis(organizationID, teamspaceID), nil
 	}
 	if err != nil {
 		return Synthesis{}, fmt.Errorf("read organization synthesis: %w", err)
@@ -106,7 +110,11 @@ func (store *Store) Synthesis(ctx context.Context, organizationID string) (Synth
 	return synthesis, nil
 }
 
-func (store *Store) ListFollowUps(ctx context.Context, organizationID string, limit int) ([]FollowUp, error) {
+// ListFollowUps lists, newest first, the follow-ups the audience may read.
+func (store *Store) ListFollowUps(ctx context.Context, organizationID string, audience Audience, limit int) ([]FollowUp, error) {
+	if !audience.All && len(audience.Teamspaces) == 0 {
+		return []FollowUp{}, nil
+	}
 	if limit <= 0 {
 		limit = 100
 	}
@@ -115,8 +123,9 @@ func (store *Store) ListFollowUps(ctx context.Context, organizationID string, li
 	}
 	rows, err := store.database.Pool.Query(ctx, `SELECT id, organization_id, synthesis_revision,
 		source_entry_id, teamspace_id, target_agent_id, task, rationale, status, created_at
-		FROM agents_primary.organization_agent_followups WHERE organization_id=$1
-		ORDER BY created_at DESC, id DESC LIMIT $2`, organizationID, limit)
+		FROM agents_primary.organization_agent_followups
+		WHERE organization_id=$1 AND ($3 OR teamspace_id = ANY($4))
+		ORDER BY created_at DESC, id DESC LIMIT $2`, organizationID, limit, audience.All, audience.Teamspaces)
 	if err != nil {
 		return nil, fmt.Errorf("list organization-agent follow-ups: %w", err)
 	}
@@ -134,7 +143,7 @@ func (store *Store) ListFollowUps(ctx context.Context, organizationID string, li
 	return result, rows.Err()
 }
 
-// Apply atomically advances the synthesis, stores proposed follow-ups, marks
+// Apply atomically advances the delivery's teamspace synthesis, stores proposed follow-ups, marks
 // the source delivery handled, and emits one content-minimal lifecycle event.
 func (store *Store) Apply(ctx context.Context, delivery Delivery, agentID string, result Result) (Synthesis, error) {
 	var synthesis Synthesis
@@ -147,14 +156,14 @@ func (store *Store) Apply(ctx context.Context, delivery Delivery, agentID string
 			return err
 		}
 		if handledAt != nil {
-			current, err := synthesisFrom(ctx, tx, delivery.OrganizationID)
+			current, err := synthesisFrom(ctx, tx, delivery.OrganizationID, delivery.TeamspaceID)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
 			synthesis = current
 			return err
 		}
-		current, err := synthesisFrom(ctx, tx, delivery.OrganizationID)
+		current, err := synthesisFrom(ctx, tx, delivery.OrganizationID, delivery.TeamspaceID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
@@ -165,15 +174,15 @@ func (store *Store) Apply(ctx context.Context, delivery Delivery, agentID string
 		questions, _ := json.Marshal(result.OpenQuestions)
 		var encodedDecisions, encodedRisks, encodedQuestions []byte
 		if err := tx.QueryRow(ctx, `INSERT INTO agents_primary.organization_agent_syntheses
-			(organization_id, agent_id, revision, summary, decisions, risks, open_questions, source_entry_id, updated_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-			ON CONFLICT (organization_id) DO UPDATE SET
+			(organization_id, teamspace_id, agent_id, revision, summary, decisions, risks, open_questions, source_entry_id, updated_at)
+			VALUES ($1,$10,$2,$3,$4,$5,$6,$7,$8,$9)
+			ON CONFLICT (organization_id, teamspace_id) DO UPDATE SET
 				agent_id=EXCLUDED.agent_id, revision=EXCLUDED.revision, summary=EXCLUDED.summary,
 				decisions=EXCLUDED.decisions, risks=EXCLUDED.risks, open_questions=EXCLUDED.open_questions,
 				source_entry_id=EXCLUDED.source_entry_id, updated_at=EXCLUDED.updated_at
-			RETURNING organization_id, agent_id, revision, summary, decisions, risks, open_questions, source_entry_id, updated_at`,
-			delivery.OrganizationID, agentID, revision, result.Summary, decisions, risks, questions, delivery.EntryID, now).
-			Scan(&synthesis.OrganizationID, &synthesis.AgentID, &synthesis.Revision, &synthesis.Summary,
+			RETURNING `+synthesisColumns,
+			delivery.OrganizationID, agentID, revision, result.Summary, decisions, risks, questions, delivery.EntryID, now, delivery.TeamspaceID).
+			Scan(&synthesis.OrganizationID, &synthesis.TeamspaceID, &synthesis.AgentID, &synthesis.Revision, &synthesis.Summary,
 				&encodedDecisions, &encodedRisks, &encodedQuestions, &synthesis.SourceEntryID, &synthesis.UpdatedAt); err != nil {
 			return err
 		}
@@ -273,18 +282,20 @@ func (store *Store) Forget(ctx context.Context, organizationID, userID string) e
 		if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.organization_agent_deliveries WHERE organization_id=$1`, organizationID); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.organization_agent_syntheses_legacy WHERE organization_id=$1`, organizationID); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx, `DELETE FROM agents_primary.organization_agent_syntheses WHERE organization_id=$1`, organizationID)
 		return err
 	})
 }
 
-func synthesisFrom(ctx context.Context, tx pgx.Tx, organizationID string) (Synthesis, error) {
+func synthesisFrom(ctx context.Context, tx pgx.Tx, organizationID, teamspaceID string) (Synthesis, error) {
 	var synthesis Synthesis
 	var decisions, risks, questions []byte
-	err := tx.QueryRow(ctx, `SELECT organization_id, agent_id, revision, summary,
-		decisions, risks, open_questions, source_entry_id, updated_at
-		FROM agents_primary.organization_agent_syntheses WHERE organization_id=$1 FOR UPDATE`, organizationID).
-		Scan(&synthesis.OrganizationID, &synthesis.AgentID, &synthesis.Revision, &synthesis.Summary,
+	err := tx.QueryRow(ctx, `SELECT `+synthesisColumns+`
+		FROM agents_primary.organization_agent_syntheses WHERE organization_id=$1 AND teamspace_id=$2 FOR UPDATE`, organizationID, teamspaceID).
+		Scan(&synthesis.OrganizationID, &synthesis.TeamspaceID, &synthesis.AgentID, &synthesis.Revision, &synthesis.Summary,
 			&decisions, &risks, &questions, &synthesis.SourceEntryID, &synthesis.UpdatedAt)
 	if err != nil {
 		return Synthesis{}, err
@@ -305,13 +316,13 @@ func decodeLists(synthesis *Synthesis, decisions, risks, questions []byte) error
 	return nil
 }
 
-func emptySynthesis(organizationID string) Synthesis {
-	return Synthesis{OrganizationID: organizationID, Decisions: []string{}, Risks: []string{}, OpenQuestions: []string{}}
+func emptySynthesis(organizationID, teamspaceID string) Synthesis {
+	return Synthesis{OrganizationID: organizationID, TeamspaceID: teamspaceID, Decisions: []string{}, Risks: []string{}, OpenQuestions: []string{}}
 }
 
 func recordSynthesisLifecycle(ctx context.Context, tx pgx.Tx, synthesis Synthesis, sourceEntryID string, followUps int) error {
 	event, err := events.NewEvent(agentsv1.OrganizationAgentSynthesisUpdatedDetailType, agentsv1.OrganizationAgentSynthesisUpdated{
-		OrganizationID: synthesis.OrganizationID, AgentID: synthesis.AgentID, Revision: synthesis.Revision,
+		OrganizationID: synthesis.OrganizationID, TeamspaceID: synthesis.TeamspaceID, AgentID: synthesis.AgentID, Revision: synthesis.Revision,
 		SourceEntryID: sourceEntryID, ProposedFollowUps: followUps, UpdatedAt: synthesis.UpdatedAt,
 	}, synthesis.UpdatedAt)
 	if err != nil {

@@ -139,11 +139,11 @@ func TestStoreLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if synthesis.Revision != 1 || synthesis.AgentID != organizationAgent.ID || synthesis.SourceEntryID != first.ID ||
+	if synthesis.Revision != 1 || synthesis.TeamspaceID != space.ID || synthesis.AgentID != organizationAgent.ID || synthesis.SourceEntryID != first.ID ||
 		synthesis.Summary != result.Summary || len(synthesis.Decisions) != 1 || len(synthesis.Risks) != 1 || len(synthesis.OpenQuestions) != 1 {
 		t.Fatalf("synthesis=%+v", synthesis)
 	}
-	followUps, err := store.ListFollowUps(ctx, organizationID, 10)
+	followUps, err := store.ListFollowUps(ctx, organizationID, Audience{All: true}, 10)
 	if err != nil || len(followUps) != 1 || followUps[0].Status != FollowUpProposed || followUps[0].Task != result.FollowUps[0].Task {
 		t.Fatalf("follow-ups=%+v error=%v", followUps, err)
 	}
@@ -153,9 +153,25 @@ func TestStoreLifecycle(t *testing.T) {
 	if err != nil || again.Revision != 1 {
 		t.Fatalf("replayed synthesis=%+v error=%v", again, err)
 	}
-	followUps, err = store.ListFollowUps(ctx, organizationID, 10)
+	followUps, err = store.ListFollowUps(ctx, organizationID, Audience{All: true}, 10)
 	if err != nil || len(followUps) != 1 {
 		t.Fatalf("replayed follow-ups=%+v error=%v", followUps, err)
+	}
+	// What one team posted reaches only that team's synthesis and follow-ups:
+	// not another team's, and not the organization-wide one every member reads.
+	if got, err := store.Synthesis(ctx, organizationID, ""); err != nil || got.Revision != 0 || got.Summary != "" {
+		t.Fatalf("organization-wide synthesis took a team-only post: %+v error=%v", got, err)
+	}
+	if got, err := store.Synthesis(ctx, organizationID, "tsp_other_team"); err != nil || got.Revision != 0 || got.Summary != "" {
+		t.Fatalf("another team's synthesis took this team's post: %+v error=%v", got, err)
+	}
+	for _, audience := range []Audience{{}, {Teamspaces: []string{"tsp_other_team"}}} {
+		if followUps, err := store.ListFollowUps(ctx, organizationID, audience, 10); err != nil || len(followUps) != 0 {
+			t.Fatalf("audience %+v read another team's follow-ups: %+v error=%v", audience, followUps, err)
+		}
+	}
+	if followUps, err := store.ListFollowUps(ctx, organizationID, Audience{Teamspaces: []string{space.ID}}, 10); err != nil || len(followUps) != 1 {
+		t.Fatalf("the team's own follow-ups=%+v error=%v", followUps, err)
 	}
 	var synthesisEvents int
 	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.agents_outbox
@@ -176,19 +192,19 @@ func TestStoreLifecycle(t *testing.T) {
 	if err := store.Forget(ctx, organizationID, userID); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := store.Synthesis(ctx, organizationID); err != nil || got.Revision != 1 {
+	if got, err := store.Synthesis(ctx, organizationID, space.ID); err != nil || got.Revision != 1 {
 		t.Fatalf("member cleanup altered org synthesis=%+v error=%v", got, err)
 	}
-	if followUps, err := store.ListFollowUps(ctx, organizationID, 10); err != nil || len(followUps) != 1 || followUps[0].TargetAgentID != "" {
+	if followUps, err := store.ListFollowUps(ctx, organizationID, Audience{All: true}, 10); err != nil || len(followUps) != 1 || followUps[0].TargetAgentID != "" {
 		t.Fatalf("member cleanup left private target=%+v error=%v", followUps, err)
 	}
 	if err := store.Forget(ctx, organizationID, ""); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := store.Synthesis(ctx, organizationID); err != nil || got.Revision != 0 {
+	if got, err := store.Synthesis(ctx, organizationID, space.ID); err != nil || got.Revision != 0 {
 		t.Fatalf("organization cleanup synthesis=%+v error=%v", got, err)
 	}
-	if followUps, err := store.ListFollowUps(ctx, organizationID, 10); err != nil || len(followUps) != 0 {
+	if followUps, err := store.ListFollowUps(ctx, organizationID, Audience{All: true}, 10); err != nil || len(followUps) != 0 {
 		t.Fatalf("organization cleanup follow-ups=%+v error=%v", followUps, err)
 	}
 }

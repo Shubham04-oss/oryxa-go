@@ -31,7 +31,7 @@ const (
 
 type deliveryStore interface {
 	Claim(context.Context, time.Duration, int) ([]Delivery, error)
-	Synthesis(context.Context, string) (Synthesis, error)
+	Synthesis(context.Context, string, string) (Synthesis, error)
 	Apply(context.Context, Delivery, string, Result) (Synthesis, error)
 	Release(context.Context, string, bool, int, time.Duration, string) (bool, error)
 	SetAside(context.Context, string, string) error
@@ -185,7 +185,12 @@ func (processor *Processor) process(ctx context.Context, delivery Delivery) {
 		return
 	}
 
-	previous, err := processor.store.Synthesis(ctx, delivery.OrganizationID)
+	// A publication is read only by its own team, so it advances only that
+	// teamspace's synthesis, and that synthesis is all the run is shown.
+	// ponytail: nothing feeds the organization-wide synthesis (teamspace "")
+	// yet, because every teamspace is team-only; org-visible inputs fill it in
+	// Layer C (C2).
+	previous, err := processor.store.Synthesis(ctx, delivery.OrganizationID, delivery.TeamspaceID)
 	if err != nil {
 		processor.retry(ctx, delivery, err, logger)
 		return

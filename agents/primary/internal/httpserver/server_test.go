@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -236,24 +237,34 @@ type fakeTeamspaces struct {
 // fakeOrganizationContext records, in call order, the organization id every
 // method was invoked with. The interface takes no user identity at all: the
 // organization-agent's synthesis and follow-ups are organization-level state,
-// not a member-owned resource. Who may read them (owners and admins, since
-// they are built from team-only posts) is the handler's check, made before
-// this is ever called.
+// not a member-owned resource. Which audience the caller is in (a team's, or
+// every teamspace's for an owner or admin) is the handler's check, made before
+// this is ever called; the fake records what it was asked for.
 type fakeOrganizationContext struct {
 	organizationIDs []string
+	// teamspaceIDs is whose synthesis each read asked for, "" the organization's.
+	teamspaceIDs []string
+	audiences    []organizationagents.Audience
 }
 
-func (service *fakeOrganizationContext) Synthesis(_ context.Context, organizationID string) (organizationagents.Synthesis, error) {
+func (service *fakeOrganizationContext) Synthesis(_ context.Context, organizationID, teamspaceID string) (organizationagents.Synthesis, error) {
 	service.organizationIDs = append(service.organizationIDs, organizationID)
+	service.teamspaceIDs = append(service.teamspaceIDs, teamspaceID)
 	return organizationagents.Synthesis{
-		OrganizationID: organizationID, AgentID: "oag_oryxa", Revision: 2,
+		OrganizationID: organizationID, TeamspaceID: teamspaceID, AgentID: "oag_oryxa", Revision: 2,
 		Summary: "Launch is on track.", Decisions: []string{"Use the reviewed design."},
 		Risks: []string{}, OpenQuestions: []string{"Confirm rollout date."}, SourceEntryID: "tse_review",
 	}, nil
 }
 
-func (service *fakeOrganizationContext) ListFollowUps(_ context.Context, organizationID string, _ int) ([]organizationagents.FollowUp, error) {
+// ListFollowUps holds one follow-up, from tsp_engineering, and returns it only
+// to an audience that includes that teamspace, as the store does.
+func (service *fakeOrganizationContext) ListFollowUps(_ context.Context, organizationID string, audience organizationagents.Audience, _ int) ([]organizationagents.FollowUp, error) {
 	service.organizationIDs = append(service.organizationIDs, organizationID)
+	service.audiences = append(service.audiences, audience)
+	if !audience.All && !slices.Contains(audience.Teamspaces, "tsp_engineering") {
+		return []organizationagents.FollowUp{}, nil
+	}
 	return []organizationagents.FollowUp{{
 		ID: "ofu_1", OrganizationID: organizationID, SynthesisRevision: 2,
 		SourceEntryID: "tse_review", TeamspaceID: "tsp_engineering",
@@ -703,7 +714,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 74 {
+	if len(patterns) != 75 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -1400,31 +1411,69 @@ func TestDeleteAgentConversationUsesAuthenticatedOwnerAndExactIDs(t *testing.T) 
 	}
 }
 
-// The organization agent's synthesis and follow-ups are built from teamspace
-// posts that only each team may read, so a member who cannot manage the
-// organization gets neither, and the synthesis is never even read for them.
-func TestOrganizationSynthesisNeedsAManager(t *testing.T) {
-	for _, path := range []string{
-		"/v1/organizations/org_1/organization-agent/context",
-		"/v1/organizations/org_1/organization-agent/follow-ups?limit=20",
-	} {
-		t.Run(path, func(t *testing.T) {
-			spaces := &fakeTeamspaces{organizationAgent: teamspaces.OrganizationAgent{
-				ID: "oag_oryxa", OrganizationID: "org_1", Name: "Oryxa Agent", Status: teamspaces.StatusActive, CanManage: false,
-			}}
-			synthesis := &fakeOrganizationContext{}
-			server := New(member(), &fakeThreads{}, Config{
-				AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute,
-				Teamspaces: spaces, OrganizationContext: synthesis,
-			}, nil)
-
-			response := serve(server, http.MethodGet, path, "", bearer)
-			if response.Code != http.StatusForbidden {
-				t.Fatalf("status = %d, want 403: %s", response.Code, response.Body.String())
-			}
-			if len(synthesis.organizationIDs) != 0 {
-				t.Fatalf("the synthesis was read for a member who may not see it: %v", synthesis.organizationIDs)
-			}
-		})
+// The organization agent's syntheses and follow-ups have audiences (L1): a
+// teamspace's is built from posts only its team may read, so a member gets
+// the syntheses and follow-ups of the teams they belong to and none of
+// another team's (never even read for them); an owner or admin gets every
+// one; and everyone gets the organization-wide synthesis, which uses only
+// inputs every member may read.
+func TestOrganizationSynthesisAudiences(t *testing.T) {
+	setup := func(canManageOrganization bool, space teamspaces.Space) (*Server, *fakeOrganizationContext) {
+		spaces := &fakeTeamspaces{space: space, organizationAgent: teamspaces.OrganizationAgent{
+			ID: "oag_oryxa", OrganizationID: "org_1", Name: "Oryxa Agent", Status: teamspaces.StatusActive, CanManage: canManageOrganization,
+		}}
+		synthesis := &fakeOrganizationContext{}
+		return New(member(), &fakeThreads{}, Config{
+			AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute,
+			Teamspaces: spaces, OrganizationContext: synthesis,
+		}, nil), synthesis
 	}
+	teamB := teamspaces.Space{ID: "tsp_design", OrganizationID: "org_1", IsMember: true}
+
+	t.Run("a member of only team B gets nothing of team A's", func(t *testing.T) {
+		server, synthesis := setup(false, teamB)
+		response := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces/tsp_engineering/synthesis", "", bearer)
+		if response.Code != http.StatusForbidden || len(synthesis.teamspaceIDs) != 0 {
+			t.Fatalf("team A's synthesis for a team B member = %d %s, read for %v", response.Code, response.Body.String(), synthesis.teamspaceIDs)
+		}
+		followUps := serve(server, http.MethodGet, "/v1/organizations/org_1/organization-agent/follow-ups?limit=20", "", bearer)
+		if followUps.Code != http.StatusOK || strings.Contains(followUps.Body.String(), "ofu_1") {
+			t.Fatalf("follow-ups for a team B member = %d %s", followUps.Code, followUps.Body.String())
+		}
+		if got := synthesis.audiences; len(got) != 1 || got[0].All || !reflect.DeepEqual(got[0].Teamspaces, []string{"tsp_design"}) {
+			t.Fatalf("follow-ups asked for audience %+v, want team B's teamspace only", got)
+		}
+		own := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces/tsp_design/synthesis", "", bearer)
+		if own.Code != http.StatusOK || !reflect.DeepEqual(synthesis.teamspaceIDs, []string{"tsp_design"}) {
+			t.Fatalf("own team's synthesis = %d %s, read for %v", own.Code, own.Body.String(), synthesis.teamspaceIDs)
+		}
+	})
+
+	t.Run("managing team A without belonging to it is not enough", func(t *testing.T) {
+		server, synthesis := setup(false, teamspaces.Space{ID: "tsp_engineering", OrganizationID: "org_1", CanManage: true})
+		response := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces/tsp_engineering/synthesis", "", bearer)
+		if response.Code != http.StatusForbidden || len(synthesis.teamspaceIDs) != 0 {
+			t.Fatalf("team A's synthesis for its non-member manager = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("an owner or admin reads every team's", func(t *testing.T) {
+		server, synthesis := setup(true, teamB)
+		response := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces/tsp_engineering/synthesis", "", bearer)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"teamspace_id":"tsp_engineering"`) {
+			t.Fatalf("team A's synthesis for an admin = %d %s", response.Code, response.Body.String())
+		}
+		followUps := serve(server, http.MethodGet, "/v1/organizations/org_1/organization-agent/follow-ups?limit=20", "", bearer)
+		if followUps.Code != http.StatusOK || !strings.Contains(followUps.Body.String(), `"id":"ofu_1"`) || !synthesis.audiences[0].All {
+			t.Fatalf("follow-ups for an admin = %d %s", followUps.Code, followUps.Body.String())
+		}
+	})
+
+	t.Run("every member reads the organization-wide synthesis", func(t *testing.T) {
+		server, synthesis := setup(false, teamB)
+		response := serve(server, http.MethodGet, "/v1/organizations/org_1/organization-agent/context", "", bearer)
+		if response.Code != http.StatusOK || !reflect.DeepEqual(synthesis.teamspaceIDs, []string{""}) {
+			t.Fatalf("organization-wide synthesis = %d %s, read for %q", response.Code, response.Body.String(), synthesis.teamspaceIDs)
+		}
+	})
 }
