@@ -5,7 +5,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { Id } from "./contracts";
 import type { Env } from "./env";
-import { EdgeError, toResponse } from "./http";
+import { EdgeError, discardBody, toResponse } from "./http";
 import { forward, parseRoomPath } from "./router";
 
 export const WEB_IDENTITY_HEADER = "x-oryxa-member";
@@ -25,6 +25,7 @@ export class WebEdge extends WorkerEntrypoint<Env> {
       }
       return await forward(request, this.env, identity.org, room, rest, { web: { org: identity.org, member: identity.member } });
     } catch (error) {
+      await discardBody(request);
       return toResponse(error);
     }
   }

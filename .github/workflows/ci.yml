@@ -310,9 +310,10 @@ jobs:
         # workers project runs the Durable Objects in workerd.
         run: pnpm test --maxWorkers=4 --testTimeout=20000
       - name: Wrangler dry run
-        # Validates the bindings, Durable Objects and migrations without
-        # uploading anything.
-        run: pnpm exec wrangler deploy --dry-run
+        # Validates the bindings, Durable Objects, migrations and container
+        # config without uploading anything. The sandbox image is linux/amd64
+        # and these runners are arm64, so it is built where it deploys.
+        run: pnpm exec wrangler deploy --dry-run --containers-rollout=none
         env:
           WRANGLER_SEND_METRICS: "false"
 
