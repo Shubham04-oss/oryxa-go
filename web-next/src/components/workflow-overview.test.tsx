@@ -198,7 +198,7 @@ describe("workflow overview", () => {
         getComputedStyle(toggle.closest(".workflow-entry")!).overflow
       ).toBe("hidden")
       const ring = getComputedStyle(toggle)
-      expect(ring.outline).toBe("2px solid #aaa")
+      expect(ring.outline).toBe("2px solid var(--tone-aaaaaa)")
       expect(ring.outlineOffset).toBe("-3px")
       expect(
         parseFloat(ring.outlineOffset) + parseFloat(ring.outline)

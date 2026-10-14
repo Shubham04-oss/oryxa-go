@@ -253,7 +253,6 @@ function ToolGroup({
       >
         <ThinkingOrb
           size={20}
-          theme="dark"
           state={
             state === "waiting_approval"
               ? "listening"
@@ -317,7 +316,7 @@ export function AgentActivity({
 }) {
   return (
     <p className="workspace-agent-working" role="status">
-      <ThinkingOrb size={20} theme="dark" state={state} aria-hidden="true" />
+      <ThinkingOrb size={20} state={state} aria-hidden="true" />
       <span>{label || (name ? `${name} is working…` : "Working…")}</span>
     </p>
   )

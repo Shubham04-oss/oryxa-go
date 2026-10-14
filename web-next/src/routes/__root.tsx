@@ -57,10 +57,13 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <HeadContent />
       </head>
       <body>
+        {/* Light, dark or the system's (DESIGN.md §1); kept in this browser,
+            applied before first paint. theme.css holds both sets of tokens. */}
         <ThemeProvider
           attribute="class"
-          defaultTheme="dark"
-          enableSystem={false}
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
         >
           <TooltipProvider>
             {children}

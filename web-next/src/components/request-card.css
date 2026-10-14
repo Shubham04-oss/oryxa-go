@@ -12,20 +12,20 @@
   gap: 10px;
   min-width: 0;
   padding: 16px 18px;
-  border: 1px solid #393939;
+  border: 1px solid var(--tone-393939);
   border-radius: 14px;
-  background: var(--workspace-raised, #242424);
-  color: #dcdcdc;
+  background: var(--workspace-raised, var(--raised));
+  color: var(--tone-dcdcdc);
 }
 .workspace-request-card:focus { outline: none; }
-.workspace-request-card:focus-visible { outline: 2px solid #d6d6d6; outline-offset: 2px; }
+.workspace-request-card:focus-visible { outline: 2px solid var(--tone-d6d6d6); outline-offset: 2px; }
 
 .workspace-request-head { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 .workspace-request-head .workspace-avatar { flex: none; width: 30px; height: 30px; }
-.workspace-request-head time { flex: none; color: #777; font-size: 10px; line-height: 1.8; }
+.workspace-request-head time { flex: none; color: var(--tone-777777); font-size: 10px; line-height: 1.8; }
 .workspace-request-title { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
 .workspace-request-title strong {
-  color: #f2f2f2;
+  color: var(--text);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.4;
@@ -36,7 +36,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  color: #8d8d8d;
+  color: var(--tone-8d8d8d);
   font-size: 11px;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -46,10 +46,10 @@
   align-items: center;
   min-height: 18px;
   padding: 1px 8px;
-  border: 1px solid #454545;
+  border: 1px solid var(--tone-454545);
   border-radius: 999px;
-  background: #2e2e2e;
-  color: #b8b8b8;
+  background: var(--tone-2e2e2e);
+  color: var(--tone-b8b8b8);
   font-size: 10px;
   font-weight: 500;
   line-height: 1;
@@ -57,7 +57,7 @@
 
 .workspace-request-task {
   margin: 0;
-  color: #e0e0e0;
+  color: var(--tone-e0e0e0);
   font-size: 13px;
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -70,7 +70,7 @@
   -webkit-line-clamp: 4;
 }
 .workspace-request-card > .workspace-agent-text-button { align-self: flex-start; margin-top: -4px; }
-.workspace-request-reads { margin: 0; color: #a9a9a9; font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.workspace-request-reads { margin: 0; color: var(--tone-a9a9a9); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
 
 /* Where it stands: the icon stays beside the words, which wrap beside it. */
 .workspace-request-status {
@@ -78,18 +78,18 @@
   align-items: flex-start;
   gap: 6px;
   margin: 0;
-  color: #b5b5b5;
+  color: var(--tone-b5b5b5);
   font-size: 12px;
   line-height: 1.45;
 }
 .workspace-request-status svg { flex: none; margin-top: 2px; }
 .workspace-request-status > span { min-width: 0; overflow-wrap: anywhere; }
-.workspace-request-card[data-tone="done"] .workspace-request-status svg { color: #7fcf98; }
-.workspace-request-card[data-tone="ended"] .workspace-request-status { color: #8d8d8d; }
-.workspace-request-card[data-tone="failed"] .workspace-request-status { color: #e4aaa6; }
+.workspace-request-card[data-tone="done"] .workspace-request-status svg { color: var(--tone-7fcf98); }
+.workspace-request-card[data-tone="ended"] .workspace-request-status { color: var(--tone-8d8d8d); }
+.workspace-request-card[data-tone="failed"] .workspace-request-status { color: var(--tone-e4aaa6); }
 .workspace-request-detail {
   margin: -6px 0 0 20px;
-  color: #858585;
+  color: var(--tone-858585);
   font-size: 11px;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -97,14 +97,14 @@
 .workspace-request-lost {
   margin: 0;
   padding: 8px 11px;
-  border: 1px solid #4a4a4a;
+  border: 1px solid var(--tone-4a4a4a);
   border-radius: 10px;
-  background: #2b2b2b;
-  color: #d0d0d0;
+  background: var(--tone-2b2b2b);
+  color: var(--tone-d0d0d0);
   font-size: 12px;
   line-height: 1.45;
 }
-.workspace-request-lost strong { color: #f2f2f2; font-weight: 600; }
+.workspace-request-lost strong { color: var(--text); font-weight: 600; }
 
 /* The owner's three choices, each with what it lets their agent do. */
 .workspace-request-choices {
@@ -119,18 +119,18 @@
   gap: 5px;
   min-width: 0;
   padding: 11px 13px;
-  border: 1px solid #424242;
+  border: 1px solid var(--tone-424242);
   border-radius: 12px;
-  background: #2a2a2a;
-  color: #eee;
+  background: var(--tone-2a2a2a);
+  color: var(--tone-eeeeee);
   text-align: left;
 }
 .workspace-request-choice strong { font-size: 12.5px; font-weight: 600; line-height: 1.3; }
-.workspace-request-choice span { color: #a3a3a3; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.workspace-request-choice:hover:not(:disabled) { border-color: #6d6d6d; background: #323232; }
-.workspace-request-choice:focus-visible { outline: 2px solid #d6d6d6; outline-offset: 2px; }
+.workspace-request-choice span { color: var(--tone-a3a3a3); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.workspace-request-choice:hover:not(:disabled) { border-color: var(--tone-6d6d6d); background: var(--tone-323232); }
+.workspace-request-choice:focus-visible { outline: 2px solid var(--tone-d6d6d6); outline-offset: 2px; }
 .workspace-request-choice:disabled { cursor: default; opacity: 0.55; }
-.workspace-request-choice[data-choice="deny"]:hover:not(:disabled) { border-color: #6d3b3b; background: #2f2525; }
+.workspace-request-choice[data-choice="deny"]:hover:not(:disabled) { border-color: var(--tone-6d3b3b); background: var(--tone-2f2525); }
 
 /* Approve or decline a request that asks for nothing more. */
 .workspace-request-decide { display: flex; flex-direction: column; gap: 8px; }
@@ -143,19 +143,19 @@
   width: 100%;
   height: 34px;
   padding: 0 12px;
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--tone-3a3a3a);
   border-radius: 999px;
-  background: #1c1c1c;
-  color: #f1f1f1;
+  background: var(--tone-1c1c1c);
+  color: var(--tone-f1f1f1);
   font: inherit;
   font-size: 12px;
 }
 .workspace-request-note input::placeholder,
-.workspace-request-secret-form input::placeholder { color: #8a8a8a; }
+.workspace-request-secret-form input::placeholder { color: var(--tone-8a8a8a); }
 .workspace-request-note input:focus-visible,
 .workspace-request-secret-form input:focus-visible,
 .workspace-request-secret-value input:focus-visible,
-.workspace-request-secret-lifetime select:focus-visible { border-color: #8a8a8a; outline: none; }
+.workspace-request-secret-lifetime select:focus-visible { border-color: var(--tone-8a8a8a); outline: none; }
 .workspace-request-note input:disabled,
 .workspace-request-secret-form input:disabled { opacity: 0.6; }
 .workspace-request-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
@@ -171,14 +171,14 @@
   display: flex;
   min-width: 0;
   padding: 3px 14px;
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--tone-3a3a3a);
   border-radius: 999px;
-  background: #1c1c1c;
+  background: var(--tone-1c1c1c);
   transition: border-radius 160ms ease, border-color 160ms ease;
 }
-.workspace-request-reply-field:focus-within { border-color: #8a8a8a; }
+.workspace-request-reply-field:focus-within { border-color: var(--tone-8a8a8a); }
 .workspace-request-reply-field[data-multiline="true"] { padding-block: 7px; border-radius: 18px; }
-.workspace-request-reply-field[data-invalid="true"] { border-color: #a36b6b; }
+.workspace-request-reply-field[data-invalid="true"] { border-color: var(--tone-a36b6b); }
 .workspace-request-reply-field textarea {
   flex: 1;
   box-sizing: border-box;
@@ -188,7 +188,7 @@
   outline: none;
   resize: none;
   background: transparent;
-  color: #f1f1f1;
+  color: var(--tone-f1f1f1);
   font: inherit;
   font-size: 12px;
   line-height: 18px;
@@ -197,13 +197,13 @@
 /* The field's own border is the focus mark, as the composer's is: the shell's
    ring for a textarea would draw a square inside the pill. */
 .workspace-shell .workspace-request-reply-field textarea:focus-visible { outline: none; }
-.workspace-request-reply-field textarea::placeholder { color: #8a8a8a; }
+.workspace-request-reply-field textarea::placeholder { color: var(--tone-8a8a8a); }
 .workspace-request-reply-field textarea:read-only { opacity: 0.7; }
-.workspace-request-reply-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; margin: 0 14px; color: #8d8d8d; font-size: 11px; line-height: 1.45; }
+.workspace-request-reply-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; margin: 0 14px; color: var(--tone-8d8d8d); font-size: 11px; line-height: 1.45; }
 .workspace-request-reply-meta > span:first-child { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
 .workspace-request-reply-count { flex: none; margin-left: auto; font-variant-numeric: tabular-nums; }
-.workspace-request-reply-count[data-over="true"] { color: #e4aaa6; }
-.workspace-request-reply-detail { margin: 0 14px; color: #8d8d8d; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.workspace-request-reply-count[data-over="true"] { color: var(--tone-e4aaa6); }
+.workspace-request-reply-detail { margin: 0 14px; color: var(--tone-8d8d8d); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 
 /* An answer held for review, and one that was shared. */
 .workspace-request-held,
@@ -213,19 +213,19 @@
 .workspace-request-answer {
   min-width: 0;
   padding: 8px 11px;
-  border: 1px solid #303030;
+  border: 1px solid var(--tone-303030);
   border-radius: 10px;
-  background: #171717;
-  color: #dedede;
+  background: var(--tone-171717);
+  color: var(--tone-dedede);
   font-size: 12.5px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.workspace-request-answer[data-masked="true"] { color: #a9a9a9; }
+.workspace-request-answer[data-masked="true"] { color: var(--tone-a9a9a9); }
 /* The owner's own words are shown as they wrote them: line breaks kept. */
 .workspace-request-answer[data-by="owner"] { white-space: pre-wrap; }
 .workspace-request-answer[data-folded="true"] { max-height: 7.5em; overflow: hidden; }
-.workspace-request-held-label { margin: 2px 0 -2px; color: #8d8d8d; font-size: 11px; line-height: 1.4; }
+.workspace-request-held-label { margin: 2px 0 -2px; color: var(--tone-8d8d8d); font-size: 11px; line-height: 1.4; }
 
 /* Access the owner gave, which they can end. */
 .workspace-request-access {
@@ -235,11 +235,11 @@
   justify-content: space-between;
   gap: 8px 12px;
   padding: 9px 12px;
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--tone-3a3a3a);
   border-radius: 10px;
-  background: #1f1f1f;
+  background: var(--tone-1f1f1f);
 }
-.workspace-request-access p { flex: 1 1 220px; margin: 0; color: #b5b5b5; font-size: 12px; line-height: 1.45; }
+.workspace-request-access p { flex: 1 1 220px; margin: 0; color: var(--tone-b5b5b5); font-size: 12px; line-height: 1.45; }
 
 /* A one-time secret, shared or opened. */
 .workspace-request-secret {
@@ -247,7 +247,7 @@
   flex-direction: column;
   gap: 7px;
   padding: 11px 13px;
-  border: 1px dashed #4a4a4a;
+  border: 1px dashed var(--tone-4a4a4a);
   border-radius: 10px;
 }
 .workspace-request-secret-head {
@@ -255,23 +255,23 @@
   align-items: center;
   gap: 6px;
   margin: 0;
-  color: #d6d6d6;
+  color: var(--tone-d6d6d6);
   font-size: 12px;
   font-weight: 600;
 }
 .workspace-request-secret-head svg { flex: none; }
 .workspace-request-secret-note,
-.workspace-request-secret-hint { margin: 0; color: #939393; font-size: 11.5px; line-height: 1.5; }
-.workspace-request-secret-state { margin: 0; color: #cdd8d0; font-size: 12px; line-height: 1.45; }
+.workspace-request-secret-hint { margin: 0; color: var(--tone-939393); font-size: 11.5px; line-height: 1.5; }
+.workspace-request-secret-state { margin: 0; color: var(--tone-cdd8d0); font-size: 12px; line-height: 1.45; }
 .workspace-request-secret-form { display: flex; flex-direction: column; gap: 8px; }
-.workspace-request-secret-lifetime { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: #999; font-size: 11.5px; }
+.workspace-request-secret-lifetime { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); font-size: 11.5px; }
 .workspace-request-secret-lifetime select {
   height: 30px;
   padding: 0 8px;
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--tone-3a3a3a);
   border-radius: 8px;
-  background: #1c1c1c;
-  color: #eee;
+  background: var(--tone-1c1c1c);
+  color: var(--tone-eeeeee);
   font: inherit;
   font-size: 12px;
 }
@@ -282,8 +282,8 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .workspace-request-secret-value .workspace-agent-pill { display: inline-flex; flex: none; align-items: center; gap: 5px; }
-.workspace-request-confirm { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 9px; background: #1b1b1b; }
-.workspace-request-confirm p { margin: 0; color: #bbb; font-size: 12px; line-height: 1.5; }
+.workspace-request-confirm { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 9px; background: var(--tone-1b1b1b); }
+.workspace-request-confirm p { margin: 0; color: var(--tone-bbbbbb); font-size: 12px; line-height: 1.5; }
 
 /* A request that cannot be read. */
 .workspace-request-missing {
@@ -292,10 +292,10 @@
   align-items: center;
   gap: 8px 12px;
   padding: 12px 14px;
-  border: 1px dashed #454545;
+  border: 1px dashed var(--tone-454545);
   border-radius: 12px;
 }
-.workspace-request-missing p { flex: 1 1 200px; margin: 0; color: #999; font-size: 12px; line-height: 1.5; }
+.workspace-request-missing p { flex: 1 1 200px; margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 
 @media (max-width: 800px) {
   .workspace-request-card { padding: 14px; }

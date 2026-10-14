@@ -23,7 +23,9 @@ import {
 import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { FocusHeader } from "./agents-parts"
 import { PrimaryAgentFileViewer } from "./primary-agent-files"
+import { BrandChip } from "./brand-chip"
 import { HomeOverview } from "./home-overview"
+import { ThemeMenuItem } from "./theme-menu-item"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import { KnowledgeBases } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
@@ -755,6 +757,7 @@ function WorkspaceShellContent({
                 role="menu"
                 aria-label="User menu"
               >
+                <ThemeMenuItem />
                 <button
                   type="button"
                   role="menuitem"
@@ -1051,6 +1054,7 @@ function WorkspaceShellContent({
             </main>
           </>
         )}
+        <BrandChip />
       </div>
 
       <WorkspaceAgentPanel

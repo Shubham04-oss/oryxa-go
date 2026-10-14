@@ -4,14 +4,14 @@
   gap: 8px;
   min-width: 0;
   padding: 10px 12px;
-  border: 1px solid #353535;
+  border: 1px solid var(--border-quiet);
   border-radius: 12px;
-  background: #111111;
+  background: var(--base);
   overflow-wrap: anywhere;
 }
 .workspace-agent-request-task {
   margin: 0;
-  color: #d3d3d3;
+  color: var(--tone-d3d3d3);
   font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;

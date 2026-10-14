@@ -127,6 +127,7 @@ function backend({
             : [],
       })
     if (resource === "apps/connections") return json({ connections: [] })
+    if (resource === "agent-workflows") return json({ workflows: [] })
     if (resource === "corpora") return json({ corpora: [] })
     if (resource === "teamspaces") return json({ teamspaces: [] })
     if (resource === "members") return json({ members: [] })
@@ -197,7 +198,7 @@ function renderShell() {
 }
 
 const home = () => within(screen.getByRole("main", { name: "Today canvas" }))
-const work = () => within(home().getByRole("region", { name: "Your agent" }))
+const work = () => within(home().getByRole("region", { name: "Conversations" }))
 function sendHome(text: string) {
   fireEvent.change(
     home().getByRole("textbox", { name: "Start a new conversation" }),
@@ -317,24 +318,22 @@ describe("Home's public primary-chat integration", () => {
     agentChats
       .named(objectName("th_old"))
       .update({ messages: itemsToChatMessages([held]) })
-    await home().findByText("1 tool confirmation · Open chat to decide")
-    const needs = within(home().getByRole("region", { name: "Needs you" }))
-    expect(needs.getAllByRole("article")).toHaveLength(1)
-    expect(needs.getByText(/Quarterly numbers/)).toBeTruthy()
-    expect(
-      within(
-        needs.getByRole("list", { name: "Tool confirmations" })
-      ).getAllByRole("listitem")
-    ).toHaveLength(1)
+    await home().findByText("1 tool confirmation")
+    const needs = within(home().getByRole("list", { name: "Needs you" }))
+    // One teammate request and one waiting conversation, each once.
+    expect(needs.getAllByRole("listitem")).toHaveLength(2)
+    expect(needs.getAllByRole("button", { name: /^Decide on / })).toHaveLength(
+      1
+    )
+    expect(needs.getByText(/Share the pipeline total\./)).toBeTruthy()
+    const waiting = needs.getAllByText(/waiting in Exact older conversation/)
+    expect(waiting).toHaveLength(1)
     expect(work().getAllByRole("listitem")).toHaveLength(2)
     expect(home().queryByText("Nothing needs you right now.")).toBeNull()
-    expect(
-      needs.getAllByRole("button", { name: /Exact older conversation/ })
-    ).toHaveLength(1)
     fireEvent.click(work().getByRole("button", { name: "New chat" }))
     await screen.findByText("Ask anything to start a conversation.")
     fireEvent.click(
-      needs.getByRole("button", { name: /Exact older conversation/ })
+      within(waiting[0].closest("li")!).getByRole("button", { name: "Open" })
     )
     await waitFor(() =>
       expect(

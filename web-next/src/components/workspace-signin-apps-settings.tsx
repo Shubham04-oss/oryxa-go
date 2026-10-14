@@ -717,7 +717,7 @@ function OAuthClientForm({
       {/* Refusing an app Oryxa doesn't have changes nothing, so the switch
           shows only where Oryxa has one, or where it is already on. */}
       {(view.oryxa_default || view.refuse_default) && (
-        <div className="workspace-settings-row mt-2 border-t border-[#383838]">
+        <div className="workspace-settings-row mt-2 border-t border-[var(--tone-383838)]">
           <div>
             <strong>Don't use Oryxa's app</strong>
             <small>
@@ -827,8 +827,8 @@ function WebhookSettings({
   const hintId = `${inputId}-hint`
   const problemId = `${inputId}-problem`
   return (
-    <div className="mt-2 grid gap-1.5 border-t border-[#383838] pt-3">
-      <strong className="text-[13px] font-semibold text-[#eee]">
+    <div className="mt-2 grid gap-1.5 border-t border-[var(--tone-383838)] pt-3">
+      <strong className="text-[13px] font-semibold text-[var(--tone-eeeeee)]">
         {appName} events
       </strong>
       {webhook.url ? (

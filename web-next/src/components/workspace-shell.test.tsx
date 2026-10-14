@@ -375,7 +375,7 @@ describe("WorkspaceShell navigation", () => {
       { kind: "new", message: "Start from Home" }
     )
     fireEvent.click(
-      within(screen.getByRole("region", { name: "Your agent" })).getByRole(
+      within(screen.getByRole("region", { name: "Conversations" })).getByRole(
         "button",
         { name: "New chat" }
       )
@@ -390,7 +390,7 @@ describe("WorkspaceShell navigation", () => {
       { target: { value: "Still composing on Home" } }
     )
     const all = within(
-      screen.getByRole("region", { name: "Your agent" })
+      screen.getByRole("region", { name: "Conversations" })
     ).getByRole("button", { name: "All conversations" })
     fireEvent.click(all)
     const history = await screen.findByRole("button", { name: "History" })

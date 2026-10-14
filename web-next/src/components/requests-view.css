@@ -41,7 +41,7 @@
   gap: 7px;
 }
 .workspace-requests-tabs .workspace-work-tab:focus-visible {
-  outline: 2px solid #d6d6d6;
+  outline: 2px solid var(--tone-d6d6d6);
   outline-offset: 2px;
 }
 .workspace-requests-count {
@@ -51,8 +51,8 @@
   padding: 0 5px;
   place-items: center;
   border-radius: 999px;
-  background: #e9e9e9;
-  color: #1e1e1e;
+  background: var(--tone-e9e9e9);
+  color: var(--canvas);
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
@@ -107,9 +107,9 @@
   margin: 0;
   padding: 0;
   overflow: hidden;
-  border: 1px solid #393939;
+  border: 1px solid var(--tone-393939);
   border-radius: 14px;
-  background: var(--workspace-raised, #242424);
+  background: var(--workspace-raised, var(--raised));
   list-style: none;
 }
 .workspace-requests-activity-row {
@@ -119,7 +119,7 @@
   padding: 11px 14px;
 }
 .workspace-requests-activity-row + .workspace-requests-activity-row {
-  border-top: 1px solid #303030;
+  border-top: 1px solid var(--tone-303030);
 }
 .workspace-requests-activity-icon {
   display: grid;
@@ -128,20 +128,20 @@
   height: 24px;
   place-items: center;
   border-radius: 999px;
-  background: #2f2f2f;
-  color: #cfcfcf;
+  background: var(--tone-2f2f2f);
+  color: var(--tone-cfcfcf);
 }
 .workspace-requests-activity-row[data-kind="secret_viewed"]
   .workspace-requests-activity-icon,
 .workspace-requests-activity-row[data-kind="lease_given"]
   .workspace-requests-activity-icon {
-  color: #e6e6e6;
+  color: var(--tone-e6e6e6);
 }
 .workspace-requests-activity-text {
   flex: 1;
   min-width: 0;
   padding-top: 3px;
-  color: #d8d8d8;
+  color: var(--tone-d8d8d8);
   font-size: 12.5px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -156,7 +156,7 @@
   padding-top: 2px;
 }
 .workspace-requests-activity-actions time {
-  color: #777;
+  color: var(--tone-777777);
   font-size: 10px;
   line-height: 1.8;
 }
@@ -189,16 +189,16 @@
   padding: 0;
   border: 0;
   background: none;
-  color: #bdbdbd;
+  color: var(--tone-bdbdbd);
   font: inherit;
   font-size: 11px;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 .workspace-requests-stat-link:hover {
-  color: #f2f2f2;
+  color: var(--text);
 }
 .workspace-requests-stat-link:focus-visible {
-  outline: 2px solid #d6d6d6;
+  outline: 2px solid var(--tone-d6d6d6);
   outline-offset: 2px;
 }

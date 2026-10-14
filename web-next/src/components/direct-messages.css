@@ -17,13 +17,13 @@
   box-sizing: border-box;
   width: 11px;
   height: 11px;
-  border: 2px solid var(--presence-ring, var(--workspace-base, #111));
+  border: 2px solid var(--presence-ring, var(--workspace-base, var(--base)));
   border-radius: 50%;
-  background: #7fcf98;
+  background: var(--tone-7fcf98);
   content: "";
 }
 .workspace-canvas {
-  --presence-ring: #1e1e1e;
+  --presence-ring: var(--canvas);
 }
 .workspace-header-detail > .workspace-presence-avatar .workspace-avatar {
   width: 32px;
@@ -41,8 +41,8 @@
   height: 18px;
   padding: 0 6px;
   border-radius: 999px;
-  background: #e9e9e9;
-  color: #161616;
+  background: var(--tone-e9e9e9);
+  color: var(--tone-161616);
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
@@ -53,7 +53,7 @@
   height: 7px;
   margin-left: auto;
   border-radius: 50%;
-  background: #e9e9e9;
+  background: var(--tone-e9e9e9);
 }
 .workspace-unread-badge {
   position: absolute;
@@ -66,10 +66,10 @@
   min-width: 18px;
   height: 18px;
   padding: 0 4px;
-  border: 2px solid var(--workspace-base, #111);
+  border: 2px solid var(--workspace-base, var(--base));
   border-radius: 999px;
-  background: #e9e9e9;
-  color: #161616;
+  background: var(--tone-e9e9e9);
+  color: var(--tone-161616);
   font-size: 9px;
   font-weight: 700;
   line-height: 1;
@@ -89,13 +89,13 @@
   padding: 0;
   border: 0;
   background: none;
-  color: #9a9a9a;
+  color: var(--tone-9a9a9a);
   font: inherit;
   letter-spacing: inherit;
   text-transform: inherit;
 }
 .workspace-conversations-heading .workspace-conversations-all:hover {
-  color: #f2f2f2;
+  color: var(--text);
 }
 ul.workspace-conversations-list {
   margin: 0;
@@ -106,17 +106,17 @@ ul.workspace-conversations-list {
   position: relative;
 }
 .workspace-conversation-item:hover {
-  --presence-ring: #222;
+  --presence-ring: var(--tone-222222);
 }
 .workspace-conversation-item.is-active {
-  --presence-ring: #2d2d2d;
+  --presence-ring: var(--tone-2d2d2d);
 }
 .workspace-conversation-item[data-unread="true"] strong {
-  color: #fff;
+  color: var(--tone-ffffff);
   font-weight: 680;
 }
 .workspace-conversation-item[data-unread="true"] small {
-  color: #c4c4c4;
+  color: var(--tone-c4c4c4);
 }
 .workspace-shell[data-left="collapsed"]
   .workspace-conversation-item
@@ -125,7 +125,7 @@ ul.workspace-conversations-list {
   top: 5px;
   right: calc(50% - 18px);
   box-sizing: content-box;
-  border: 2px solid var(--workspace-base, #111);
+  border: 2px solid var(--workspace-base, var(--base));
 }
 
 /* One conversation. */
@@ -140,15 +140,15 @@ ul.workspace-conversations-list {
 .workspace-dm[data-layout="canvas"] {
   /* The canvas centers a readable column and keeps the scrollbar at its edge. */
   --dm-gutter: max(28px, calc((100% - 760px) / 2));
-  --dm-bubble: #2c2c2c;
+  --dm-bubble: var(--tone-2c2c2c);
   height: 100%;
 }
 .workspace-dm[data-layout="panel"] {
-  --dm-bubble: #242424;
+  --dm-bubble: var(--raised);
 }
 
 .workspace-dm-bar {
-  --presence-ring: var(--workspace-base, #111);
+  --presence-ring: var(--workspace-base, var(--base));
   display: flex;
   align-items: center;
   flex: none;
@@ -170,14 +170,14 @@ ul.workspace-conversations-list {
 .workspace-dm-bar-title {
   margin: 0;
   overflow: hidden;
-  color: #f2f2f2;
+  color: var(--text);
   font-size: 13px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .workspace-dm-bar-name small {
-  color: #8f8f8f;
+  color: var(--tone-8f8f8f);
   font-size: 10px;
 }
 
@@ -198,11 +198,11 @@ ul.workspace-conversations-list {
   /* Its place is kept by hand when the page before arrives above it. */
   overflow-anchor: none;
   overscroll-behavior: contain;
-  scrollbar-color: #444 transparent;
+  scrollbar-color: var(--tone-444444) transparent;
   scrollbar-width: thin;
 }
 .workspace-dm-log:focus-visible {
-  outline: 2px solid #d6d6d6;
+  outline: 2px solid var(--tone-d6d6d6);
   outline-offset: -2px;
   border-radius: 12px;
 }
@@ -226,7 +226,7 @@ ul.workspace-conversations-list {
 }
 .workspace-dm-history p {
   margin: 0;
-  color: #777;
+  color: var(--tone-777777);
   font-size: 11px;
   line-height: 1.5;
   text-align: center;
@@ -234,15 +234,15 @@ ul.workspace-conversations-list {
 .workspace-dm-history button {
   min-height: 26px;
   padding: 0 12px;
-  border: 1px solid #333;
+  border: 1px solid var(--tone-333333);
   border-radius: 999px;
   background: transparent;
-  color: #bdbdbd;
+  color: var(--tone-bdbdbd);
   font-size: 11px;
 }
 .workspace-dm-history button:hover {
-  background: #262626;
-  color: #f2f2f2;
+  background: var(--selected);
+  color: var(--text);
 }
 
 .workspace-dm-day {
@@ -250,7 +250,7 @@ ul.workspace-conversations-list {
   align-items: center;
   gap: 12px;
   margin: 6px 0 0;
-  color: #858585;
+  color: var(--tone-858585);
   font-size: 11px;
   font-weight: 550;
 }
@@ -258,7 +258,7 @@ ul.workspace-conversations-list {
 .workspace-dm-day::after {
   flex: 1;
   height: 1px;
-  background: #2e2e2e;
+  background: var(--tone-2e2e2e);
   content: "";
 }
 
@@ -289,7 +289,7 @@ ul.workspace-conversations-list {
 }
 .workspace-dm-meta {
   margin: 0;
-  color: #858585;
+  color: var(--tone-858585);
   font-size: 10px;
   line-height: 1.4;
 }
@@ -309,7 +309,7 @@ ul.workspace-conversations-list {
 }
 .workspace-dm-text {
   margin: 0;
-  color: #dedede;
+  color: var(--tone-dedede);
   font-size: 13px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -319,22 +319,22 @@ ul.workspace-conversations-list {
   padding: 7px 12px;
   border-radius: 14px;
   background: var(--dm-bubble);
-  color: #ececec;
+  color: var(--tone-ececec);
 }
 .workspace-dm-message[data-status="sending"] .workspace-dm-text {
   opacity: 0.55;
 }
 .workspace-dm-message[data-status="failed"] .workspace-dm-text {
-  box-shadow: inset 0 0 0 1px #6b3b39;
+  box-shadow: inset 0 0 0 1px var(--tone-6b3b39);
 }
 .workspace-dm-note {
   margin: 3px 4px 0;
-  color: #858585;
+  color: var(--tone-858585);
   font-size: 10px;
   line-height: 1.4;
 }
 .workspace-dm-failed {
-  color: #e4aaa6;
+  color: var(--tone-e4aaa6);
 }
 .workspace-dm-retry,
 .workspace-dm-notice button,
@@ -342,7 +342,7 @@ ul.workspace-conversations-list {
   padding: 0;
   border: 0;
   background: none;
-  color: #f2f2f2;
+  color: var(--text);
   font: inherit;
   font-weight: 600;
   text-decoration: underline;
@@ -351,12 +351,12 @@ ul.workspace-conversations-list {
 .workspace-dm-retry:hover,
 .workspace-dm-notice button:hover,
 .workspace-dm-list-note button:hover {
-  color: #fff;
+  color: var(--tone-ffffff);
 }
 
 .workspace-dm-typing {
   margin: 0;
-  color: #858585;
+  color: var(--tone-858585);
   font-size: 12px;
   animation: workspace-agent-pulse 1.6s ease-in-out infinite;
 }
@@ -368,7 +368,7 @@ ul.workspace-conversations-list {
   gap: 8px;
   margin: auto 0;
   padding: 24px 12px;
-  color: #929292;
+  color: var(--tone-929292);
   font-size: 12px;
   line-height: 1.5;
   text-align: center;
@@ -377,7 +377,7 @@ ul.workspace-conversations-list {
   margin: 0;
 }
 .workspace-dm-empty strong {
-  color: #eee;
+  color: var(--tone-eeeeee);
   font-size: 14px;
   font-weight: 600;
 }
@@ -387,13 +387,13 @@ ul.workspace-conversations-list {
 }
 .workspace-dm-waiting {
   margin: 40px 16px;
-  color: #929292;
+  color: var(--tone-929292);
   font-size: 12px;
   text-align: center;
 }
 .workspace-dm-notice {
   margin: 4px 0 0;
-  color: #a5a5a5;
+  color: var(--tone-a5a5a5);
   font-size: 12px;
   line-height: 1.5;
   text-align: center;
@@ -409,16 +409,16 @@ ul.workspace-conversations-list {
   gap: 6px;
   min-height: 30px;
   padding: 0 13px;
-  border: 1px solid #3c3c3c;
+  border: 1px solid var(--tone-3c3c3c);
   border-radius: 999px;
-  background: #2a2a2a;
-  color: #f2f2f2;
+  background: var(--tone-2a2a2a);
+  color: var(--text);
   font-size: 12px;
-  box-shadow: 0 8px 24px #0009;
+  box-shadow: 0 8px 24px var(--shade-99);
   transform: translateX(-50%);
 }
 .workspace-dm-jump:hover {
-  background: #333;
+  background: var(--tone-333333);
 }
 
 /* The DMs tab: its list, and the picker for a new message. */
@@ -432,11 +432,11 @@ ul.workspace-conversations-list {
   padding: 0;
   overflow-y: auto;
   list-style: none;
-  scrollbar-color: #444 transparent;
+  scrollbar-color: var(--tone-444444) transparent;
   scrollbar-width: thin;
 }
 .workspace-dm-row {
-  --presence-ring: var(--workspace-base, #111);
+  --presence-ring: var(--workspace-base, var(--base));
   display: flex;
   align-items: center;
   gap: 11px;
@@ -446,12 +446,12 @@ ul.workspace-conversations-list {
   border: 0;
   border-radius: 12px;
   background: transparent;
-  color: #cfcfcf;
+  color: var(--tone-cfcfcf);
   text-align: left;
 }
 .workspace-dm-row:hover {
-  --presence-ring: #1d1d1d;
-  background: #1d1d1d;
+  --presence-ring: var(--hover);
+  background: var(--hover);
 }
 .workspace-dm-row .workspace-avatar {
   width: 34px;
@@ -475,7 +475,7 @@ ul.workspace-conversations-list {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: #e6e6e6;
+  color: var(--tone-e6e6e6);
   font-size: 13px;
   font-weight: 560;
   text-overflow: ellipsis;
@@ -484,25 +484,25 @@ ul.workspace-conversations-list {
 .workspace-dm-row-top time {
   flex: none;
   margin-left: auto;
-  color: #777;
+  color: var(--tone-777777);
   font-size: 10px;
 }
 .workspace-dm-row-preview {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  color: #858585;
+  color: var(--tone-858585);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .workspace-dm-row[data-unread="true"] strong {
-  color: #fff;
+  color: var(--tone-ffffff);
   font-weight: 650;
 }
 .workspace-dm-row[data-unread="true"] .workspace-dm-row-preview,
 .workspace-dm-row[data-unread="true"] time {
-  color: #d0d0d0;
+  color: var(--tone-d0d0d0);
 }
 .workspace-dm-context {
   flex: 0 1 auto;
@@ -510,16 +510,16 @@ ul.workspace-conversations-list {
   max-width: 45%;
   overflow: hidden;
   padding: 1px 7px;
-  border: 1px solid #333;
+  border: 1px solid var(--tone-333333);
   border-radius: 999px;
-  color: #a5a5a5;
+  color: var(--tone-a5a5a5);
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .workspace-dm-list-note {
   margin: 4px 2px;
-  color: #999;
+  color: var(--text-muted);
   font-size: 11px;
   line-height: 1.45;
 }
@@ -529,7 +529,7 @@ ul.workspace-conversations-list {
   align-items: center;
   gap: 4px;
   margin: auto 0;
-  color: #929292;
+  color: var(--tone-929292);
   font-size: 12px;
   line-height: 1.5;
   text-align: center;
@@ -538,7 +538,7 @@ ul.workspace-conversations-list {
   margin: 0;
 }
 .workspace-dm-inbox-empty p:first-child {
-  color: #e6e6e6;
+  color: var(--tone-e6e6e6);
   font-size: 13px;
   font-weight: 600;
 }
@@ -564,9 +564,9 @@ ul.workspace-conversations-list {
     box-sizing: border-box;
     width: 11px;
     height: 11px;
-    border: 2px solid var(--workspace-base, #111);
+    border: 2px solid var(--workspace-base, var(--base));
     border-radius: 50%;
-    background: #e9e9e9;
+    background: var(--tone-e9e9e9);
   }
   .workspace-middle[data-composing="true"] {
     overflow: hidden;

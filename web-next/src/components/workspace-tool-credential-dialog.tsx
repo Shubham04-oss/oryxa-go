@@ -187,26 +187,26 @@ export function CredentialDialog({
       }}
     >
       <DialogContent
-        className="gap-4 rounded-[15px] border border-[#383838] bg-[#252525] p-5 text-[#eee] shadow-2xl ring-0 sm:max-w-md"
+        className="gap-4 rounded-[15px] border border-[var(--tone-383838)] bg-[var(--tone-252525)] p-5 text-[var(--tone-eeeeee)] shadow-2xl ring-0 sm:max-w-md"
         showCloseButton={!pending}
       >
         <div className="grid gap-1.5 pr-6">
-          <DialogTitle className="text-[15px] font-semibold text-[#f3f3f3]">
+          <DialogTitle className="text-[15px] font-semibold text-[var(--tone-f3f3f3)]">
             {title}
           </DialogTitle>
-          <DialogDescription className="text-xs leading-normal text-[#999]">
+          <DialogDescription className="text-xs leading-normal text-[var(--text-muted)]">
             {replacing
               ? `The new key is checked with ${appName} before it replaces the old one, which keeps working until then. A saved key can't be read back.`
               : `Your agents use this to act in ${appName} as you. A key is checked with ${appName} before it's saved, and can't be read back.`}
           </DialogDescription>
         </div>
         {loading ? (
-          <p className="m-0 text-xs text-[#999]" role="status">
+          <p className="m-0 text-xs text-[var(--text-muted)]" role="status">
             Loading {appName}'s sign-in…
           </p>
         ) : loadError || !method ? (
           <div className="grid gap-3">
-            <p className="m-0 text-xs text-[#f0aaaa]" role="alert">
+            <p className="m-0 text-xs text-[var(--tone-f0aaaa)]" role="alert">
               {loadError || `${appName}'s sign-in could not be loaded.`}
             </p>
             <div className="flex justify-end gap-2">
@@ -238,13 +238,13 @@ export function CredentialDialog({
           >
             {!replacing && methods.length > 1 && (
               <fieldset className="grid gap-2" disabled={pending}>
-                <legend className="mb-2 text-xs text-[#ddd]">
+                <legend className="mb-2 text-xs text-[var(--tone-dddddd)]">
                   How to sign in
                 </legend>
                 {methods.map((candidate) => (
                   <label
                     key={candidate.kind}
-                    className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-[#3d3d3d] px-3 py-2 text-xs text-[#ddd] has-[:checked]:border-[#8a8a8a] has-[:checked]:bg-[#2f2f2f] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-[#8a8a8a]"
+                    className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--tone-3d3d3d)] px-3 py-2 text-xs text-[var(--tone-dddddd)] has-[:checked]:border-[var(--tone-8a8a8a)] has-[:checked]:bg-[var(--tone-2f2f2f)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-[var(--tone-8a8a8a)]"
                   >
                     <input
                       type="radio"
@@ -252,7 +252,7 @@ export function CredentialDialog({
                       value={candidate.kind}
                       checked={candidate.kind === method.kind}
                       onChange={() => choose(candidate.kind)}
-                      className="accent-[#b5b5b5]"
+                      className="accent-[var(--tone-b5b5b5)]"
                     />
                     {signinMethodLabel(candidate.kind, appName)}
                   </label>
@@ -262,7 +262,7 @@ export function CredentialDialog({
             {/* Keyed by the way in, so switching starts its fields afresh. */}
             <div className="grid gap-3.5" key={method.kind}>
               {continues && fields.length === 0 && (
-                <p className="m-0 text-xs leading-normal text-[#bbb]">
+                <p className="m-0 text-xs leading-normal text-[var(--tone-bbbbbb)]">
                   You'll continue to {appName} to approve access, then come back
                   here.
                 </p>
@@ -278,7 +278,7 @@ export function CredentialDialog({
             </div>
             {formError && (
               <p
-                className="m-0 text-xs leading-normal text-[#f0aaaa]"
+                className="m-0 text-xs leading-normal text-[var(--tone-f0aaaa)]"
                 role="alert"
               >
                 {formError}
@@ -346,10 +346,10 @@ function CredentialField({
       .join(" ") || undefined
   const choices = field.validation.enum ?? []
   const control =
-    "min-h-9 w-full rounded-lg border border-[#4c4c4c] bg-[#202020] px-2.5 text-base text-[#eee] outline-none focus:border-[#aaa] disabled:opacity-50 aria-[invalid=true]:border-[#c77] md:text-[13px]"
+    "min-h-9 w-full rounded-lg border border-[var(--tone-4c4c4c)] bg-[var(--tone-202020)] px-2.5 text-base text-[var(--tone-eeeeee)] outline-none focus:border-[var(--tone-aaaaaa)] disabled:opacity-50 aria-[invalid=true]:border-[var(--tone-cc7777)] md:text-[13px]"
   return (
     <div className="grid gap-1.5">
-      <label htmlFor={id} className="text-xs text-[#ddd]">
+      <label htmlFor={id} className="text-xs text-[var(--tone-dddddd)]">
         {field.label}
         {field.validation.required ? " *" : " (optional)"}
       </label>
@@ -388,14 +388,17 @@ function CredentialField({
         />
       )}
       {field.help && (
-        <small id={helpId} className="text-[11px] leading-snug text-[#929292]">
+        <small
+          id={helpId}
+          className="text-[11px] leading-snug text-[var(--tone-929292)]"
+        >
           {field.help}
         </small>
       )}
       {problem && (
         <small
           id={problemId}
-          className="text-[11px] leading-snug text-[#f0aaaa]"
+          className="text-[11px] leading-snug text-[var(--tone-f0aaaa)]"
         >
           {problem}
         </small>

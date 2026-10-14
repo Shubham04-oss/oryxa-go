@@ -31,10 +31,10 @@
 }
 .workflow-entry {
   min-width: 0;
-  border: 1px solid #353535;
+  border: 1px solid var(--border-quiet);
   border-radius: 14px;
   overflow: hidden;
-  background: var(--workspace-raised, #242424);
+  background: var(--workspace-raised, var(--raised));
 }
 .workflow-entry-toggle {
   display: flex;
@@ -43,11 +43,11 @@
   width: 100%;
   padding: 14px 16px;
   text-align: left;
-  color: #b0b0b0;
+  color: var(--tone-b0b0b0);
   background: transparent;
 }
 .workflow-entry-toggle:hover:not(:disabled) {
-  background: #2b2b2b;
+  background: var(--tone-2b2b2b);
 }
 .workflow-entry-toggle:disabled {
   cursor: wait;
@@ -61,12 +61,12 @@
 }
 .workflow-entry-copy strong {
   font-size: 13px;
-  color: #eee;
+  color: var(--tone-eeeeee);
   overflow-wrap: anywhere;
 }
 .workflow-entry-copy small {
   font-size: 11px;
-  color: #929292;
+  color: var(--tone-929292);
   overflow-wrap: anywhere;
 }
 .workflow-entry-latest {
@@ -91,7 +91,7 @@
 }
 .workflow-description {
   margin: 0;
-  color: #aaa;
+  color: var(--tone-aaaaaa);
   font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -106,11 +106,11 @@
   margin: 0;
   font-size: 12px;
   font-weight: 600;
-  color: #ddd;
+  color: var(--tone-dddddd);
 }
 .workflow-detail-heading strong {
   font-size: 12px;
-  color: #ddd;
+  color: var(--tone-dddddd);
   overflow-wrap: anywhere;
 }
 .workflow-assignment-list,
@@ -126,18 +126,18 @@
   gap: 7px;
   min-width: 0;
   padding: 12px;
-  border: 1px solid #393939;
+  border: 1px solid var(--tone-393939);
   border-radius: 10px;
-  background: var(--workspace-canvas, #1e1e1e);
+  background: var(--workspace-canvas, var(--canvas));
 }
 .workflow-assignment-list li > strong {
   font-size: 12px;
-  color: #ddd;
+  color: var(--tone-dddddd);
 }
 .workflow-assignment-list p,
 .workflow-result-output {
   margin: 0;
-  color: #b0b0b0;
+  color: var(--tone-b0b0b0);
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -145,7 +145,7 @@
 }
 .workflow-assignment-list summary {
   cursor: pointer;
-  color: #999;
+  color: var(--text-muted);
   font-size: 11px;
 }
 .workflow-assignment-list details p {
@@ -156,7 +156,7 @@
   flex-direction: column;
   gap: 12px;
   padding-top: 12px;
-  border-top: 1px solid #383838;
+  border-top: 1px solid var(--tone-383838);
 }
 .workflow-history-list {
   display: flex;
@@ -173,28 +173,28 @@
   gap: 12px;
   padding: 10px 12px;
   border-radius: 8px;
-  color: #ccc;
-  background: #1e1e1e;
+  color: var(--tone-cccccc);
+  background: var(--canvas);
   text-align: left;
 }
 .workflow-history-list button:hover {
-  background: #303030;
+  background: var(--tone-303030);
 }
 .workflow-history-list small {
-  color: #919191;
+  color: var(--tone-919191);
   font-size: 10px;
 }
 .workflow-execution-status {
   font-size: 11px;
-  color: #b0b0b0;
+  color: var(--tone-b0b0b0);
 }
 .workflow-execution-status[data-status="failed"],
 .workflow-entry-latest[data-status="failed"] {
-  color: #e4aaa6;
+  color: var(--tone-e4aaa6);
 }
 .workflow-execution-status[data-status="needs_confirmation"],
 .workflow-entry-latest[data-status="needs_confirmation"] {
-  color: #dbc18e;
+  color: var(--tone-dbc18e);
 }
 .workflow-execution-detail > .workspace-agents-button {
   align-self: flex-start;
@@ -206,13 +206,13 @@
   margin: 0;
 }
 .workflow-execution-times dt {
-  color: #888;
+  color: var(--tone-888888);
   font-size: 10px;
 }
 .workflow-execution-times dd {
   margin: 4px 0 0;
   font-size: 11px;
-  color: #c2c2c2;
+  color: var(--tone-c2c2c2);
   overflow-wrap: anywhere;
 }
 .workflow-form {
@@ -233,7 +233,7 @@
   margin-top: 7px;
 }
 .workflow-assignment-fields > legend {
-  color: #ddd;
+  color: var(--tone-dddddd);
   font-size: 12px;
   margin-bottom: 9px;
 }
@@ -246,22 +246,22 @@
   flex-direction: column;
   gap: 9px;
   padding: 12px;
-  border: 1px solid #3e3e3e;
+  border: 1px solid var(--tone-3e3e3e);
   border-radius: 10px;
 }
 .workflow-form select {
   min-height: 38px;
   width: 100%;
-  border: 1px solid #454545;
+  border: 1px solid var(--tone-454545);
   border-radius: 8px;
   padding: 8px 10px;
-  background: #1e1e1e;
-  color: #eee;
+  background: var(--canvas);
+  color: var(--tone-eeeeee);
   font: inherit;
   font-size: 12px;
 }
 .workflow-form select[aria-invalid="true"] {
-  border-color: #bc7878;
+  border-color: var(--tone-bc7878);
 }
 .workflow-checkbox {
   display: flex;
@@ -276,7 +276,7 @@
 .workflow-overview summary:focus-visible,
 .workflow-overview select:focus-visible,
 .workflow-overview input:focus-visible {
-  outline: 2px solid #aaa;
+  outline: 2px solid var(--tone-aaaaaa);
   outline-offset: 3px;
 }
 .workflow-overview .workflow-entry-toggle:focus-visible {
