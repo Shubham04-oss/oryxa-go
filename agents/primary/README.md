@@ -2465,6 +2465,7 @@ The compose service has no secret of its own to fall back on, and binds `127.0.0
 | `AGENTS_PRIMARY_LIVE_BACKEND` | `agentcore` | Where the sandbox and browser tools run: `agentcore`, or `cloudflare` (the oryxa-edge Worker, docs/design/live-layer) for every organization |
 | `AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS` | unset | Organization ids, comma-separated, whose sandbox and browser run on Cloudflare while the backend above is still `agentcore`: the rollout |
 | `AGENTS_PRIMARY_EDGE_URL` | unset | The oryxa-edge Worker, such as `https://edge.oryxa.in`; required, with `AGENTS_PRIMARY_SERVICE_KEY_ID` to sign edge tokens, when any organization runs on Cloudflare |
+| `AGENTS_PRIMARY_EDGE_TOKEN_PUBLIC_KEYS` | unset | JSON array of the base64 DER SPKI P-256 keys the edge signs edge→agents tokens with (more than one while it rotates). Set, it turns on `POST /v1/edge/dispatch`, where a call's voice agent hands work over; the answers go back to `AGENTS_PRIMARY_EDGE_URL` with edge tokens `AGENTS_PRIMARY_SERVICE_KEY_ID` signs, so both are required with it |
 | `GOOGLE_CLOUD_PROJECT` | unset | Project whose Vertex AI serves Gemini; the agents require it |
 | `GOOGLE_CLOUD_LOCATION` | `global` | Vertex AI location: `global`, or the `us` or `eu` multi-region |
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | ADC credential file; locally `gcloud auth application-default login` supplies ADC |

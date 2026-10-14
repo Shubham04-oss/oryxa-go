@@ -653,6 +653,14 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if secretsSealed {
 		httpConfig.SecretShares = secretShares
 	}
+	// The voice agent in a call hands real work over through the dispatch
+	// route; the answers go back to the edge (docs/design/live-layer/03, B5).
+	edgeDispatch, edgeRoute, err := mountEdgeDispatch(settings, platform, service, sessionStore, logger)
+	if err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
+	httpConfig.EdgeDispatch = edgeRoute
 	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpConfig, logger)
 
 	table, err := outbox.NewTable(platform.Database.Pool, schema+".agents_outbox")
@@ -819,7 +827,15 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		// the next process (threads.ErrInterrupted).
 		Drain: func(ctx context.Context) {
 			going := runDrain.Running()
-			if interrupted := runDrain.Drain(ctx); interrupted > 0 {
+			interrupted := runDrain.Drain(ctx)
+			if edgeDispatch != nil {
+				// A dispatched run that ended, or was interrupted, still has to
+				// tell the edge, which may then send it to the next process.
+				answering, cancel := context.WithTimeout(context.WithoutCancel(ctx), edgeAnswerGrace)
+				edgeDispatch.Wait(answering)
+				cancel()
+			}
+			if interrupted > 0 {
 				logger.Warn("agent runs were interrupted by the shutdown", "going", going, "interrupted", interrupted)
 				return
 			}

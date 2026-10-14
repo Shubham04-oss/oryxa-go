@@ -251,6 +251,9 @@ type Config struct {
 	// routes: it is set only when there is one, since a nil pointer in the
 	// interface would not read as none.
 	SecretShares SecretShares
+	// EdgeDispatch takes work the voice agent at the edge hands over. Nil
+	// leaves POST /v1/edge/dispatch answering 404.
+	EdgeDispatch *EdgeDispatch
 }
 
 // Server serves the API.
@@ -269,6 +272,7 @@ type Server struct {
 	answerGuard         AnswerChecker
 	guardPreferences    AnswerGuardPreferences
 	secretShares        SecretShares
+	edge                *EdgeDispatch
 	checks              *checkLimiter
 	allowedOrigins      map[string]struct{}
 	runTimeout          time.Duration
@@ -300,6 +304,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		answerGuard:         config.AnswerGuard,
 		guardPreferences:    keptGuardPreferences(config.AnswerGuardPreferences),
 		secretShares:        config.SecretShares,
+		edge:                config.EdgeDispatch,
 		checks:              newCheckLimiter(checksPerWindow, checkWindow),
 		allowedOrigins:      map[string]struct{}{},
 		runTimeout:          config.RunTimeout,
@@ -390,6 +395,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	guardPreferences := newGuardPreferenceHandlers(server.guardPreferences, server.member, logger)
 	server.handle("GET /v1/organizations/{organizationID}/answer-guard/preferences", guardPreferences.get)
 	server.handle("PUT /v1/organizations/{organizationID}/answer-guard/preferences", guardPreferences.put)
+	server.routeEdge()
 	return server
 }
 

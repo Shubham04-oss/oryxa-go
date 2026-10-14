@@ -78,6 +78,12 @@ type Config struct {
 	LiveBackend        string
 	LiveCloudflareOrgs map[string]bool
 	EdgeURL            string
+	// EdgeTokenPublicKeys turns on POST /v1/edge/dispatch, where the voice
+	// agent in a call hands work over (docs/design/live-layer/03, B5): a JSON
+	// array of the base64 DER SPKI public keys the edge signs its tokens with,
+	// more than one while the key rotates. The answers go back to EdgeURL, with
+	// edge tokens ServiceKeyID signs, so both are required with it.
+	EdgeTokenPublicKeys string
 	// EventBusName is the EventBridge bus agents primary publishes on.
 	// EventBridgeEndpoint overrides the endpoint locally; when empty the AWS
 	// SDK resolves AWS_ENDPOINT_URL itself.
@@ -328,6 +334,16 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("AGENTS_PRIMARY_SERVICE_KEY_ID must be set when any organization's sandbox and browser run on Cloudflare: it signs the edge tokens")
 		}
 	}
+	edgeTokenPublicKeys := strings.TrimSpace(getenv("AGENTS_PRIMARY_EDGE_TOKEN_PUBLIC_KEYS"))
+	if edgeTokenPublicKeys != "" {
+		parsed, err := url.Parse(edgeURL)
+		if edgeURL == "" || err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+			return Config{}, errors.New("AGENTS_PRIMARY_EDGE_URL must be the edge's absolute URL when AGENTS_PRIMARY_EDGE_TOKEN_PUBLIC_KEYS is set: dispatched answers go back there")
+		}
+		if strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")) == "" {
+			return Config{}, errors.New("AGENTS_PRIMARY_SERVICE_KEY_ID must be set when AGENTS_PRIMARY_EDGE_TOKEN_PUBLIC_KEYS is: it signs the answers' edge tokens")
+		}
+	}
 	guardHoldOrgs, err := organizationList(getenv, "AGENTS_PRIMARY_GUARD_HOLD_ORGS")
 	if err != nil {
 		return Config{}, err
@@ -405,6 +421,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		LiveBackend:                liveBackend,
 		LiveCloudflareOrgs:         liveCloudflareOrgs,
 		EdgeURL:                    edgeURL,
+		EdgeTokenPublicKeys:        edgeTokenPublicKeys,
 		EventBusName:               valueOrDefault(getenv, "EVENT_BUS_NAME", "default"),
 		EventBridgeEndpoint:        strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")),
 		GuardrailIdentifier:        guardrailIdentifier,
