@@ -1,0 +1,81 @@
+# The integrations loop agent (docs/design/integrations/loop-agent.md):
+# once a day it builds one queued piece of the integrations service and opens
+# one pull request. It never merges; macbookpro reviews and merges.
+#
+# It runs on a1's dedicated runner (label oryxa-loop), so CI keeps both of
+# a1's oryxa-go runners. Secrets:
+#   CLAUDE_CODE_OAUTH_TOKEN  `claude setup-token`, the owner's subscription
+#   LOOP_GH_TOKEN            a fine-grained token: this repo (contents, pull
+#                            requests, issues: write) and oryxa-platform
+#                            (contents: read). A pull request opened with the
+#                            workflow's own GITHUB_TOKEN would not start CI.
+name: Integrations loop
+
+on:
+  schedule:
+    # 20:30 UTC, 02:00 in India: while the other agents are quiet.
+    - cron: "30 20 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: integrations-loop
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build one piece
+    runs-on: [self-hosted, oryxa-loop]
+    timeout-minutes: 150
+    services:
+      # As CI's Go job: tests that need a database get one.
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg17
+        env:
+          POSTGRES_USER: oryxa
+          POSTGRES_PASSWORD: oryxa
+          POSTGRES_DB: oryxa
+        ports: ["5432"]
+        options: >-
+          --health-cmd "pg_isready -U oryxa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.LOOP_GH_TOKEN }}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Database
+        env:
+          PGPORT: ${{ job.services.postgres.ports['5432'] }}
+        run: |
+          for service in AGENTS_PRIMARY APPS AUTH INTEGRATIONS OUTBOX POSTGRESKIT; do
+            echo "${service}_TEST_DATABASE_URL=postgres://oryxa:oryxa@localhost:$PGPORT/oryxa?sslmode=disable" >> "$GITHUB_ENV"
+          done
+          docker exec -i "${{ job.services.postgres.id }}" psql -U oryxa -d oryxa -v ON_ERROR_STOP=1 < infra/postgres/init/001_extensions.sql
+      - name: Git identity
+        run: |
+          git config user.name "integrations-loop"
+          git config user.email "integrations-loop@users.noreply.github.com"
+      - uses: anthropics/claude-code-action@fd1c128679612beff4ca259c78021c506e8aa7a7 # v1.0.237
+        env:
+          GH_TOKEN: ${{ secrets.LOOP_GH_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.LOOP_GH_TOKEN }}
+          prompt: |
+            You are the integrations loop agent for this repository.
+            Read docs/design/integrations/loop-agent.md and follow it exactly for today's run.
+            The design is docs/design/integrations/README.md. Today is a new run: start at step 1.
+          claude_args: >-
+            --model claude-opus-5-5
+            --max-turns 300
+            --allowedTools "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,TodoWrite"
+            --disallowedTools "Bash(gh pr merge:*),Bash(gh pr review:*),Bash(git push origin main:*),Bash(git push origin HEAD:main:*),Bash(git push --force:*),Bash(git push -f:*),Bash(tofu:*),Bash(terraform:*),Bash(aws:*),Bash(wrangler:*),Bash(gh secret:*),Bash(gh api -X DELETE:*)"
