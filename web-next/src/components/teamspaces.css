@@ -237,3 +237,177 @@
 @media (prefers-reduced-motion: reduce) {
   .workspace-room-seat:hover:not(:disabled) { transform: none; }
 }
+
+/* The teamspaces list (founder's redesign, 14 Oct 2026): a title with the
+   counts under a faint harbour band, segmented filters, and the teamspaces
+   as a grid of cards, the last one opening a new teamspace. */
+.workspace-teamspaces-page { position: relative; padding: 0 28px 40px; }
+.workspace-teamspaces-page > :not(.workspace-teamspaces-scene) { position: relative; }
+.workspace-teamspaces-scene {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 230px;
+  background: var(--scene-harbour) center 34% / cover no-repeat;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .45) 45%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .45) 45%, transparent 100%);
+  opacity: var(--scene-soft-opacity);
+  pointer-events: none;
+}
+.workspace-teamspaces-hello {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 34px;
+}
+.workspace-teamspaces-hello h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -.03em;
+}
+.workspace-teamspaces-hello p { margin: 6px 0 0; color: var(--text-muted); font-size: 13.5px; }
+.workspace-teamspaces-hello strong { color: var(--text); font-weight: 600; }
+
+.workspace-teamspace-filters {
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--base);
+}
+.workspace-teamspace-filters button {
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.workspace-teamspace-filters button:hover { background: transparent; color: var(--text); }
+.workspace-teamspace-filters button.is-active {
+  background: var(--raised);
+  box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66);
+  color: var(--text);
+}
+.workspace-teamspace-search [data-slot="input"] { border-color: transparent; background: var(--base); }
+
+.workspace-teamspace-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.workspace-teamspace-row {
+  display: grid;
+  grid-template-areas:
+    "avatar . status"
+    "main main main"
+    "members . arrow";
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px 10px;
+  min-height: 176px;
+  padding: 16px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--base);
+}
+.workspace-teamspace-row:hover { background: var(--hover); }
+.workspace-teamspace-row > .workspace-avatar { grid-area: avatar; width: 38px; height: 38px; }
+.workspace-teamspace-row-main { grid-area: main; align-self: start; }
+.workspace-teamspace-row-main strong { font-size: 14px; color: var(--text); }
+.workspace-teamspace-row-main small { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.workspace-teamspace-row-members { grid-area: members; }
+.workspace-teamspace-row .workspace-teamspace-status { grid-area: status; }
+.workspace-teamspace-row > svg:last-child { grid-area: arrow; }
+.workspace-teamspace-row[aria-label] .workspace-teamspace-status.paused ~ svg { opacity: .6; }
+
+.workspace-teamspace-new {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-height: 176px;
+  padding: 16px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 16px;
+  background: var(--tone-1c3350);
+  color: var(--on-scene);
+  text-align: center;
+}
+.workspace-teamspace-new::before {
+  content: "";
+  position: absolute;
+  inset: 12px 0 auto;
+  height: 100px;
+  background: var(--scene-ship-lines) center / contain no-repeat;
+  opacity: .42;
+}
+.workspace-teamspace-new > * { position: relative; }
+.workspace-teamspace-new strong { font-size: 14px; }
+.workspace-teamspace-new span { color: var(--on-scene-soft); font-size: 12px; line-height: 1.45; }
+.workspace-teamspace-new:hover::before { opacity: .55; }
+
+@media (max-width: 760px) {
+  .workspace-teamspaces-page { padding: 0 16px 32px; }
+  .workspace-teamspaces-hello { flex-direction: column; align-items: flex-start; }
+}
+
+/* A teamspace (founder's redesign, 14 Oct 2026): its name as a title under a
+   faint harbour band, then the room as the main tile and its work (overview,
+   tasks, files, activity) as a side tile with segmented tabs. */
+.workspace-teamspace-focus { position: relative; }
+.workspace-teamspace-focus > :not(.workspace-teamspace-scene) { position: relative; }
+.workspace-teamspace-scene {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 220px;
+  background: var(--scene-harbour) center 34% / cover no-repeat;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .45) 45%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .45) 45%, transparent 100%);
+  opacity: var(--scene-soft-opacity);
+  pointer-events: none;
+}
+.workspace-teamspace-hero { gap: 16px; padding: 28px 24px 22px; }
+.workspace-teamspace-hero h1 { font-size: 28px; font-weight: 700; letter-spacing: -.03em; line-height: 1.15; }
+.workspace-teamspace-hero p { margin-top: 6px; color: var(--text-muted); font-size: 13px; }
+.workspace-teamspace-hero .workspace-focus-team-avatar { width: 46px; height: 46px; }
+.workspace-teamspace-focus .workspace-focus-layout {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 38%);
+  gap: 14px;
+  padding: 48px 16px 16px;
+}
+.workspace-teamspace-focus .workspace-conversation {
+  padding: 4px 16px 12px;
+  border-radius: 16px;
+  background: var(--base);
+}
+.workspace-teamspace-focus .workspace-work-panel { background: var(--base); border-radius: 16px; }
+.workspace-teamspace-focus .workspace-work-tabs {
+  right: auto;
+  gap: 2px;
+  height: auto;
+  bottom: calc(100% + 8px);
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--base);
+}
+.workspace-teamspace-focus .workspace-work-tab { min-height: 28px; border: 0; background: transparent; color: var(--text-muted); font-weight: 600; }
+.workspace-teamspace-focus .workspace-work-tab:hover { background: transparent; color: var(--text); }
+.workspace-teamspace-focus .workspace-work-tab.is-active {
+  background: var(--raised);
+  box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66);
+  color: var(--text);
+}
+.workspace-teamspace-focus .workspace-work-card { border: 0; background: var(--canvas); }
+@media (max-width: 760px) {
+  .workspace-teamspace-hero { padding: 16px; }
+  .workspace-teamspace-hero h1 { font-size: 22px; }
+  .workspace-teamspace-hero-more { display: none; }
+}
+@media (max-width: 960px) {
+  .workspace-teamspace-focus .workspace-focus-layout { padding: 0 16px 16px; }
+  .workspace-teamspace-focus .workspace-work-tabs { position: static; align-self: flex-start; margin-bottom: 8px; }
+}

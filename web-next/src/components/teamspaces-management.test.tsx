@@ -302,6 +302,26 @@ describe("creating a teamspace", () => {
     expect(screen.queryByRole("button", { name: "New teamspace" })).toBeNull()
   })
 
+  it("ends the grid with a card that opens the same form", async () => {
+    backend([launch, design])
+    render()
+    await screen.findByRole("button", { name: "Manage Launch room" })
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Open a new teamspace/ })
+    )
+    expect(
+      screen
+        .getByRole("button", { name: "New teamspace" })
+        .getAttribute("aria-expanded")
+    ).toBe("true")
+    expect(screen.getByRole("combobox", { name: "Team" })).toBeTruthy()
+    // With the form open, the card steps aside.
+    expect(
+      screen.queryByRole("button", { name: /Open a new teamspace/ })
+    ).toBeNull()
+  })
+
   it("posts the fields Go takes, for a team the member manages, and opens the result", async () => {
     const created = teamspace({
       id: "tsp_research",

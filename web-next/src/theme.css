@@ -227,6 +227,9 @@
   --tone-1c3350: #1c3350;
   --scene-sea: url("/scenes/sea.webp");
   --scene-ships: url("/scenes/ships.jpg");
+  --scene-harbour: url("/scenes/harbour.webp");
+  --scene-ship-lines: url("/scenes/ship-lines.webp");
+  --scene-soft-opacity: .24;
   --scene-band-opacity: .38;
   color-scheme: dark;
 }
@@ -452,6 +455,9 @@
   --tone-1c3350: #1c3350;
   --scene-sea: url("/scenes/sea.webp");
   --scene-ships: url("/scenes/ships.jpg");
+  --scene-harbour: url("/scenes/harbour.webp");
+  --scene-ship-lines: url("/scenes/ship-lines.webp");
+  --scene-soft-opacity: .38;
   --scene-band-opacity: .55;
   color-scheme: light;
 }
