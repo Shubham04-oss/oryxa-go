@@ -229,6 +229,33 @@ describe("artifacts", () => {
 });
 
 describe("previews", () => {
+  it("strips headers that would reach past the preview, and answers 502 when nothing listens", async () => {
+    await post("/sandbox/shared/exec/command", { command: "true" });
+    workspace().ports.set(
+      3000,
+      () =>
+        new Response("<script>navigator.serviceWorker.register('/sw.js',{scope:'/'})</script>", {
+          headers: { "content-type": "text/html", "set-cookie": "session=stolen; Domain=.oryxa.in", "service-worker-allowed": "/", "x-kept": "yes" },
+        }),
+    );
+    const signed = (await (await post("/sandbox/shared/preview", { port: 3000 })).json()) as { url: string };
+    const worker = (exports as unknown as { default: Fetcher }).default;
+    const page = await worker.fetch(signed.url);
+    expect(page.status).toBe(200);
+    expect(page.headers.get("set-cookie")).toBeNull();
+    expect(page.headers.get("service-worker-allowed")).toBeNull();
+    expect(page.headers.get("x-kept")).toBe("yes");
+    await page.text();
+
+    workspace().ports.set(4000, () => {
+      throw new Error("The container is not listening in the TCP address 10.0.0.1:4000");
+    });
+    const dead = (await (await post("/sandbox/shared/preview", { port: 4000 })).json()) as { url: string };
+    const answer = await worker.fetch(dead.url);
+    expect(answer.status).toBe(502);
+    expect(await answer.text()).toContain("port 4000");
+  });
+
   it("signs a URL that reaches the sandbox port, and refuses a tampered one", async () => {
     await post("/sandbox/shared/exec/command", { command: "python3 -m http.server 8080 &" });
     workspace().ports.set(8080, (request) => new Response(`hello from ${new URL(request.url).pathname}`));
