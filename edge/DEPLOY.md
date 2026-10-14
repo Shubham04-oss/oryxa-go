@@ -3,7 +3,22 @@
 What staging and production need before `AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS`
 names anyone. The edge's own config is in `wrangler.jsonc`; the steps below
 are the owner's and macbookpro's (F4, A9): Cloudflare and AWS changes,
-secrets, CI and routes. Nothing here has been applied yet.
+secrets, CI and routes.
+
+**Applied 2026-10-14 (F4):**
+- R2 buckets `oryxa-runs` and `oryxa-runs-staging`, in OpenTofu (`deploy/production/live_layer.tf`).
+- The routes and trusted keys in `wrangler.jsonc`.
+- `EDGE_URL_SIGNING_KEY` set in both environments.
+- Both Workers deployed from macbookpro, building the amd64 image with Docker Desktop's emulation:
+  - staging `edge-staging.oryxa.in`, version a730e942;
+  - production `edge.oryxa.in`, version a601c9b4.
+- The section 4 check passed on staging, 4/4, with the real sandbox and Browser Run. The run records landed in `oryxa-runs-staging`.
+- Production agents don't call the edge yet: no `AGENTS_PRIMARY_LIVE_*` variables are set.
+
+**Not done yet:**
+- The lifecycle rule below.
+- CI-driven deploys (an amd64 runner).
+- agents' R2 artifact variables.
 
 ## 1. Cloudflare account
 
@@ -11,7 +26,9 @@ secrets, CI and routes. Nothing here has been applied yet.
   sandbox is a Durable Object–managed container (`containers` in
   `wrangler.jsonc`); the browser is the `BROWSER` binding.
 - **R2 buckets** `oryxa-runs` and `oryxa-runs-staging`. Lifecycle rules
-  (until Layer C's retention decision):
+  (until Layer C's retention decision). **R2 lifecycle rules match fixed
+  prefixes only, not wildcards, so the first rule can't be set as written.
+  Sandbox backups need a fixed prefix, such as `backups/sandbox/…`:**
   - `runs/*/*/*/_room/media/sandbox-*/`: sandbox workspace backups. They're
     replaced on every idle stop; expire after 30 days.
   - Everything else under `runs/` and `artifacts/`: keep.
@@ -76,7 +93,9 @@ go test ./agents/primary/internal/edgelive -count=1 -v
 
 For this check, add a dedicated test key's public half to staging's
 `AGENTS_TOKEN_PUBLIC_KEYS` beside agents' KMS key, rather than handing out
-KMS signing. Never add one to production.
+KMS signing. Never add one to production. Staging trusts one such key today:
+its private half is on macbookpro at `~/.config/oryxa/edge-staging-test-key.pem`.
+No dev stack has an agents service key yet.
 
 Then, in our org with `AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS` set: ask Krude
 to run Python, write and read a file, take a screenshot, and browse to a
