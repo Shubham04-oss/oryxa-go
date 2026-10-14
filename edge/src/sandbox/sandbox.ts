@@ -189,7 +189,7 @@ export class SandboxDO extends DurableObject<Env> {
     };
     const backups = new DirectoryBackup(container, exports.DirectoryBackupGateway, {
       binding: "RUNS",
-      prefix: `${runPrefix(identity.org, identity.room, ROOM_RUN)}media/sandbox-${identity.name}/`,
+      prefix: backupPrefix(identity),
     });
     this.workspaceInstance = new ContainerWorkspace(container, {
       image: container.images["sandbox"] ?? Object.values(container.images)[0]!,
@@ -428,7 +428,7 @@ export class SandboxDO extends DurableObject<Env> {
     await workspace.stop();
     await this.ctx.storage.delete("backup");
     const identity = await this.identity();
-    const prefix = `${runPrefix(identity.org, identity.room, ROOM_RUN)}media/sandbox-${identity.name}/`;
+    const prefix = backupPrefix(identity);
     const listed = await this.env.RUNS.list({ prefix });
     if (listed.objects.length) await this.env.RUNS.delete(listed.objects.map((object) => object.key));
     events.push({ type: "sandbox.reset", summary: "Sandbox reset: processes and files cleared" });
@@ -514,6 +514,17 @@ export class SandboxDO extends DurableObject<Env> {
     events.push({ type: "sandbox.snapshot", summary: "Workspace snapshot saved", data: { id: record.id, size: record.size } });
     return { id: record.id, size: record.size, createdAt };
   }
+}
+
+// BACKUPS_PREFIX is where sandbox workspace backups live in R2, apart from
+// the runs: a backup is replaced at every idle stop and only needed to
+// restore one, so a lifecycle rule on this fixed prefix expires old ones
+// (A17; R2 rules match fixed prefixes, not patterns).
+export const BACKUPS_PREFIX = "backups/sandbox/";
+
+// backupPrefix is one sandbox's: backups/sandbox/{org}/{kind}/{room}/{name}/.
+export function backupPrefix(identity: SandboxIdentity): string {
+  return `${BACKUPS_PREFIX}${identity.org}/${identity.room.kind}/${identity.room.id}/${identity.name}/`;
 }
 
 // resolvePath makes a sandbox path absolute against /workspace and refuses
