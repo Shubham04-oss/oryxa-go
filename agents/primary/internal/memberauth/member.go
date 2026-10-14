@@ -41,12 +41,19 @@ const (
 	agentKindStateKey = "managed_agent_kind"
 )
 
+// GrantStateKey is the session state key managedagents writes a
+// specialist's grant (runprofile.Grant, as JSON) under at every run's start.
+const GrantStateKey = "managed_agent_grant"
+
 // Agent is which of the member's agents acts: its ID (agt_…, oag_…; empty
 // for a primary that has none) and its role. An agent token is minted for,
 // and names, exactly one Agent. The zero Agent is asked for as the primary.
 type Agent struct {
 	ID   string
 	Role runprofile.Role
+	// Grant is a specialist's grant as JSON, which its token carries for
+	// apps to enforce; empty is the default grant.
+	Grant string
 }
 
 // Member is who an agent is acting for: a session's own user, in the
@@ -111,6 +118,9 @@ func MemberFromSession(ctx agent.ReadonlyContext) (Member, error) {
 	member := Member{UserID: userID, OrganizationID: organizationID, Agent: Agent{ID: agentID}}
 	if kind != "" {
 		member.Agent.Role = runprofile.RoleOf(kind)
+	}
+	if member.Agent.Role == runprofile.Specialist {
+		member.Agent.Grant, _ = stateString(ctx, GrantStateKey)
 	}
 	return member, nil
 }

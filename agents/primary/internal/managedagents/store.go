@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
@@ -69,7 +71,7 @@ func (store *Store) EnsurePrimary(ctx context.Context, scope Scope) (Definition,
 					(id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at)
 				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
 				ON CONFLICT (organization_id, owner_user_id) WHERE kind = 'primary' DO NOTHING
-				RETURNING id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at`,
+				RETURNING id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant`,
 				created.ID, created.OrganizationID, created.OwnerUserID, created.Kind, created.Name,
 				created.Description, created.Instructions, created.Status, created.Revision, now)
 			if err := scanDefinition(row, &result); err != nil {
@@ -119,7 +121,7 @@ func (store *Store) Create(ctx context.Context, scope Scope, definition Definiti
 			INSERT INTO agents_primary.member_agents
 				(id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
-			RETURNING id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at`,
+			RETURNING id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant`,
 			definition.ID, definition.OrganizationID, definition.OwnerUserID, definition.Kind, definition.Name,
 			definition.Description, definition.Instructions, definition.Status, definition.Revision, now), &definition); err != nil {
 			return err
@@ -140,7 +142,7 @@ func (store *Store) List(ctx context.Context, scope Scope) ([]Definition, error)
 		return nil, err
 	}
 	rows, err := store.database.Pool.Query(ctx, `
-		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at
+		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant
 		FROM agents_primary.member_agents
 		WHERE organization_id = $1 AND owner_user_id = $2
 		ORDER BY CASE kind WHEN 'primary' THEN 0 ELSE 1 END, lower(name), id`, scope.OrganizationID, scope.UserID)
@@ -198,7 +200,7 @@ func (store *Store) Get(ctx context.Context, scope Scope, id string) (Definition
 	}
 	var result Definition
 	err := scanDefinition(store.database.Pool.QueryRow(ctx, `
-		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at
+		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant
 		FROM agents_primary.member_agents WHERE organization_id=$1 AND owner_user_id=$2 AND id=$3`,
 		scope.OrganizationID, scope.UserID, id), &result)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -229,15 +231,28 @@ func (store *Store) Update(ctx context.Context, scope Scope, id string, input Up
 		if input.Status != nil {
 			current.Status = *input.Status
 		}
+		// Only a grant sent is written, so an untouched specialist keeps the
+		// default rather than a copy of it.
+		var grant any
+		if input.Grant != nil {
+			if current.Kind != KindSpecialist {
+				return fmt.Errorf("%w: only a specialist has a grant", ErrInvalid)
+			}
+			encoded, err := json.Marshal(input.Grant)
+			if err != nil {
+				return fmt.Errorf("encode the grant: %w", err)
+			}
+			grant = string(encoded)
+		}
 		current.Revision++
 		current.UpdatedAt = time.Now().UTC()
 		if err := scanDefinition(tx.QueryRow(ctx, `
 			UPDATE agents_primary.member_agents SET name=$4, description=$5, instructions=$6, status=$7,
-				revision=$8, updated_at=$9
+				revision=$8, updated_at=$9, app_grant=COALESCE($10::jsonb, app_grant)
 			WHERE organization_id=$1 AND owner_user_id=$2 AND id=$3
-			RETURNING id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at`,
+			RETURNING id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant`,
 			scope.OrganizationID, scope.UserID, id, current.Name, current.Description, current.Instructions,
-			current.Status, current.Revision, current.UpdatedAt), &result); err != nil {
+			current.Status, current.Revision, current.UpdatedAt, grant), &result); err != nil {
 			return err
 		}
 		return recordLifecycle(ctx, tx, agentsv1.AgentUpdatedDetailType, result)
@@ -296,15 +311,32 @@ func (store *Store) Forget(ctx context.Context, organizationID, userID string) e
 
 type scanner interface{ Scan(...any) error }
 
+// scanDefinition reads a row; a specialist with no grant stored has the
+// default one.
 func scanDefinition(row scanner, target *Definition) error {
-	return row.Scan(&target.ID, &target.OrganizationID, &target.OwnerUserID, &target.Kind, &target.Name,
-		&target.Description, &target.Instructions, &target.Status, &target.Revision, &target.CreatedAt, &target.UpdatedAt)
+	var grant []byte
+	if err := row.Scan(&target.ID, &target.OrganizationID, &target.OwnerUserID, &target.Kind, &target.Name,
+		&target.Description, &target.Instructions, &target.Status, &target.Revision, &target.CreatedAt, &target.UpdatedAt, &grant); err != nil {
+		return err
+	}
+	target.Grant = nil
+	if target.Kind != KindSpecialist {
+		return nil
+	}
+	decoded := runprofile.DefaultGrant()
+	if grant != nil {
+		if err := json.Unmarshal(grant, &decoded); err != nil {
+			return fmt.Errorf("decode the grant of agent %s: %w", target.ID, err)
+		}
+	}
+	target.Grant = &decoded
+	return nil
 }
 
 func get(ctx context.Context, tx pgx.Tx, scope Scope, id string) (Definition, error) {
 	var result Definition
 	err := scanDefinition(tx.QueryRow(ctx, `
-		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at
+		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant
 		FROM agents_primary.member_agents WHERE organization_id=$1 AND owner_user_id=$2 AND id=$3 FOR UPDATE`,
 		scope.OrganizationID, scope.UserID, id), &result)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -316,7 +348,7 @@ func get(ctx context.Context, tx pgx.Tx, scope Scope, id string) (Definition, er
 func getPrimary(ctx context.Context, tx pgx.Tx, scope Scope) (Definition, error) {
 	var result Definition
 	err := scanDefinition(tx.QueryRow(ctx, `
-		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at
+		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant
 		FROM agents_primary.member_agents WHERE organization_id=$1 AND owner_user_id=$2 AND kind='primary' FOR UPDATE`,
 		scope.OrganizationID, scope.UserID), &result)
 	if errors.Is(err, pgx.ErrNoRows) {

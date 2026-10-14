@@ -232,3 +232,37 @@ func ModeOf(startedBy string, tools Toolset) (Mode, error) {
 		return Wakeup, nil
 	}
 }
+
+// AllApps in Grant.Apps is every app the member has connected.
+const AllApps = "*"
+
+// Grant is what a member lets one of their specialists reach in their apps
+// (I3): which apps (toolkits) and tools it may use, read-only unless a write
+// is granted here. Assembly builds the specialist's toolboxes from it, and
+// apps enforces it on every call the specialist's agent token makes, which
+// is what holds when a prompt steers the specialist. The primary has none:
+// it reaches all its member does.
+type Grant struct {
+	// Apps are the toolkits it may reach, such as gmail, or AllApps.
+	Apps []string `json:"apps"`
+	// Tools, when any are named, are the only tools it may run in those apps,
+	// besides WriteTools.
+	Tools []string `json:"tools"`
+	// WriteApps and WriteTools are where it may change things: every write
+	// in an app, or one tool. Nothing else it runs may write. A write is
+	// still only in the apps named in Apps.
+	WriteApps  []string `json:"write_apps"`
+	WriteTools []string `json:"write_tools"`
+}
+
+// DefaultGrant is a specialist's until its member changes it: every app it
+// reached before grants existed, read-only.
+func DefaultGrant() Grant {
+	return Grant{Apps: []string{AllApps}, Tools: []string{}, WriteApps: []string{}, WriteTools: []string{}}
+}
+
+// ReachesApps is whether the grant names any app at all.
+func (grant Grant) ReachesApps() bool { return len(grant.Apps) > 0 }
+
+// Writes is whether the grant lets it change anything.
+func (grant Grant) Writes() bool { return len(grant.WriteApps) > 0 || len(grant.WriteTools) > 0 }

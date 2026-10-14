@@ -353,6 +353,70 @@ func TestAToolRunNamesTheAgentThatRanIt(t *testing.T) {
 	}
 }
 
+// TestASpecialistRunsOnlyWhatItWasGranted: a specialist's agent token
+// cannot write where its owner granted no write, nor reach an app its grant
+// does not name, whatever the model was steered to call (I3, L2). Without a
+// grant on its token it reads every app and writes nothing; what was
+// granted runs; the member and the primary are unchanged.
+func TestASpecialistRunsOnlyWhatItWasGranted(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	read, write := h.readTool(), h.writeTool()
+	h.activeConnection("apc_github", "user-1", "github", "ca_1")
+	directory := h.service.directory.(*fakeDirectory)
+	granted := func(name string, grant domain.AgentGrant) authclient.Credentials {
+		credentials := authclient.Credentials{Authorization: "Bearer " + name}
+		directory.members[credentials.Authorization] = domain.OrgMembership{
+			OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember,
+			Agent: true, AgentID: "agt_" + name, AgentRole: "specialist", AgentGrant: &grant,
+		}
+		return credentials
+	}
+	mail := granted("mail", domain.AgentGrant{Apps: []string{"gmail"}, WriteApps: []string{"gmail"}})
+	writer := granted("writer", domain.AgentGrant{Apps: []string{"github"}, WriteApps: []string{"github"}})
+	lister := granted("lister", domain.AgentGrant{Apps: []string{"*"}, Tools: []string{read.Slug}})
+	creator := granted("creator", domain.AgentGrant{Apps: []string{"github"}, Tools: []string{read.Slug}, WriteTools: []string{write.Slug}})
+	writeInput := RunToolInput{Tool: write.Slug, Arguments: json.RawMessage(`{"title":"bug"}`), IdempotencyKey: "issue-2026-10-14"}
+
+	refused := map[string]struct {
+		credentials authclient.Credentials
+		input       RunToolInput
+	}{
+		"a write with the default grant":   {specialistToken, writeInput},
+		"a read in an app not granted":     {mail, RunToolInput{Tool: read.Slug}},
+		"a write in an app not granted":    {mail, writeInput},
+		"a tool outside its granted tools": {lister, writeInput},
+	}
+	for name, call := range refused {
+		if _, err := h.service.RunTool(context.Background(), call.credentials, "org_1", call.input); !errors.Is(err, domain.ErrForbidden) {
+			t.Errorf("%s = %v, want forbidden", name, err)
+		}
+	}
+	if _, err := h.service.SearchTools(context.Background(), mail, "org_1", "github", "", 0); !errors.Is(err, domain.ErrForbidden) {
+		t.Errorf("searching an app not granted = %v, want forbidden", err)
+	}
+	if len(h.composio.executed) != 0 {
+		t.Fatalf("a refused call reached the app: %+v", h.composio.executed)
+	}
+
+	allowed := map[string]struct {
+		credentials authclient.Credentials
+		input       RunToolInput
+	}{
+		"a read with the default grant": {specialistToken, RunToolInput{Tool: read.Slug}},
+		"a granted tool":                {lister, RunToolInput{Tool: read.Slug}},
+		"a write in a granted app":      {writer, writeInput},
+		"a granted write tool":          {creator, RunToolInput{Tool: write.Slug, IdempotencyKey: "issue-2026-10-15"}},
+		"the member's own write":        {memberToken, RunToolInput{Tool: write.Slug, IdempotencyKey: "issue-2026-10-16"}},
+		"the primary's write":           {agentToken, RunToolInput{Tool: write.Slug, IdempotencyKey: "issue-2026-10-17"}},
+	}
+	for name, call := range allowed {
+		if _, err := h.service.RunTool(context.Background(), call.credentials, "org_1", call.input); err != nil {
+			t.Errorf("%s = %v, want it to run", name, err)
+		}
+	}
+}
+
 func TestRunToolSaysWhenTheAppIsNotUsable(t *testing.T) {
 	t.Parallel()
 	for name, testCase := range map[string]struct {

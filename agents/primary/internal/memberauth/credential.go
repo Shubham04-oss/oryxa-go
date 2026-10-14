@@ -8,6 +8,8 @@ import (
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/auth"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 )
 
 // TokenSource mints a short-lived access token for a member when the member
@@ -47,11 +49,13 @@ func (p *CredentialProvider) Credential(ctx context.Context) (auth.Credential, e
 	if !ok {
 		return nil, ErrNoMember
 	}
-	if token := AccessToken(ctx); token != "" {
+	// A specialist always presents its own agent token, even in its member's
+	// own turn: the member's token would reach past its grant (I3).
+	if token := AccessToken(ctx); token != "" && member.Agent.Role != runprofile.Specialist {
 		return memberCredential{token: token, organizationID: member.OrganizationID}, nil
 	}
 	if p.Tokens == nil {
-		return nil, errors.New("memberauth: this run carries no member access token, and no agent token source is configured")
+		return nil, errors.New("memberauth: this run cannot present an agent token: no agent token source is configured")
 	}
 	token, _, err := p.Tokens.AgentToken(ctx, member.UserID, member.Agent)
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 )
 
 // recordingModel answers every call with a finished specialist result, which
@@ -165,6 +166,7 @@ func assembledKrude(t *testing.T, llm model.LLM, thinking genai.ThinkingLevel) *
 		toolboxes:         []agents.Toolbox{apps, knowledge, interactions(agents.InteractionConfig{})},
 		unattended:        unattended,
 		unattendedQuiet:   unattendedQuiet,
+		readOnlyApps:      &apps,
 		room:              []agents.Toolbox{room},
 		deliveryToolboxes: deliveryToolboxes(unattended, unattendedQuiet, &delivering),
 		deliveryThinking:  thinking,
@@ -201,7 +203,7 @@ func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 	} {
 		state := agents.DeliveryState(agents.Delivery{RequestID: "irq_1", Purpose: run.purpose})
 		want := append(slices.Clone(run.tools), agents.DeliveryTools(run.purpose)...)
-		specialist, err := krude.ManagedDelivering(agents.ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}, run.reach)
+		specialist, err := krude.ManagedDelivering(agents.ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}, run.reach, runprofile.DefaultGrant())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -226,7 +228,7 @@ func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 func TestOnlyDeliveriesStartLoaded(t *testing.T) {
 	llm := &recordingModel{}
 	krude := assembledKrude(t, llm, "")
-	stood, err := krude.ManagedUnattended(agents.ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}, false)
+	stood, err := krude.ManagedUnattended(agents.ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}, false, runprofile.DefaultGrant())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,21 +315,21 @@ func TestOnlyDeliveriesThinkAtTheLevelSet(t *testing.T) {
 		}
 		for reach, name := range map[DeliveryReach]string{DeliveryReads: "approved work", DeliveryApps: "approved work on the apps alone", DeliveryQuiet: "approved work on the knowledge alone", DeliveryReport: "a report or a new request"} {
 			thinks("Krude delivering "+name, krude.Delivering(reach), thinking)
-			specialist, err := krude.ManagedDelivering(spec, reach)
+			specialist, err := krude.ManagedDelivering(spec, reach, runprofile.DefaultGrant())
 			if err != nil {
 				t.Fatal(err)
 			}
 			thinks("a specialist delivering "+name, specialist, thinking)
 		}
-		member, err := krude.Managed(spec)
+		member, err := krude.Managed(spec, runprofile.DefaultGrant())
 		if err != nil {
 			t.Fatal(err)
 		}
-		reading, err := krude.ManagedUnattended(spec, true)
+		reading, err := krude.ManagedUnattended(spec, true, runprofile.DefaultGrant())
 		if err != nil {
 			t.Fatal(err)
 		}
-		standing, err := krude.ManagedUnattended(spec, false)
+		standing, err := krude.ManagedUnattended(spec, false, runprofile.DefaultGrant())
 		if err != nil {
 			t.Fatal(err)
 		}

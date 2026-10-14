@@ -110,3 +110,14 @@ func TestModeOf(t *testing.T) {
 		}
 	}
 }
+
+// TestADefaultGrantReadsEveryAppAndWritesNothing: a specialist nobody has
+// granted anything reaches the apps it did before grants, read-only (I3).
+func TestADefaultGrantReadsEveryAppAndWritesNothing(t *testing.T) {
+	if grant := DefaultGrant(); !grant.ReachesApps() || grant.Writes() || grant.Apps[0] != AllApps {
+		t.Fatalf("the default grant is %+v", grant)
+	}
+	if (Grant{}).ReachesApps() || !(Grant{WriteTools: []string{"GMAIL_SEND_EMAIL"}}).Writes() {
+		t.Fatal("an empty grant reaches an app, or a granted write tool does not write")
+	}
+}

@@ -181,7 +181,13 @@ type AgentGrant struct {
 type AgentIdentity struct {
 	Agent string `json:"agent,omitempty"`
 	Role  string `json:"role"`
+	// Grant is what a specialist may reach in its member's apps, as agents
+	// sent it (a JSON object); auth only carries it, and apps enforces it.
+	Grant json.RawMessage `json:"grant,omitempty"`
 }
+
+// MaxAgentGrantBytes bounds the grant an agent token carries.
+const MaxAgentGrantBytes = 32 << 10
 
 const (
 	AgentRolePrimary      = "primary"

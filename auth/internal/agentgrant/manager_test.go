@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -457,18 +458,18 @@ func TestMintedTokenNamesItsAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	specialist := domain.AgentIdentity{Agent: "agt_writer", Role: domain.AgentRoleSpecialist}
+	specialist := domain.AgentIdentity{Agent: "agt_writer", Role: domain.AgentRoleSpecialist, Grant: json.RawMessage(`{"apps": ["gmail"]}`)}
 	token, _, err := manager.MintToken(context.Background(), "member-1", specialist)
 	if err != nil {
 		t.Fatalf("MintToken() error = %v", err)
 	}
-	if got, err := manager.AgentIdentity(context.Background(), "member-1", token); err != nil || got != specialist {
+	if got, err := manager.AgentIdentity(context.Background(), "member-1", token); err != nil || !reflect.DeepEqual(got, specialist) {
 		t.Fatalf("AgentIdentity(minted) = %+v, %v; want %+v", got, err, specialist)
 	}
-	if got, err := manager.AgentIdentity(context.Background(), "member-2", token); err != nil || got != (domain.AgentIdentity{Role: domain.AgentRolePrimary}) {
+	if got, err := manager.AgentIdentity(context.Background(), "member-2", token); err != nil || !reflect.DeepEqual(got, domain.AgentIdentity{Role: domain.AgentRolePrimary}) {
 		t.Fatalf("AgentIdentity(another member) = %+v, %v; want the bare primary", got, err)
 	}
-	if got, err := manager.AgentIdentity(context.Background(), "member-1", "legacy-token"); err != nil || got != (domain.AgentIdentity{Role: domain.AgentRolePrimary}) {
+	if got, err := manager.AgentIdentity(context.Background(), "member-1", "legacy-token"); err != nil || !reflect.DeepEqual(got, domain.AgentIdentity{Role: domain.AgentRolePrimary}) {
 		t.Fatalf("AgentIdentity(legacy) = %+v, %v; want the primary", got, err)
 	}
 }

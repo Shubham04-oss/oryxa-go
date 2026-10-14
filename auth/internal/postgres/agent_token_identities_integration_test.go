@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -18,11 +20,11 @@ func TestAgentTokenIdentityAnswersOnlyItsOwnLiveToken(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = store.pool.Exec(ctx, `DELETE FROM auth_agent_token_identities WHERE token_hash IN ($1,$2)`, hash, expired)
 	})
-	specialist := domain.AgentIdentity{Agent: "agt_writer", Role: domain.AgentRoleSpecialist}
+	specialist := domain.AgentIdentity{Agent: "agt_writer", Role: domain.AgentRoleSpecialist, Grant: json.RawMessage(`{"apps": ["gmail"]}`)}
 	if err := store.BindAgentToken(ctx, hash, "member-1", specialist, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := store.AgentTokenIdentity(ctx, hash, "member-1"); err != nil || got != specialist {
+	if got, err := store.AgentTokenIdentity(ctx, hash, "member-1"); err != nil || !reflect.DeepEqual(got, specialist) {
 		t.Fatalf("AgentTokenIdentity = %+v, %v; want %+v", got, err, specialist)
 	}
 	if _, err := store.AgentTokenIdentity(ctx, hash, "member-2"); !errors.Is(err, domain.ErrNotFound) {

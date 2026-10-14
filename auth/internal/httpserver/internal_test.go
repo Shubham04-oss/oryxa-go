@@ -2,8 +2,10 @@ package httpserver
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -65,25 +67,35 @@ func TestMintAgentTokenSucceeds(t *testing.T) {
 
 // TestMintAgentTokenBindsTheNamedAgent: a request naming an agent mints a
 // token bound to it; one naming none (an older agents) gets the primary; an
-// unknown role is refused.
+// unknown role, or a grant that is not an object, is refused. A specialist's
+// grant is carried as sent.
 func TestMintAgentTokenBindsTheNamedAgent(t *testing.T) {
 	services := fakeServiceVerifier{claims: serviceauth.Claims{Service: "agents", Purpose: "agent"}}
 	for body, want := range map[string]domain.AgentIdentity{
 		`{"user_id":"member-1","agent":"agt_writer","role":"specialist"}`: {Agent: "agt_writer", Role: domain.AgentRoleSpecialist},
+		`{"user_id":"member-1","agent":"agt_writer","role":"specialist","grant":{"apps":["gmail"]}}`: {
+			Agent: "agt_writer", Role: domain.AgentRoleSpecialist, Grant: json.RawMessage(`{"apps":["gmail"]}`),
+		},
 		`{"user_id":"member-1"}`: {Role: domain.AgentRolePrimary},
 	} {
 		agentGrants := &fakeAgentGrants{mintAccessToken: "access-token-1", mintExpiresIn: 3600}
 		response := httptest.NewRecorder()
 		internalHandler(agentGrants, services).ServeHTTP(response, mintRequest(body, "svc-token"))
-		if response.Code != http.StatusOK || agentGrants.mintIdentity != want {
+		if response.Code != http.StatusOK || !reflect.DeepEqual(agentGrants.mintIdentity, want) {
 			t.Fatalf("%s: status = %d, identity = %+v, want %+v", body, response.Code, agentGrants.mintIdentity, want)
 		}
 	}
-	agentGrants := &fakeAgentGrants{}
-	response := httptest.NewRecorder()
-	internalHandler(agentGrants, services).ServeHTTP(response, mintRequest(`{"user_id":"member-1","role":"root"}`, "svc-token"))
-	if response.Code != http.StatusBadRequest || agentGrants.mintUserID != "" {
-		t.Fatalf("unknown role: status = %d, minted for %q", response.Code, agentGrants.mintUserID)
+	for _, body := range []string{
+		`{"user_id":"member-1","role":"root"}`,
+		`{"user_id":"member-1","role":"specialist","grant":["gmail"]}`,
+		`{"user_id":"member-1","role":"specialist","grant":null}`,
+	} {
+		agentGrants := &fakeAgentGrants{}
+		response := httptest.NewRecorder()
+		internalHandler(agentGrants, services).ServeHTTP(response, mintRequest(body, "svc-token"))
+		if response.Code != http.StatusBadRequest || agentGrants.mintUserID != "" {
+			t.Fatalf("%s: status = %d, minted for %q", body, response.Code, agentGrants.mintUserID)
+		}
 	}
 }
 

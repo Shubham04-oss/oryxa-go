@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
@@ -68,6 +70,25 @@ func TestStoreLifecycle(t *testing.T) {
 	if updated.Name != name || updated.Revision != 2 {
 		t.Fatalf("updated=%+v", updated)
 	}
+	// A specialist reads every app until its owner grants otherwise; the
+	// grant set survives a later change of anything else; the primary has none.
+	if primary.Grant != nil || !reflect.DeepEqual(updated.SpecialistGrant(), runprofile.DefaultGrant()) || updated.Grant == nil {
+		t.Fatalf("primary grant=%+v specialist grant=%+v", primary.Grant, updated.Grant)
+	}
+	grant := runprofile.Grant{Apps: []string{"gmail"}, Tools: []string{}, WriteApps: []string{"gmail"}, WriteTools: []string{}}
+	if _, err := store.Update(ctx, scope, specialist.ID, UpdateInput{Grant: &grant}); err != nil {
+		t.Fatal(err)
+	}
+	description := "Owns revenue"
+	if _, err := store.Update(ctx, scope, specialist.ID, UpdateInput{Description: &description}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Get(ctx, scope, specialist.ID); err != nil || !reflect.DeepEqual(*got.Grant, grant) || got.Revision != 4 {
+		t.Fatalf("granted=%+v, %v", got, err)
+	}
+	if _, err := store.Update(ctx, scope, primary.ID, UpdateInput{Grant: &grant}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a grant for the primary: error = %v", err)
+	}
 	listed, err := store.List(ctx, scope)
 	if err != nil {
 		t.Fatal(err)
@@ -106,8 +127,8 @@ func TestStoreLifecycle(t *testing.T) {
 	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.agents_outbox WHERE detail->>'user_id'=$1`, scope.UserID).Scan(&lifecycleEvents); err != nil {
 		t.Fatal(err)
 	}
-	if lifecycleEvents != 5 {
-		t.Fatalf("lifecycle events=%d, want 5", lifecycleEvents)
+	if lifecycleEvents != 7 {
+		t.Fatalf("lifecycle events=%d, want 7", lifecycleEvents)
 	}
 	if err := store.Forget(ctx, scope.OrganizationID, scope.UserID); err != nil {
 		t.Fatal(err)

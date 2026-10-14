@@ -6,6 +6,8 @@ package managedagents
 import (
 	"errors"
 	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 )
 
 var (
@@ -49,6 +51,18 @@ type Definition struct {
 	Revision       int64     `json:"revision"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+	// Grant is what a specialist may reach in its owner's apps; a primary
+	// has none, and reaches all its member does.
+	Grant *runprofile.Grant `json:"grant,omitempty"`
+}
+
+// SpecialistGrant is the specialist's grant, or the default for one read
+// before it had any.
+func (definition Definition) SpecialistGrant() runprofile.Grant {
+	if definition.Grant == nil {
+		return runprofile.DefaultGrant()
+	}
+	return *definition.Grant
 }
 
 // Handle is the safe discoverability view of an active agent. Instructions
@@ -74,4 +88,6 @@ type UpdateInput struct {
 	Description  *string `json:"description,omitempty"`
 	Instructions *string `json:"instructions,omitempty"`
 	Status       *Status `json:"status,omitempty"`
+	// Grant replaces a specialist's whole grant.
+	Grant *runprofile.Grant `json:"grant,omitempty"`
 }
