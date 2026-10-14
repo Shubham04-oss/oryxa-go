@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { ArrowLeft, Download, FileText, Pencil } from "lucide-react"
+import { ArrowLeft, Download, Pencil } from "lucide-react"
 import { ApiError } from "@/lib/api/client"
 import {
   fetchArtifactLink,
@@ -9,6 +9,7 @@ import {
 import type { ArtifactLink } from "@/lib/threads/client"
 import { artifactFileName, buildTimeline } from "@/lib/threads/timeline"
 import type { ArtifactEntry } from "@/lib/threads/timeline"
+import { FileKindBadge } from "./file-kind"
 import { OfficeEditor } from "./office-editor"
 
 const DocumentPreview = lazy(() =>
@@ -126,7 +127,7 @@ export function PrimaryAgentFiles({
                 }
               }}
             >
-              <FileText size={15} strokeWidth={1.7} />
+              <FileKindBadge name={file.name} size="small" />
               <span>{artifactFileName(file.name)}</span>
             </button>
           ))}
@@ -212,7 +213,7 @@ export function PrimaryAgentFileViewer({
         >
           <ArrowLeft size={17} strokeWidth={1.7} />
         </button>
-        <FileText size={17} strokeWidth={1.7} aria-hidden="true" />
+        <FileKindBadge name={name} />
         <strong>{name}</strong>
         {editable && link && (
           <button

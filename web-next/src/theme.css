@@ -231,6 +231,16 @@
   --scene-ship-lines: url("/scenes/ship-lines.webp");
   --scene-soft-opacity: .24;
   --scene-band-opacity: .38;
+  /* A file's kind badge (file-kind.tsx): the same in both themes. */
+  --file-pdf: #c8463f;
+  --file-sheet: #2f8a55;
+  --file-slides: #d98e62;
+  --file-image: #2f8f8a;
+  --file-video: #b0487a;
+  --file-audio: #5b5bd6;
+  --file-code: #3d7fb8;
+  --file-doc: #6b6b6b;
+  --on-file: #ffffff;
   color-scheme: dark;
 }
 
