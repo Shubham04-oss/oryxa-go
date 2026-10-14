@@ -72,6 +72,12 @@ func (signer Signer) Token(ctx context.Context, audience, purpose string) (strin
 		return "", fmt.Errorf("encode claims: %w", err)
 	}
 
+	return signer.sign(ctx, claims)
+}
+
+// sign signs claims, already JSON, with the signer's KMS key and returns the
+// compact JWT.
+func (signer Signer) sign(ctx context.Context, claims []byte) (string, error) {
 	signingInput := headerSegment + "." + base64.RawURLEncoding.EncodeToString(claims)
 	ctx, cancel := kmscall.Context(ctx)
 	defer cancel()
