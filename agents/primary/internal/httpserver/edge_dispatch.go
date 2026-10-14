@@ -61,14 +61,19 @@ func (server *Server) edgeDispatch(writer http.ResponseWriter, request *http.Req
 		return
 	}
 
+	// The edge signs a dispatch's token for speaking in the call.
+	if !claims.HasScope(edgev1.ScopeCallSpeak) {
+		writeError(writer, http.StatusForbidden, "forbidden", "the edge token lacks call:speak")
+		return
+	}
+
 	var body edgedispatch.Request
 	if !server.decode(writer, request, &body) {
 		return
 	}
 	// The token is the edge's word for whom and where; the body may not
 	// name anyone or anywhere else.
-	if body.Organization != claims.Org || body.Room != claims.Room || body.Member != claims.Member ||
-		(claims.Team != "" && body.Team != claims.Team) {
+	if body.Organization != claims.Org || body.Room != claims.Room || body.Member != claims.Member || body.Team != claims.Team {
 		server.logger.WarnContext(request.Context(), "edge dispatch names another member or room than its token",
 			"organization_id", claims.Org, "room_kind", string(claims.Room.Kind))
 		writeError(writer, http.StatusForbidden, "forbidden", "the dispatch must be for the token's organization, room and member")

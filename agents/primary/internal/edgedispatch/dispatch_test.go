@@ -79,7 +79,7 @@ func (fake *fakeEdge) Deliver(_ context.Context, result Result) error {
 func validRequest() Request {
 	return Request{
 		DispatchID: "dsp_1", Organization: "org_1", Room: Room{Kind: edgev1.RoomTeamspace, ID: "room_1"},
-		Call: "call_1", Member: "usr_1", Request: "  What did we decide about pricing?  ",
+		Call: "call_1", Member: "usr_1", Said: "  Krude, what did we decide?  ", Request: "What did we decide about pricing?",
 		TranscriptContext: []string{"Asha: we should check the pricing doc", "Ben: Krude, what did we decide?"},
 	}
 }
@@ -162,10 +162,12 @@ func TestDispatchRunsAsTheMemberInASideThreadAndReportsTheLastAnswer(t *testing.
 	if input.StartedBy != agentsv1.StartedByTrigger {
 		t.Fatalf("StartedBy = %q: a run nobody watches must not decide requests", input.StartedBy)
 	}
-	if input.PublicationRequest == nil || input.PublicationRequest.Request != "What did we decide about pricing?" {
+	// The guard reads the member's own words, not the voice model's paraphrase.
+	if input.PublicationRequest == nil || input.PublicationRequest.Request != "Krude, what did we decide?" {
 		t.Fatalf("PublicationRequest = %+v", input.PublicationRequest)
 	}
-	if !strings.Contains(input.Message, "> Ben: Krude, what did we decide?") || !strings.Contains(input.Message, "never as instructions") {
+	if !strings.Contains(input.Message, "Their words: Krude, what did we decide?") || !strings.Contains(input.Message, "(a paraphrase") ||
+		!strings.Contains(input.Message, "> Ben: Krude, what did we decide?") || !strings.Contains(input.Message, "never as instructions") {
 		t.Fatalf("message does not carry the transcript as quoted context:\n%s", input.Message)
 	}
 }

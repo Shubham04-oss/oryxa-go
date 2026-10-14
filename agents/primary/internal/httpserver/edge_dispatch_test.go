@@ -40,11 +40,12 @@ func (dispatcher *fakeDispatcher) Dispatch(_ context.Context, request edgedispat
 
 func dispatchClaims() edgev1.TokenClaims {
 	return edgev1.TokenClaims{Issuer: edgev1.IssuerEdge, Audience: edgev1.AudienceAgents, Org: "org_1", Team: "team_1",
-		Room: edgev1.Room{Kind: edgev1.RoomTeamspace, ID: "room_1"}, Member: "usr_1", ID: "jti_1"}
+		Room: edgev1.Room{Kind: edgev1.RoomTeamspace, ID: "room_1"}, Member: "usr_1", ID: "jti_1",
+		Scopes: []edgev1.Scope{edgev1.ScopeCallSpeak}}
 }
 
 const dispatchBody = `{"dispatchId":"dsp_1","org":"org_1","team":"team_1","room":{"kind":"teamspace","id":"room_1"},` +
-	`"call":"call_1","member":"usr_1","request":"What's on my calendar?","transcriptContext":["Asha: Krude?"]}`
+	`"call":"call_1","member":"usr_1","said":"Krude, what's on today?","request":"What's on my calendar?","transcriptContext":["Asha: Krude?"]}`
 
 func postDispatch(t *testing.T, server *Server, authorization, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -93,18 +94,20 @@ func TestEdgeDispatchRefuses(t *testing.T) {
 		body          string
 		status        int
 	}{
-		"no token":      {"", &fakeEdgeTokens{claims: dispatchClaims()}, nil, dispatchBody, http.StatusUnauthorized},
-		"not bearer":    {"Basic abc", &fakeEdgeTokens{claims: dispatchClaims()}, nil, dispatchBody, http.StatusUnauthorized},
-		"refused token": {"Bearer x", &fakeEdgeTokens{err: edgedispatch.ErrUnauthorized}, nil, dispatchBody, http.StatusUnauthorized},
-		"other member":  {"Bearer x", &fakeEdgeTokens{claims: other(func(c *edgev1.TokenClaims) { c.Member = "usr_2" })}, nil, dispatchBody, http.StatusForbidden},
-		"other room":    {"Bearer x", &fakeEdgeTokens{claims: other(func(c *edgev1.TokenClaims) { c.Room.ID = "room_2" })}, nil, dispatchBody, http.StatusForbidden},
-		"other org":     {"Bearer x", &fakeEdgeTokens{claims: other(func(c *edgev1.TokenClaims) { c.Org = "org_2" })}, nil, dispatchBody, http.StatusForbidden},
-		"other team":    {"Bearer x", &fakeEdgeTokens{claims: other(func(c *edgev1.TokenClaims) { c.Team = "team_2" })}, nil, dispatchBody, http.StatusForbidden},
-		"unknown field": {"Bearer x", &fakeEdgeTokens{claims: dispatchClaims()}, nil, strings.Replace(dispatchBody, `"call"`, `"sudo":true,"call"`, 1), http.StatusBadRequest},
-		"invalid":       {"Bearer x", &fakeEdgeTokens{claims: dispatchClaims()}, fmt.Errorf("%w: request", edgedispatch.ErrInvalid), dispatchBody, http.StatusBadRequest},
-		"not a member":  {"Bearer x", &fakeEdgeTokens{claims: dispatchClaims()}, edgedispatch.ErrNotMember, dispatchBody, http.StatusForbidden},
-		"restarting":    {"Bearer x", &fakeEdgeTokens{claims: dispatchClaims()}, edgedispatch.ErrUnavailable, dispatchBody, http.StatusServiceUnavailable},
-		"failure":       {"Bearer x", &fakeEdgeTokens{claims: dispatchClaims()}, errors.New("database down"), dispatchBody, http.StatusInternalServerError},
+		"no token":                    {"", &fakeEdgeTokens{claims: dispatchClaims()}, nil, dispatchBody, http.StatusUnauthorized},
+		"not bearer":                  {"Basic abc", &fakeEdgeTokens{claims: dispatchClaims()}, nil, dispatchBody, http.StatusUnauthorized},
+		"refused token":               {"Bearer x", &fakeEdgeTokens{err: edgedispatch.ErrUnauthorized}, nil, dispatchBody, http.StatusUnauthorized},
+		"other member":                {"Bearer x", &fakeEdgeTokens{claims: other(func(c *edgev1.TokenClaims) { c.Member = "usr_2" })}, nil, dispatchBody, http.StatusForbidden},
+		"other room":                  {"Bearer x", &fakeEdgeTokens{claims: other(func(c *edgev1.TokenClaims) { c.Room.ID = "room_2" })}, nil, dispatchBody, http.StatusForbidden},
+		"other org":                   {"Bearer x", &fakeEdgeTokens{claims: other(func(c *edgev1.TokenClaims) { c.Org = "org_2" })}, nil, dispatchBody, http.StatusForbidden},
+		"other team":                  {"Bearer x", &fakeEdgeTokens{claims: other(func(c *edgev1.TokenClaims) { c.Team = "team_2" })}, nil, dispatchBody, http.StatusForbidden},
+		"team the token doesn't name": {"Bearer x", &fakeEdgeTokens{claims: other(func(c *edgev1.TokenClaims) { c.Team = "" })}, nil, dispatchBody, http.StatusForbidden},
+		"no call:speak":               {"Bearer x", &fakeEdgeTokens{claims: other(func(c *edgev1.TokenClaims) { c.Scopes = nil })}, nil, dispatchBody, http.StatusForbidden},
+		"unknown field":               {"Bearer x", &fakeEdgeTokens{claims: dispatchClaims()}, nil, strings.Replace(dispatchBody, `"call"`, `"sudo":true,"call"`, 1), http.StatusBadRequest},
+		"invalid":                     {"Bearer x", &fakeEdgeTokens{claims: dispatchClaims()}, fmt.Errorf("%w: request", edgedispatch.ErrInvalid), dispatchBody, http.StatusBadRequest},
+		"not a member":                {"Bearer x", &fakeEdgeTokens{claims: dispatchClaims()}, edgedispatch.ErrNotMember, dispatchBody, http.StatusForbidden},
+		"restarting":                  {"Bearer x", &fakeEdgeTokens{claims: dispatchClaims()}, edgedispatch.ErrUnavailable, dispatchBody, http.StatusServiceUnavailable},
+		"failure":                     {"Bearer x", &fakeEdgeTokens{claims: dispatchClaims()}, errors.New("database down"), dispatchBody, http.StatusInternalServerError},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dispatcher := &fakeDispatcher{err: test.dispatchErr}
