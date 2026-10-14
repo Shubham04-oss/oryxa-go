@@ -51,6 +51,10 @@
 // Go must refuse the outsider. CALL_LIVE_ADMIT=off skips that, for a room
 // whose members are already on the edge.
 //
+// It refuses to run against production (app.oryxa.in, api.oryxa.in,
+// edge.oryxa.in): it ends whatever call is open in its room and writes
+// made-up lines into the room's log for good. CALL_LIVE_ALLOW_PROD=1 lets it.
+//
 // Optional, because they cost money or time or need more access:
 //
 //	CALL_LIVE_DISPATCH=1           a real dispatch to agents (agents-staging)

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -70,6 +71,8 @@ func setup(t *testing.T) *live {
 		edgeURL:   strings.TrimRight(os.Getenv("EDGE_URL"), "/"),
 		client:    &http.Client{Timeout: 30 * time.Second},
 	}
+	refuseProduction(t, "CALL_LIVE_ROOM_URL", template)
+	refuseProduction(t, "EDGE_URL", l.edgeURL)
 	if !edgev1.ValidID(l.org) {
 		t.Fatal("CALL_LIVE_ORG must name the organization")
 	}
@@ -89,6 +92,43 @@ func setup(t *testing.T) *live {
 		t.Fatal("the local door needs EDGE_URL and EDGE_SIGNING_KEY_PEM: a local edge has no rooms until an agent makes one")
 	}
 	return l
+}
+
+// production is where real calls are: the test ends whatever call is open in
+// its room and writes made-up lines into the room's log for good.
+var production = []string{"app.oryxa.in", "api.oryxa.in", "edge.oryxa.in"}
+
+// refuseProduction stops the test when name points at production, unless
+// CALL_LIVE_ALLOW_PROD=1 says that is meant.
+func refuseProduction(t *testing.T, name, raw string) {
+	t.Helper()
+	if os.Getenv("CALL_LIVE_ALLOW_PROD") == "1" {
+		return
+	}
+	host, err := productionHost(raw)
+	if err != nil {
+		t.Fatalf("%s is not a URL: %v", name, err)
+	}
+	if host != "" {
+		t.Fatalf("%s points at production (%s): this test ends live calls and writes into rooms' logs; set CALL_LIVE_ALLOW_PROD=1 if that is really meant", name, host)
+	}
+}
+
+// productionHost returns raw's host when it is production's, or "".
+func productionHost(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	// The room URL is a template: its {org}, {kind} and {id} aren't a URL's.
+	parsed, err := url.Parse(strings.NewReplacer("{", "", "}", "").Replace(raw))
+	if err != nil {
+		return "", err
+	}
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if slices.Contains(production, host) {
+		return host, nil
+	}
+	return "", nil
 }
 
 func (l *live) member(t *testing.T, label, name string) member {
@@ -325,6 +365,16 @@ type joined struct {
 	ParticipantID string `json:"participantId"`
 	Token         string `json:"token"`
 	Preset        string `json:"preset"`
+}
+
+// String leaves the participant's token out of failure messages: it lets
+// whoever holds it into the meeting.
+func (j joined) String() string {
+	token := "<none>"
+	if j.Token != "" {
+		token = "<redacted>"
+	}
+	return fmt.Sprintf("{CallID:%s MeetingID:%s ParticipantID:%s Token:%s Preset:%s}", j.CallID, j.MeetingID, j.ParticipantID, token, j.Preset)
 }
 
 type callView struct {
