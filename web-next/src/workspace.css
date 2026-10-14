@@ -1217,3 +1217,34 @@
   .workspace-switcher-item.is-selected { transform: none; }
   .workspace-entry { transition: none; }
 }
+
+/* A first-time empty page (founder's redesign, 14 Oct 2026): the brand's ship
+   lines on deep sea, one quiet tile. Errors, warnings and "nothing matches"
+   stay plain. */
+.workspace-empty-scene {
+  position: relative;
+  isolation: isolate;
+  justify-content: flex-end;
+  width: 100%;
+  max-width: 460px;
+  min-height: 280px;
+  margin-inline: auto;
+  padding: 120px 28px 32px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 18px;
+  background: var(--tone-1c3350);
+  color: var(--on-scene);
+  text-align: center;
+}
+.workspace-empty-scene::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--scene-ship-lines) center 18px / 180px auto no-repeat;
+  content: "";
+  opacity: .42;
+}
+.workspace-empty-scene > svg { display: none; }
+.workspace-empty-scene strong { color: var(--on-scene); }
+.workspace-empty-scene p { color: var(--on-scene-soft); }

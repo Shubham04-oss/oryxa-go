@@ -232,6 +232,10 @@ not permission to copy every incidental value into a new component.
   chosen sheet is the raised tile. A file's kind is a small coloured tile with
   its extension (`file-kind.tsx`, `--file-*` tokens, the same in both
   themes), wherever a file is listed or open.
+- **A first-time empty page** (founder's redesign, 14 Oct 2026), such as an
+  empty Library or no teamspaces yet, is one tile of the brand's ship lines
+  on deep sea (`.workspace-empty-scene`). "Nothing matches", errors and
+  warnings stay plain; a destructive confirm never gets a scene.
 - **Library** (was Knowledge bases; founder's redesign, 14 Oct 2026). Each
   collection is a filled tile on the canvas, with no outline, and lifts to
   the raised tile on hover; search, the source list, an open document and an
