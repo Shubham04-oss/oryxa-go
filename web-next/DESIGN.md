@@ -86,8 +86,12 @@ not permission to copy every incidental value into a new component.
   tile. The sidebar's top row names the workspace. Collapsed, the rail shows
   the same three tiles as icons. (The Home/Team/Agents mode pills are gone.)
 - The right agent panel holds the member's agent and team conversations. Its
-  tabs, Agents (the default), DMs and Teams, use the same icon-first pills;
-  the Agents pill carries the primary agent's voxel avatar. When the member
+  tabs, Agents (the default), DMs, Teams and **At a glance**, use the same
+  icon-first pills. At a glance keeps Today's widgets (from your apps,
+  teammates, conversations, knowledge, files, recurring work) one tab away on
+  every page, as compact tiles in one column, without Today's composer
+  (founder, 14 Oct 2026: the sidebar's quick widgets stay). The
+  Agents pill carries the primary agent's voxel avatar. When the member
   has more than one agent, the Agents tab's top row is a quick switch between
   them: the one in use is the oval pill with its name, like the pills
   elsewhere, and the rest stay avatar-only. With a single agent the row is not

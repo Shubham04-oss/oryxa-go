@@ -116,6 +116,12 @@ type HomeProps = {
   onOpenKnowledge: () => void
   onOpenSlack?: () => void
   onOpenAccount?: () => void
+  /**
+   * "glance" is the agent panel's At a glance tab: the same widgets in one
+   * compact column, without the page's composer (the agent's chat is a tab
+   * away).
+   */
+  variant?: "page" | "glance"
 }
 
 /** A different signed-in member must never inherit drafts or local decisions. */
@@ -140,6 +146,7 @@ function HomeDesk({
   onOpenKnowledge,
   onOpenSlack,
   onOpenAccount,
+  variant = "page",
 }: HomeProps) {
   const hydrated = useHydrated()
   const enabled = hydrated && Boolean(organizationId && viewerId)
@@ -403,7 +410,13 @@ function HomeDesk({
     !needsMember
 
   return (
-    <div className="home-overview home-today">
+    <div
+      className={
+        variant === "glance"
+          ? "home-overview home-today home-glance"
+          : "home-overview home-today"
+      }
+    >
       {enabled && (
         <div className="home-top">
           <section className="home-column" aria-labelledby="home-briefs">
@@ -685,51 +698,53 @@ function HomeDesk({
         </div>
       )}
 
-      <section className="home-compose" aria-label="Your agent">
-        <AgentComposer
-          label="Start a new conversation"
-          placeholder="Ask your agent…"
-          value={draft}
-          onChange={setDraft}
-          sendDisabled={!enabled || !onNewChat}
-          status={
-            !enabled
-              ? "Sign in to start a conversation."
-              : !onNewChat
-                ? "Conversation shortcuts are unavailable."
-                : undefined
-          }
-          onSubmit={(message) => {
-            onNewChat?.(message)
-            setDraft("")
-          }}
-        />
-        {enabled && (
-          <div className="home-tools" aria-label="Your tools">
-            {tools.map((toolkit) => (
-              <button
-                key={toolkit}
-                type="button"
-                className="home-tool"
-                onClick={onOpenTools}
-              >
-                <ToolkitLogo toolkit={{ toolkit, name: appName(toolkit) }} />
-                <span>{appName(toolkit)}</span>
-              </button>
-            ))}
-            {connections.isSuccess && (
-              <button
-                type="button"
-                className="home-tool home-tool-connect"
-                onClick={onOpenTools}
-              >
-                {tools.length > 0 ? "+ Connect" : "Connect your tools"}
-              </button>
-            )}
-            <ReadNotice name="your tools" query={connections} />
-          </div>
-        )}
-      </section>
+      {variant === "page" && (
+        <section className="home-compose" aria-label="Your agent">
+          <AgentComposer
+            label="Start a new conversation"
+            placeholder="Ask your agent…"
+            value={draft}
+            onChange={setDraft}
+            sendDisabled={!enabled || !onNewChat}
+            status={
+              !enabled
+                ? "Sign in to start a conversation."
+                : !onNewChat
+                  ? "Conversation shortcuts are unavailable."
+                  : undefined
+            }
+            onSubmit={(message) => {
+              onNewChat?.(message)
+              setDraft("")
+            }}
+          />
+          {enabled && (
+            <div className="home-tools" aria-label="Your tools">
+              {tools.map((toolkit) => (
+                <button
+                  key={toolkit}
+                  type="button"
+                  className="home-tool"
+                  onClick={onOpenTools}
+                >
+                  <ToolkitLogo toolkit={{ toolkit, name: appName(toolkit) }} />
+                  <span>{appName(toolkit)}</span>
+                </button>
+              ))}
+              {connections.isSuccess && (
+                <button
+                  type="button"
+                  className="home-tool home-tool-connect"
+                  onClick={onOpenTools}
+                >
+                  {tools.length > 0 ? "+ Connect" : "Connect your tools"}
+                </button>
+              )}
+              <ReadNotice name="your tools" query={connections} />
+            </div>
+          )}
+        </section>
+      )}
 
       {enabled && (
         <div className="home-stack">
