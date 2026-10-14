@@ -43,7 +43,7 @@ not permission to copy every incidental value into a new component.
 - Keep the product nearly monochrome and low-noise. Reserve color for
   app logos, planet/user/agent avatars, validation, and genuinely meaningful
   status. Do not introduce a new accent color for decoration.
-- Use Geist Variable for UI type. Prefer the existing compact type scale:
+- Use Plus Jakarta Sans (variable) for UI type; the wordmark alone is Inter. Prefer the existing compact type scale:
   workspace title about 18px, subsection title 13–16px, body 12–14px, and
   metadata 10–12px. Hierarchy comes from weight and space, not giant slogans.
 - Use a restrained spacing rhythm based on 8, 12, 16, 24, and 32px. Rounded
