@@ -302,7 +302,7 @@ function KnowledgeBaseList({
           </button>
         </div>
       ) : bases.length === 0 ? (
-        <div className="workspace-knowledge-empty workspace-knowledge-toolbar-gap">
+        <div className="workspace-knowledge-empty workspace-knowledge-toolbar-gap workspace-empty-scene">
           <BookOpenText size={23} strokeWidth={1.5} />
           <strong>No knowledge bases yet</strong>
           <p>

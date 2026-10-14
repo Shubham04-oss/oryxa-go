@@ -365,7 +365,7 @@ export function TeamspacesManagement({
           <p>Try another search or status filter.</p>
         </div>
       ) : (
-        <div className="workspace-teamspace-empty">
+        <div className="workspace-teamspace-empty workspace-empty-scene">
           <UsersRound size={23} strokeWidth={1.5} />
           <strong>No teamspaces yet</strong>
           <p>
