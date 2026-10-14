@@ -614,3 +614,25 @@ func TestLiveBackendRefusesWhatCouldNotWork(t *testing.T) {
 		}
 	}
 }
+
+func TestArtifactsMoveToR2OnlyWithItsCredentials(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{
+		"AGENTS_PRIMARY_ARTIFACT_ENDPOINT":          "https://acct.r2.cloudflarestorage.com/",
+		"AGENTS_PRIMARY_ARTIFACT_ACCESS_KEY_ID":     "id",
+		"AGENTS_PRIMARY_ARTIFACT_SECRET_ACCESS_KEY": "secret",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ArtifactR2.Endpoint != "https://acct.r2.cloudflarestorage.com" || config.ArtifactR2.Bucket != "oryxa-runs" {
+		t.Errorf("ArtifactR2 = %+v", config.ArtifactR2)
+	}
+	for name, values := range map[string]map[string]string{
+		"no keys":    {"AGENTS_PRIMARY_ARTIFACT_ENDPOINT": "https://acct.r2.cloudflarestorage.com"},
+		"plain http": {"AGENTS_PRIMARY_ARTIFACT_ENDPOINT": "http://acct.r2.cloudflarestorage.com", "AGENTS_PRIMARY_ARTIFACT_ACCESS_KEY_ID": "id", "AGENTS_PRIMARY_ARTIFACT_SECRET_ACCESS_KEY": "s"},
+	} {
+		if _, err := FromEnv(env(values)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

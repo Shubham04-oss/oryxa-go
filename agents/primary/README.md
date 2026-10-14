@@ -2450,6 +2450,9 @@ The compose service has no secret of its own to fall back on, and binds `127.0.0
 | `AGENTS_PRIMARY_CACHE_TTL_SECONDS` | `3600` | How long a created cache lives; 60–86400 seconds |
 | `AGENTS_PRIMARY_CACHE_MIN_TOKENS` | `4096` | Smallest prefix worth an explicit cache; Vertex's floor for these models. Below it, implicit caching applies |
 | `AGENTS_PRIMARY_ARTIFACT_BUCKET` | unset | S3 bucket artifacts are kept in; without it they are held in memory and go with the process |
+| `AGENTS_PRIMARY_ARTIFACT_ENDPOINT` | unset | The R2 account's S3 endpoint (`https://{account}.r2.cloudflarestorage.com`). When set, new artifact versions are written to R2 under `artifacts/`, numbered after any on S3, and `AGENTS_PRIMARY_ARTIFACT_BUCKET` is still read for older ones |
+| `AGENTS_PRIMARY_ARTIFACT_R2_BUCKET` | `oryxa-runs` | The R2 bucket artifacts are written to |
+| `AGENTS_PRIMARY_ARTIFACT_ACCESS_KEY_ID`, `AGENTS_PRIMARY_ARTIFACT_SECRET_ACCESS_KEY` | unset | R2 API token credentials for that bucket; required with the endpoint |
 | `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE` | unset | Vertex AI agent engine whose memory bank holds what Krude remembers across a member's threads, scoped to their organization. Its bank needs similarity search configured. Without it Krude remembers nothing between threads (see [Memory](#memory)) |
 | `AGENTS_PRIMARY_MEMORY_RECALLED` | `0` (10) | How many memories one search returns. Memory Bank caps it at 100 |
 | `AGENTS_PRIMARY_MEMORY_LOCATION` | `GOOGLE_CLOUD_LOCATION` | Region the memory agent engine is in, such as `us-west1`; never `global` |
