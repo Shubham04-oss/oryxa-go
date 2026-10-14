@@ -43,7 +43,8 @@ export class Gemini implements VoiceBrain {
   constructor(
     private readonly apiKey: string,
     private readonly model: string = DEFAULT_MODEL,
-    private readonly fetcher: typeof fetch = fetch,
+    // Wrapped: Workers refuse the global fetch called as another object's method.
+    private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
   ) {}
 
   static fromEnv(env: Env): Gemini | undefined {
