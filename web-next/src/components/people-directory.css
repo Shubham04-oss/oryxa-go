@@ -139,3 +139,33 @@
   }
   .workspace-people-message span { display: none; }
 }
+
+/* People as cards (founder's redesign, 14 Oct 2026): a grid of tiles on the
+   canvas, each a person with their presence, what you share, and Message. */
+.workspace-people-directory { width: min(100%, 1080px); }
+.workspace-people-search { border-color: transparent; background: var(--base); }
+.workspace-people-directory-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  align-content: start;
+  gap: 12px;
+}
+.workspace-people-directory-list button {
+  --presence-ring: var(--base);
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  min-height: 190px;
+  padding: 20px 14px 16px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--base);
+  text-align: center;
+}
+.workspace-people-directory-list button:hover {
+  --presence-ring: var(--hover);
+  background: var(--hover);
+}
+.workspace-people-directory-list .workspace-avatar { width: 56px; height: 56px; }
+.workspace-people-directory-copy { flex: none; align-items: center; width: 100%; }
+.workspace-people-directory-list small { white-space: normal; text-align: center; }

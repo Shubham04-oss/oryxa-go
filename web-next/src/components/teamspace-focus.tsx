@@ -118,13 +118,14 @@ export function TeamspaceFocus({
 
   return (
     <div
-      className="workspace-focus"
+      className="workspace-focus workspace-teamspace-focus"
       data-composing={isComposing ? "true" : "false"}
       style={
         isComposing && visibleHeight ? { height: visibleHeight } : undefined
       }
     >
-      <header className="workspace-focus-header">
+      <div className="workspace-teamspace-scene" aria-hidden="true" />
+      <header className="workspace-focus-header workspace-teamspace-hero">
         <button
           className="workspace-icon-button"
           type="button"
@@ -139,7 +140,14 @@ export function TeamspaceFocus({
         />
         <div>
           <h1>{space.name}</h1>
-          <p>Teamspace · {statusLabel(space)}</p>
+          <p>
+            <span>Teamspace · {statusLabel(space)}</span>
+            <span className="workspace-teamspace-hero-more">
+              {" "}
+              · {space.team_name} team · {space.whisperers.length}{" "}
+              {space.whisperers.length === 1 ? "person" : "people"}
+            </span>
+          </p>
         </div>
       </header>
 

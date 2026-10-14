@@ -139,7 +139,7 @@ export function SignInPage({ redirect }: { redirect?: string }) {
   }
 
   return (
-    <AuthShell>
+    <AuthShell scene="ships">
       <h1>Welcome back.</h1>
       <p className="auth-subtitle">
         Sign in to pick up where your work left off.
@@ -219,7 +219,7 @@ export function SignUpPage({ redirect }: { redirect?: string }) {
   }
 
   return (
-    <AuthShell>
+    <AuthShell scene={submittedEmail ? "sea" : "nest"}>
       <h1>Create your space.</h1>
       <p className="auth-subtitle">
         A place for your team and agents to work together.
@@ -309,7 +309,7 @@ export function ForgotPasswordPage() {
   }
 
   return (
-    <AuthShell>
+    <AuthShell scene="deck">
       <h1>Reset your password.</h1>
       <p className="auth-subtitle">
         We’ll send you a link to choose a new one.
@@ -386,7 +386,9 @@ export function ResetPasswordPage({ token }: { token?: string }) {
   }
 
   return (
-    <AuthShell>
+    <AuthShell
+      scene={state === "expired" || state === "invalid" ? "gate" : "deck"}
+    >
       <h1>
         {state === "done"
           ? "Password updated."
@@ -496,7 +498,11 @@ export function VerifyEmailPage({ token }: { token?: string }) {
   }
 
   return (
-    <AuthShell>
+    <AuthShell
+      scene={
+        state === "verified" ? "ships" : state === "verifying" ? "sea" : "gate"
+      }
+    >
       <h1>
         {state === "verified"
           ? "Email verified."

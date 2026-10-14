@@ -1,0 +1,131 @@
+/* Setting up a workspace: the sign-in layout with a stepper (DESIGN.md §4). */
+.setup-steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0 0 22px;
+  padding: 0;
+  list-style: none;
+}
+.setup-steps li {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.setup-steps li::before {
+  content: "";
+  height: 4px;
+  border-radius: 2px;
+  background: var(--selected);
+}
+.setup-steps li.is-done::before { background: var(--text-soft); }
+.setup-steps li.is-now { color: var(--text); }
+.setup-steps li.is-now::before { background: var(--text); }
+
+.setup-grow { flex: 1; min-width: 0; }
+
+.setup-option,
+.setup-apps li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--canvas);
+  box-shadow: inset 0 0 0 1px var(--border-quiet);
+}
+.setup-option { margin-bottom: 18px; }
+.setup-option strong,
+.setup-apps strong { display: block; color: var(--text); font-size: 13px; }
+.setup-option small,
+.setup-apps small { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+.setup-option.is-on,
+.setup-apps li.is-on {
+  background: var(--tone-263a2e);
+  box-shadow: inset 0 0 0 1px var(--tone-385c49);
+}
+.setup-option.is-on small,
+.setup-apps li.is-on small,
+.setup-apps li.is-on svg,
+.setup-on { color: var(--tone-b9e6c6); }
+.setup-on { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; }
+
+.setup-apps {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+}
+.setup-apps li { padding: 8px 8px 8px 12px; }
+.setup-apps small { display: block; }
+.setup-app-logo { display: grid; flex: none; place-items: center; }
+
+.setup-small {
+  flex: none;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--border-quiet);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.setup-small:hover:not(:disabled) { background: var(--selected); }
+.setup-small:disabled { opacity: .6; }
+
+.setup-sent {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
+.setup-sent li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--tone-263a2e);
+  color: var(--tone-b9e6c6);
+  font-size: 12px;
+}
+.auth-submit.setup-secondary {
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--border-quiet);
+  color: var(--text);
+}
+.auth-submit.setup-secondary:hover:not(:disabled) { background: var(--selected); }
+
+.setup-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 22px;
+}
+.auth-submit.setup-primary { width: auto; margin: 0; padding: 0 22px; }
+.setup-back,
+.setup-skip {
+  height: 45px;
+  padding: 0 14px;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.setup-back { background: var(--raised); box-shadow: inset 0 0 0 1px var(--border-quiet); color: var(--text); }
+.setup-skip:hover,
+.setup-back:hover { color: var(--text); }
+
+@media (max-width: 480px) {
+  .setup-steps li { font-size: 0; }
+}

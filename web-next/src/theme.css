@@ -219,6 +219,18 @@
   --logo-ink: #222222;
   /* The wordmark's square (BRAND.md gold-deep): the brand's one accent. */
   --brand-gold: #d98e62;
+  /* The brand's painted scenes: words on them are white in both themes, over
+     a deep-sea shade; deep sea also fills a scene while it loads. */
+  --on-scene: #ffffff;
+  --on-scene-soft: #ffffffd1;
+  --scene-shade: #0a121e8c;
+  --tone-1c3350: #1c3350;
+  --scene-sea: url("/scenes/sea.webp");
+  --scene-ships: url("/scenes/ships.jpg");
+  --scene-harbour: url("/scenes/harbour.webp");
+  --scene-ship-lines: url("/scenes/ship-lines.webp");
+  --scene-soft-opacity: .24;
+  --scene-band-opacity: .38;
   color-scheme: dark;
 }
 
@@ -435,5 +447,17 @@
   --logo-ink: #222222;
   /* The wordmark's square (BRAND.md gold-deep): the brand's one accent. */
   --brand-gold: #d98e62;
+  /* The brand's painted scenes: words on them are white in both themes, over
+     a deep-sea shade; deep sea also fills a scene while it loads. */
+  --on-scene: #ffffff;
+  --on-scene-soft: #ffffffd1;
+  --scene-shade: #0a121e8c;
+  --tone-1c3350: #1c3350;
+  --scene-sea: url("/scenes/sea.webp");
+  --scene-ships: url("/scenes/ships.jpg");
+  --scene-harbour: url("/scenes/harbour.webp");
+  --scene-ship-lines: url("/scenes/ship-lines.webp");
+  --scene-soft-opacity: .38;
+  --scene-band-opacity: .55;
   color-scheme: light;
 }

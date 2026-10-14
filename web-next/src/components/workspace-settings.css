@@ -588,3 +588,29 @@
     padding: 16px;
   }
 }
+
+/* Settings in groups (founder's redesign, 14 Oct 2026): You, Workspace and
+   Connections, each a tile on the sidebar, the open page a raised tile, as
+   the workspace's own sidebar is. */
+.workspace-settings-sidebar nav {
+  gap: 1px;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--canvas);
+}
+.workspace-settings-group {
+  padding: 10px 12px 4px;
+  color: var(--tone-858585);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.workspace-settings-group:first-child { padding-top: 4px; }
+.workspace-settings-sidebar nav button { min-height: 38px; }
+.workspace-settings-sidebar nav button:hover { background: var(--tone-2a2a2a); }
+.workspace-settings-sidebar nav button.is-active {
+  background: var(--raised);
+  box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66);
+  color: var(--text);
+}

@@ -15,7 +15,6 @@ import (
 
 	"cloud.google.com/go/auth"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"google.golang.org/adk/v2/agent"
@@ -30,7 +29,6 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/ragclient"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
@@ -430,22 +428,9 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		return fail("agents", err)
 	}
 
-	artifacts := artifact.InMemoryService()
-	if settings.ArtifactBucket != "" {
-		artifactConfig := options.AWS
-		if settings.S3Endpoint != "" {
-			// The emulator takes any signature, so the client carries dummy
-			// credentials instead of asking for real ones.
-			artifactConfig.Credentials = credentials.NewStaticCredentialsProvider("test", "test", "")
-		}
-		stored, err := s3artifact.NewFromConfig(artifactConfig, settings.S3Endpoint, settings.ArtifactBucket)
-		if err != nil {
-			return fail("artifact store", err)
-		}
-		artifacts = stored
-		logger.InfoContext(ctx, "artifacts stored in S3", "bucket", settings.ArtifactBucket)
-	} else {
-		logger.InfoContext(ctx, "artifacts are held in memory and go with this process; set AGENTS_PRIMARY_ARTIFACT_BUCKET to keep them")
+	artifacts, err := artifactStore(ctx, options, logger)
+	if err != nil {
+		return fail("artifact store", err)
 	}
 	krude.Artifacts = artifacts
 

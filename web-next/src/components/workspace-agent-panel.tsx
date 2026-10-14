@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft,
   ArrowRight,
+  LayoutGrid,
   MessageCircle,
   PanelRightClose,
   PanelRightOpen,
@@ -49,7 +50,7 @@ import type {
 import { cn } from "@/lib/utils"
 import type { ScreenContext } from "@/lib/agents/screen-context"
 
-export type AgentPanelTab = "agents" | "dms" | "teams"
+export type AgentPanelTab = "agents" | "dms" | "teams" | "glance"
 
 /**
  * The shell bringing a tab forward (Team's "All conversations" opens DMs).
@@ -108,6 +109,12 @@ const panelTabs: Array<{
     icon: UsersRound,
     empty: "Team rooms will appear here.",
   },
+  {
+    key: "glance",
+    label: "At a glance",
+    icon: LayoutGrid,
+    empty: "Your apps, teammates and conversations will appear here.",
+  },
 ]
 
 /**
@@ -148,6 +155,7 @@ export function WorkspaceAgentPanel({
   onPrimaryFileCreated,
   onPrimaryComposingChange,
   getScreenContext,
+  glance,
 }: {
   expanded: boolean
   onExpand: () => void
@@ -158,6 +166,11 @@ export function WorkspaceAgentPanel({
   chatRequest?: AgentPanelChatRequest | null
   /** The latest request to bring a tab forward; the shell expands the panel with it. */
   tabRequest?: AgentPanelTabRequest | null
+  /**
+   * The At a glance tab's content: the member's widgets (apps, teammates,
+   * conversations, knowledge, files, recurring work), always a tab away.
+   */
+  glance?: ReactNode
   /** The member's direct messages; without them (no session) the DMs tab says what it will hold. */
   directMessages?: PanelDirectMessages
   /**
@@ -668,6 +681,8 @@ export function WorkspaceAgentPanel({
                   />
                 </div>
               </>
+            ) : item.key === "glance" && organizationId && glance ? (
+              activeTab === "glance" && expanded && glance
             ) : item.key === "dms" && organizationId && directMessages ? (
               // Mounted only while it shows: an open conversation is what
               // makes the member online in it (REALTIME.md, "Presence").

@@ -100,6 +100,22 @@ function ReadNotice({ name, query }: { name: string; query: ReadState }) {
   return null
 }
 
+/** "Good morning, Ada": by the member's own clock. */
+export function greeting(now: number, name?: string): string {
+  const hour = new Date(now).getHours()
+  const part =
+    hour < 5
+      ? "evening"
+      : hour < 12
+        ? "morning"
+        : hour < 18
+          ? "afternoon"
+          : "evening"
+  // An email address is not a name to greet someone by.
+  const first = name?.includes("@") ? undefined : name?.trim().split(/\s+/)[0]
+  return first ? `Good ${part}, ${first}` : `Good ${part}`
+}
+
 function conversationTitle(title?: string) {
   return title?.trim() ?? ""
 }
@@ -116,6 +132,14 @@ type HomeProps = {
   onOpenKnowledge: () => void
   onOpenSlack?: () => void
   onOpenAccount?: () => void
+  /**
+   * "glance" is the agent panel's At a glance tab: the same widgets in one
+   * compact column, without the page's composer (the agent's chat is a tab
+   * away).
+   */
+  variant?: "page" | "glance"
+  /** The member's name, for the page's greeting. */
+  viewerName?: string
 }
 
 /** A different signed-in member must never inherit drafts or local decisions. */
@@ -140,6 +164,8 @@ function HomeDesk({
   onOpenKnowledge,
   onOpenSlack,
   onOpenAccount,
+  variant = "page",
+  viewerName,
 }: HomeProps) {
   const hydrated = useHydrated()
   const enabled = hydrated && Boolean(organizationId && viewerId)
@@ -401,73 +427,98 @@ function HomeDesk({
     inboxRows.length < requestLimit &&
     completeConfirmationCoverage &&
     !needsMember
+  const needsCount = waitingRequests.length + waitingChats.length
+  // Only when something waits: the tile below says so when nothing does.
+  const helloLine =
+    needsCount > 0
+      ? `${needsCount} ${needsCount === 1 ? "thing needs" : "things need"} you.`
+      : ""
+
+  const appsSection = (
+    <section className="home-column" aria-labelledby="home-briefs">
+      <header className="home-column-head">
+        <h2 id="home-briefs">From your apps</h2>
+        {updatesThreadId && (
+          <button
+            type="button"
+            disabled={!onOpenConversation}
+            onClick={() => onOpenConversation?.(updatesThreadId)}
+          >
+            All updates
+          </button>
+        )}
+      </header>
+      {updatesThreadId && <ReadNotice name="updates" query={updates} />}
+      {briefs.length > 0 ? (
+        <ul className="home-list">
+          {briefs.map((brief) => (
+            <li key={brief.key}>
+              <button
+                type="button"
+                className="home-item"
+                disabled={!onOpenConversation}
+                onClick={() =>
+                  updatesThreadId && onOpenConversation?.(updatesThreadId)
+                }
+              >
+                <span className="home-item-mark">
+                  {brief.toolkits[0] ? (
+                    <ToolkitLogo
+                      toolkit={{
+                        toolkit: brief.toolkits[0],
+                        name: appName(brief.toolkits[0]),
+                      }}
+                    />
+                  ) : null}
+                </span>
+                <span className="home-item-copy">
+                  <span>{brief.text}</span>
+                  <small>
+                    {[
+                      brief.toolkits.map(appName).join(", "),
+                      agoPhrase(brief.at, now),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </small>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        (!updatesThreadId || updates.isSuccess) &&
+        threads.isSuccess && (
+          <p className="home-quiet">
+            {connections.isSuccess && tools.length === 0
+              ? "Connect a tool and its news lands here."
+              : "No updates from your apps yet."}
+          </p>
+        )
+      )}
+    </section>
+  )
 
   return (
-    <div className="home-overview home-today">
+    <div
+      className={
+        variant === "glance"
+          ? "home-overview home-today home-glance"
+          : "home-overview home-today"
+      }
+    >
+      {variant === "page" && (
+        <>
+          <div className="home-scene" aria-hidden="true" />
+          <header className="home-hello">
+            <h2>{greeting(now, viewerName)}</h2>
+            {enabled && helloLine && <p>{helloLine}</p>}
+          </header>
+        </>
+      )}
       {enabled && (
         <div className="home-top">
-          <section className="home-column" aria-labelledby="home-briefs">
-            <header className="home-column-head">
-              <h2 id="home-briefs">From your apps</h2>
-              {updatesThreadId && (
-                <button
-                  type="button"
-                  disabled={!onOpenConversation}
-                  onClick={() => onOpenConversation?.(updatesThreadId)}
-                >
-                  All updates
-                </button>
-              )}
-            </header>
-            {updatesThreadId && <ReadNotice name="updates" query={updates} />}
-            {briefs.length > 0 ? (
-              <ul className="home-list">
-                {briefs.map((brief) => (
-                  <li key={brief.key}>
-                    <button
-                      type="button"
-                      className="home-item"
-                      disabled={!onOpenConversation}
-                      onClick={() =>
-                        updatesThreadId && onOpenConversation?.(updatesThreadId)
-                      }
-                    >
-                      <span className="home-item-mark">
-                        {brief.toolkits[0] ? (
-                          <ToolkitLogo
-                            toolkit={{
-                              toolkit: brief.toolkits[0],
-                              name: appName(brief.toolkits[0]),
-                            }}
-                          />
-                        ) : null}
-                      </span>
-                      <span className="home-item-copy">
-                        <span>{brief.text}</span>
-                        <small>
-                          {[
-                            brief.toolkits.map(appName).join(", "),
-                            agoPhrase(brief.at, now),
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </small>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              (!updatesThreadId || updates.isSuccess) &&
-              threads.isSuccess && (
-                <p className="home-quiet">
-                  {connections.isSuccess && tools.length === 0
-                    ? "Connect a tool and its news lands here."
-                    : "No updates from your apps yet."}
-                </p>
-              )
-            )}
-          </section>
+          {variant === "glance" && appsSection}
 
           <section className="home-column" aria-labelledby="home-teammates">
             <header className="home-column-head">
@@ -685,54 +736,66 @@ function HomeDesk({
         </div>
       )}
 
-      <section className="home-compose" aria-label="Your agent">
-        <AgentComposer
-          label="Start a new conversation"
-          placeholder="Ask your agent…"
-          value={draft}
-          onChange={setDraft}
-          sendDisabled={!enabled || !onNewChat}
-          status={
-            !enabled
-              ? "Sign in to start a conversation."
-              : !onNewChat
-                ? "Conversation shortcuts are unavailable."
-                : undefined
-          }
-          onSubmit={(message) => {
-            onNewChat?.(message)
-            setDraft("")
-          }}
-        />
-        {enabled && (
-          <div className="home-tools" aria-label="Your tools">
-            {tools.map((toolkit) => (
-              <button
-                key={toolkit}
-                type="button"
-                className="home-tool"
-                onClick={onOpenTools}
-              >
-                <ToolkitLogo toolkit={{ toolkit, name: appName(toolkit) }} />
-                <span>{appName(toolkit)}</span>
-              </button>
-            ))}
-            {connections.isSuccess && (
-              <button
-                type="button"
-                className="home-tool home-tool-connect"
-                onClick={onOpenTools}
-              >
-                {tools.length > 0 ? "+ Connect" : "Connect your tools"}
-              </button>
-            )}
-            <ReadNotice name="your tools" query={connections} />
-          </div>
-        )}
-      </section>
+      {variant === "page" && (
+        <section className="home-compose" aria-label="Your agent">
+          <AgentComposer
+            label="Start a new conversation"
+            placeholder="Ask your agent…"
+            value={draft}
+            onChange={setDraft}
+            sendDisabled={!enabled || !onNewChat}
+            status={
+              !enabled
+                ? "Sign in to start a conversation."
+                : !onNewChat
+                  ? "Conversation shortcuts are unavailable."
+                  : undefined
+            }
+            onSubmit={(message) => {
+              onNewChat?.(message)
+              setDraft("")
+            }}
+          />
+          {enabled && (
+            <div className="home-tools" aria-label="Your tools">
+              {tools.map((toolkit) => (
+                <button
+                  key={toolkit}
+                  type="button"
+                  className="home-tool"
+                  onClick={onOpenTools}
+                >
+                  <ToolkitLogo toolkit={{ toolkit, name: appName(toolkit) }} />
+                  <span>{appName(toolkit)}</span>
+                </button>
+              ))}
+              {connections.isSuccess && (
+                <button
+                  type="button"
+                  className="home-tool home-tool-connect"
+                  onClick={onOpenTools}
+                >
+                  {tools.length > 0 ? "+ Connect" : "Connect your tools"}
+                </button>
+              )}
+              <ReadNotice name="your tools" query={connections} />
+            </div>
+          )}
+        </section>
+      )}
 
+      {enabled && variant === "page" && (
+        <h2 className="home-row-title" id="home-row">
+          Pick up where you left off
+        </h2>
+      )}
       {enabled && (
-        <div className="home-stack">
+        <div
+          className="home-stack"
+          role={variant === "page" ? "region" : undefined}
+          aria-labelledby={variant === "page" ? "home-row" : undefined}
+        >
+          {variant === "page" && appsSection}
           <section className="home-column" aria-labelledby="home-conversations">
             <header className="home-column-head">
               <h2 id="home-conversations">Conversations</h2>

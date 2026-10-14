@@ -130,6 +130,9 @@ export function WorkspaceSettings({
             <strong>Settings</strong>
           </div>
           <nav aria-label="Settings sections">
+            <span className="workspace-settings-group" aria-hidden="true">
+              You
+            </span>
             <button
               type="button"
               className={cn(page === "account" && "is-active")}
@@ -137,6 +140,9 @@ export function WorkspaceSettings({
             >
               <UserRound size={18} strokeWidth={1.7} /> Account
             </button>
+            <span className="workspace-settings-group" aria-hidden="true">
+              Workspace
+            </span>
             <button
               type="button"
               className={cn(page === "organization" && "is-active")}
@@ -158,6 +164,16 @@ export function WorkspaceSettings({
             >
               <Network size={18} strokeWidth={1.7} /> Teams
             </button>
+            <button
+              type="button"
+              className={cn(page === "billing" && "is-active")}
+              onClick={() => setPage("billing")}
+            >
+              <CreditCard size={18} strokeWidth={1.7} /> Billing
+            </button>
+            <span className="workspace-settings-group" aria-hidden="true">
+              Connections
+            </span>
             <button
               type="button"
               className={cn(page === "tools" && "is-active")}
@@ -190,13 +206,6 @@ export function WorkspaceSettings({
               onClick={() => setPage("email")}
             >
               <Mail size={18} strokeWidth={1.7} /> Email
-            </button>
-            <button
-              type="button"
-              className={cn(page === "billing" && "is-active")}
-              onClick={() => setPage("billing")}
-            >
-              <CreditCard size={18} strokeWidth={1.7} /> Billing
             </button>
           </nav>
           <button

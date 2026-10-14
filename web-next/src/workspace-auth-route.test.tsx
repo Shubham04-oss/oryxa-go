@@ -188,7 +188,7 @@ describe("workspace session expiry", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100)
     })
-    expect(screen.getByRole("heading", { name: "Today" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "My workspace" })).toBeTruthy()
     expect(sockets.some((socket) => socket.url.includes("inbox"))).toBe(true)
     expect(api.calls.some((call) => call.path.includes("agent-leases"))).toBe(
       true
@@ -213,7 +213,7 @@ describe("workspace session expiry", () => {
     expect(
       screen.getByRole("heading", { name: "Your session has ended." })
     ).toBeTruthy()
-    expect(screen.queryByRole("heading", { name: "Today" })).toBeNull()
+    expect(screen.queryByRole("heading", { name: "My workspace" })).toBeNull()
     expect(sessionHasEnded()).toBe(true)
     expect(openSockets.length).toBeGreaterThan(0)
     for (const socket of openSockets) expect(socket.close).toHaveBeenCalled()
@@ -256,7 +256,7 @@ describe("workspace session expiry", () => {
   it("keeps the latch through failed login and recovers through the real sign-in page", async () => {
     const api = liveApi()
     await renderWorkspace()
-    await screen.findByRole("heading", { name: "Today" })
+    await screen.findByRole("heading", { name: "My workspace" })
     api.expire()
     await act(async () => {
       await apiRequest("/v1/expire").catch(() => undefined)
@@ -277,7 +277,7 @@ describe("workspace session expiry", () => {
       target: { value: "correct-password" },
     })
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }))
-    await screen.findByRole("heading", { name: "Today" })
+    await screen.findByRole("heading", { name: "My workspace" })
     expect(sessionHasEnded()).toBe(false)
     expect(
       api.calls.filter((call) => call.path === "/v1/auth/password/login")
@@ -288,7 +288,7 @@ describe("workspace session expiry", () => {
   it("a stale auth/me 401 after sign-in cannot redirect the authenticated shell", async () => {
     const api = liveApi()
     const { client } = await renderWorkspace()
-    await screen.findByRole("heading", { name: "Today" })
+    await screen.findByRole("heading", { name: "My workspace" })
     let answerOld!: (response: Response) => void
     api.fetchMock.mockImplementationOnce(
       async () =>
@@ -316,7 +316,7 @@ describe("workspace session expiry", () => {
     })
     expect(await settled).toMatchObject({ name: "AbortError" })
     expect(sessionHasEnded()).toBe(false)
-    expect(screen.getByRole("heading", { name: "Today" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "My workspace" })).toBeTruthy()
     expect(
       screen.queryByRole("heading", { name: "Your session has ended." })
     ).toBeNull()
@@ -359,7 +359,7 @@ describe("workspace session expiry", () => {
     })
     expect(sessionReads).toBe(3)
     expect(refreshes).toBe(2)
-    expect(screen.getByRole("heading", { name: "Today" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "My workspace" })).toBeTruthy()
     expect(sessionHasEnded()).toBe(false)
   })
 })

@@ -94,8 +94,8 @@ type NavigationItem = {
 
 const navigation: Record<PrimaryMode, NavigationItem[]> = {
   home: [
-    { key: "overview", label: "Today", icon: LayoutGrid },
-    { key: "knowledge", label: "Knowledge bases", icon: Sparkles },
+    { key: "overview", label: "My workspace", icon: LayoutGrid },
+    { key: "knowledge", label: "Library", icon: Sparkles },
     { key: "tools", label: "Tools", icon: Puzzle },
   ],
   team: [
@@ -127,14 +127,14 @@ const defaultSections: Record<PrimaryMode, Section> = {
 }
 
 const headings: Record<Section, string> = {
-  overview: "Today",
+  overview: "My workspace",
   teamspaces: "Teamspaces",
   agents: "Agent overview",
   "multi-agents": "Multi-agent teams",
   specialists: "Specialists",
   requests: "Requests",
   people: "People",
-  knowledge: "Knowledge bases",
+  knowledge: "Library",
   tools: "Tools",
 }
 
@@ -435,22 +435,30 @@ function WorkspaceShellContent({
     )
   }
 
-  function selectMode(nextMode: PrimaryMode) {
-    setActiveMode(nextMode)
-    teamspaces.close()
-    if (nextMode !== activeMode) {
+  /** The one sidebar: each page belongs to a mode, and picking it opens both. */
+  function selectNav(mode: PrimaryMode, next: Section) {
+    if (next === "requests") {
+      openRequestsSection()
+      if (isMobile) setLeftExpanded(false)
+      return
+    }
+    closePrimaryWork()
+    agentsMode.close()
+    if (mode !== activeMode) {
       setKnowledgeBaseSelection(null)
       teamspaces.select(null)
     }
+    setActiveMode(mode)
+    selectSection(next, mode)
   }
 
-  function selectSection(nextSection: Section) {
+  function selectSection(nextSection: Section, mode = activeMode) {
     setDmPeerId(null)
     setKnowledgeBaseSelection(null)
     teamspaces.reset()
     setSectionsByMode((current) => ({
       ...current,
-      [activeMode]: nextSection,
+      [mode]: nextSection,
     }))
     if (isMobile) setLeftExpanded(false)
   }
@@ -600,6 +608,31 @@ function WorkspaceShellContent({
   }, [section])
   useRequestsEntry(openRequestsSection)
 
+  // Today's widgets, on the page and in the agent panel's At a glance tab.
+  const homeOverviewKey = JSON.stringify([selectedOrganization?.id, viewerId])
+  const homeOverviewProps = {
+    organizationId: session ? selectedOrganization?.id : undefined,
+    viewerId,
+    viewerName: session ? currentIdentity.name : undefined,
+    primaryChatActivity,
+    onNewChat: (message?: string) =>
+      openHomeConversation({ kind: "new", message }),
+    onOpenConversation: (threadId: string) =>
+      openHomeConversation({ kind: "thread", threadId }),
+    onOpenRequests: openHomeRequests,
+    onOpenAgent: openHomeHistory,
+    onOpenTools: () => navigateFromHome("home", "tools"),
+    onOpenKnowledge: () => navigateFromHome("home", "knowledge"),
+    onOpenSlack: () => {
+      setSettingsPage("slack")
+      setSettingsOpen(true)
+    },
+    onOpenAccount: () => {
+      setSettingsPage("account")
+      setSettingsOpen(true)
+    },
+  }
+
   return (
     <div
       className="workspace-shell"
@@ -627,33 +660,9 @@ function WorkspaceShellContent({
           <div className="workspace-left-top">
             {leftExpanded ? (
               <>
-                <div
-                  className="workspace-switcher"
-                  role="group"
-                  aria-label="Main areas"
-                >
-                  {primaryModes.map((mode) => {
-                    const Icon = mode.icon
-                    const selected = activeMode === mode.key
-                    return (
-                      <button
-                        className={cn(
-                          "workspace-switcher-item",
-                          selected && "is-selected"
-                        )}
-                        type="button"
-                        key={mode.key}
-                        aria-label={mode.label}
-                        aria-pressed={selected}
-                        title={selected ? undefined : mode.label}
-                        onClick={() => selectMode(mode.key)}
-                      >
-                        <Icon size={18} strokeWidth={1.8} />
-                        {selected && <span>{mode.label}</span>}
-                      </button>
-                    )
-                  })}
-                </div>
+                <span className="workspace-left-title">
+                  {selectedOrganization?.name ?? "Workspace"}
+                </span>
                 <button
                   className="workspace-icon-button workspace-left-toggle"
                   type="button"
@@ -700,45 +709,57 @@ function WorkspaceShellContent({
             )}
           </div>
 
-          <nav
-            className="workspace-navigation"
-            aria-label={`${activeMode === "home" ? "Home" : activeMode === "team" ? "Team" : "Agents"} navigation`}
-          >
-            {navigation[activeMode].map((item) => {
-              const Icon = item.icon
-              return (
-                <button
-                  className={cn(
-                    "workspace-nav-item",
-                    navCurrent(item.key) && "is-active"
-                  )}
-                  key={item.key}
-                  type="button"
-                  title={leftExpanded ? undefined : item.label}
-                  aria-label={leftExpanded ? undefined : item.label}
-                  aria-current={navCurrent(item.key) ? "page" : undefined}
-                  onClick={() => selectSection(item.key)}
-                >
-                  <Icon size={18} strokeWidth={1.7} />
-                  {leftExpanded && (
-                    <span className="workspace-nav-label">{item.label}</span>
-                  )}
-                  {leftExpanded &&
-                    (item.count ||
-                      (item.key === "teamspaces" &&
-                        teamspaces.count !== undefined)) && (
-                      <span className="workspace-nav-count">
-                        {item.key === "teamspaces"
-                          ? teamspaces.count
-                          : item.count}
-                      </span>
-                    )}
-                </button>
-              )
-            })}
-          </nav>
+          <div className="workspace-nav-groups">
+            {primaryModes.map((mode) => (
+              <nav
+                className="workspace-navigation"
+                key={mode.key}
+                aria-label={`${mode.label} navigation`}
+              >
+                {leftExpanded && (
+                  <span className="workspace-nav-heading" aria-hidden="true">
+                    {mode.label}
+                  </span>
+                )}
+                {navigation[mode.key].map((item) => {
+                  const Icon = item.icon
+                  const current =
+                    activeMode === mode.key && navCurrent(item.key)
+                  return (
+                    <button
+                      className={cn(
+                        "workspace-nav-item",
+                        current && "is-active"
+                      )}
+                      key={item.key}
+                      type="button"
+                      title={leftExpanded ? undefined : item.label}
+                      aria-label={leftExpanded ? undefined : item.label}
+                      aria-current={current ? "page" : undefined}
+                      onClick={() => selectNav(mode.key, item.key)}
+                    >
+                      <Icon size={18} strokeWidth={1.7} />
+                      {leftExpanded && (
+                        <span className="workspace-nav-label">
+                          {item.label}
+                        </span>
+                      )}
+                      {leftExpanded &&
+                        (item.count ||
+                          (item.key === "teamspaces" &&
+                            teamspaces.count !== undefined)) && (
+                          <span className="workspace-nav-count">
+                            {item.key === "teamspaces"
+                              ? teamspaces.count
+                              : item.count}
+                          </span>
+                        )}
+                    </button>
+                  )
+                })}
+              </nav>
+            ))}
 
-          {activeMode === "team" && (
             <RecentConversations
               inbox={inbox}
               people={dmPeople}
@@ -748,7 +769,7 @@ function WorkspaceShellContent({
               onOpen={openDirectMessage}
               onShowAll={showAllConversations}
             />
-          )}
+          </div>
 
           <div className="workspace-profile-area">
             {profileMenuOpen && (
@@ -948,32 +969,7 @@ function WorkspaceShellContent({
               aria-label={`${detailTitle || heading} canvas`}
             >
               {section === "overview" && (
-                <HomeOverview
-                  key={JSON.stringify([selectedOrganization?.id, viewerId])}
-                  organizationId={
-                    session ? selectedOrganization?.id : undefined
-                  }
-                  viewerId={viewerId}
-                  primaryChatActivity={primaryChatActivity}
-                  onNewChat={(message) =>
-                    openHomeConversation({ kind: "new", message })
-                  }
-                  onOpenConversation={(threadId) =>
-                    openHomeConversation({ kind: "thread", threadId })
-                  }
-                  onOpenRequests={openHomeRequests}
-                  onOpenAgent={openHomeHistory}
-                  onOpenTools={() => navigateFromHome("home", "tools")}
-                  onOpenKnowledge={() => navigateFromHome("home", "knowledge")}
-                  onOpenSlack={() => {
-                    setSettingsPage("slack")
-                    setSettingsOpen(true)
-                  }}
-                  onOpenAccount={() => {
-                    setSettingsPage("account")
-                    setSettingsOpen(true)
-                  }}
-                />
+                <HomeOverview key={homeOverviewKey} {...homeOverviewProps} />
               )}
               {section === "knowledge" && (
                 <KnowledgeBases
@@ -1073,6 +1069,13 @@ function WorkspaceShellContent({
         tabRequest={tabRequest}
         directMessages={directMessages}
         teamspaceId={pageTeamspaceId}
+        glance={
+          <HomeOverview
+            key={homeOverviewKey}
+            {...homeOverviewProps}
+            variant="glance"
+          />
+        }
       />
       {settingsOpen && (
         <WorkspaceSettings

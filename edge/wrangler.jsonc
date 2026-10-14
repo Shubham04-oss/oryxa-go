@@ -44,8 +44,11 @@
     "VOICE_AGENT_NAME": "Krude",
     "AGENTS_URL": "https://api.oryxa.in",
     // agents' serviceauth KMS public key (base64 DER SPKI). Public, so a var.
-    "AGENTS_TOKEN_PUBLIC_KEYS": "[]"
+    // Production trusts only production agents' key
+    // (alias/oryxa-production-agents-primary, us-west-2).
+    "AGENTS_TOKEN_PUBLIC_KEYS": "[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEiWs2zaZoVzNeNIyQ33jeyNFqzGFxFX1bR5BJBIq0Qy22yBgQNKJjGD+ejgM290hi/BfIS+uCwMQfpcZ/TbmYHQ==\"]"
   },
+  "routes": [{ "pattern": "edge.oryxa.in", "custom_domain": true }],
   "env": {
     "staging": {
       "name": "oryxa-edge-staging",
@@ -72,13 +75,15 @@
         "ENVIRONMENT": "staging",
         "EDGE_PUBLIC_URL": "https://edge-staging.oryxa.in",
         "SANDBOX_INSTANCE": "standard-1",
-        "AGENTS_TOKEN_PUBLIC_KEYS": "[]",
+        // A dedicated test key, for edge/DEPLOY.md's check; never in production.
+        "AGENTS_TOKEN_PUBLIC_KEYS": "[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqtvQb0ZpfBSXWZnRipeubHTIJ8ZU2bdTqq9XOoB1SBUzz8fCsBcIzn0ZT11ZthtfGZM9dvubZEJrkGAqoe4Phw==\"]",
         "REALTIMEKIT_ACCOUNT_ID": "",
         "REALTIMEKIT_APP_ID": "",
         "REALTIMEKIT_WEBHOOK_PUBLIC_KEY": "",
         "VOICE_AGENT_NAME": "Krude",
         "AGENTS_URL": "https://api-staging.oryxa.in"
-      }
+      },
+      "routes": [{ "pattern": "edge-staging.oryxa.in", "custom_domain": true }]
     }
   }
 }

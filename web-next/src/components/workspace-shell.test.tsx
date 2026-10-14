@@ -356,7 +356,7 @@ describe("WorkspaceShell navigation", () => {
     expect(shell?.getAttribute("data-right")).toBe("expanded")
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(
-      screen.getByRole("heading", { name: "Today", level: 1 })
+      screen.getByRole("heading", { name: "My workspace", level: 1 })
     ).toBeTruthy()
     expect(shell?.getAttribute("data-primary-work")).toBeNull()
 
@@ -365,10 +365,9 @@ describe("WorkspaceShell navigation", () => {
       { target: { value: "  Start from Home  " } }
     )
     fireEvent.click(
-      within(screen.getByRole("main", { name: "Today canvas" })).getByRole(
-        "button",
-        { name: "Send message" }
-      )
+      within(
+        screen.getByRole("main", { name: "My workspace canvas" })
+      ).getByRole("button", { name: "Send message" })
     )
     expect(request).toHaveBeenLastCalledWith(
       { organizationId: "org_sim", userId: viewerId },
@@ -408,7 +407,7 @@ describe("WorkspaceShell navigation", () => {
     )
     expect(screen.getByDisplayValue("Still composing on Home")).toBeTruthy()
     expect(
-      screen.getByRole("heading", { name: "Today", level: 1 })
+      screen.getByRole("heading", { name: "My workspace", level: 1 })
     ).toBeTruthy()
     expect(shell?.getAttribute("data-primary-work")).toBeNull()
     expect(request).toHaveBeenCalledTimes(3)
@@ -419,7 +418,7 @@ describe("WorkspaceShell navigation", () => {
     const { container } = render(<WorkspaceShell />)
     const shell = container.querySelector(".workspace-shell")
     expect(
-      screen.getByRole("heading", { name: "Today", level: 1 })
+      screen.getByRole("heading", { name: "My workspace", level: 1 })
     ).toBeTruthy()
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("collapsed")
@@ -432,14 +431,14 @@ describe("WorkspaceShell navigation", () => {
       expect(screen.queryByText(label)).toBeNull()
 
     fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
-    fireEvent.click(screen.getByRole("button", { name: /^Home$/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Teamspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "My workspace" }))
     expect(shell?.getAttribute("data-left")).toBe("expanded")
     fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("expanded")
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
-    fireEvent.click(screen.getByRole("button", { name: "Today" }))
+    fireEvent.click(screen.getByRole("button", { name: "Library" }))
+    fireEvent.click(screen.getByRole("button", { name: "My workspace" }))
     expect(shell?.getAttribute("data-right")).toBe("expanded")
     fireEvent.click(
       screen.getByRole("button", { name: "Collapse agent panel" })
@@ -451,20 +450,19 @@ describe("WorkspaceShell navigation", () => {
   it("uses the header title without repeating page introductions", () => {
     render(<WorkspaceShell />)
 
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
+    fireEvent.click(screen.getByRole("button", { name: "Library" }))
     expect(
-      screen.getByRole("heading", { name: "Knowledge bases", level: 1 })
+      screen.getByRole("heading", { name: "Library", level: 1 })
     ).toBeTruthy()
     expect(screen.queryByText("Knowledge your team can build on.")).toBeNull()
 
     fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Teamspaces" }))
     expect(
       screen.getByRole("heading", { name: "Teamspaces", level: 1 })
     ).toBeTruthy()
     expect(screen.queryByText("Spaces where your team works.")).toBeNull()
 
-    fireEvent.click(screen.getByRole("button", { name: /^Home$/ }))
     fireEvent.click(screen.getByRole("button", { name: "Tools" }))
     expect(
       screen.getByRole("heading", { name: "Tools", level: 1 })
@@ -536,56 +534,59 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
   })
 
-  it("shows a different sidebar for each mode and remembers its selection", () => {
+  it("shows every area's pages in one sidebar, each area its own group", () => {
     render(<WorkspaceShell />)
 
     const homeNavigation = screen.getByRole("navigation", {
       name: "Home navigation",
     })
-    expect(
-      within(homeNavigation).getByRole("button", { name: "Today" })
-    ).toBeTruthy()
-    expect(
-      within(homeNavigation).getByRole("button", { name: "Knowledge bases" })
-    ).toBeTruthy()
-    expect(
-      screen.queryByRole("button", { name: "Multi-agent teams" })
-    ).toBeNull()
-
-    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
     const teamNavigation = screen.getByRole("navigation", {
       name: "Team navigation",
     })
-    expect(
-      within(teamNavigation).getByRole("button", { name: "People" })
-    ).toBeTruthy()
-    expect(
-      within(teamNavigation).queryByRole("button", { name: "Today" })
-    ).toBeNull()
-    fireEvent.click(
-      within(teamNavigation).getByRole("button", { name: "People" })
-    )
-    expect(screen.getByRole("heading", { name: "People" })).toBeTruthy()
-
-    fireEvent.click(screen.getByRole("button", { name: /^Agents$/ }))
     const agentsNavigation = screen.getByRole("navigation", {
       name: "Agents navigation",
     })
+    expect(
+      within(homeNavigation).getByRole("button", { name: "My workspace" })
+    ).toBeTruthy()
+    expect(
+      within(homeNavigation).getByRole("button", { name: "Library" })
+    ).toBeTruthy()
+    expect(
+      within(teamNavigation).queryByRole("button", { name: "My workspace" })
+    ).toBeNull()
     expect(
       within(agentsNavigation).getByRole("button", {
         name: "Multi-agent teams",
       })
     ).toBeTruthy()
+    expect(screen.queryByRole("group", { name: "Main areas" })).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
+    fireEvent.click(
+      within(teamNavigation).getByRole("button", { name: "People" })
+    )
+    expect(screen.getByRole("heading", { name: "People" })).toBeTruthy()
+    expect(
+      within(teamNavigation)
+        .getByRole("button", { name: "People" })
+        .getAttribute("aria-current")
+    ).toBe("page")
+
     fireEvent.click(
       within(agentsNavigation).getByRole("button", { name: "Specialists" })
     )
     expect(screen.getByRole("heading", { name: "Specialists" })).toBeTruthy()
+    expect(
+      within(teamNavigation)
+        .getByRole("button", { name: "People" })
+        .getAttribute("aria-current")
+    ).toBeNull()
 
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
-    expect(screen.getByRole("heading", { name: "People" })).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: /^Agents$/ }))
-    expect(screen.getByRole("heading", { name: "Specialists" })).toBeTruthy()
+    fireEvent.click(
+      within(homeNavigation).getByRole("button", { name: "My workspace" })
+    )
+    expect(screen.getByRole("heading", { name: "My workspace" })).toBeTruthy()
   })
 
   // Agents mode's focused work is real data now: agents-mode.test.tsx.
@@ -658,6 +659,26 @@ describe("WorkspaceShell navigation", () => {
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
   })
 
+  it("keeps today's widgets a tab away, without example data", () => {
+    render(<WorkspaceShell />)
+    const panel = screen.getByRole("complementary", { name: "Agent panel" })
+    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
+
+    const glanceTab = within(panel).getByRole("tab", { name: "At a glance" })
+    fireEvent.click(glanceTab)
+    expect(glanceTab.getAttribute("aria-selected")).toBe("true")
+    const glanceView = within(panel).getByRole("tabpanel", {
+      name: "At a glance",
+    })
+    // No workspace to read: one line saying what the tab holds, nothing more.
+    expect(
+      within(glanceView).getByText(
+        "Your apps, teammates and conversations will appear here."
+      )
+    ).toBeTruthy()
+    expect(within(glanceView).queryByRole("list")).toBeNull()
+  })
+
   it("replaces the activity feed with agent and team tabs", () => {
     const { container } = render(<WorkspaceShell />)
     const shell = container.querySelector(".workspace-shell")
@@ -677,7 +698,7 @@ describe("WorkspaceShell navigation", () => {
       within(panel)
         .getAllByRole("tab")
         .map((item) => item.getAttribute("aria-label"))
-    ).toEqual(["Agents", "DMs", "Teams"])
+    ).toEqual(["Agents", "DMs", "Teams", "At a glance"])
     const agentsTab = within(panel).getByRole("tab", { name: "Agents" })
     expect(agentsTab.getAttribute("aria-selected")).toBe("true")
     const agentsView = within(panel).getByRole("tabpanel", {
@@ -722,10 +743,23 @@ describe("WorkspaceShell navigation", () => {
     for (const [key, name, text] of [
       ["ArrowRight", "DMs", "Direct messages will appear here."],
       ["ArrowRight", "Teams", "Team rooms will appear here."],
+      [
+        "ArrowRight",
+        "At a glance",
+        "Your apps, teammates and conversations will appear here.",
+      ],
       ["ArrowRight", "Agents", "Ask anything to start a conversation."],
-      ["ArrowLeft", "Teams", "Team rooms will appear here."],
+      [
+        "ArrowLeft",
+        "At a glance",
+        "Your apps, teammates and conversations will appear here.",
+      ],
       ["Home", "Agents", "Ask anything to start a conversation."],
-      ["End", "Teams", "Team rooms will appear here."],
+      [
+        "End",
+        "At a glance",
+        "Your apps, teammates and conversations will appear here.",
+      ],
     ]) {
       fireEvent.keyDown(tab, { key })
       tab = expectSelected(name, text)
@@ -800,7 +834,7 @@ describe("WorkspaceShell navigation", () => {
     const api = mockApi(() => undefined)
     render(<WorkspaceShell />)
     fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Teamspaces" }))
 
     expect(screen.getByText("No workspace to load")).toBeTruthy()
     for (const example of ["Product sync", "Launch planning", "Design reviews"])
@@ -876,7 +910,7 @@ describe("WorkspaceShell navigation", () => {
         organizationRole="member"
       />
     )
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
+    fireEvent.click(screen.getByRole("button", { name: "Library" }))
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Open Product handbook" })
@@ -886,13 +920,13 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
     expect(screen.getByText("Knowledge base")).toBeTruthy()
     expect(
-      screen.queryByRole("heading", { name: "Knowledge bases", level: 1 })
+      screen.queryByRole("heading", { name: "Library", level: 1 })
     ).toBeNull()
     expect(await screen.findByText("Design principles")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "All knowledge bases" }))
     expect(
-      screen.getByRole("heading", { name: "Knowledge bases", level: 1 })
+      screen.getByRole("heading", { name: "Library", level: 1 })
     ).toBeTruthy()
     expect(
       screen.getByRole("button", { name: "Open Product handbook" })
@@ -901,11 +935,11 @@ describe("WorkspaceShell navigation", () => {
 
   it("shows no example knowledge bases without a workspace", () => {
     render(<WorkspaceShell />)
-    fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
+    fireEvent.click(screen.getByRole("button", { name: "Library" }))
     expect(
       screen.getByText(/Sign in to a workspace to see its knowledge bases/)
     ).toBeTruthy()
-    const canvas = screen.getByRole("main", { name: "Knowledge bases canvas" })
+    const canvas = screen.getByRole("main", { name: "Library canvas" })
     expect(within(canvas).queryByRole("button", { name: /^Open / })).toBeNull()
     expect(
       within(canvas).queryByRole("button", { name: "New knowledge base" })

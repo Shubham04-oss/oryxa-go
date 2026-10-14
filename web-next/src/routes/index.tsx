@@ -24,6 +24,7 @@ import {
   getReceivedInvitations,
 } from "@/lib/auth/invitations"
 import { isNameId } from "@/lib/dms/names"
+import { Onboarding, isSetupStep } from "@/components/onboarding"
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -32,12 +33,14 @@ export const Route = createFileRoute("/")({
     // The person whose DM is open in the main canvas, so a refresh returns
     // to it (the organization is `org`).
     dm: isNameId(search.dm) ? search.dm : undefined,
+    // A step of setting up a new workspace (components/onboarding.tsx).
+    ...(isSetupStep(search.setup) ? { setup: search.setup } : {}),
   }),
   component: Home,
 })
 
 function Home() {
-  const { org, dm } = Route.useSearch()
+  const { org, dm, setup } = Route.useSearch()
   const navigate = Route.useNavigate()
   const queryClient = useQueryClient()
   const sessionEnded = useSyncExternalStore(
@@ -85,7 +88,7 @@ function Home() {
   if (sessionEnded) {
     const destination = `${window.location.pathname}${window.location.search}${window.location.hash}`
     return (
-      <AuthShell>
+      <AuthShell scene="ships">
         <h1>Your session has ended.</h1>
         <p className="auth-subtitle">Sign in again to continue your work.</p>
         <Link
@@ -127,6 +130,38 @@ function Home() {
     return <NewWorkspace session={session.data} />
   }
 
+  if (setup && selectedOrganization) {
+    return (
+      <Onboarding
+        organizationId={selectedOrganization.id}
+        organizationName={selectedOrganization.name}
+        step={setup}
+        onStep={(step) =>
+          void navigate({
+            to: "/",
+            search: {
+              org: selectedOrganization.id,
+              view: undefined,
+              dm: undefined,
+              setup: step,
+            },
+          })
+        }
+        onDone={() =>
+          void navigate({
+            to: "/",
+            search: {
+              org: selectedOrganization.id,
+              view: undefined,
+              dm: undefined,
+            },
+            replace: true,
+          })
+        }
+      />
+    )
+  }
+
   const workspaceRole =
     role.data === "owner" || role.data === "admin" ? "admin" : "member"
   return (
@@ -149,6 +184,7 @@ function Home() {
 
 function NewWorkspace({ session }: { session: Session }) {
   const queryClient = useQueryClient()
+  const navigate = Route.useNavigate()
   const [nameError, setNameError] = useState("")
   const [formError, setFormError] = useState("")
   const [submitting, setSubmitting] = useState(false)
@@ -189,6 +225,16 @@ function NewWorkspace({ session }: { session: Session }) {
         ...session,
         organizations: [organization],
       })
+      // Then set it up: Krude, tools, crew and a first teamspace.
+      await navigate({
+        to: "/",
+        search: {
+          org: organization.id,
+          view: undefined,
+          dm: undefined,
+          setup: "agent",
+        },
+      })
     } catch (error) {
       setFormError(
         error instanceof ApiError && error.status === 400
@@ -210,7 +256,13 @@ function NewWorkspace({ session }: { session: Session }) {
   }
 
   return (
-    <AuthShell>
+    <AuthShell
+      scene="harbour"
+      caption={{
+        line: "Every crew needs a harbour.",
+        sub: "Yours is ready in a few seconds.",
+      }}
+    >
       <h1>Make room for your work.</h1>
       <p className="auth-subtitle">
         Name your workspace to bring your people and agents together.

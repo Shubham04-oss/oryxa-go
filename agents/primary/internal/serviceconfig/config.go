@@ -26,6 +26,15 @@ const (
 	LiveBackendCloudflare = "cloudflare"
 )
 
+// ArtifactR2 is the R2 bucket artifacts are written to and its S3 API
+// credentials.
+type ArtifactR2 struct {
+	Endpoint        string
+	Bucket          string
+	AccessKeyID     string
+	SecretAccessKey string
+}
+
 // LiveOnCloudflare reports whether an organization's sandbox and browser run
 // on Cloudflare.
 func (config Config) LiveOnCloudflare(organizationID string) bool {
@@ -185,6 +194,10 @@ type Config struct {
 	ArtifactBucket string
 	// S3Endpoint overrides AWS for artifacts, for the LocalStack emulator.
 	S3Endpoint string
+	// ArtifactR2 moves artifacts to Cloudflare R2 (live-layer A7) when its
+	// endpoint is set: new versions are written there, under "artifacts/",
+	// and ArtifactBucket, when set, is still read for what was saved before.
+	ArtifactR2 ArtifactR2
 	// Document editor endpoints and secrets for ONLYOFFICE Docs. The JWT
 	// secret is Docs' own; the ticket secret signs the URLs Docs is handed for
 	// a member's file, is never given to Docs, and must differ from it.
@@ -344,6 +357,21 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("AGENTS_PRIMARY_SERVICE_KEY_ID must be set when AGENTS_PRIMARY_EDGE_TOKEN_PUBLIC_KEYS is: it signs the answers' edge tokens")
 		}
 	}
+	artifactR2 := ArtifactR2{
+		Endpoint:        strings.TrimRight(strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_ENDPOINT")), "/"),
+		Bucket:          valueOrDefault(getenv, "AGENTS_PRIMARY_ARTIFACT_R2_BUCKET", "oryxa-runs"),
+		AccessKeyID:     strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_ACCESS_KEY_ID")),
+		SecretAccessKey: strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_SECRET_ACCESS_KEY")),
+	}
+	if artifactR2.Endpoint != "" {
+		parsed, err := url.Parse(artifactR2.Endpoint)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+			return Config{}, errors.New("AGENTS_PRIMARY_ARTIFACT_ENDPOINT must be the R2 account's https URL")
+		}
+		if artifactR2.AccessKeyID == "" || artifactR2.SecretAccessKey == "" {
+			return Config{}, errors.New("AGENTS_PRIMARY_ARTIFACT_ENDPOINT needs AGENTS_PRIMARY_ARTIFACT_ACCESS_KEY_ID and AGENTS_PRIMARY_ARTIFACT_SECRET_ACCESS_KEY")
+		}
+	}
 	guardHoldOrgs, err := organizationList(getenv, "AGENTS_PRIMARY_GUARD_HOLD_ORGS")
 	if err != nil {
 		return Config{}, err
@@ -450,6 +478,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		MemoryLocation:             valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_LOCATION", googleCloudLocation),
 		ArtifactBucket:             strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
 		S3Endpoint:                 artifactEndpoint(getenv),
+		ArtifactR2:                 artifactR2,
 		DocumentServerURL:          strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_SERVER_URL")),
 		DocumentServerInternalURL:  strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_SERVER_INTERNAL_URL")),
 		DocumentAPIURL:             strings.TrimSpace(getenv("AGENTS_PRIMARY_DOCUMENT_API_URL")),

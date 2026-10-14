@@ -94,6 +94,22 @@ function listRoute(
   }
 }
 
+/** Each item of a list: a row's request, or a heading. */
+function listed(list: HTMLElement): string[] {
+  return within(list)
+    .getAllByRole("listitem")
+    .map(
+      (item) =>
+        item.querySelector(".requests-row-what")?.textContent ??
+        item.textContent
+    )
+}
+
+/** The request open beside the lists: named, or the one at hand. */
+function openedRegion(): HTMLElement {
+  return screen.getByRole("region", { name: /^(Opened|Current) request$/ })
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] })
   vi.setSystemTime(NOW)
@@ -115,25 +131,43 @@ describe("Inbox", () => {
 
     const list = await screen.findByRole("list", { name: "Inbox" })
     await within(list).findByText("What is the plan for the EU launch?")
-    const order = within(list)
-      .getAllByRole("listitem")
-      .map(
-        (item) =>
-          item.querySelector(".workspace-request-task")?.textContent ??
-          item.textContent
-      )
     // A heading, what waits, a heading, what came before.
-    expect(order).toEqual([
+    expect(listed(list)).toEqual([
       "Waiting for you",
       "What is the plan for the EU launch?",
       "Earlier",
       "Explain the service boundary.",
     ])
+    // What waits opens beside the list, ready to decide.
     expect(
-      within(list).getByRole("group", { name: /Choose what Krude/ })
+      await within(openedRegion()).findByRole("group", {
+        name: /Choose what Krude/,
+      })
     ).toBeTruthy()
+    expect(
+      within(list)
+        .getByRole("button", { name: /What is the plan/ })
+        .getAttribute("aria-current")
+    ).toBe("true")
     // The tab says how many wait.
     expect(screen.getByRole("tab", { name: "Inbox, 1 waiting" })).toBeTruthy()
+  })
+
+  it("says every ask is answered beside the list when nothing waits, and opens none", async () => {
+    renderView({ [`GET ${inboxPath}`]: listRoute(() => [earlier]) })
+
+    const clear = await screen.findByRole("region", { name: "All clear" })
+    expect(within(clear).getByText("Every ask answered.")).toBeTruthy()
+    expect(
+      screen.queryByRole("region", { name: /^(Opened|Current) request$/ })
+    ).toBeNull()
+
+    // Opening a row puts its request where the words were.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Explain the service boundary/ })
+    )
+    await within(openedRegion()).findByRole("article")
+    expect(screen.queryByRole("region", { name: "All clear" })).toBeNull()
   })
 
   it("has no headings when nothing waits", async () => {
@@ -197,8 +231,16 @@ describe("Sent", () => {
     })
 
     fireEvent.click(await screen.findByRole("tab", { name: "Sent" }))
+    // Nothing of the member's waits on them, so nothing opens by itself.
+    const row = await screen.findByRole("button", {
+      name: /Raya Patel.*Who owns the billing service\?/,
+    })
+    expect(
+      screen.queryByRole("region", { name: /^(Opened|Current) request$/ })
+    ).toBeNull()
+    fireEvent.click(row)
 
-    const card = await screen.findByRole("article", {
+    const card = await within(openedRegion()).findByRole("article", {
       name: "You asked Raya Patel, in Slack",
     })
     expect(within(card).getByText("Who owns the billing service?")).toBeTruthy()
@@ -227,12 +269,12 @@ describe("the origin filter", () => {
         origins
       ),
     })
-    await screen.findByText("What is the plan for the EU launch?")
-    expect(screen.getByText("Explain the service boundary.")).toBeTruthy()
+    await screen.findAllByText("What is the plan for the EU launch?")
+    expect(screen.getAllByText("Explain the service boundary.")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "Slack" }))
     // A new filter is a new list, and says so while it loads.
-    await screen.findByText("What is the plan for the EU launch?")
+    await screen.findAllByText("What is the plan for the EU launch?")
     expect(screen.queryByText("Explain the service boundary.")).toBeNull()
     expect(screen.getByRole("button", { name: "Slack" })).toHaveProperty(
       "ariaPressed",
@@ -240,7 +282,7 @@ describe("the origin filter", () => {
     )
 
     fireEvent.click(screen.getByRole("button", { name: "Oryxa" }))
-    await screen.findByText("Explain the service boundary.")
+    await screen.findAllByText("Explain the service boundary.")
     expect(screen.queryByText("What is the plan for the EU launch?")).toBeNull()
     expect(origins).toEqual(expect.arrayContaining(["", "slack", "agent"]))
   })
@@ -252,20 +294,20 @@ describe("the origin filter", () => {
         requests: [slackRequest(), agentRequest({ origin: undefined })],
       }),
     })
-    await screen.findByText("What is the plan for the EU launch?")
-    expect(screen.getByText("Explain the service boundary.")).toBeTruthy()
+    await screen.findAllByText("What is the plan for the EU launch?")
+    expect(screen.getAllByText("Explain the service boundary.")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "Slack" }))
-    await screen.findByText("What is the plan for the EU launch?")
+    await screen.findAllByText("What is the plan for the EU launch?")
     expect(screen.queryByText("Explain the service boundary.")).toBeNull()
 
     fireEvent.click(screen.getByRole("button", { name: "Oryxa" }))
-    await screen.findByText("Explain the service boundary.")
+    await screen.findAllByText("Explain the service boundary.")
     expect(screen.queryByText("What is the plan for the EU launch?")).toBeNull()
 
     fireEvent.click(screen.getByRole("button", { name: "All" }))
-    await screen.findByText("What is the plan for the EU launch?")
-    expect(screen.getByText("Explain the service boundary.")).toBeTruthy()
+    await screen.findAllByText("What is the plan for the EU launch?")
+    expect(screen.getAllByText("Explain the service boundary.")).toBeTruthy()
   })
 
   it("says what an empty filtered list is not", async () => {
@@ -339,17 +381,14 @@ describe("a list that keeps each request where it was", () => {
     focusManager.setFocused(true)
 
     await screen.findByText(/Approved in Slack by you/)
-    // The same card, in the same place: not moved, and not made again.
+    // The same card stays open, not made again, and its row keeps its place.
     expect(screen.getByRole("article", { name: /asked you/ })).toBe(before)
     // Nothing waits any more, so no heading says so.
     expect(screen.queryByText("Waiting for you")).toBeNull()
     expect(screen.queryByText("Earlier")).toBeNull()
-    const cards = screen
-      .getAllByRole("article")
-      .map((card) => card.getAttribute("aria-label"))
-    expect(cards).toEqual([
-      "Raya Patel asked you, in Slack",
-      "Raya Patel asked Krude, in Oryxa",
+    expect(listed(screen.getByRole("list", { name: "Inbox" }))).toEqual([
+      "What is the plan for the EU launch?",
+      "Explain the service boundary.",
     ])
   })
 
@@ -357,7 +396,7 @@ describe("a list that keeps each request where it was", () => {
     const answered = approvedRequest("summary", { id: "irq_answered" })
     let served: AgentRequest[] = [answered, earlier]
     renderView({ [`GET ${inboxPath}`]: listRoute(() => served) })
-    await screen.findByText("Explain the service boundary.")
+    await screen.findAllByText("Explain the service boundary.")
     expect(screen.queryByText("Waiting for you")).toBeNull()
 
     // Its answer was held for review, and a new ask came in besides.
@@ -384,18 +423,11 @@ describe("a list that keeps each request where it was", () => {
     focusManager.setFocused(false)
     focusManager.setFocused(true)
 
-    await screen.findByText("A brand new ask.")
     const list = screen.getByRole("list", { name: "Inbox" })
-    const order = within(list)
-      .getAllByRole("listitem")
-      .map(
-        (item) =>
-          item.querySelector(".workspace-request-task")?.textContent ??
-          item.textContent
-      )
+    await within(list).findByText("A brand new ask.")
     // Both go above what was there; the answer that came back held is the
     // later change, so it is first.
-    expect(order).toEqual([
+    expect(listed(list)).toEqual([
       "Waiting for you",
       "What is the plan for the EU launch?",
       "A brand new ask.",
@@ -464,11 +496,14 @@ describe("a request a link or a note named", () => {
       name: /asked you/,
     })
     await waitFor(() => expect(document.activeElement).toBe(card))
-    // It is not listed a second time.
-    await screen.findByText("Explain the service boundary.")
+    // Its row stays in the list, marked as the one open.
+    const list = await screen.findByRole("list", { name: "Inbox" })
+    await within(list).findByText("Explain the service boundary.")
     expect(
-      screen.getAllByText("What is the plan for the EU launch?")
-    ).toHaveLength(1)
+      within(list)
+        .getByRole("button", { name: /What is the plan/ })
+        .getAttribute("aria-current")
+    ).toBe("true")
   })
 
   it("goes back to the lists, and says so to whoever opened it", async () => {
@@ -486,7 +521,10 @@ describe("a request a link or a note named", () => {
       screen.getByRole("button", { name: "Back to all requests" })
     )
 
-    expect(screen.queryByRole("region", { name: "Opened request" })).toBeNull()
+    // No longer named: the way back goes, and whoever opened it is told.
+    expect(
+      screen.queryByRole("button", { name: "Back to all requests" })
+    ).toBeNull()
     expect(onFocusDone).toHaveBeenCalledTimes(1)
     const list = await screen.findByRole("list", { name: "Inbox" })
     await within(list).findByText("What is the plan for the EU launch?")
@@ -537,6 +575,10 @@ describe("access the member gave", () => {
       }),
     })
 
+    // Nothing waits, so the member opens it.
+    fireEvent.click(
+      await screen.findByRole("button", { name: /What is the plan/ })
+    )
     await screen.findByText(
       `Raya's follow-ups in that Slack thread are answered without asking you until ${clockTime(lease.expires_at)}.`
     )
@@ -572,11 +614,13 @@ describe("when the members list cannot be read", () => {
     })
 
     await screen.findByRole("article", { name: "Someone asked you, in Slack" })
+    // Every request has its row, named by what it holds.
     // The list is not asked for again by each card, nor by each time the
     // page settles: it is asked for, failed, and left.
     await new Promise((resolve) => setTimeout(resolve, 100))
     expect(go.count("GET", membersPath)).toBe(1)
-    expect(screen.getAllByRole("article")).toHaveLength(2)
+    const list = screen.getByRole("list", { name: "Inbox" })
+    expect(within(list).getAllByRole("button")).toHaveLength(2)
   })
 })
 
