@@ -49,7 +49,11 @@ not permission to copy every incidental value into a new component.
 - Use a restrained spacing rhythm based on 8, 12, 16, 24, and 32px. Rounded
   cards and pill controls are welcome; avoid ornamental gradients, broad
   shadows, glass effects, or divider lines between shell regions. Borders may
-  group content *inside* a surface. Shadows are for overlays, not page depth.
+  group content *inside* a surface. Shadows are for overlays, not page depth,
+  with one exception: the selected item in a tiled group is a **raised tile**
+  (`--raised` fill, a 1px `--border-quiet` hairline and a 1–3px
+  `--shade-66` shadow), never a sunken fill. The same raised tile marks the
+  selected pill in a segmented control.
 - A chat composer (message to a person, room, or agent) is a pill-shaped
   field — full pill at one line, softening to a large radius once its
   content wraps past one line — with a circular icon send button inside,
@@ -63,8 +67,13 @@ not permission to copy every incidental value into a new component.
 
 ## 2. Global shell and navigation
 
-- The base `#111111` surface carries the two sidebars without separate cards.
-  The `#1e1e1e` canvas sits between them. No shell separator/divider lines.
+- The base `#111111` surface carries the two sidebars. Their groups (the
+  navigation, the conversation list, the profile, the collapsed rails) are
+  **tiles**: filled `--canvas` blocks with a 14px radius, the same surface as
+  the central canvas, so each group reads at a glance. The expanded agent
+  panel's body is one such tile. No shell separator/divider lines; tiles are
+  separated by the base showing between them. (Founder, 14 Oct 2026: "use
+  the same surfaces … instead of just borders … use tiling".)
 - On desktop, the left sidebar is 20% when expanded and a 48px rail when
   collapsed. The right agent panel has a 48px collapsed rail and a wider
   expanded panel. The center takes all remaining width.
