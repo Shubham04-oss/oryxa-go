@@ -1494,7 +1494,7 @@ func TestARunNobodyWatchesRemembersNothing(t *testing.T) {
 	}
 	away := Member{UserID: asha.UserID, OrganizationID: asha.OrganizationID}
 	for _, startedBy := range []string{agentsv1.StartedByTrigger, agentsv1.StartedByWorkflow, agentsv1.StartedByOrganization, agentsv1.StartedByTeam} {
-		h.run(away, created.ID, RunInput{Message: "the invoice mentions tungsten, " + startedBy, StartedBy: startedBy})
+		h.run(away, created.ID, RunInput{Message: "tungsten is in the invoice, " + startedBy, StartedBy: startedBy})
 		if remembered := recalled("tungsten"); remembered != 0 {
 			t.Fatalf("a %s run left %d memories behind", startedBy, remembered)
 		}
