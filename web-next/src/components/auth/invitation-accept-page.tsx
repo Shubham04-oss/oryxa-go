@@ -83,7 +83,7 @@ export function InvitationAcceptPage({ token }: { token?: string }) {
   }
 
   return (
-    <AuthShell>
+    <AuthShell scene="harbour">
       <h1>Join your team.</h1>
       <p className="auth-subtitle">
         {token
