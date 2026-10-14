@@ -1,7 +1,7 @@
-// The local door (wrangler.jsonc), in the shape proposed for web-next's
-// binding on discussion #217:
+// The local door (wrangler.jsonc), in the shape of web-next's binding (F5,
+// web-next/src/edge-proxy.ts):
 //
-//   /edge/v1/organizations/{org}/rooms/{kind}/{id}/…  →  WebEdge /v1/rooms/{kind}/{id}/…
+//   /live/{org}/rooms/{kind}/{id}/…  →  WebEdge /v1/rooms/{kind}/{id}/…
 //
 // with x-oryxa-member set to {org, member}. In web-next the member comes from
 // their session, checked with Go for that org; here x-live-identity names
@@ -12,7 +12,7 @@ interface Env {
   EDGE_PUBLIC: Fetcher;
 }
 
-const DOOR = /^\/edge\/v1\/organizations\/([^/]+)(\/rooms\/[^/]+\/[^/]+(?:\/.*)?)$/;
+const DOOR = /^\/live\/([^/]+)(\/rooms\/[^/]+\/[^/]+(?:\/.*)?)$/;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

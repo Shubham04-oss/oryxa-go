@@ -170,6 +170,13 @@ func (l *live) newRoom(t *testing.T) *room {
 			t.Fatal("CALL_LIVE_ROOM must be kind/id")
 		}
 		r.room = edgev1.Room{Kind: edgev1.RoomKind(kind), ID: id}
+		if r.admits() {
+			for _, m := range []member{l.a, l.b} {
+				if status := r.admit(&m); status != http.StatusNoContent {
+					t.Fatalf("Go would not admit %s to %s: %d", m.label, l.room, status)
+				}
+			}
+		}
 	}
 	if err := r.room.Validate(); err != nil {
 		t.Fatalf("room: %v", err)
@@ -177,6 +184,35 @@ func (l *live) newRoom(t *testing.T) *room {
 	r.endAnyCall()
 	t.Cleanup(r.endAnyCall)
 	return r
+}
+
+// admits says whether members are admitted through Go before opening the
+// room, as the page does (A18): on the web door, with the room configured
+// rather than seeded, unless CALL_LIVE_ADMIT=off.
+func (r *room) admits() bool {
+	return !r.local && r.signer == nil && os.Getenv("CALL_LIVE_ADMIT") != "off"
+}
+
+// admit asks Go, as m, to make them a member of the room on the edge:
+// POST /v1/organizations/{org}/edge/rooms/{kind}/{id}/admit on the app's
+// origin, 204 when they may be in it and 404 when it isn't theirs.
+func (r *room) admit(m *member) int {
+	r.t.Helper()
+	parsed, err := url.Parse(r.roomURL)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	address := parsed.Scheme + "://" + parsed.Host + "/v1/organizations/" + url.PathEscape(r.org) +
+		"/edge/rooms/" + url.PathEscape(string(r.room.Kind)) + "/" + url.PathEscape(r.room.ID) + "/admit"
+	request, _ := http.NewRequest(http.MethodPost, address, nil)
+	r.credentials(request.Header, m)
+	response, err := r.client.Do(request)
+	if err != nil {
+		r.t.Fatalf("admit %s: %v", m.label, err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	return response.StatusCode
 }
 
 // seed makes m a member of the room the way their agent acting there does:

@@ -1,4 +1,5 @@
-// A local stand-in for web-next's binding to the edge's WebEdge entrypoint,
+// A local stand-in for web-next's binding to the edge's WebEdge entrypoint
+// (web-next/src/edge-proxy.ts),
 // so test/live/call runs against `wrangler dev` before the call screen's
 // binding exists. It trusts whoever x-live-identity names: never deploy it.
 //

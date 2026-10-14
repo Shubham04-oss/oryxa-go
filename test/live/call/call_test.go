@@ -102,6 +102,11 @@ func TestNonMembersGetNoCall(t *testing.T) {
 	call := r.join(r.a)
 
 	if r.outsider != nil {
+		if r.admits() {
+			if status := r.admit(r.outsider); status != http.StatusNotFound {
+				t.Errorf("Go admitted an outsider to the room: %d, want 404", status)
+			}
+		}
 		for _, request := range []struct{ method, rest string }{
 			{http.MethodPost, "/call/join"}, {http.MethodGet, "/call"}, {http.MethodPost, "/call/leave"}, {http.MethodPost, "/call/end"},
 		} {
