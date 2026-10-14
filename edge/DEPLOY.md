@@ -26,12 +26,11 @@ secrets, CI and routes.
   sandbox is a Durable Object–managed container (`containers` in
   `wrangler.jsonc`); the browser is the `BROWSER` binding.
 - **R2 buckets** `oryxa-runs` and `oryxa-runs-staging`. Lifecycle rules
-  (until Layer C's retention decision). **R2 lifecycle rules match fixed
-  prefixes only, not wildcards, so the first rule can't be set as written.
-  Sandbox backups need a fixed prefix, such as `backups/sandbox/…`:**
-  - `runs/*/*/*/_room/media/sandbox-*/`: sandbox workspace backups. They're
-    replaced on every idle stop; expire after 30 days.
-  - Everything else under `runs/` and `artifacts/`: keep.
+  (until Layer C's retention decision; R2 rules match fixed prefixes):
+  - `backups/sandbox/`: sandbox workspace backups, at
+    `backups/sandbox/{org}/{kind}/{room}/{sandbox}/`. Each is replaced at
+    every idle stop and only restores that sandbox; expire after 30 days.
+  - Everything under `runs/`, `calls/` and `artifacts/`: keep.
 
 ## 2. The edge Worker
 
