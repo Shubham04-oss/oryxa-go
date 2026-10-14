@@ -344,6 +344,36 @@ describe("who may reach which sandbox", () => {
   });
 });
 
+describe("watching through web-next (#270 review)", () => {
+  const web = () => (exports as unknown as { WebEdge: Fetcher }).WebEdge;
+  const as = (member: string) => ({ "x-oryxa-member": JSON.stringify({ org: "org_1", member }) });
+
+  it("opens a member's terminal only in their own private sandbox", async () => {
+    await post("/sandbox/shared/exec/command", { command: "true" });
+    await post("/sandbox/private-usr_1/exec/command", { command: "true" }, { member: "usr_1", private: true });
+    const shared = await web().fetch(`https://edge.test${base}/sandbox/shared/terminal`, { method: "POST", headers: as("usr_1"), body: "{}" });
+    expect(shared.status).toBe(403);
+    expect(await shared.text()).toContain("watch-only");
+    const own = await web().fetch(`https://edge.test${base}/sandbox/private-usr_1/terminal`, { method: "POST", headers: as("usr_1"), body: "{}" });
+    expect(own.status).toBe(200);
+    expect(((await own.json()) as { url: string }).url).toContain("/t/");
+  });
+
+  it("doesn't count listing files as use, so watching doesn't keep a sandbox up", async () => {
+    await post("/sandbox/shared/exec/command", { command: "true" });
+    const stub = env.ROOM.getByName(`org/org_1/room/thread/${room.id}`);
+    const past = Date.now() - 10 * 60 * 1000;
+    const { runInDurableObject } = await import("cloudflare:test");
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("UPDATE children SET last_used_at = ?", past);
+    });
+    expect((await web().fetch(`https://edge.test${base}/sandbox/shared/files`, { headers: as("usr_1") })).status).toBe(200);
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(state.storage.sql.exec<{ last_used_at: number }>("SELECT last_used_at FROM children").one().last_used_at).toBe(past);
+    });
+  });
+});
+
 describe("egress", () => {
   it("refuses metadata, private and internal targets, and allows the public internet", () => {
     for (const blocked of [
