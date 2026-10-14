@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -82,6 +83,12 @@ type s3API interface {
 type Service struct {
 	client s3API
 	bucket string
+	// prefix is put before every key, so a bucket shared with other data
+	// (R2's oryxa-runs) keeps artifacts apart; empty on AWS.
+	prefix string
+	// encrypt asks S3 for SSE-S3 on every write. R2 encrypts everything at
+	// rest and has no such header, so it is off there.
+	encrypt bool
 	// sleep waits for d or until ctx is done; a field so tests can stub out
 	// the Save retry backoff. Never nil.
 	sleep func(ctx context.Context, d time.Duration) error
@@ -111,7 +118,47 @@ func newService(client s3API, bucket string) (*Service, error) {
 	if strings.TrimSpace(bucket) == "" {
 		return nil, errors.New("s3artifact: a bucket is required")
 	}
-	return &Service{client: client, bucket: bucket, sleep: sleepContext}, nil
+	return &Service{client: client, bucket: bucket, encrypt: true, sleep: sleepContext}, nil
+}
+
+// R2 reaches a Cloudflare R2 bucket through its S3 API (live-layer A7).
+type R2 struct {
+	// Endpoint is https://{account}.r2.cloudflarestorage.com.
+	Endpoint        string
+	AccessKeyID     string
+	SecretAccessKey string
+	Bucket          string
+	// Prefix is put before every key, such as "artifacts/".
+	Prefix string
+}
+
+// NewR2 returns a Service storing artifacts in an R2 bucket, keyed as on S3
+// under r2.Prefix.
+func NewR2(awsConfig aws.Config, r2 R2) (*Service, error) {
+	if strings.TrimSpace(r2.Endpoint) == "" || r2.AccessKeyID == "" || r2.SecretAccessKey == "" {
+		return nil, errors.New("s3artifact: R2 needs an endpoint and an access key")
+	}
+	if r2.Prefix != "" && !strings.HasSuffix(r2.Prefix, "/") {
+		return nil, errors.New("s3artifact: an R2 prefix must end in /")
+	}
+	config := awsConfig.Copy()
+	config.Region = "auto"
+	config.Credentials = credentials.NewStaticCredentialsProvider(r2.AccessKeyID, r2.SecretAccessKey, "")
+	client := s3.NewFromConfig(config, func(options *s3.Options) {
+		options.BaseEndpoint = aws.String(strings.TrimRight(r2.Endpoint, "/"))
+		options.UsePathStyle = true
+		// R2 checks no request checksum, and refuses the ones the SDK adds
+		// by default on some operations.
+		options.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		options.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+	})
+	service, err := newService(client, r2.Bucket)
+	if err != nil {
+		return nil, err
+	}
+	service.prefix = r2.Prefix
+	service.encrypt = false
+	return service, nil
 }
 
 // Save implements artifact.Service.
@@ -144,16 +191,19 @@ func (service *Service) Save(ctx context.Context, request *artifact.SaveRequest)
 			}
 		}
 
-		key := buildKey(request.AppName, request.UserID, request.SessionID, request.FileName, version)
-		_, err := service.client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:               aws.String(service.bucket),
-			Key:                  aws.String(key),
-			Body:                 bytes.NewReader(content),
-			ContentLength:        aws.Int64(int64(len(content))),
-			ContentType:          aws.String(mimeType),
-			ServerSideEncryption: s3types.ServerSideEncryptionAes256,
-			IfNoneMatch:          aws.String("*"),
-		})
+		key := service.key(request.AppName, request.UserID, request.SessionID, request.FileName, version)
+		input := &s3.PutObjectInput{
+			Bucket:        aws.String(service.bucket),
+			Key:           aws.String(key),
+			Body:          bytes.NewReader(content),
+			ContentLength: aws.Int64(int64(len(content))),
+			ContentType:   aws.String(mimeType),
+			IfNoneMatch:   aws.String("*"),
+		}
+		if service.encrypt {
+			input.ServerSideEncryption = s3types.ServerSideEncryptionAes256
+		}
+		_, err := service.client.PutObject(ctx, input)
 		if err == nil {
 			return &artifact.SaveResponse{Version: version}, nil
 		}
@@ -185,7 +235,7 @@ func (service *Service) Load(ctx context.Context, request *artifact.LoadRequest)
 	if err != nil {
 		return nil, err
 	}
-	key := buildKey(request.AppName, request.UserID, request.SessionID, request.FileName, version)
+	key := service.key(request.AppName, request.UserID, request.SessionID, request.FileName, version)
 
 	output, err := service.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(service.bucket),
@@ -224,7 +274,7 @@ func (service *Service) Delete(ctx context.Context, request *artifact.DeleteRequ
 		return fmt.Errorf("request validation failed: %w", err)
 	}
 	if request.Version != 0 {
-		key := buildKey(request.AppName, request.UserID, request.SessionID, request.FileName, request.Version)
+		key := service.key(request.AppName, request.UserID, request.SessionID, request.FileName, request.Version)
 		if _, err := service.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 			Bucket: aws.String(service.bucket),
 			Key:    aws.String(key),
@@ -244,7 +294,7 @@ func (service *Service) Delete(ctx context.Context, request *artifact.DeleteRequ
 	objects := make([]s3types.ObjectIdentifier, 0, len(versions))
 	for _, version := range versions {
 		objects = append(objects, s3types.ObjectIdentifier{
-			Key: aws.String(buildKey(request.AppName, request.UserID, request.SessionID, request.FileName, version)),
+			Key: aws.String(service.key(request.AppName, request.UserID, request.SessionID, request.FileName, version)),
 		})
 	}
 	if _, err := service.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
@@ -264,8 +314,8 @@ func (service *Service) List(ctx context.Context, request *artifact.ListRequest)
 	}
 	names := map[string]bool{}
 	for _, prefix := range []string{
-		buildSessionPrefix(request.AppName, request.UserID, request.SessionID),
-		buildUserPrefix(request.AppName, request.UserID),
+		service.prefix + buildSessionPrefix(request.AppName, request.UserID, request.SessionID),
+		service.prefix + buildUserPrefix(request.AppName, request.UserID),
 	} {
 		keys, err := service.keys(ctx, prefix)
 		if err != nil {
@@ -310,7 +360,7 @@ func (service *Service) GetArtifactVersion(ctx context.Context, request *artifac
 	if err != nil {
 		return nil, err
 	}
-	key := buildKey(request.AppName, request.UserID, request.SessionID, request.FileName, version)
+	key := service.key(request.AppName, request.UserID, request.SessionID, request.FileName, version)
 
 	head, err := service.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(service.bucket),
@@ -346,7 +396,7 @@ func (service *Service) GetArtifactVersion(ctx context.Context, request *artifac
 // versions reports the versions an artifact has, newest last, and no error
 // when it has none.
 func (service *Service) versions(ctx context.Context, appName, userID, sessionID, fileName string) ([]int64, error) {
-	keys, err := service.keys(ctx, buildKeyPrefix(appName, userID, sessionID, fileName))
+	keys, err := service.keys(ctx, service.prefix+buildKeyPrefix(appName, userID, sessionID, fileName))
 	if err != nil {
 		return nil, err
 	}
@@ -421,6 +471,11 @@ func partBytes(part *genai.Part) ([]byte, string) {
 // to one conversation, which adk-go marks with a "user:" prefix.
 func userNamespaced(fileName string) bool {
 	return strings.HasPrefix(fileName, "user:")
+}
+
+// key is a version's object key, under the service's prefix.
+func (service *Service) key(appName, userID, sessionID, fileName string, version int64) string {
+	return service.prefix + buildKey(appName, userID, sessionID, fileName, version)
 }
 
 func buildKey(appName, userID, sessionID, fileName string, version int64) string {
