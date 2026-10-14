@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"time"
 
 	"google.golang.org/adk/v2/artifact"
 )
@@ -20,6 +21,8 @@ import (
 type Chain struct {
 	current artifact.Service
 	legacy  artifact.Service
+	// sleep waits between Save's retries; a field so tests don't wait.
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
 // NewChain returns a Chain writing to current and also reading legacy.
@@ -27,10 +30,13 @@ func NewChain(current, legacy artifact.Service) (*Chain, error) {
 	if current == nil || legacy == nil {
 		return nil, errors.New("s3artifact: a chain needs both stores")
 	}
-	return &Chain{current: current, legacy: legacy}, nil
+	return &Chain{current: current, legacy: legacy, sleep: sleepContext}, nil
 }
 
-// Save implements artifact.Service.
+// Save implements artifact.Service. While the old store holds versions of
+// the artifact, the new one is numbered after the highest in either; a
+// writer that takes that number first makes this one pick the next, as
+// Service.Save does on its own (A16), within the same budget.
 func (chain *Chain) Save(ctx context.Context, request *artifact.SaveRequest) (*artifact.SaveResponse, error) {
 	if request.Version != 0 {
 		return chain.current.Save(ctx, request)
@@ -42,13 +48,26 @@ func (chain *Chain) Save(ctx context.Context, request *artifact.SaveRequest) (*a
 	if len(legacy) == 0 {
 		return chain.current.Save(ctx, request)
 	}
-	current, err := versionsOf(ctx, chain.current, request.AppName, request.UserID, request.SessionID, request.FileName)
-	if err != nil {
-		return nil, err
+	var lastErr error
+	for attempt := range maxSaveAttempts {
+		current, err := versionsOf(ctx, chain.current, request.AppName, request.UserID, request.SessionID, request.FileName)
+		if err != nil {
+			return nil, err
+		}
+		next := *request
+		next.Version = slices.Max(append(slices.Clone(legacy), current...)) + 1
+		saved, err := chain.current.Save(ctx, &next)
+		if !errors.Is(err, ErrVersionConflict) {
+			return saved, err
+		}
+		lastErr = err
+		if attempt < maxSaveAttempts-1 {
+			if err := chain.sleep(ctx, backoffDelay(attempt)); err != nil {
+				return nil, fmt.Errorf("save artifact %q: %w", request.FileName, err)
+			}
+		}
 	}
-	next := *request
-	next.Version = slices.Max(append(legacy, current...)) + 1
-	return chain.current.Save(ctx, &next)
+	return nil, fmt.Errorf("save artifact %q after %d attempts (last error: %v): %w", request.FileName, maxSaveAttempts, lastErr, ErrVersionConflict)
 }
 
 // Load implements artifact.Service: the latest version across both stores

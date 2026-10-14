@@ -254,6 +254,21 @@ not permission to copy every incidental value into a new component.
     agent is a tile with no camera, marked Listening or Speaking.
   - **Recording:** while it is on, everyone in the call sees who turned it
     on, and when.
+- **A specialist's access** (I3, I9). Its page has an Access tab with two
+  cards:
+  - **Model:** Lite or Main, as two tiles, with the chosen one raised.
+  - **Apps:** "Every app you connect" (the default, which reads everything
+    and changes nothing) or "Only the apps you choose". Every connected app
+    gets a row with a checkbox for whether the specialist may use it, and a
+    "May change things" switch, which is off unless it may use the app.
+    Saving replaces the whole grant. An app the grant names that is no
+    longer connected stays listed, marked so, until it is taken off.
+- **What the organization agent made of a team's posts** (I7).
+  - **Team summary:** a teamspace's Overview starts with this card (summary,
+    decisions, risks, open questions) and the team's proposed follow-ups.
+    Anyone who may not read it (403) sees no card at all.
+  - **Agent overview** lists the follow-ups from the member's teamspaces,
+    grouped by teamspace.
 - **Library** (was Knowledge bases; founder's redesign, 14 Oct 2026). Each
   collection is a filled tile on the canvas, with no outline, and lifts to
   the raised tile on hover; search, the source list, an open document and an

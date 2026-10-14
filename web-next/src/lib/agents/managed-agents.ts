@@ -9,6 +9,28 @@ import type { ReadOptions } from "./http"
 export type AgentKind = "primary" | "specialist"
 export type AgentStatus = "active" | "disabled"
 
+/** The model an agent answers on: lite for a specialist unless set to main. */
+export type ModelTier = "lite" | "main"
+
+/** "Every app": a grant's `apps` may be just this. */
+export const ALL_APPS = "*"
+
+/**
+ * What a specialist may reach in its owner's apps (`runprofile.Grant`).
+ * `apps` are toolkit slugs, or `["*"]` for every app; it reads them. It may
+ * change things only in `write_apps`. The default is `{apps: ["*"]}`: reads
+ * everything, writes nothing.
+ */
+export type AgentGrant = {
+  apps: string[]
+  tools?: string[]
+  write_apps?: string[]
+  write_tools?: string[]
+}
+
+/** The most entries one of a grant's lists may hold. */
+export const MAX_GRANT_ENTRIES = 200
+
 /** One of the caller's own agents (`managedagents.Definition`). */
 export type ManagedAgent = {
   id: string
@@ -22,6 +44,10 @@ export type ManagedAgent = {
   revision: number
   created_at: string
   updated_at: string
+  /** A specialist's grant; a primary has none and reaches all its member does. */
+  grant?: AgentGrant
+  /** Always main for a primary. Older servers leave it out. */
+  model_tier?: ModelTier
 }
 
 export type CreateAgentInput = {
@@ -37,8 +63,13 @@ export type CreateAgentInput = {
 export type UpdateAgentInput = {
   name?: string
   description?: string
+  /** A specialist's only: a primary's instructions are not editable (400). */
   instructions?: string
   status?: AgentStatus
+  /** Specialists only, owner only: replaces the whole grant. */
+  grant?: AgentGrant
+  /** Specialists only. */
+  model_tier?: ModelTier
 }
 
 function agentsPath(organizationId: string, ...segments: string[]) {
@@ -87,7 +118,14 @@ export function updateAgent(
 ): Promise<ManagedAgent> {
   return apiRequest<ManagedAgent>(agentsPath(organizationId, agentId), {
     method: "PATCH",
-    body: pick(input, ["name", "description", "instructions", "status"]),
+    body: pick(input, [
+      "name",
+      "description",
+      "instructions",
+      "status",
+      "grant",
+      "model_tier",
+    ]),
   })
 }
 

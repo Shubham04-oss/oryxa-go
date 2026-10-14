@@ -6,7 +6,7 @@ import { runDurableObjectAlarm } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Event, ExecResult, LogResponse } from "../src/contracts";
 import { blockedTarget } from "../src/sandbox/egress";
-import { setWorkspaceFactory } from "../src/sandbox/sandbox";
+import { BACKUPS_PREFIX, backupPrefix, setWorkspaceFactory } from "../src/sandbox/sandbox";
 import { FakeWorkspace, workspaces } from "./fakes";
 import { type TokenOptions, call } from "./tokens";
 
@@ -233,6 +233,18 @@ describe("lifecycle", () => {
     const read = (await (await post("/sandbox/shared/files/read", { paths: ["a.txt"] })).json()) as { files: { error?: string }[] };
     expect(read.files[0]!.error).toContain("ENOENT");
     expect(workspace().restored.length).toBe(0);
+  });
+
+  it("keeps backups under a fixed prefix a lifecycle rule can expire, and reset clears them (A17)", async () => {
+    const prefix = backupPrefix({ org: "org_1", room, name: "shared" });
+    expect(prefix).toBe(`backups/sandbox/org_1/thread/${room.id}/shared/`);
+    expect(prefix.startsWith(BACKUPS_PREFIX)).toBe(true);
+    await env.RUNS.put(`${prefix}0000-backup.tar.zst`, "backup");
+    await env.RUNS.put(`${BACKUPS_PREFIX}org_1/thread/${room.id}/other/keep.tar.zst`, "other sandbox");
+    await post("/sandbox/shared/exec/command", { command: "true" });
+    expect((await post("/sandbox/shared/reset", {})).status).toBe(200);
+    expect((await env.RUNS.list({ prefix })).objects).toEqual([]);
+    expect((await env.RUNS.list({ prefix: `${BACKUPS_PREFIX}org_1/thread/${room.id}/other/` })).objects.length).toBe(1);
   });
 
   it("stops a sandbox on DELETE", async () => {

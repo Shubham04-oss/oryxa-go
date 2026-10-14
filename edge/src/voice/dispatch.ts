@@ -66,7 +66,8 @@ export class Agents implements AgentsClient {
   constructor(
     private readonly baseURL: string,
     private readonly jwk: string,
-    private readonly fetcher: typeof fetch = fetch,
+    // Wrapped: Workers refuse the global fetch called as another object's method.
+    private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
   ) {}
 
   static fromEnv(env: Env): Agents | undefined {

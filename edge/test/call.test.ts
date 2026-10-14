@@ -6,13 +6,13 @@ import { env, exports } from "cloudflare:workers";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { DispatchRequest, VoiceFrame } from "../src/call/contracts";
 import { setCallProvider } from "../src/call/providers";
-import type { CallProvider } from "../src/call/realtimekit";
+import { RealtimeKit, type CallProvider } from "../src/call/realtimekit";
 import { handleRealtimeKitWebhook, recordingPrefix } from "../src/call/webhook";
 import type { Event, LogResponse } from "../src/contracts";
 import type { Env } from "../src/env";
 import { base64Encode } from "../src/http";
-import { DispatchError } from "../src/voice/dispatch";
-import type { Ask, Reply } from "../src/voice/brain";
+import { Agents, DispatchError } from "../src/voice/dispatch";
+import { Gemini, type Ask, type Reply } from "../src/voice/brain";
 import { setVoiceProviders } from "../src/voice/providers";
 import { call } from "./tokens";
 
@@ -629,4 +629,26 @@ describe("RealtimeKit's webhooks", () => {
     );
     expect(await response.json()).toEqual({ ignored: true });
   });
+});
+
+describe("the real clients, in workerd", () => {
+  // The tests above fake RealtimeKit, Gemini and agents; these check that the
+  // real clients' own fetch works where they run, rather than failing every
+  // request with "Illegal invocation" (the global fetch called as a method).
+  it("reach the network with their default fetch", async () => {
+    const clients: { name: string; fetcher: (input: string) => Promise<Response> }[] = [
+      { name: "RealtimeKit", ...(new RealtimeKit("acct", "app", "token") as unknown as { fetcher: (input: string) => Promise<Response> }) },
+      { name: "Gemini", ...(new Gemini("key") as unknown as { fetcher: (input: string) => Promise<Response> }) },
+      { name: "Agents", ...(new Agents("http://127.0.0.1:9", "{}") as unknown as { fetcher: (input: string) => Promise<Response> }) },
+    ];
+    for (const client of clients) {
+      const holder = { fetcher: client.fetcher };
+      const error = await holder.fetcher("http://127.0.0.1:9/").then(
+        () => null,
+        (failure: unknown) => String(failure),
+      );
+      expect(error ?? "", client.name).not.toMatch(/Illegal invocation/);
+    }
+  });
+
 });

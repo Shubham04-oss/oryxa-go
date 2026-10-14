@@ -14,6 +14,7 @@ import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { TeamspaceConversation } from "./teamspace-room"
 import { useHasCalls } from "./call-provider"
 import { ParleyButton, ParleyStrip } from "./call-surfaces"
+import { TeamSynthesis } from "./team-synthesis"
 import {
   agentIdentity,
   memberName,
@@ -207,7 +208,11 @@ export function TeamspaceFocus({
             aria-label={`${space.name} work panel`}
           >
             {tab === "Overview" && (
-              <OverviewPanel space={space} viewerId={viewerId} />
+              <OverviewPanel
+                organizationId={organizationId}
+                space={space}
+                viewerId={viewerId}
+              />
             )}
             {tab === "Tasks" && (
               <>
@@ -256,9 +261,11 @@ function WorkHeading({
 }
 
 function OverviewPanel({
+  organizationId,
   space,
   viewerId,
 }: {
+  organizationId: string
   space: Teamspace
   viewerId?: string
 }) {
@@ -272,6 +279,7 @@ function OverviewPanel({
         status={statusLabel(space)}
       />
       <div className="workspace-work-body">
+        <TeamSynthesis organizationId={organizationId} teamspaceId={space.id} />
         <div className="workspace-work-card">
           <h3>Purpose</h3>
           <p className="workspace-teamspace-purpose">

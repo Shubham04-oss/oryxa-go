@@ -50,7 +50,9 @@ export class RealtimeKit implements CallProvider {
     accountId: string,
     appId: string,
     private readonly apiToken: string,
-    private readonly fetcher: typeof fetch = fetch,
+    // Workers refuse the global fetch called as another object's method, so
+    // it is wrapped rather than stored as is.
+    private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
   ) {
     this.base = `${API}/${encodeURIComponent(accountId)}/realtime/kit/${encodeURIComponent(appId)}`;
   }

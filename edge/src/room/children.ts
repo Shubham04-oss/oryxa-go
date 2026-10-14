@@ -182,12 +182,10 @@ export class Children {
       if (caller.kind === "agent" && caller.claims.private) throw new EdgeError("forbidden", "a private token reaches only its member's private sandbox");
       return;
     }
-    // Browsers hold their member's cookies and logins.
-    if (caller.kind === "agent") {
-      if (existing && existing.member !== member) throw new EdgeError("forbidden", "this browser belongs to another member");
-      return;
-    }
-    if (existing && existing.private && existing.member !== member) throw new EdgeError("forbidden", "this browser is private to another member");
+    // Browsers hold their member's cookies and logins: only that member, and
+    // agents acting for them, may drive, watch, take over or hand back one,
+    // private or not (A15).
+    if (existing && existing.member !== member) throw new EdgeError("forbidden", "this browser belongs to another member");
   }
 
   private checkLimit(kind: Kind): void {
