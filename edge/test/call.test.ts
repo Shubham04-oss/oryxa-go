@@ -3,7 +3,7 @@
 // and the dispatch round trip (B5). RealtimeKit, the voice model, speech and
 // Go are faked; the room, its log, R2 and the VoiceDO are the real ones.
 import { env, exports } from "cloudflare:workers";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { DispatchRequest, VoiceFrame } from "../src/call/contracts";
 import { setCallProvider } from "../src/call/providers";
 import type { CallProvider } from "../src/call/realtimekit";
@@ -49,6 +49,12 @@ class FakeRealtimeKit implements CallProvider {
     this.stopped.push(recordingId);
   }
 }
+
+// The Worker's first request starts it, which under a loaded full run can
+// outlast a test's own timeout.
+beforeAll(async () => {
+  await call("/v1/rooms/teamspace/room_warmup/log", { tokenOptions: { room: { kind: "teamspace", id: "room_warmup" }, scopes: ["log:read"] } });
+}, 60_000);
 
 let rtk: FakeRealtimeKit;
 let asks: Ask[];

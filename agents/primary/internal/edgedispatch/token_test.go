@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -175,5 +176,47 @@ func TestParsePublicKeys(t *testing.T) {
 	}
 	if _, err := NewVerifier(nil, nil); err == nil {
 		t.Error("a verifier with no keys was made")
+	}
+}
+
+// TestVerifyAcceptsATokenTheEdgeSigned reads a token the edge's own signer
+// made (edge/src/voice/dispatch.node.test.ts writes the fixture), so the
+// two sides of contract §4 can't drift apart.
+func TestVerifyAcceptsATokenTheEdgeSigned(t *testing.T) {
+	raw, err := os.ReadFile("testdata/edge_to_agents.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		PublicKeys []string `json:"publicKeys"`
+		IssuedAt   int64    `json:"issuedAt"`
+		Token      string   `json:"token"`
+		Request    Request  `json:"request"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(fixture.PublicKeys)
+	keys, err := ParsePublicKeys(string(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := NewVerifier(keys, func() time.Time { return time.Unix(fixture.IssuedAt, 0) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := verifier.Verify(fixture.Token)
+	if err != nil {
+		t.Fatalf("the edge's token was refused: %v", err)
+	}
+	request := fixture.Request
+	if err := request.Validate(); err != nil {
+		t.Fatalf("the edge's dispatch body is invalid here: %v", err)
+	}
+	if claims.Org != request.Organization || claims.Room != request.Room || claims.Member != request.Member || claims.Team != request.Team {
+		t.Fatalf("claims %+v do not cover the request %+v", claims, request)
+	}
+	if !claims.HasScope(edgev1.ScopeCallSpeak) {
+		t.Fatalf("scopes = %v", claims.Scopes)
 	}
 }
