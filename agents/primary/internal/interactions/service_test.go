@@ -279,7 +279,7 @@ func TestCreateResolvesTheTargetAndRecordsStrictScope(t *testing.T) {
 	}
 }
 
-func TestTargetOrPrimaryCanDecideWithinRequestedScope(t *testing.T) {
+func TestOnlyTheTargetCanDecideWithinRequestedScope(t *testing.T) {
 	// An agent decides only what its member let it: a request made in a
 	// teamspace to a specialist contributed there with automatic delegation.
 	service, _ := teamspaceService(t, teamspaceSeats())
@@ -297,7 +297,18 @@ func TestTargetOrPrimaryCanDecideWithinRequestedScope(t *testing.T) {
 	}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("broadened decision error=%v", err)
 	}
-	approved, err := service.Decide(inMemberChat(), targetPrimary, created.ID, agents.InteractionDecisionInput{
+	// The member's primary agent reads the request but never decides it (L7).
+	if _, err := service.Decide(inMemberChat(), targetPrimary, created.ID, agents.InteractionDecisionInput{
+		Decision: DecisionApproved, Message: "Approved", AllowedTools: []string{"knowledge_search"},
+	}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("primary decision error=%v", err)
+	}
+	if _, err := service.Respond(context.Background(), targetPrimary, created.ID, agents.InteractionResponseInput{
+		Status: StatusCompleted, Summary: "Done",
+	}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("primary response error=%v", err)
+	}
+	approved, err := service.Decide(inMemberChat(), autoSpecialist, created.ID, agents.InteractionDecisionInput{
 		Decision: DecisionApproved, Message: "Approved", AllowedTools: []string{"knowledge_search"}, GrantedPermissions: []string{"read:architecture"},
 	})
 	if err != nil || approved.Status != StatusApproved || approved.Decision == nil {

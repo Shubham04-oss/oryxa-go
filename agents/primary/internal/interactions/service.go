@@ -542,7 +542,8 @@ func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, 
 }
 
 // Decide records a decision an agent makes, through its interactions tool:
-// the addressed agent's own, or its member's primary agent mediating, and
+// only the addressed agent's own (answersFor; the primary never decides for
+// its member's other agents), and
 // only in a run its member started (memberauth.RunOrigin): no agent decides
 // anything in a run nobody is watching. A
 // request held for its owner (HeldForOwner), every one made outside a
@@ -601,11 +602,11 @@ func (service *Service) decide(ctx context.Context, actor agents.InteractionActo
 		return agents.Interaction{}, ErrForbidden
 	}
 	if !asOwner {
-		if actor.AgentID != request.Target.AgentID && actor.AgentKind != "primary" {
-			return agents.Interaction{}, ErrForbidden
-		}
 		if HeldForOwner(request) {
 			return agents.Interaction{}, fmt.Errorf("%w: this request is held for your member's own decision in Oryxa, and no agent can approve or reject it; tell your member it is waiting for them", ErrForbidden)
+		}
+		if !answersFor(actor, request.Target) {
+			return agents.Interaction{}, fmt.Errorf("%w: this request is addressed to another of your member's agents, and only it or your member decides it", ErrForbidden)
 		}
 	}
 	if request.Status == StatusExpired {
@@ -654,7 +655,7 @@ func (service *Service) Respond(ctx context.Context, actor agents.InteractionAct
 	if err != nil {
 		return agents.Interaction{}, err
 	}
-	if request.Target.UserID != actor.UserID || actor.AgentID != request.Target.AgentID && actor.AgentKind != "primary" {
+	if !answersFor(actor, request.Target) {
 		return agents.Interaction{}, ErrForbidden
 	}
 	if request.Status == StatusExpired {
@@ -886,6 +887,14 @@ func isToolSubset(values, allowed []string) bool {
 // for itself.
 func actsFor(actor agents.InteractionActor, party agents.InteractionParty) bool {
 	return party.UserID == actor.UserID && (actor.AgentKind == "primary" || party.AgentID == actor.AgentID)
+}
+
+// answersFor is whether the actor may decide or answer for this party: the
+// member themselves in their signed-in session, otherwise only the agent the
+// request is addressed to. A primary agent reads its member's other agents'
+// requests (actsFor) but never decides or answers them (06-agent-isolation.md, L7).
+func answersFor(actor agents.InteractionActor, party agents.InteractionParty) bool {
+	return party.UserID == actor.UserID && (actor.Session == agents.SessionMember || party.AgentID == actor.AgentID)
 }
 
 func canRead(actor agents.InteractionActor, request agents.Interaction) bool {
