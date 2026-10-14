@@ -63,8 +63,13 @@ if [[ -z "${GOOGLE_OAUTH_CLIENT_ID:-}" || -z "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]
 fi
 
 step auth/infra/cognito
+# The pool sends from the domain's SES identity, verified in this region, not
+# from Cognito's own sender and its 50 messages a day.
+account=$(aws sts get-caller-identity --query Account --output text)
 cognito=$(
   COGNITO_POOL_NAME=$COGNITO_POOL_NAME \
+    COGNITO_EMAIL_SOURCE_ARN="arn:aws:ses:$AWS_REGION:$account:identity/${EMAIL_FROM_ADDRESS#*@}" \
+    COGNITO_EMAIL_FROM="Oryxa <$EMAIL_FROM_ADDRESS>" \
     COGNITO_APP_CLIENT_NAME=$COGNITO_APP_CLIENT_NAME \
     COGNITO_DOMAIN_PREFIX=$COGNITO_DOMAIN_PREFIX \
     COGNITO_CALLBACK_URLS="$APP_URL/v1/auth/callback" \
