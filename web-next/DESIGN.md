@@ -524,6 +524,12 @@ not permission to copy every incidental value into a new component.
   its foot; no text sits on the painting anywhere else. On a phone the scene
   is a band across the top that fades into the page. The Google option uses
   the full-color Google mark.
+- Setting up a new workspace continues in the same layout (`?setup=`, in
+  `components/onboarding.tsx`), with a five-part stepper: Workspace, then
+  Krude (background access), Tools (connect apps), Crew (invite by email)
+  and Teamspace (the first one). Each step does real work through the
+  existing APIs and can be skipped; an app's or the grant's sign-in page
+  returns to the step it left.
 
 ## 5. Small screens and keyboard
 
