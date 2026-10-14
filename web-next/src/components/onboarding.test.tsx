@@ -25,7 +25,7 @@ function jsonResponse(body: unknown, status = 200) {
 
 /** Answers by "METHOD url"; anything unknown is a 404. Records every call. */
 function stubApi(
-  routes: Record<string, (body: unknown) => [number, unknown]>
+  routes: Partial<Record<string, (body: unknown) => [number, unknown]>>
 ): Call[] {
   const calls: Call[] = []
   vi.stubGlobal(
