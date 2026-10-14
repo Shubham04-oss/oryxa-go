@@ -136,7 +136,14 @@ export class SandboxDO extends DurableObject<Env> {
       const upstream = new URL(`http://localhost:${target.port}${rest}${incoming.search}`);
       const headers = new Headers(request.headers);
       for (const name of ["x-oryxa-signed", "x-oryxa-rest", "cookie", "authorization"]) headers.delete(name);
-      return workspace.port(target.port!).fetch(new Request(upstream, { method: request.method, headers, body: request.body, redirect: "manual" }));
+      let answer: Response;
+      try {
+        answer = await workspace.port(target.port!).fetch(new Request(upstream, { method: request.method, headers, body: request.body, redirect: "manual" }));
+      } catch (error) {
+        // Nothing listens there (yet), or the server dropped the connection.
+        return new Response(`Nothing in the sandbox answered on port ${target.port}: ${String((error as Error)?.message ?? error)}\n`, { status: 502 });
+      }
+      return previewResponse(answer);
     }
     if (target.t === "terminal") {
       if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return new Response("expected a WebSocket", { status: 426 });
@@ -636,6 +643,19 @@ async function kernelCall(workspace: Workspace, port: number, path: string, body
   } finally {
     clearTimeout(timer);
   }
+}
+
+// PREVIEW_STRIPPED are response headers a preview may not send. Every org's
+// previews share the edge's origin, so a page a dev server serves must not
+// set cookies there or widen a service worker's scope over it.
+const PREVIEW_STRIPPED = ["set-cookie", "set-cookie2", "service-worker-allowed"];
+
+// previewResponse passes a sandbox server's answer on without the headers
+// above, keeping a WebSocket upgrade (a dev server's hot reload) working.
+export function previewResponse(answer: Response): Response {
+  const headers = new Headers(answer.headers);
+  for (const name of PREVIEW_STRIPPED) headers.delete(name);
+  return new Response(answer.body, { status: answer.status, statusText: answer.statusText, headers, webSocket: answer.webSocket });
 }
 
 // resolvePath makes a sandbox path absolute against /workspace and refuses
