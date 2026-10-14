@@ -23,7 +23,7 @@ import type { Item } from "@/lib/threads/client"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
 import type { AgentWorkflow } from "@/lib/agents/agent-workflows"
 import type { ActiveAgentLease } from "@/lib/home/client"
-import { HomeOverview } from "./home-overview"
+import { HomeOverview, greeting } from "./home-overview"
 import {
   ASKER,
   OWNER,
@@ -334,24 +334,38 @@ it("pins a running open chat once and keeps starting chat truthful until an ID e
   ).toBeNull()
 })
 
-it("lays Today out as apps and teammates, the composer, then conversations, knowledge, files and recurring work", async () => {
+it("greets by the member's clock and first name", () => {
+  const at = (hour: number) => new Date(2026, 9, 14, hour, 30).getTime()
+  expect(greeting(at(9), "Ada Brennan")).toBe("Good morning, Ada")
+  expect(greeting(at(14), "Ada")).toBe("Good afternoon, Ada")
+  expect(greeting(at(21), " ")).toBe("Good evening")
+  expect(greeting(at(2))).toBe("Good evening")
+  expect(greeting(at(9), "ada@northstar.io")).toBe("Good morning")
+})
+
+it("lays My workspace out as the greeting, teammates, the composer, then one row from your apps through recurring work", async () => {
   stubApi()
-  const view = renderHome()
+  const view = renderHome({ viewerName: "Ada Brennan" })
   await screen.findByText("Nothing needs you right now.")
   expect(
     screen.getAllByRole("heading", { level: 2 }).map((node) => node.textContent)
   ).toEqual([
-    "From your apps",
+    expect.stringMatching(/^Good (morning|afternoon|evening), Ada$/),
     "Teammates",
+    "Pick up where you left off",
+    "From your apps",
     "Conversations",
     "Knowledge",
     "Files",
     "Recurring work",
   ])
+  const row = screen.getByRole("region", { name: "Pick up where you left off" })
+  for (const name of ["From your apps", "Conversations", "Recurring work"])
+    expect(within(row).getByRole("region", { name })).toBeTruthy()
   const order = [
     screen.getByRole("region", { name: "Teammates" }),
     screen.getByRole("region", { name: "Your agent" }),
-    screen.getByRole("region", { name: "Conversations" }),
+    row,
   ]
   expect(
     order[0].compareDocumentPosition(order[1]) &

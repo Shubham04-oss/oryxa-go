@@ -241,7 +241,7 @@ describe("Requests in the workspace shell", () => {
 
   it("opens on a request when a note or a link names one, from wherever the member is", async () => {
     renderShell({ mode: "home" })
-    await screen.findByRole("heading", { name: "Today", level: 1 })
+    await screen.findByRole("heading", { name: "My workspace", level: 1 })
 
     act(() => openRequest("irq_link"))
 

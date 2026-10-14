@@ -106,7 +106,7 @@ not permission to copy every incidental value into a new component.
 
   | Tile | Pages |
   | --- | --- |
-  | Home | Today, Knowledge bases, Tools |
+  | Home | My workspace, Knowledge bases, Tools |
   | Team | Teamspaces, People, then up to three visible recent conversations |
   | Agents | Agent overview, Requests, Multi-agent teams, Specialists |
 
@@ -122,14 +122,20 @@ not permission to copy every incidental value into a new component.
 
 ## 3. Focused work and content pages
 
-- **Home — Today.** Home is the member's desk: what their apps said, who
-  needs them, a place to ask, and their own stack. Start with both rails
-  collapsed and preserve the member's explicit toggle choices on return. Use a
-  centered column at most 880px wide on the canvas. Every section is naked:
-  a small muted heading and plain rows (a 26px mark, a 13px line clamped to
-  two lines, an 11px quiet line), a hover tint and no cards, borders or
-  fills. On a phone the columns stack and controls wrap without horizontal
-  scrolling. No greeting or starter prompts.
+- **Home — My workspace** (was Today; founder's redesign, 14 Oct 2026).
+  Home is the member's desk: what their apps said, who needs them, a place to
+  ask, and their own stack. Start with both rails collapsed and preserve the
+  member's explicit toggle choices on return. One calm centered column at
+  most 760px wide, under a faint band of the sea-of-bottles scene that fades
+  out before the content (no text on it). In order: a greeting by the
+  member's clock and first name ("Good afternoon, Ada"; no name when only an
+  email is known) with one line saying how many things need them, only when
+  something does; Teammates (what needs them) as one tile; the composer and
+  their tools; then **Pick up where you left off**, a row of cards that
+  scrolls sideways (snapping, the next card faded at the edge): From your
+  apps, Conversations, Knowledge, Files and Recurring work. Inside a card or
+  tile, rows stay plain (a 26px mark, a 13px line clamped to two lines, an
+  11px quiet line) with a hover tint. No starter prompts.
   - **From your apps** (top left): at most four briefs, newest first. A brief
     is the first sentence of what Krude told the member in their wake-up
     thread (`origin: "wakeup"`, "Updates from your apps") after a batch of

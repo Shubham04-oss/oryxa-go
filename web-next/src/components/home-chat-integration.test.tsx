@@ -197,7 +197,7 @@ function renderShell() {
   return { ...view, client }
 }
 
-const home = () => within(screen.getByRole("main", { name: "Today canvas" }))
+const home = () => within(screen.getByRole("main", { name: "My workspace canvas" }))
 const work = () => within(home().getByRole("region", { name: "Conversations" }))
 function sendHome(text: string) {
   fireEvent.change(

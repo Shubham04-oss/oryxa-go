@@ -225,6 +225,8 @@
   --on-scene-soft: #ffffffd1;
   --scene-shade: #0a121e8c;
   --tone-1c3350: #1c3350;
+  --scene-sea: url("/scenes/sea.webp");
+  --scene-band-opacity: .38;
   color-scheme: dark;
 }
 
@@ -447,5 +449,7 @@
   --on-scene-soft: #ffffffd1;
   --scene-shade: #0a121e8c;
   --tone-1c3350: #1c3350;
+  --scene-sea: url("/scenes/sea.webp");
+  --scene-band-opacity: .55;
   color-scheme: light;
 }

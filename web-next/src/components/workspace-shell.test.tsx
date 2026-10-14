@@ -356,7 +356,7 @@ describe("WorkspaceShell navigation", () => {
     expect(shell?.getAttribute("data-right")).toBe("expanded")
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(
-      screen.getByRole("heading", { name: "Today", level: 1 })
+      screen.getByRole("heading", { name: "My workspace", level: 1 })
     ).toBeTruthy()
     expect(shell?.getAttribute("data-primary-work")).toBeNull()
 
@@ -365,7 +365,7 @@ describe("WorkspaceShell navigation", () => {
       { target: { value: "  Start from Home  " } }
     )
     fireEvent.click(
-      within(screen.getByRole("main", { name: "Today canvas" })).getByRole(
+      within(screen.getByRole("main", { name: "My workspace canvas" })).getByRole(
         "button",
         { name: "Send message" }
       )
@@ -408,7 +408,7 @@ describe("WorkspaceShell navigation", () => {
     )
     expect(screen.getByDisplayValue("Still composing on Home")).toBeTruthy()
     expect(
-      screen.getByRole("heading", { name: "Today", level: 1 })
+      screen.getByRole("heading", { name: "My workspace", level: 1 })
     ).toBeTruthy()
     expect(shell?.getAttribute("data-primary-work")).toBeNull()
     expect(request).toHaveBeenCalledTimes(3)
@@ -419,7 +419,7 @@ describe("WorkspaceShell navigation", () => {
     const { container } = render(<WorkspaceShell />)
     const shell = container.querySelector(".workspace-shell")
     expect(
-      screen.getByRole("heading", { name: "Today", level: 1 })
+      screen.getByRole("heading", { name: "My workspace", level: 1 })
     ).toBeTruthy()
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("collapsed")
@@ -433,13 +433,13 @@ describe("WorkspaceShell navigation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
     fireEvent.click(screen.getByRole("button", { name: "Teamspaces" }))
-    fireEvent.click(screen.getByRole("button", { name: "Today" }))
+    fireEvent.click(screen.getByRole("button", { name: "My workspace" }))
     expect(shell?.getAttribute("data-left")).toBe("expanded")
     fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("expanded")
     fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
-    fireEvent.click(screen.getByRole("button", { name: "Today" }))
+    fireEvent.click(screen.getByRole("button", { name: "My workspace" }))
     expect(shell?.getAttribute("data-right")).toBe("expanded")
     fireEvent.click(
       screen.getByRole("button", { name: "Collapse agent panel" })
@@ -548,13 +548,13 @@ describe("WorkspaceShell navigation", () => {
       name: "Agents navigation",
     })
     expect(
-      within(homeNavigation).getByRole("button", { name: "Today" })
+      within(homeNavigation).getByRole("button", { name: "My workspace" })
     ).toBeTruthy()
     expect(
       within(homeNavigation).getByRole("button", { name: "Knowledge bases" })
     ).toBeTruthy()
     expect(
-      within(teamNavigation).queryByRole("button", { name: "Today" })
+      within(teamNavigation).queryByRole("button", { name: "My workspace" })
     ).toBeNull()
     expect(
       within(agentsNavigation).getByRole("button", {
@@ -585,9 +585,9 @@ describe("WorkspaceShell navigation", () => {
     ).toBeNull()
 
     fireEvent.click(
-      within(homeNavigation).getByRole("button", { name: "Today" })
+      within(homeNavigation).getByRole("button", { name: "My workspace" })
     )
-    expect(screen.getByRole("heading", { name: "Today" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "My workspace" })).toBeTruthy()
   })
 
   // Agents mode's focused work is real data now: agents-mode.test.tsx.

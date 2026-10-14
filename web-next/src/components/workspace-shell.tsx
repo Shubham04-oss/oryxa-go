@@ -94,7 +94,7 @@ type NavigationItem = {
 
 const navigation: Record<PrimaryMode, NavigationItem[]> = {
   home: [
-    { key: "overview", label: "Today", icon: LayoutGrid },
+    { key: "overview", label: "My workspace", icon: LayoutGrid },
     { key: "knowledge", label: "Knowledge bases", icon: Sparkles },
     { key: "tools", label: "Tools", icon: Puzzle },
   ],
@@ -127,7 +127,7 @@ const defaultSections: Record<PrimaryMode, Section> = {
 }
 
 const headings: Record<Section, string> = {
-  overview: "Today",
+  overview: "My workspace",
   teamspaces: "Teamspaces",
   agents: "Agent overview",
   "multi-agents": "Multi-agent teams",
@@ -613,6 +613,7 @@ function WorkspaceShellContent({
   const homeOverviewProps = {
     organizationId: session ? selectedOrganization?.id : undefined,
     viewerId,
+    viewerName: session ? currentIdentity.name : undefined,
     primaryChatActivity,
     onNewChat: (message?: string) =>
       openHomeConversation({ kind: "new", message }),
