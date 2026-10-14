@@ -32,6 +32,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/relevance"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 )
@@ -111,11 +112,13 @@ type Answer struct {
 // Run is a run that holds its thread and is ready to execute. Execute or
 // Discard it, once: either records how it ended and frees the thread.
 type Run struct {
-	service    *Service
-	member     Member
-	threadID   string
-	id         string
-	startedBy  string
+	service   *Service
+	member    Member
+	threadID  string
+	id        string
+	startedBy string
+	// mode is what kind of run this is, in runprofile's table.
+	mode       runprofile.Mode
 	content    *genai.Content
 	stateDelta map[string]any
 	guardInput agents.RunGuardInput
@@ -125,8 +128,9 @@ type Run struct {
 	// record, not in an event.
 	teamspaceID string
 	// remembering is the run's view of memory, scoped to the member's
-	// organization. It is built when the run starts driving, and nil when
-	// the service has no memory.
+	// organization, that the run is handed to once it ends. It is built when
+	// the run starts driving, and nil when the service has no memory or the
+	// run's profile writes none.
 	remembering memory.Service
 	once        sync.Once
 }
@@ -166,8 +170,9 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 		return nil, ErrDraining
 	}
 	startedBy := cmp.Or(input.StartedBy, agentsv1.StartedByMember)
-	if startedBy != agentsv1.StartedByMember && startedBy != agentsv1.StartedByTrigger && startedBy != agentsv1.StartedByTeam && startedBy != agentsv1.StartedByWorkflow && startedBy != agentsv1.StartedByOrganization {
-		return nil, fmt.Errorf("%w: a run is started by a member, trigger, team coordinator, workflow or organization agent", ErrInvalid)
+	mode, err := runprofile.ModeOf(startedBy, service.unattendedTools)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, err)
 	}
 
 	// The thread must be the member's before this run takes it, even for a
@@ -179,7 +184,7 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 	if input.PublicationRequest != nil && stateString(stored.State(), stateOrigin) != OriginSideConversation {
 		return nil, fmt.Errorf("%w: publication_request is only for a side conversation", ErrInvalid)
 	}
-	run := &Run{service: service, member: member, threadID: threadID, startedBy: startedBy, teamspaceID: pinned}
+	run := &Run{service: service, member: member, threadID: threadID, startedBy: startedBy, mode: mode, teamspaceID: pinned}
 	if run.id, err = newRunID(); err != nil {
 		return nil, err
 	}
@@ -479,28 +484,18 @@ func publicationGuardInput(history []*session.Event, message string) agents.RunG
 	return input
 }
 
-// unwatched reports whether nobody is there to see what a run does. An app
-// event woke it, a schedule or durable workflow dispatched it, or the
-// organization agent is reading what members published. A team delegation is
-// not unwatched: the member asked for it, in their own thread, and waits for
-// the answer.
-func unwatched(startedBy string) bool {
-	switch startedBy {
-	case agentsv1.StartedByTrigger, agentsv1.StartedByWorkflow, agentsv1.StartedByOrganization:
-		return true
-	default:
-		return false
-	}
-}
-
 // drive runs the agent and streams what it yields, returning the error the
 // run ended with, if any.
 func (run *Run) drive(ctx context.Context, send func(Item)) error {
 	service := run.service
+	// What this run may do is its role's profile in its mode
+	// (runprofile): a run nobody is watching — an app event, a schedule, the
+	// edge, another member's request, a team coordinator, a room — is
+	// steered by text somebody else wrote, so only the agent that can reach
+	// nothing outside answers it.
+	profile := runprofile.Lookup(runprofile.RoleOf(run.member.AgentKind), run.mode)
 	answering := service.agent
-	if unwatched(run.startedBy) {
-		// Nobody is watching this run, and text somebody else wrote steers
-		// it: only the agent that can reach nothing outside runs it.
+	if profile.Reduced() {
 		answering = service.unattended
 	}
 	// The run's memory is bound to the member's organization before the run
@@ -508,14 +503,15 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 	// more than one organization, so the scope cannot be left to be read off
 	// each request: this view answers within it or not at all.
 	//
-	// A run nobody is watching gets no memory at all, neither reading nor
-	// writing. What steers it is text from the member's apps, a schedule
+	// A run nobody is watching gets no memory at all (its profile), neither
+	// reading nor writing. What steers it is text from the member's apps, a schedule
 	// firing, or another member's request — which anyone who can email them,
 	// open an issue or address their agent wrote: remembering such a run
 	// would let that text put facts about the member into what Krude knows,
 	// where they would outlive the run and steer later ones, and reading
 	// would hand that text what Krude already knows.
-	if service.memory != nil && !unwatched(run.startedBy) {
+	var recalling memory.Service
+	if service.memory != nil && (profile.ReadsMemory || profile.WritesMemory) {
 		scoped, err := service.memory.For(adkmemory.Scope{
 			OrganizationID: run.member.OrganizationID,
 			UserID:         run.member.UserID,
@@ -523,14 +519,19 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 		if err != nil {
 			return fmt.Errorf("scope memory to the member's organization: %w", err)
 		}
-		run.remembering = scoped
+		if profile.WritesMemory {
+			run.remembering = scoped
+		}
+		if profile.ReadsMemory {
+			recalling = scoped
+		}
 	}
 	adkRunner, err := runner.New(runner.Config{
 		AppName:         service.appName,
 		Agent:           answering,
 		SessionService:  service.sessions,
 		ArtifactService: service.artifacts,
-		MemoryService:   run.remembering,
+		MemoryService:   recalling,
 	})
 	if err != nil {
 		return fmt.Errorf("build runner: %w", err)

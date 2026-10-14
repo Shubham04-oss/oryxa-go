@@ -31,6 +31,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
 )
@@ -147,6 +148,10 @@ type Config struct {
 	// answer to the same name, since they take turns in one thread.
 	Agent      agent.Agent
 	Unattended agent.Agent
+	// UnattendedTools names the tool set Unattended was built with, which
+	// with what started a run is its mode in runprofile's table; empty is
+	// runprofile.ToolsReads, Krude's own wake-up agent.
+	UnattendedTools runprofile.Toolset
 	// Sessions stores threads. It should seed a member's state when a thread
 	// is created, as adksession's does.
 	Sessions session.Service
@@ -176,20 +181,21 @@ type Config struct {
 
 // Service is the run API.
 type Service struct {
-	artifactSaveMu sync.Mutex
-	appName        string
-	agent          agent.Agent
-	unattended     agent.Agent
-	sessions       session.Service
-	artifacts      artifact.Service
-	memory         *adkmemory.Service
-	runs           RunStore
-	prices         *pricing.Table
-	logger         *slog.Logger
-	runTimeout     time.Duration
-	lease          time.Duration
-	initialState   map[string]any
-	drain          *Drain
+	artifactSaveMu  sync.Mutex
+	appName         string
+	agent           agent.Agent
+	unattended      agent.Agent
+	unattendedTools runprofile.Toolset
+	sessions        session.Service
+	artifacts       artifact.Service
+	memory          *adkmemory.Service
+	runs            RunStore
+	prices          *pricing.Table
+	logger          *slog.Logger
+	runTimeout      time.Duration
+	lease           time.Duration
+	initialState    map[string]any
+	drain           *Drain
 }
 
 // New returns the service.
@@ -217,19 +223,20 @@ func New(config Config) (*Service, error) {
 		unattended = config.Agent
 	}
 	return &Service{
-		appName:      config.AppName,
-		agent:        config.Agent,
-		unattended:   unattended,
-		sessions:     config.Sessions,
-		artifacts:    config.Artifacts,
-		memory:       config.Memory,
-		runs:         config.Runs,
-		prices:       config.Prices,
-		logger:       logger,
-		runTimeout:   cmp.Or(config.RunTimeout, defaultRunTimeout),
-		lease:        cmp.Or(config.Lease, defaultLease),
-		initialState: cloneState(config.InitialState),
-		drain:        config.Drain,
+		appName:         config.AppName,
+		agent:           config.Agent,
+		unattended:      unattended,
+		unattendedTools: config.UnattendedTools,
+		sessions:        config.Sessions,
+		artifacts:       config.Artifacts,
+		memory:          config.Memory,
+		runs:            config.Runs,
+		prices:          config.Prices,
+		logger:          logger,
+		runTimeout:      cmp.Or(config.RunTimeout, defaultRunTimeout),
+		lease:           cmp.Or(config.Lease, defaultLease),
+		initialState:    cloneState(config.InitialState),
+		drain:           config.Drain,
 	}, nil
 }
 

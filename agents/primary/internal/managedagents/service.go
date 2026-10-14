@@ -16,6 +16,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
@@ -39,7 +40,9 @@ type Repository interface {
 // returns remains stable even when Definition.Name changes.
 type Factory func(Definition) (agent.Agent, error)
 
-// UnattendedProfile says how far a run nobody is watching may reach. What
+// UnattendedProfile says how far a run nobody is watching may reach: it names
+// the reduced tool set (runprofile.Toolset) the run's reduced agent is built
+// with, and with what started the run, its mode in runprofile's table. What
 // steers such a run is text somebody else wrote — another member's request,
 // or whatever a tool read — so it answers on a reduced agent rather than the
 // one a member talks to.
@@ -48,10 +51,10 @@ type UnattendedProfile string
 const (
 	// UnattendedReads may read the member's apps and knowledge: the member's
 	// own unwatched work, and an interaction their agent has approved.
-	UnattendedReads UnattendedProfile = "reads"
+	UnattendedReads = UnattendedProfile(runprofile.ToolsReads)
 	// UnattendedQuiet keeps the member's apps out of the run altogether, for
 	// a request nobody has approved yet.
-	UnattendedQuiet UnattendedProfile = "quiet"
+	UnattendedQuiet = UnattendedProfile(runprofile.ToolsQuiet)
 	// DeliveryReads and DeliveryQuiet reach as far as UnattendedReads and
 	// UnattendedQuiet, for a run that delivers one interaction: its
 	// interactions toolbox holds only what that request needs, reading,
@@ -60,23 +63,23 @@ const (
 	// nothing to list or load. DeliveryReads is approved work allowed both
 	// the member's apps and their knowledge; DeliveryQuiet is approved work
 	// allowed the knowledge alone.
-	DeliveryReads UnattendedProfile = "delivery_reads"
-	DeliveryQuiet UnattendedProfile = "delivery_quiet"
+	DeliveryReads = UnattendedProfile(runprofile.ToolsDeliveryReads)
+	DeliveryQuiet = UnattendedProfile(runprofile.ToolsDeliveryQuiet)
 	// DeliveryApps is approved work allowed the member's apps, read-only,
 	// and not their knowledge.
-	DeliveryApps UnattendedProfile = "delivery_apps"
+	DeliveryApps = UnattendedProfile(runprofile.ToolsDeliveryApps)
 	// DeliveryReport reaches the one request alone: for deciding a new
 	// request, for telling the member who asked that it was rejected or
 	// answered, and for approved work allowed neither the member's apps nor
 	// their knowledge.
-	DeliveryReport UnattendedProfile = "delivery_report"
+	DeliveryReport = UnattendedProfile(runprofile.ToolsDeliveryReport)
 	// RoomSeat is a seat's turn in a room, its owner reading the room or
 	// away alike: what steers it is what everyone in the room wrote, and
 	// everyone in the room reads what it says. It answers from the room
 	// alone, reaching none of the member's apps, knowledge, memory or
-	// requests, and files what it cannot answer with its member. It is
-	// Confined.
-	RoomSeat UnattendedProfile = "room"
+	// requests, and files what it cannot answer with its member: a room
+	// turn (runprofile.RoomTurn), whoever started it.
+	RoomSeat = UnattendedProfile(runprofile.ToolsRoom)
 )
 
 // ReadsApps is whether a run on this profile may read the member's apps.
@@ -90,19 +93,12 @@ func (profile UnattendedProfile) Delivers() bool {
 	return profile == DeliveryReads || profile == DeliveryApps || profile == DeliveryQuiet || profile == DeliveryReport
 }
 
-// Confined is whether a run on this profile answers on the reduced agent,
-// with no memory, whoever started it: a seat's turn in a room, which its
-// owner reading the room does not make a conversation of their own.
-func (profile UnattendedProfile) Confined() bool {
-	return profile == RoomSeat
-}
-
 // UnattendedFactory builds the restricted runtime a profile allows. It must
 // answer to the same name as [Factory] for the same definition: a run picks
 // between the two, and ADK addresses the agent by name. When a service has
 // no unattended factory, an unwatched run falls back to the full agent, so
-// wiring one is what makes the restriction real; a run on a Confined profile
-// does not run at all without one.
+// wiring one is what makes the restriction real; a turn in a room does not
+// run at all without one.
 type UnattendedFactory func(Definition, UnattendedProfile) (agent.Agent, error)
 
 type Config struct {
@@ -397,19 +393,15 @@ func (service *Service) engineIn(definition Definition, profile UnattendedProfil
 			return nil, fmt.Errorf("build the agent for an unwatched run: %w", err)
 		}
 	}
-	memory := service.memory
-	if profile.Confined() {
-		// A run on a confined profile answers on the reduced agent even with
-		// somebody watching, and remembers nothing: without that agent it
-		// does not run at all, rather than on the full one.
-		if unattended == nil {
-			return nil, errors.New("managed agents: a turn in a room needs the reduced agent built for it, and none is wired")
-		}
-		built, memory = unattended, nil
+	// A turn in a room answers on the reduced agent whoever started it
+	// (runprofile.RoomTurn): without that agent it does not run at all,
+	// rather than on the full one.
+	if profile == RoomSeat && unattended == nil {
+		return nil, errors.New("managed agents: a turn in a room needs the reduced agent built for it, and none is wired")
 	}
 	engine, err := threads.New(threads.Config{
-		AppName: application, Agent: built, Unattended: unattended, Sessions: service.sessions,
-		Artifacts: service.artifacts, Memory: memory, Runs: service.runs,
+		AppName: application, Agent: built, Unattended: unattended, UnattendedTools: runprofile.Toolset(profile),
+		Sessions: service.sessions, Artifacts: service.artifacts, Memory: service.memory, Runs: service.runs,
 		Prices: service.prices, Logger: service.logger, Drain: service.drain,
 		InitialState: map[string]any{
 			primaryagents.AgentIDKey:   definition.ID,

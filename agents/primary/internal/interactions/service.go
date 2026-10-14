@@ -17,7 +17,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
-	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace/policy"
@@ -567,6 +567,14 @@ func (service *Service) DecideAsOwner(ctx context.Context, actor agents.Interact
 	return service.decide(ctx, actor, token, id, input, true)
 }
 
+// runDecides is whether the run ctx carries may decide a request as an agent
+// of kind, by its profile (runprofile). What started the run names its mode
+// well enough here: only a member's own turn decides, whatever its tools.
+func runDecides(ctx context.Context, kind string) bool {
+	mode, err := runprofile.ModeOf(memberauth.RunOrigin(ctx), "")
+	return err == nil && runprofile.Lookup(runprofile.RoleOf(kind), mode).Decides
+}
+
 func (service *Service) decide(ctx context.Context, actor agents.InteractionActor, token, id string, input agents.InteractionDecisionInput, asOwner bool) (agents.Interaction, error) {
 	// Who decides is proved by the session, not by which method was called:
 	// only the member's own signed-in session decides as the owner, and it
@@ -577,7 +585,7 @@ func (service *Service) decide(ctx context.Context, actor agents.InteractionActo
 	if !asOwner && actor.Session == agents.SessionMember {
 		return agents.Interaction{}, fmt.Errorf("%w: a member decides in their own session as the owner, not as an agent", ErrForbidden)
 	}
-	if !asOwner && memberauth.RunOrigin(ctx) != agentsv1.StartedByMember {
+	if !asOwner && !runDecides(ctx, actor.AgentKind) {
 		// Nobody is watching a run its member did not start: an app trigger, a
 		// schedule, a team, or a delivery of another member's request. What
 		// steers it is text somebody else wrote, which must never decide what
