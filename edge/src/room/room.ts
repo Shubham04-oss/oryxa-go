@@ -53,6 +53,15 @@ const LOG_PAGE = 500;
 // HOT_EVENTS is how many flushed events the room keeps in SQLite for fast
 // reads; R2 holds all of them.
 const HOT_EVENTS = 10_000;
+// MAX_ARCHIVE_LISTS bounds how many R2 listings one read of old events makes.
+const MAX_ARCHIVE_LISTS = 20;
+
+type LogRow = {
+  seq: number;
+  private: number;
+  on_behalf_of: string | null;
+  body: string;
+};
 const FLUSH_DELAY_MS = 2_000;
 const FLUSH_BATCH = 1_000;
 // SUMMARY_LIMIT and DATA_LIMIT keep one event small (§8: size-capped).
@@ -200,7 +209,7 @@ export class RoomDO extends DurableObject<Env> {
   private async route(request: Request, url: URL, rest: string, caller: Caller): Promise<Response> {
     if (rest === "/log" && request.method === "GET") {
       requireScope(caller, "log:read");
-      return json(this.readLog(caller, url.searchParams));
+      return json(await this.readLog(caller, url.searchParams));
     }
     if (rest === "/log" && request.method === "POST") {
       if (caller.kind !== "agent") throw new EdgeError("forbidden", "only agents write the log");
@@ -295,18 +304,33 @@ export class RoomDO extends DurableObject<Env> {
     return event.on_behalf_of === member;
   }
 
-  readLog(caller: Caller, params: URLSearchParams): { events: Event[]; next: number; more: boolean } {
+  // hotEvents is how many flushed events stay in SQLite; a field so a test
+  // can make the R2 fallback below reachable without 10,000 events.
+  hotEvents = HOT_EVENTS;
+
+  // readLog pages through the log after a seq, optionally for one run
+  // (ROOM_RUN for the room's own events, which belong to no run). The newest
+  // events are in SQLite; older ones the flush pruned are read back from R2.
+  async readLog(caller: Caller, params: URLSearchParams): Promise<{ events: Event[]; next: number; more: boolean }> {
     const after = Number(params.get("after") ?? "0") || 0;
     const limit = Math.min(Math.max(Number(params.get("limit") ?? LOG_PAGE) || LOG_PAGE, 1), LOG_PAGE);
     const run = params.get("run");
-    const rows = this.sql
-      .exec<{ seq: number; private: number; on_behalf_of: string | null; body: string }>(
-        run
-          ? "SELECT seq, private, on_behalf_of, body FROM events WHERE seq > ? AND run = ? ORDER BY seq LIMIT ?"
-          : "SELECT seq, private, on_behalf_of, body FROM events WHERE seq > ? ORDER BY seq LIMIT ?",
-        ...(run ? [after, run, limit + 1] : [after, limit + 1]),
+    const runFilter = run === null ? "" : run === ROOM_RUN ? " AND run IS NULL" : " AND run = ?";
+    const runArgs = run === null || run === ROOM_RUN ? [] : [run];
+
+    let older: LogRow[] = [];
+    const oldest = this.sql.exec<{ seq: number | null }>("SELECT MIN(seq) AS seq FROM events").one().seq;
+    if (oldest !== null && after + 1 < oldest) older = await this.archived(after, oldest, run, limit + 1);
+
+    const hot = this.sql
+      .exec<LogRow>(
+        `SELECT seq, private, on_behalf_of, body FROM events WHERE seq > ?${runFilter} ORDER BY seq LIMIT ?`,
+        after,
+        ...runArgs,
+        limit + 1,
       )
       .toArray();
+    const rows = [...older, ...hot].slice(0, limit + 1);
     const more = rows.length > limit;
     const page = rows.slice(0, limit);
     return {
@@ -315,6 +339,52 @@ export class RoomDO extends DurableObject<Env> {
       more,
     };
   }
+
+  // archived reads events with after < seq < before from R2, where the flush
+  // wrote them in chunks per run (events/{firstSeq}.ndjson), in seq order,
+  // stopping once it has wanted of them and no earlier chunk can add one.
+  private async archived(after: number, before: number, run: string | null, wanted: number): Promise<LogRow[]> {
+    const identity = this.identity();
+    if (!identity) return [];
+    const base = run === null ? `runs/${identity.org}/${identity.room.kind}/${identity.room.id}/` : runPrefix(identity.org, identity.room, run);
+    const chunks: { key: string; first: number }[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_ARCHIVE_LISTS; page++) {
+      const listed = await this.env.RUNS.list({ prefix: base, cursor });
+      for (const object of listed.objects) {
+        const match = /\/events\/(\d{8,})\.ndjson$/.exec(object.key);
+        if (match) chunks.push({ key: object.key, first: Number(match[1]) });
+      }
+      if (!listed.truncated) break;
+      cursor = listed.cursor;
+    }
+    chunks.sort((a, b) => a.first - b.first);
+    // A chunk starting at or before after can still hold later events of its
+    // run, so the last such chunk per run is read too.
+    const lastBefore = new Map<string, number>();
+    chunks.forEach((chunk, index) => {
+      if (chunk.first <= after + 1) lastBefore.set(chunk.key.slice(0, chunk.key.lastIndexOf("/events/")), index);
+    });
+    const firstIndex = lastBefore.size ? Math.min(...lastBefore.values()) : 0;
+
+    const rows: LogRow[] = [];
+    for (let index = firstIndex; index < chunks.length; index++) {
+      const chunk = chunks[index]!;
+      if (chunk.first >= before) break;
+      if (rows.length >= wanted && chunk.first > rows[wanted - 1]!.seq) break;
+      const object = await this.env.RUNS.get(chunk.key);
+      if (!object) continue;
+      for (const line of (await object.text()).split("\n")) {
+        if (!line) continue;
+        const event = JSON.parse(line) as Event;
+        if (event.seq <= after || event.seq >= before) continue;
+        rows.push({ seq: event.seq, private: event.private ? 1 : 0, on_behalf_of: event.actor.onBehalfOf ?? null, body: line });
+      }
+      rows.sort((a, b) => a.seq - b.seq);
+    }
+    return rows.slice(0, wanted);
+  }
+
 
   // denied logs a refused request in the room it was aimed at (§05:
   // isolation attacks are refused, and logged).
@@ -423,7 +493,7 @@ export class RoomDO extends DurableObject<Env> {
     }
     this.sql.exec(
       "DELETE FROM events WHERE flushed = 1 AND seq <= (SELECT MAX(seq) FROM events) - ?",
-      HOT_EVENTS,
+      this.hotEvents,
     );
     return written;
   }
