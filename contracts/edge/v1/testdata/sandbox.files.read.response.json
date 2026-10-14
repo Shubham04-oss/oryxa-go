@@ -1,0 +1,1 @@
+{"files":[{"path":"/workspace/main.py","encoding":"utf8","content":"print(1)\n","mimeType":"text/x-python","size":9},{"path":"/workspace/logo.png","encoding":"base64","content":"iVBORw0KGgo=","mimeType":"image/png","size":8},{"path":"/workspace/missing.txt","size":0,"error":"ENOENT: no such file or directory"}]}
