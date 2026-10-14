@@ -21,7 +21,7 @@
 //
 //	CALL_LIVE_ROOM_URL   where a room's edge API is behind the door, as a
 //	                     template: {org}, {kind} and {id} are filled in, e.g.
-//	                     https://app-staging.oryxa.in/edge/v1/rooms/{kind}/{id}
+//	                     https://app-staging.oryxa.in/edge/v1/organizations/{org}/rooms/{kind}/{id}
 //	CALL_LIVE_DOOR       "web" (default): members are web-next sessions, sent
 //	                     as Cookie with the room URL's origin as Origin.
 //	                     "local": test/live/call/door in front of `wrangler
@@ -60,7 +60,7 @@
 //
 // On staging, once the call screen's binding is deployed:
 //
-//	CALL_LIVE_ROOM_URL='https://app-staging.oryxa.in/edge/v1/rooms/{kind}/{id}' \
+//	CALL_LIVE_ROOM_URL='https://app-staging.oryxa.in/edge/v1/organizations/{org}/rooms/{kind}/{id}' \
 //	CALL_LIVE_ORG=org_… CALL_LIVE_ROOM=teamspace/tsp_… \
 //	CALL_LIVE_A_ID=usr_… CALL_LIVE_A_COOKIE='…' CALL_LIVE_B_ID=usr_… CALL_LIVE_B_COOKIE='…' \
 //	go test -count=1 -v ./test/live/call
@@ -76,7 +76,7 @@
 //	go run ./test/live/call/fakertk &
 //	(cd edge && pnpm exec wrangler dev --local --enable-containers=false \
 //	  -c ../test/live/call/door/wrangler.jsonc -c /path/to/edge.local.json --port 8788) &
-//	CALL_LIVE_ROOM_URL='http://127.0.0.1:8788/edge/v1/rooms/{kind}/{id}' CALL_LIVE_DOOR=local \
+//	CALL_LIVE_ROOM_URL='http://127.0.0.1:8788/edge/v1/organizations/{org}/rooms/{kind}/{id}' CALL_LIVE_DOOR=local \
 //	CALL_LIVE_ORG=org_livecall CALL_LIVE_A_ID=usr_a CALL_LIVE_B_ID=usr_b \
 //	EDGE_URL=http://127.0.0.1:8788 EDGE_SIGNING_KEY_PEM="$(cat key.pem)" \
 //	go test -count=1 -v ./test/live/call
