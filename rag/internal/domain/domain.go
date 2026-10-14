@@ -115,6 +115,10 @@ type OrgMembership struct {
 	// What it reads can end up in front of any of them, so it gets a plain
 	// member's reach whatever its member's role; see ActsAsAdmin.
 	Agent bool
+	// AgentID and AgentRole name which of the member's agents it is (agt_…,
+	// and primary, specialist or organization), when Agent is set.
+	AgentID   string
+	AgentRole string
 }
 
 // ActsAsAdmin reports whether the caller acts with an org admin's reach:

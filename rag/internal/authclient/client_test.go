@@ -52,6 +52,26 @@ func TestMembershipReadsWhetherTheCallerIsAnAgent(t *testing.T) {
 	}
 }
 
+// TestMembershipNamesTheAgent: auth answers an agent token with the agent it
+// was minted for; an older agent token names none, and is the primary.
+func TestMembershipNamesTheAgent(t *testing.T) {
+	named := `{"organization":{"id":"org_1","name":"Acme"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"admin"},"agent":true,"agent_claims":{"agent":"agt_writer","role":"specialist"}}`
+	legacy := `{"organization":{"id":"org_1","name":"Acme"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"admin"},"agent":true}`
+	for body, want := range map[string][2]string{named: {"agt_writer", "specialist"}, legacy: {"", "primary"}, organizationBody: {"", ""}} {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write([]byte(body))
+		}))
+		membership, err := New(server.URL).Membership(context.Background(), "org_1", Credentials{Authorization: "Bearer token-1"})
+		server.Close()
+		if err != nil {
+			t.Fatalf("Membership() error = %v", err)
+		}
+		if got := [2]string{membership.AgentID, membership.AgentRole}; got != want {
+			t.Fatalf("agent = %v, want %v for %s", got, want, body)
+		}
+	}
+}
+
 func TestMembershipFallsBackToTheAccessCookie(t *testing.T) {
 	// A bearer token is not sent by a browser on its own, so the cookie is
 	// what a browser session actually carries.

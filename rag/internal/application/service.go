@@ -385,6 +385,7 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 	if err := service.mayWrite(ctx, credentials, member, corpus); err != nil {
 		return domain.Document{}, err
 	}
+	service.logAgent(ctx, member, "add_document", corpus.ID)
 	// Only now, with the caller known and allowed to write here: a document can
 	// be megabytes, and nobody else has theirs read.
 	input, err := read()
@@ -599,6 +600,7 @@ func (service *Service) DeleteDocument(ctx context.Context, credentials authclie
 	if err := service.mayWrite(ctx, credentials, member, corpus); err != nil {
 		return err
 	}
+	service.logAgent(ctx, member, "delete_document", corpus.ID)
 	document, err := service.store.Document(ctx, organizationID, documentID)
 	if err != nil {
 		return err
@@ -631,6 +633,7 @@ func (service *Service) Search(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return retrieval.Results{}, err
 	}
+	service.logAgent(ctx, member, "search", corpus.ID)
 	query.IncludeAdminOnly = member.ActsAsAdmin()
 	return service.retriever.Search(ctx, corpus, query)
 }
@@ -651,6 +654,7 @@ func (service *Service) Answer(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return Answered{}, err
 	}
+	service.logAgent(ctx, member, "answer", corpus.ID)
 	query.IncludeAdminOnly = member.ActsAsAdmin()
 	results, err := service.retriever.Search(ctx, corpus, query)
 	if err != nil {
@@ -662,6 +666,17 @@ func (service *Service) Answer(ctx context.Context, credentials authclient.Crede
 	}
 	answer.Usage.Add(results.Usage)
 	return Answered{Answer: answer, Matches: results.Matches}, nil
+}
+
+// logAgent records that an agent was let into a corpus to do operation,
+// naming the agent, so the trail says which of a member's agents acted.
+func (service *Service) logAgent(ctx context.Context, member domain.OrgMembership, operation, corpusID string) {
+	if !member.Agent {
+		return
+	}
+	service.logger.InfoContext(ctx, "an agent used knowledge", "operation", operation,
+		"organization_id", member.OrganizationID, "member_id", member.UserID,
+		"agent_id", member.AgentID, "agent_role", member.AgentRole, "corpus_id", corpusID)
 }
 
 // caller asks auth who this is. A caller outside the organization gets not
