@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { createPortal } from "react-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft,
@@ -12,7 +13,7 @@ import {
 } from "lucide-react"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { TeamspaceConversation } from "./teamspace-room"
-import { useHasCalls } from "./call-provider"
+import { useHasCalls, useRoomChatSlot } from "./call-provider"
 import { ParleyButton, ParleyStrip } from "./call-surfaces"
 import { TeamSynthesis } from "./team-synthesis"
 import { RoomLive } from "./live-work"
@@ -81,6 +82,10 @@ export function TeamspaceFocus({
   const [isComposing, setIsComposing] = useState(false)
   const visibleHeight = useVisibleHeight(isComposing)
   const hasCalls = useHasCalls()
+  const chatSlot = useRoomChatSlot(organizationId, {
+    kind: "teamspace",
+    id: teamspaceId,
+  })
 
   if (!space) {
     return (
@@ -176,12 +181,26 @@ export function TeamspaceFocus({
       )}
 
       <main className="workspace-focus-layout">
-        <TeamspaceConversation
-          space={space}
-          room={room}
-          viewerId={viewerId}
-          onComposingChange={setIsComposing}
-        />
+        {chatSlot ? (
+          // The parley's full page shows the room beside the call: the same
+          // conversation, moved there, so the room is never open twice.
+          createPortal(
+            <TeamspaceConversation
+              space={space}
+              room={room}
+              viewerId={viewerId}
+              onComposingChange={setIsComposing}
+            />,
+            chatSlot
+          )
+        ) : (
+          <TeamspaceConversation
+            space={space}
+            room={room}
+            viewerId={viewerId}
+            onComposingChange={setIsComposing}
+          />
+        )}
 
         <div className="workspace-work-column">
           <div

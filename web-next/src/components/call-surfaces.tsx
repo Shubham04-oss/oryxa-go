@@ -9,6 +9,7 @@ import {
   Captions,
   Circle,
   Maximize2,
+  MessageSquareText,
   Mic,
   MicOff,
   MonitorUp,
@@ -546,6 +547,44 @@ function CallMiniPlayer({
   )
 }
 
+/**
+ * The room's conversation beside the call. The room's own page moves its
+ * conversation in here while it's open (useRoomChatSlot), so there's only
+ * ever one; from any other page the pane says where to find it.
+ */
+function RoomChatPane({ room, roomName }: { room: string; roomName: string }) {
+  const { setRoomChat } = useCall()
+  const [element, setElement] = useState<HTMLDivElement | null>(null)
+  const [claimed, setClaimed] = useState(false)
+  useEffect(() => {
+    if (!element) return
+    setRoomChat({ room, element })
+    const watch = new MutationObserver(() =>
+      setClaimed(element.childElementCount > 0)
+    )
+    watch.observe(element, { childList: true })
+    setClaimed(element.childElementCount > 0)
+    return () => {
+      watch.disconnect()
+      setRoomChat(null)
+    }
+  }, [element, room, setRoomChat])
+  return (
+    <section
+      className="call-transcript call-room"
+      aria-label={`${roomName} room`}
+    >
+      <h2>Room</h2>
+      {!claimed && (
+        <p>
+          Open {roomName}'s page to talk in its room while you're in the parley.
+        </p>
+      )}
+      <div ref={setElement} className="call-room-slot" />
+    </section>
+  )
+}
+
 type Layout = "gallery" | "speaker"
 
 function CallFullPage({
@@ -567,7 +606,13 @@ function CallFullPage({
   } = useCall()
   const [layout, setLayout] = useState<Layout>("gallery")
   const [captions, setCaptions] = useState(true)
-  const [transcript, setTranscript] = useState(true)
+  // The side pane: what's been said, the room's conversation, or neither.
+  const [side, setSide] = useState<"transcript" | "room" | null>("transcript")
+  const transcript = side === "transcript"
+  const setTranscript = (toggle: (value: boolean) => boolean) =>
+    setSide((current) =>
+      toggle(current === "transcript") ? "transcript" : null
+    )
   const [busy, setBusy] = useState(false)
   const duration = useDuration(view?.startedAt)
   const speaking = speakingMember(active)
@@ -696,6 +741,12 @@ function CallFullPage({
             )}
           </section>
         )}
+        {side === "room" && (
+          <RoomChatPane
+            room={roomKey(active.organizationId, active.room)}
+            roomName={active.roomName}
+          />
+        )}
         {active.privateAnswer && (
           <div className="call-private" role="status">
             <b>Only you can see this</b>
@@ -804,6 +855,17 @@ function CallFullPage({
             onClick={() => setCaptions((value) => !value)}
           >
             <Captions size={16} aria-hidden="true" />
+          </button>
+          <button
+            className="call-btn"
+            type="button"
+            aria-pressed={side === "room"}
+            aria-label={side === "room" ? "Hide the room" : "Show the room"}
+            onClick={() =>
+              setSide((current) => (current === "room" ? null : "room"))
+            }
+          >
+            <MessageSquareText size={16} aria-hidden="true" />
           </button>
           <button
             className="call-btn"

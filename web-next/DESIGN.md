@@ -249,6 +249,10 @@ not permission to copy every incidental value into a new component.
   - **The full page:** a gallery or speaker layout, live captions, the
     transcript as this page heard it, and a dock (mic, camera, screen,
     record, ask the agent in, leave), plus "End for everyone".
+    Beside the call is the Transcript or the **Room**: the room's own
+    conversation, moved in from the room's page while the pane is open
+    (there's only ever one, so the room is never open twice). From any
+    other page the Room pane says to open the room's page.
   - **Tiles:** camera tiles stay dark in both themes, as video does
     (`--call-*` tokens). A person keeps their tile colour everywhere. The
     agent is a tile with no camera, marked Listening or Speaking.

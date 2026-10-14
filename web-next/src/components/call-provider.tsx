@@ -116,7 +116,13 @@ type CallContextValue = {
   /** The room whose own page is on screen, which shows the call itself. */
   roomOnScreen: string | null
   showingRoom: (room: string | null) => void
+  /** Where the full page shows its room's conversation, while it does. */
+  roomChat: RoomChatSlot | null
+  setRoomChat: (slot: RoomChatSlot | null) => void
 } & CallActions
+
+/** The full page's place for the room's conversation, and whose room it is. */
+export type RoomChatSlot = { room: string; element: HTMLElement }
 
 /** A room's key, for telling whether a page shows the member's call. */
 export function roomKey(organizationId: string, room: LiveRoom): string {
@@ -130,6 +136,22 @@ export function useCall(): CallContextValue {
   const value = useContext(CallContext)
   if (!value) throw new Error("useCall outside CallProvider")
   return value
+}
+
+/**
+ * Where a room's page puts its conversation while the member's parley in
+ * that room is open full page: the call's Room pane, or nowhere (it stays on
+ * the page). One conversation, moved, so the room is never open twice.
+ */
+export function useRoomChatSlot(
+  organizationId: string,
+  room: LiveRoom
+): HTMLElement | null {
+  const value = useContext(CallContext)
+  const slot = value?.roomChat
+  return slot && slot.room === roomKey(organizationId, room)
+    ? slot.element
+    : null
 }
 
 /** Whether parleys are offered here: inside the workspace's CallProvider. */
@@ -181,6 +203,7 @@ export function CallProvider({
   const queryClient = useQueryClient()
   const [active, setActive] = useState<ActiveCall | null>(null)
   const [roomOnScreen, showingRoom] = useState<string | null>(null)
+  const [roomChat, setRoomChat] = useState<RoomChatSlot | null>(null)
   const media = useRef<CallMedia | null>(null)
   const cleanups = useRef<(() => void)[]>([])
   const activeRef = useRef<ActiveCall | null>(null)
@@ -485,6 +508,8 @@ export function CallProvider({
       active,
       roomOnScreen,
       showingRoom,
+      roomChat,
+      setRoomChat,
       join,
       leave: teardownAndLeave,
       end,
@@ -503,6 +528,7 @@ export function CallProvider({
       end,
       join,
       record,
+      roomChat,
       roomOnScreen,
       teardownAndLeave,
       toggle,
