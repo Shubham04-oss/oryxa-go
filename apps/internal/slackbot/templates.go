@@ -591,6 +591,9 @@ type answerParams struct {
 	Text      string `json:"text"`
 	OwnerName string `json:"owner_name"`
 	Mode      string `json:"mode"`
+	// AgentName, when set, is the owner's agent that answered, which the
+	// attribution names: "From Triage, Raya's agent".
+	AgentName string `json:"agent_name,omitempty"`
 }
 
 // renderAnswer is an owner's agent's answer, with who it is from and what the
@@ -620,16 +623,20 @@ func renderAnswer(r renderer, raw json.RawMessage) (Rendered, error) {
 		}
 		return Rendered{Text: plain(line) + " " + firstRunes(plain(body), 200), Blocks: blocks}, nil
 	}
+	from := "From " + owner + "'s agent"
+	if strings.TrimSpace(p.AgentName) != "" {
+		from = "From " + r.shown(p.AgentName, maxNameRunes) + ", " + owner + "'s agent"
+	}
 	var line string
 	switch p.Mode {
 	case ModeSummary:
-		line = "From " + owner + "'s agent · approved by " + owner + " (AI summary only)"
+		line = from + " · approved by " + owner + " (AI summary only)"
 	case ModeAccess:
-		line = "From " + owner + "'s agent · approved by " + owner
+		line = from + " · approved by " + owner
 	case ModeLease:
-		line = "From " + owner + "'s agent · approved by " + owner + " (1-hour access)"
+		line = from + " · approved by " + owner + " (1-hour access)"
 	case ModeBypass:
-		line = "From " + owner + "'s agent · shared under a priority rule, and " + owner + " was told"
+		line = from + " · shared under a priority rule, and " + owner + " was told"
 	default:
 		return Rendered{}, invalid("mode %q is not one an answer is allowed in", truncate(p.Mode, 32))
 	}

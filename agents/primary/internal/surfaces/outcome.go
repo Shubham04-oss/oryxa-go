@@ -17,6 +17,9 @@ type answerParams struct {
 	Text      string `json:"text"`
 	OwnerName string `json:"owner_name"`
 	Mode      string `json:"mode"`
+	// AgentName is the owner's agent that answered, which the attribution
+	// names. It is the agent's name now: a rename reaches the request's copy.
+	AgentName string `json:"agent_name,omitempty"`
 }
 
 // statusParams are the parameters of apps' status template, which says where a
@@ -290,7 +293,7 @@ func (p *pass) tellAnswer(ctx context.Context) error {
 	}
 	posted, sent, err := p.send(ctx, roleAnswer, slackrouter.Post{
 		Target: target, Template: templateAnswer,
-		Params: answerParams{Text: answerText(p.request.Result), OwnerName: ownerName, Mode: answerMode(p.request)},
+		Params: answerParams{Text: answerText(p.request.Result), OwnerName: ownerName, Mode: answerMode(p.request), AgentName: p.request.Target.AgentName},
 	})
 	if err != nil || !sent {
 		return err

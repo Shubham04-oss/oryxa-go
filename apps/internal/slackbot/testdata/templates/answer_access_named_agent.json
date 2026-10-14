@@ -1,0 +1,21 @@
+{
+  "text": "From Nova, Raya's agent · approved by Raya: The launch is on the 14th.",
+  "blocks": [
+    {
+      "text": {
+        "text": "The launch is on the 14th.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "From Nova, Raya's agent · approved by Raya",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}
