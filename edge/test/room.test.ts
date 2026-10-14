@@ -225,3 +225,59 @@ describe("a token signed for one org", () => {
     expect(log.events.every((event) => event.org === "org_a")).toBe(true);
   });
 });
+
+describe("reading the log back (A13)", () => {
+  async function pageAll(path: string, options: Record<string, unknown>, query = "") {
+    const seen: Event[] = [];
+    let after = 0;
+    for (let page = 0; page < 50; page++) {
+      const response = await call(`${path}/log?after=${after}&limit=7${query}`, { tokenOptions: options });
+      const body = (await response.json()) as LogResponse;
+      seen.push(...body.events);
+      after = body.next;
+      if (!body.more) break;
+    }
+    return seen;
+  }
+
+  it("reads the room's own events with run=_room", async () => {
+    const room = { kind: "teamspace" as const, id: "rm_room_run" };
+    const path = "/v1/rooms/teamspace/rm_room_run";
+    await appendEvent(path, { room, run: "run_x" }, "run.started");
+    const body = (await (await call(`${path}/log?run=_room`, { tokenOptions: { room } })).json()) as LogResponse;
+    expect(body.events.map((event) => event.type)).toEqual(["room.created"]);
+    expect(body.events.every((event) => event.run === null)).toBe(true);
+  });
+
+  it("pages through events the flush moved to R2 as if they were still here", async () => {
+    const room = { kind: "teamspace" as const, id: "rm_archive" };
+    const path = "/v1/rooms/teamspace/rm_archive";
+    for (let index = 0; index < 24; index++) {
+      const run = index % 3 === 0 ? "run_b" : "run_a";
+      const isPrivate = index === 5;
+      await appendEvent(path, { room, run, member: isPrivate ? "usr_secret" : "usr_1", private: isPrivate }, `step.n${index}`);
+    }
+    const stub = roomStub("org_1", "teamspace", "rm_archive");
+    await runInDurableObject(stub, (instance: RoomDO) => {
+      instance.hotEvents = 4;
+    });
+    await runDurableObjectAlarm(stub);
+    await runInDurableObject(stub, (instance: RoomDO, state) => {
+      instance.hotEvents = 4;
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM events").one().n).toBeLessThanOrEqual(5);
+    });
+
+    const all = await pageAll(path, { room });
+    const seqs = all.map((event) => event.seq);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+    expect(new Set(seqs).size).toBe(seqs.length);
+    // room.created, then 24 steps less the one private to someone else.
+    expect(all.map((event) => event.type)).toEqual(["room.created", ...Array.from({ length: 24 }, (_, i) => `step.n${i}`).filter((type) => type !== "step.n5")]);
+
+    const theirs = await pageAll(path, { room, member: "usr_secret" });
+    expect(theirs.map((event) => event.type)).toContain("step.n5");
+
+    const runB = await pageAll(path, { room }, "&run=run_b");
+    expect(runB.map((event) => event.type)).toEqual(["step.n0", "step.n3", "step.n6", "step.n9", "step.n12", "step.n15", "step.n18", "step.n21"]);
+  });
+});
