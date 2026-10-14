@@ -17,6 +17,7 @@ import (
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
@@ -71,7 +72,7 @@ func (store *Store) EnsurePrimary(ctx context.Context, scope Scope) (Definition,
 					(id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at)
 				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
 				ON CONFLICT (organization_id, owner_user_id) WHERE kind = 'primary' DO NOTHING
-				RETURNING id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant`,
+				RETURNING `+definitionColumns,
 				created.ID, created.OrganizationID, created.OwnerUserID, created.Kind, created.Name,
 				created.Description, created.Instructions, created.Status, created.Revision, now)
 			if err := scanDefinition(row, &result); err != nil {
@@ -121,7 +122,7 @@ func (store *Store) Create(ctx context.Context, scope Scope, definition Definiti
 			INSERT INTO agents_primary.member_agents
 				(id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
-			RETURNING id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant`,
+			RETURNING `+definitionColumns,
 			definition.ID, definition.OrganizationID, definition.OwnerUserID, definition.Kind, definition.Name,
 			definition.Description, definition.Instructions, definition.Status, definition.Revision, now), &definition); err != nil {
 			return err
@@ -142,7 +143,7 @@ func (store *Store) List(ctx context.Context, scope Scope) ([]Definition, error)
 		return nil, err
 	}
 	rows, err := store.database.Pool.Query(ctx, `
-		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant
+		SELECT `+definitionColumns+`
 		FROM agents_primary.member_agents
 		WHERE organization_id = $1 AND owner_user_id = $2
 		ORDER BY CASE kind WHEN 'primary' THEN 0 ELSE 1 END, lower(name), id`, scope.OrganizationID, scope.UserID)
@@ -200,7 +201,7 @@ func (store *Store) Get(ctx context.Context, scope Scope, id string) (Definition
 	}
 	var result Definition
 	err := scanDefinition(store.database.Pool.QueryRow(ctx, `
-		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant
+		SELECT `+definitionColumns+`
 		FROM agents_primary.member_agents WHERE organization_id=$1 AND owner_user_id=$2 AND id=$3`,
 		scope.OrganizationID, scope.UserID, id), &result)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -219,6 +220,7 @@ func (store *Store) Update(ctx context.Context, scope Scope, id string, input Up
 		if err != nil {
 			return err
 		}
+		previousName := current.Name
 		if input.Name != nil {
 			current.Name = *input.Name
 		}
@@ -244,15 +246,25 @@ func (store *Store) Update(ctx context.Context, scope Scope, id string, input Up
 			}
 			grant = string(encoded)
 		}
+		var tier any
+		if input.ModelTier != nil {
+			if current.Kind != KindSpecialist {
+				return fmt.Errorf("%w: only a specialist has a model tier", ErrInvalid)
+			}
+			tier = string(*input.ModelTier)
+		}
 		current.Revision++
 		current.UpdatedAt = time.Now().UTC()
 		if err := scanDefinition(tx.QueryRow(ctx, `
 			UPDATE agents_primary.member_agents SET name=$4, description=$5, instructions=$6, status=$7,
-				revision=$8, updated_at=$9, app_grant=COALESCE($10::jsonb, app_grant)
+				revision=$8, updated_at=$9, app_grant=COALESCE($10::jsonb, app_grant), model_tier=COALESCE($11, model_tier)
 			WHERE organization_id=$1 AND owner_user_id=$2 AND id=$3
-			RETURNING id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant`,
+			RETURNING `+definitionColumns,
 			scope.OrganizationID, scope.UserID, id, current.Name, current.Description, current.Instructions,
-			current.Status, current.Revision, current.UpdatedAt, grant), &result); err != nil {
+			current.Status, current.Revision, current.UpdatedAt, grant, tier), &result); err != nil {
+			return err
+		}
+		if err := renameCopies(ctx, tx, result, previousName); err != nil {
 			return err
 		}
 		return recordLifecycle(ctx, tx, agentsv1.AgentUpdatedDetailType, result)
@@ -264,6 +276,39 @@ func (store *Store) Update(ctx context.Context, scope Scope, id string, input Up
 		return Definition{}, err
 	}
 	return result, nil
+}
+
+// nameCopies are the other tables that keep an agent's name beside its id,
+// for display: the requests it made or was asked, what it posted in a
+// teamspace, and what it said in an agent team's room. A room's handles are
+// not here: a message addressed @Old keeps the handle it was written to.
+var nameCopies = []struct{ table, name, id string }{
+	{"agents_primary.agent_interactions", "requester_agent_name", "requester_agent_id"},
+	{"agents_primary.agent_interactions", "target_agent_name", "target_agent_id"},
+	{"agents_primary.teamspace_entries", "author_agent_name", "author_agent_id"},
+	{"agents_primary.member_agent_team_messages", "author_name", "author_agent_id"},
+}
+
+// renameCopies writes a renamed agent's new name into every copy of it, in
+// the rename's transaction, so the agent's own row stays the one source of
+// its name. A table another service has not migrated yet holds no copy.
+func renameCopies(ctx context.Context, tx pgx.Tx, renamed Definition, previousName string) error {
+	if renamed.Name == previousName {
+		return nil
+	}
+	for _, held := range nameCopies {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, held.table).Scan(&exists); err != nil {
+			return fmt.Errorf("find %s: %w", held.table, err)
+		}
+		if !exists {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE `+held.table+` SET `+held.name+`=$2 WHERE `+held.id+`=$1`, renamed.ID, renamed.Name); err != nil {
+			return fmt.Errorf("rename the agent in %s: %w", held.table, err)
+		}
+	}
+	return nil
 }
 
 func (store *Store) Delete(ctx context.Context, scope Scope, id string) error {
@@ -311,17 +356,27 @@ func (store *Store) Forget(ctx context.Context, organizationID, userID string) e
 
 type scanner interface{ Scan(...any) error }
 
+// definitionColumns is what scanDefinition reads, in its order.
+const definitionColumns = `id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant, model_tier`
+
 // scanDefinition reads a row; a specialist with no grant stored has the
-// default one.
+// default one, and with no tier stored the lite one. A primary always
+// answers on main.
 func scanDefinition(row scanner, target *Definition) error {
 	var grant []byte
+	var tier *string
 	if err := row.Scan(&target.ID, &target.OrganizationID, &target.OwnerUserID, &target.Kind, &target.Name,
-		&target.Description, &target.Instructions, &target.Status, &target.Revision, &target.CreatedAt, &target.UpdatedAt, &grant); err != nil {
+		&target.Description, &target.Instructions, &target.Status, &target.Revision, &target.CreatedAt, &target.UpdatedAt, &grant, &tier); err != nil {
 		return err
 	}
 	target.Grant = nil
+	target.ModelTier = modelrouter.Main
 	if target.Kind != KindSpecialist {
 		return nil
+	}
+	target.ModelTier = modelrouter.Lite
+	if tier != nil {
+		target.ModelTier = modelrouter.Tier(*tier)
 	}
 	decoded := runprofile.DefaultGrant()
 	if grant != nil {
@@ -336,7 +391,7 @@ func scanDefinition(row scanner, target *Definition) error {
 func get(ctx context.Context, tx pgx.Tx, scope Scope, id string) (Definition, error) {
 	var result Definition
 	err := scanDefinition(tx.QueryRow(ctx, `
-		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant
+		SELECT `+definitionColumns+`
 		FROM agents_primary.member_agents WHERE organization_id=$1 AND owner_user_id=$2 AND id=$3 FOR UPDATE`,
 		scope.OrganizationID, scope.UserID, id), &result)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -348,7 +403,7 @@ func get(ctx context.Context, tx pgx.Tx, scope Scope, id string) (Definition, er
 func getPrimary(ctx context.Context, tx pgx.Tx, scope Scope) (Definition, error) {
 	var result Definition
 	err := scanDefinition(tx.QueryRow(ctx, `
-		SELECT id, organization_id, owner_user_id, kind, name, description, instructions, status, revision, created_at, updated_at, app_grant
+		SELECT `+definitionColumns+`
 		FROM agents_primary.member_agents WHERE organization_id=$1 AND owner_user_id=$2 AND kind='primary' FOR UPDATE`,
 		scope.OrganizationID, scope.UserID), &result)
 	if errors.Is(err, pgx.ErrNoRows) {

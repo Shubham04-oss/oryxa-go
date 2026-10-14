@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
@@ -89,6 +90,21 @@ func TestStoreLifecycle(t *testing.T) {
 	if _, err := store.Update(ctx, scope, primary.ID, UpdateInput{Grant: &grant}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a grant for the primary: error = %v", err)
 	}
+	// A specialist answers on lite until its owner moves it, and keeps the
+	// tier set through later changes; the primary is always on main.
+	if primary.ModelTier != modelrouter.Main || updated.ModelTier != modelrouter.Lite {
+		t.Fatalf("primary tier=%q specialist tier=%q", primary.ModelTier, updated.ModelTier)
+	}
+	mainTier := modelrouter.Main
+	if _, err := store.Update(ctx, scope, specialist.ID, UpdateInput{ModelTier: &mainTier}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Update(ctx, scope, specialist.ID, UpdateInput{Description: &description}); err != nil || got.ModelTier != modelrouter.Main {
+		t.Fatalf("tier after another change=%+v, %v", got, err)
+	}
+	if _, err := store.Update(ctx, scope, primary.ID, UpdateInput{ModelTier: &mainTier}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a tier for the primary: error = %v", err)
+	}
 	listed, err := store.List(ctx, scope)
 	if err != nil {
 		t.Fatal(err)
@@ -127,8 +143,8 @@ func TestStoreLifecycle(t *testing.T) {
 	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.agents_outbox WHERE detail->>'user_id'=$1`, scope.UserID).Scan(&lifecycleEvents); err != nil {
 		t.Fatal(err)
 	}
-	if lifecycleEvents != 7 {
-		t.Fatalf("lifecycle events=%d, want 7", lifecycleEvents)
+	if lifecycleEvents != 9 {
+		t.Fatalf("lifecycle events=%d, want 9", lifecycleEvents)
 	}
 	if err := store.Forget(ctx, scope.OrganizationID, scope.UserID); err != nil {
 		t.Fatal(err)

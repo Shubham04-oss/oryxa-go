@@ -107,6 +107,45 @@ func TestKrudeAnswersATurn(t *testing.T) {
 	}
 }
 
+// TestASpecialistAnswersOnItsOwnModelTier: a specialist answers on lite
+// unless its spec names a tier, and on main when its owner moved it there.
+func TestASpecialistAnswersOnItsOwnModelTier(t *testing.T) {
+	answer := func(string, *model.LLMRequest) *genai.Content {
+		return genai.NewContentFromText(`{"status":"completed","summary":"done","tools_used":[],"artifacts":[],"handoffs":[]}`, genai.RoleModel)
+	}
+	for _, test := range []struct {
+		tier     modelrouter.Tier
+		wantMain bool
+	}{{"", false}, {modelrouter.Lite, false}, {modelrouter.Main, true}} {
+		mainModel, liteModel := newTreeModel(answer), newTreeModel(answer)
+		router, err := modelrouter.New(mainModel, liteModel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		specialist, err := Managed(router, nil, false, ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Sell.", Model: test.tier})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessions := session.InMemoryService()
+		turns, err := runner.New(runner.Config{AppName: "managed_agt_sales", Agent: specialist, SessionService: sessions, ArtifactService: artifact.InMemoryService()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		created, err := sessions.Create(context.Background(), &session.CreateRequest{AppName: "managed_agt_sales", UserID: "user_1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, err := range turns.Run(context.Background(), "user_1", created.Session.ID(), genai.NewContentFromText("Go", genai.RoleUser), agent.RunConfig{}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if onMain := len(mainModel.requestsFor("subagent")) > 0; onMain != test.wantMain || onMain == (len(liteModel.requestsFor("subagent")) > 0) {
+			t.Fatalf("tier %q: main answered %v, want %v", test.tier, onMain, test.wantMain)
+		}
+	}
+}
+
 func TestManagedSpecialistCanRunAsItsPersistentThreadRoot(t *testing.T) {
 	llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
 		return genai.NewContentFromText(`{"status":"completed","summary":"done","tools_used":[],"artifacts":[],"handoffs":[]}`, genai.RoleModel)

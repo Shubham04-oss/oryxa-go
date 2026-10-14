@@ -411,6 +411,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			}
 			return krude.Managed(agents.ManagedSpec{
 				ID: definition.ID, Name: definition.Name, Description: definition.Description, Instructions: definition.Instructions,
+				Model: definition.ModelTier,
 			}, definition.SpecialistGrant())
 		},
 		// What answers when nobody is watching the run: the same agent with
@@ -423,6 +424,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Unattended: func(definition managedagents.Definition, profile managedagents.UnattendedProfile) (agent.Agent, error) {
 			spec := agents.ManagedSpec{
 				ID: definition.ID, Name: definition.Name, Description: definition.Description, Instructions: definition.Instructions,
+				Model: definition.ModelTier,
 			}
 			if profile == managedagents.RoomSeat {
 				if definition.Kind == managedagents.KindPrimary {

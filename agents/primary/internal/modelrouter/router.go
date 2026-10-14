@@ -103,6 +103,16 @@ func (r *Router) Answer(role Role) model.LLM {
 	return r.answers[r.Tier(role)]
 }
 
+// AnswerOn is [Router.Answer] for an agent whose tier is set on the agent
+// itself rather than by its role: a specialist its owner moved to main. An
+// unknown tier gets the lite model, as an unknown role does.
+func (r *Router) AnswerOn(tier Tier) model.LLM {
+	if llm, known := r.answers[tier]; known {
+		return llm
+	}
+	return r.answers[Lite]
+}
+
 // Tier names the tier a role runs on, for logs and tests.
 func (r *Router) Tier(role Role) Tier {
 	if tier, routed := r.policy[role]; routed {

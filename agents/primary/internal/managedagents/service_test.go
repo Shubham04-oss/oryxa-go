@@ -15,6 +15,7 @@ import (
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
@@ -74,6 +75,9 @@ func (repo *fakeRepository) Update(_ context.Context, _ Scope, id string, input 
 	}
 	if input.Grant != nil {
 		definition.Grant = input.Grant
+	}
+	if input.ModelTier != nil {
+		definition.ModelTier = *input.ModelTier
 	}
 	repo.agents[id] = definition
 	return definition, nil
@@ -142,6 +146,49 @@ func TestUpdateCanRenameThePrimaryButNeedsARealChange(t *testing.T) {
 	_, err = service.Update(context.Background(), Scope{OrganizationID: "org_1", UserID: "user_1"}, repo.primary.ID, UpdateInput{})
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("empty update error = %v", err)
+	}
+}
+
+// TestThePrimaryTakesNoInstructions: the primary answers on Krude's own
+// instruction, so text written to it would be stored and never followed.
+// A specialist's instructions are still its owner's to change.
+func TestThePrimaryTakesNoInstructions(t *testing.T) {
+	repo := newFakeRepository()
+	service := &Service{repository: repo}
+	scope := Scope{OrganizationID: "org_1", UserID: "user_1"}
+	instructions := "Always answer in French."
+	if _, err := service.Update(context.Background(), scope, repo.primary.ID, UpdateInput{Instructions: &instructions}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("instructions for the primary: error = %v, want ErrInvalid", err)
+	}
+	specialist, err := service.Create(context.Background(), scope, CreateInput{Name: "Mail", Instructions: "Triage mail."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := service.Update(context.Background(), scope, specialist.ID, UpdateInput{Instructions: &instructions}); err != nil || updated.Instructions != instructions {
+		t.Fatalf("instructions for a specialist: %+v, %v", updated, err)
+	}
+}
+
+// TestOnlyASpecialistMovesToAnotherModelTier: an owner may move a specialist
+// to main and back; the primary always answers on main, and a tier that is
+// neither is refused.
+func TestOnlyASpecialistMovesToAnotherModelTier(t *testing.T) {
+	repo := newFakeRepository()
+	service := &Service{repository: repo}
+	scope := Scope{OrganizationID: "org_1", UserID: "user_1"}
+	specialist, err := service.Create(context.Background(), scope, CreateInput{Name: "Mail", Instructions: "Triage mail."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	main, unknown := modelrouter.Main, modelrouter.Tier("opus")
+	if updated, err := service.Update(context.Background(), scope, specialist.ID, UpdateInput{ModelTier: &main}); err != nil || updated.ModelTier != modelrouter.Main {
+		t.Fatalf("move to main: %+v, %v", updated, err)
+	}
+	if _, err := service.Update(context.Background(), scope, specialist.ID, UpdateInput{ModelTier: &unknown}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unknown tier: error = %v, want ErrInvalid", err)
+	}
+	if _, err := service.Update(context.Background(), scope, repo.primary.ID, UpdateInput{ModelTier: &main}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("tier for the primary: error = %v, want ErrInvalid", err)
 	}
 }
 
