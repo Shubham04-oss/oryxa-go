@@ -410,8 +410,15 @@ not permission to copy every incidental value into a new component.
   which names people and states and never a question or an answer. A filter
   (All, Slack, Oryxa) narrows the first two. The lists are re-read as the page
   is focused and every few seconds, so a request decided in Slack settles here
-  without a reload. A request a link or a DM's line names opens first, above
-  the lists (`/?org=…&view=requests&request=…`).
+  without a reload. **One request at a time** (founder's redesign, 14 Oct
+  2026): the lists are compact rows on a tile (who asked or was asked, where,
+  what, when, and a tag for what it waits on), and the request open is its
+  card beside them, its row the raised tile. The request a row, a link or a
+  DM's line names opens (`/?org=…&view=requests&request=…`); without one, the
+  first on show that waits opens, and stays open once answered so the member
+  sees what their choice did. When nothing waits and none is open, the side
+  says "Every ask answered." under a small scene. Below 1100px the card
+  replaces the list while one is opened, with "Back to all requests".
   - **The request card** says who asked, the question, where it came from (in
     Slack, or in Oryxa), where it stands and, for the person it is theirs to
     answer, what to do, in one set of words wherever the request came from,
