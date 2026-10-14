@@ -69,6 +69,8 @@
   // Worker (src/edge-proxy.ts), which hands it to the edge's WebEdge
   // entrypoint naming the member. `vite dev` binds staging's edge; a
   // local run without it answers the live routes 503.
+  // `WEB_NEXT_REMOTE_EDGE=1 vite dev` reaches the deployed staging edge
+  // (vite.config.ts), given Cloudflare credentials on the machine.
   "services": [
     {
       "binding": "EDGE",
