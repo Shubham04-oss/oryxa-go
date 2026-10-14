@@ -164,6 +164,10 @@ type Cap struct {
 	HoldOrgs map[string]bool
 }
 
+// ponytail: choices are per organization and member, so a member's
+// specialists share their primary's levels; keying them by agent too (falling
+// back to the member's) needs a migration and store change (I6 follow-up, L5).
+//
 // Choices are what a member chose for each origin. Empty is no choice: the
 // default applies.
 type Choices struct {

@@ -1982,10 +1982,15 @@ wrapper uses the standalone `ApplyGuardrail` API, evaluating the newest content
 of every request (a member message or a tool result) and every answer.
 
 It is on when `AGENTS_PRIMARY_GUARDRAIL_ID` and a numbered
-`AGENTS_PRIMARY_GUARDRAIL_VERSION` are set, and screens the main model: the
-member's conversation, where their messages and every tool result — the lite
-model's work included — arrive, and where every answer they see comes from.
-While it is on, those answers do not stream (a partial answer that the
+`AGENTS_PRIMARY_GUARDRAIL_VERSION` are set, and screens every model call of
+every agent: the router wraps both tiers, main and lite
+(`modelrouter.Router.Guarded`), so Krude, the member's specialists and the
+organization agent's synthesis all pass it. Which runs it screens is the
+run-profile table's `Guarded` column (`internal/runprofile`), which every row
+sets today; a call outside a run (a room's brief) is screened too. Unset, every
+call goes straight to the model. Each screened call costs an `ApplyGuardrail`
+on its newest input and on its answer, lite traffic included.
+While it is on, answers do not stream (a partial answer that the
 completed one would block cannot be unsent), so a run's stream carries
 Krude's whole message without deltas, and a blocked answer arrives as
 "I can't help with that." `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` decides what
@@ -2490,7 +2495,7 @@ The compose service has no secret of its own to fall back on, and binds `127.0.0
 | `AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS` | `600` | Longest one run may take; 60–3600 seconds |
 | `TYPESAFE_API_KEY` | unset | TypeSafe's key, for Jev: a room's judgment of every message, what a request made in a teamspace that omits tools needs (see [Agent interactions toolbox](#agent-interactions-toolbox)), and the screen of what people ask in Slack. Unset, rooms fall back to rules, an omitted request tool list defaults to knowledge, and with the Slack consent loop on every mention is refused and nobody is asked |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | TypeSafe's API: HTTPS, or plain HTTP to this machine |
-| `AGENTS_PRIMARY_GUARDRAIL_ID` | unset | Bedrock guardrail that screens the member's conversation; unset turns screening off |
+| `AGENTS_PRIMARY_GUARDRAIL_ID` | unset | Bedrock guardrail that screens every agent's model calls, main and lite; unset turns screening off |
 | `AGENTS_PRIMARY_GUARDRAIL_VERSION` | unset | The guardrail's numbered version, required with its ID; never `DRAFT` |
 | `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` | `false` | Block, rather than pass, what a failed screen could not check |
 | `AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID` | unset | Bedrock guardrail the answer guard reads every answer another member will read with (see [Answer guard](#answer-guard)); unset, no answer is checked. Set with its version or not at all |

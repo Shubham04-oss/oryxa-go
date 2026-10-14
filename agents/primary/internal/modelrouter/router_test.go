@@ -66,3 +66,44 @@ func TestNewValidatesModelsAndPolicy(t *testing.T) {
 		t.Fatal("NewWithPolicy() error = nil with an unknown tier")
 	}
 }
+
+// screenedModel answers "screened <name>", so a test sees which calls passed
+// the screen.
+type screenedModel struct{ model.LLM }
+
+func (s screenedModel) GenerateContent(context.Context, *model.LLMRequest, bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(&model.LLMResponse{ErrorMessage: "screened " + s.Name()}, nil)
+	}
+}
+
+// answered is what router's role answers in ctx: "screened <model>", or
+// "unscreened" when the call reached the model itself.
+func answered(ctx context.Context, router *Router, role Role) string {
+	for response := range router.For(role).GenerateContent(ctx, &model.LLMRequest{}, false) {
+		return response.ErrorMessage
+	}
+	return "unscreened"
+}
+
+func TestAGuardedRouterScreensEveryTierUnlessTheRunIsNotGuarded(t *testing.T) {
+	router, err := New(namedModel("main"), namedModel("lite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	guarded := router.Guarded(func(llm model.LLM) model.LLM { return screenedModel{llm} })
+	for role, name := range map[Role]string{RoleChat: "main", RoleWork: "lite"} {
+		if got := answered(context.Background(), guarded, role); got != "screened "+name {
+			t.Errorf("%s outside a run: %q, want screened", role, got)
+		}
+		if got := answered(WithGuard(context.Background(), true), guarded, role); got != "screened "+name {
+			t.Errorf("%s in a guarded run: %q, want screened", role, got)
+		}
+		if got := answered(WithGuard(context.Background(), false), guarded, role); got != "unscreened" {
+			t.Errorf("%s in an unguarded run: %q, want unscreened", role, got)
+		}
+		if got := answered(context.Background(), router, role); got != "unscreened" {
+			t.Errorf("Guarded changed the router it was called on: %s %q", role, got)
+		}
+	}
+}

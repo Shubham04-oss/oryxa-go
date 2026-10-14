@@ -5,8 +5,10 @@
 package modelrouter
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"iter"
 
 	"google.golang.org/adk/v2/model"
 )
@@ -96,4 +98,37 @@ func (r *Router) Tier(role Role) Tier {
 		return tier
 	}
 	return Lite
+}
+
+// Guarded is the router with every tier's model screened by screen (the
+// Bedrock guardrail), so every call of every agent, main and lite, passes it.
+// A call whose run's profile is not guarded ([WithGuard]) skips the screen; a
+// call outside any run is screened.
+func (r *Router) Guarded(screen func(model.LLM) model.LLM) *Router {
+	tiers := map[Tier]model.LLM{}
+	for tier, llm := range r.tiers {
+		tiers[tier] = screened{LLM: llm, guarded: screen(llm)}
+	}
+	return &Router{tiers: tiers, policy: r.policy}
+}
+
+type guardKey struct{}
+
+// WithGuard records whether the run's profile has its model screened
+// (runprofile.Profile.Guarded), for a [Guarded] router to read on each call.
+func WithGuard(ctx context.Context, guarded bool) context.Context {
+	return context.WithValue(ctx, guardKey{}, guarded)
+}
+
+// screened calls guarded unless the run says it is not guarded.
+type screened struct {
+	model.LLM
+	guarded model.LLM
+}
+
+func (s screened) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	if guarded, set := ctx.Value(guardKey{}).(bool); set && !guarded {
+		return s.LLM.GenerateContent(ctx, req, stream)
+	}
+	return s.guarded.GenerateContent(ctx, req, stream)
 }
