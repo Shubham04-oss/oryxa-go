@@ -519,4 +519,54 @@ describe("a parley in a teamspace", () => {
     const [, init] = requests("/call/join", "POST")[0] ?? []
     expect(JSON.parse(String(init?.body))).toEqual({ name: "Ada Brennan" })
   })
+
+  it("says the parley ended, how long and who was in it, when someone else ends it", async () => {
+    const media = fakeMedia()
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    await screen.findByText(/^You're in the parley/)
+    // The view after joining is the one the summary remembers.
+    await waitFor(() => expect(requests(`${base}/call`)).not.toHaveLength(0))
+
+    socketFor("/voice/live")?.frame({
+      type: "voice.stop",
+      utteranceId: "u1",
+      reason: "call_ended",
+    })
+    const ended = await screen.findByRole("dialog", { name: "Parley ended" })
+    expect(within(ended).getByText(/EU launch · 1 min · 2 people/)).toBeTruthy()
+    expect(
+      within(ended).getByText(/transcript is kept with EU launch/)
+    ).toBeTruthy()
+    fireEvent.click(within(ended).getByRole("button", { name: "Done" }))
+    expect(screen.queryByRole("dialog", { name: "Parley ended" })).toBeNull()
+  })
+
+  it("says so after ending it for everyone, but not after just leaving", async () => {
+    renderParley()
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    fireEvent.click(
+      within(page).getByRole("button", { name: /End for everyone/ })
+    )
+    expect(
+      await screen.findByRole("dialog", { name: "Parley ended" })
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Done" }))
+
+    const again = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(again).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Leave" }))
+    await waitFor(() => expect(requests("/call/leave", "POST")).toHaveLength(1))
+    expect(screen.queryByRole("dialog", { name: "Parley ended" })).toBeNull()
+  })
 })

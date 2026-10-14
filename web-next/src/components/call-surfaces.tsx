@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react"
 import { roomKey, useCall } from "./call-provider"
-import type { ActiveCall } from "./call-provider"
+import type { ActiveCall, EndedCall } from "./call-provider"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { agentIdentity, personIdentity } from "./teamspace-format"
 import { callDuration, whoIsIn } from "@/lib/call/client"
@@ -429,7 +429,9 @@ export function ParleyStrip({
 /** The member's parley, wherever they are: the mini player or the full page. */
 export function CallSurface() {
   const call = useCall()
-  const { active } = call
+  const { active, ended } = call
+  if (!active && ended)
+    return <CallEnded ended={ended} onDone={call.dismissEnded} />
   const { call: view } = useRoomCall(active?.organizationId, active?.room, {
     enabled: active?.phase === "in",
   })
@@ -441,6 +443,77 @@ export function CallSurface() {
   if (call.roomOnScreen === roomKey(active.organizationId, active.room))
     return null
   return <CallMiniPlayer active={active} view={view} />
+}
+
+function minutesBetween(
+  from: string | undefined,
+  to: string
+): string | undefined {
+  if (!from) return undefined
+  const minutes = Math.round((Date.parse(to) - Date.parse(from)) / 60_000)
+  if (!Number.isFinite(minutes) || minutes < 0) return undefined
+  return minutes < 1 ? "under a minute" : `${minutes} min`
+}
+
+/**
+ * A parley just ended (founder's redesign, "Parley ended" on the pop-ups
+ * board): a slight sea scene, how long it ran and who was in it, and what was
+ * kept. The agent's notes from it arrive with an API for them.
+ */
+function CallEnded({
+  ended,
+  onDone,
+}: {
+  ended: EndedCall
+  onDone: () => void
+}) {
+  const done = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    done.current?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onDone()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onDone])
+  const length = minutesBetween(ended.startedAt, ended.endedAt)
+  const facts = [
+    length,
+    `${ended.people} ${ended.people === 1 ? "person" : "people"}`,
+  ].filter(Boolean)
+  return (
+    <div className="call-ended-backdrop">
+      <div
+        className="call-ended"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="call-ended-title"
+      >
+        <div className="call-ended-scene" aria-hidden="true" />
+        <div className="call-ended-body">
+          <h2 id="call-ended-title">Parley ended</h2>
+          <p className="call-ended-facts">
+            {ended.roomName} · {facts.join(" · ")}
+          </p>
+          <p>
+            {ended.recorded
+              ? `The recording and transcript are kept with ${ended.roomName}. Only people in it can open them.`
+              : `The transcript is kept with ${ended.roomName}.`}
+          </p>
+          <div className="call-ended-actions">
+            <button
+              ref={done}
+              type="button"
+              className="call-join"
+              onClick={onDone}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function speakingMember(active: ActiveCall): string | undefined {

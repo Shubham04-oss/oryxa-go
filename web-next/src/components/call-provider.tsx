@@ -26,7 +26,7 @@ import {
   setAgentPresent,
   setRecording,
 } from "@/lib/call/client"
-import type { TranscriptSegment } from "@/lib/call/client"
+import type { CallView, TranscriptSegment } from "@/lib/call/client"
 import { joinMedia } from "@/lib/call/media"
 import { CALL_REFRESH_MS } from "@/lib/call/use-room-call"
 import type { CallMedia, CallTile } from "@/lib/call/media"
@@ -111,8 +111,22 @@ type CallActions = {
   dismiss: () => void
 }
 
+/** A parley that just ended, as the member saw it. */
+export type EndedCall = {
+  roomName: string
+  startedAt?: string
+  endedAt: string
+  /** How many people were in it at the end. */
+  people: number
+  /** It was being recorded: the recording and transcript are kept. */
+  recorded: boolean
+}
+
 type CallContextValue = {
   active: ActiveCall | null
+  /** The parley that just ended, until the member dismisses it. */
+  ended: EndedCall | null
+  dismissEnded: () => void
   /** The room whose own page is on screen, which shows the call itself. */
   roomOnScreen: string | null
   showingRoom: (room: string | null) => void
@@ -181,6 +195,9 @@ export function CallProvider({
   const queryClient = useQueryClient()
   const [active, setActive] = useState<ActiveCall | null>(null)
   const [roomOnScreen, showingRoom] = useState<string | null>(null)
+  const [ended, setEnded] = useState<EndedCall | null>(null)
+  /** The last view of the member's call, for the summary once it ends. */
+  const lastView = useRef<CallView | null>(null)
   const media = useRef<CallMedia | null>(null)
   const cleanups = useRef<(() => void)[]>([])
   const activeRef = useRef<ActiveCall | null>(null)
@@ -230,6 +247,7 @@ export function CallProvider({
   const join = useCallback(
     async (options: JoinOptions) => {
       if (activeRef.current?.phase === "in") await teardownAndLeave()
+      setEnded(null)
       setActive({
         organizationId: options.organizationId,
         room: options.room,
@@ -382,14 +400,28 @@ export function CallProvider({
    * Someone else ended the call: there is no seat to give back, only the
    * media and the page's own state to clear.
    */
+  const remember = useCallback(() => {
+    const current = activeRef.current
+    if (current?.phase !== "in") return
+    const seen = lastView.current
+    setEnded({
+      roomName: current.roomName,
+      startedAt: seen?.startedAt,
+      endedAt: new Date().toISOString(),
+      people: Math.max(seen?.participants.length ?? 0, current.tiles.length),
+      recorded: seen?.recording.on ?? false,
+    })
+  }, [])
+
   const endedElsewhere = useCallback(
     async (id: number) => {
       if (attempt.current !== id) return
       attempt.current += 1
+      remember()
       await teardown()
       setActive(null)
     },
-    [teardown]
+    [remember, teardown]
   )
 
   // The edge's view of the call the member is in: once a view read after
@@ -410,6 +442,11 @@ export function CallProvider({
     refetchInterval: CALL_REFRESH_MS,
   })
   useEffect(() => {
+    if (inCall && view.data && view.data.callId === inCall.callId) {
+      lastView.current = view.data
+    }
+  }, [inCall, view.data])
+  useEffect(() => {
     if (!inCall || !view.isSuccess) return
     if (view.dataUpdatedAt <= joinedAt.current) return
     if (view.data && view.data.callId === inCall.callId) return
@@ -420,11 +457,12 @@ export function CallProvider({
     const current = activeRef.current
     if (!current) return
     attempt.current += 1
+    remember()
     await endCall(current.organizationId, current.room).catch(() => undefined)
     await teardown()
     setActive(null)
     refreshCall(current.organizationId, current.room)
-  }, [refreshCall, teardown])
+  }, [refreshCall, remember, teardown])
 
   const toggle = useCallback(
     (key: "mic" | "camera" | "screen") => async (on: boolean) => {
@@ -483,6 +521,8 @@ export function CallProvider({
   const value = useMemo<CallContextValue>(
     () => ({
       active,
+      ended,
+      dismissEnded: () => setEnded(null),
       roomOnScreen,
       showingRoom,
       join,
@@ -501,6 +541,7 @@ export function CallProvider({
       active,
       agent,
       end,
+      ended,
       join,
       record,
       roomOnScreen,

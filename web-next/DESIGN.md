@@ -254,6 +254,11 @@ not permission to copy every incidental value into a new component.
     agent is a tile with no camera, marked Listening or Speaking.
   - **Recording:** while it is on, everyone in the call sees who turned it
     on, and when.
+  - **Parley ended:** when the call the member is in ends (someone ended it,
+    or they ended it for everyone), a pop-up with a slight sea scene says
+    how long it ran, how many were in it, and what was kept (the recording
+    and transcript, or the transcript). Just leaving shows nothing. The
+    agent's notes join it once there's an API for them.
   - **In a DM:** the same strip, or a "Parley" button when none runs, sits
     above the conversation in its reading column. The call is the DM's own
     room on the edge. A DM whose ids the edge can't name offers no parley.

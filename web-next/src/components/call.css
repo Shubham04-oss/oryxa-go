@@ -728,3 +728,33 @@
 .workspace-dm-parley .workspace-teamspace-parley {
   margin-left: 0;
 }
+
+/* "Parley ended": a pop-up with a slight scene (the brand's sea) at its top,
+   fading into the surface. */
+.call-ended-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--shade-66);
+}
+.call-ended {
+  width: min(420px, 100%);
+  overflow: hidden;
+  border-radius: 18px;
+  background: var(--raised);
+  box-shadow: 0 0 0 1px var(--border-quiet), 0 24px 60px var(--shade-66);
+}
+.call-ended-scene {
+  height: 110px;
+  background: var(--tone-1c3350) var(--scene-sea) center 40% / cover no-repeat;
+  -webkit-mask-image: linear-gradient(to bottom, #000 45%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 45%, transparent 100%);
+}
+.call-ended-body { display: grid; gap: 8px; margin-top: -18px; padding: 0 22px 20px; }
+.call-ended-body h2 { margin: 0; color: var(--text); font-size: 18px; font-weight: 700; }
+.call-ended-body p { margin: 0; color: var(--text-soft); font-size: 13px; line-height: 1.55; }
+.call-ended-facts { color: var(--text-muted); font-size: 12.5px; }
+.call-ended-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
