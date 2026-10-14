@@ -53,14 +53,15 @@ export class RealtimeKit implements CallProvider {
     // Workers refuse the global fetch called as another object's method, so
     // it is wrapped rather than stored as is.
     private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
+    api: string = API,
   ) {
-    this.base = `${API}/${encodeURIComponent(accountId)}/realtime/kit/${encodeURIComponent(appId)}`;
+    this.base = `${api.replace(/\/+$/, "")}/${encodeURIComponent(accountId)}/realtime/kit/${encodeURIComponent(appId)}`;
   }
 
   // fromEnv returns the client, or undefined when calls aren't set up here.
   static fromEnv(env: Env): RealtimeKit | undefined {
     if (!env.REALTIMEKIT_ACCOUNT_ID || !env.REALTIMEKIT_APP_ID || !env.REALTIMEKIT_API_TOKEN) return undefined;
-    return new RealtimeKit(env.REALTIMEKIT_ACCOUNT_ID, env.REALTIMEKIT_APP_ID, env.REALTIMEKIT_API_TOKEN);
+    return new RealtimeKit(env.REALTIMEKIT_ACCOUNT_ID, env.REALTIMEKIT_APP_ID, env.REALTIMEKIT_API_TOKEN, undefined, env.REALTIMEKIT_API_URL || API);
   }
 
   async createMeeting(title: string): Promise<Meeting> {

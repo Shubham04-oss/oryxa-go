@@ -34,6 +34,9 @@ export interface Env {
   REALTIMEKIT_ACCOUNT_ID?: string;
   REALTIMEKIT_APP_ID?: string;
   REALTIMEKIT_API_TOKEN?: string;
+  // REALTIMEKIT_API_URL replaces Cloudflare's API, for a local run against a
+  // fake (test/live/call). Unset everywhere deployed.
+  REALTIMEKIT_API_URL?: string;
   // REALTIMEKIT_WEBHOOK_PUBLIC_KEY is RealtimeKit's webhook signing key
   // (PEM), from its .well-known/webhooks.json. Public, so a var.
   REALTIMEKIT_WEBHOOK_PUBLIC_KEY?: string;

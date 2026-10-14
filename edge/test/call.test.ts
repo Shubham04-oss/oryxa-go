@@ -651,4 +651,13 @@ describe("the real clients, in workerd", () => {
     }
   });
 
+  it("send RealtimeKit requests to REALTIMEKIT_API_URL when it is set", async () => {
+    const client = RealtimeKit.fromEnv({
+      REALTIMEKIT_ACCOUNT_ID: "acct",
+      REALTIMEKIT_APP_ID: "app",
+      REALTIMEKIT_API_TOKEN: "token",
+      REALTIMEKIT_API_URL: "http://127.0.0.1:9/accounts/",
+    } as Env)!;
+    await expect(client.createMeeting("oryxa:test")).rejects.toThrow(/RealtimeKit did not answer/);
+  });
 });

@@ -106,6 +106,10 @@ console.log("AGENTS_PRIMARY_EDGE_TOKEN_PUBLIC_KEYS="+JSON.stringify([publicKey.e
 
 **6. The WAF.** `POST /v1/edge/dispatch` on api.oryxa.in must be reachable from the edge. It is part of F4's `/v1/edge/*` allowance.
 
+## Testing end to end (B8)
+
+`test/live/call` runs calls end to end through a door to WebEdge: on staging, web-next's binding; locally, `test/live/call/door`. Its package docs list the settings. For a local run, `REALTIMEKIT_API_URL` points the edge at `test/live/call/fakertk` instead of Cloudflare's API. Leave it unset anywhere deployed.
+
 ## Not in the baseline (Layer C)
 
 - **Who the agent can see:** the room-audience guard on spoken answers, and sidekicks.
