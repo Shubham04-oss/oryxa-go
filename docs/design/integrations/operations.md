@@ -58,9 +58,75 @@ The builder acts with the owner's GitHub identity, so its limits are rules plus 
 - **Once:**
   - install the Claude GitHub App on `oryxa-go` and `oryxa-platform`;
   - create a cloud environment with **Trusted** network access at claude.ai/code;
-  - tell macbookpro its id.
+  - give its id to whoever sets up the routines (§ Setting up the routines).
 - **Weekly-ish:** answer `loop:blocked-owner` issues, and do the live smoke test when an app's phase ends (P2–P5 exit criteria).
 - **To pause:** switch a routine off at <https://claude.ai/code/routines>. **To run now:** "Run now" on the same page.
+
+## Setting up the routines (a guide for the agent doing it)
+
+Nothing here is set up yet. Whoever sets it up, the owner or an agent in a Claude Code session with the owner's go-ahead, follows these steps exactly.
+
+### 0. Before you start
+
+- **The Claude GitHub App** is installed on `Shubham04-oss/oryxa-go` and `Shubham04-oss/oryxa-platform` (claude.ai/code → GitHub).
+- **A cloud environment** exists with **Trusted** network access (claude.ai/code → environments), and you have its id. The owner gives it to you; don't guess one.
+- **Nothing already runs:** with the `RemoteTrigger` tool (load it with `ToolSearch select:RemoteTrigger`), call `{action: "list"}` and check no routine named `integrations-loop` or `integrations-review` exists. If one does, **update** it instead of creating a second.
+
+### 1. The builder routine
+
+`RemoteTrigger` `{action: "create", body: …}` with this body. Replace `ENVIRONMENT_ID`, and generate a fresh lowercase v4 UUID for `uuid`.
+
+```json
+{
+  "name": "integrations-loop",
+  "cron_expression": "30 20 * * *",
+  "enabled": true,
+  "job_config": {
+    "ccr": {
+      "environment_id": "ENVIRONMENT_ID",
+      "session_context": {
+        "model": "claude-opus-5-5",
+        "sources": [
+          {"git_repository": {"url": "https://github.com/Shubham04-oss/oryxa-go"}},
+          {"git_repository": {"url": "https://github.com/Shubham04-oss/oryxa-platform"}}
+        ],
+        "allowed_tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "TodoWrite"]
+      },
+      "events": [
+        {"data": {
+          "uuid": "FRESH-UUID",
+          "session_id": "",
+          "type": "user",
+          "parent_tool_use_id": null,
+          "message": {"role": "user", "content": "You are the integrations loop agent for Shubham04-oss/oryxa-go. Read docs/design/integrations/loop-agent.md in the oryxa-go checkout and follow it exactly for today's run, starting at step 1. The design is docs/design/integrations/README.md; how the loop runs is docs/design/integrations/operations.md. oryxa-platform is checked out next to oryxa-go."}
+        }}
+      ]
+    }
+  }
+}
+```
+
+### 2. The reviewer routine
+
+The same shape, with these differences:
+- `"name": "integrations-review"`;
+- `"cron_expression": "0 4,16 * * *"`;
+- `"model": "claude-opus-5-5"`;
+- **only** the `oryxa-go` source;
+- `allowed_tools` without `WebFetch`;
+- `message.content` set to the reviewer's prompt below, verbatim.
+
+### 3. Check
+
+- `RemoteTrigger` `{action: "get", trigger_id}` for each: enabled, with the next run time shown in UTC.
+- Optionally `{action: "run", trigger_id}` on the builder once, then `list_runs` and `get_run_log` to watch it.
+- Tell the owner both routine links: `https://claude.ai/code/routines/<id>`.
+
+### 4. Changing them later
+
+- **Edit the prompts here first, then update the routine,** so this file stays the source of truth.
+- **Schedules are UTC:** 20:30 UTC = 02:00 IST; 04:00 and 16:00 UTC = 09:30 and 21:30 IST.
+- **Deleting** a routine is only possible at <https://claude.ai/code/routines>.
 
 ## Debugging a run
 
