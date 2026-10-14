@@ -16,6 +16,7 @@ import { SpecialistFocus } from "./specialist-focus"
 import { SpecialistsSection } from "./specialists-section"
 import { AgentTeamFocus } from "./multi-agent-team-focus"
 import { AgentTeamsSection } from "./multi-agent-teams-section"
+import { FollowUpsByTeamspace } from "./team-synthesis"
 import { PrimaryAgentFiles } from "./primary-agent-files"
 import { WorkflowOverview } from "./workflow-overview"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
@@ -408,6 +409,8 @@ function AgentsOverview({
           </AgentsNotice>
         )}
       </section>
+
+      <FollowUpsByTeamspace organizationId={organizationId} />
 
       <WorkflowOverview organizationId={organizationId} />
     </div>

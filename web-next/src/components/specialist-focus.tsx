@@ -17,6 +17,7 @@ import {
   statusLabel,
   timeAgo,
 } from "./agents-format"
+import { SpecialistAccess } from "./specialist-access"
 import { SpecialistChat } from "./specialist-chat"
 import { SpecialistForm } from "./specialists-section"
 import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
@@ -33,7 +34,7 @@ import { clearSpecialistChat, specialistKeys } from "@/lib/specialists/client"
 import { teamspacesQueryOptions } from "@/lib/teamspaces/queries"
 import type { ScreenContext } from "@/lib/agents/screen-context"
 
-const tabs = ["Overview", "Instructions", "Teams"] as const
+const tabs = ["Overview", "Instructions", "Access", "Teams"] as const
 type Tab = (typeof tabs)[number]
 
 export function SpecialistFocus({
@@ -193,14 +194,18 @@ export function SpecialistFocus({
               ? agent.name
               : tab === "Instructions"
                 ? "How it works"
-                : "Teams"
+                : tab === "Access"
+                  ? "Access"
+                  : "Teams"
           }
           description={
             tab === "Overview"
               ? agent.description || "No description yet."
               : tab === "Instructions"
                 ? "It follows these on every run."
-                : "The teams it works in, and its role in each."
+                : tab === "Access"
+                  ? "The apps it may use, and the model it answers on."
+                  : "The teams it works in, and its role in each."
           }
           status={tab === "Overview" && <StatusPill status={agent.status} />}
         >
@@ -328,6 +333,10 @@ export function SpecialistFocus({
                 </button>
               </div>
             </div>
+          )}
+
+          {tab === "Access" && (
+            <SpecialistAccess organizationId={organizationId} agent={agent} />
           )}
 
           {tab === "Teams" && (

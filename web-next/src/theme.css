@@ -229,8 +229,8 @@
   --scene-ships: url("/scenes/ships.jpg");
   --scene-harbour: url("/scenes/harbour.webp");
   --scene-ship-lines: url("/scenes/ship-lines.webp");
-  --scene-soft-opacity: .24;
-  --scene-band-opacity: .38;
+  --scene-soft-opacity: 0.24;
+  --scene-band-opacity: 0.38;
   /* A file's kind badge (file-kind.tsx): the same in both themes. */
   --file-pdf: #c8463f;
   --file-sheet: #2f8a55;
@@ -241,6 +241,9 @@
   --file-code: #3d7fb8;
   --file-doc: #6b6b6b;
   --on-file: #ffffff;
+  /* A switch that is on, and its knob, in both themes. */
+  --switch-on: #3f9d63;
+  --switch-knob: #ffffff;
   color-scheme: dark;
 }
 
@@ -467,7 +470,7 @@
   --scene-ships: url("/scenes/ships.jpg");
   --scene-harbour: url("/scenes/harbour.webp");
   --scene-ship-lines: url("/scenes/ship-lines.webp");
-  --scene-soft-opacity: .38;
-  --scene-band-opacity: .55;
+  --scene-soft-opacity: 0.38;
+  --scene-band-opacity: 0.55;
   color-scheme: light;
 }

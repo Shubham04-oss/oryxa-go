@@ -1,0 +1,100 @@
+/* A team's synthesis and the follow-ups the organization agent proposed
+   (I7): quiet tiles, the points as short lists. */
+.workspace-synthesis-summary {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.workspace-synthesis-points {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+.workspace-synthesis-points h4 {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.workspace-synthesis-points ul:not(.workspace-follow-ups) {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-soft);
+  font-size: 12.5px;
+  line-height: 1.5;
+  list-style: disc;
+}
+.workspace-synthesis-points ul:not(.workspace-follow-ups) li::marker {
+  color: var(--text-muted);
+}
+.workspace-synthesis-time {
+  display: block;
+  margin-top: 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.workspace-follow-ups {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.workspace-follow-ups li {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: var(--base);
+}
+.workspace-follow-ups strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.workspace-follow-ups span {
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.workspace-follow-ups small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.workspace-follow-up-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+.workspace-follow-up-groups h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.workspace-follow-up-groups h3 span {
+  margin-left: auto;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.workspace-follow-up-groups h3 button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border-quiet);
+  text-underline-offset: 3px;
+}
