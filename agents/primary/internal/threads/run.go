@@ -34,6 +34,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/relevance"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 )
 
@@ -382,6 +383,8 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	// The pin rides on this run's context alone, beside the run's origin.
 	runContext = agents.WithPinnedTeamspace(runContext, run.teamspaceID)
 	runContext = agents.WithRunGuard(runContext, run.guardInput)
+	// What the run saves and reads is kept under the member's organization.
+	runContext = s3artifact.WithOrganization(runContext, run.member.OrganizationID)
 	if run.member.AccessToken != "" {
 		runContext = memberauth.WithAccessToken(runContext, run.member.AccessToken)
 	}
