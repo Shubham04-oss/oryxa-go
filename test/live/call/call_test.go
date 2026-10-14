@@ -30,6 +30,7 @@ const (
 // gives a rejoin a fresh participant, and ends when the last one leaves.
 func TestCallLifecycle(t *testing.T) {
 	r := setup(t).newRoom(t)
+	seats := rtkFromEnv(t)
 
 	first := r.join(r.a)
 	if first.CallID == "" || first.MeetingID == "" || first.ParticipantID == "" {
@@ -67,15 +68,19 @@ func TestCallLifecycle(t *testing.T) {
 	if got := r.call(r.a).members(); len(got) != 2 {
 		t.Errorf("after A rejoined, participants = %v, want A once and B", got)
 	}
+	seats.gone(t, "after A rejoined", first.MeetingID, first.ParticipantID)
+	seats.present(t, "with A and B in the call", first.MeetingID, again.ParticipantID, second.ParticipantID)
 
 	r.must(r.b, http.MethodPost, "/call/leave", map[string]any{}, nil)
 	if got := r.call(r.a).members(); !slices.Equal(got, []string{r.a.id}) {
 		t.Errorf("after B left, participants = %v", got)
 	}
+	seats.gone(t, "after B left", first.MeetingID, second.ParticipantID)
 	r.must(r.a, http.MethodPost, "/call/leave", map[string]any{}, nil)
 	if view := r.call(r.a); view != nil {
 		t.Fatalf("the last member left, but the call goes on: %+v", view)
 	}
+	seats.gone(t, "after the call ended", first.MeetingID, first.ParticipantID, second.ParticipantID, again.ParticipantID)
 
 	events := forCall(r.log(r.a), first.CallID)
 	want := []string{"call.started", "call.joined", "call.joined", "call.left", "call.left", "call.ended"}

@@ -52,6 +52,12 @@ func main() {
 			token := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)) + "." +
 				base64.RawURLEncoding.EncodeToString([]byte(`{"meetingId":"`+rest[1]+`","participantId":"`+id+`"}`)) + ".fake"
 			answer(w, http.StatusCreated, map[string]string{"id": id, "token": token})
+		case r.Method == http.MethodGet && len(rest) == 4 && rest[2] == "participants":
+			if !participants[rest[3]] {
+				answer(w, http.StatusNotFound, nil)
+				return
+			}
+			answer(w, http.StatusOK, map[string]string{"id": rest[3]})
 		case r.Method == http.MethodDelete && len(rest) == 4 && rest[2] == "participants":
 			if !participants[rest[3]] {
 				answer(w, http.StatusNotFound, nil)

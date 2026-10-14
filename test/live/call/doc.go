@@ -62,6 +62,10 @@
 //	                               edge, then check it survived
 //	CALL_LIVE_LATENCY_SAMPLES=10   ask that many questions and report latency
 //	CALL_LIVE_REPORT=path.json     where the latency report goes
+//	CALL_LIVE_RTK_ACCOUNT_ID, CALL_LIVE_RTK_APP_ID, CALL_LIVE_RTK_API_TOKEN
+//	                               ask RealtimeKit that every participant is
+//	                               deleted on leave and when the call ends
+//	                               (CALL_LIVE_RTK_URL for fakertk)
 //	CALL_LIVE_R2_ENDPOINT, CALL_LIVE_R2_BUCKET, CALL_LIVE_R2_ACCESS_KEY_ID,
 //	CALL_LIVE_R2_SECRET_ACCESS_KEY read the saved transcript back from R2
 //
