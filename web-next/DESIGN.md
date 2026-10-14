@@ -236,6 +236,24 @@ not permission to copy every incidental value into a new component.
   empty Library or no teamspaces yet, is one tile of the brand's ship lines
   on deep sea (`.workspace-empty-scene`). "Nothing matches", errors and
   warnings stay plain; a destructive confirm never gets a scene.
+- **Parleys** (live calls; founder's redesign, 14 Oct 2026). A parley is a
+  room's call (live layer B6, `call-provider.tsx`, `call-surfaces.tsx`,
+  `call.css`).
+  - **Starting and joining:** "Parley" in a teamspace's header starts one.
+    While one runs, a strip under the header shows who's in, how long it
+    has run and any recording, with the mic and camera set before you join,
+    "Listen in" (muted, camera off) and Join.
+  - **Once you're in:** the strip says so, with Open and Leave. On any other
+    page a mini player follows you (bottom left) with mute, back to the
+    parley, and leave.
+  - **The full page:** a gallery or speaker layout, live captions, the
+    transcript as this page heard it, and a dock (mic, camera, screen,
+    record, ask the agent in, leave), plus "End for everyone".
+  - **Tiles:** camera tiles stay dark in both themes, as video does
+    (`--call-*` tokens). A person keeps their tile colour everywhere. The
+    agent is a tile with no camera, marked Listening or Speaking.
+  - **Recording:** while it is on, everyone in the call sees who turned it
+    on, and when.
 - **Library** (was Knowledge bases; founder's redesign, 14 Oct 2026). Each
   collection is a filled tile on the canvas, with no outline, and lifts to
   the raised tile on hover; search, the source list, an open document and an

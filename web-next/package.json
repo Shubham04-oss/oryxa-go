@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cloudflare/realtimekit": "2.0.2",
     "@ai-sdk/react": "^4.0.111",
     "@base-ui/react": "^1.8.0",
     "@cloudflare/ai-chat": "^0.12.0",

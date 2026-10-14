@@ -1,0 +1,367 @@
+// @vitest-environment jsdom
+
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { CallProvider } from "./call-provider"
+import { CallSurface, ParleyButton, ParleyStrip, tintOf } from "./call-surfaces"
+import type { CallView } from "@/lib/call/client"
+import { callDuration, parseVoiceFrame, whoIsIn } from "@/lib/call/client"
+import type { CallMedia, CallTile, HeardSegment } from "@/lib/call/media"
+
+const room = { kind: "teamspace", id: "tsp_1" } as const
+const base = "/live/org_1/rooms/teamspace/tsp_1"
+
+class QuietSocket extends EventTarget {
+  send() {}
+  close() {}
+}
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  })
+}
+
+function view(overrides: Partial<CallView> = {}): CallView {
+  return {
+    callId: "call_1",
+    startedAt: new Date(Date.now() - 65_000).toISOString(),
+    startedBy: "usr_raya",
+    participants: [
+      {
+        member: "usr_raya",
+        name: "Raya Patel",
+        joinedAt: "2026-10-14T10:00:00Z",
+      },
+      {
+        member: "usr_rohan",
+        name: "Rohan Mehta",
+        joinedAt: "2026-10-14T10:01:00Z",
+      },
+    ],
+    recording: { on: false, by: null, since: null },
+    agent: { present: true, name: "Krude" },
+    ...overrides,
+  }
+}
+
+function fakeMedia() {
+  const tiles: CallTile[] = [
+    {
+      id: "p_me",
+      member: "usr_ada",
+      name: "Ada",
+      self: true,
+      audio: true,
+      video: false,
+    },
+    {
+      id: "p_raya",
+      member: "usr_raya",
+      name: "Raya Patel",
+      self: false,
+      audio: true,
+      video: false,
+    },
+  ]
+  let heard: ((segment: HeardSegment) => void) | undefined
+  const media: CallMedia & { say: (segment: HeardSegment) => void } = {
+    tiles: () => tiles,
+    onChange: () => () => undefined,
+    onTranscript(listener) {
+      heard = listener
+      return () => undefined
+    },
+    setMic: vi.fn(async (on: boolean) => {
+      tiles[0] = { ...tiles[0], audio: on }
+    }),
+    setCamera: vi.fn(async () => undefined),
+    setScreen: vi.fn(async () => undefined),
+    leave: vi.fn(async () => undefined),
+    say: (segment) => heard?.(segment),
+  }
+  return media
+}
+
+function Parley({ onRoomPage }: { onRoomPage: boolean }) {
+  return (
+    <>
+      {onRoomPage && (
+        <>
+          <ParleyButton
+            organizationId="org_1"
+            room={room}
+            roomName="EU launch"
+            member="usr_ada"
+            name="Ada"
+          />
+          <ParleyStrip
+            organizationId="org_1"
+            room={room}
+            roomName="EU launch"
+            member="usr_ada"
+            name="Ada"
+          />
+        </>
+      )}
+      <CallSurface />
+    </>
+  )
+}
+
+function renderParley(join = vi.fn(async () => fakeMedia())) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const tree = (onRoomPage: boolean) => (
+    <QueryClientProvider client={client}>
+      <CallProvider joinMediaWith={join}>
+        <Parley onRoomPage={onRoomPage} />
+      </CallProvider>
+    </QueryClientProvider>
+  )
+  const { rerender } = render(tree(true))
+  return { join, leaveRoomPage: () => rerender(tree(false)) }
+}
+
+const fetchMock = vi.fn<typeof fetch>()
+let current: CallView | null = view()
+
+function requests(path: string, method = "GET") {
+  return fetchMock.mock.calls.filter(([url, init]) => {
+    const target = String(url)
+    return target.includes(path) && (init?.method ?? "GET") === method
+  })
+}
+
+beforeEach(() => {
+  current = view()
+  vi.stubGlobal("WebSocket", QuietSocket)
+  vi.stubGlobal("fetch", fetchMock)
+  fetchMock.mockImplementation(async (url, init) => {
+    const target = String(url)
+    const method = init?.method ?? "GET"
+    if (target.endsWith(`${base}/call`) && method === "GET")
+      return json({ call: current })
+    if (target.includes(`${base}/log`))
+      return json({ events: [], next: 0, more: false })
+    if (target.endsWith("/call/join")) {
+      return json({
+        callId: "call_1",
+        meetingId: "m_1",
+        participantId: "p_me",
+        token: "rtk-token",
+        preset: "oryxa-member",
+      })
+    }
+    if (target.endsWith("/call/leave")) return json({ left: true })
+    if (target.endsWith("/call/transcript")) return json({ accepted: 1 }, 202)
+    return json({ error: { code: "not_found", message: "no" } }, 404)
+  })
+})
+
+afterEach(() => {
+  cleanup()
+  fetchMock.mockReset()
+  vi.unstubAllGlobals()
+})
+
+describe("the call's words", () => {
+  it("says how long a call has run and who is in", () => {
+    expect(
+      callDuration("2026-10-14T10:00:00Z", Date.parse("2026-10-14T10:18:42Z"))
+    ).toBe("18:42")
+    expect(
+      callDuration("2026-10-14T10:00:00Z", Date.parse("2026-10-14T11:02:05Z"))
+    ).toBe("1:02:05")
+    expect(whoIsIn([])).toBe("Nobody is in yet")
+    expect(whoIsIn(["Raya"])).toBe("Raya is in")
+    expect(whoIsIn(["Raya", "Rohan"])).toBe("Raya and Rohan are in")
+    expect(whoIsIn(["Raya", "Rohan", "Kenji", "Krude"])).toBe(
+      "Raya, Rohan and 2 others are in"
+    )
+  })
+
+  it("reads voice frames and ignores the rest", () => {
+    expect(
+      parseVoiceFrame('{"type":"voice.state","present":true,"name":"Krude"}')
+    ).toEqual({
+      type: "voice.state",
+      present: true,
+      name: "Krude",
+    })
+    expect(parseVoiceFrame('{"type":"event"}')).toBeUndefined()
+    expect(parseVoiceFrame("nope")).toBeUndefined()
+  })
+
+  it("gives each person the same colour every time", () => {
+    expect(tintOf("usr_raya")).toBe(tintOf("usr_raya"))
+    expect(tintOf("usr_raya")).toMatch(/^var\(--call-tint-[1-6]\)$/)
+  })
+})
+
+describe("a parley in a teamspace", () => {
+  it("shows a running parley and who is in it, and hides Start", async () => {
+    renderParley()
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    expect(within(strip).getByText(/^Parley · 1:0\d$/)).toBeTruthy()
+    expect(within(strip).getByText("Raya, Rohan and Krude are in")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Parley" })).toBeNull()
+  })
+
+  it("offers to start one when none runs", async () => {
+    current = null
+    const { join } = renderParley()
+    const start = await screen.findByRole("button", { name: "Parley" })
+    fireEvent.click(start)
+    await waitFor(() => expect(join).toHaveBeenCalled())
+    expect(join).toHaveBeenCalledWith({
+      token: "rtk-token",
+      mic: true,
+      camera: false,
+    })
+  })
+
+  it("joins with the mic and camera as set, then follows the member as a mini player", async () => {
+    const { join, leaveRoomPage } = renderParley()
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(
+      within(strip).getByRole("button", { name: "Join with your mic on" })
+    )
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+
+    await waitFor(() =>
+      expect(join).toHaveBeenCalledWith({
+        token: "rtk-token",
+        mic: false,
+        camera: false,
+      })
+    )
+    const [, init] = requests("/call/join", "POST")[0] ?? []
+    expect(JSON.parse(String(init?.body))).toEqual({ name: "Ada" })
+
+    expect(await screen.findByText(/^You're in the parley/)).toBeTruthy()
+    // On the room's own page the strip is the call's control.
+    expect(screen.queryByRole("region", { name: /mini player/ })).toBeNull()
+    leaveRoomPage()
+    const pip = screen.getByRole("region", {
+      name: "EU launch parley, mini player",
+    })
+    expect(within(pip).getByRole("group", { name: "Raya Patel" })).toBeTruthy()
+  })
+
+  it("opens the full page with its controls, and leaves", async () => {
+    const media = fakeMedia()
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    const dock = within(page).getByRole("toolbar", { name: "Parley controls" })
+    fireEvent.click(within(dock).getByRole("button", { name: "Mute" }))
+    await waitFor(() => expect(media.setMic).toHaveBeenCalledWith(false))
+    expect(within(dock).getByRole("button", { name: "Unmute" })).toBeTruthy()
+    expect(
+      within(page).getByRole("group", { name: "Krude, the agent" })
+    ).toBeTruthy()
+
+    fireEvent.click(within(dock).getByRole("button", { name: "Leave" }))
+    await waitFor(() => expect(requests("/call/leave", "POST")).toHaveLength(1))
+    expect(media.leave).toHaveBeenCalled()
+    expect(screen.queryByRole("dialog")).toBeNull()
+    expect(screen.queryByRole("region", { name: /mini player/ })).toBeNull()
+  })
+
+  it("captions everyone and sends only the member's own words to the room", async () => {
+    const media = fakeMedia()
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    await screen.findByText(/^You're in the parley/)
+
+    media.say({
+      id: "s1",
+      member: "usr_raya",
+      name: "Raya Patel",
+      text: "Then 4 November.",
+      partial: false,
+      at: 1,
+    })
+    media.say({
+      id: "s2",
+      member: "usr_ada",
+      name: "Ada",
+      text: "Agreed.",
+      partial: false,
+      at: 2,
+    })
+
+    await waitFor(
+      () => expect(requests("/call/transcript", "POST")).toHaveLength(1),
+      {
+        timeout: 3000,
+      }
+    )
+    const [, init] = requests("/call/transcript", "POST")[0] ?? []
+    expect(JSON.parse(String(init?.body))).toEqual({
+      callId: "call_1",
+      segments: [
+        {
+          id: "s2",
+          speaker: "usr_ada",
+          text: "Agreed.",
+          partial: false,
+          at: 2,
+        },
+      ],
+    })
+  })
+
+  it("says why a join was refused", async () => {
+    fetchMock.mockImplementation(async (url, init) => {
+      const target = String(url)
+      if (target.endsWith("/call/join")) {
+        return json(
+          {
+            error: { code: "forbidden", message: "not a member of this room" },
+          },
+          403
+        )
+      }
+      if (
+        target.endsWith(`${base}/call`) &&
+        (init?.method ?? "GET") === "GET"
+      ) {
+        return json({ call: current })
+      }
+      return json({ events: [], next: 0, more: false })
+    })
+    const { join } = renderParley()
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "You can't join a parley in this room yet."
+    )
+    expect(join).not.toHaveBeenCalled()
+  })
+})
