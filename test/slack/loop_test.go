@@ -556,7 +556,7 @@ func TestSlackConsentLoop(t *testing.T) {
 			return ok
 		})
 		words := wording(answer)
-		for _, want := range []string{"Revenue grew by about a fifth in Q3", "From Raya's agent", "approved by Raya", "AI summary only"} {
+		for _, want := range []string{"Revenue grew by about a fifth in Q3", "Raya's agent · approved by Raya", "AI summary only"} {
 			if !strings.Contains(words, want) {
 				t.Errorf("the answer does not say %q: %s", want, words)
 			}
@@ -620,7 +620,7 @@ func TestSlackConsentLoop(t *testing.T) {
 			}
 			return false
 		})
-		if words := wording(answer); !strings.Contains(words, "From Raya's agent") || !strings.Contains(words, "approved by Raya") {
+		if words := wording(answer); !strings.Contains(words, "Raya's agent · approved by Raya") {
 			t.Errorf("the follow-up's answer is attributed %s", words)
 		}
 		for _, message := range s.fromIndex(before) {
@@ -846,7 +846,7 @@ func TestSlackConsentLoop(t *testing.T) {
 			answer = message
 			return ok
 		})
-		for _, want := range []string{"Revenue grew by about a fifth in Q3", "From Raya's agent", "approved by Raya"} {
+		for _, want := range []string{"Revenue grew by about a fifth in Q3", "Raya's agent · approved by Raya"} {
 			if !strings.Contains(wording(answer), want) {
 				t.Errorf("the answer does not say %q: %s", want, wording(answer))
 			}
