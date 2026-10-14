@@ -13,7 +13,18 @@ import (
 // artifactStore is where artifacts are kept: R2 when the settings name it
 // (live-layer A7), still reading the S3 bucket for what was saved there
 // before; S3 alone; or, with neither, memory, which goes with the process.
+//
+// Whichever it is, every artifact is keyed by the organization on the
+// request's context (s3artifact.ByOrganization, live-layer L6).
 func artifactStore(ctx context.Context, options Options, logger *slog.Logger) (artifact.Service, error) {
+	store, err := unorganizedArtifactStore(ctx, options, logger)
+	if err != nil {
+		return nil, err
+	}
+	return s3artifact.ByOrganization(store), nil
+}
+
+func unorganizedArtifactStore(ctx context.Context, options Options, logger *slog.Logger) (artifact.Service, error) {
 	settings := options.Settings
 	var legacy artifact.Service
 	if settings.ArtifactBucket != "" {

@@ -18,6 +18,7 @@ import (
 	"google.golang.org/adk/v2/tool/functiontool"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
 )
 
 func TestAFileARunKeepsShowsInTheThreadAndCanBeRead(t *testing.T) {
@@ -46,7 +47,7 @@ func TestAFileARunKeepsShowsInTheThreadAndCanBeRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	service, err := New(Config{
-		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(), Artifacts: artifact.InMemoryService(),
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(), Artifacts: s3artifact.ByOrganization(artifact.InMemoryService()),
 		Runs: newFakeRuns(), Prices: prices, RunTimeout: time.Minute,
 	})
 	if err != nil {
@@ -121,7 +122,7 @@ func TestAnEditedFileKeepsTheTypeOfTheVersionItReplaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifacts := artifact.InMemoryService()
+	artifacts := s3artifact.ByOrganization(artifact.InMemoryService())
 	service, err := New(Config{
 		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(), Artifacts: artifacts,
 		Runs: newFakeRuns(), Prices: prices, RunTimeout: time.Minute,
@@ -137,7 +138,7 @@ func TestAnEditedFileKeepsTheTypeOfTheVersionItReplaces(t *testing.T) {
 	// An agent kept the file with a type of its own choosing: not the one
 	// its extension would give it.
 	const kept = "application/octet-stream"
-	if _, err := artifacts.Save(ctx, &artifact.SaveRequest{
+	if _, err := artifacts.Save(s3artifact.WithOrganization(ctx, asha.OrganizationID), &artifact.SaveRequest{
 		AppName: "krude", UserID: asha.UserID, SessionID: created.ID, FileName: "plan.docx",
 		Part: genai.NewPartFromBytes([]byte("docx-v1"), kept),
 	}); err != nil {
@@ -178,7 +179,7 @@ func TestAnArtifactVersionIsReadWithoutTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifacts := &countingArtifacts{Service: artifact.InMemoryService()}
+	artifacts := &countingArtifacts{Service: s3artifact.ByOrganization(artifact.InMemoryService())}
 	service, err := New(Config{
 		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(), Artifacts: artifacts,
 		Runs: newFakeRuns(), Prices: prices, RunTimeout: time.Minute,
@@ -192,7 +193,7 @@ func TestAnArtifactVersionIsReadWithoutTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, content := range []string{"docx-v1", "docx-v2"} {
-		if _, err := artifacts.Save(ctx, &artifact.SaveRequest{
+		if _, err := artifacts.Save(s3artifact.WithOrganization(ctx, asha.OrganizationID), &artifact.SaveRequest{
 			AppName: "krude", UserID: asha.UserID, SessionID: created.ID, FileName: "plan.docx",
 			Part: genai.NewPartFromBytes([]byte(content), "application/octet-stream"),
 		}); err != nil {

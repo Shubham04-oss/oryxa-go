@@ -10,6 +10,9 @@
 //
 // A filename beginning with "user:" belongs to the member rather than to one
 // conversation, and every session of theirs sees it.
+//
+// Oryxa reaches it through ByOrganization, which puts the organization in
+// front of the app name, so every key starts orgs/{organizationID}/.
 package s3artifact
 
 import (

@@ -17,6 +17,7 @@ import (
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
@@ -352,7 +353,7 @@ func (service *Service) DeleteThread(ctx context.Context, member threads.Member,
 	if err := service.sessions.Delete(ctx, &session.DeleteRequest{AppName: app, UserID: member.UserID, SessionID: threadID}); err != nil && !errors.Is(err, session.ErrNotFound) {
 		return fmt.Errorf("delete managed agent thread: %w", err)
 	}
-	service.deleteArtifacts(ctx, app, member.UserID, threadID)
+	service.deleteArtifacts(s3artifact.WithOrganization(ctx, member.OrganizationID), app, member.UserID, threadID)
 	return nil
 }
 

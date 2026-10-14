@@ -465,6 +465,7 @@ func (service *Service) resolveArtifact(ctx context.Context, member Member, thre
 	if _, err := service.thread(ctx, member, threadID); err != nil {
 		return nil, 0, err
 	}
+	ctx = s3artifact.WithOrganization(ctx, member.OrganizationID)
 	request := &artifact.LoadRequest{
 		AppName: service.appName, UserID: member.UserID, SessionID: threadID, FileName: name, Version: version,
 	}
@@ -497,7 +498,7 @@ func (service *Service) Artifact(ctx context.Context, member Member, threadID, n
 	if err != nil {
 		return File{}, err
 	}
-	loaded, err := service.artifacts.Load(ctx, request)
+	loaded, err := service.artifacts.Load(s3artifact.WithOrganization(ctx, member.OrganizationID), request)
 	if errors.Is(err, fs.ErrNotExist) {
 		return File{}, ErrNotFound
 	}
@@ -547,7 +548,7 @@ func (service *Service) SaveArtifact(ctx context.Context, member Member, threadI
 		return 0, ErrConflict
 	}
 	mimeType := cmp.Or(strings.TrimSpace(current.MIMEType), "application/octet-stream")
-	saved, err := service.artifacts.Save(ctx, &artifact.SaveRequest{
+	saved, err := service.artifacts.Save(s3artifact.WithOrganization(ctx, member.OrganizationID), &artifact.SaveRequest{
 		AppName: service.appName, UserID: member.UserID, SessionID: threadID, FileName: name,
 		Version: expectedVersion + 1, Part: genai.NewPartFromBytes(data, mimeType),
 	})
@@ -567,6 +568,7 @@ func (service *Service) deleteArtifacts(ctx context.Context, member Member, thre
 	if service.artifacts == nil {
 		return
 	}
+	ctx = s3artifact.WithOrganization(ctx, member.OrganizationID)
 	listed, err := service.artifacts.List(ctx, &artifact.ListRequest{
 		AppName: service.appName, UserID: member.UserID, SessionID: threadID,
 	})
