@@ -169,9 +169,12 @@ function joinError(error: unknown): string {
 
 export function CallProvider({
   children,
+  viewerName,
   joinMediaWith = joinMedia,
 }: {
   children: ReactNode
+  /** The member's name, which the call shows when a page names none. */
+  viewerName?: string
   /** The media to join with; tests stand in for RealtimeKit. */
   joinMediaWith?: typeof joinMedia
 }) {
@@ -252,7 +255,7 @@ export function CallProvider({
         const answer = await joinCall(
           options.organizationId,
           options.room,
-          options.name
+          options.name ?? viewerName
         )
         callId = answer.callId
         token = answer.token
@@ -372,7 +375,7 @@ export function CallProvider({
         })
       )
     },
-    [joinMediaWith, refreshCall, teardownAndLeave, update]
+    [joinMediaWith, refreshCall, teardownAndLeave, update, viewerName]
   )
 
   /**

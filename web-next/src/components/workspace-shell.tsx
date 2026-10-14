@@ -150,7 +150,7 @@ export function WorkspaceShell(
 ) {
   return (
     <OpenRequestProvider value={openRequest}>
-      <CallProvider>
+      <CallProvider viewerName={props.session?.user.display_name || undefined}>
         <WorkspaceShellContent key={props.session?.user.id} {...props} />
         <CallSurface />
       </CallProvider>

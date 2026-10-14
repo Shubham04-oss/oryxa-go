@@ -493,4 +493,30 @@ describe("a parley in a teamspace", () => {
     window.dispatchEvent(new Event("pagehide"))
     expect(beacon).toHaveBeenCalledWith(`${base}/call/leave`)
   })
+
+  it("names the member with their own name when the page names none", async () => {
+    current = null
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CallProvider
+          viewerName="Ada Brennan"
+          joinMediaWith={async () => fakeMedia()}
+        >
+          <ParleyButton
+            organizationId="org_1"
+            room={room}
+            roomName="Raya Patel"
+            member="usr_ada"
+          />
+        </CallProvider>
+      </QueryClientProvider>
+    )
+    fireEvent.click(await screen.findByRole("button", { name: "Parley" }))
+    await waitFor(() => expect(requests("/call/join", "POST")).toHaveLength(1))
+    const [, init] = requests("/call/join", "POST")[0] ?? []
+    expect(JSON.parse(String(init?.body))).toEqual({ name: "Ada Brennan" })
+  })
 })
