@@ -241,6 +241,29 @@
   --file-code: #3d7fb8;
   --file-doc: #6b6b6b;
   --on-file: #ffffff;
+  /* A parley's camera tiles stay dark in both themes, as video does
+     (call.css); everything around them follows the theme. */
+  --call-cam: #2a2a2a;
+  --call-cam-edge: #131313;
+  --call-cam-off: #171717;
+  --on-call: #f1f1f1;
+  --call-label: #0000008c;
+  --call-caption: #000000b8;
+  --call-face-shadow: #00000059;
+  --call-speaking: #7fcf98;
+  --call-speaking-ring: #7fcf9829;
+  --call-muted: #f0a8a8;
+  --call-agent: #263a2ee6;
+  --call-agent-text: #b9e6c6;
+  --call-leave: #d4544f;
+  --call-join: #3f9d63;
+  --on-call-action: #ffffff;
+  --call-tint-1: #3d2b4a;
+  --call-tint-2: #4a3a26;
+  --call-tint-3: #4a2a36;
+  --call-tint-4: #24364d;
+  --call-tint-5: #22433f;
+  --call-tint-6: #26402f;
   /* A switch that is on, and its knob, in both themes. */
   --switch-on: #3f9d63;
   --switch-knob: #ffffff;

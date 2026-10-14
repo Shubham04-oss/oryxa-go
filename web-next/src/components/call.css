@@ -1,0 +1,711 @@
+/* Parleys (B6; founder's redesign, 14 Oct 2026): people as camera tiles,
+   which stay dark in both themes as video does; everything around them
+   follows the theme. The strip joins from a teamspace, the mini player
+   follows the member to other pages, and the full page is the parley. */
+
+/* A person in the call. */
+.call-cam {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 14px;
+  background: radial-gradient(
+    120% 95% at 50% 30%,
+    var(--c, var(--call-cam)) 0%,
+    var(--call-cam-edge) 78%
+  );
+  color: var(--on-call);
+}
+.call-cam[data-speaking="true"] {
+  box-shadow:
+    inset 0 0 0 2px var(--call-speaking),
+    0 0 0 3px var(--call-speaking-ring);
+}
+.call-cam video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.call-cam[data-self="true"] video {
+  transform: scaleX(-1);
+}
+.call-cam .workspace-avatar {
+  width: 64px;
+  height: 64px;
+  box-shadow: 0 6px 20px var(--call-face-shadow);
+}
+.call-cam[data-size="big"] .workspace-avatar {
+  width: 96px;
+  height: 96px;
+}
+.call-cam[data-size="small"] .workspace-avatar {
+  width: 26px;
+  height: 26px;
+  box-shadow: none;
+}
+.call-name {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: calc(100% - 16px);
+  height: 22px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--call-label);
+  color: var(--on-call);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.call-name svg {
+  flex: none;
+}
+.call-name .is-muted {
+  display: inline-flex;
+  color: var(--call-muted);
+}
+.call-flag {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--call-label);
+  color: var(--on-call);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.call-flag[data-agent="true"] {
+  background: var(--call-agent);
+  color: var(--call-agent-text);
+}
+.call-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 12px;
+}
+.call-wave i {
+  display: block;
+  width: 2px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.call-wave i:nth-child(1) {
+  height: 5px;
+}
+.call-wave i:nth-child(2) {
+  height: 11px;
+}
+.call-wave i:nth-child(3) {
+  height: 7px;
+}
+.call-wave i:nth-child(4) {
+  height: 9px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .call-wave i {
+    animation: call-wave 900ms ease-in-out infinite alternate;
+  }
+  .call-wave i:nth-child(2) {
+    animation-delay: 150ms;
+  }
+  .call-wave i:nth-child(3) {
+    animation-delay: 300ms;
+  }
+  .call-wave i:nth-child(4) {
+    animation-delay: 450ms;
+  }
+}
+@keyframes call-wave {
+  to {
+    transform: scaleY(0.45);
+  }
+}
+
+.call-live-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tone-7fcf98);
+}
+
+/* Round controls. */
+.call-btn {
+  position: relative;
+  display: grid;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--canvas);
+  color: var(--text);
+}
+.call-btn:hover {
+  background: var(--selected);
+}
+.call-btn[data-state="off"] {
+  background: var(--tone-3a2323);
+  color: var(--tone-f0a8a8);
+}
+.call-btn[data-state="on"] {
+  background: var(--tone-263a2e);
+  color: var(--tone-b9e6c6);
+}
+.call-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.call-btn:focus-visible,
+.call-leave:focus-visible,
+.call-join:focus-visible {
+  outline: 2px solid var(--tone-aaaaaa);
+  outline-offset: 2px;
+}
+.call-leave {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--call-leave);
+  color: var(--on-call-action);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.call-join {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--call-join);
+  color: var(--on-call-action);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.call-join:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.call-quiet {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.call-quiet:hover {
+  background: var(--selected);
+}
+
+/* The strip: a running parley across the top of its teamspace. */
+.call-strip {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 14px;
+  background: var(--base);
+}
+.call-strip-cams {
+  display: flex;
+  gap: 4px;
+}
+.call-strip-cams .call-cam {
+  width: 74px;
+  height: 48px;
+  border-radius: 9px;
+}
+.call-strip-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.call-strip-text strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.call-strip-text span,
+.call-strip-text p {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.call-strip-text p[role="alert"] {
+  color: var(--tone-e4aaa6);
+}
+.call-strip-acts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.call-strip-acts .call-btn {
+  width: 34px;
+  height: 34px;
+}
+.call-sep {
+  width: 1px;
+  height: 22px;
+  margin: 0 2px;
+  background: var(--border-quiet);
+}
+
+/* The recording banner: everyone in the call sees who turned it on, and when. */
+.call-recording {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--tone-f0a8a8);
+  font-size: 12px;
+  font-weight: 600;
+}
+.call-recording::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--call-leave);
+  content: "";
+}
+
+/* The mini player, on any page while the member is in a parley. */
+.call-pip {
+  position: fixed;
+  bottom: 16px;
+  left: 76px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--border-quiet),
+    0 16px 40px var(--shade-66);
+}
+.call-pip-stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 72px;
+  gap: 4px;
+  margin: 6px 6px 0;
+}
+.call-pip-stage .call-cam {
+  border-radius: 10px;
+}
+.call-pip-stage .call-cam[data-share="true"] {
+  grid-column: 1 / -1;
+  grid-row: span 2;
+  background: var(--call-cam-edge);
+}
+.call-pip-stage .call-cam video {
+  object-fit: contain;
+}
+.call-pip-stage .call-name {
+  bottom: 4px;
+  left: 4px;
+  height: 17px;
+  padding: 0 6px;
+  font-size: 9.5px;
+}
+.call-pip-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 8px 12px;
+}
+.call-pip-title {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.call-pip-title strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.call-pip-title small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.call-pip-bar .call-btn {
+  width: 32px;
+  height: 32px;
+}
+.call-pip-bar .call-leave {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  justify-content: center;
+}
+.call-pip-note {
+  margin: 0 12px 10px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.call-pip-note[role="alert"] {
+  color: var(--tone-e4aaa6);
+}
+
+/* The full page. */
+.call-full {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--base);
+  color: var(--text);
+  font-size: 13px;
+}
+.call-top {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 60px;
+  padding: 0 16px;
+}
+.call-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--canvas);
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+.call-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 14px;
+}
+.call-title .workspace-avatar {
+  width: 22px;
+  height: 22px;
+}
+.call-title small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.call-grow {
+  flex: 1;
+}
+.call-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--canvas);
+}
+.call-seg button {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.call-seg button[aria-pressed="true"] {
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--border-quiet),
+    0 1px 3px var(--shade-66);
+  color: var(--text);
+}
+.call-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  gap: 10px;
+  min-height: 0;
+  padding: 0 16px 10px;
+}
+.call-gallery {
+  position: relative;
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+.call-gallery[data-layout="speaker"] {
+  grid-template-columns: minmax(0, 1fr) 208px;
+  grid-template-rows: repeat(var(--rows, 4), minmax(0, 1fr));
+}
+.call-gallery[data-layout="speaker"] > :first-child {
+  grid-row: 1 / -1;
+}
+.call-gallery .call-cam[data-share="true"] {
+  background: var(--call-cam-edge);
+}
+.call-gallery .call-cam[data-share="true"] video {
+  object-fit: contain;
+}
+.call-caption {
+  position: absolute;
+  /* Above the tiles' name labels. */
+  bottom: 40px;
+  left: 50%;
+  max-width: 70%;
+  padding: 8px 14px;
+  transform: translateX(-50%);
+  border-radius: 12px;
+  background: var(--call-caption);
+  color: var(--on-call);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+}
+.call-caption b {
+  margin-right: 6px;
+  color: var(--call-agent-text);
+  font-weight: 600;
+}
+
+.call-transcript {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 300px;
+  min-height: 0;
+  border-radius: 14px;
+  background: var(--canvas);
+}
+.call-transcript h2 {
+  margin: 0;
+  padding: 14px 16px 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+.call-transcript ol {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 16px 16px;
+  overflow-y: auto;
+  list-style: none;
+}
+.call-transcript li {
+  color: var(--text-soft);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.call-transcript li b {
+  display: block;
+  color: var(--text);
+  font-size: 11.5px;
+}
+.call-transcript li[data-partial="true"] {
+  opacity: 0.6;
+}
+.call-transcript p {
+  margin: 0;
+  padding: 6px 16px 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.call-dock {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  height: 64px;
+  margin: 0 16px 14px;
+  padding: 0 10px 0 14px;
+  border-radius: 14px;
+  background: var(--canvas);
+}
+.call-dock .call-btn {
+  background: var(--base);
+}
+.call-dock .call-btn:hover {
+  background: var(--selected);
+}
+.call-dock .call-btn[data-state="off"] {
+  background: var(--tone-3a2323);
+}
+.call-dock .call-btn[data-state="on"] {
+  background: var(--tone-263a2e);
+}
+.call-dock-side {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.call-dock-side:last-child {
+  justify-content: flex-end;
+}
+.call-dock-side .call-time {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.call-ctrls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.call-private {
+  position: absolute;
+  top: 0;
+  right: 16px;
+  max-width: 320px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--border-quiet),
+    0 8px 24px var(--shade-66);
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.call-private b {
+  display: block;
+  color: var(--text);
+  font-size: 11px;
+}
+
+@media (max-width: 800px) {
+  .call-strip {
+    flex-wrap: wrap;
+  }
+  .call-strip-cams {
+    display: none;
+  }
+  .call-strip-acts {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .call-pip {
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    width: auto;
+  }
+  .call-gallery {
+    --cols: 2;
+  }
+  .call-transcript {
+    display: none;
+  }
+  .call-dock {
+    gap: 6px;
+    margin: 0 8px 8px;
+    padding: 0 8px;
+  }
+  .call-dock-side {
+    display: none;
+  }
+  .call-ctrls {
+    flex: 1;
+    justify-content: center;
+  }
+  .call-top .call-seg {
+    display: none;
+  }
+}
+
+/* "Parley" in a teamspace's header: starts one when none runs. */
+.workspace-teamspace-parley {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  margin-left: auto;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.workspace-teamspace-parley:hover:not(:disabled) {
+  background: var(--selected);
+}
+.workspace-teamspace-parley:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* In a teamspace the strip lines up with the room and the work column. */
+.workspace-teamspace-focus > .call-strip {
+  margin: 0 16px;
+}

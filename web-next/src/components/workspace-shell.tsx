@@ -34,6 +34,8 @@ import { openRequest, useRequestsEntry } from "./requests-view-open"
 import { TeamspacesManagement } from "./teamspaces-management"
 import type { WorkspaceRole } from "./teamspaces-management"
 import { TeamspaceFocus } from "./teamspace-focus"
+import { CallProvider } from "./call-provider"
+import { CallSurface } from "./call-surfaces"
 import { statusLabel } from "./teamspace-format"
 import { DirectMessageView, PersonAvatar } from "./direct-message"
 import {
@@ -148,7 +150,10 @@ export function WorkspaceShell(
 ) {
   return (
     <OpenRequestProvider value={openRequest}>
-      <WorkspaceShellContent key={props.session?.user.id} {...props} />
+      <CallProvider>
+        <WorkspaceShellContent key={props.session?.user.id} {...props} />
+        <CallSurface />
+      </CallProvider>
     </OpenRequestProvider>
   )
 }
