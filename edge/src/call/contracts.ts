@@ -109,6 +109,9 @@ export const DispatchRequest = z.strictObject({
   room: Room,
   call: Id,
   member: Id,
+  // said is the member's own words; request is the voice model's
+  // paraphrase, which may draw on what others said.
+  said: z.string().min(1).max(MAX_REQUEST_CHARS),
   request: z.string().min(1).max(MAX_REQUEST_CHARS),
   transcriptContext: z.array(z.string().max(MAX_CONTEXT_LINE_CHARS)).max(MAX_CONTEXT_LINES),
 });

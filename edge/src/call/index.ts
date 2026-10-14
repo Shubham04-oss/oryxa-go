@@ -98,6 +98,8 @@ export async function handleCall(ctx: CallRoom, request: Request, rest: string, 
   const member = caller.identity.member;
 
   if (rest === "/voice/live" && request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+    // The agent's voice is for the people in the call, not the whole room.
+    requirePresent(store, requireActive(store), member);
     const headers = new Headers({ upgrade: "websocket", [VOICE_MEMBER_HEADER]: member });
     return voiceStub(ctx, identity).fetch(new Request("https://voice.internal/live", { headers }));
   }
@@ -234,6 +236,7 @@ async function join(ctx: CallRoom, store: CallStore, identity: RoomIdentity, mem
   if (previous) await revoke(provider, call, previous.participant_id, "rejoin");
   const participant = await provider.addParticipant(call.meeting_id, { member, name, preset: PRESET_MEMBER });
   store.join(call.id, member, name, participant.id, new Date().toISOString());
+  await voice(ctx, identity).joined(member);
   if (!previous || previous.left_at !== null) {
     append(ctx, {
       actor: { type: "member", id: member },
@@ -251,6 +254,7 @@ async function leave(ctx: CallRoom, store: CallStore, identity: RoomIdentity, me
   const participant = store.participant(call.id, member);
   if (!participant || !store.leave(call.id, member, new Date().toISOString())) return;
   await revoke(callProvider(ctx.env), call, participant.participant_id, "leave");
+  await voice(ctx, identity).left(member);
   append(ctx, {
     actor: { type: "member", id: member },
     type: CALL_EVENTS.left,
@@ -315,7 +319,7 @@ async function revoke(provider: ReturnType<typeof callProvider>, call: CallRow, 
 // the room's VoiceDO. Nothing outside this Worker can send one.
 export type CallOp =
   | { type: "webhook"; event: RealtimeKitEvent; deliveryId: string; callId: string }
-  | { type: "agentSegment"; callId: string; segmentId: string; text: string; at: number; name: string }
+  | { type: "agentSegment"; callId: string; segmentId: string; text: string; at: number; name: string; privateFor: string | null }
   // present answers who is in the call now, by member id.
   | { type: "present"; callId: string };
 
@@ -328,7 +332,7 @@ export async function handleCallOp(ctx: CallRoom, op: CallOp): Promise<unknown> 
     return call && call.ended_at === null ? store.present(op.callId).map((row) => row.member) : [];
   }
   if (op.type === "agentSegment") {
-    recordAgentSegment(ctx, store, op.callId, op.segmentId, op.text, op.at, op.name);
+    recordAgentSegment(ctx, store, op.callId, op.segmentId, op.text, op.at, op.name, op.privateFor);
     return undefined;
   }
   // A delivery is marked done only once it is applied: RealtimeKit sends a

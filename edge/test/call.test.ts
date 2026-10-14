@@ -11,6 +11,7 @@ import { handleRealtimeKitWebhook, recordingPrefix } from "../src/call/webhook";
 import type { Event, LogResponse } from "../src/contracts";
 import type { Env } from "../src/env";
 import { base64Encode } from "../src/http";
+import { DispatchError } from "../src/voice/dispatch";
 import type { Ask, Reply } from "../src/voice/brain";
 import { setVoiceProviders } from "../src/voice/providers";
 import { call } from "./tokens";
@@ -129,7 +130,7 @@ async function waitFor<T>(read: () => T | Promise<T>, done: (value: T) => boolea
   throw new Error(`timed out waiting for ${what}`);
 }
 
-async function listen(member: string, room: string): Promise<{ frames: VoiceFrame[]; close(): void }> {
+async function listen(member: string, room: string): Promise<{ frames: VoiceFrame[]; close(): void; onClose(done: () => void): void }> {
   const response = await asMember(member, room, "/voice/live", { headers: { upgrade: "websocket" } });
   expect(response.status).toBe(101);
   const socket = response.webSocket!;
@@ -138,7 +139,7 @@ async function listen(member: string, room: string): Promise<{ frames: VoiceFram
   socket.addEventListener("message", (message) => {
     frames.push(JSON.parse(message.data as string));
   });
-  return { frames, close: () => socket.close() };
+  return { frames, close: () => socket.close(), onClose: (done) => socket.addEventListener("close", () => done()) };
 }
 
 function say(member: string, room: string, callId: string, text: string, options: { id?: string; partial?: boolean } = {}) {
@@ -347,6 +348,21 @@ describe("the agent in the call (B4)", () => {
     live.close();
   });
 
+  it("speaks only to the people in the call", async () => {
+    const room = await newRoom("usr_a", "usr_b");
+    await join("usr_a", room);
+    // Ben is a room member but never joined: no voice socket for him.
+    const refused = await asMember("usr_b", room, "/voice/live", { headers: { upgrade: "websocket" } });
+    expect(refused.status).toBe(403);
+
+    await join("usr_b", room);
+    const ben = await listen("usr_b", room);
+    const closed = new Promise<void>((resolve) => ben.onClose(resolve));
+    await post("usr_b", room, "/call/leave");
+    await closed;
+    expect((await asMember("usr_b", room, "/voice/live", { headers: { upgrade: "websocket" } })).status).toBe(403);
+  });
+
   it("says nothing once a member dismisses it", async () => {
     const room = await newRoom("usr_a");
     const { callId } = await join("usr_a", room);
@@ -435,6 +451,63 @@ describe("dispatching real work (B5)", () => {
     expect((await log("usr_a", room)).find((event) => event.type === "voice.result")).toMatchObject({ private: true });
     asha.close();
     ben.close();
+  });
+
+  it("keeps an answer private to its member even when they are alone in the call", async () => {
+    const room = await newRoom("usr_a", "usr_b");
+    const { callId } = await join("usr_a", room, "Asha");
+    reply = () => ({ kind: "dispatch", request: "What's in my inbox from legal?", acknowledgement: "Checking." });
+    const asha = await listen("usr_a", room);
+    await say("usr_a", room, callId, "Krude, anything from legal in my inbox?");
+    await waitFor(() => dispatched, (all) => all.length === 1, "the dispatch");
+    expect(dispatched[0]!.said).toBe("Krude, anything from legal in my inbox?");
+    await call(`/v1/rooms/teamspace/${room}/voice/result`, {
+      method: "POST",
+      body: JSON.stringify({
+        dispatchId: dispatched[0]!.dispatchId, org: "org_1", room: { kind: "teamspace", id: room }, call: callId, member: "usr_a",
+        threadId: "thr_side", runId: "run_1", status: "completed", text: "Legal sent the NDA redlines.",
+      }),
+      tokenOptions: { room: { kind: "teamspace", id: room }, member: "usr_a", scopes: ["call:speak"] },
+    });
+    await waitFor(() => asha.frames, (all) => all.some((frame) => frame.type === "voice.speaking" && frame.text.includes("NDA")), "the answer, spoken to Asha");
+    const ashas = await waitFor(
+      () => log("usr_a", room),
+      (events) => events.some((event) => event.type === "transcript.segment" && event.summary.includes("NDA")),
+      "the agent's private line",
+    );
+    expect(ashas.filter((event) => event.summary.includes("NDA")).every((event) => event.private)).toBe(true);
+    // Ben is in the room but not the call: nothing of the answer reaches him.
+    expect(JSON.stringify(await log("usr_b", room))).not.toContain("NDA");
+
+    await post("usr_a", room, "/call/end");
+    const saved = await waitFor(
+      () => env.RUNS.get(`calls/org_1/teamspace/${room}/${callId}/transcript.ndjson`),
+      (object) => object !== null,
+      "the transcript in R2",
+    );
+    const lines = (await saved!.text()).trim().split("\n").map((line) => JSON.parse(line) as { text: string; private?: boolean; for?: string });
+    expect(lines.filter((line) => line.text.includes("NDA"))).toEqual([expect.objectContaining({ private: true, for: "usr_a" })]);
+  });
+
+  it("sends a dispatch again while agents is restarting", async () => {
+    const room = await newRoom("usr_a");
+    const { callId } = await join("usr_a", room);
+    reply = () => ({ kind: "dispatch", request: "Check my calendar", acknowledgement: "Checking." });
+    let refusals = 0;
+    setVoiceProviders(() => ({
+      brain: { reply: async (ask) => reply(ask) },
+      speech: { synthesize: async (text) => new TextEncoder().encode(text) },
+      agents: {
+        dispatch: async (request) => {
+          if (refusals++ === 0) throw new DispatchError("agents answered 503", true);
+          dispatched.push(request);
+          return { dispatchId: request.dispatchId, threadId: "t", runId: "r" };
+        },
+      },
+    }));
+    await say("usr_a", room, callId, "Krude, check my calendar");
+    await waitFor(() => dispatched, (all) => all.length === 1, "the dispatch, sent again");
+    expect(refusals).toBe(2);
   });
 
   it("sends a dispatch a deploy interrupted again, once", async () => {

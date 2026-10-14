@@ -30,6 +30,9 @@ export type SegmentRow = {
   speaker: string;
   text: string;
   at: number;
+  // private_for, when set, is the one member a line is for: an answer the
+  // work agent found with their access.
+  private_for: string | null;
 };
 
 export class CallStore {
@@ -64,6 +67,7 @@ export class CallStore {
         speaker TEXT NOT NULL,
         text TEXT NOT NULL,
         at INTEGER NOT NULL,
+        private_for TEXT,
         PRIMARY KEY (call_id, segment_id)
       );
       CREATE TABLE IF NOT EXISTS call_webhooks (id TEXT PRIMARY KEY, at INTEGER NOT NULL);
@@ -158,12 +162,13 @@ export class CallStore {
   addSegment(segment: SegmentRow): boolean {
     return (
       this.sql.exec(
-        "INSERT OR IGNORE INTO call_segments (call_id, segment_id, speaker, text, at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO call_segments (call_id, segment_id, speaker, text, at, private_for) VALUES (?, ?, ?, ?, ?, ?)",
         segment.call_id,
         segment.segment_id,
         segment.speaker,
         segment.text,
         segment.at,
+        segment.private_for,
       ).rowsWritten > 0
     );
   }

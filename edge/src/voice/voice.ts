@@ -41,11 +41,16 @@ const KEPT_LINES = 40;
 const MIN_BARGE_IN_CHARS = 4;
 // DISPATCH_RETRIES is how often a dispatch a deploy interrupted is sent again.
 const DISPATCH_RETRIES = 1;
+// DISPATCH_TRIES and DISPATCH_BACKOFF_MS bound sending one dispatch while
+// agents can't take it (a 503 as it restarts), doubling the wait each time.
+const DISPATCH_TRIES = 3;
+const DISPATCH_BACKOFF_MS = 500;
 
 type DispatchRow = {
   id: string;
   member: string;
   name: string;
+  said: string;
   request: string;
   context: string;
   attempts: number;
@@ -68,8 +73,9 @@ export class VoiceDO extends DurableObject<Env> {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS voice_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS voice_lines (at INTEGER NOT NULL, id TEXT PRIMARY KEY, speaker TEXT NOT NULL, name TEXT NOT NULL, text TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS voice_present (member TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS voice_dispatches (
-        id TEXT PRIMARY KEY, call_id TEXT NOT NULL, member TEXT NOT NULL, name TEXT NOT NULL, request TEXT NOT NULL,
+        id TEXT PRIMARY KEY, call_id TEXT NOT NULL, member TEXT NOT NULL, name TEXT NOT NULL, said TEXT NOT NULL, request TEXT NOT NULL,
         context TEXT NOT NULL, attempts INTEGER NOT NULL, status TEXT NOT NULL, at INTEGER NOT NULL
       );
     `);
@@ -107,6 +113,7 @@ export class VoiceDO extends DurableObject<Env> {
 
   async start(call: CallInfo): Promise<void> {
     this.sql.exec("DELETE FROM voice_lines");
+    this.sql.exec("DELETE FROM voice_present");
     this.saveCall(call);
     this.broadcast({ type: "voice.state", present: call.present, name: agentName(this.env) });
   }
@@ -119,6 +126,31 @@ export class VoiceDO extends DurableObject<Env> {
     this.sql.exec("DELETE FROM voice_lines");
     this.sql.exec("UPDATE voice_dispatches SET status = 'abandoned' WHERE call_id = ? AND status = 'pending'", callId);
     this.broadcast({ type: "voice.state", present: false, name: agentName(this.env) });
+    // The call is over: nobody hears the agent any more.
+    for (const socket of this.ctx.getWebSockets()) this.close(socket, "the call ended");
+    this.sql.exec("DELETE FROM voice_present");
+  }
+
+  // joined and left keep who is in the call, who alone hear the agent.
+  async joined(member: string): Promise<void> {
+    this.sql.exec("INSERT OR IGNORE INTO voice_present (member) VALUES (?)", member);
+  }
+
+  async left(member: string): Promise<void> {
+    this.sql.exec("DELETE FROM voice_present WHERE member = ?", member);
+    for (const socket of this.ctx.getWebSockets(member)) this.close(socket, "left the call");
+  }
+
+  private present(): string[] {
+    return this.sql.exec<{ member: string }>("SELECT member FROM voice_present").toArray().map((row) => row.member);
+  }
+
+  private close(socket: WebSocket, reason: string): void {
+    try {
+      socket.close(1000, reason);
+    } catch {
+      // already closed
+    }
   }
 
   async setPresent(present: boolean): Promise<void> {
@@ -165,9 +197,10 @@ export class VoiceDO extends DurableObject<Env> {
     const generation = this.generation;
     if (result.status === "completed" && result.text) {
       // The work agent used the member's own access. Until the room-audience
-      // guard (Layer C) checks an answer against everyone listening, it is
-      // spoken only when the member who asked is alone in the call; otherwise
-      // it goes to them privately, and the room hears only that it did.
+      // guard (Layer C) checks an answer against everyone who could see it,
+      // it stays theirs: a private event and private transcript lines. It is
+      // spoken only when they are alone in the call; otherwise it goes to
+      // their own sockets, and the call hears only that it did.
       const present = ((await this.room(call).callOp({ type: "present", callId: call.callId })) as string[] | undefined) ?? [];
       const alone = present.every((member) => member === row.member);
       this.room(call).append({
@@ -176,11 +209,13 @@ export class VoiceDO extends DurableObject<Env> {
         type: CALL_EVENTS.result,
         summary: `${agentName(this.env)} answered ${row.name}: ${result.text}`,
         data: { callId: call.callId, dispatchId: row.id, threadId: result.threadId, runId: result.runId, text: result.text, spoken: alone },
-        private: !alone,
+        private: true,
       });
       if (alone) {
         const answer = spoken(result.text);
-        this.ctx.waitUntil(this.speak(call, answer.cut ? `${answer.text} The rest is in the room.` : answer.text, row.member, generation));
+        const text = answer.cut ? `${answer.text} The rest is in your panel.` : answer.text;
+        this.sendTo(row.member, { type: "voice.private", dispatchId: row.id, text: result.text });
+        this.ctx.waitUntil(this.speak(call, text, row.member, generation, row.member));
       } else {
         this.sendTo(row.member, { type: "voice.private", dispatchId: row.id, text: result.text });
         this.ctx.waitUntil(this.speak(call, `${row.name}, I've sent you that answer privately.`, row.member, generation));
@@ -224,17 +259,19 @@ export class VoiceDO extends DurableObject<Env> {
       id: `dsp_${crypto.randomUUID().replaceAll("-", "")}`,
       member: segment.speaker,
       name: segment.name,
+      said: segment.text.slice(0, 4_000),
       request: reply.request.slice(0, 4_000),
       context: JSON.stringify(recent.map((line) => `${line.name}: ${line.text}`.slice(0, MAX_CONTEXT_LINE_CHARS))),
       attempts: 1,
       status: "pending",
     };
     this.sql.exec(
-      "INSERT INTO voice_dispatches (id, call_id, member, name, request, context, attempts, status, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO voice_dispatches (id, call_id, member, name, said, request, context, attempts, status, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       row.id,
       call.callId,
       row.member,
       row.name,
+      row.said,
       row.request,
       row.context,
       row.attempts,
@@ -255,17 +292,29 @@ export class VoiceDO extends DurableObject<Env> {
     };
     if (!agents) return fail("agents not configured");
     this.sql.exec("UPDATE voice_dispatches SET attempts = ? WHERE id = ?", attempt, row.id);
+    const request = {
+      dispatchId: row.id,
+      org: call.org,
+      ...(call.team ? { team: call.team } : {}),
+      room: call.room,
+      call: call.callId,
+      member: row.member,
+      said: row.said,
+      request: row.request,
+      transcriptContext: JSON.parse(row.context) as string[],
+    };
     try {
-      const accepted = await agents.dispatch({
-        dispatchId: row.id,
-        org: call.org,
-        ...(call.team ? { team: call.team } : {}),
-        room: call.room,
-        call: call.callId,
-        member: row.member,
-        request: row.request,
-        transcriptContext: JSON.parse(row.context) as string[],
-      });
+      let accepted;
+      for (let tried = 1; ; tried++) {
+        try {
+          accepted = await agents.dispatch(request);
+          break;
+        } catch (error) {
+          // Agents restarting answers 503: wait a little and send it again.
+          if (!(error instanceof DispatchError) || !error.retryable || tried === DISPATCH_TRIES) throw error;
+          await new Promise((resolve) => setTimeout(resolve, DISPATCH_BACKOFF_MS * 2 ** (tried - 1)));
+        }
+      }
       this.room(call).append({
         actor: { type: "agent", id: "voice", onBehalfOf: row.member },
         run: null,
@@ -281,15 +330,16 @@ export class VoiceDO extends DurableObject<Env> {
 
   // speak says text in the call, a sentence at a time, unless something
   // stops it first, and keeps it in the call's transcript.
-  private async speak(call: CallInfo, text: string, answering: string, generation: number): Promise<void> {
+  private async speak(call: CallInfo, text: string, answering: string, generation: number, privateFor: string | null = null): Promise<void> {
     const speech = voiceProviders(this.env).speech;
     if (!text || generation !== this.generation || !this.call()?.present) return;
     const utteranceId = `utt_${crypto.randomUUID().replaceAll("-", "")}`;
     this.speaking = { utteranceId, generation };
     const at = Date.now();
-    this.remember(utteranceId, "agent", agentName(this.env), text, at);
+    // A private answer never joins the context the agent reads for others.
+    if (!privateFor) this.remember(utteranceId, "agent", agentName(this.env), text, at);
     this.ctx.waitUntil(
-      this.room(call).callOp({ type: "agentSegment", callId: call.callId, segmentId: utteranceId, text, at, name: agentName(this.env) }),
+      this.room(call).callOp({ type: "agentSegment", callId: call.callId, segmentId: utteranceId, text, at, name: agentName(this.env), privateFor }),
     );
     this.broadcast({ type: "voice.speaking", utteranceId, text });
     try {
@@ -342,15 +392,9 @@ export class VoiceDO extends DurableObject<Env> {
     }
   }
 
+  // broadcast sends a frame to everyone in the call, and to nobody else.
   private broadcast(frame: VoiceFrame): void {
-    const message = JSON.stringify(frame);
-    for (const socket of this.ctx.getWebSockets()) {
-      try {
-        socket.send(message);
-      } catch {
-        // A socket closing mid-send is dropped by the runtime.
-      }
-    }
+    for (const member of this.present()) this.sendTo(member, frame);
   }
 
   override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {

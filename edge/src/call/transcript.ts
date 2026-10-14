@@ -52,7 +52,7 @@ export function acceptTranscript(
     if (text === "") continue;
     heard.push({ id: segment.id, speaker: member, name: participant.name, text, partial: segment.partial, at: segment.at });
     if (segment.partial) continue;
-    if (!store.addSegment({ call_id: call.id, segment_id: segment.id, speaker: member, text, at: segment.at })) continue;
+    if (!store.addSegment({ call_id: call.id, segment_id: segment.id, speaker: member, text, at: segment.at, private_for: null })) continue;
     accepted++;
     ctx.room.append({
       actor: { type: "member", id: member },
@@ -66,17 +66,28 @@ export function acceptTranscript(
   return accepted;
 }
 
-// recordAgentSegment keeps what the agent said in the same transcript.
-export function recordAgentSegment(ctx: CallRoom, store: CallStore, callId: string, segmentId: string, text: string, at: number, name: string): void {
+// recordAgentSegment keeps what the agent said in the same transcript. A
+// line for one member (privateFor) is a private event, readable by them alone.
+export function recordAgentSegment(
+  ctx: CallRoom,
+  store: CallStore,
+  callId: string,
+  segmentId: string,
+  text: string,
+  at: number,
+  name: string,
+  privateFor: string | null,
+): void {
   const call = store.byId(callId);
   if (!call || call.ended_at !== null) return;
-  if (!store.addSegment({ call_id: callId, segment_id: segmentId, speaker: AGENT_SPEAKER, text, at })) return;
+  if (!store.addSegment({ call_id: callId, segment_id: segmentId, speaker: AGENT_SPEAKER, text, at, private_for: privateFor })) return;
   ctx.room.append({
-    actor: { type: "agent", id: "voice" },
+    actor: { type: "agent", id: "voice", ...(privateFor ? { onBehalfOf: privateFor } : {}) },
     run: null,
     type: CALL_EVENTS.segment,
     summary: `${name}: ${text}`,
     data: { callId, segmentId, speaker: AGENT_SPEAKER, name, text, at },
+    private: privateFor !== null,
   });
 }
 
@@ -86,7 +97,19 @@ export async function saveLiveTranscript(ctx: CallRoom, store: CallStore, identi
   const segments = store.segments(callId);
   const key = `${callPrefix(identity, callId)}transcript.ndjson`;
   try {
-    const body = segments.map((segment) => JSON.stringify({ id: segment.segment_id, speaker: segment.speaker, text: segment.text, at: segment.at })).join("\n");
+    // A private line keeps whom it is for, so whoever reads the file back
+    // shows it to that member alone, as the room log does.
+    const body = segments
+      .map((segment) =>
+        JSON.stringify({
+          id: segment.segment_id,
+          speaker: segment.speaker,
+          text: segment.text,
+          at: segment.at,
+          ...(segment.private_for ? { private: true, for: segment.private_for } : {}),
+        }),
+      )
+      .join("\n");
     await ctx.env.RUNS.put(key, body === "" ? "" : `${body}\n`, {
       httpMetadata: { contentType: "application/x-ndjson" },
       customMetadata: { org: identity.org },

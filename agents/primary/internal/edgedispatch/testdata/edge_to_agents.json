@@ -1,9 +1,9 @@
 {
   "publicKeys": [
-    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgc2Co9LHJ5RaOwUspi6Ir6TMOnG0yWeRYDuy6TQQo2eybjQF4a29zg2LQPQyhVkCykDjIDDyLgyi/JSj/er1+w=="
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEFq6rTeQj/ReBwg1tQBOGp9wrXgpdE7teALSSHhKJGgT95W29vxkM20CWshiYqDK+ViK2y8nGaeRD7V/s24ap2g=="
   ],
   "issuedAt": 1800000000,
-  "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJlZGdlIiwiYXVkIjoiYWdlbnRzIiwib3JnIjoib3JnXzEiLCJ0ZWFtIjoidGVhbV8xIiwicm9vbSI6eyJraW5kIjoidGVhbXNwYWNlIiwiaWQiOiJyb29tXzEifSwibWVtYmVyIjoidXNyXzEiLCJhZ2VudCI6IiIsInJ1biI6IiIsInNjb3BlcyI6WyJjYWxsOnNwZWFrIl0sInByaXZhdGUiOmZhbHNlLCJpYXQiOjE4MDAwMDAwMDAsImV4cCI6MTgwMDAwMDA2MCwianRpIjoiYzNhZGI3NzgtNWEyNi00MmY0LWExZTktNGFiMzZkZDE2MTdlIn0.v6aR8fGYhJ0pLHCMUMuDowJUMUEjBn4xRllCRFPzOuLjq1E9FqoxEP1LVVF0bJTFowlm5w3CJ27-FmkiKEhSfg",
+  "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJlZGdlIiwiYXVkIjoiYWdlbnRzIiwib3JnIjoib3JnXzEiLCJ0ZWFtIjoidGVhbV8xIiwicm9vbSI6eyJraW5kIjoidGVhbXNwYWNlIiwiaWQiOiJyb29tXzEifSwibWVtYmVyIjoidXNyXzEiLCJhZ2VudCI6IiIsInJ1biI6IiIsInNjb3BlcyI6WyJjYWxsOnNwZWFrIl0sInByaXZhdGUiOmZhbHNlLCJpYXQiOjE4MDAwMDAwMDAsImV4cCI6MTgwMDAwMDA2MCwianRpIjoiMjAxYzU1OTItYzFhMi00NWQxLWJhYmEtOTA5YTVkNmFiYTM2In0.1kV-46oBFHR1AWp6Vs1Mz4ijNVhlJZdUE-Rn40lQHmt7rxjgID9AWwCSLH-5vZVJJT9AKWCwnLdXPw92EaOFOQ",
   "request": {
     "dispatchId": "dsp_fixture",
     "org": "org_1",
@@ -14,6 +14,7 @@
     },
     "call": "call_1",
     "member": "usr_1",
+    "said": "Krude, what's on today?",
     "request": "What's on my calendar?",
     "transcriptContext": [
       "Asha: Krude?"

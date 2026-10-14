@@ -20,6 +20,7 @@ const request: DispatchRequest = {
   room: { kind: "teamspace", id: "room_1" },
   call: "call_1",
   member: "usr_1",
+  said: "Krude, what's on today?",
   request: "What's on my calendar?",
   transcriptContext: ["Asha: Krude?"],
 };
