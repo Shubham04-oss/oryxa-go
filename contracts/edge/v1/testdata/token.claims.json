@@ -1,0 +1,1 @@
+{"iss":"agents","aud":"edge","org":"org_1","team":"","room":{"kind":"thread","id":"thr_1"},"member":"usr_1","agent":"agt_1","run":"run_1","scopes":["sandbox:exec","sandbox:files","log:write"],"private":false,"iat":1792000000,"exp":1792000060,"jti":"j1"}

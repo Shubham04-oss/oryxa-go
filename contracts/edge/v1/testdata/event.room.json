@@ -1,0 +1,1 @@
+{"seq":1,"at":"2026-10-14T09:59:00Z","org":"org_1","room":{"kind":"teamspace","id":"rm_1"},"actor":{"type":"system","id":"edge"},"run":null,"type":"room.created","summary":"Room created","data":{},"durationMs":0,"private":false}

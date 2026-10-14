@@ -1,0 +1,1 @@
+{"seq":1042,"at":"2026-10-14T10:00:00.123Z","org":"org_1","room":{"kind":"thread","id":"thr_1"},"actor":{"type":"agent","id":"agt_1","onBehalfOf":"usr_1"},"run":"run_1","type":"sandbox.exec","summary":"Ran python (exit 0, 412 ms)","data":{"language":"python","exitCode":0},"durationMs":412,"cost":{"unit":"usd","amount":0.0004},"private":false}
