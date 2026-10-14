@@ -20,7 +20,7 @@
   "vars": {
     // Where the Worker and its Durable Objects reach the Go API. The
     // browser still calls /v1 on the app's own origin.
-    "ORYXA_API_ORIGIN": "http://localhost:8080"
+    "ORYXA_API_ORIGIN": "http://localhost:8080",
   },
   "durable_objects": {
     "bindings": [
@@ -30,14 +30,14 @@
       { "name": "DirectMessageAgent", "class_name": "DirectMessageAgent" },
       {
         "name": "SideConversationAgent",
-        "class_name": "SideConversationAgent"
+        "class_name": "SideConversationAgent",
       },
       { "name": "InboxAgent", "class_name": "InboxAgent" },
       {
         "name": "RealtimeRegistryAgent",
-        "class_name": "RealtimeRegistryAgent"
-      }
-    ]
+        "class_name": "RealtimeRegistryAgent",
+      },
+    ],
   },
   // Append-only: a deployed tag is never edited or reordered. Each new
   // Durable Object class gets a tag of its own after the last one.
@@ -45,28 +45,39 @@
     { "tag": "thread-chat-v1", "new_sqlite_classes": ["ThreadChatAgent"] },
     {
       "tag": "specialist-chat-v1",
-      "new_sqlite_classes": ["SpecialistChatAgent"]
+      "new_sqlite_classes": ["SpecialistChatAgent"],
     },
     {
       "tag": "teamspace-room-v1",
-      "new_sqlite_classes": ["TeamspaceRoomAgent"]
+      "new_sqlite_classes": ["TeamspaceRoomAgent"],
     },
     {
       "tag": "direct-message-v1",
-      "new_sqlite_classes": ["DirectMessageAgent"]
+      "new_sqlite_classes": ["DirectMessageAgent"],
     },
     { "tag": "inbox-v1", "new_sqlite_classes": ["InboxAgent"] },
     {
       "tag": "realtime-registry-v1",
-      "new_sqlite_classes": ["RealtimeRegistryAgent"]
+      "new_sqlite_classes": ["RealtimeRegistryAgent"],
     },
     {
       "tag": "side-conversation-v1",
-      "new_sqlite_classes": ["SideConversationAgent"]
-    }
+      "new_sqlite_classes": ["SideConversationAgent"],
+    },
+  ],
+  // The live layer's edge (F5): the page reaches its room through the
+  // Worker (src/edge-proxy.ts), which hands it to the edge's WebEdge
+  // entrypoint naming the member. `vite dev` binds staging's edge; a
+  // local run without it answers the live routes 503.
+  "services": [
+    {
+      "binding": "EDGE",
+      "service": "oryxa-edge-staging",
+      "entrypoint": "WebEdge",
+    },
   ],
   "observability": {
-    "enabled": true
+    "enabled": true,
   },
   "upload_source_maps": true,
   "env": {
@@ -75,64 +86,67 @@
       "name": "oryxa-production-web-next",
       "workers_dev": false,
       "preview_urls": false,
+      "services": [
+        { "binding": "EDGE", "service": "oryxa-edge", "entrypoint": "WebEdge" },
+      ],
       "vars": {
         // app.oryxa.in/v1/* goes through the API tunnel to the tasks, as
         // the browser's calls do. REALTIME_PURGE_SECRET is a Worker secret.
-        "ORYXA_API_ORIGIN": "https://app.oryxa.in"
+        "ORYXA_API_ORIGIN": "https://app.oryxa.in",
       },
       "durable_objects": {
         "bindings": [
           { "name": "ThreadChatAgent", "class_name": "ThreadChatAgent" },
           {
             "name": "SpecialistChatAgent",
-            "class_name": "SpecialistChatAgent"
+            "class_name": "SpecialistChatAgent",
           },
           {
             "name": "TeamspaceRoomAgent",
-            "class_name": "TeamspaceRoomAgent"
+            "class_name": "TeamspaceRoomAgent",
           },
           {
             "name": "DirectMessageAgent",
-            "class_name": "DirectMessageAgent"
+            "class_name": "DirectMessageAgent",
           },
           {
             "name": "SideConversationAgent",
-            "class_name": "SideConversationAgent"
+            "class_name": "SideConversationAgent",
           },
           { "name": "InboxAgent", "class_name": "InboxAgent" },
           {
             "name": "RealtimeRegistryAgent",
-            "class_name": "RealtimeRegistryAgent"
-          }
-        ]
+            "class_name": "RealtimeRegistryAgent",
+          },
+        ],
       },
       "migrations": [
         {
           "tag": "thread-chat-v1",
-          "new_sqlite_classes": ["ThreadChatAgent"]
+          "new_sqlite_classes": ["ThreadChatAgent"],
         },
         {
           "tag": "specialist-chat-v1",
-          "new_sqlite_classes": ["SpecialistChatAgent"]
+          "new_sqlite_classes": ["SpecialistChatAgent"],
         },
         {
           "tag": "teamspace-room-v1",
-          "new_sqlite_classes": ["TeamspaceRoomAgent"]
+          "new_sqlite_classes": ["TeamspaceRoomAgent"],
         },
         {
           "tag": "direct-message-v1",
-          "new_sqlite_classes": ["DirectMessageAgent"]
+          "new_sqlite_classes": ["DirectMessageAgent"],
         },
         { "tag": "inbox-v1", "new_sqlite_classes": ["InboxAgent"] },
         {
           "tag": "realtime-registry-v1",
-          "new_sqlite_classes": ["RealtimeRegistryAgent"]
+          "new_sqlite_classes": ["RealtimeRegistryAgent"],
         },
         {
           "tag": "side-conversation-v1",
-          "new_sqlite_classes": ["SideConversationAgent"]
-        }
-      ]
-    }
-  }
+          "new_sqlite_classes": ["SideConversationAgent"],
+        },
+      ],
+    },
+  },
 }

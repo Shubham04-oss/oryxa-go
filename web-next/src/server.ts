@@ -1,6 +1,8 @@
 import type { Item } from "./lib/threads/client"
 import handler from "@tanstack/react-start/server-entry"
 import { getAgentByName, routeAgentRequest } from "agents"
+import { LIVE_PATH_PREFIX, handleLive, parseLivePath } from "./edge-proxy"
+import type { EdgeEnv } from "./edge-proxy"
 import { conversationRequestHeaders } from "./conversation-env"
 import type { ConversationEnv } from "./conversation-env"
 import { DirectMessageAgent } from "./direct-message-agent"
@@ -41,7 +43,7 @@ import type { ThreadChatEnv } from "./thread-chat-agent"
 // and its signed notes that an agent request between two members moved
 // (src/realtime-requests.ts).
 
-export interface Env extends ThreadChatEnv, ConversationEnv {
+export interface Env extends ThreadChatEnv, ConversationEnv, EdgeEnv {
   ThreadChatAgent: DurableObjectNamespace<ThreadChatAgent>
   SpecialistChatAgent: DurableObjectNamespace<SpecialistChatAgent>
   TeamspaceRoomAgent: DurableObjectNamespace<TeamspaceRoomAgent>
@@ -770,6 +772,17 @@ async function respond(request: Request, env: Env): Promise<Response> {
   if (url.pathname === REALTIME_PURGE_PATH) return handlePurge(request, env)
   if (url.pathname === REALTIME_REQUESTS_PATH) {
     return handleRequests(request, env)
+  }
+  if (url.pathname.startsWith(LIVE_PATH_PREFIX)) {
+    const live = parseLivePath(url.pathname)
+    if (!live) return failure(404, "not_found", "Not found.")
+    return handleLive(request, env, live, async (org, cookie) =>
+      callerIn(
+        await askGo(env, cookie).json(
+          `/v1/organizations/${encodeURIComponent(org)}`
+        )
+      )
+    )
   }
   const specialistHistory =
     /^\/agents\/specialist-chat-agent\/([^/]+)\/(conversation|threads\/([^/]+))\/?$/.exec(

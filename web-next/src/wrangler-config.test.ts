@@ -22,6 +22,15 @@ describe("wrangler.jsonc", () => {
     expect(production.migrations).toEqual(wrangler.migrations)
   })
 
+  it("binds the edge's WebEdge entrypoint: staging's in dev, production's in production", () => {
+    expect(wrangler.services).toEqual([
+      { binding: "EDGE", service: "oryxa-edge-staging", entrypoint: "WebEdge" },
+    ])
+    expect(production.services).toEqual([
+      { binding: "EDGE", service: "oryxa-edge", entrypoint: "WebEdge" },
+    ])
+  })
+
   it("names the Worker OpenTofu routes app.oryxa.in to", () => {
     const routed = readJsonc("../../deploy/production/web.auto.tfvars.json")
     expect(production.name).toBe(routed.web_worker_name)
