@@ -25,11 +25,22 @@ import (
 )
 
 // Scope is whose memory a read or write addresses: one member, in one
-// organization. Both halves are required, because either alone names more
-// than one member's memory.
+// organization, and optionally one of that member's agents. The organization
+// and member are required, because either alone names more than one member's
+// memory.
+//
+// AgentID is empty for the member's primary agent, so its scope (and every
+// memory it wrote before agents had scopes of their own) stays exactly what it
+// was. A specialist names itself here and gets a pool of its own: Memory Bank
+// matches the whole scope, so neither reads or writes the other's (L4).
+//
+// ponytail: no explicit "shared notes" space the member controls yet
+// (06-agent-isolation.md section 4); add one as its own scope key when a
+// product surface asks for it.
 type Scope struct {
 	OrganizationID string
 	UserID         string
+	AgentID        string
 }
 
 // Validate reports whether the scope names exactly one member's memory. What
@@ -49,6 +60,7 @@ func (scope Scope) Validate() error {
 const (
 	FieldOrganizationID = "organization_id"
 	FieldUserID         = "user_id"
+	FieldAgentID        = "agent_id"
 )
 
 // Fields is the scope as a key-value map, for a backend that partitions
@@ -60,10 +72,16 @@ const (
 // A backend that addresses memory by a single string instead — mem0 does —
 // needs both halves in that string, and no two scopes may render the same.
 func (scope Scope) Fields() map[string]string {
-	return map[string]string{
+	fields := map[string]string{
 		FieldOrganizationID: scope.OrganizationID,
 		FieldUserID:         scope.UserID,
 	}
+	// Left out, not empty, for the primary: its scope must stay exactly what
+	// it was, or it would lose every memory it already has.
+	if scope.AgentID != "" {
+		fields[FieldAgentID] = scope.AgentID
+	}
+	return fields
 }
 
 // Backend keeps what Krude remembers. Every call names the scope it acts in,

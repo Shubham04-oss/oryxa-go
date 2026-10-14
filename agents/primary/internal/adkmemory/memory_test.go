@@ -81,6 +81,35 @@ func newService(t *testing.T) *Service {
 	return service
 }
 
+// TestMemoryDoesNotCrossAgents is L4: a member's specialist and their primary
+// keep separate pools, so neither reads what the other remembered.
+func TestMemoryDoesNotCrossAgents(t *testing.T) {
+	service := newService(t)
+	const member = "user-1"
+	primary := Scope{OrganizationID: "org-acme", UserID: member}
+	specialist := Scope{OrganizationID: "org-acme", UserID: member, AgentID: "agt_researcher"}
+
+	remember(t, service, specialist, conversation(t, member, "the specialist migration note"))
+	remember(t, service, primary, conversation(t, member, "the primary migration note"))
+
+	got := remembered(t, service, primary, "migration")
+	if len(got) != 1 || !strings.Contains(got[0], "primary") {
+		t.Fatalf("the primary read %q, want only its own memory", got)
+	}
+	got = remembered(t, service, specialist, "migration")
+	if len(got) != 1 || !strings.Contains(got[0], "specialist") {
+		t.Fatalf("the specialist read %q, want only its own memory", got)
+	}
+
+	// Forgetting a member forgets every agent's pool.
+	if err := service.Forget(context.Background(), "org-acme", member); err != nil {
+		t.Fatal(err)
+	}
+	if got := remembered(t, service, specialist, "migration"); len(got) != 0 {
+		t.Fatalf("the specialist's memory outlived the member: %q", got)
+	}
+}
+
 // TestMemoryDoesNotCrossOrganizations is the reason this package exists: one
 // member in two organizations must not be told in one what they said in the
 // other, even though ADK addresses both by the same user.
