@@ -1,0 +1,18 @@
+// A local stand-in for web-next's binding to the edge's WebEdge entrypoint
+// (web-next/src/edge-proxy.ts),
+// so test/live/call runs against `wrangler dev` before the call screen's
+// binding exists. It trusts whoever x-live-identity names: never deploy it.
+//
+//   cd edge && corepack pnpm exec wrangler dev -c ../test/live/call/door/wrangler.jsonc -c wrangler.jsonc
+//
+// The first config is the one served; the edge runs beside it. /v1/… goes
+// to the edge's own public routes untouched, so EDGE_URL can be this door too.
+{
+  "name": "oryxa-live-call-door",
+  "main": "index.ts",
+  "compatibility_date": "2026-10-01",
+  "services": [
+    { "binding": "EDGE", "service": "oryxa-edge", "entrypoint": "WebEdge" },
+    { "binding": "EDGE_PUBLIC", "service": "oryxa-edge" }
+  ]
+}

@@ -29,6 +29,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/assembly"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/directoryclient"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/edgemembers"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardpolicy"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/httpserver"
@@ -117,6 +118,9 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	}
 	if err := organizationagents.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return err
+	}
+	if err := edgemembers.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate edge room members: %w", err)
 	}
 	if err := interactiondelivery.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return err
@@ -663,6 +667,17 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		return host.Service{}, err
 	}
 	httpConfig.EdgeDispatch = edgeRoute
+	// Rooms on the edge learn their members from Go (A18): the admit route
+	// lets a member in once Go has checked they may be, and leaving a team or
+	// the organization takes them out again (the consumer below).
+	edgeMembers, err := mountEdgeMembers(settings, platform, teamspaceStore, logger)
+	if err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
+	if edgeMembers != nil {
+		httpConfig.EdgeMembers = edgeMembers
+	}
 	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpConfig, logger)
 
 	table, err := outbox.NewTable(platform.Database.Pool, schema+".agents_outbox")
@@ -749,9 +764,29 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			// empty member means the whole organization.
 			secretShares.Forget,
 		}
+		forgetTeamMember := teamspaceStore.ForgetTeamMember
+		forgetTeam := teamspaceStore.ForgetTeam
+		if edgeMembers != nil {
+			// A deleted team's teamspace rooms on the edge are emptied first,
+			// while its teamspaces can still be found; a failure fails the
+			// event, which comes again with nothing yet forgotten.
+			forgetTeam = func(ctx context.Context, organizationID, teamID string) error {
+				if err := edgeMembers.TeamDeleted(ctx, organizationID, teamID); err != nil {
+					return err
+				}
+				return teamspaceStore.ForgetTeam(ctx, organizationID, teamID)
+			}
+			// Out of the team's teamspace rooms on the edge too, whatever
+			// became of the teamspace cleanup: each is retried on redelivery.
+			independent = append(independent, edgeMembers.Forget)
+			forgetTeamMember = func(ctx context.Context, organizationID, teamID, userID string, removedAt time.Time) error {
+				return errors.Join(teamspaceStore.ForgetTeamMember(ctx, organizationID, teamID, userID, removedAt),
+					edgeMembers.MemberLeftTeam(ctx, organizationID, teamID, userID))
+			}
+		}
 		consumer.
-			WithTeamForgetter(teamspaceStore.ForgetTeam).
-			WithTeamMemberForgetter(teamspaceStore.ForgetTeamMember).
+			WithTeamForgetter(forgetTeam).
+			WithTeamMemberForgetter(forgetTeamMember).
 			WithOrganizationSynthesisRecorder(organizationStore)
 		if slack != nil {
 			// The router and the surfaces are handed their events, and forget what

@@ -107,8 +107,16 @@ describe("useRoomLog", () => {
     )
     const socket = FakeSocket.all[0]
     expect(socket.url).toContain("/live/org_1/rooms/teamspace/tsp_1/live")
+    fetchMock.mockResolvedValueOnce(logAnswer([event(3)]))
     act(() => socket.open())
     expect(result.current.status).toBe("live")
+    // What was appended before the socket opened is read once it has.
+    await waitFor(() =>
+      expect(String(fetchMock.mock.calls[1]?.[0])).toContain("after=2")
+    )
+    await waitFor(() =>
+      expect(result.current.events.map((e) => e.seq)).toEqual([1, 2, 3])
+    )
 
     act(() => socket.frame(JSON.stringify({ type: "event", event: event(3) })))
     act(() => socket.frame(JSON.stringify({ type: "event", event: event(2) })))

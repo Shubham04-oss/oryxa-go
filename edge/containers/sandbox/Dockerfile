@@ -30,6 +30,9 @@ RUN useradd --create-home --home-dir /home/agent --uid 1000 agent \
 WORKDIR /workspace
 ENV HOME=/home/agent MPLBACKEND=Agg
 
-# The Durable Object runs every process with exec; the container only has to
-# stay up.
-CMD ["sleep", "infinity"]
+# The code kernels keep exec/code's state between calls (A12): Python on
+# 8899, JavaScript and TypeScript on 8898, both run as the agent user by
+# start.sh. Previews can't use those two ports.
+COPY kernel.py kernel.mjs start.sh /opt/oryxa/
+ENV ORYXA_WORKSPACE=/workspace ORYXA_TYPESCRIPT=/usr/lib/node_modules/typescript/lib/typescript.js
+CMD ["/opt/oryxa/start.sh"]

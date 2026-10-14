@@ -45,6 +45,10 @@ const fixtures: Record<string, z.ZodType> = {
   "log.append.request.json": c.AppendEventRequest,
   "log.response.json": c.LogResponse,
   "children.response.json": c.ChildrenResponse,
+  "members.replace.request.json": c.MembersRequest,
+  "members.empty.request.json": c.MembersRequest,
+  "members.change.request.json": c.MembersRequest,
+  "members.response.json": c.MembersResponse,
   "error.json": c.ErrorBody,
   "error.retryable.json": c.ErrorBody,
 };
@@ -90,5 +94,24 @@ describe("names", () => {
     expect(() => c.sandboxDOName("org_1", room, "private-")).toThrow();
     expect(() => c.browserDOName("org_1", room, "a/b")).toThrow();
     expect(() => c.runPrefix("org_1", room, "rün")).toThrow();
+  });
+});
+
+describe("conversation rooms", () => {
+  const a = "6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f";
+  const b = "0a1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f";
+  it("names them as Go does", () => {
+    expect(c.directRoomId(a, b)).toBe(`${b}_${a}`);
+    expect(c.directRoomId(b, a)).toBe(`${b}_${a}`);
+    expect(c.sideRoomId("tsp_Ab-c_d9", a, b)).toBe(`tsp_Ab-c_d9_${b}_${a}`);
+    expect(c.conversationMembers({ kind: "dm", id: `${b}_${a}` })).toEqual([b, a]);
+    expect(c.conversationMembers({ kind: "side", id: `tsp_Ab-c_d9_${b}_${a}` })).toEqual([b, a]);
+  });
+  it("refuses what isn't canonical", () => {
+    expect(c.conversationMembers({ kind: "dm", id: `${a}_${b}` })).toBeNull();
+    expect(c.conversationMembers({ kind: "thread", id: `${b}_${a}` })).toBeNull();
+    expect(() => c.directRoomId(a, a)).toThrow();
+    expect(c.MembersRequest.safeParse({ members: [a], add: [b] }).success).toBe(false);
+    expect(c.MembersRequest.safeParse({}).success).toBe(false);
   });
 });

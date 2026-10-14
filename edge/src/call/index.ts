@@ -72,6 +72,15 @@ function serialized<T>(key: object, work: () => Promise<T>): Promise<T> {
   return next;
 }
 
+// removeMember takes a member out of the room's call as if they had left,
+// revoking their participant and closing their voice sockets: the room
+// removed them (A18).
+export async function removeMember(ctx: CallRoom, member: string): Promise<void> {
+  const identity = ctx.room.identity();
+  if (!identity) return;
+  await serialized(ctx.room, () => leave(ctx, new CallStore(ctx.sql), identity, member));
+}
+
 export function isCallPath(rest: string): boolean {
   return rest === "/call" || rest.startsWith("/call/") || rest.startsWith("/voice/");
 }

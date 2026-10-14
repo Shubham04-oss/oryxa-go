@@ -117,6 +117,9 @@ export function useRoomLog(
           refusal: undefined,
         }))
         ping = setInterval(() => socket?.send("ping"), PING_MS)
+        // Events appended between the read and the socket opening reach no
+        // socket: read them now. Merging by seq drops any seen twice.
+        void catchUp().catch(() => undefined)
       })
       socket.addEventListener("message", (message) => {
         const event = parseLiveFrame(message.data)

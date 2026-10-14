@@ -11,6 +11,9 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   AppendEventRequest,
+  MAX_ROOM_MEMBERS,
+  MembersRequest,
+  conversationMembers,
   type Event,
   type Room,
   type Scope,
@@ -20,7 +23,7 @@ import {
 } from "../contracts";
 import type { Env } from "../env";
 import { EdgeError, discardBody, json, readJson, toResponse } from "../http";
-import { type CallOp, type CallRoom, handleCall, handleCallOp, isCallPath } from "../call/index";
+import { type CallOp, type CallRoom, handleCall, handleCallOp, isCallPath, removeMember as removeFromCall } from "../call/index";
 import { Children } from "./children";
 
 export const CLAIMS_HEADER = "x-oryxa-edge-claims";
@@ -83,6 +86,7 @@ export class RoomDO extends DurableObject<Env> {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS members (member TEXT PRIMARY KEY, added_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS removed_members (member TEXT PRIMARY KEY, removed_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS seen_tokens (jti TEXT PRIMARY KEY, exp INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS events (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,8 +144,33 @@ export class RoomDO extends DurableObject<Env> {
     return this.sql.exec("SELECT 1 FROM members WHERE member = ?", member).toArray().length > 0;
   }
 
-  private addMember(member: string): void {
+  // members lists the room's members, sorted.
+  members(): string[] {
+    return this.sql
+      .exec<{ member: string }>("SELECT member FROM members ORDER BY member")
+      .toArray()
+      .map((row) => row.member);
+  }
+
+  private wasRemoved(member: string): boolean {
+    return this.sql.exec("SELECT 1 FROM removed_members WHERE member = ?", member).toArray().length > 0;
+  }
+
+  // mayJoin is whether member can be one of this room's members at all: a
+  // direct message or side conversation has exactly the two its id names.
+  private mayJoin(room: Room, member: string): boolean {
+    if (room.kind !== "dm" && room.kind !== "side") return true;
+    return conversationMembers(room)?.includes(member) ?? false;
+  }
+
+  // admitByToken lets an agent's token make its member a room member, the
+  // way rooms learned members before Go pushed them (A18) and still do for a
+  // thread's owner. It refuses a member Go removed, until Go adds them again,
+  // and anyone a conversation room's id doesn't name.
+  private admitByToken(room: Room, member: string): void {
     if (!member) return;
+    if (!this.mayJoin(room, member)) throw new EdgeError("forbidden", "not a member of this conversation");
+    if (this.wasRemoved(member)) throw new EdgeError("forbidden", "removed from this room");
     this.sql.exec("INSERT OR IGNORE INTO members (member, added_at) VALUES (?, ?)", member, new Date().toISOString());
   }
 
@@ -192,7 +221,14 @@ export class RoomDO extends DurableObject<Env> {
         this.denied(caller, `${request.method} ${request.headers.get(REST_HEADER) ?? ""}`, "token already used");
         throw error;
       }
-      this.addMember(claims.member);
+      if (!claims.scopes.includes("room:members")) {
+        try {
+          this.admitByToken(room, claims.member);
+        } catch (error) {
+          this.denied(caller, `${request.method} ${request.headers.get(REST_HEADER) ?? ""}`, (error as Error).message);
+          throw error;
+        }
+      }
       return caller;
     }
     if (webHeader) {
@@ -227,6 +263,14 @@ export class RoomDO extends DurableObject<Env> {
       });
       return json({ seq }, 201);
     }
+    if (rest === "/members") {
+      if (caller.kind !== "agent") throw new EdgeError("forbidden", "only agents set a room's members");
+      requireScope(caller, "room:members");
+      if (request.method === "GET") return json({ members: this.members() });
+      if (request.method !== "PUT") throw new EdgeError("not_found", "no such route");
+      const body = await readJson(request, MembersRequest, 256 << 10);
+      return json({ members: await this.setMembers(body) });
+    }
     if (rest === "/live" && request.headers.get("upgrade")?.toLowerCase() === "websocket") {
       requireScope(caller, "log:read");
       return this.subscribe(caller);
@@ -234,6 +278,69 @@ export class RoomDO extends DurableObject<Env> {
     // The call and the agent's voice (edge/src/call, integration-2).
     if (isCallPath(rest)) return handleCall(this.callRoom(), request, rest, caller);
     return this.children.route(request, url, rest, caller);
+  }
+
+  // ---- membership (A18) ----
+
+  // setMembers applies Go's membership: a full replace or a change. A
+  // member removed is out of the call, their live sockets are closed, their
+  // browsers and private sandbox are stopped, and their agent's token no
+  // longer brings them back.
+  private async setMembers(request: MembersRequest): Promise<string[]> {
+    const identity = this.identity()!;
+    const current = new Set(this.members());
+    let add: string[];
+    let remove: string[];
+    if (request.members) {
+      const wanted = new Set(request.members);
+      add = [...wanted].filter((member) => !current.has(member));
+      remove = [...current].filter((member) => !wanted.has(member));
+    } else {
+      add = [...new Set(request.add ?? [])].filter((member) => !current.has(member));
+      remove = [...new Set(request.remove ?? [])].filter((member) => current.has(member) || !this.wasRemoved(member));
+    }
+    const refused = add.filter((member) => !this.mayJoin(identity.room, member));
+    if (refused.length) throw new EdgeError("invalid_request", `not a member this conversation can have: ${refused.join(", ")}`);
+    if (current.size + add.length - remove.filter((member) => current.has(member)).length > MAX_ROOM_MEMBERS) {
+      throw new EdgeError("too_large", `a room has at most ${MAX_ROOM_MEMBERS} members`);
+    }
+
+    const at = new Date().toISOString();
+    for (const member of add) {
+      this.sql.exec("INSERT OR IGNORE INTO members (member, added_at) VALUES (?, ?)", member, at);
+      this.sql.exec("DELETE FROM removed_members WHERE member = ?", member);
+    }
+    for (const member of remove) {
+      this.sql.exec("DELETE FROM members WHERE member = ?", member);
+      this.sql.exec("INSERT OR REPLACE INTO removed_members (member, removed_at) VALUES (?, ?)", member, at);
+    }
+    if (add.length || remove.length) {
+      this.append({
+        actor: { type: "system", id: "agents" },
+        run: null,
+        type: "room.members.changed",
+        summary: `Members changed: ${add.length} added, ${remove.length} removed`,
+        data: { added: add.slice(0, 100), removed: remove.slice(0, 100) },
+      });
+    }
+    for (const member of remove) await this.memberRemoved(member);
+    return this.members();
+  }
+
+  private async memberRemoved(member: string): Promise<void> {
+    for (const socket of this.ctx.getWebSockets(member)) {
+      try {
+        socket.close(4403, "removed from this room");
+      } catch {
+        // already closed
+      }
+    }
+    try {
+      await removeFromCall(this.callRoom(), member);
+    } catch (error) {
+      console.error(JSON.stringify({ msg: "removing a member from the call failed", error: String(error) }));
+    }
+    await this.children.memberRemoved(member);
   }
 
   // ---- the call (edge/src/call) ----

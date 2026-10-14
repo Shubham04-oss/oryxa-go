@@ -12,10 +12,13 @@ import {
 } from "lucide-react"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { TeamspaceConversation } from "./teamspace-room"
+import { useHasCalls } from "./call-provider"
+import { ParleyButton, ParleyStrip } from "./call-surfaces"
 import { TeamSynthesis } from "./team-synthesis"
 import { RoomLive } from "./live-work"
 import {
   agentIdentity,
+  memberName,
   personIdentity,
   statusLabel,
   timeAgo,
@@ -77,6 +80,7 @@ export function TeamspaceFocus({
   const [tab, setTab] = useState<WorkTab>("Overview")
   const [isComposing, setIsComposing] = useState(false)
   const visibleHeight = useVisibleHeight(isComposing)
+  const hasCalls = useHasCalls()
 
   if (!space) {
     return (
@@ -151,7 +155,25 @@ export function TeamspaceFocus({
             </span>
           </p>
         </div>
+        {hasCalls && viewerId && (
+          <ParleyButton
+            organizationId={organizationId}
+            room={{ kind: "teamspace", id: space.id }}
+            roomName={space.name}
+            member={viewerId}
+            name={memberName(space, viewerId)}
+          />
+        )}
       </header>
+      {hasCalls && viewerId && (
+        <ParleyStrip
+          organizationId={organizationId}
+          room={{ kind: "teamspace", id: space.id }}
+          roomName={space.name}
+          member={viewerId}
+          name={memberName(space, viewerId)}
+        />
+      )}
 
       <main className="workspace-focus-layout">
         <TeamspaceConversation

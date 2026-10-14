@@ -30,7 +30,7 @@ import type { Env } from "../env";
 import { EdgeError, base64Decode, base64Encode } from "../http";
 import { type ChildContext, type ChildEvent, type ChildReply, childError } from "../room/child";
 import { SIGNED_URL_SECONDS, type SignedTarget, signTarget } from "../signed";
-import { ContainerWorkspace, FileError, WORKSPACE_DIR, type Workspace } from "./workspace";
+import { ContainerWorkspace, type ExecOutcome, FileError, WORKSPACE_DIR, type Workspace } from "./workspace";
 
 export const SANDBOX_IDLE_MS = 15 * 60 * 1000;
 const DEFAULT_EXEC_MS = 120_000;
@@ -263,26 +263,45 @@ export class SandboxDO extends DurableObject<Env> {
     }
   }
 
+  // execCode runs a cell in the language's kernel (A12), whose state lasts
+  // between calls as AgentCore's interpreter's does; clearContext resets it.
+  // A kernel that restarted since its last cell (one outran its timeout, or
+  // the container is new) has lost that state, which sessionRecreated says.
   private async execCode(request: ExecCodeRequest, events: ChildEvent[]): Promise<ExecResult> {
     if (new TextEncoder().encode(request.code).length > MAX_CODE_BYTES) throw new EdgeError("too_large", "code is over 1 MiB");
     const { workspace, recreated } = await this.started(events);
-    const extension = { python: "py", javascript: "mjs", typescript: "ts" }[request.language];
-    const interpreter = { python: "python3", javascript: "node", typescript: "tsx" }[request.language];
-    const file = `${WORKSPACE_DIR}/.oryxa/run-${crypto.randomUUID()}.${extension}`;
-    await workspace.writeFile(file, new TextEncoder().encode(request.code));
-    try {
-      const result = await this.execute(workspace, [interpreter, file], undefined, request.timeoutMs, recreated);
-      events.push({
-        type: "sandbox.exec",
-        summary: `Ran ${request.language} (${result.timedOut ? "timed out" : `exit ${result.exitCode}`}, ${result.durationMs} ms)`,
-        data: { language: request.language, exitCode: result.exitCode, timedOut: Boolean(result.timedOut), code: request.code.slice(0, 2_000) },
-        durationMs: result.durationMs,
-      });
-      this.fileEvents(result.changedFiles ?? [], events);
-      return result;
-    } finally {
-      await workspace.remove(file).catch(() => undefined);
-    }
+    const port = KERNEL_PORTS[request.language];
+    const limit = clampTimeout(request.timeoutMs);
+    const started = Date.now();
+    await workspace.exec(["sh", "-c", "mkdir -p /tmp/oryxa && touch /tmp/oryxa/mark"], { timeoutMs: 15_000, stdoutLimit: 1024, stderrLimit: 1024 });
+    const pid = await kernelReady(workspace, port);
+    const key = `kernel:${port}`;
+    const previous = await this.ctx.storage.get<number>(key);
+    const lost = previous !== undefined && previous !== pid;
+    await this.ctx.storage.put(key, pid);
+    if (request.clearContext) await kernelCall(workspace, port, "/reset", {}, 15_000);
+    const outcome = await kernelCall(
+      workspace,
+      port,
+      "/exec",
+      { code: request.code, language: request.language, timeoutMs: limit, stdoutLimit: STDOUT_LIMIT, stderrLimit: STDERR_LIMIT },
+      limit + kernelSlack(limit),
+    );
+    const result = await this.collect(workspace, outcome, Date.now() - started, recreated || lost);
+    events.push({
+      type: "sandbox.exec",
+      summary: `Ran ${request.language} (${result.timedOut ? "timed out" : `exit ${result.exitCode}`}, ${result.durationMs} ms)`,
+      data: {
+        language: request.language,
+        exitCode: result.exitCode,
+        timedOut: Boolean(result.timedOut),
+        contextCleared: Boolean(request.clearContext),
+        code: request.code.slice(0, 2_000),
+      },
+      durationMs: result.durationMs,
+    });
+    this.fileEvents(result.changedFiles ?? [], events);
+    return result;
   }
 
   private async execCommand(request: ExecCommandRequest, events: ChildEvent[]): Promise<ExecResult> {
@@ -299,18 +318,21 @@ export class SandboxDO extends DurableObject<Env> {
     return result;
   }
 
-  // execute runs argv after marking the time, then lists the files it
-  // changed and returns small images among them as rich results.
+  // execute runs argv after marking the time, then collects what it did.
   private async execute(workspace: Workspace, argv: string[], cwd: string | undefined, timeoutMs: number | undefined, recreated: boolean): Promise<ExecResult> {
-    const limit = Math.min(Math.max(timeoutMs ?? DEFAULT_EXEC_MS, 1_000), MAX_EXEC_MS);
     const started = Date.now();
     const outcome = await workspace.exec(["sh", "-c", 'mkdir -p /tmp/oryxa && touch /tmp/oryxa/mark && exec "$@"', "oryxa", ...argv], {
       cwd,
-      timeoutMs: limit,
+      timeoutMs: clampTimeout(timeoutMs),
       stdoutLimit: STDOUT_LIMIT,
       stderrLimit: STDERR_LIMIT,
     });
-    const durationMs = Date.now() - started;
+    return this.collect(workspace, outcome, Date.now() - started, recreated);
+  }
+
+  // collect lists the files a run changed since the mark and returns small
+  // images among them as rich results.
+  private async collect(workspace: Workspace, outcome: ExecOutcome, durationMs: number, recreated: boolean): Promise<ExecResult> {
     const changed = await workspace
       .exec(["sh", "-c", `find ${WORKSPACE_DIR} -newer /tmp/oryxa/mark -type f -not -path '${WORKSPACE_DIR}/.oryxa/*' 2>/dev/null | head -200`], {
         timeoutMs: 15_000,
@@ -471,6 +493,9 @@ export class SandboxDO extends DurableObject<Env> {
   }
 
   private async preview(context: ChildContext, request: PreviewRequest, events: ChildEvent[]): Promise<SignedURL> {
+    if (Object.values(KERNEL_PORTS).includes(request.port as 8898 | 8899)) {
+      throw new EdgeError("invalid_request", `port ${request.port} is the sandbox's own; serve the preview on another`);
+    }
     await this.started(events);
     const url = await this.signedURL(context, { t: "preview", port: request.port }, "https");
     events.push({ type: "sandbox.preview", summary: `Preview opened on port ${request.port}`, data: { port: request.port } });
@@ -525,6 +550,92 @@ export const BACKUPS_PREFIX = "backups/sandbox/";
 // backupPrefix is one sandbox's: backups/sandbox/{org}/{kind}/{room}/{name}/.
 export function backupPrefix(identity: SandboxIdentity): string {
   return `${BACKUPS_PREFIX}${identity.org}/${identity.room.kind}/${identity.room.id}/${identity.name}/`;
+}
+
+// KERNEL_PORTS are where the code kernels listen in the container
+// (containers/sandbox/start.sh): Python, and Node for JavaScript and
+// TypeScript.
+export const KERNEL_PORTS = { python: 8899, javascript: 8898, typescript: 8898 } as const;
+const KERNEL_SCRIPTS: Record<number, string> = { 8899: "kernel.py", 8898: "kernel.mjs" };
+const KERNEL_START_MS = 20_000;
+// HEALTH_PROBE_MS bounds one health check: a kernel wedged by a cell (say
+// `await null; while (true) {}`, which vm's timeout can't reach) never
+// answers, and is killed instead of waited on.
+const HEALTH_PROBE_MS = 3_000;
+
+// kernelSlack is how much past a cell's own limit the DO waits for the
+// kernel's answer before it kills the kernel: kernels answer at the limit
+// themselves unless they're wedged.
+function kernelSlack(limitMs: number): number {
+  return Math.min(15_000, Math.max(2_000, limitMs));
+}
+
+// killKernel ends a kernel so start.sh starts a fresh one. Kernels run as
+// the agent user, as exec does, so pkill reaches them.
+async function killKernel(workspace: Workspace, port: number): Promise<void> {
+  const script = KERNEL_SCRIPTS[port];
+  if (!script) return;
+  await workspace
+    .exec(["pkill", "-9", "-f", `/opt/oryxa/${script}`], { timeoutMs: 10_000, stdoutLimit: 1024, stderrLimit: 1024 })
+    .catch((error) => console.error(JSON.stringify({ msg: "kill a stuck kernel failed", port, error: String(error) })));
+}
+
+function clampTimeout(timeoutMs: number | undefined): number {
+  return Math.min(Math.max(timeoutMs ?? DEFAULT_EXEC_MS, 1_000), MAX_EXEC_MS);
+}
+
+// kernelReady waits for a kernel to answer, as it may still be starting,
+// and returns its process id: a new one means its state was lost.
+async function kernelReady(workspace: Workspace, port: number): Promise<number> {
+  const deadline = Date.now() + KERNEL_START_MS;
+  let last: unknown;
+  let killed = false;
+  for (let delay = 100; Date.now() < deadline; delay = Math.min(delay * 2, 1_000)) {
+    try {
+      const response = await workspace.port(port).fetch("http://kernel/health", { signal: AbortSignal.timeout(HEALTH_PROBE_MS) });
+      if (response.ok) return ((await response.json()) as { pid: number }).pid;
+      last = new Error(`kernel answered ${response.status}`);
+    } catch (error) {
+      last = error;
+      // Listening but silent: a cell has it stuck. Kill it once; start.sh
+      // brings up a fresh one, which the next probes find.
+      if (!killed && (error as Error)?.name === "TimeoutError") {
+        killed = true;
+        await killKernel(workspace, port);
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+  throw new EdgeError("unavailable", `the sandbox's code kernel did not start: ${String(last)}`, true);
+}
+
+async function kernelCall(workspace: Workspace, port: number, path: string, body: unknown, timeoutMs: number): Promise<ExecOutcome> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  try {
+    const response = await workspace.port(port).fetch(`http://kernel${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: abort.signal,
+    });
+    if (!response.ok) throw new Error(`kernel answered ${response.status}`);
+    return (await response.json()) as ExecOutcome;
+  } catch (error) {
+    // Past the cell's limit with no answer, the kernel is stuck: kill it so
+    // start.sh starts a fresh one, and report the cell as timed out. The
+    // next cell finds a new pid, so it is told its state was lost.
+    if (abort.signal.aborted) {
+      await killKernel(workspace, port);
+      return { stdout: "", stderr: "", exitCode: -1, truncated: false, timedOut: true };
+    }
+    // The kernel died under the cell (it ran the process out of memory, or
+    // exited it): report it as the cell's failure, and the next call starts
+    // with a fresh kernel.
+    return { stdout: "", stderr: `The code kernel stopped while running this: ${String(error)}`, exitCode: 1, truncated: false, timedOut: false };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // resolvePath makes a sandbox path absolute against /workspace and refuses

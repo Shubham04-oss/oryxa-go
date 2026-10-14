@@ -67,6 +67,7 @@ type authHarness struct {
 	answerGuard  *fakeAnswerChecker
 	guardPolicy  *fakeAnswerGuardPreferences
 	secrets      *fakeSecretShares
+	edgeMembers  *fakeEdgeMembers
 	server       *Server
 }
 
@@ -89,6 +90,7 @@ func newAuthHarness() *authHarness {
 		answerGuard:  &fakeAnswerChecker{},
 		guardPolicy:  &fakeAnswerGuardPreferences{},
 		secrets:      &fakeSecretShares{},
+		edgeMembers:  &fakeEdgeMembers{},
 	}
 	h.server = New(h.directory, h.threadsSvc, Config{
 		AllowedOrigins: []string{"https://app.oryxa.test"},
@@ -111,6 +113,7 @@ func newAuthHarness() *authHarness {
 
 		AnswerGuardPreferences: h.guardPolicy,
 		SecretShares:           h.secrets,
+		EdgeMembers:            h.edgeMembers,
 	}, nil)
 	return h
 }
@@ -207,6 +210,11 @@ func lastTeamspaceActor(h *authHarness) (string, string) {
 func lastRoomActor(h *authHarness) (string, string) {
 	a := h.rooms.actors[len(h.rooms.actors)-1]
 	return a.OrganizationID, a.UserID
+}
+
+func lastEdgeMembership(h *authHarness) (string, string) {
+	m := h.edgeMembers.admitted[len(h.edgeMembers.admitted)-1]
+	return m.Org, m.Member
 }
 
 func lastOrgContextOrg(h *authHarness) (string, string) {
@@ -456,6 +464,11 @@ var authzRoutes = []authzRoute{
 		pattern: "GET /v1/organizations/{organizationID}/organization-agent/follow-ups", method: http.MethodGet,
 		path: "/v1/organizations/org_1/organization-agent/follow-ups", malformedQuery: "?limit=abc", orgOnly: true, identity: lastOrgContextOrg,
 	},
+	// -- the edge (A18) -------------------------------------------------------
+	{
+		pattern: "POST /v1/organizations/{organizationID}/edge/rooms/{kind}/{id}/admit", method: http.MethodPost,
+		path: "/v1/organizations/org_1/edge/rooms/thread/thread_1/admit", identity: lastEdgeMembership,
+	},
 	// -- teamspaces ---------------------------------------------------------
 	{
 		pattern: "GET /v1/organizations/{organizationID}/teamspaces", method: http.MethodGet,
@@ -554,7 +567,7 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 71 {
+	if len(authzRoutes) != 72 {
 		t.Fatalf("authzRoutes has %d entries, want 71 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
@@ -647,8 +660,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 37 {
-		t.Fatalf("tested %d state-changing routes, want 37 - a route's method changed without updating this expectation", tested)
+	if tested != 38 {
+		t.Fatalf("tested %d state-changing routes, want 38 - a route's method changed without updating this expectation", tested)
 	}
 }
 

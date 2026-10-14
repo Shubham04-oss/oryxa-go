@@ -714,7 +714,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 75 {
+	if len(patterns) != 76 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
