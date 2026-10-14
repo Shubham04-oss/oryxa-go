@@ -1,0 +1,41 @@
+// oryxa-edge: the live layer (docs/design/live-layer/README.md). platform-1
+// owns this file; integration-2 adds its call and voice bindings through a
+// PR here (README, "Shared files"). Environments, routes and secrets are F4.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "oryxa-edge",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOM", "class_name": "RoomDO" },
+      { "name": "SANDBOX", "class_name": "SandboxDO" },
+      { "name": "BROWSER_SESSION", "class_name": "BrowserDO" },
+      { "name": "VOICE", "class_name": "VoiceDO" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomDO", "SandboxDO", "BrowserDO", "VoiceDO"] }],
+  "r2_buckets": [{ "binding": "RUNS", "bucket_name": "oryxa-runs" }],
+  "vars": {
+    "ENVIRONMENT": "production",
+    // agents' serviceauth KMS public key (base64 DER SPKI). Public, so a var.
+    "AGENTS_TOKEN_PUBLIC_KEYS": "[]"
+  },
+  "env": {
+    "staging": {
+      "name": "oryxa-edge-staging",
+      "durable_objects": {
+        "bindings": [
+          { "name": "ROOM", "class_name": "RoomDO" },
+          { "name": "SANDBOX", "class_name": "SandboxDO" },
+          { "name": "BROWSER_SESSION", "class_name": "BrowserDO" },
+          { "name": "VOICE", "class_name": "VoiceDO" }
+        ]
+      },
+      "r2_buckets": [{ "binding": "RUNS", "bucket_name": "oryxa-runs-staging" }],
+      "vars": { "ENVIRONMENT": "staging", "AGENTS_TOKEN_PUBLIC_KEYS": "[]" }
+    }
+  }
+}
