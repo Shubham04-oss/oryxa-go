@@ -85,6 +85,8 @@ Oryxa gets its own **integrations service**: one Go service that connects member
 - N workers;
 - the connector host, which spawns one child process per connector binary, supervises it and restarts it on a crash.
 
+**Built so far (#283).** The skeleton: `integrations.Definition`, registered after `realtime`, reads `INTEGRATIONS_ENABLED=true` (off otherwise: no mount, no migration, no workers, no configuration). On, it migrates `integrations/migrations/` (schema `integrations`) and serves `GET /healthz`; internal routes are registered with `Server.Internal`, which refuses any call without a verified serviceauth token, and the callers come from `INTEGRATIONS_SERVICE_CALLERS`. A process whose `ORYXA_SERVICES` names `integrations` while it is off refuses to start.
+
 Roles can later split across tasks with flags (`--api`, `--workers`). Like the core binary, it starts with one task.
 
 **Public routes.** The Cloudflare Tunnel gets a path rule sending `api.oryxa.in/v1/integrations/*` (OAuth callbacks, webhooks) to this service. Everything else is internal, reached with serviceauth.
