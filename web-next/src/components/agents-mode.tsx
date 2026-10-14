@@ -16,6 +16,9 @@ import { SpecialistFocus } from "./specialist-focus"
 import { SpecialistsSection } from "./specialists-section"
 import { AgentTeamFocus } from "./multi-agent-team-focus"
 import { AgentTeamsSection } from "./multi-agent-teams-section"
+import { LiveChildren } from "./live-work"
+import { threadRoom } from "@/lib/live/children"
+import type { LiveTarget } from "@/lib/live/children"
 import { PrimaryAgentFiles } from "./primary-agent-files"
 import { WorkflowOverview } from "./workflow-overview"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
@@ -59,6 +62,7 @@ export function AgentsCanvas({
   viewerId,
   primaryThreadId,
   onOpenFile,
+  onOpenLive,
   onOpen,
   onNavigate,
 }: {
@@ -68,6 +72,8 @@ export function AgentsCanvas({
   viewerId?: string
   primaryThreadId?: string | null
   onOpenFile?: (file: PrimaryAgentFileTarget) => void
+  /** Opens one of the conversation's sandboxes or browsers in the work panel. */
+  onOpenLive?: (target: LiveTarget) => void
   onOpen: (target: AgentsFocusTarget) => void
   onNavigate: (section: AgentsSection) => void
 }) {
@@ -95,6 +101,7 @@ export function AgentsCanvas({
       viewerId={viewerId}
       primaryThreadId={primaryThreadId}
       onOpenFile={onOpenFile}
+      onOpenLive={onOpenLive}
       onOpen={onOpen}
       onNavigate={onNavigate}
     />
@@ -199,6 +206,7 @@ function AgentsOverview({
   viewerId,
   primaryThreadId,
   onOpenFile,
+  onOpenLive,
   onOpen,
   onNavigate,
 }: {
@@ -206,6 +214,7 @@ function AgentsOverview({
   viewerId?: string
   primaryThreadId?: string | null
   onOpenFile?: (file: PrimaryAgentFileTarget) => void
+  onOpenLive?: (target: LiveTarget) => void
   onOpen: (target: AgentsFocusTarget) => void
   onNavigate: (section: AgentsSection) => void
 }) {
@@ -257,6 +266,7 @@ function AgentsOverview({
     )
   }
 
+  const liveRoom = threadRoom(primaryThreadId)
   const primary = primaryAgent(agents.data)
   const specialists = specialistAgents(agents.data)
   const pausedSpecialists = specialists.filter(
@@ -353,6 +363,18 @@ function AgentsOverview({
         threadId={primaryThreadId}
         onOpenFile={onOpenFile}
       />
+
+      {onOpenLive && (
+        <LiveChildren
+          organizationId={organizationId}
+          room={liveRoom}
+          viewerId={viewerId}
+          title="This conversation's sandbox and browser"
+          onOpen={(child) => {
+            if (liveRoom) onOpenLive({ room: liveRoom, child })
+          }}
+        />
+      )}
 
       <section aria-labelledby="agents-overview-work">
         <p className="workspace-eyebrow" id="agents-overview-work">

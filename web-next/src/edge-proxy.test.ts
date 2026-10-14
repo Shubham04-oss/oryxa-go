@@ -184,3 +184,41 @@ describe("handleLive", () => {
     expect(sent.headers.get("sec-websocket-key")).toBe("abc")
   })
 })
+
+describe("a room's sandboxes and browsers", () => {
+  it("passes what a member may do, and nothing that runs or drives", async () => {
+    const { env, fetch } = edge()
+    const allowed: [string, string][] = [
+      ["GET", "/children"],
+      ["GET", "/sandbox/shared/files"],
+      ["POST", "/sandbox/shared/files/read"],
+      ["POST", "/sandbox/private-usr_ada/preview"],
+      ["POST", "/sandbox/run_1/terminal"],
+      ["POST", "/browser/br_1/live"],
+      ["GET", "/browser/br_1/handoff"],
+      ["POST", "/browser/br_1/resume"],
+    ]
+    for (const [method, rest] of allowed) {
+      const { request, live } = liveRequest(`/live/org_1/rooms/thread/th_1${rest}`, {
+        method,
+        body: method === "POST" ? "{}" : undefined,
+      })
+      expect((await handleLive(request, env, live, member)).status).toBe(200)
+    }
+    const refused: [string, string][] = [
+      ["POST", "/sandbox/shared/exec/command"],
+      ["POST", "/sandbox/shared/files/write"],
+      ["POST", "/browser/br_1/navigate"],
+      ["POST", "/browser/br_1/handoff"],
+      ["GET", "/sandbox/../files"],
+    ]
+    for (const [method, rest] of refused) {
+      const { request, live } = liveRequest(`/live/org_1/rooms/thread/th_1${rest}`, {
+        method,
+        body: method === "POST" ? "{}" : undefined,
+      })
+      expect((await handleLive(request, env, live, member)).status).not.toBe(200)
+    }
+    expect(fetch).toHaveBeenCalledTimes(allowed.length)
+  })
+})

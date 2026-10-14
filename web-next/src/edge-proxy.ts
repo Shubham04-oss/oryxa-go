@@ -23,8 +23,9 @@ const livePath = /^\/live\/([^/]+)\/rooms\/([^/]+)\/([^/]+)(\/.*)?$/
 
 /**
  * What a page may ask of its room, by method: the log and its live socket,
- * the call and the agent's voice. Anything else (an agent's writes, the
- * sandbox and browser routes, which come with A8) is not passed on.
+ * the call and the agent's voice, and what a member may do with its
+ * sandboxes and browsers. Anything else (an agent's writes, running code,
+ * driving a browser) is not passed on.
  */
 const routes: { path: RegExp; methods: string[]; socket?: true }[] = [
   { path: /^\/log$/, methods: ["GET"] },
@@ -35,6 +36,18 @@ const routes: { path: RegExp; methods: string[]; socket?: true }[] = [
     methods: ["POST"],
   },
   { path: /^\/voice\/live$/, methods: ["GET"], socket: true },
+  // The room's sandboxes and browsers (A8), as far as a member may reach
+  // them (edge/src/room/children.ts, `web: true`): list them, read a
+  // sandbox's files, open its preview or terminal, watch a browser, and
+  // hand a browser back after taking it over.
+  { path: /^\/children$/, methods: ["GET"] },
+  { path: /^\/sandbox\/[A-Za-z0-9_-]+\/files$/, methods: ["GET"] },
+  {
+    path: /^\/sandbox\/[A-Za-z0-9_-]+\/(files\/read|preview|terminal)$/,
+    methods: ["POST"],
+  },
+  { path: /^\/browser\/[A-Za-z0-9_-]+\/(live|resume)$/, methods: ["POST"] },
+  { path: /^\/browser\/[A-Za-z0-9_-]+\/handoff$/, methods: ["GET"] },
 ]
 
 export type LiveRequest = {

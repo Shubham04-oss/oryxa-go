@@ -241,6 +241,9 @@
   --file-code: #3d7fb8;
   --file-doc: #6b6b6b;
   --on-file: #ffffff;
+  /* A sandbox's terminal stays dark in both themes, as a shell does. */
+  --terminal-bg: #0d0d0d;
+  --terminal-fg: #e6e6e6;
   color-scheme: dark;
 }
 

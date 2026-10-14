@@ -34,6 +34,8 @@ import { openRequest, useRequestsEntry } from "./requests-view-open"
 import { TeamspacesManagement } from "./teamspaces-management"
 import type { WorkspaceRole } from "./teamspaces-management"
 import { TeamspaceFocus } from "./teamspace-focus"
+import { LivePane } from "./live-work"
+import type { LiveTarget } from "@/lib/live/children"
 import { statusLabel } from "./teamspace-format"
 import { DirectMessageView, PersonAvatar } from "./direct-message"
 import {
@@ -214,9 +216,10 @@ function WorkspaceShellContent({
   const agentsMode = useAgentsMode()
   const [primaryWork, setPrimaryWork] = useState(false)
   const [primaryComposing, setPrimaryComposing] = useState(false)
-  const [primaryViewer, setPrimaryViewer] = useState<"overview" | "file">(
-    "overview"
-  )
+  const [primaryViewer, setPrimaryViewer] = useState<
+    "overview" | "file" | "live"
+  >("overview")
+  const [primaryLive, setPrimaryLive] = useState<LiveTarget | null>(null)
   const [primaryFile, setPrimaryFile] = useState<PrimaryAgentFileTarget | null>(
     null
   )
@@ -545,6 +548,12 @@ function WorkspaceShellContent({
     openRequestsSection(requestId)
   }
 
+  function openPrimaryLive(target: LiveTarget) {
+    setPrimaryLive(target)
+    setPrimaryViewer("live")
+    openPrimaryWork()
+  }
+
   function openPrimaryFile(file?: PrimaryAgentFileTarget) {
     setPrimaryViewer("file")
     setPrimaryFile(file ?? null)
@@ -859,7 +868,15 @@ function WorkspaceShellContent({
                   className="workspace-work-panel"
                   aria-label="Agent overview work panel"
                 >
-                  {primaryViewer === "file" ? (
+                  {primaryViewer === "live" && primaryLive ? (
+                    <LivePane
+                      organizationId={selectedOrganization.id}
+                      room={primaryLive.room}
+                      child={primaryLive.child}
+                      viewerId={session?.user.id}
+                      onBack={() => setPrimaryViewer("overview")}
+                    />
+                  ) : primaryViewer === "file" ? (
                     <PrimaryAgentFileViewer
                       organizationId={selectedOrganization.id}
                       threadId={primaryFile?.threadId ?? primaryThreadId}
@@ -875,6 +892,7 @@ function WorkspaceShellContent({
                       onOpen={openWork}
                       onNavigate={navigatePrimarySection}
                       onOpenFile={openPrimaryFile}
+                      onOpenLive={openPrimaryLive}
                     />
                   )}
                 </section>
