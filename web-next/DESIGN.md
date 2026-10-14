@@ -80,8 +80,11 @@ not permission to copy every incidental value into a new component.
 - Expanding the right panel collapses the left. Collapsing the right expands
   the center; it must **not** automatically expand the left. A manually
   collapsed left sidebar stays collapsed until the user opens it.
-- Home, Team, and Agents are the three primary icon-first pill controls. The
-  active one is slightly enlarged and more prominent, not a giant tab.
+- **One sidebar** (founder, 14 Oct 2026): every page is listed at once, in
+  three tiles headed Home, Team and Agents, so nothing is a mode switch away.
+  Picking a page opens it and its area; the page you are on is the raised
+  tile. The sidebar's top row names the workspace. Collapsed, the rail shows
+  the same three tiles as icons. (The Home/Team/Agents mode pills are gone.)
 - The right agent panel holds the member's agent and team conversations. Its
   tabs, Agents (the default), DMs and Teams, use the same icon-first pills;
   the Agents pill carries the primary agent's voxel avatar. When the member
@@ -95,9 +98,9 @@ not permission to copy every incidental value into a new component.
   one icon per tab, and each opens the panel on that tab. A tab without a
   live service shows a one-line empty state, never example people, rooms or
   messages.
-- Sidebar content follows the primary mode:
+- The sidebar's tiles, in order (Team's recent conversations follow them):
 
-  | Mode | Left navigation |
+  | Tile | Pages |
   | --- | --- |
   | Home | Today, Knowledge bases, Tools |
   | Team | Teamspaces, People, then up to three visible recent conversations |

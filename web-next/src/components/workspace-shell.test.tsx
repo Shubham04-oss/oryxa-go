@@ -432,8 +432,8 @@ describe("WorkspaceShell navigation", () => {
       expect(screen.queryByText(label)).toBeNull()
 
     fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
-    fireEvent.click(screen.getByRole("button", { name: /^Home$/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Teamspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Today" }))
     expect(shell?.getAttribute("data-left")).toBe("expanded")
     fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
@@ -458,13 +458,12 @@ describe("WorkspaceShell navigation", () => {
     expect(screen.queryByText("Knowledge your team can build on.")).toBeNull()
 
     fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Teamspaces" }))
     expect(
       screen.getByRole("heading", { name: "Teamspaces", level: 1 })
     ).toBeTruthy()
     expect(screen.queryByText("Spaces where your team works.")).toBeNull()
 
-    fireEvent.click(screen.getByRole("button", { name: /^Home$/ }))
     fireEvent.click(screen.getByRole("button", { name: "Tools" }))
     expect(
       screen.getByRole("heading", { name: "Tools", level: 1 })
@@ -536,11 +535,17 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
   })
 
-  it("shows a different sidebar for each mode and remembers its selection", () => {
+  it("shows every area's pages in one sidebar, each area its own group", () => {
     render(<WorkspaceShell />)
 
     const homeNavigation = screen.getByRole("navigation", {
       name: "Home navigation",
+    })
+    const teamNavigation = screen.getByRole("navigation", {
+      name: "Team navigation",
+    })
+    const agentsNavigation = screen.getByRole("navigation", {
+      name: "Agents navigation",
     })
     expect(
       within(homeNavigation).getByRole("button", { name: "Today" })
@@ -549,43 +554,40 @@ describe("WorkspaceShell navigation", () => {
       within(homeNavigation).getByRole("button", { name: "Knowledge bases" })
     ).toBeTruthy()
     expect(
-      screen.queryByRole("button", { name: "Multi-agent teams" })
-    ).toBeNull()
-
-    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
-    const teamNavigation = screen.getByRole("navigation", {
-      name: "Team navigation",
-    })
-    expect(
-      within(teamNavigation).getByRole("button", { name: "People" })
-    ).toBeTruthy()
-    expect(
       within(teamNavigation).queryByRole("button", { name: "Today" })
     ).toBeNull()
-    fireEvent.click(
-      within(teamNavigation).getByRole("button", { name: "People" })
-    )
-    expect(screen.getByRole("heading", { name: "People" })).toBeTruthy()
-
-    fireEvent.click(screen.getByRole("button", { name: /^Agents$/ }))
-    const agentsNavigation = screen.getByRole("navigation", {
-      name: "Agents navigation",
-    })
     expect(
       within(agentsNavigation).getByRole("button", {
         name: "Multi-agent teams",
       })
     ).toBeTruthy()
+    expect(screen.queryByRole("group", { name: "Main areas" })).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
+    fireEvent.click(
+      within(teamNavigation).getByRole("button", { name: "People" })
+    )
+    expect(screen.getByRole("heading", { name: "People" })).toBeTruthy()
+    expect(
+      within(teamNavigation)
+        .getByRole("button", { name: "People" })
+        .getAttribute("aria-current")
+    ).toBe("page")
+
     fireEvent.click(
       within(agentsNavigation).getByRole("button", { name: "Specialists" })
     )
     expect(screen.getByRole("heading", { name: "Specialists" })).toBeTruthy()
+    expect(
+      within(teamNavigation)
+        .getByRole("button", { name: "People" })
+        .getAttribute("aria-current")
+    ).toBeNull()
 
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
-    expect(screen.getByRole("heading", { name: "People" })).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: /^Agents$/ }))
-    expect(screen.getByRole("heading", { name: "Specialists" })).toBeTruthy()
+    fireEvent.click(
+      within(homeNavigation).getByRole("button", { name: "Today" })
+    )
+    expect(screen.getByRole("heading", { name: "Today" })).toBeTruthy()
   })
 
   // Agents mode's focused work is real data now: agents-mode.test.tsx.
@@ -800,7 +802,7 @@ describe("WorkspaceShell navigation", () => {
     const api = mockApi(() => undefined)
     render(<WorkspaceShell />)
     fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Teamspaces" }))
 
     expect(screen.getByText("No workspace to load")).toBeTruthy()
     for (const example of ["Product sync", "Launch planning", "Design reviews"])
