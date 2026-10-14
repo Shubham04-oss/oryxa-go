@@ -34,12 +34,15 @@ const (
 	ScopeLogWrite     Scope = "log:write"
 	// ScopeLogRead lets Go read a run's events back for the agent's context.
 	ScopeLogRead Scope = "log:read"
+	// ScopeRoomMembers lets agents set who a room's members are (A18). A
+	// token with it names no member of its own.
+	ScopeRoomMembers Scope = "room:members"
 )
 
 // KnownScopes lists every scope, in a fixed order.
 var KnownScopes = []Scope{
 	ScopeSandboxExec, ScopeSandboxFiles, ScopeBrowserDrive,
-	ScopeCallJoin, ScopeCallSpeak, ScopeLogWrite, ScopeLogRead,
+	ScopeCallJoin, ScopeCallSpeak, ScopeLogWrite, ScopeLogRead, ScopeRoomMembers,
 }
 
 // TokenClaims is the edge token's payload.

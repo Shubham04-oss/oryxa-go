@@ -258,6 +258,9 @@ type Config struct {
 	// EdgeDispatch takes work the voice agent at the edge hands over. Nil
 	// leaves POST /v1/edge/dispatch answering 404.
 	EdgeDispatch *EdgeDispatch
+	// EdgeMembers admits a member to a room on the edge once they may be in
+	// it (edgemembers.Pusher, A18). Nil leaves the admit route answering 404.
+	EdgeMembers EdgeMembers
 }
 
 // Server serves the API.
@@ -277,6 +280,7 @@ type Server struct {
 	guardPreferences    AnswerGuardPreferences
 	secretShares        SecretShares
 	edge                *EdgeDispatch
+	edgeMembers         EdgeMembers
 	checks              *checkLimiter
 	allowedOrigins      map[string]struct{}
 	runTimeout          time.Duration
@@ -309,6 +313,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		guardPreferences:    keptGuardPreferences(config.AnswerGuardPreferences),
 		secretShares:        config.SecretShares,
 		edge:                config.EdgeDispatch,
+		edgeMembers:         config.EdgeMembers,
 		checks:              newCheckLimiter(checksPerWindow, checkWindow),
 		allowedOrigins:      map[string]struct{}{},
 		runTimeout:          config.RunTimeout,
@@ -401,6 +406,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/answer-guard/preferences", guardPreferences.get)
 	server.handle("PUT /v1/organizations/{organizationID}/answer-guard/preferences", guardPreferences.put)
 	server.routeEdge()
+	server.routeEdgeMembers()
 	return server
 }
 
@@ -1229,7 +1235,20 @@ func (server *Server) deleteTeamspace(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
 		return
 	}
-	if err := server.teamspaces.Delete(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID")); err != nil {
+	id := request.PathValue("teamspaceID")
+	// Its rooms on the edge are emptied first (A18), so a failure there
+	// leaves the teamspace to delete again; if the delete then fails,
+	// members are let back in when they next open a room.
+	if server.edgeMembers != nil {
+		if space, err := server.teamspaces.Get(request.Context(), teamspaceActorOf(member), id); err == nil && space.CanManage {
+			if err := server.edgeMembers.TeamspaceDeleted(request.Context(), member.OrganizationID, id); err != nil {
+				server.logger.WarnContext(request.Context(), "empty a deleted teamspace's edge rooms", "organization_id", member.OrganizationID, "error", err)
+				writeError(writer, http.StatusServiceUnavailable, "edge_unavailable", "the teamspace's live rooms could not be closed; try again")
+				return
+			}
+		}
+	}
+	if err := server.teamspaces.Delete(request.Context(), teamspaceActorOf(member), id); err != nil {
 		server.handleError(writer, request, err)
 		return
 	}

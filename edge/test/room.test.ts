@@ -131,23 +131,23 @@ describe("the log", () => {
 
 describe("R2", () => {
   it("flushes events per run and writes each run's manifest", async () => {
-    const room = { kind: "dm" as const, id: "dm_flush" };
-    const path = "/v1/rooms/dm/dm_flush";
+    const room = { kind: "teamspace" as const, id: "dm_flush" };
+    const path = "/v1/rooms/teamspace/dm_flush";
     await appendEvent(path, { room, run: "run_a" }, "run.started");
     await appendEvent(path, { room, run: "run_a" }, "run.completed");
     await appendEvent(path, { room, run: "run_b" }, "run.started");
-    expect(await runDurableObjectAlarm(roomStub("org_1", "dm", "dm_flush"))).toBe(true);
+    expect(await runDurableObjectAlarm(roomStub("org_1", "teamspace", "dm_flush"))).toBe(true);
 
-    const runA = await env.RUNS.list({ prefix: "runs/org_1/dm/dm_flush/run_a/" });
+    const runA = await env.RUNS.list({ prefix: "runs/org_1/teamspace/dm_flush/run_a/" });
     const keys = runA.objects.map((object) => object.key);
-    expect(keys).toContain("runs/org_1/dm/dm_flush/run_a/manifest.json");
+    expect(keys).toContain("runs/org_1/teamspace/dm_flush/run_a/manifest.json");
     const eventsKey = keys.find((key) => key.includes("/events/"))!;
     const lines = (await (await env.RUNS.get(eventsKey))!.text()).trim().split("\n");
     expect(lines.map((line) => (JSON.parse(line) as Event).type)).toEqual(["run.started", "run.completed"]);
-    const manifest = await (await env.RUNS.get("runs/org_1/dm/dm_flush/run_a/manifest.json"))!.json<Record<string, unknown>>();
+    const manifest = await (await env.RUNS.get("runs/org_1/teamspace/dm_flush/run_a/manifest.json"))!.json<Record<string, unknown>>();
     expect(manifest).toMatchObject({ org: "org_1", run: "run_a", eventCount: 2, status: "completed" });
-    expect((await env.RUNS.list({ prefix: "runs/org_1/dm/dm_flush/_room/" })).objects.length).toBeGreaterThan(0);
-    expect((await env.RUNS.list({ prefix: "runs/org_1/dm/dm_flush/run_b/" })).objects.length).toBe(2);
+    expect((await env.RUNS.list({ prefix: "runs/org_1/teamspace/dm_flush/_room/" })).objects.length).toBeGreaterThan(0);
+    expect((await env.RUNS.list({ prefix: "runs/org_1/teamspace/dm_flush/run_b/" })).objects.length).toBe(2);
   });
 
   it("keeps events it couldn't write, and writes them next time", async () => {

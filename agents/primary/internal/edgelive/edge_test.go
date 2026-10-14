@@ -15,7 +15,7 @@
 // EDGE_EXPECT_SANDBOX=1 and EDGE_EXPECT_BROWSER=1 require the sandbox
 // container and Browser Run to work, as on staging; without them, those
 // calls must fail as unavailable and retryable, as under `wrangler dev
-// --enable-containers=false`.
+// --enable-containers=false --local` (--local because the AI binding is remote-only).
 package edgelive
 
 import (
@@ -39,6 +39,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/cfbrowser"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/cfsandbox"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/edgeclient"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/edgemembers"
 	edgev1 "github.com/Shubham04-oss/oryxa-go/contracts/edge/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
@@ -290,4 +291,89 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// memoryMemberships is edgemembers.Memberships in memory: this checks the
+// edge, not PostgreSQL.
+type memoryMemberships struct{ rows []edgemembers.Membership }
+
+func (m *memoryMemberships) Record(_ context.Context, row edgemembers.Membership) error {
+	m.rows = append(m.rows, row)
+	return nil
+}
+func (m *memoryMemberships) Forget(_ context.Context, row edgemembers.Membership) error {
+	kept := m.rows[:0]
+	for _, each := range m.rows {
+		if each != row {
+			kept = append(kept, each)
+		}
+	}
+	m.rows = kept
+	return nil
+}
+func (m *memoryMemberships) Rooms(_ context.Context, org, member string, _ []string) ([]edgemembers.Membership, error) {
+	var found []edgemembers.Membership
+	for _, each := range m.rows {
+		if each.Org == org && each.Member == member {
+			found = append(found, each)
+		}
+	}
+	return found, nil
+}
+func (m *memoryMemberships) ForgetOrganization(context.Context, string) error { return nil }
+func (m *memoryMemberships) Exists(_ context.Context, row edgemembers.Membership) (bool, error) {
+	for _, each := range m.rows {
+		if each == row {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+func (m *memoryMemberships) InTeamspace(context.Context, string, string) ([]edgemembers.Membership, error) {
+	return nil, nil
+}
+
+// Go's pusher sets a room's members; a removed member's own agent token is
+// then refused (A18).
+func TestGoSetsARoomsMembers(t *testing.T) {
+	l := setup(t)
+	target := l.target(t, "org_live_m")
+	target.Room.Kind = edgev1.RoomTeamspace
+	pusher, err := edgemembers.New(l.client, &memoryMemberships{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, member := range []string{"usr_m1", "usr_m2"} {
+		if err := pusher.Admit(ctx, edgemembers.Membership{Org: target.Org, Room: target.Room, Member: member}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path, _ := edgev1.RoomPath(target.Room)
+	read := func() []string {
+		var members edgev1.MembersResponse
+		if err := l.client.Do(ctx, edgeclient.Call{
+			Claims: edgev1.TokenClaims{Org: target.Org, Room: target.Room, Agent: "edgemembers", Scopes: []edgev1.Scope{edgev1.ScopeRoomMembers}},
+			Method: http.MethodGet, Path: path + "/members", Idempotent: true,
+		}, &members); err != nil {
+			t.Fatal(err)
+		}
+		return members.Members
+	}
+	if got := read(); strings.Join(got, ",") != "usr_m1,usr_m2" {
+		t.Fatalf("members = %v", got)
+	}
+	if err := pusher.MemberLeftOrganization(ctx, target.Org, "usr_m1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); strings.Join(got, ",") != "usr_m2" {
+		t.Fatalf("after removal, members = %v", got)
+	}
+	removed := target
+	removed.Member = "usr_m1"
+	var log edgev1.LogResponse
+	err = l.client.Do(ctx, edgeclient.Call{Claims: removed.Claims(edgev1.ScopeLogRead), Method: http.MethodGet, Path: path + "/log", Idempotent: true}, &log)
+	if !edgeclient.IsCode(err, edgev1.CodeForbidden) {
+		t.Fatalf("a removed member's agent token: %v", err)
+	}
 }
