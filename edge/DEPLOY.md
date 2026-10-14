@@ -27,7 +27,8 @@ secrets, CI and routes.
   `wrangler.jsonc`); the browser is the `BROWSER` binding.
 - **R2 buckets** `oryxa-runs` and `oryxa-runs-staging`. Lifecycle rules
   (until Layer C's retention decision; R2 rules match fixed prefixes):
-  - `backups/sandbox/`: sandbox workspace backups, at
+  - `backups/sandbox/`: sandbox workspace backups (rule applied by
+    `cloudflare_r2_bucket_lifecycle.runs` in deploy/production), at
     `backups/sandbox/{org}/{kind}/{room}/{sandbox}/`. Each is replaced at
     every idle stop and only restores that sandbox; expire after 30 days.
   - Everything under `runs/`, `calls/` and `artifacts/`: keep.
