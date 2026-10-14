@@ -9,6 +9,10 @@
 //
 //	EDGE_URL=http://127.0.0.1:8787 EDGE_SIGNING_KEY_PEM="$(cat key.pem)" go test ./agents/primary/internal/edgelive
 //
+// Or sign with agents' KMS service key, as on a1 against staging:
+//
+//	EDGE_URL=https://edge-staging.oryxa.in EDGE_SIGNING_KMS_KEY_ID=alias/oryxa-staging-agents-primary AWS_REGION=ap-south-1 …
+//
 // It lives here, not in test/live, because it drives the agents' internal
 // packages.
 //
@@ -28,12 +32,14 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/cfbrowser"
@@ -67,9 +73,32 @@ func setup(t *testing.T) live {
 	if url == "" {
 		t.Skip("EDGE_URL is not set: no edge to run against")
 	}
+	var signer serviceauth.Signer
+	if keyID := os.Getenv("EDGE_SIGNING_KMS_KEY_ID"); keyID != "" {
+		// Sign with agents' own KMS key, as the agents the edge serves do:
+		// the staging service key, with whatever AWS credentials are here.
+		awsConfig, err := config.LoadDefaultConfig(context.Background())
+		if err != nil {
+			t.Fatalf("load AWS config: %v", err)
+		}
+		signer = serviceauth.Signer{Client: kms.NewFromConfig(awsConfig), KeyID: keyID, Service: "agents"}
+	} else {
+		signer = pemSigner(t)
+	}
+	client, err := edgeclient.New(edgeclient.Config{BaseURL: url, Tokens: signer, Backoff: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return live{url: url, signer: signer, client: client, run: fmt.Sprintf("run_live_%d", time.Now().UnixNano())}
+}
+
+// pemSigner signs with EDGE_SIGNING_KEY_PEM, a test key whose public half
+// the edge trusts, in KMS's place.
+func pemSigner(t *testing.T) serviceauth.Signer {
+	t.Helper()
 	block, _ := pem.Decode([]byte(os.Getenv("EDGE_SIGNING_KEY_PEM")))
 	if block == nil {
-		t.Fatal("EDGE_SIGNING_KEY_PEM must hold the PEM private key the edge trusts")
+		t.Fatal("set EDGE_SIGNING_KMS_KEY_ID, or EDGE_SIGNING_KEY_PEM to the PEM private key the edge trusts")
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
@@ -79,12 +108,7 @@ func setup(t *testing.T) live {
 		}
 		parsed = key
 	}
-	signer := serviceauth.Signer{Client: localKMS{key: parsed.(*ecdsa.PrivateKey)}, KeyID: "live-test", Service: "agents"}
-	client, err := edgeclient.New(edgeclient.Config{BaseURL: url, Tokens: signer, Backoff: 100 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return live{url: url, signer: signer, client: client, run: fmt.Sprintf("run_live_%d", time.Now().UnixNano())}
+	return serviceauth.Signer{Client: localKMS{key: parsed.(*ecdsa.PrivateKey)}, KeyID: "live-test", Service: "agents"}
 }
 
 // target is a fresh room for each test, so runs never see each other.
@@ -375,5 +399,116 @@ func TestGoSetsARoomsMembers(t *testing.T) {
 	err = l.client.Do(ctx, edgeclient.Call{Claims: removed.Claims(edgev1.ScopeLogRead), Method: http.MethodGet, Path: path + "/log", Idempotent: true}, &log)
 	if !edgeclient.IsCode(err, edgev1.CodeForbidden) {
 		t.Fatalf("a removed member's agent token: %v", err)
+	}
+}
+
+func requireSandbox(t *testing.T) {
+	t.Helper()
+	if os.Getenv("EDGE_EXPECT_SANDBOX") != "1" {
+		t.Skip("EDGE_EXPECT_SANDBOX is not 1: no real sandbox to run against")
+	}
+}
+
+// What one cell defines is there in the next, per language, until
+// clear_context (A12).
+func TestCodeStateLastsAcrossCalls(t *testing.T) {
+	requireSandbox(t)
+	l := setup(t)
+	target := l.target(t, "org_live_a")
+	executor, _ := cfsandbox.New(l.client)
+	ctx := context.Background()
+	run := func(t *testing.T, language, code string, clear bool) cfsandbox.Result {
+		t.Helper()
+		result, err := executor.Invoke(ctx, target, cfsandbox.Request{Action: cfsandbox.ExecuteCode, Language: language, Code: code, ClearContext: clear})
+		if err != nil {
+			t.Fatalf("%s %q: %v", language, code, err)
+		}
+		return result
+	}
+	t.Run("python", func(t *testing.T) {
+		run(t, "python", "import statistics\nrows = [40, 42, 44]", false)
+		if got := strings.TrimSpace(run(t, "python", "statistics.mean(rows)", false).Stdout); got != "42" {
+			t.Errorf("python kept state: %q", got)
+		}
+		cleared := run(t, "python", "rows", true)
+		if !cleared.IsError || !strings.Contains(cleared.Stderr, "NameError") {
+			t.Errorf("clear_context kept state: %+v", cleared)
+		}
+	})
+	t.Run("typescript", func(t *testing.T) {
+		run(t, "typescript", "const base: number = 40", false)
+		if got := strings.TrimSpace(run(t, "typescript", "base + 2", false).Stdout); got != "42" {
+			t.Errorf("typescript kept state: %q", got)
+		}
+	})
+}
+
+// A server in the sandbox is reachable through the preview's signed URL.
+func TestPreviewServesFromTheSandbox(t *testing.T) {
+	requireSandbox(t)
+	l := setup(t)
+	target := l.target(t, "org_live_a")
+	executor, _ := cfsandbox.New(l.client)
+	ctx := context.Background()
+	start, err := executor.Invoke(ctx, target, cfsandbox.Request{Action: cfsandbox.ExecuteCommand,
+		Command: "mkdir -p /workspace/site && echo hello-from-the-sandbox > /workspace/site/index.html && " +
+			// socketserver, not http.server, which dies on Cloudflare's 64-character hostname.
+			"cd /workspace/site && (nohup python3 -c 'import http.server, socketserver; socketserver.ThreadingTCPServer((\"\", 8000), http.server.SimpleHTTPRequestHandler).serve_forever()' >/tmp/http.log 2>&1 &) && sleep 2"})
+	if err != nil || start.IsError {
+		t.Fatalf("start the server: %+v, %v", start, err)
+	}
+	path, _ := edgev1.SandboxPath(target.Room, edgev1.SharedSandbox)
+	var signed edgev1.SignedURL
+	if err := l.client.Do(ctx, edgeclient.Call{Claims: target.Claims(edgev1.ScopeSandboxExec), Method: http.MethodPost, Path: path + "/preview", Body: edgev1.PreviewRequest{Port: 8000}}, &signed); err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.Get(signed.URL + "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "hello-from-the-sandbox") {
+		t.Errorf("preview answered %d: %q", response.StatusCode, body)
+	}
+	tampered := signed.URL[:strings.LastIndex(signed.URL, ".")+1] + "AAAA/index.html"
+	if refused, err := http.Get(tampered); err == nil {
+		refused.Body.Close()
+		if refused.StatusCode != http.StatusForbidden {
+			t.Errorf("a tampered preview link answered %d", refused.StatusCode)
+		}
+	}
+}
+
+// Browse, read the page, and keep a screenshot, which lands in R2 under the
+// run.
+func TestTheBrowserSnapshotsAndScreenshots(t *testing.T) {
+	if os.Getenv("EDGE_EXPECT_BROWSER") != "1" {
+		t.Skip("EDGE_EXPECT_BROWSER is not 1: no Browser Run to run against")
+	}
+	l := setup(t)
+	target := l.target(t, "org_live_a")
+	controller, _ := cfbrowser.New(l.client)
+	ctx := context.Background()
+	if _, err := controller.Invoke(ctx, target, cfbrowser.Request{Action: cfbrowser.Navigate, URL: "https://example.com/"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := controller.Invoke(ctx, target, cfbrowser.Request{Action: cfbrowser.Snapshot})
+	if err != nil || snapshot.Page.Title != "Example Domain" || !strings.Contains(snapshot.Page.Text, "documentation examples") || len(snapshot.Page.Elements) == 0 {
+		t.Fatalf("snapshot = %+v, %v", snapshot.Page, err)
+	}
+	shot, err := controller.Invoke(ctx, target, cfbrowser.Request{Action: cfbrowser.Screenshot})
+	if err != nil || !bytes.HasPrefix(shot.ScreenshotPNG, []byte("\x89PNG")) {
+		t.Fatalf("screenshot: %d bytes, %v", len(shot.ScreenshotPNG), err)
+	}
+	prefix, _ := edgev1.RunPrefix(target.Org, target.Room, target.Run)
+	var key string
+	for _, event := range l.readLog(t, target) {
+		if event.Type == edgev1.EventBrowserScreenshot {
+			key, _ = event.Data["key"].(string)
+		}
+	}
+	if !strings.HasPrefix(key, prefix+"media/screenshot-") {
+		t.Errorf("screenshot stored at %q, want under %smedia/", key, prefix)
 	}
 }
