@@ -660,6 +660,26 @@ describe("WorkspaceShell navigation", () => {
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
   })
 
+  it("keeps today's widgets a tab away, without example data", () => {
+    render(<WorkspaceShell />)
+    const panel = screen.getByRole("complementary", { name: "Agent panel" })
+    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
+
+    const glanceTab = within(panel).getByRole("tab", { name: "At a glance" })
+    fireEvent.click(glanceTab)
+    expect(glanceTab.getAttribute("aria-selected")).toBe("true")
+    const glanceView = within(panel).getByRole("tabpanel", {
+      name: "At a glance",
+    })
+    // No workspace to read: one line saying what the tab holds, nothing more.
+    expect(
+      within(glanceView).getByText(
+        "Your apps, teammates and conversations will appear here."
+      )
+    ).toBeTruthy()
+    expect(within(glanceView).queryByRole("list")).toBeNull()
+  })
+
   it("replaces the activity feed with agent and team tabs", () => {
     const { container } = render(<WorkspaceShell />)
     const shell = container.querySelector(".workspace-shell")
@@ -679,7 +699,7 @@ describe("WorkspaceShell navigation", () => {
       within(panel)
         .getAllByRole("tab")
         .map((item) => item.getAttribute("aria-label"))
-    ).toEqual(["Agents", "DMs", "Teams"])
+    ).toEqual(["Agents", "DMs", "Teams", "At a glance"])
     const agentsTab = within(panel).getByRole("tab", { name: "Agents" })
     expect(agentsTab.getAttribute("aria-selected")).toBe("true")
     const agentsView = within(panel).getByRole("tabpanel", {
@@ -724,10 +744,23 @@ describe("WorkspaceShell navigation", () => {
     for (const [key, name, text] of [
       ["ArrowRight", "DMs", "Direct messages will appear here."],
       ["ArrowRight", "Teams", "Team rooms will appear here."],
+      [
+        "ArrowRight",
+        "At a glance",
+        "Your apps, teammates and conversations will appear here.",
+      ],
       ["ArrowRight", "Agents", "Ask anything to start a conversation."],
-      ["ArrowLeft", "Teams", "Team rooms will appear here."],
+      [
+        "ArrowLeft",
+        "At a glance",
+        "Your apps, teammates and conversations will appear here.",
+      ],
       ["Home", "Agents", "Ask anything to start a conversation."],
-      ["End", "Teams", "Team rooms will appear here."],
+      [
+        "End",
+        "At a glance",
+        "Your apps, teammates and conversations will appear here.",
+      ],
     ]) {
       fireEvent.keyDown(tab, { key })
       tab = expectSelected(name, text)

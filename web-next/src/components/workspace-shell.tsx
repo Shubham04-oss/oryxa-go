@@ -608,6 +608,30 @@ function WorkspaceShellContent({
   }, [section])
   useRequestsEntry(openRequestsSection)
 
+  // Today's widgets, on the page and in the agent panel's At a glance tab.
+  const homeOverviewKey = JSON.stringify([selectedOrganization?.id, viewerId])
+  const homeOverviewProps = {
+    organizationId: session ? selectedOrganization?.id : undefined,
+    viewerId,
+    primaryChatActivity,
+    onNewChat: (message?: string) =>
+      openHomeConversation({ kind: "new", message }),
+    onOpenConversation: (threadId: string) =>
+      openHomeConversation({ kind: "thread", threadId }),
+    onOpenRequests: openHomeRequests,
+    onOpenAgent: openHomeHistory,
+    onOpenTools: () => navigateFromHome("home", "tools"),
+    onOpenKnowledge: () => navigateFromHome("home", "knowledge"),
+    onOpenSlack: () => {
+      setSettingsPage("slack")
+      setSettingsOpen(true)
+    },
+    onOpenAccount: () => {
+      setSettingsPage("account")
+      setSettingsOpen(true)
+    },
+  }
+
   return (
     <div
       className="workspace-shell"
@@ -944,32 +968,7 @@ function WorkspaceShellContent({
               aria-label={`${detailTitle || heading} canvas`}
             >
               {section === "overview" && (
-                <HomeOverview
-                  key={JSON.stringify([selectedOrganization?.id, viewerId])}
-                  organizationId={
-                    session ? selectedOrganization?.id : undefined
-                  }
-                  viewerId={viewerId}
-                  primaryChatActivity={primaryChatActivity}
-                  onNewChat={(message) =>
-                    openHomeConversation({ kind: "new", message })
-                  }
-                  onOpenConversation={(threadId) =>
-                    openHomeConversation({ kind: "thread", threadId })
-                  }
-                  onOpenRequests={openHomeRequests}
-                  onOpenAgent={openHomeHistory}
-                  onOpenTools={() => navigateFromHome("home", "tools")}
-                  onOpenKnowledge={() => navigateFromHome("home", "knowledge")}
-                  onOpenSlack={() => {
-                    setSettingsPage("slack")
-                    setSettingsOpen(true)
-                  }}
-                  onOpenAccount={() => {
-                    setSettingsPage("account")
-                    setSettingsOpen(true)
-                  }}
-                />
+                <HomeOverview key={homeOverviewKey} {...homeOverviewProps} />
               )}
               {section === "knowledge" && (
                 <KnowledgeBases
@@ -1069,6 +1068,13 @@ function WorkspaceShellContent({
         tabRequest={tabRequest}
         directMessages={directMessages}
         teamspaceId={pageTeamspaceId}
+        glance={
+          <HomeOverview
+            key={homeOverviewKey}
+            {...homeOverviewProps}
+            variant="glance"
+          />
+        }
       />
       {settingsOpen && (
         <WorkspaceSettings

@@ -228,6 +228,20 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it("shows the same chats at a glance in the agent panel, without its own composer", async () => {
+  stubApi({
+    [`${path}/threads`]: {
+      threads: [chat("one", "First"), chat("two", "Second")],
+    },
+  })
+  const view = renderHome({ variant: "glance" })
+  expect(view.container.querySelector(".home-glance")).toBeTruthy()
+  expect(screen.queryByRole("region", { name: "Your agent" })).toBeNull()
+  expect(screen.queryByRole("textbox")).toBeNull()
+  fireEvent.click(await screen.findByRole("button", { name: /First/ }))
+  expect(view.onOpenConversation).toHaveBeenCalledWith("one")
+})
+
 it("keeps the composer under Your agent and three titled recent chats under Conversations, opening exact chats and history", async () => {
   stubApi({
     [`${path}/threads`]: {
