@@ -13,6 +13,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
@@ -143,7 +144,7 @@ func (world *ownerApprovalWorld) handled(t *testing.T, eventID string) bool {
 // member who allowed agents to act for them while away.
 type memberTokens struct{}
 
-func (memberTokens) AgentToken(_ context.Context, userID string) (string, time.Time, error) {
+func (memberTokens) AgentToken(_ context.Context, userID string, _ memberauth.Agent) (string, time.Time, error) {
 	return "agent-token-" + userID, time.Now().Add(time.Hour), nil
 }
 

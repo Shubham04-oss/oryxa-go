@@ -53,7 +53,7 @@ var defaultArgs = []string{
 // test/cmd/authstub. Never point this at a real deployment.
 type devMemberTokenSource string
 
-func (t devMemberTokenSource) AgentToken(context.Context, string) (string, time.Time, error) {
+func (t devMemberTokenSource) AgentToken(context.Context, string, memberauth.Agent) (string, time.Time, error) {
 	return string(t), time.Now().Add(time.Hour), nil
 }
 

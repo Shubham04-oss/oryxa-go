@@ -116,7 +116,7 @@ func (source *fakeKnowledgeSources) Sources(_ context.Context, org, token, provi
 	return source.listed, nil
 }
 
-func (tokens fakeTokens) AgentToken(context.Context, string) (string, time.Time, error) {
+func (tokens fakeTokens) AgentToken(context.Context, string, memberauth.Agent) (string, time.Time, error) {
 	return tokens.token, time.Now().Add(time.Hour), nil
 }
 

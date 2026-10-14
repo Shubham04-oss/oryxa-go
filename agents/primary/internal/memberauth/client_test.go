@@ -19,6 +19,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
@@ -72,6 +73,8 @@ type fakeAuth struct {
 type fakeAuthRequest struct {
 	path        string
 	userID      string
+	agent       string
+	role        string
 	serviceAuth string
 }
 
@@ -105,6 +108,8 @@ func (f *fakeAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var decoded struct {
 		UserID string `json:"user_id"`
+		Agent  string `json:"agent"`
+		Role   string `json:"role"`
 	}
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		f.t.Fatal(err)
@@ -119,7 +124,7 @@ func (f *fakeAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f.mu.Lock()
-	f.requests = append(f.requests, fakeAuthRequest{path: r.URL.Path, userID: decoded.UserID, serviceAuth: serviceToken})
+	f.requests = append(f.requests, fakeAuthRequest{path: r.URL.Path, userID: decoded.UserID, agent: decoded.Agent, role: decoded.Role, serviceAuth: serviceToken})
 	status, respBody := f.status, f.body
 	f.mu.Unlock()
 
@@ -130,6 +135,44 @@ func (f *fakeAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// TestAgentTokensAreCachedPerAgent: a specialist's token names the
+// specialist, and the cache never hands one agent of a member's the token
+// minted for another.
+func TestAgentTokensAreCachedPerAgent(t *testing.T) {
+	signer, _ := newTestSigner(t)
+	var requests []string
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ Agent, Role string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		requests = append(requests, body.Agent+"/"+body.Role)
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "token-for-" + body.Agent + "/" + body.Role, "expires_in": 3600})
+	}))
+	defer server.Close()
+	client := NewAuthClient(AuthClientConfig{BaseURL: server.URL, Signer: signer})
+
+	writer := Agent{ID: "agt_writer", Role: runprofile.Specialist}
+	for _, step := range []struct {
+		agent Agent
+		want  string
+	}{
+		{writer, "token-for-agt_writer/specialist"},
+		{Agent{ID: "agt_krude", Role: runprofile.Primary}, "token-for-agt_krude/primary"},
+		{Agent{}, "token-for-/primary"},
+		{writer, "token-for-agt_writer/specialist"},
+	} {
+		token, _, err := client.AgentToken(context.Background(), "user-1", step.agent)
+		if err != nil || token != step.want {
+			t.Fatalf("AgentToken(%+v) = %q, %v; want %q", step.agent, token, err, step.want)
+		}
+	}
+	if len(requests) != 3 {
+		t.Fatalf("requests = %v, want one per distinct agent", requests)
+	}
+}
+
 func TestAuthClientRequestShape(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	fake := newFakeAuth(t, verifier)
@@ -137,7 +180,7 @@ func TestAuthClientRequestShape(t *testing.T) {
 	defer server.Close()
 
 	client := NewAuthClient(AuthClientConfig{BaseURL: server.URL, Signer: signer})
-	token, expiresAt, err := client.AgentToken(context.Background(), "user-1")
+	token, expiresAt, err := client.AgentToken(context.Background(), "user-1", Agent{})
 	if err != nil {
 		t.Fatalf("AgentToken() error = %v", err)
 	}
@@ -158,6 +201,9 @@ func TestAuthClientRequestShape(t *testing.T) {
 	if got.userID != "user-1" {
 		t.Errorf("body user_id = %q, want user-1", got.userID)
 	}
+	if got.agent != "" || got.role != "primary" {
+		t.Errorf("body agent, role = %q, %q; want the primary with no ID", got.agent, got.role)
+	}
 	if got.serviceAuth == "" {
 		t.Error("no service token header was sent")
 	}
@@ -171,7 +217,7 @@ func TestAuthClientMapsGrantRequired(t *testing.T) {
 		server := httptest.NewServer(fake)
 
 		client := NewAuthClient(AuthClientConfig{BaseURL: server.URL, Signer: signer})
-		if _, _, err := client.AgentToken(context.Background(), "user-1"); !errors.Is(err, ErrGrantRequired) {
+		if _, _, err := client.AgentToken(context.Background(), "user-1", Agent{}); !errors.Is(err, ErrGrantRequired) {
 			t.Errorf("status %d: AgentToken() error = %v, want ErrGrantRequired", status, err)
 		}
 		server.Close()
@@ -186,7 +232,7 @@ func TestAuthClientMapsServerErrorsToUnavailable(t *testing.T) {
 	defer server.Close()
 
 	client := NewAuthClient(AuthClientConfig{BaseURL: server.URL, Signer: signer})
-	if _, _, err := client.AgentToken(context.Background(), "user-1"); !errors.Is(err, ErrUnavailable) {
+	if _, _, err := client.AgentToken(context.Background(), "user-1", Agent{}); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("AgentToken() error = %v, want ErrUnavailable", err)
 	}
 }
@@ -197,7 +243,7 @@ func TestAuthClientUnreachableIsUnavailable(t *testing.T) {
 	server.Close() // closed before any request reaches it
 
 	client := NewAuthClient(AuthClientConfig{BaseURL: server.URL, Signer: signer})
-	if _, _, err := client.AgentToken(context.Background(), "user-1"); !errors.Is(err, ErrUnavailable) {
+	if _, _, err := client.AgentToken(context.Background(), "user-1", Agent{}); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("AgentToken() error = %v, want ErrUnavailable", err)
 	}
 }
@@ -212,7 +258,7 @@ func TestAuthClientCachesUntilTheRefreshWindow(t *testing.T) {
 	now := time.Now()
 	client := NewAuthClient(AuthClientConfig{BaseURL: server.URL, Signer: signer, Now: func() time.Time { return now }})
 
-	first, _, err := client.AgentToken(context.Background(), "user-1")
+	first, _, err := client.AgentToken(context.Background(), "user-1", Agent{})
 	if err != nil {
 		t.Fatalf("AgentToken() error = %v", err)
 	}
@@ -222,7 +268,7 @@ func TestAuthClientCachesUntilTheRefreshWindow(t *testing.T) {
 
 	// Still well inside the window: no second request.
 	now = now.Add(2 * time.Minute)
-	second, _, err := client.AgentToken(context.Background(), "user-1")
+	second, _, err := client.AgentToken(context.Background(), "user-1", Agent{})
 	if err != nil {
 		t.Fatalf("AgentToken() error = %v", err)
 	}
@@ -234,7 +280,7 @@ func TestAuthClientCachesUntilTheRefreshWindow(t *testing.T) {
 	// the cache must refresh.
 	fake.setResponse(http.StatusOK, map[string]any{"access_token": "token-2", "expires_in": 600})
 	now = now.Add(7 * time.Minute) // t+9m, inside the last 2 minutes before t+10m
-	third, _, err := client.AgentToken(context.Background(), "user-1")
+	third, _, err := client.AgentToken(context.Background(), "user-1", Agent{})
 	if err != nil {
 		t.Fatalf("AgentToken() error = %v", err)
 	}
@@ -261,7 +307,7 @@ func TestAuthClientConcurrentCallersShareOneColdRequest(t *testing.T) {
 	for i := 0; i < callers; i++ {
 		go func() {
 			defer wg.Done()
-			token, _, err := client.AgentToken(context.Background(), "user-1")
+			token, _, err := client.AgentToken(context.Background(), "user-1", Agent{})
 			if err != nil || token != "minted-token" {
 				failures.Add(1)
 			}
@@ -293,7 +339,7 @@ func TestAuthClientConcurrentCallersForDifferentUsers(t *testing.T) {
 		userID := "user-" + string(rune('a'+i))
 		go func() {
 			defer wg.Done()
-			if _, _, err := client.AgentToken(context.Background(), userID); err != nil {
+			if _, _, err := client.AgentToken(context.Background(), userID, Agent{}); err != nil {
 				failures.Add(1)
 			}
 		}()

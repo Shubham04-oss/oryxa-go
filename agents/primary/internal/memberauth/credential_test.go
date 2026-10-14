@@ -13,15 +13,17 @@ import (
 // fakeTokenSource records every call it gets and answers with a fixed token,
 // or a fixed error when set.
 type fakeTokenSource struct {
-	calls int
-	users []string
-	token string
-	err   error
+	calls  int
+	users  []string
+	agents []Agent
+	token  string
+	err    error
 }
 
-func (f *fakeTokenSource) AgentToken(_ context.Context, userID string) (string, time.Time, error) {
+func (f *fakeTokenSource) AgentToken(_ context.Context, userID string, agent Agent) (string, time.Time, error) {
 	f.calls++
 	f.users = append(f.users, userID)
+	f.agents = append(f.agents, agent)
 	if f.err != nil {
 		return "", time.Time{}, f.err
 	}
