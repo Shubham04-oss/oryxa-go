@@ -20,6 +20,7 @@ import {
 } from "../contracts";
 import type { Env } from "../env";
 import { EdgeError, discardBody, json, readJson, toResponse } from "../http";
+import { type CallOp, type CallRoom, handleCall, handleCallOp, isCallPath } from "../call/index";
 import { Children } from "./children";
 
 export const CLAIMS_HEADER = "x-oryxa-edge-claims";
@@ -221,7 +222,21 @@ export class RoomDO extends DurableObject<Env> {
       requireScope(caller, "log:read");
       return this.subscribe(caller);
     }
+    // The call and the agent's voice (edge/src/call, integration-2).
+    if (isCallPath(rest)) return handleCall(this.callRoom(), request, rest, caller);
     return this.children.route(request, url, rest, caller);
+  }
+
+  // ---- the call (edge/src/call) ----
+
+  private callRoom(): CallRoom {
+    return { room: this, sql: this.sql, env: this.env, waitUntil: (promise) => this.ctx.waitUntil(promise) };
+  }
+
+  // callOp is the call's RPC entry, for the Worker's RealtimeKit webhook and
+  // the room's VoiceDO; nothing outside this Worker reaches it.
+  async callOp(op: CallOp): Promise<void> {
+    return handleCallOp(this.callRoom(), op);
   }
 
   // ---- the log ----

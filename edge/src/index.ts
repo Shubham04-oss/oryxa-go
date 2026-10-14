@@ -5,6 +5,7 @@
 import type { Env } from "./env";
 import { errorResponse } from "./http";
 import { handleLink, isLink } from "./links";
+import { handleRealtimeKitWebhook, WEBHOOK_PATH } from "./call/webhook";
 import { handleApi } from "./router";
 
 export { RoomDO } from "./room/room";
@@ -21,6 +22,7 @@ export default {
     if (url.pathname === "/healthz") return new Response("ok");
     if (url.pathname.startsWith("/v1/rooms/")) return handleApi(request, env);
     if (isLink(url.pathname)) return handleLink(request, env);
+    if (url.pathname === WEBHOOK_PATH) return handleRealtimeKitWebhook(request, env);
     return errorResponse("not_found", "no such route");
   },
 } satisfies ExportedHandler<Env>;

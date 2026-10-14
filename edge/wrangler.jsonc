@@ -29,10 +29,20 @@
       "scheduling_policy": "durable_object"
     }
   ],
+  // Workers AI: the call agent's text to speech (integration-2, B4).
+  "ai": { "binding": "AI" },
   "vars": {
     "ENVIRONMENT": "production",
     "EDGE_PUBLIC_URL": "https://edge.oryxa.in",
     "SANDBOX_INSTANCE": "standard-1",
+    // Calls (integration-2, B1–B5). The RealtimeKit app's ids and webhook key
+    // are B7's to fill; secrets: REALTIMEKIT_API_TOKEN, GEMINI_API_KEY,
+    // EDGE_SIGNING_KEY. Until they are set, calls answer 503.
+    "REALTIMEKIT_ACCOUNT_ID": "",
+    "REALTIMEKIT_APP_ID": "",
+    "REALTIMEKIT_WEBHOOK_PUBLIC_KEY": "",
+    "VOICE_AGENT_NAME": "Krude",
+    "AGENTS_URL": "https://api.oryxa.in",
     // agents' serviceauth KMS public key (base64 DER SPKI). Public, so a var.
     "AGENTS_TOKEN_PUBLIC_KEYS": "[]"
   },
@@ -57,11 +67,17 @@
           "scheduling_policy": "durable_object"
         }
       ],
+      "ai": { "binding": "AI" },
       "vars": {
         "ENVIRONMENT": "staging",
         "EDGE_PUBLIC_URL": "https://edge-staging.oryxa.in",
         "SANDBOX_INSTANCE": "standard-1",
-        "AGENTS_TOKEN_PUBLIC_KEYS": "[]"
+        "AGENTS_TOKEN_PUBLIC_KEYS": "[]",
+        "REALTIMEKIT_ACCOUNT_ID": "",
+        "REALTIMEKIT_APP_ID": "",
+        "REALTIMEKIT_WEBHOOK_PUBLIC_KEY": "",
+        "VOICE_AGENT_NAME": "Krude",
+        "AGENTS_URL": "https://api-staging.oryxa.in"
       }
     }
   }
