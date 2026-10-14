@@ -153,10 +153,10 @@ type authzRoute struct {
 	malformedQuery string
 	// orgOnly is true only for the two organization-agent synthesis routes,
 	// whose service interface takes an organization id and nothing else:
-	// the synthesis and its follow-ups are shared, organization-wide state
-	// by design (like a teamspace), not a member-owned resource, so there
-	// is no per-user boundary for case 4 to check - only the organization
-	// one.
+	// the synthesis and its follow-ups are organization-level state, not a
+	// member-owned resource, so there is no per-user boundary for case 4 to
+	// check - only the organization one. Who in the organization may read
+	// them (its owners and admins) is TestOrganizationSynthesisNeedsAManager's.
 	orgOnly bool
 	// identity reads back, from the harness, the (organization, user) the
 	// relevant fake most recently recorded - exactly what the handler
