@@ -14,7 +14,9 @@
 # the Workflows permission, and the script refuses any change under .github/.
 #
 # It runs on a1's dedicated runner (label oryxa-loop), so CI keeps both of
-# a1's oryxa-go runners. Secrets:
+# a1's oryxa-go runners. That runner is persistent, so no secret but the
+# agent's own Claude token ever reaches it: oryxa-platform is fetched by a
+# separate GitHub-hosted job and handed over as an artifact. Secrets:
 #   CLAUDE_CODE_OAUTH_TOKEN  `claude setup-token`, the owner's subscription
 #   LOOP_GH_TOKEN            fine-grained: this repo (contents, pull requests,
 #                            issues: write) and oryxa-platform (contents:
@@ -38,7 +40,27 @@ permissions:
   pull-requests: read
 
 jobs:
+  fetch:
+    name: Fetch oryxa-platform
+    # On a fresh GitHub-hosted machine, so LOOP_GH_TOKEN never reaches the
+    # agent's persistent runner; the agent gets the files as an artifact.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Clone
+        env:
+          TOKEN: ${{ secrets.LOOP_GH_TOKEN }}
+        run: |
+          git clone --depth 1 --quiet "https://x-access-token:${TOKEN}@github.com/Shubham04-oss/oryxa-platform.git" oryxa-platform
+          rm -rf oryxa-platform/.git oryxa-platform/target oryxa-platform/node_modules oryxa-platform/connectors/node_modules
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: oryxa-platform
+          path: oryxa-platform
+          retention-days: 1
+
   build:
+    needs: fetch
     name: Build one piece
     runs-on: [self-hosted, oryxa-loop]
     timeout-minutes: 150
@@ -74,17 +96,12 @@ jobs:
             echo "${service}_TEST_DATABASE_URL=postgres://oryxa:oryxa@localhost:$PGPORT/oryxa?sslmode=disable" >> "$GITHUB_ENV"
           done
           docker exec -i "${{ job.services.postgres.id }}" psql -U oryxa -d oryxa -v ON_ERROR_STOP=1 < infra/postgres/init/001_extensions.sql
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: oryxa-platform
+          path: ${{ runner.temp }}/oryxa-platform
       - name: oryxa-platform, to read
-        # Cloned before the agent starts, and left without a remote, so the
-        # agent can read it without a token.
-        env:
-          TOKEN: ${{ secrets.LOOP_GH_TOKEN }}
-        run: |
-          dir="$RUNNER_TEMP/oryxa-platform"
-          rm -rf "$dir"
-          git clone --depth 1 --quiet "https://x-access-token:${TOKEN}@github.com/Shubham04-oss/oryxa-platform.git" "$dir"
-          git -C "$dir" remote remove origin
-          echo "ORYXA_PLATFORM_DIR=$dir" >> "$GITHUB_ENV"
+        run: echo "ORYXA_PLATFORM_DIR=$RUNNER_TEMP/oryxa-platform" >> "$GITHUB_ENV"
       - name: Git identity
         run: |
           git config user.name "integrations-loop"
