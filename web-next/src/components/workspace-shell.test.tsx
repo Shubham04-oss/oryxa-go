@@ -365,10 +365,9 @@ describe("WorkspaceShell navigation", () => {
       { target: { value: "  Start from Home  " } }
     )
     fireEvent.click(
-      within(screen.getByRole("main", { name: "My workspace canvas" })).getByRole(
-        "button",
-        { name: "Send message" }
-      )
+      within(
+        screen.getByRole("main", { name: "My workspace canvas" })
+      ).getByRole("button", { name: "Send message" })
     )
     expect(request).toHaveBeenLastCalledWith(
       { organizationId: "org_sim", userId: viewerId },
