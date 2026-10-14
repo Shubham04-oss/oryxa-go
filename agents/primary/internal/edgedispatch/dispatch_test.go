@@ -11,6 +11,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/relevance"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
+	edgev1 "github.com/Shubham04-oss/oryxa-go/contracts/edge/v1"
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 )
 
@@ -77,7 +78,7 @@ func (fake *fakeEdge) Deliver(_ context.Context, result Result) error {
 
 func validRequest() Request {
 	return Request{
-		DispatchID: "dsp_1", Organization: "org_1", Room: Room{Kind: RoomTeamspace, ID: "room_1"},
+		DispatchID: "dsp_1", Organization: "org_1", Room: Room{Kind: edgev1.RoomTeamspace, ID: "room_1"},
 		Call: "call_1", Member: "usr_1", Request: "  What did we decide about pricing?  ",
 		TranscriptContext: []string{"Asha: we should check the pricing doc", "Ben: Krude, what did we decide?"},
 	}
@@ -144,7 +145,7 @@ func TestDispatchRunsAsTheMemberInASideThreadAndReportsTheLastAnswer(t *testing.
 	}
 	result := receive(t, edge)
 	want := Result{
-		DispatchID: "dsp_1", Organization: "org_1", Room: Room{Kind: RoomTeamspace, ID: "room_1"}, Call: "call_1",
+		DispatchID: "dsp_1", Organization: "org_1", Room: Room{Kind: edgev1.RoomTeamspace, ID: "room_1"}, Call: "call_1",
 		Member: "usr_1", ThreadID: "thr_1", RunID: "run_1", Status: StatusCompleted, Text: "We settled on per-seat pricing.",
 	}
 	if result != want {

@@ -17,22 +17,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/relevance"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
+	edgev1 "github.com/Shubham04-oss/oryxa-go/contracts/edge/v1"
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
-)
-
-// The room kinds of docs/design/live-layer/01-contracts.md, section 1.
-const (
-	RoomThread    = "thread"
-	RoomTeamspace = "teamspace"
-	RoomDM        = "dm"
-	RoomSide      = "side"
 )
 
 // The ways a dispatched run ends, as the edge is told.
@@ -69,15 +61,8 @@ var (
 	ErrUnavailable = errors.New("dispatch unavailable: the service is stopping")
 )
 
-// idPattern bounds every identifier a dispatch names, so each is safe to put
-// in a URL path and in logs.
-var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
-
-// Room is where the call is.
-type Room struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id"`
-}
+// Room is where the call is (contract §1).
+type Room = edgev1.Room
 
 // Request is one piece of work the voice agent hands over.
 type Request struct {
@@ -98,21 +83,20 @@ type Request struct {
 
 // Validate reports whether the request is one dispatch accepts.
 func (request Request) Validate() error {
+	// Every id ends up in a URL path, a DO name or a log line, so each is
+	// held to the contract's id shape.
 	for name, value := range map[string]string{
-		"dispatchId": request.DispatchID, "org": request.Organization, "room.id": request.Room.ID,
-		"call": request.Call, "member": request.Member,
+		"dispatchId": request.DispatchID, "org": request.Organization, "call": request.Call, "member": request.Member,
 	} {
-		if !idPattern.MatchString(value) {
+		if !edgev1.ValidID(value) {
 			return fmt.Errorf("%w: %s is missing or malformed", ErrInvalid, name)
 		}
 	}
-	if request.Team != "" && !idPattern.MatchString(request.Team) {
+	if request.Team != "" && !edgev1.ValidID(request.Team) {
 		return fmt.Errorf("%w: team is malformed", ErrInvalid)
 	}
-	switch request.Room.Kind {
-	case RoomThread, RoomTeamspace, RoomDM, RoomSide:
-	default:
-		return fmt.Errorf("%w: room.kind must be thread, teamspace, dm or side", ErrInvalid)
+	if err := request.Room.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	asked := strings.TrimSpace(request.Request)
 	if asked == "" || utf8.RuneCountInString(asked) > MaxRequestRunes {
@@ -140,6 +124,7 @@ type Accepted struct {
 type Result struct {
 	DispatchID   string `json:"dispatchId"`
 	Organization string `json:"org"`
+	Team         string `json:"team,omitempty"`
 	Room         Room   `json:"room"`
 	Call         string `json:"call"`
 	Member       string `json:"member"`
@@ -274,10 +259,10 @@ func startError(err error) error {
 func (service *Service) finish(ctx context.Context, request Request, accepted Accepted, run Run) {
 	defer service.going.Done()
 	logger := service.logger.With("dispatch_id", request.DispatchID, "organization_id", request.Organization,
-		"room_kind", request.Room.Kind, "run_id", accepted.RunID)
+		"room_kind", string(request.Room.Kind), "run_id", accepted.RunID)
 
 	result := Result{
-		DispatchID: request.DispatchID, Organization: request.Organization, Room: request.Room,
+		DispatchID: request.DispatchID, Organization: request.Organization, Team: request.Team, Room: request.Room,
 		Call: request.Call, Member: request.Member, ThreadID: accepted.ThreadID, RunID: accepted.RunID,
 	}
 	var answer, failure string
