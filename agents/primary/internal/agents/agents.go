@@ -183,7 +183,7 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agen
 	return llmagent.New(llmagent.Config{
 		Name:                RootName,
 		Description:         "Krude, a member's assistant.",
-		Model:               router.For(modelrouter.RoleChat),
+		Model:               router.Answer(modelrouter.RoleChat),
 		InstructionProvider: instructionFrom(krudeInstruction, catalog, false),
 		BeforeToolCallbacks: []llmagent.BeforeToolCallback{recordRunSource},
 		SubAgents:           subAgents,
@@ -231,7 +231,7 @@ func RoomRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, err
 	return llmagent.New(llmagent.Config{
 		Name:                RootName,
 		Description:         "Krude, speaking for a member in a room their team shares.",
-		Model:               router.For(modelrouter.RoleChat),
+		Model:               router.Answer(modelrouter.RoleChat),
 		InstructionProvider: instructionFrom(roomInstruction, catalog, false),
 		Toolsets:            []tool.Toolset{catalog.loaded()},
 	})
@@ -294,7 +294,7 @@ func unattendedRoot(router *modelrouter.Router, toolboxes []Toolbox, delivering 
 	return llmagent.New(llmagent.Config{
 		Name:                  RootName,
 		Description:           "Krude, reporting to a member who is away.",
-		Model:                 router.For(modelrouter.RoleChat),
+		Model:                 router.Answer(modelrouter.RoleChat),
 		GenerateContentConfig: delivering.config(),
 		AfterToolCallbacks:    delivering.afterTools(),
 		BeforeToolCallbacks:   []llmagent.BeforeToolCallback{recordRunSource},

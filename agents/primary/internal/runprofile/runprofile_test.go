@@ -12,7 +12,7 @@ import (
 // golden is the whole table. A change to what any run may do is a change
 // here, in review, on purpose.
 const golden = `
-organization synthesis        tools=none            knowledge=none      memory=-/-  guarded=false decides=false model=lite
+organization synthesis        tools=none            knowledge=none      memory=-/-  guarded=true  decides=false model=lite
 primary      delivery_apps    tools=delivery_apps   knowledge=none      memory=-/-  guarded=true  decides=false model=main
 primary      delivery_quiet   tools=delivery_quiet  knowledge=read_only memory=-/-  guarded=true  decides=false model=main
 primary      delivery_reads   tools=delivery_reads  knowledge=read_only memory=-/-  guarded=true  decides=false model=main
@@ -23,16 +23,16 @@ primary      wakeup           tools=reads           knowledge=read_only memory=-
 primary      wakeup_quiet     tools=quiet           knowledge=read_only memory=-/-  guarded=true  decides=false model=main
 primary      watched          tools=full            knowledge=member    memory=r/w  guarded=true  decides=true  model=main
 primary      workflow         tools=reads           knowledge=read_only memory=-/-  guarded=true  decides=false model=main
-specialist   delivery_apps    tools=delivery_apps   knowledge=none      memory=-/-  guarded=false decides=false model=lite
-specialist   delivery_quiet   tools=delivery_quiet  knowledge=read_only memory=-/-  guarded=false decides=false model=lite
-specialist   delivery_reads   tools=delivery_reads  knowledge=read_only memory=-/-  guarded=false decides=false model=lite
-specialist   delivery_report  tools=delivery_report knowledge=none      memory=-/-  guarded=false decides=false model=lite
-specialist   room_turn        tools=room            knowledge=none      memory=-/-  guarded=false decides=false model=lite
-specialist   team_turn        tools=reads           knowledge=read_only memory=-/-  guarded=false decides=false model=lite
-specialist   wakeup           tools=reads           knowledge=read_only memory=-/-  guarded=false decides=false model=lite
-specialist   wakeup_quiet     tools=quiet           knowledge=read_only memory=-/-  guarded=false decides=false model=lite
-specialist   watched          tools=full            knowledge=member    memory=r/w  guarded=false decides=true  model=lite
-specialist   workflow         tools=reads           knowledge=read_only memory=-/-  guarded=false decides=false model=lite
+specialist   delivery_apps    tools=delivery_apps   knowledge=none      memory=-/-  guarded=true  decides=false model=lite
+specialist   delivery_quiet   tools=delivery_quiet  knowledge=read_only memory=-/-  guarded=true  decides=false model=lite
+specialist   delivery_reads   tools=delivery_reads  knowledge=read_only memory=-/-  guarded=true  decides=false model=lite
+specialist   delivery_report  tools=delivery_report knowledge=none      memory=-/-  guarded=true  decides=false model=lite
+specialist   room_turn        tools=room            knowledge=none      memory=-/-  guarded=true  decides=false model=lite
+specialist   team_turn        tools=reads           knowledge=read_only memory=-/-  guarded=true  decides=false model=lite
+specialist   wakeup           tools=reads           knowledge=read_only memory=-/-  guarded=true  decides=false model=lite
+specialist   wakeup_quiet     tools=quiet           knowledge=read_only memory=-/-  guarded=true  decides=false model=lite
+specialist   watched          tools=full            knowledge=member    memory=r/w  guarded=true  decides=true  model=lite
+specialist   workflow         tools=reads           knowledge=read_only memory=-/-  guarded=true  decides=false model=lite
 `
 
 func TestTheTableIsPinned(t *testing.T) {

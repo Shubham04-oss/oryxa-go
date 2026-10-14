@@ -66,3 +66,52 @@ func TestNewValidatesModelsAndPolicy(t *testing.T) {
 		t.Fatal("NewWithPolicy() error = nil with an unknown tier")
 	}
 }
+
+// screenedModel answers "screened <name>", so a test sees which calls passed
+// the screen.
+type screenedModel struct{ model.LLM }
+
+func (s screenedModel) GenerateContent(context.Context, *model.LLMRequest, bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(&model.LLMResponse{ErrorMessage: "screened " + s.Name()}, nil)
+	}
+}
+
+// answered is what llm answers in ctx: "screened <model>", or "unscreened"
+// when the call reached the model itself.
+func answered(ctx context.Context, llm model.LLM) string {
+	for response := range llm.GenerateContent(ctx, &model.LLMRequest{}, false) {
+		return response.ErrorMessage
+	}
+	return "unscreened"
+}
+
+// A guarded router screens the answering agents' models on both tiers, unless
+// the run is not guarded, and never the internal calls For hands out.
+func TestAGuardedRouterScreensOnlyAnswers(t *testing.T) {
+	router, err := New(namedModel("main"), namedModel("lite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	guarded := router.Guarded(func(llm model.LLM) model.LLM { return screenedModel{llm} })
+	background := context.Background()
+	for role, name := range map[Role]string{RoleChat: "main", RoleWork: "lite"} {
+		if got := answered(background, guarded.Answer(role)); got != "screened "+name {
+			t.Errorf("%s answer outside a run: %q, want screened", role, got)
+		}
+		if got := answered(WithGuard(background, true), guarded.Answer(role)); got != "screened "+name {
+			t.Errorf("%s answer in a guarded run: %q, want screened", role, got)
+		}
+		if got := answered(WithGuard(background, false), guarded.Answer(role)); got != "unscreened" {
+			t.Errorf("%s answer in an unguarded run: %q, want unscreened", role, got)
+		}
+		if got := answered(background, router.Answer(role)); got != "unscreened" {
+			t.Errorf("Guarded changed the router it was called on: %s %q", role, got)
+		}
+	}
+	for _, role := range allRoles {
+		if got := answered(background, guarded.For(role)); got != "unscreened" {
+			t.Errorf("internal %s call: %q, want unscreened", role, got)
+		}
+	}
+}

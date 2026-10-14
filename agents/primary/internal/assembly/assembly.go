@@ -220,26 +220,30 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	cacheConfig := modelcache.Config{TTL: settings.CacheTTL, MinTokens: settings.CacheMinTokens}
 	// Usage is counted inside the guardrail: an answer it blocks was still
 	// generated, and billed.
-	conversation := usage.Counted(modelcache.Cached(mainModel, promptCache, cacheConfig))
-	if settings.GuardrailIdentifier != "" {
-		// The main model carries the member's conversation and everything
-		// that reaches it: their messages, and every tool result, the lite
-		// model's work included. Screening it screens all the member sees.
-		conversation = guardrail.Model(conversation, bedrockruntime.NewFromConfig(options.AWS), guardrail.Config{
-			Identifier: settings.GuardrailIdentifier,
-			Version:    settings.GuardrailVersion,
-			FailClosed: settings.GuardrailFailClosed,
-			Logger:     logger,
-		})
-		logger.InfoContext(ctx, "guardrail screens the member's conversation; its answers do not stream",
-			"guardrail", settings.GuardrailIdentifier, "version", settings.GuardrailVersion, "fail_closed", settings.GuardrailFailClosed)
-	}
 	router, err := modelrouter.New(
-		conversation,
+		usage.Counted(modelcache.Cached(mainModel, promptCache, cacheConfig)),
 		usage.Counted(modelcache.Cached(liteModel, promptCache, cacheConfig)),
 	)
 	if err != nil {
 		return fail("model router", err)
+	}
+	if settings.GuardrailIdentifier != "" {
+		// The answers that reach a person, main and lite: Krude's, its
+		// specialists' and the organization agent's, whichever model they
+		// answer on (L5). Internal calls (planner, helpers, sub-agents,
+		// compaction) are not screened. A run whose profile is not guarded
+		// skips it (threads, runprofile).
+		bedrock := bedrockruntime.NewFromConfig(options.AWS)
+		router = router.Guarded(func(llm model.LLM) model.LLM {
+			return guardrail.Model(llm, bedrock, guardrail.Config{
+				Identifier: settings.GuardrailIdentifier,
+				Version:    settings.GuardrailVersion,
+				FailClosed: settings.GuardrailFailClosed,
+				Logger:     logger,
+			})
+		})
+		logger.InfoContext(ctx, "guardrail screens every agent's answer; those answers do not stream",
+			"guardrail", settings.GuardrailIdentifier, "version", settings.GuardrailVersion, "fail_closed", settings.GuardrailFailClosed)
 	}
 	krude.router = router
 	logger.InfoContext(ctx, "models: main model with lite model for planning and bulk work",

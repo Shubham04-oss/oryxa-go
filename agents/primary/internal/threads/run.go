@@ -31,6 +31,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/relevance"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
@@ -497,6 +498,9 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 	// steered by text somebody else wrote, so only the agent that can reach
 	// nothing outside answers it.
 	profile := runprofile.Lookup(runprofile.RoleOf(run.member.AgentKind), run.mode)
+	// The guardrail, when one is configured, screens this run's every model
+	// call as its profile says (modelrouter.Router.Guarded).
+	ctx = modelrouter.WithGuard(ctx, profile.Guarded)
 	answering := service.agent
 	if profile.Reduced() {
 		answering = service.unattended

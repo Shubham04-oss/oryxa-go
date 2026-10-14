@@ -113,8 +113,9 @@ type Profile struct {
 	// ReadsMemory and WritesMemory: load_memory on the runner, and the run
 	// handed to Memory Bank once it ends.
 	ReadsMemory, WritesMemory bool
-	// Guarded is whether the Bedrock guardrail screens the run's model, when
-	// one is configured. Today it wraps the main model only (assembly).
+	// Guarded is whether the Bedrock guardrail screens the answering agent's
+	// model calls in the run, main or lite, when one is configured
+	// (modelrouter.Router.Answer, WithGuard).
 	Guarded bool
 	// Decides is whether the agent may decide a request addressed to it.
 	Decides bool
@@ -126,15 +127,15 @@ type Profile struct {
 // role's full one.
 func (profile Profile) Reduced() bool { return profile.Tools != ToolsFull }
 
-// least is what a (role, mode) the table does not hold gets: nothing.
-var least = Profile{Tools: ToolsNone, Knowledge: KnowledgeNone, Model: modelrouter.Lite}
+// least is what a (role, mode) the table does not hold gets: nothing, and
+// screened.
+var least = Profile{Tools: ToolsNone, Knowledge: KnowledgeNone, Guarded: true, Model: modelrouter.Lite}
 
 // table is every (role, mode) a run can have. A run nobody is watching is
 // steered by text somebody else wrote, so it answers on a reduced agent, with
 // no memory, and decides nothing; only the member's own turn gets the full
-// agent. The primary answers on the main model, which is the one the
-// guardrail wraps; specialists and the organization agent run on the lite
-// model, unguarded (I6 changes that).
+// agent. Every run is guarded: the guardrail, when configured, screens every
+// agent's model, the lite one included (L5).
 var table = map[Role]map[Mode]Profile{
 	Primary: {
 		// The member's own conversation with Krude: everything.
@@ -160,22 +161,22 @@ var table = map[Role]map[Mode]Profile{
 	},
 	Specialist: {
 		// The member's own conversation with their specialist: the primary's toolboxes and memory (L2, L4).
-		Watched: {Tools: ToolsFull, Knowledge: KnowledgeMember, ReadsMemory: true, WritesMemory: true, Decides: true, Model: modelrouter.Lite},
-		// Each unwatched mode is the primary's, on the lite model and unguarded (L5).
-		Wakeup:         {Tools: ToolsReads, Knowledge: KnowledgeReadOnly, Model: modelrouter.Lite},
-		WakeupQuiet:    {Tools: ToolsQuiet, Knowledge: KnowledgeReadOnly, Model: modelrouter.Lite},
-		DeliveryReads:  {Tools: ToolsDeliveryReads, Knowledge: KnowledgeReadOnly, Model: modelrouter.Lite},
-		DeliveryQuiet:  {Tools: ToolsDeliveryQuiet, Knowledge: KnowledgeReadOnly, Model: modelrouter.Lite},
-		DeliveryApps:   {Tools: ToolsDeliveryApps, Knowledge: KnowledgeNone, Model: modelrouter.Lite},
-		DeliveryReport: {Tools: ToolsDeliveryReport, Knowledge: KnowledgeNone, Model: modelrouter.Lite},
-		RoomTurn:       {Tools: ToolsRoom, Knowledge: KnowledgeNone, Model: modelrouter.Lite},
+		Watched: {Tools: ToolsFull, Knowledge: KnowledgeMember, ReadsMemory: true, WritesMemory: true, Decides: true, Guarded: true, Model: modelrouter.Lite},
+		// Each unwatched mode is the primary's, on the lite model.
+		Wakeup:         {Tools: ToolsReads, Knowledge: KnowledgeReadOnly, Guarded: true, Model: modelrouter.Lite},
+		WakeupQuiet:    {Tools: ToolsQuiet, Knowledge: KnowledgeReadOnly, Guarded: true, Model: modelrouter.Lite},
+		DeliveryReads:  {Tools: ToolsDeliveryReads, Knowledge: KnowledgeReadOnly, Guarded: true, Model: modelrouter.Lite},
+		DeliveryQuiet:  {Tools: ToolsDeliveryQuiet, Knowledge: KnowledgeReadOnly, Guarded: true, Model: modelrouter.Lite},
+		DeliveryApps:   {Tools: ToolsDeliveryApps, Knowledge: KnowledgeNone, Guarded: true, Model: modelrouter.Lite},
+		DeliveryReport: {Tools: ToolsDeliveryReport, Knowledge: KnowledgeNone, Guarded: true, Model: modelrouter.Lite},
+		RoomTurn:       {Tools: ToolsRoom, Knowledge: KnowledgeNone, Guarded: true, Model: modelrouter.Lite},
 		// A delegation or a team room's turn (L3).
-		TeamTurn: {Tools: ToolsReads, Knowledge: KnowledgeReadOnly, Model: modelrouter.Lite},
-		Workflow: {Tools: ToolsReads, Knowledge: KnowledgeReadOnly, Model: modelrouter.Lite},
+		TeamTurn: {Tools: ToolsReads, Knowledge: KnowledgeReadOnly, Guarded: true, Model: modelrouter.Lite},
+		Workflow: {Tools: ToolsReads, Knowledge: KnowledgeReadOnly, Guarded: true, Model: modelrouter.Lite},
 	},
 	Organization: {
-		// Reading published posts into a synthesis: no tools, no memory.
-		Synthesis: {Tools: ToolsNone, Knowledge: KnowledgeNone, Model: modelrouter.Lite},
+		// Reading published posts into a synthesis admins read: no tools, no memory, guarded.
+		Synthesis: {Tools: ToolsNone, Knowledge: KnowledgeNone, Guarded: true, Model: modelrouter.Lite},
 	},
 }
 
