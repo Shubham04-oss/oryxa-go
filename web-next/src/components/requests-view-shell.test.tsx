@@ -218,7 +218,7 @@ describe("Requests in the workspace shell", () => {
       screen.getByRole("heading", { name: "Requests", level: 1 })
     ).toBeTruthy()
     expect(await screen.findByRole("tab", { name: /Inbox/ })).toBeTruthy()
-    await screen.findByText("Share the pipeline total.")
+    await screen.findAllByText("Share the pipeline total.")
     expect(
       within(navigation)
         .getByRole("button", { name: "Requests" })
@@ -236,7 +236,7 @@ describe("Requests in the workspace shell", () => {
     expect(
       screen.getByRole("heading", { name: "Requests", level: 1 })
     ).toBeTruthy()
-    await screen.findByText("Share the pipeline total.")
+    await screen.findAllByText("Share the pipeline total.")
   })
 
   it("opens on a request when a note or a link names one, from wherever the member is", async () => {
@@ -365,7 +365,7 @@ describe("Requests in the workspace shell", () => {
         expect(
           screen.queryByRole("region", { name: "Opened request" })
         ).toBeNull()
-        await screen.findByText("Share the pipeline total.")
+        await screen.findAllByText("Share the pipeline total.")
       }
     }
   )

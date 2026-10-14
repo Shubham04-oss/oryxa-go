@@ -3,8 +3,13 @@
 // them first; Sent holds theirs; Activity is what happened to their Slack
 // asks. A filter narrows the two lists to where a request was made. The lists
 // are re-read on focus and on a timer while open, so a request decided
-// elsewhere, in Slack or on another device, settles here. A request a link or
-// a note named opens first, above the lists.
+// elsewhere, in Slack or on another device, settles here.
+//
+// One request at a time (founder's redesign, 14 Oct 2026): the lists are
+// compact rows, and the request a row, a link or a note names opens beside
+// them as its card. Without one, the first that waits opens; with none
+// waiting, the side says every ask is answered. On a narrow canvas the card
+// replaces the list, with a way back.
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { KeyboardEvent } from "react"
 import { useQuery } from "@tanstack/react-query"
@@ -12,7 +17,11 @@ import "./requests-view.css"
 import { AgentsNotice } from "./agents-parts"
 import { agentsErrorMessage, plural } from "./agents-format"
 import { RequestCard, RequestCardById } from "./request-card"
-import { waitsOnOwner } from "./request-card-format"
+import { originLabel, waitsOnOwner } from "./request-card-format"
+import { IdentityAvatar } from "./workspace-avatar"
+import { personIdentity } from "./people-format"
+import { agoPhrase } from "./today-format"
+import { needsOwnerReply } from "@/lib/agents/agent-requests"
 import { RequestsActivity } from "./requests-activity"
 import { useStableLayout } from "./requests-view-layout"
 import {
@@ -112,25 +121,93 @@ const emptyWords: Record<
   },
 }
 
+/** What a row says a request waits on, or where it stands. */
+function rowTag(request: AgentRequest, waits: boolean): string {
+  if (waits) {
+    if (request.status === "review") return "Answer held for you"
+    return needsOwnerReply(request) ? "Needs your reply" : "Waiting for your OK"
+  }
+  const words: Record<AgentRequest["status"], string> = {
+    pending: "Waiting",
+    approved: "Approved",
+    review: "In review",
+    rejected: "Declined",
+    completed: "Answered",
+    failed: "Failed",
+    expired: "Expired",
+    withheld: "Withheld",
+  }
+  return words[request.status]
+}
+
+function RequestRow({
+  request,
+  box,
+  waits,
+  selected,
+  nameOf,
+  now,
+  onSelect,
+}: {
+  request: AgentRequest
+  box: AgentRequestBox
+  waits: boolean
+  selected: boolean
+  nameOf: (userId: string) => string | undefined
+  now: number
+  onSelect: (requestId: string) => void
+}) {
+  // Inbox rows name who asked; Sent rows name who was asked.
+  const party = box === "inbox" ? request.requester : request.target
+  const name =
+    nameOf(party.user_id) ||
+    party.user_display_name?.trim() ||
+    party.user_email?.trim() ||
+    "Someone"
+  const what = request.task.trim() || request.purpose.trim()
+  return (
+    <button
+      type="button"
+      className={selected ? "requests-row is-active" : "requests-row"}
+      aria-current={selected ? "true" : undefined}
+      data-waiting={waits ? "true" : undefined}
+      onClick={() => onSelect(request.id)}
+    >
+      <IdentityAvatar identity={personIdentity(party.user_id, name)} />
+      <span className="requests-row-copy">
+        <span className="requests-row-head">
+          <strong>{name}</strong>
+          <small>· {originLabel(request)}</small>
+          <time dateTime={request.created_at}>
+            {agoPhrase(request.created_at, now)}
+          </time>
+        </span>
+        <span className="requests-row-what">{what}</span>
+        <span className="requests-row-tag">{rowTag(request, waits)}</span>
+      </span>
+    </button>
+  )
+}
+
 function RequestList({
   organizationId,
   viewerId,
   box,
   origin,
-  hideId,
-  leases,
+  selectedId,
+  onSelect,
 }: {
   organizationId: string
   viewerId: string
   box: AgentRequestBox
   origin: OriginFilter
-  /** A request shown above the lists instead. */
-  hideId: string | null
-  leases: ReadonlyMap<string, AgentLease>
+  /** The request open beside the list. */
+  selectedId: string | null
+  onSelect: (requestId: string) => void
 }) {
   const people = usePeopleNames(organizationId, viewerId)
   const query = useQuery(requestListQueryOptions(organizationId, box, origin))
-  const requests = (query.data ?? []).filter((request) => request.id !== hideId)
+  const requests = query.data ?? []
   const now = Date.now()
   const waitsNow = (request: AgentRequest) =>
     box === "inbox" && waitsOnOwner(request, viewerId, now)
@@ -199,11 +276,14 @@ function RequestList({
             </li>
           ) : (
             <li key={row.request.id}>
-              <RequestCard
-                organizationId={organizationId}
-                viewerId={viewerId}
+              <RequestRow
                 request={row.request}
-                lease={leases.get(row.request.id)}
+                box={box}
+                waits={waitsNow(row.request)}
+                selected={row.request.id === selectedId}
+                nameOf={people.nameOf}
+                now={now}
+                onSelect={onSelect}
               />
             </li>
           )
@@ -240,11 +320,18 @@ export function RequestsView({
 }: RequestsViewProps) {
   const [tab, setTab] = useState<Tab>("inbox")
   const [origin, setOrigin] = useState<OriginFilter>("all")
-  const [pinned, setPinned] = useState<string | null>(focusRequestId ?? null)
+  // The request the member opened: from a row, a link, a note or Activity.
+  const [chosen, setChosen] = useState<string | null>(focusRequestId ?? null)
+  // Opened by a link, a note or Activity, a request reads itself, as it may
+  // not be in the list on show; opened from a row, it is that row's request.
+  const [chosenAlone, setChosenAlone] = useState(Boolean(focusRequestId))
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   useEffect(() => {
-    if (focusRequestId) setPinned(focusRequestId)
+    if (focusRequestId) {
+      setChosen(focusRequestId)
+      setChosenAlone(true)
+    }
   }, [focusRequestId])
 
   // The whole inbox, whatever the filter: it says how many wait on the
@@ -252,9 +339,10 @@ export function RequestsView({
   const inbox = useQuery(requestListQueryOptions(organizationId, "inbox"))
   const now = Date.now()
   const inboxAll = inbox.data
-  const waiting = (inboxAll ?? []).filter((request) =>
+  const waitingRequests = (inboxAll ?? []).filter((request) =>
     waitsOnOwner(request, viewerId, now)
-  ).length
+  )
+  const waiting = waitingRequests.length
   const accessMayRun = (inboxAll ?? []).some((request) =>
     mayHoldAccess(request, now)
   )
@@ -263,6 +351,41 @@ export function RequestsView({
     enabled: tab === "activity" || accessMayRun,
   })
   const leases = useMemo(() => leasesByRequest(activity.data), [activity.data])
+  // The list on show, from the same cache its rows read.
+  const shown = useQuery({
+    ...requestListQueryOptions(
+      organizationId,
+      tab === "sent" ? "sent" : "inbox",
+      origin
+    ),
+    enabled: tab !== "activity",
+  })
+  // Without a choice, the first request on show that waits opens, and stays
+  // open once answered, so the member sees what their choice did.
+  const firstWaiting =
+    tab === "inbox"
+      ? (shown.data ?? []).find((request) =>
+          waitsOnOwner(request, viewerId, now)
+        )?.id
+      : undefined
+  const [lastOpened, setLastOpened] = useState<string | null>(null)
+  useEffect(() => {
+    if (firstWaiting) setLastOpened(firstWaiting)
+  }, [firstWaiting])
+  const stillListed =
+    lastOpened &&
+    (shown.data ?? []).some((request) => request.id === lastOpened)
+      ? lastOpened
+      : null
+  const openId =
+    chosen ?? (tab === "inbox" ? (firstWaiting ?? stillListed) : null)
+  const openRequest = openId
+    ? [...(shown.data ?? []), ...(inboxAll ?? [])].find(
+        (request) => request.id === openId
+      )
+    : undefined
+  const allClear =
+    !openId && tab === "inbox" && inbox.isSuccess && waiting === 0
 
   function selectTab(index: number) {
     setTab(tabs[index].key)
@@ -290,122 +413,166 @@ export function RequestsView({
     selectTab(target)
   }
 
-  function openRequest(requestId: string) {
-    setPinned(requestId)
+  function choose(requestId: string) {
+    setChosen(requestId)
+    setChosenAlone(false)
+  }
+
+  function chooseFromActivity(requestId: string) {
+    setChosen(requestId)
+    setChosenAlone(true)
+  }
+
+  function putAway() {
+    setChosen(null)
+    onFocusDone?.()
   }
 
   return (
-    <div className="workspace-agents-page workspace-requests-page">
-      <div className="workspace-requests-column">
-        {pinned && (
-          <section
-            className="workspace-requests-pinned"
-            aria-label="Opened request"
-          >
-            <RequestCardById
-              organizationId={organizationId}
-              viewerId={viewerId}
-              requestId={pinned}
-              lease={leases.get(pinned)}
-              autoFocus
-            />
-            <button
-              className="workspace-agent-text-button"
-              type="button"
-              onClick={() => {
-                setPinned(null)
-                onFocusDone?.()
-              }}
-            >
-              Back to all requests
-            </button>
-          </section>
-        )}
-
-        <div className="workspace-requests-bar">
-          <div
-            className="workspace-requests-tabs"
-            role="tablist"
-            aria-label="Requests"
-          >
-            {tabs.map((item, index) => (
-              <button
-                className={
-                  tab === item.key
-                    ? "workspace-work-tab is-active"
-                    : "workspace-work-tab"
-                }
-                type="button"
-                role="tab"
-                key={item.key}
-                id={`requests-tab-${item.key}`}
-                aria-selected={tab === item.key}
-                aria-controls={`requests-panel-${item.key}`}
-                aria-label={
-                  item.key === "inbox" && waiting > 0
-                    ? `Inbox, ${waiting} waiting`
-                    : undefined
-                }
-                tabIndex={tab === item.key ? 0 : -1}
-                ref={(element) => {
-                  tabRefs.current[index] = element
-                }}
-                onClick={() => setTab(item.key)}
-                onKeyDown={(event) => onTabKey(event, index)}
-              >
-                {item.label}
-                {item.key === "inbox" && waiting > 0 && (
-                  <span className="workspace-requests-count" aria-hidden="true">
-                    {waiting}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-          {tab !== "activity" && (
+    <div
+      className="workspace-agents-page workspace-requests-page"
+      data-open={chosen ? "true" : undefined}
+    >
+      <div className="requests-split">
+        <div className="workspace-requests-column requests-side">
+          <div className="workspace-requests-bar">
             <div
-              className="workspace-requests-filter"
-              role="group"
-              aria-label="Where requests were made"
+              className="workspace-requests-tabs"
+              role="tablist"
+              aria-label="Requests"
             >
-              {filters.map((item) => (
+              {tabs.map((item, index) => (
                 <button
-                  className="workspace-agent-pill"
+                  className={
+                    tab === item.key
+                      ? "workspace-work-tab is-active"
+                      : "workspace-work-tab"
+                  }
                   type="button"
+                  role="tab"
                   key={item.key}
-                  aria-pressed={origin === item.key}
-                  onClick={() => setOrigin(item.key)}
+                  id={`requests-tab-${item.key}`}
+                  aria-selected={tab === item.key}
+                  aria-controls={`requests-panel-${item.key}`}
+                  aria-label={
+                    item.key === "inbox" && waiting > 0
+                      ? `Inbox, ${waiting} waiting`
+                      : undefined
+                  }
+                  tabIndex={tab === item.key ? 0 : -1}
+                  ref={(element) => {
+                    tabRefs.current[index] = element
+                  }}
+                  onClick={() => setTab(item.key)}
+                  onKeyDown={(event) => onTabKey(event, index)}
                 >
                   {item.label}
+                  {item.key === "inbox" && waiting > 0 && (
+                    <span
+                      className="workspace-requests-count"
+                      aria-hidden="true"
+                    >
+                      {waiting}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
-          )}
+            {tab !== "activity" && (
+              <div
+                className="workspace-requests-filter"
+                role="group"
+                aria-label="Where requests were made"
+              >
+                {filters.map((item) => (
+                  <button
+                    className="workspace-agent-pill"
+                    type="button"
+                    key={item.key}
+                    aria-pressed={origin === item.key}
+                    onClick={() => setOrigin(item.key)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div
+            role="tabpanel"
+            id={`requests-panel-${tab}`}
+            aria-labelledby={`requests-tab-${tab}`}
+          >
+            {tab === "activity" ? (
+              <RequestsActivity
+                organizationId={organizationId}
+                viewerId={viewerId}
+                onOpenRequest={chooseFromActivity}
+              />
+            ) : (
+              <RequestList
+                key={tab}
+                organizationId={organizationId}
+                viewerId={viewerId}
+                box={tab}
+                origin={origin}
+                selectedId={openId}
+                onSelect={choose}
+              />
+            )}
+          </div>
         </div>
 
-        <div
-          role="tabpanel"
-          id={`requests-panel-${tab}`}
-          aria-labelledby={`requests-tab-${tab}`}
-        >
-          {tab === "activity" ? (
-            <RequestsActivity
-              organizationId={organizationId}
-              viewerId={viewerId}
-              onOpenRequest={openRequest}
-            />
-          ) : (
-            <RequestList
-              key={tab}
-              organizationId={organizationId}
-              viewerId={viewerId}
-              box={tab}
-              origin={origin}
-              hideId={pinned}
-              leases={leases}
-            />
-          )}
-        </div>
+        {openId ? (
+          <section
+            className="requests-detail"
+            aria-label={chosen ? "Opened request" : "Current request"}
+          >
+            {chosen && (
+              <button
+                className="workspace-agent-text-button requests-back"
+                type="button"
+                onClick={putAway}
+              >
+                Back to all requests
+              </button>
+            )}
+            {openRequest && !(chosen && chosenAlone) ? (
+              <RequestCard
+                key={openRequest.id}
+                organizationId={organizationId}
+                viewerId={viewerId}
+                request={openRequest}
+                lease={leases.get(openRequest.id)}
+                autoFocus={chosen === openRequest.id}
+              />
+            ) : (
+              <RequestCardById
+                key={openId}
+                organizationId={organizationId}
+                viewerId={viewerId}
+                requestId={openId}
+                lease={leases.get(openId)}
+                autoFocus
+              />
+            )}
+          </section>
+        ) : allClear ? (
+          <section
+            className="requests-detail requests-clear"
+            aria-label="All clear"
+          >
+            <div className="requests-clear-scene" aria-hidden="true" />
+            <h2>Every ask answered.</h2>
+            <p>The next one will open here.</p>
+          </section>
+        ) : (
+          <div
+            className="requests-detail requests-detail-empty"
+            aria-hidden="true"
+          />
+        )}
       </div>
     </div>
   )
