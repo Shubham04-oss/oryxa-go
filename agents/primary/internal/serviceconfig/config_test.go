@@ -565,3 +565,52 @@ func TestFromEnvReadsTheDocumentEditorSettings(t *testing.T) {
 		t.Fatalf("a ticket secret was made up from the JWT secret: %q, %v", config.DocumentTicketSecret, err)
 	}
 }
+
+func TestLiveBackendDefaultsToAgentCoreForEveryone(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.LiveBackend != LiveBackendAgentCore || config.LiveOnCloudflare("org_1") {
+		t.Fatalf("LiveBackend = %q, org_1 on Cloudflare = %v", config.LiveBackend, config.LiveOnCloudflare("org_1"))
+	}
+}
+
+func TestLiveBackendMovesListedOrganizationsToCloudflare(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{
+		"AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS": "org_ours, org_staging",
+		"AGENTS_PRIMARY_EDGE_URL":             "https://edge.oryxa.in/",
+		"AGENTS_PRIMARY_SERVICE_KEY_ID":       "arn:aws:kms:ap-south-1:1:key/agents",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.LiveOnCloudflare("org_ours") || !config.LiveOnCloudflare("org_staging") || config.LiveOnCloudflare("org_other") {
+		t.Fatal("only the listed organizations should run on Cloudflare")
+	}
+	if config.EdgeURL != "https://edge.oryxa.in" {
+		t.Errorf("EdgeURL = %q", config.EdgeURL)
+	}
+	everyone, err := FromEnv(env(map[string]string{
+		"AGENTS_PRIMARY_LIVE_BACKEND":   "cloudflare",
+		"AGENTS_PRIMARY_EDGE_URL":       "https://edge.oryxa.in",
+		"AGENTS_PRIMARY_SERVICE_KEY_ID": "arn:aws:kms:ap-south-1:1:key/agents",
+	}))
+	if err != nil || !everyone.LiveOnCloudflare("org_other") {
+		t.Fatalf("cloudflare for everyone: %v", err)
+	}
+}
+
+func TestLiveBackendRefusesWhatCouldNotWork(t *testing.T) {
+	for name, values := range map[string]map[string]string{
+		"unknown backend":      {"AGENTS_PRIMARY_LIVE_BACKEND": "gcp"},
+		"cloudflare, no edge":  {"AGENTS_PRIMARY_LIVE_BACKEND": "cloudflare", "AGENTS_PRIMARY_SERVICE_KEY_ID": "k"},
+		"orgs, relative edge":  {"AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS": "org_1", "AGENTS_PRIMARY_EDGE_URL": "edge.oryxa.in", "AGENTS_PRIMARY_SERVICE_KEY_ID": "k"},
+		"orgs, no signing key": {"AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS": "org_1", "AGENTS_PRIMARY_EDGE_URL": "https://edge.oryxa.in"},
+		"bad organization id":  {"AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS": "org 1"},
+	} {
+		if _, err := FromEnv(env(values)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

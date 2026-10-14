@@ -22,8 +22,6 @@ import (
 	"google.golang.org/adk/v2/artifact"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcorebrowser"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcoresandbox"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardrail"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/knowledgeclient"
@@ -185,42 +183,12 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		return nil, errors.Join(fmt.Errorf("%s: %w", stage, err), krude.Close(ctx))
 	}
 
-	sandbox, err := agentcoresandbox.New(options.AWS, agentcoresandbox.Options{
-		CodeInterpreterIdentifier: settings.SandboxCodeInterpreter,
-		SessionTimeout:            settings.SandboxSessionTimeout,
-	})
+	// The sandbox and browser run on AgentCore or Cloudflare per
+	// organization (live.go).
+	sandboxTools, browserTools, err := liveToolsets(ctx, options, krude, logger)
 	if err != nil {
-		return fail("AgentCore sandbox", err)
+		return fail("sandbox and browser", err)
 	}
-	krude.closers = append(krude.closers, func(ctx context.Context) error {
-		if err := sandbox.Close(ctx); err != nil {
-			return fmt.Errorf("stop AgentCore sandboxes: %w", err)
-		}
-		return nil
-	})
-	sandboxTools, err := agentcoresandbox.NewToolset(sandbox)
-	if err != nil {
-		return fail("AgentCore sandbox tools", err)
-	}
-
-	browser, err := agentcorebrowser.New(options.AWS, agentcorebrowser.Options{
-		BrowserIdentifier: settings.BrowserIdentifier,
-		SessionTimeout:    settings.BrowserSessionTimeout,
-	})
-	if err != nil {
-		return fail("AgentCore browser", err)
-	}
-	krude.closers = append(krude.closers, func(ctx context.Context) error {
-		if err := browser.Close(ctx); err != nil {
-			return fmt.Errorf("stop AgentCore browsers: %w", err)
-		}
-		return nil
-	})
-	browserTools, err := agentcorebrowser.NewToolset(browser)
-	if err != nil {
-		return fail("AgentCore browser tools", err)
-	}
-	logger.InfoContext(ctx, "AWS AgentCore sandbox and browser configured", "region", settings.AWSRegion)
 
 	mainModel, err := agents.Gemini(ctx, settings.Model, settings.GoogleCloudProject, settings.GoogleCloudLocation, options.Google)
 	if err != nil {

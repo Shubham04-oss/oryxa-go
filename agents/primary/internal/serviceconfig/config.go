@@ -20,6 +20,18 @@ import (
 
 const defaultAWSRegion = "ap-south-1"
 
+// The live backends AGENTS_PRIMARY_LIVE_BACKEND names.
+const (
+	LiveBackendAgentCore  = "agentcore"
+	LiveBackendCloudflare = "cloudflare"
+)
+
+// LiveOnCloudflare reports whether an organization's sandbox and browser run
+// on Cloudflare.
+func (config Config) LiveOnCloudflare(organizationID string) bool {
+	return config.LiveBackend == LiveBackendCloudflare || config.LiveCloudflareOrgs[organizationID]
+}
+
 // Config is what primary reads for itself. The listener is the host's.
 // DatabaseURL and AutoMigrate stay here, unlike a service the host migrates
 // and mounts on the shared pool: cmd/devui is the only thing that opens
@@ -57,6 +69,15 @@ type Config struct {
 	SandboxSessionTimeout  time.Duration
 	BrowserIdentifier      string
 	BrowserSessionTimeout  time.Duration
+	// LiveBackend runs the sandbox and browser tools on "agentcore" (the
+	// default) or "cloudflare", the oryxa-edge Worker at EdgeURL
+	// (docs/design/live-layer). LiveCloudflareOrgs are organizations, by id,
+	// that use Cloudflare while the default is still AgentCore: the rollout
+	// is staging, then our organization, then everyone (A6, A11). Cloudflare
+	// needs EdgeURL and ServiceKeyID, which signs the edge tokens.
+	LiveBackend        string
+	LiveCloudflareOrgs map[string]bool
+	EdgeURL            string
 	// EventBusName is the EventBridge bus agents primary publishes on.
 	// EventBridgeEndpoint overrides the endpoint locally; when empty the AWS
 	// SDK resolves AWS_ENDPOINT_URL itself.
@@ -289,6 +310,24 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	liveBackend := valueOrDefault(getenv, "AGENTS_PRIMARY_LIVE_BACKEND", LiveBackendAgentCore)
+	if liveBackend != LiveBackendAgentCore && liveBackend != LiveBackendCloudflare {
+		return Config{}, fmt.Errorf("AGENTS_PRIMARY_LIVE_BACKEND must be %s or %s", LiveBackendAgentCore, LiveBackendCloudflare)
+	}
+	liveCloudflareOrgs, err := organizationList(getenv, "AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS")
+	if err != nil {
+		return Config{}, err
+	}
+	edgeURL := strings.TrimRight(strings.TrimSpace(getenv("AGENTS_PRIMARY_EDGE_URL")), "/")
+	if liveBackend == LiveBackendCloudflare || len(liveCloudflareOrgs) > 0 {
+		parsed, err := url.Parse(edgeURL)
+		if edgeURL == "" || err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+			return Config{}, errors.New("AGENTS_PRIMARY_EDGE_URL must be the edge's absolute URL when any organization's sandbox and browser run on Cloudflare")
+		}
+		if strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")) == "" {
+			return Config{}, errors.New("AGENTS_PRIMARY_SERVICE_KEY_ID must be set when any organization's sandbox and browser run on Cloudflare: it signs the edge tokens")
+		}
+	}
 	guardHoldOrgs, err := organizationList(getenv, "AGENTS_PRIMARY_GUARD_HOLD_ORGS")
 	if err != nil {
 		return Config{}, err
@@ -363,6 +402,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			"aws.browser.v1",
 		),
 		BrowserSessionTimeout:      browserTimeout,
+		LiveBackend:                liveBackend,
+		LiveCloudflareOrgs:         liveCloudflareOrgs,
+		EdgeURL:                    edgeURL,
 		EventBusName:               valueOrDefault(getenv, "EVENT_BUS_NAME", "default"),
 		EventBridgeEndpoint:        strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")),
 		GuardrailIdentifier:        guardrailIdentifier,
