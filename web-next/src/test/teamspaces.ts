@@ -1,10 +1,15 @@
-// A routed `fetch` stand-in for the tests of the pages, and test data shaped
-// as the agents service answers for a teamspace (agents/primary/internal/
-// teamspaces), as far as the teamspace room's Durable Object reads it: its
-// people, their agents and the specialists contributed.
+// Test data shaped as the agents service answers (agents/primary/internal/
+// teamspaces and rooms), and a routed `fetch` stand-in, for the Team mode
+// tests.
 import { beforeEach, vi } from "vitest"
 import { resumeSessionAfterSignIn } from "@/lib/api/client"
-import type { RoomSeat } from "@/lib/rooms/client"
+import type { RoomMessage, RoomSeat } from "@/lib/rooms/client"
+import type {
+  Teamspace,
+  TeamspaceContribution,
+  TeamspaceEntry,
+  Whisperer,
+} from "@/lib/teamspaces/client"
 
 // Each independent scenario starts authenticated. Keep the same browser
 // session across calls inside a test, including after a terminal refresh 401.
@@ -24,40 +29,7 @@ export function apiError(status: number, code: string, message: string) {
   return json({ error: { code, message } }, status)
 }
 
-/** A teammate's primary agent as the teamspace sees it. */
-type Whisperer = {
-  user_id: string
-  user_display_name?: string
-  agent_id: string
-  agent_name: string
-  mode: "whisperer"
-}
-
-/** A specialist its owner made available to the teamspace. */
-type TeamspaceContribution = {
-  agent_id: string
-  owner_user_id: string
-  name: string
-  description?: string
-  status: "active" | "disabled"
-  role: string
-  delegation_mode: "request" | "automatic"
-  position: number
-  created_at: string
-}
-
-type Teamspace = {
-  id: string
-  organization_id: string
-  team_id: string
-  team_name: string
-  name: string
-  status: "active" | "disabled"
-  whisperers: Whisperer[]
-  contributions: TeamspaceContribution[]
-}
-
-function whisperer(
+export function whisperer(
   userId: string,
   name: string,
   agentId: string,
@@ -72,8 +44,25 @@ function whisperer(
   }
 }
 
-const memberWhisperer = whisperer(viewerId, "Member", "agt_leo", "Leo")
-const adaWhisperer = whisperer("user-ada", "Ada", "agt_juno", "Juno")
+export const memberWhisperer = whisperer(viewerId, "Member", "agt_leo", "Leo")
+export const adaWhisperer = whisperer("user-ada", "Ada", "agt_juno", "Juno")
+
+export function contribution(
+  overrides: Partial<TeamspaceContribution> = {}
+): TeamspaceContribution {
+  return {
+    agent_id: "agt_pricing",
+    owner_user_id: "user-ada",
+    name: "Pricing",
+    description: "Checks prices",
+    status: "active",
+    role: "Checks the launch pricing",
+    delegation_mode: "request",
+    position: 0,
+    created_at: "2026-09-20T09:00:00Z",
+    ...overrides,
+  }
+}
 
 export function teamspace(overrides: Partial<Teamspace> = {}): Teamspace {
   return {
@@ -82,9 +71,27 @@ export function teamspace(overrides: Partial<Teamspace> = {}): Teamspace {
     team_id: "team_launch",
     team_name: "Launch",
     name: "Launch room",
+    description: "Plans, owners and updates for the next release.",
+    created_by_user_id: viewerId,
+    organization_agent: {
+      id: "oag_1",
+      organization_id: org,
+      name: "Simulated Org Agent",
+      instructions: "Keep the organization's context.",
+      status: "active",
+      revision: 1,
+      can_manage: false,
+      created_at: "2026-09-01T09:00:00Z",
+      updated_at: "2026-09-01T09:00:00Z",
+    },
     whisperers: [memberWhisperer, adaWhisperer],
     status: "active",
+    revision: 1,
     contributions: [],
+    can_manage: true,
+    is_member: true,
+    created_at: "2026-09-20T09:00:00Z",
+    updated_at: "2026-09-20T09:00:00Z",
     ...overrides,
   }
 }
@@ -130,6 +137,42 @@ export function seatsFor(
     })
   }
   return seats
+}
+
+export function roomMessage(
+  seq: number,
+  author: RoomSeat,
+  body: string
+): RoomMessage {
+  return {
+    id: `rmg_${seq}`,
+    room_id: "tsp_launch",
+    seq,
+    author_handle: author.handle,
+    author_kind: author.kind,
+    author_user_id: author.user_id,
+    ...(author.agent_id ? { author_agent_id: author.agent_id } : {}),
+    body,
+    created_at: "2026-09-23T09:1" + (seq % 10) + ":00Z",
+  }
+}
+
+export function entry(overrides: Partial<TeamspaceEntry> = {}): TeamspaceEntry {
+  return {
+    id: "tse_1",
+    teamspace_id: "tsp_launch",
+    organization_id: org,
+    author_user_id: viewerId,
+    author_agent_id: "agt_leo",
+    author_agent_name: "Leo",
+    kind: "decision",
+    title: "Ship on Thursday",
+    summary: "Ship on Thursday. Support is staffed for the weekend.",
+    tools_used: [],
+    artifacts: [],
+    created_at: "2026-09-23T08:00:00Z",
+    ...overrides,
+  }
 }
 
 export type ApiCall = {

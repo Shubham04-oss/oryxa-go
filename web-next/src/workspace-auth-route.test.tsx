@@ -39,9 +39,8 @@ import { getContext } from "@/integrations/tanstack-query/context"
 import { rememberChoice, rememberedChoice } from "@/lib/threads/chat-choice"
 import { json, mockApi } from "@/test/teamspaces"
 
-// Keep the real WorkspaceShell, Home reads, agent chat and Agents SDK hooks.
-// Only the browser's transport is a stand-in, so SDK unmount closes are
-// observable.
+// Keep the real WorkspaceShell, Home reads, inbox and Agents SDK hooks. Only
+// the browser's transport is a stand-in, so SDK unmount closes are observable.
 class TestWebSocket extends EventTarget {
   static readonly CONNECTING = 0
   static readonly OPEN = 1
@@ -67,25 +66,6 @@ class TestWebSocket extends EventTarget {
 
 const sockets: TestWebSocket[] = []
 const clients: QueryClient[] = []
-const savedThread = () => ({
-  id: "th_saved",
-  title: "Saved conversation",
-  origin: "chat",
-  updated_at: new Date().toISOString(),
-})
-const leo = {
-  id: "agt_leo",
-  organization_id: "org_sim",
-  owner_user_id: "user-member",
-  kind: "primary",
-  name: "Leo",
-  description: "",
-  instructions: "",
-  status: "active",
-  revision: 1,
-  created_at: "2026-09-20T10:00:00Z",
-  updated_at: "2026-09-20T10:00:00Z",
-}
 const session: Session = {
   user: {
     id: "user-member",
@@ -163,11 +143,9 @@ function liveApi() {
     if (path === "/v1/auth/me") return json(session)
     if (path === "/v1/organizations/org_sim")
       return json({ membership: { role: "member" } })
-    if (path.endsWith("/agents")) return json({ agents: [leo] })
-    if (path.endsWith("/threads")) return json({ threads: [savedThread()] })
-    if (path.endsWith("/threads/th_saved"))
-      return json({ ...savedThread(), items: [], pending_confirmations: [] })
-    if (path.endsWith("/get-messages")) return json([])
+    if (path.endsWith("/agents")) return json({ agents: [] })
+    if (path.endsWith("/threads")) return json({ threads: [] })
+    if (path.endsWith("/teamspaces")) return json({ teamspaces: [] })
     if (path.endsWith("/agent-requests")) return json({ requests: [] })
     if (path.endsWith("/agent-leases"))
       return json({
@@ -211,24 +189,12 @@ describe("workspace session expiry", () => {
       await vi.advanceTimersByTimeAsync(100)
     })
     expect(screen.getByRole("heading", { name: "Today" })).toBeTruthy()
+    expect(sockets.some((socket) => socket.url.includes("inbox"))).toBe(true)
     expect(api.calls.some((call) => call.path.includes("agent-leases"))).toBe(
       true
     )
-    // The member opens their conversation from Recent: its chat, in the
-    // center, holds a real socket.
     const choiceScope = { organizationId: "org_sim", userId: "user-member" }
     rememberChoice(choiceScope, "agt_leo", "th_saved")
-    fireEvent.click(screen.getByRole("button", { name: /^Saved conversation/ }))
-    // The chat gives choosing its conversation a few seconds, and opening it
-    // a few renders.
-    for (let round = 0; round < 6 && sockets.length === 0; round += 1) {
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(2_500)
-      })
-    }
-    expect(
-      sockets.some((socket) => socket.url.includes("thread-chat-agent"))
-    ).toBe(true)
     const initialReads = api.calls.filter((call) =>
       call.path.includes("agent-requests")
     ).length
@@ -238,6 +204,7 @@ describe("workspace session expiry", () => {
     expect(
       api.calls.filter((call) => call.path.includes("agent-requests")).length
     ).toBeGreaterThan(initialReads)
+    const openSockets = [...sockets]
     const cancelQueries = vi.spyOn(client, "cancelQueries")
     api.expire()
     await act(async () => {
@@ -248,9 +215,6 @@ describe("workspace session expiry", () => {
     ).toBeTruthy()
     expect(screen.queryByRole("heading", { name: "Today" })).toBeNull()
     expect(sessionHasEnded()).toBe(true)
-    // Every socket the chat opened, however often it reconnected while the
-    // session was still readable, is closed with the shell.
-    const openSockets = [...sockets]
     expect(openSockets.length).toBeGreaterThan(0)
     for (const socket of openSockets) expect(socket.close).toHaveBeenCalled()
     expect(

@@ -1,136 +1,154 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import type { CSSProperties, ReactNode } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { useHydrated } from "@tanstack/react-router"
-import { ArrowLeft, BookOpenText, Menu } from "lucide-react"
-import { AgentChat, chatView } from "./agent-chat"
-import type { BlankChat } from "./agent-chat"
-import { PrimaryChatHistory } from "./agent-chat-history"
-import { ConversationHeader } from "./conversation-header"
-import { HomeOverview, deskInboxQueryOptions } from "./home-overview"
+import type { ComponentType, CSSProperties } from "react"
+import {
+  ArrowLeft,
+  ArrowRight,
+  BookOpenText,
+  Bot,
+  ChartNoAxesColumn,
+  Folder,
+  House,
+  Inbox,
+  LayoutGrid,
+  LogOut,
+  MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Puzzle,
+  Settings2,
+  Sparkles,
+  UsersRound,
+  Workflow,
+} from "lucide-react"
+import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
+import { FocusHeader } from "./agents-parts"
+import { PrimaryAgentFileViewer } from "./primary-agent-files"
+import { HomeOverview } from "./home-overview"
+import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import { KnowledgeBases } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
-import {
-  PrimaryAgentFileViewer,
-  PrimaryAgentFiles,
-  useConversationFiles,
-} from "./primary-agent-files"
-import type { PrimaryAgentFileTarget } from "./primary-agent-files"
-import { PrimaryAgentPaused } from "./primary-agent-paused"
-import { usePrimaryChatHost } from "./primary-chat-host"
-import { waitsOnOwner } from "./request-card-format"
 import { RequestsCanvas } from "./requests-view"
-import { requestsLinkOf, useRequestsEntry } from "./requests-view-open"
-import { people } from "./workspace-avatar"
-import type { AvatarIdentity } from "./workspace-avatar"
+import { openRequest, useRequestsEntry } from "./requests-view-open"
+import { TeamspacesManagement } from "./teamspaces-management"
+import type { WorkspaceRole } from "./teamspaces-management"
+import { TeamspaceFocus } from "./teamspace-focus"
+import { statusLabel } from "./teamspace-format"
+import { DirectMessageView, PersonAvatar } from "./direct-message"
+import {
+  RecentConversations,
+  recentDirectMessages,
+} from "./direct-message-inbox"
+import { useDmPeople } from "./direct-message-people"
+import { usePeerOnline } from "./direct-message-presence"
+import { IdentityAvatar, people, TeamspaceAvatar } from "./workspace-avatar"
+import { WorkspaceTools } from "./workspace-tools"
+import { WorkspaceAgentPanel } from "./workspace-agent-panel"
+import type {
+  AgentPanelChatRequest,
+  AgentPanelTabRequest,
+} from "./workspace-agent-panel"
+import { PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
 import type { SettingsPage } from "./workspace-settings"
-import { WorkspaceSidebar } from "./workspace-sidebar"
-import type { WorkspaceArea } from "./workspace-sidebar"
-import { WorkspaceTools } from "./workspace-tools"
+import { useTeamspaces } from "@/hooks/use-teamspaces"
+import { useQuery } from "@tanstack/react-query"
+import { agentsQueryOptions } from "@/lib/agents/queries"
+import { useAgentsMode } from "@/hooks/use-agents-mode"
+import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
 import { signOut } from "@/lib/auth/client"
 import type { Organization, Role, Session } from "@/lib/auth/client"
+import { useInbox } from "@/lib/dms"
+import { isNameId } from "@/lib/dms/names"
+import { OpenRequestProvider } from "@/lib/dms/request-navigation"
+import type { AvatarIdentity } from "./workspace-avatar"
+import { cn } from "@/lib/utils"
 import { captureScreenContext } from "@/lib/agents/screen-context"
 import type { ScreenContext, ScreenItem } from "@/lib/agents/screen-context"
-import { AGENT_REQUESTS_POLL_MS } from "@/lib/agents/queries"
-import { authorizedData } from "@/lib/home/queries"
 import {
-  firstMessage,
   requestPrimaryChat,
-  shownThread,
   usePrimaryChatActivity,
 } from "@/lib/threads/chat-choice"
+import type { PrimaryChatTarget } from "@/lib/threads/chat-choice"
 
-export type { WorkspaceArea } from "./workspace-sidebar"
+type Section =
+  | "overview"
+  | "knowledge"
+  | "tools"
+  | "teamspaces"
+  | "people"
+  | "agents"
+  | "multi-agents"
+  | "specialists"
+  | "requests"
+type PrimaryMode = "home" | "team" | "agents"
 
-/** What the workspace's member may do in it: the admin sees what an admin manages. */
-type WorkspaceRole = "admin" | "member"
+type NavigationItem = {
+  key: Section
+  label: string
+  icon: ComponentType<{ size?: number; strokeWidth?: number }>
+  count?: string
+}
 
-const headings: Record<Exclude<WorkspaceArea, "agent">, string> = {
+const navigation: Record<PrimaryMode, NavigationItem[]> = {
+  home: [
+    { key: "overview", label: "Today", icon: LayoutGrid },
+    { key: "knowledge", label: "Knowledge bases", icon: Sparkles },
+    { key: "tools", label: "Tools", icon: Puzzle },
+  ],
+  team: [
+    { key: "teamspaces", label: "Teamspaces", icon: Folder },
+    { key: "people", label: "People", icon: UsersRound },
+  ],
+  agents: [
+    { key: "agents", label: "Agent overview", icon: ChartNoAxesColumn },
+    { key: "multi-agents", label: "Multi-agent teams", icon: Workflow },
+    { key: "specialists", label: "Specialists", icon: Bot },
+    { key: "requests", label: "Requests", icon: Inbox },
+  ],
+}
+
+const primaryModes: Array<{
+  key: PrimaryMode
+  label: string
+  icon: NavigationItem["icon"]
+}> = [
+  { key: "home", label: "Home", icon: House },
+  { key: "team", label: "Team", icon: UsersRound },
+  { key: "agents", label: "Agents", icon: ChartNoAxesColumn },
+]
+
+const defaultSections: Record<PrimaryMode, Section> = {
+  home: "overview",
+  team: "teamspaces",
+  agents: "agents",
+}
+
+const headings: Record<Section, string> = {
+  overview: "Today",
+  teamspaces: "Teamspaces",
+  agents: "Agent overview",
+  "multi-agents": "Multi-agent teams",
+  specialists: "Specialists",
   requests: "Requests",
+  people: "People",
   knowledge: "Knowledge bases",
   tools: "Tools",
 }
 
-/** Where the member's choice of a collapsed sidebar is kept, in this browser. */
-const SIDEBAR_KEY = "oryxa.sidebar"
-
-function readCollapsed(): boolean {
-  try {
-    return window.localStorage.getItem(SIDEBAR_KEY) === "collapsed"
-  } catch {
-    return false
-  }
-}
-
-function keepCollapsed(collapsed: boolean) {
-  try {
-    if (collapsed) window.localStorage.setItem(SIDEBAR_KEY, "collapsed")
-    else window.localStorage.removeItem(SIDEBAR_KEY)
-  } catch {
-    /* Storage may be unavailable; the sidebar still works. */
-  }
-}
-
-/** The page's address, read once as the shell opens (never during a server render). */
-function openingAddress(): URLSearchParams {
-  return new URLSearchParams(
-    typeof window === "undefined" ? "" : window.location.search
-  )
-}
-
-/** The screen an address names: `?view=requests|knowledge|tools`, or the member's agent. */
-function areaOf(params: URLSearchParams): WorkspaceArea {
-  const view = params.get("view")
-  return view === "requests" || view === "knowledge" || view === "tools"
-    ? view
-    : "agent"
-}
-
-/** Settings' page an address names: `?view=billing` (billing sends members back here) or `?view=slack` (Slack's install does). */
-function settingsPageOf(params: URLSearchParams): SettingsPage | undefined {
-  const view = params.get("view")
-  return view === "billing" || view === "slack" ? view : undefined
-}
-
 /**
- * How many Inbox requests wait on the member, for the sidebar: the desk's own
- * read of their Inbox (so the two agree), re-read on focus and every few
- * seconds, so an ask made in Slack shows at once, wherever the member is.
- * While the desk is shown its own reads keep it fresh. Nothing while it loads
- * or was refused.
- */
-function useRequestsWaiting(
-  organizationId: string | undefined,
-  viewerId: string | undefined,
-  poll: boolean
-): number | undefined {
-  const hydrated = useHydrated()
-  const viewer = viewerId ?? ""
-  const inbox = useQuery({
-    ...deskInboxQueryOptions(organizationId ?? "", viewer),
-    enabled: hydrated && Boolean(organizationId && viewerId),
-    refetchInterval: poll ? AGENT_REQUESTS_POLL_MS : false,
-  })
-  const rows = authorizedData(inbox)
-  if (!rows) return undefined
-  const now = Date.now()
-  return rows.filter((request) => waitsOnOwner(request, viewer, now)).length
-}
-
-/**
- * The workspace: one sidebar and one central screen (DESIGN.md §2). The
- * sidebar is the only navigation; the center shows exactly one thing: the
- * desk, a conversation with the member's primary agent, Requests, Knowledge
- * or Tools. Settings opens over it all from the profile menu. A request named
- * by a link or a note opens in Requests: `openRequest` (requests-view-open.ts)
- * is what a note calls, and the shell listens for it.
+ * The workspace. A request named in a DM opens in Agents → Requests: what
+ * shows a DM reads `useOpenRequest` from the provider here, and its function
+ * is `openRequest` (requests-view-open.ts), which the shell below listens for.
  */
 export function WorkspaceShell(
   props: NonNullable<Parameters<typeof WorkspaceShellContent>[0]> = {}
 ) {
-  return <WorkspaceShellContent key={props.session?.user.id} {...props} />
+  return (
+    <OpenRequestProvider value={openRequest}>
+      <WorkspaceShellContent key={props.session?.user.id} {...props} />
+    </OpenRequestProvider>
+  )
 }
 
 function WorkspaceShellContent({
@@ -139,110 +157,95 @@ function WorkspaceShellContent({
   organizationRole,
   selectedOrganization,
   preview = false,
-  initialArea,
+  initialMode = "home",
+  initialSection,
+  initialDirectMessage,
+  onDirectMessageChange,
 }: {
   session?: Session
   role?: WorkspaceRole
   organizationRole?: Role
   selectedOrganization?: Organization
   preview?: boolean
-  /** The screen to open on; otherwise the address's, otherwise the member's agent. */
-  initialArea?: WorkspaceArea
+  initialMode?: PrimaryMode
+  initialSection?: Section
+  /** The person whose DM opens in the main canvas first (the page's `?dm=`). */
+  initialDirectMessage?: string
+  /** The DM open in the main canvas changed (null: none), for the page's address. */
+  onDirectMessageChange?: (peerId: string | null) => void
 } = {}) {
   const viewerId = session?.user.id
-  // The chat is the signed-in member's, in the organization they have open.
-  const organizationId = session ? selectedOrganization?.id : undefined
-  const [address] = useState(openingAddress)
+  // DMs are the signed-in member's, in the organization they have open.
+  const dmOrganizationId = session ? selectedOrganization?.id : undefined
+  // A DM the page may open: with someone other than the member, by an id a
+  // DM's name can hold.
+  const openable = (peerId: string | null | undefined): string | null =>
+    dmOrganizationId && isNameId(peerId) && peerId !== viewerId ? peerId : null
+  const firstDm = openable(initialDirectMessage)
+  const startMode: PrimaryMode = firstDm ? "team" : initialMode
   const [isMobile, setIsMobile] = useState(false)
-  const [collapsed, setCollapsed] = useState(readCollapsed)
-  const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [area, setArea] = useState<WorkspaceArea>(
-    () => initialArea ?? areaOf(address)
-  )
+  const [leftExpanded, setLeftExpanded] = useState(startMode !== "home")
+  const [rightExpanded, setRightExpanded] = useState(false)
+  const [activeMode, setActiveMode] = useState<PrimaryMode>(startMode)
+  const [sectionsByMode, setSectionsByMode] = useState<
+    Record<PrimaryMode, Section>
+  >({
+    ...defaultSections,
+    [initialMode]: initialSection || defaultSections[initialMode],
+    ...(firstDm ? { team: "people" as const } : {}),
+  })
+  const teamspaces = useTeamspaces(selectedOrganization?.id)
+  const ownAgents = useQuery({
+    ...agentsQueryOptions(selectedOrganization?.id ?? ""),
+    enabled: Boolean(selectedOrganization),
+  })
   const [knowledgeBaseSelection, setKnowledgeBaseSelection] =
     useState<SelectedKnowledgeBase | null>(null)
-  // The request a link or a note named, which Requests opens first.
-  const [requestFocus, setRequestFocus] = useState<string | null>(
-    () => requestsLinkOf(address.toString())?.requestId ?? null
-  )
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState("")
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   // The page Settings opens on, when a link asked for one.
-  const [settingsPage, setSettingsPage] = useState<SettingsPage | undefined>(
-    () => settingsPageOf(address)
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>()
+  // The request a link or a note named, which Requests opens first.
+  const [requestFocus, setRequestFocus] = useState<string | null>(null)
+  const agentsMode = useAgentsMode()
+  const [primaryWork, setPrimaryWork] = useState(false)
+  const [primaryComposing, setPrimaryComposing] = useState(false)
+  const [primaryViewer, setPrimaryViewer] = useState<"overview" | "file">(
+    "overview"
   )
-  const [settingsOpen, setSettingsOpen] = useState(
-    () => settingsPageOf(address) !== undefined
-  )
-  // The open conversation's files, shown inline under the header, and the
-  // one the viewer shows in place of the conversation.
-  const [filesOpen, setFilesOpen] = useState(false)
-  const [viewerFile, setViewerFile] = useState<PrimaryAgentFileTarget | null>(
+  const [primaryFile, setPrimaryFile] = useState<PrimaryAgentFileTarget | null>(
     null
   )
-  const [composing, setComposing] = useState(false)
-  const menuButton = useRef<HTMLButtonElement>(null)
-  const sidebarToggle = useRef<HTMLButtonElement>(null)
-  const filesId = "workspace-conversation-files"
-
-  // What the agent is sent as the member's screen, read as they send.
-  const screenContextRef = useRef<() => ScreenContext>(() =>
-    captureScreenContext("home/overview")
+  const [primaryThreadId, setPrimaryThreadId] = useState<
+    string | null | undefined
+  >()
+  const [chatRequest, setChatRequest] = useState<AgentPanelChatRequest | null>(
+    null
   )
-  const getScreenContext = useCallback(() => screenContextRef.current(), [])
-  const host = usePrimaryChatHost({
-    organizationId,
-    viewerId,
-    getScreenContext,
-  })
-  const { chat, dispatch, scope } = host
-  const shown = shownThread(chat)
-  const first = firstMessage(chat)
-  // The member's agent in the center: the desk (no conversation open), a
-  // conversation, or, for the moment their agents take to load, nothing yet.
-  const view = organizationId ? chatView(chat, scope, host.agentId) : "blank"
-  const conversation = view === "conversation"
-  const viewing =
-    viewerFile && viewerFile.threadId === shown ? viewerFile : null
-  const primaryChatActivity = usePrimaryChatActivity({
-    organizationId: organizationId ?? "",
-    userId: viewerId ?? "",
-  })
-  const files = useConversationFiles(
-    organizationId ?? "",
-    typeof shown === "string" ? shown : null
+  const [tabRequest, setTabRequest] = useState<AgentPanelTabRequest | null>(
+    null
   )
-  const requestsWaiting = useRequestsWaiting(
-    organizationId,
-    viewerId,
-    !(area === "agent" && view === "blank")
-  )
-  const visibleHeight = useVisibleHeight(composing)
-
-  const selectedKnowledgeBase =
-    area === "knowledge" ? (knowledgeBaseSelection ?? undefined) : undefined
-  const screenView =
-    area === "agent"
-      ? view !== "conversation"
-        ? "home/overview"
-        : viewing
-          ? "agents/file"
-          : "agents/chat"
-      : area === "requests"
-        ? "agents/requests"
-        : `home/${area}`
-  const screenSelection: ScreenItem | undefined = selectedKnowledgeBase
-    ? {
-        kind: "knowledge_base",
-        id: selectedKnowledgeBase.id,
-        name: selectedKnowledgeBase.name,
-      }
+  // Direct messages: the member's inbox (Team's recent conversations, the
+  // DMs tab and its badge), whom they can message, and who is known to be
+  // online. The DM open in the main canvas is `dmPeerId`, under People.
+  const inbox = useInbox(dmOrganizationId, viewerId)
+  const dmPeople = useDmPeople(dmOrganizationId, viewerId, teamspaces.spaces)
+  const directMessages = viewerId
+    ? { viewerId, inbox, people: dmPeople }
     : undefined
-  useEffect(() => {
-    screenContextRef.current = () =>
-      captureScreenContext(screenView, screenSelection)
+  const primaryChatActivity = usePrimaryChatActivity({
+    organizationId: dmOrganizationId ?? "",
+    userId: directMessages?.viewerId ?? "",
   })
+  const [dmPeerId, setDmPeerId] = useState<string | null>(firstDm)
+  // The member opened it just now: focus goes into it.
+  const [dmOpenedByMember, setDmOpenedByMember] = useState(false)
+  // Back from a DM, focus returns to that person in People.
+  const [dmReturnTo, setDmReturnTo] = useState<string | null>(null)
+  const [dmDrafts, setDmDrafts] = useState<Partial<Record<string, string>>>({})
+  const [dmComposing, setDmComposing] = useState(false)
 
   const currentIdentity: AvatarIdentity = session
     ? {
@@ -273,28 +276,30 @@ function WorkspaceShellContent({
     const media = window.matchMedia("(max-width: 800px)")
     function syncViewport() {
       setIsMobile(media.matches)
-      if (!media.matches) setMobileNavOpen(false)
+      if (media.matches) setLeftExpanded(false)
     }
     syncViewport()
     media.addEventListener("change", syncViewport)
     return () => media.removeEventListener("change", syncViewport)
   }, [])
 
-  // A link to one conversation (`?chat=<thread id>`) opens it, once: the
-  // address forgets it, so a reload follows the opening rules again.
   useEffect(() => {
-    const threadId = address.get("chat")
-    if (!threadId || !scope) return
-    requestPrimaryChat(scope, { kind: "thread", threadId })
-    setArea("agent")
-    const url = new URL(window.location.href)
-    url.searchParams.delete("chat")
-    window.history.replaceState(
-      window.history.state,
-      "",
-      `${url.pathname}${url.search}${url.hash}`
-    )
-    // The address is read once, as the shell opens.
+    const view = new URLSearchParams(window.location.search).get("view")
+    // /settings/billing, where billing sends a member back, lands here.
+    if (view === "billing") {
+      setSettingsPage("billing")
+      setSettingsOpen(true)
+      return
+    }
+    // Slack's install sends its admin back here (slack-settings.tsx).
+    if (view === "slack") {
+      setSettingsPage("slack")
+      setSettingsOpen(true)
+      return
+    }
+    if (view !== "tools") return
+    setActiveMode("home")
+    setSectionsByMode((current) => ({ ...current, home: "tools" }))
   }, [])
 
   function closeSettings() {
@@ -302,353 +307,769 @@ function WorkspaceShellContent({
     setSettingsPage(undefined)
   }
 
-  function openSettings(page?: SettingsPage) {
-    setProfileMenuOpen(false)
-    setMobileNavOpen(false)
-    setSettingsPage(page)
-    setSettingsOpen(true)
-  }
-
-  function closeMobileNav() {
-    setMobileNavOpen(false)
-    menuButton.current?.focus()
-  }
-
   useEffect(() => {
-    if (!settingsOpen && !profileMenuOpen && !mobileNavOpen) return
+    if (!settingsOpen && !profileMenuOpen) return
     function onEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return
       if (settingsOpen) closeSettings()
-      else if (profileMenuOpen) setProfileMenuOpen(false)
-      else closeMobileNav()
+      else setProfileMenuOpen(false)
     }
     window.addEventListener("keydown", onEscape)
     return () => window.removeEventListener("keydown", onEscape)
-  }, [settingsOpen, profileMenuOpen, mobileNavOpen])
+  }, [settingsOpen, profileMenuOpen])
 
-  // The phone's navigation takes focus as it opens.
+  const section = sectionsByMode[activeMode]
+  const heading = headings[section]
+  // Agents mode's focused work belongs to that mode and its workspace.
+  const agentWork =
+    activeMode === "agents" && selectedOrganization ? agentsMode.focus : null
+  const isFocused = Boolean(
+    primaryWork || agentWork || (teamspaces.openId && selectedOrganization)
+  )
+  // The teamspace on the page: the agent panel offers its teammates.
+  const pageTeamspaceId =
+    !primaryWork && !agentWork && selectedOrganization && teamspaces.openId
+      ? teamspaces.openId
+      : undefined
+  // The DM in the main canvas, while People is on screen.
+  const canvasPeerId =
+    section === "people" && dmOrganizationId && viewerId ? dmPeerId : null
+  // Who they are, once the members list can say: until then the header and
+  // the canvas wait, rather than greet "Someone".
+  const canvasPeer = canvasPeerId ? dmPeople.peer(canvasPeerId) : undefined
+  const canvasPeerName = canvasPeer?.name
+  const canvasPeerOnline = usePeerOnline(canvasPeerId ?? undefined)
+  // On a small screen with the keyboard up, the DM gets the height it leaves.
+  const middleHeight = useVisibleHeight(Boolean(canvasPeerId) && dmComposing)
+  const primaryVisibleHeight = useVisibleHeight(primaryWork && primaryComposing)
+  const recentPeerIds = recentDirectMessages(inbox.conversations).map(
+    (conversation) => conversation.peerId
+  )
+  const selectedKnowledgeBase =
+    section === "knowledge" ? (knowledgeBaseSelection ?? undefined) : undefined
+  const selectedTeamspace =
+    section === "teamspaces" ? teamspaces.selected : undefined
+  const detailTitle = canvasPeerId
+    ? (canvasPeerName ?? "Direct message")
+    : selectedKnowledgeBase?.name || selectedTeamspace?.name
+  const detailKind = canvasPeerId
+    ? canvasPeerName === undefined
+      ? undefined
+      : canvasPeerOnline
+        ? "Online"
+        : "Direct message"
+    : selectedKnowledgeBase
+      ? "Knowledge base"
+      : selectedTeamspace
+        ? `Teamspace · ${statusLabel(selectedTeamspace)}`
+        : undefined
+
+  const screenView =
+    primaryWork && primaryViewer === "file"
+      ? "agents/file"
+      : agentWork
+        ? `agents/${agentWork.kind}`
+        : teamspaces.openId
+          ? "team/teamspace"
+          : activeMode === "agents" && section === "agents"
+            ? "agents/overview"
+            : `${activeMode}/${section}`
+  const screenSelection: ScreenItem | undefined = primaryWork
+    ? undefined
+    : agentWork
+      ? {
+          kind: agentWork.kind,
+          id: agentWork.kind === "team" ? agentWork.teamId : agentWork.agentId,
+          name:
+            agentWork.kind === "specialist"
+              ? (ownAgents.data?.find((agent) => agent.id === agentWork.agentId)
+                  ?.name ?? "")
+              : "",
+        }
+      : teamspaces.openId
+        ? {
+            kind: "teamspace",
+            id: teamspaces.openId,
+            name:
+              teamspaces.spaces.find((space) => space.id === teamspaces.openId)
+                ?.name ?? "",
+          }
+        : canvasPeerId && canvasPeerName
+          ? { kind: "person", id: canvasPeerId, name: canvasPeerName }
+          : selectedKnowledgeBase
+            ? {
+                kind: "knowledge_base",
+                id: selectedKnowledgeBase.id,
+                name: selectedKnowledgeBase.name,
+              }
+            : selectedTeamspace
+              ? {
+                  kind: "teamspace",
+                  id: selectedTeamspace.id,
+                  name: selectedTeamspace.name,
+                }
+              : undefined
+  const screenContextRef = useRef<() => ScreenContext>(() =>
+    captureScreenContext("home/overview")
+  )
+  screenContextRef.current = () =>
+    captureScreenContext(screenView, screenSelection)
+  const getScreenContext = useCallback(() => screenContextRef.current(), [])
+
+  // The page's address follows the DM in the main canvas, so a refresh
+  // returns to it.
+  const reportedDm = useRef(canvasPeerId)
   useEffect(() => {
-    if (mobileNavOpen) sidebarToggle.current?.focus()
-  }, [mobileNavOpen])
+    if (reportedDm.current === canvasPeerId) return
+    reportedDm.current = canvasPeerId
+    onDirectMessageChange?.(canvasPeerId)
+  }, [canvasPeerId, onDirectMessageChange])
 
-  /** Shows `next` in the center; a phone's navigation closes behind it. */
-  function go(next: WorkspaceArea) {
-    setArea(next)
+  /** A nav item is the page: People only while no recent conversation in the nav is. */
+  function navCurrent(key: Section): boolean {
+    if (section !== key) return false
+    return (
+      key !== "people" || !canvasPeerId || !recentPeerIds.includes(canvasPeerId)
+    )
+  }
+
+  function selectMode(nextMode: PrimaryMode) {
+    setActiveMode(nextMode)
+    teamspaces.close()
+    if (nextMode !== activeMode) {
+      setKnowledgeBaseSelection(null)
+      teamspaces.select(null)
+    }
+  }
+
+  function selectSection(nextSection: Section) {
+    setDmPeerId(null)
     setKnowledgeBaseSelection(null)
-    setProfileMenuOpen(false)
-    setComposing(false)
-    if (isMobile) setMobileNavOpen(false)
+    teamspaces.reset()
+    setSectionsByMode((current) => ({
+      ...current,
+      [activeMode]: nextSection,
+    }))
+    if (isMobile) setLeftExpanded(false)
   }
 
-  /** New chat: the desk, with the chat on no conversation. */
-  function startNewChat() {
-    dispatch({ type: "move", thread: null })
-    setViewerFile(null)
-    go("agent")
+  /** Opens the DM with `peerId` in the main canvas, under People. */
+  function openDirectMessage(peerId: string) {
+    const peer = openable(peerId)
+    if (!peer) return
+    setDmPeerId(peer)
+    setDmOpenedByMember(true)
+    setActiveMode("team")
+    setSectionsByMode((current) => ({ ...current, team: "people" }))
+    teamspaces.reset()
+    if (isMobile) setLeftExpanded(false)
   }
 
-  /** A conversation the member chose (the Recent list, a confirmation on the desk). */
-  function showConversation() {
-    setViewerFile(null)
-    go("agent")
+  function closeDirectMessage() {
+    setDmReturnTo(dmPeerId)
+    setDmPeerId(null)
+    setDmOpenedByMember(false)
+    setDmComposing(false)
   }
 
-  function openConversation(threadId: string) {
-    dispatch({ type: "move", thread: threadId })
-    showConversation()
+  /** Team's "All conversations": the agent panel's DMs tab. */
+  function showAllConversations() {
+    expandAgentPanel()
+    setTabRequest({ tab: "dms" })
   }
 
-  /** Every conversation: the sidebar's Recent list, brought into view. */
-  function revealHistory() {
-    if (isMobile) setMobileNavOpen(true)
-    else if (collapsed) toggleCollapsed()
+  function openWork(target: AgentsFocusTarget) {
+    teamspaces.close()
+    setPrimaryWork(false)
+    setPrimaryComposing(false)
+    agentsMode.open(target)
+    setRightExpanded(false)
+    if (isMobile) setLeftExpanded(false)
   }
 
-  function toggleCollapsed() {
-    setCollapsed((current) => {
-      keepCollapsed(!current)
-      return !current
-    })
+  function openPrimaryWork() {
+    teamspaces.close()
+    agentsMode.close()
+    setPrimaryWork(true)
+    setActiveMode("agents")
+    setSectionsByMode((current) => ({ ...current, agents: "agents" }))
+    setLeftExpanded(false)
+    setRightExpanded(false)
+  }
+
+  function openAgentOverview() {
+    setPrimaryViewer("overview")
+    setPrimaryFile(null)
+    openPrimaryWork()
+  }
+
+  function openHomeConversation(target: PrimaryChatTarget) {
+    if (!selectedOrganization || !directMessages) return
+    closePrimaryWork()
+    expandAgentPanel()
+    requestPrimaryChat(
+      {
+        organizationId: selectedOrganization.id,
+        userId: directMessages.viewerId,
+      },
+      target
+    )
+  }
+
+  function openHomeHistory() {
+    closePrimaryWork()
+    expandAgentPanel()
+    setTabRequest({ tab: "agents", history: true })
+  }
+
+  function navigateFromHome(mode: PrimaryMode, next: Section) {
+    closePrimaryWork()
+    teamspaces.close()
+    agentsMode.close()
+    setActiveMode(mode)
+    setSectionsByMode((current) => ({ ...current, [mode]: next }))
+    if (isMobile) setLeftExpanded(false)
+  }
+
+  function openHomeRequests(requestId?: string) {
+    openRequestsSection(requestId)
+  }
+
+  function openPrimaryFile(file?: PrimaryAgentFileTarget) {
+    setPrimaryViewer("file")
+    setPrimaryFile(file ?? null)
+    openPrimaryWork()
+  }
+
+  function closePrimaryWork() {
+    setPrimaryWork(false)
+    setPrimaryComposing(false)
+  }
+
+  function navigatePrimarySection(
+    next: "agents" | "multi-agents" | "specialists"
+  ) {
+    closePrimaryWork()
+    selectSection(next)
+  }
+
+  /** Opens the agent panel on the Agents tab, talking to this specialist. */
+  function chatWith(agentId: string) {
+    expandAgentPanel()
+    setChatRequest({ agentId })
+  }
+
+  // Expanding the right panel collapses the left (DESIGN.md §2).
+  function expandAgentPanel() {
+    setLeftExpanded(false)
+    setRightExpanded(true)
+  }
+
+  function openTeamspace(id: string) {
+    teamspaces.open(id)
+    setRightExpanded(false)
+    if (isMobile) setLeftExpanded(false)
+  }
+
+  function closeDetail() {
+    if (canvasPeerId) closeDirectMessage()
+    if (selectedKnowledgeBase) setKnowledgeBaseSelection(null)
+    if (selectedTeamspace) teamspaces.select(null)
   }
 
   // A request named by a link or a note (requests-view-open.ts) opens in
-  // Requests, first; leaving Requests puts it away.
+  // Agents → Requests, first; leaving Requests puts it away.
   function openRequestsSection(requestId?: string) {
-    go("requests")
+    closePrimaryWork()
+    teamspaces.reset()
+    agentsMode.close()
+    setDmPeerId(null)
+    setKnowledgeBaseSelection(null)
     setRequestFocus(requestId ?? null)
+    setActiveMode("agents")
+    setSectionsByMode((current) => ({ ...current, agents: "requests" }))
+    if (isMobile) {
+      setLeftExpanded(false)
+      setRightExpanded(false)
+    }
   }
+  useEffect(() => {
+    if (section !== "requests") setRequestFocus(null)
+  }, [section])
   useRequestsEntry(openRequestsSection)
-  useEffect(() => {
-    if (area !== "requests") setRequestFocus(null)
-  }, [area])
-
-  // The address follows the screen, so a reload stays on it: Requests (on
-  // the request it opened), Knowledge or Tools. The member's agent has none:
-  // a reload there follows the opening rules.
-  useEffect(() => {
-    const url = new URL(window.location.href)
-    const params = url.searchParams
-    const before = params.toString()
-    if (area === "agent") params.delete("view")
-    else params.set("view", area)
-    if (area === "requests" && requestFocus) params.set("request", requestFocus)
-    else params.delete("request")
-    if (params.toString() === before) return
-    const search = params.toString()
-    window.history.replaceState(
-      window.history.state,
-      "",
-      `${url.pathname}${search ? `?${search}` : ""}${url.hash}`
-    )
-  }, [area, requestFocus])
-
-  const heading =
-    area === "agent"
-      ? view === "conversation"
-        ? "Conversation"
-        : "Today"
-      : headings[area]
-  const detailTitle = selectedKnowledgeBase?.name
-
-  let title: ReactNode
-  if (area === "agent" && conversation && organizationId) {
-    title = (
-      <ConversationHeader
-        organizationId={organizationId}
-        scope={scope}
-        chat={chat}
-        dispatch={dispatch}
-        files={{
-          count: files.files.length,
-          open: filesOpen,
-          onToggle: () => setFilesOpen((open) => !open),
-          controls: filesId,
-        }}
-        onNewChat={() => setViewerFile(null)}
-      />
-    )
-  } else if (area === "agent" && view === "choosing") {
-    title = null
-  } else if (detailTitle) {
-    title = (
-      <div className="workspace-header-detail">
-        <span className="workspace-header-detail-icon">
-          <BookOpenText size={17} strokeWidth={1.7} />
-        </span>
-        <div>
-          <h1>{detailTitle}</h1>
-          <small>Knowledge base</small>
-        </div>
-      </div>
-    )
-  } else {
-    title = <h1>{heading}</h1>
-  }
-
-  function renderDesk(blank?: BlankChat) {
-    return (
-      <div className="workspace-desk">
-        <HomeOverview
-          organizationId={organizationId}
-          viewerId={viewerId}
-          primaryChatActivity={primaryChatActivity}
-          chat={blank}
-          agent={host.primary}
-          onOpenRequests={openRequestsSection}
-          onOpenHistory={revealHistory}
-          onOpenConversation={organizationId ? openConversation : undefined}
-          onOpenTools={() => go("tools")}
-          onOpenKnowledge={() => go("knowledge")}
-          onOpenSlack={() => openSettings("slack")}
-          onOpenAccount={() => openSettings("account")}
-        />
-      </div>
-    )
-  }
-
-  const recent = organizationId ? (
-    <PrimaryChatHistory
-      organizationId={organizationId}
-      scope={scope}
-      chat={chat}
-      dispatch={dispatch}
-      current={area === "agent" && conversation}
-      onOpened={showConversation}
-    />
-  ) : undefined
 
   return (
     <div
       className="workspace-shell"
-      data-sidebar={collapsed ? "collapsed" : "expanded"}
-      data-mobile-nav={isMobile && mobileNavOpen ? "open" : undefined}
-      data-composing={visibleHeight ? "true" : undefined}
+      data-left={leftExpanded ? "expanded" : "collapsed"}
+      data-right={rightExpanded ? "expanded" : "collapsed"}
+      data-view={isFocused ? "focused" : "browse"}
+      data-primary-work={primaryWork ? "true" : undefined}
+      data-primary-composing={
+        primaryWork && primaryComposing ? "true" : undefined
+      }
       style={
-        visibleHeight
-          ? ({ "--visible-height": `${visibleHeight}px` } as CSSProperties)
+        primaryVisibleHeight
+          ? ({
+              "--primary-visible-height": `${primaryVisibleHeight}px`,
+            } as CSSProperties)
           : undefined
       }
     >
-      {(!isMobile || mobileNavOpen) && (
-        <WorkspaceSidebar
-          collapsed={!isMobile && collapsed}
-          mobile={isMobile}
-          onToggle={isMobile ? closeMobileNav : toggleCollapsed}
-          toggleRef={sidebarToggle}
-          session={session}
-          selectedOrganization={selectedOrganization}
-          area={area}
-          onNewChat={startNewChat}
-          newChatDisabled={first !== null}
-          onNavigate={(next) => go(next)}
-          requestsWaiting={requestsWaiting}
-          recent={recent}
-          identity={currentIdentity}
-          roleLabel={
-            session
-              ? role === "admin"
-                ? "Workspace admin"
-                : "Member"
-              : "Preview admin"
-          }
-          profileMenuOpen={profileMenuOpen}
-          onProfileMenuOpenChange={setProfileMenuOpen}
-          onOpenSettings={() => openSettings()}
-          onSignOut={session ? () => void handleSignOut() : undefined}
-          signingOut={signingOut}
-          signOutError={signOutError}
-        />
-      )}
-      {isMobile && mobileNavOpen && (
-        <div
-          className="workspace-scrim"
-          aria-hidden="true"
-          onClick={closeMobileNav}
-        />
-      )}
-
-      <div className="workspace-middle">
-        <header
-          className="workspace-header"
-          data-actions={
-            area === "agent" && conversation ? "conversation" : undefined
-          }
+      {!isFocused && (
+        <aside
+          id="workspace-navigation"
+          className="workspace-left"
+          aria-label="Workspace navigation"
         >
-          <div className="workspace-header-start">
-            {isMobile && (
+          <div className="workspace-left-top">
+            {leftExpanded ? (
+              <>
+                <div
+                  className="workspace-switcher"
+                  role="group"
+                  aria-label="Main areas"
+                >
+                  {primaryModes.map((mode) => {
+                    const Icon = mode.icon
+                    const selected = activeMode === mode.key
+                    return (
+                      <button
+                        className={cn(
+                          "workspace-switcher-item",
+                          selected && "is-selected"
+                        )}
+                        type="button"
+                        key={mode.key}
+                        aria-label={mode.label}
+                        aria-pressed={selected}
+                        title={selected ? undefined : mode.label}
+                        onClick={() => selectMode(mode.key)}
+                      >
+                        <Icon size={18} strokeWidth={1.8} />
+                        {selected && <span>{mode.label}</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+                <button
+                  className="workspace-icon-button workspace-left-toggle"
+                  type="button"
+                  aria-label="Collapse left sidebar"
+                  aria-controls="workspace-navigation"
+                  aria-expanded={leftExpanded}
+                  onClick={() => setLeftExpanded(false)}
+                >
+                  <PanelLeftClose
+                    className="workspace-panel-toggle-desktop"
+                    size={18}
+                    strokeWidth={1.7}
+                  />
+                  <ArrowLeft
+                    className="workspace-panel-toggle-mobile"
+                    size={17}
+                    strokeWidth={1.7}
+                  />
+                </button>
+              </>
+            ) : (
               <button
-                className="workspace-icon-button workspace-menu-button"
+                className="workspace-mark workspace-mark-button"
                 type="button"
-                ref={menuButton}
-                aria-label="Open navigation"
+                aria-label="Expand left sidebar"
                 aria-controls="workspace-navigation"
-                aria-expanded={mobileNavOpen}
-                onClick={() => setMobileNavOpen(true)}
+                aria-expanded={leftExpanded}
+                onClick={() => {
+                  setLeftExpanded(true)
+                  setRightExpanded(false)
+                }}
               >
-                <Menu size={17} strokeWidth={1.7} />
-              </button>
-            )}
-            {detailTitle && (
-              <button
-                className="workspace-header-back"
-                type="button"
-                aria-label="All knowledge bases"
-                onClick={() => setKnowledgeBaseSelection(null)}
-              >
-                <ArrowLeft size={17} strokeWidth={1.7} />
+                <PanelLeftOpen
+                  className="workspace-panel-toggle-desktop"
+                  size={18}
+                  strokeWidth={1.7}
+                />
+                <ArrowRight
+                  className="workspace-panel-toggle-mobile"
+                  size={17}
+                  strokeWidth={1.7}
+                />
               </button>
             )}
           </div>
-          {title}
-        </header>
-        <main
-          className="workspace-canvas"
-          data-area={area}
-          aria-label={`${detailTitle || heading} canvas`}
-        >
-          {area === "requests" && (
-            <RequestsCanvas
-              organizationId={organizationId}
-              viewerId={session?.user.id}
-              focusRequestId={requestFocus}
-              onFocusDone={() => setRequestFocus(null)}
-            />
-          )}
-          {area === "knowledge" && (
-            <KnowledgeBases
-              organizationId={selectedOrganization?.id}
-              organizationName={selectedOrganization?.name}
-              organizationRole={organizationRole}
-              userId={session?.user.id}
-              selected={selectedKnowledgeBase ?? null}
-              onSelect={setKnowledgeBaseSelection}
-              onOpenTools={() => go("tools")}
-            />
-          )}
-          {area === "tools" && (
-            <WorkspaceTools organizationId={selectedOrganization?.id} />
-          )}
-          {!organizationId && area === "agent" && renderDesk()}
-          {organizationId && (
-            <div className="workspace-agent-area" hidden={area !== "agent"}>
-              {conversation && filesOpen && typeof shown === "string" && (
-                <div className="workspace-conversation-files">
-                  <PrimaryAgentFiles
-                    id={filesId}
-                    organizationId={organizationId}
-                    threadId={shown}
-                    onOpenFile={setViewerFile}
-                  />
-                </div>
-              )}
-              {viewing && (
-                <section
-                  className="workspace-file-viewer"
-                  aria-label="File viewer"
+
+          <nav
+            className="workspace-navigation"
+            aria-label={`${activeMode === "home" ? "Home" : activeMode === "team" ? "Team" : "Agents"} navigation`}
+          >
+            {navigation[activeMode].map((item) => {
+              const Icon = item.icon
+              return (
+                <button
+                  className={cn(
+                    "workspace-nav-item",
+                    navCurrent(item.key) && "is-active"
+                  )}
+                  key={item.key}
+                  type="button"
+                  title={leftExpanded ? undefined : item.label}
+                  aria-label={leftExpanded ? undefined : item.label}
+                  aria-current={navCurrent(item.key) ? "page" : undefined}
+                  onClick={() => selectSection(item.key)}
                 >
-                  <PrimaryAgentFileViewer
-                    organizationId={organizationId}
-                    threadId={viewing.threadId}
-                    file={viewing}
-                    onBack={() => setViewerFile(null)}
-                  />
-                </section>
-              )}
-              {conversation && host.primary?.status === "disabled" && (
-                <div className="workspace-conversation-notice">
-                  <PrimaryAgentPaused
-                    organizationId={organizationId}
-                    agent={host.primary}
-                  />
-                </div>
-              )}
-              <div
-                className="workspace-agent-column"
-                hidden={Boolean(viewing)}
-                data-view={view}
-                {...(conversation
-                  ? { role: "region", "aria-label": "Agent chat" }
-                  : {})}
-              >
-                <AgentChat
-                  key={host.owner}
-                  organizationId={organizationId}
-                  scope={scope}
-                  visible={area === "agent"}
-                  agentId={host.agentId}
-                  agentName={host.agentName}
-                  chat={chat}
-                  dispatch={dispatch}
-                  onComposingChange={setComposing}
-                  getScreenContext={getScreenContext}
-                  renderBlank={renderDesk}
-                />
-              </div>
-            </div>
+                  <Icon size={18} strokeWidth={1.7} />
+                  {leftExpanded && (
+                    <span className="workspace-nav-label">{item.label}</span>
+                  )}
+                  {leftExpanded &&
+                    (item.count ||
+                      (item.key === "teamspaces" &&
+                        teamspaces.count !== undefined)) && (
+                      <span className="workspace-nav-count">
+                        {item.key === "teamspaces"
+                          ? teamspaces.count
+                          : item.count}
+                      </span>
+                    )}
+                </button>
+              )
+            })}
+          </nav>
+
+          {activeMode === "team" && (
+            <RecentConversations
+              inbox={inbox}
+              people={dmPeople}
+              viewerId={viewerId}
+              expanded={leftExpanded}
+              activePeerId={canvasPeerId}
+              onOpen={openDirectMessage}
+              onShowAll={showAllConversations}
+            />
           )}
-        </main>
+
+          <div className="workspace-profile-area">
+            {profileMenuOpen && (
+              <div
+                className="workspace-profile-menu"
+                role="menu"
+                aria-label="User menu"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    setSettingsPage(undefined)
+                    setSettingsOpen(true)
+                  }}
+                >
+                  <Settings2 size={17} strokeWidth={1.7} /> Settings
+                </button>
+                {session && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={signingOut}
+                    onClick={() => void handleSignOut()}
+                  >
+                    <LogOut size={17} strokeWidth={1.7} />{" "}
+                    {signingOut ? "Signing out…" : "Sign out"}
+                  </button>
+                )}
+              </div>
+            )}
+            <button
+              className="workspace-profile"
+              type="button"
+              aria-label="Open user menu"
+              aria-haspopup="menu"
+              aria-expanded={profileMenuOpen}
+              onClick={() => setProfileMenuOpen((open) => !open)}
+            >
+              <IdentityAvatar identity={currentIdentity} />
+              {leftExpanded && (
+                <>
+                  <span className="workspace-profile-copy">
+                    <strong>{currentIdentity.name}</strong>
+                    <small>
+                      {session
+                        ? role === "admin"
+                          ? "Workspace admin"
+                          : "Member"
+                        : "Preview admin"}
+                    </small>
+                  </span>
+                  <MoreHorizontal size={17} strokeWidth={1.7} />
+                </>
+              )}
+            </button>
+          </div>
+          {signOutError && (
+            <p className="workspace-profile-error" role="alert">
+              {signOutError}
+            </p>
+          )}
+        </aside>
+      )}
+
+      <div
+        className="workspace-middle"
+        data-composing={middleHeight ? "true" : undefined}
+        style={middleHeight ? { height: middleHeight } : undefined}
+      >
+        {primaryWork && selectedOrganization ? (
+          <div className="workspace-focus workspace-primary-focus">
+            <FocusHeader
+              title="Agent overview"
+              kind="Primary agent"
+              onBack={closePrimaryWork}
+            />
+            <main className="workspace-focus-layout workspace-primary-focus-layout">
+              <div
+                className="workspace-conversation workspace-primary-conversation-slot"
+                aria-hidden="true"
+              />
+              <div className="workspace-work-column">
+                <section
+                  className="workspace-work-panel"
+                  aria-label="Agent overview work panel"
+                >
+                  {primaryViewer === "file" ? (
+                    <PrimaryAgentFileViewer
+                      organizationId={selectedOrganization.id}
+                      threadId={primaryFile?.threadId ?? primaryThreadId}
+                      file={primaryFile ?? undefined}
+                      onBack={() => setPrimaryViewer("overview")}
+                    />
+                  ) : (
+                    <AgentsCanvas
+                      section="agents"
+                      primaryThreadId={primaryThreadId}
+                      organizationId={selectedOrganization.id}
+                      viewerId={session?.user.id}
+                      onOpen={openWork}
+                      onNavigate={navigatePrimarySection}
+                      onOpenFile={openPrimaryFile}
+                    />
+                  )}
+                </section>
+              </div>
+            </main>
+          </div>
+        ) : agentWork && selectedOrganization ? (
+          <AgentsFocus
+            target={agentWork}
+            organizationId={selectedOrganization.id}
+            onBack={agentsMode.close}
+            onOpen={openWork}
+            onChat={chatWith}
+            getScreenContext={getScreenContext}
+          />
+        ) : teamspaces.openId && selectedOrganization ? (
+          <TeamspaceFocus
+            key={teamspaces.openId}
+            organizationId={selectedOrganization.id}
+            teamspaceId={teamspaces.openId}
+            viewerId={session?.user.id}
+            onBack={teamspaces.close}
+          />
+        ) : (
+          <>
+            <header className="workspace-header">
+              {detailTitle ? (
+                <>
+                  <button
+                    className="workspace-header-back"
+                    type="button"
+                    aria-label={
+                      canvasPeerId
+                        ? "Back to people"
+                        : selectedKnowledgeBase
+                          ? "All knowledge bases"
+                          : "All teamspaces"
+                    }
+                    onClick={closeDetail}
+                  >
+                    <ArrowLeft size={17} strokeWidth={1.7} />
+                  </button>
+                  <div className="workspace-header-detail">
+                    {canvasPeerId && (
+                      <PersonAvatar
+                        id={canvasPeerId}
+                        name={canvasPeerName ?? ""}
+                        online={canvasPeerOnline}
+                      />
+                    )}
+                    {selectedKnowledgeBase && (
+                      <span className="workspace-header-detail-icon">
+                        <BookOpenText size={17} strokeWidth={1.7} />
+                      </span>
+                    )}
+                    {selectedTeamspace && (
+                      <TeamspaceAvatar name={selectedTeamspace.name} />
+                    )}
+                    <div>
+                      <h1>{detailTitle}</h1>
+                      {detailKind && <small>{detailKind}</small>}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <h1>{heading}</h1>
+              )}
+              {session && session.organizations.length > 1 && (
+                <label className="workspace-organization-switcher">
+                  <span className="sr-only">Workspace</span>
+                  <select
+                    value={
+                      selectedOrganization?.id || session.organizations[0].id
+                    }
+                    onChange={(event) =>
+                      window.location.assign(
+                        `/?org=${encodeURIComponent(event.target.value)}`
+                      )
+                    }
+                  >
+                    {session.organizations.map((organization) => (
+                      <option value={organization.id} key={organization.id}>
+                        {organization.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </header>
+            <main
+              className="workspace-canvas"
+              aria-label={`${detailTitle || heading} canvas`}
+            >
+              {section === "overview" && (
+                <HomeOverview
+                  key={JSON.stringify([selectedOrganization?.id, viewerId])}
+                  organizationId={
+                    session ? selectedOrganization?.id : undefined
+                  }
+                  viewerId={viewerId}
+                  primaryChatActivity={primaryChatActivity}
+                  onNewChat={(message) =>
+                    openHomeConversation({ kind: "new", message })
+                  }
+                  onOpenConversation={(threadId) =>
+                    openHomeConversation({ kind: "thread", threadId })
+                  }
+                  onOpenRequests={openHomeRequests}
+                  onOpenAgent={openHomeHistory}
+                  onOpenTools={() => navigateFromHome("home", "tools")}
+                  onOpenKnowledge={() => navigateFromHome("home", "knowledge")}
+                  onOpenSlack={() => {
+                    setSettingsPage("slack")
+                    setSettingsOpen(true)
+                  }}
+                  onOpenAccount={() => {
+                    setSettingsPage("account")
+                    setSettingsOpen(true)
+                  }}
+                />
+              )}
+              {section === "knowledge" && (
+                <KnowledgeBases
+                  organizationId={selectedOrganization?.id}
+                  organizationName={selectedOrganization?.name}
+                  organizationRole={organizationRole}
+                  userId={session?.user.id}
+                  selected={selectedKnowledgeBase ?? null}
+                  onSelect={setKnowledgeBaseSelection}
+                  onOpenTools={() => selectSection("tools")}
+                />
+              )}
+              {section === "tools" && (
+                <WorkspaceTools organizationId={selectedOrganization?.id} />
+              )}
+              {section === "people" &&
+                (canvasPeerId && !canvasPeer ? (
+                  <p className="workspace-dm-waiting" role="status">
+                    Loading the conversation…
+                  </p>
+                ) : canvasPeer && dmOrganizationId && viewerId ? (
+                  <DirectMessageView
+                    key={canvasPeer.id}
+                    organizationId={dmOrganizationId}
+                    viewerId={viewerId}
+                    peer={canvasPeer}
+                    layout="canvas"
+                    draft={dmDrafts[canvasPeer.id] ?? ""}
+                    onDraftChange={(draft) =>
+                      setDmDrafts((current) => ({
+                        ...current,
+                        [canvasPeer.id]: draft,
+                      }))
+                    }
+                    onComposingChange={setDmComposing}
+                    autoFocus={dmOpenedByMember}
+                  />
+                ) : (
+                  <PeopleDirectory
+                    people={dmPeople}
+                    onMessage={openDirectMessage}
+                    focusPersonId={dmReturnTo}
+                    onFocused={() => setDmReturnTo(null)}
+                  />
+                ))}
+              {section === "teamspaces" && (
+                <TeamspacesManagement
+                  organizationId={selectedOrganization?.id}
+                  viewerId={session?.user.id}
+                  selectedId={teamspaces.selectedId}
+                  onSelect={teamspaces.select}
+                  onOpen={openTeamspace}
+                />
+              )}
+              {isAgentsSection(section) && (
+                <AgentsCanvas
+                  section={section}
+                  primaryThreadId={primaryThreadId}
+                  organizationId={
+                    session ? selectedOrganization?.id : undefined
+                  }
+                  viewerId={session?.user.id}
+                  onOpen={openWork}
+                  onNavigate={selectSection}
+                  onOpenFile={openPrimaryFile}
+                />
+              )}
+              {section === "requests" && (
+                <RequestsCanvas
+                  organizationId={
+                    session ? selectedOrganization?.id : undefined
+                  }
+                  viewerId={session?.user.id}
+                  focusRequestId={requestFocus}
+                  onFocusDone={() => setRequestFocus(null)}
+                />
+              )}
+            </main>
+          </>
+        )}
       </div>
 
+      <WorkspaceAgentPanel
+        key={JSON.stringify([dmOrganizationId, viewerId])}
+        organizationId={session ? selectedOrganization?.id : undefined}
+        expanded={rightExpanded}
+        onExpand={expandAgentPanel}
+        onCollapse={() => setRightExpanded(false)}
+        primaryWork={primaryWork}
+        onOpenAgentOverview={openAgentOverview}
+        onPrimaryThreadChange={setPrimaryThreadId}
+        onPrimaryFileCreated={openPrimaryFile}
+        onPrimaryComposingChange={setPrimaryComposing}
+        getScreenContext={getScreenContext}
+        chatRequest={chatRequest}
+        tabRequest={tabRequest}
+        directMessages={directMessages}
+        teamspaceId={pageTeamspaceId}
+      />
       {settingsOpen && (
         <WorkspaceSettings
           key={JSON.stringify([
@@ -667,8 +1088,10 @@ function WorkspaceShellContent({
           signingOut={signingOut}
           signOutError={signOutError}
           onOpenTools={() => {
+            setActiveMode("home")
+            setSectionsByMode((current) => ({ ...current, home: "tools" }))
             closeSettings()
-            go("tools")
+            if (isMobile) setLeftExpanded(false)
           }}
         />
       )}

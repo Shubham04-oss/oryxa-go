@@ -27,9 +27,8 @@ import { agentChats } from "@/test/agent-chat"
 import { roomSockets } from "@/test/room-socket"
 import { deferred, json, mockApi } from "@/test/teamspaces"
 
-// Run the desk, the shell, the public choice store and the real primary chat
-// in the center together. Only HTTP and the authenticated chat SDK's
-// transport stand in.
+// Run Home, the shell, the public choice store and the real primary panel
+// together. Only HTTP and the authenticated chat SDK's transport stand in.
 vi.mock(
   "agents/react",
   async () => (await import("@/test/room-socket")).agentsReact
@@ -38,11 +37,6 @@ vi.mock(
   "@cloudflare/ai-chat/react",
   async () => (await import("@/test/agent-chat")).aiChatReact
 )
-vi.mock("thinking-orbs", () => ({
-  ThinkingOrb: ({ state }: { state: string }) => (
-    <i aria-hidden="true" data-orb-state={state} />
-  ),
-}))
 
 const organization = { id: "org_home", name: "Home workspace", slug: "home" }
 const session: Session = {
@@ -202,25 +196,22 @@ function renderShell() {
   return { ...view, client }
 }
 
-const desk = () => within(screen.getByRole("main", { name: "Today canvas" }))
-const recentList = () => within(screen.getByRole("region", { name: "Recent" }))
-const title = () => screen.getByRole("heading", { level: 1 }).textContent
-function sendFromDesk(text: string) {
+const home = () => within(screen.getByRole("main", { name: "Today canvas" }))
+const work = () => within(home().getByRole("region", { name: "Your agent" }))
+function sendHome(text: string) {
   fireEvent.change(
-    desk().getByRole("textbox", { name: "Start a new conversation" }),
+    home().getByRole("textbox", { name: "Start a new conversation" }),
     { target: { value: text } }
   )
-  fireEvent.click(desk().getByRole("button", { name: "Send message" }))
+  fireEvent.click(home().getByRole("button", { name: "Send message" }))
 }
 const objectName = (id: string) => `${organization.id}~${id}`
 async function socket(id: string) {
   await waitFor(() =>
-    expect(roomSockets.named(objectName(id)).length, id).toBeGreaterThan(0)
+    expect(roomSockets.named(objectName(id)).length).toBeGreaterThan(0)
   )
   return roomSockets.named(objectName(id)).at(-1)!
 }
-const posts = (api: { calls: Array<{ method: string }> }) =>
-  api.calls.filter((call) => call.method === "POST")
 
 beforeEach(() => {
   const requestHook = renderHook(() => usePrimaryChatRequest())
@@ -243,39 +234,41 @@ afterEach(() => {
   window.sessionStorage.clear()
 })
 
-describe("the desk and the primary chat in the center", () => {
-  it("makes one conversation of a desk message, shows it in the center and sends once, then opens the exact older thread from Recent without a POST", async () => {
+describe("Home's public primary-chat integration", () => {
+  it("creates one fresh conversation and sends once through its actual panel socket, then reopens the exact older thread without a POST", async () => {
     const api = backend()
     const release = api.holdCreate()
     const view = renderShell()
-    await desk().findByRole("region", { name: "Your agent" })
-    await recentList().findByRole("button", {
-      name: /^Exact older conversation/,
-    })
-    sendFromDesk("  Fresh request from the desk  ")
-    await waitFor(() => expect(posts(api)).toHaveLength(1))
-
-    // The center is the conversation being made, the message in it: never a
-    // side panel, and nothing claims it is sent.
-    expect(title()).toBe("New conversation")
+    await home().findByRole("button", { name: /Exact older conversation/ })
+    sendHome("  Fresh request from Home  ")
+    await waitFor(() =>
+      expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(1)
+    )
+    expect(await home().findByText("Starting conversation")).toBeTruthy()
+    expect(work().getAllByRole("listitem")).toHaveLength(3)
     expect(
-      screen.getByRole("log").querySelector('[data-from="member"]')?.textContent
-    ).toBe("Fresh request from the desk")
-    const box = screen.getByRole("textbox", { name: "Message Leo" })
-    expect(box.hasAttribute("disabled")).toBe(true)
-    expect(screen.getByText("Connecting…")).toBeTruthy()
-    expect(view.container.querySelector(".workspace-right")).toBeNull()
-
+      work()
+        .getByText("Starting conversation")
+        .closest("li")
+        ?.querySelector("button")
+    ).toBeNull()
+    expect(
+      view.container
+        .querySelector(".workspace-shell")
+        ?.getAttribute("data-right")
+    ).toBe("expanded")
     await act(async () => release())
     const created = await socket("th_created")
     const chat = agentChats.named(objectName("th_created"))
     expect(chat.sendMessage).not.toHaveBeenCalled()
     created.open()
     expect(chat.sendMessage).toHaveBeenCalledExactlyOnceWith(
-      { text: "Fresh request from the desk" },
+      { text: "Fresh request from Home" },
       {
         body: {
-          screen_context: expect.objectContaining({ view: "home/overview" }),
+          screen_context: expect.objectContaining({
+            view: "home/overview",
+          }),
         },
       }
     )
@@ -283,52 +276,28 @@ describe("the desk and the primary chat in the center", () => {
     view.rerender(<WorkspaceShell {...shellProps(session)} />)
     expect(chat.sendMessage).toHaveBeenCalledOnce()
 
-    // Recent waits for the first message to settle in its conversation.
-    const older = recentList().getByRole<HTMLButtonElement>("button", {
-      name: /^Exact older conversation/,
-    })
-    expect(older.disabled).toBe(true)
-    await waitFor(() => expect(older.disabled).toBe(false))
-    fireEvent.click(older)
+    fireEvent.click(
+      work().getByRole("button", { name: /Exact older conversation/ })
+    )
     ;(await socket("th_old")).open()
-    await waitFor(() => expect(title()).toBe("Exact older conversation"))
+    await waitFor(() =>
+      expect(
+        view.container.querySelector(".workspace-agent-thread-title")
+          ?.textContent
+      ).toBe("Exact older conversation")
+    )
     expect(
       agentChats.named(objectName("th_old")).sendMessage
     ).not.toHaveBeenCalled()
-    expect(posts(api)).toHaveLength(1)
-
-    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
+    expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(1)
+    fireEvent.click(work().getByRole("button", { name: "New chat" }))
     expect(
-      await desk().findByRole("region", { name: "Your agent" })
+      await screen.findByText("Ask anything to start a conversation.")
     ).toBeTruthy()
-    expect(posts(api)).toHaveLength(1)
+    expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(1)
   })
 
-  it("sends what the member types next into the conversation their desk message made", async () => {
-    const api = backend()
-    renderShell()
-    await desk().findByRole("region", { name: "Your agent" })
-    sendFromDesk("First question")
-    ;(await socket("th_created")).open()
-    const chat = agentChats.named(objectName("th_created"))
-    await waitFor(() => expect(chat.sendMessage).toHaveBeenCalledOnce())
-
-    const box = await screen.findByRole("textbox", { name: "Message Leo" })
-    await waitFor(() => expect(box.hasAttribute("disabled")).toBe(false))
-    fireEvent.change(box, { target: { value: "A follow-up" } })
-    fireEvent.keyDown(box, { key: "Enter" })
-    expect(chat.sendMessage).toHaveBeenLastCalledWith(
-      { text: "A follow-up" },
-      {
-        body: {
-          screen_context: expect.objectContaining({ view: "agents/chat" }),
-        },
-      }
-    )
-    expect(posts(api)).toHaveLength(1)
-  })
-
-  it("counts the waiting conversation once beside Inbox requests on the desk, and opens its actual chat in the center", async () => {
+  it("counts the selected confirmation conversation once alongside Inbox requests and opens its actual chat", async () => {
     const held: Item = {
       type: "confirmation",
       id: "ev_held",
@@ -341,24 +310,15 @@ describe("the desk and the primary chat in the center", () => {
     }
     backend({ items: { th_old: [held] }, inbox: true })
     renderShell()
-    // As the app opens, the conversation waiting on the member opens.
+    fireEvent.click(
+      await home().findByRole("button", { name: /Exact older conversation/ })
+    )
     ;(await socket("th_old")).open()
     agentChats
       .named(objectName("th_old"))
       .update({ messages: itemsToChatMessages([held]) })
-    await waitFor(() => expect(title()).toBe("Exact older conversation"))
-    expect(
-      await screen.findByRole("group", { name: /Confirm Gmail send email/ })
-    ).toBeTruthy()
-    expect(
-      recentList().getByRole("button", {
-        name: /^Exact older conversation.*Needs approval/,
-      })
-    ).toBeTruthy()
-
-    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
-    await desk().findByText("1 tool confirmation · Open chat to decide")
-    const needs = within(desk().getByRole("region", { name: "Needs you" }))
+    await home().findByText("1 tool confirmation · Open chat to decide")
+    const needs = within(home().getByRole("region", { name: "Needs you" }))
     expect(needs.getAllByRole("article")).toHaveLength(1)
     expect(needs.getByText(/Quarterly numbers/)).toBeTruthy()
     expect(
@@ -366,76 +326,170 @@ describe("the desk and the primary chat in the center", () => {
         needs.getByRole("list", { name: "Tool confirmations" })
       ).getAllByRole("listitem")
     ).toHaveLength(1)
-    expect(desk().queryByText("Nothing needs you right now.")).toBeNull()
-
+    expect(work().getAllByRole("listitem")).toHaveLength(2)
+    expect(home().queryByText("Nothing needs you right now.")).toBeNull()
+    expect(
+      needs.getAllByRole("button", { name: /Exact older conversation/ })
+    ).toHaveLength(1)
+    fireEvent.click(work().getByRole("button", { name: "New chat" }))
+    await screen.findByText("Ask anything to start a conversation.")
     fireEvent.click(
       needs.getByRole("button", { name: /Exact older conversation/ })
     )
-    await waitFor(() => expect(title()).toBe("Exact older conversation"))
-    expect(screen.getByRole("region", { name: "Agent chat" })).toBeTruthy()
+    await waitFor(() =>
+      expect(
+        document.querySelector(".workspace-agent-thread-title")?.textContent
+      ).toBe("Exact older conversation")
+    )
     expect(
       agentChats.named(objectName("th_old")).sendMessage
     ).not.toHaveBeenCalled()
   })
 
-  it("keeps a desk message whose conversation couldn't be made on the desk, as not sent, and sends it again into a conversation of its own", async () => {
+  it("preserves a second Home message sent while a first new conversation is still being created", async () => {
     const api = backend()
-    const release = api.holdCreate({ fail: true })
+    const release = api.holdCreate()
     renderShell()
-    await desk().findByRole("region", { name: "Your agent" })
-    sendFromDesk("Failed first request")
-    await waitFor(() => expect(posts(api)).toHaveLength(1))
+    await home().findByRole("button", { name: /Exact older conversation/ })
+    sendHome("First Home request")
+    await waitFor(() =>
+      expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(1)
+    )
+    await home().findByText("Starting conversation")
+    sendHome("Second Home request")
     await act(async () => release())
-
-    // Back on the desk: the words wait as not sent, the composer empty.
-    const unsent = await desk().findByRole("log", {
-      name: "Messages not sent",
+    await waitFor(() =>
+      expect(
+        roomSockets.all.filter((candidate) =>
+          candidate.options.name?.startsWith(objectName("th_created"))
+        ).length
+      ).toBeGreaterThan(0)
+    )
+    for (const candidate of roomSockets.all)
+      if (candidate.options.name?.startsWith(objectName("th_created")))
+        candidate.open()
+    // The consumer may keep or deliver the newer message; it must not
+    // silently discard it when the older create response arrives.
+    await waitFor(() => {
+      const sent = agentChats.all.flatMap((chat) =>
+        chat.sendMessage.mock.calls.map(
+          ([message]) => (message as { text?: string } | undefined)?.text
+        )
+      )
+      const drafts = screen
+        .getAllByRole<HTMLTextAreaElement>("textbox")
+        .map((box) => box.value)
+      const pending = Array.from(
+        document.querySelectorAll('[role="log"] [data-from="member"]')
+      ).map((message) => message.textContent)
+      expect([...sent, ...drafts, ...pending]).toContain("Second Home request")
     })
-    expect(within(unsent).getByText("Failed first request")).toBeTruthy()
-    expect(within(unsent).getByText(/Not sent\. Couldn't start/)).toBeTruthy()
-    expect(
-      desk().getByRole<HTMLTextAreaElement>("textbox", {
-        name: "Start a new conversation",
-      }).value
-    ).toBe("")
+    // Every Home submission starts a new conversation: retaining/delivering
+    // B cannot be implemented by adding it to A's pending thread.
+    const firstThreadSent = agentChats.all
+      .filter((chat) => chat.name === objectName("th_created"))
+      .flatMap((chat) =>
+        chat.sendMessage.mock.calls.map(
+          ([message]) => (message as { text?: string } | undefined)?.text
+        )
+      )
+    expect(firstThreadSent).not.toContain("Second Home request")
+    const deliveredB = agentChats.all.filter((chat) =>
+      chat.sendMessage.mock.calls.some(
+        ([message]) =>
+          (message as { text?: string } | undefined)?.text ===
+          "Second Home request"
+      )
+    )
+    for (const chat of deliveredB)
+      expect(chat.name).toBe(objectName("th_created_2"))
+  })
 
-    fireEvent.click(within(unsent).getByRole("button", { name: "Retry" }))
-    ;(await socket("th_created_2")).open()
-    expect(
-      agentChats.named(objectName("th_created_2")).sendMessage
-    ).toHaveBeenCalledExactlyOnceWith(
-      { text: "Failed first request" },
+  it("delivers both Home submissions once into distinct new conversations after the member's agents finish loading", async () => {
+    const api = backend()
+    const release = api.holdAgents()
+    renderShell()
+    await home().findByRole("button", { name: /Exact older conversation/ })
+    sendHome("First held-agents Home request")
+    sendHome("Second held-agents Home request")
+    expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(0)
+
+    await act(async () => release())
+    ;(await socket("th_created")).open()
+    const firstChat = agentChats.named(objectName("th_created"))
+    expect(firstChat.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      { text: "First held-agents Home request" },
       {
         body: {
           screen_context: expect.objectContaining({ view: "home/overview" }),
         },
       }
     )
-    expect(posts(api)).toHaveLength(2)
+    ;(await socket("th_created_2")).open()
+    const secondChat = agentChats.named(objectName("th_created_2"))
+    expect(secondChat.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      { text: "Second held-agents Home request" },
+      {
+        body: {
+          screen_context: expect.objectContaining({ view: "home/overview" }),
+        },
+      }
+    )
+    expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(2)
+    const sent = agentChats.all.flatMap((chat) =>
+      chat.sendMessage.mock.calls.map(
+        ([message]) => (message as { text?: string } | undefined)?.text
+      )
+    )
     expect(
-      screen.queryByText("Failed first request", { selector: "[data-status]" })
-    ).toBeNull()
+      sent.filter((text) => text === "First held-agents Home request")
+    ).toHaveLength(1)
+    expect(
+      sent.filter((text) => text === "Second held-agents Home request")
+    ).toHaveLength(1)
   })
 
-  it("keeps one draft for the desk and the conversations, as the chat's one composer did", async () => {
-    backend()
+  it("keeps a failed first Home message recoverable beside an occupied primary draft after the next Home message sends", async () => {
+    const api = backend()
+    const release = api.holdCreate({ fail: true })
     renderShell()
     fireEvent.click(
-      await recentList().findByRole("button", {
-        name: /^Exact older conversation/,
-      })
+      await home().findByRole("button", { name: /Exact older conversation/ })
     )
     ;(await socket("th_old")).open()
     fireEvent.change(
       await screen.findByRole("textbox", { name: "Message Leo" }),
       { target: { value: "Half a thought" } }
     )
-    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
+    sendHome("Failed first Home request")
+    await waitFor(() =>
+      expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(1)
+    )
+    sendHome("Following Home request")
+    await act(async () => release())
+    ;(await socket("th_created_2")).open()
     expect(
-      desk().getByRole<HTMLTextAreaElement>("textbox", {
-        name: "Start a new conversation",
-      }).value
-    ).toBe("Half a thought")
+      agentChats.named(objectName("th_created_2")).sendMessage
+    ).toHaveBeenCalledExactlyOnceWith(
+      { text: "Following Home request" },
+      {
+        body: {
+          screen_context: expect.objectContaining({ view: "home/overview" }),
+        },
+      }
+    )
+    expect(screen.getByDisplayValue("Half a thought")).toBeTruthy()
+    // A failed submission must remain visible and recoverable independently
+    // of the next request; it cannot replace the member's existing draft.
+    expect(await screen.findByText("Failed first Home request")).toBeTruthy()
+    expect(api.calls.filter((call) => call.method === "POST")).toHaveLength(2)
+    expect(
+      agentChats.all.flatMap((chat) =>
+        chat.sendMessage.mock.calls.map(
+          ([message]) => (message as { text?: string } | undefined)?.text
+        )
+      )
+    ).not.toContain("Failed first Home request")
   })
 
   it.each([
@@ -444,24 +498,22 @@ describe("the desk and the primary chat in the center", () => {
     "organization",
     "logout",
   ] as const)(
-    "clears the open chat's activity and draft when %s changes",
+    "clears selected chat activity and panel draft when %s changes",
     async (change) => {
       const api = backend()
       const view = renderShell()
       fireEvent.click(
-        await recentList().findByRole("button", {
-          name: /^Exact older conversation/,
-        })
+        await home().findByRole("button", { name: /Exact older conversation/ })
       )
       ;(await socket("th_old")).open()
       const box = await screen.findByRole<HTMLTextAreaElement>("textbox", {
         name: "Message Leo",
       })
       fireEvent.change(box, {
-        target: { value: "Member's private draft" },
+        target: { value: "Member's private panel draft" },
       })
       agentChats.named(objectName("th_old")).update({ status: "streaming" })
-      await recentList().findByText("Working")
+      await home().findByText("Working")
       const before = roomSockets.named(objectName("th_old")).length
       const newerBefore = roomSockets.named(objectName("th_newer")).length
       const next =
@@ -484,19 +536,27 @@ describe("the desk and the primary chat in the center", () => {
       if (next) api.setSession(next)
       const refuse = api.holdRefusedReads()
       view.rerender(<WorkspaceShell {...shellProps(next)} />)
-      expect(screen.queryByText("Working")).toBeNull()
-      expect(screen.queryByText("Exact older conversation")).toBeNull()
-      expect(screen.queryByDisplayValue("Member's private draft")).toBeNull()
+      expect(home().queryByText("Working")).toBeNull()
+      expect(home().queryByText("Exact older conversation")).toBeNull()
+      expect(
+        screen.queryByDisplayValue("Member's private panel draft")
+      ).toBeNull()
       await act(async () => {})
       if (change === "viewer refused") await act(async () => refuse())
       expect(roomSockets.named(objectName("th_old"))).toHaveLength(before)
       expect(roomSockets.named(objectName("th_newer"))).toHaveLength(
         newerBefore
       )
+      expect(
+        view.container.querySelector(".workspace-agent-thread-title")
+          ?.textContent
+      ).not.toBe("Newer conversation")
       await act(async () => refuse())
-      expect(screen.queryByText("Working")).toBeNull()
-      expect(screen.queryByText("Exact older conversation")).toBeNull()
-      expect(screen.queryByDisplayValue("Member's private draft")).toBeNull()
+      expect(home().queryByText("Working")).toBeNull()
+      expect(home().queryByText("Exact older conversation")).toBeNull()
+      expect(
+        screen.queryByDisplayValue("Member's private panel draft")
+      ).toBeNull()
       expect(roomSockets.named(objectName("th_old"))).toHaveLength(before)
       expect(roomSockets.named(objectName("th_newer"))).toHaveLength(
         newerBefore

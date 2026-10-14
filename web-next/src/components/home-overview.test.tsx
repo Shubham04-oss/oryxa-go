@@ -128,7 +128,7 @@ function renderHome(
   const callbacks = {
     onNewChat: vi.fn(),
     onOpenRequests: vi.fn(),
-    onOpenHistory: vi.fn(),
+    onOpenAgent: vi.fn(),
     onOpenConversation: vi.fn(),
     onOpenTools: vi.fn(),
     onOpenKnowledge: vi.fn(),
@@ -175,37 +175,44 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it("names the member's agent over the composer, and starts a conversation from it without listing conversations of its own", async () => {
+it("keeps composer and three titled recent chats in the agent card, opening exact chats and history", async () => {
   stubApi({
     [`${path}/threads`]: {
-      threads: [chat("one", " First "), chat("two", "Second")],
+      threads: [
+        chat("blank", "  "),
+        chat("wake", "Wake", "wakeup"),
+        chat("one", " First "),
+        chat("two", "Second"),
+        chat("three", "Third"),
+        chat("four", "Fourth"),
+      ],
     },
   })
-  const view = renderHome({
-    agent: { id: "agt_krude", name: "Krude", status: "active" },
-  })
+  const view = renderHome()
   const agent = screen.getByRole("region", { name: "Your agent" })
-  expect(within(agent).getByRole("heading", { name: "Krude" })).toBeTruthy()
-  expect(agent.getAttribute("data-screen-context-kind")).toBe("primary_agent")
-  expect(agent.getAttribute("data-screen-context-id")).toBe("agt_krude")
-  await screen.findByText("Nothing needs you right now.")
-  // The sidebar's Recent list has the conversations and New chat: the desk
-  // lists none, and offers neither New chat nor All of its own.
-  expect(screen.queryByText("Second")).toBeNull()
-  expect(within(agent).queryByRole("list")).toBeNull()
-  expect(within(agent).queryByRole("button", { name: "New chat" })).toBeNull()
   expect(
-    within(agent).queryByRole("button", { name: "All conversations" })
-  ).toBeNull()
-  // Nothing is paused: no word of it.
-  expect(within(agent).queryByText(/paused/)).toBeNull()
-
-  fireEvent.change(
     within(agent).getByRole<HTMLTextAreaElement>("textbox", {
       name: "Start a new conversation",
-    }),
-    { target: { value: "  Check the launch plan  " } }
+    })
+  ).toBeTruthy()
+  await within(agent).findByRole("button", { name: /First/ })
+  expect(
+    within(agent).getByRole("list", { name: "Recent conversations" }).children
+  ).toHaveLength(3)
+  expect(screen.queryByText("Fourth")).toBeNull()
+  fireEvent.click(
+    within(agent).getByRole<HTMLButtonElement>("button", { name: /Second/ })
   )
+  expect(view.onOpenConversation).toHaveBeenCalledWith("two")
+  fireEvent.click(
+    within(agent).getByRole<HTMLButtonElement>("button", {
+      name: "All conversations",
+    })
+  )
+  expect(view.onOpenAgent).toHaveBeenCalledOnce()
+  fireEvent.change(within(agent).getByRole<HTMLTextAreaElement>("textbox"), {
+    target: { value: "  Check the launch plan  " },
+  })
   fireEvent.click(
     within(agent).getByRole<HTMLButtonElement>("button", {
       name: "Send message",
@@ -215,82 +222,37 @@ it("names the member's agent over the composer, and starts a conversation from i
   expect(within(agent).getByRole<HTMLTextAreaElement>("textbox").value).toBe("")
 })
 
-it("calls the agent 'Your agent' until the member's agents have loaded", () => {
-  stubApi()
-  renderHome()
-  expect(
-    within(screen.getByRole("region", { name: "Your agent" })).getByRole(
-      "heading",
-      { name: "Your agent" }
-    )
-  ).toBeTruthy()
-})
-
-it("is the primary chat's blank state when given one: its draft, its send, its unsent messages and why it left a conversation", async () => {
-  stubApi()
-  const blank = {
-    draft: "Typed in a conversation",
-    onDraftChange: vi.fn(),
-    onSubmit: vi.fn(),
-    onComposingChange: vi.fn(),
-    notSent: <p data-status="not-sent">Lost words</p>,
-    notice: "That conversation no longer exists.",
-  }
-  const view = renderHome({ chat: blank, onNewChat: undefined })
-  const box = screen.getByRole<HTMLTextAreaElement>("textbox", {
-    name: "Start a new conversation",
+it("pins a running open chat once and keeps starting chat truthful until an ID exists", async () => {
+  stubApi({
+    [`${path}/threads`]: {
+      threads: [
+        chat("one"),
+        chat("two"),
+        chat("three"),
+        chat("open", "Running chat"),
+      ],
+    },
   })
-  // One draft with the conversations' composer: the chat keeps it.
-  expect(box.value).toBe("Typed in a conversation")
-  fireEvent.change(box, { target: { value: "Something else" } })
-  expect(blank.onDraftChange).toHaveBeenCalledWith("Something else")
-  fireEvent.focus(box)
-  expect(blank.onComposingChange).toHaveBeenLastCalledWith(true)
-  fireEvent.blur(box)
-  expect(blank.onComposingChange).toHaveBeenLastCalledWith(false)
-  fireEvent.click(screen.getByRole("button", { name: "Send message" }))
-  expect(blank.onSubmit).toHaveBeenCalledExactlyOnceWith(
-    "Typed in a conversation"
-  )
-  expect(view.onNewChat).not.toHaveBeenCalled()
+  const view = renderHome({
+    primaryChatActivity: { state: "running", threadId: "open" },
+  })
+  const recents = await screen.findByRole("list", {
+    name: "Recent conversations",
+  })
+  await waitFor(() => expect(recents.children).toHaveLength(3))
+  expect(within(recents).getAllByText("Running chat")).toHaveLength(1)
   expect(
-    within(screen.getByRole("log", { name: "Messages not sent" })).getByText(
-      "Lost words"
-    )
+    within(recents)
+      .getByText("Working")
+      .querySelector("[data-orb-state=working]")
   ).toBeTruthy()
-  expect(screen.getByRole("alert").textContent).toBe(
-    "That conversation no longer exists."
-  )
-})
-
-it("says when the member's agent is paused, and resumes it", async () => {
-  const krude = {
-    id: "agt_krude",
-    organization_id: ORG,
-    owner_user_id: OWNER,
-    kind: "primary",
-    name: "Krude",
-    description: "",
-    instructions: "",
-    status: "active",
-    revision: 2,
-    created_at: new Date(NOW).toISOString(),
-    updated_at: new Date(NOW).toISOString(),
-  }
-  const go = stubApi({ [`${path}/agents/agt_krude`]: () => json(krude) })
-  renderHome({ agent: { id: "agt_krude", name: "Krude", status: "disabled" } })
-  const agent = screen.getByRole("region", { name: "Your agent" })
-  expect(within(agent).getByText("Krude is paused.")).toBeTruthy()
-  fireEvent.click(within(agent).getByRole("button", { name: "Resume Krude" }))
-  await waitFor(() =>
-    expect(
-      go.calls.find(
-        (call) =>
-          call.method === "PATCH" &&
-          call.url.pathname === `${path}/agents/agt_krude`
-      )?.body
-    ).toEqual({ status: "active" })
-  )
+  view.rerenderHome({
+    primaryChatActivity: { state: "running", threadId: null },
+  })
+  await screen.findByText("Starting conversation")
+  expect(
+    screen.queryByRole("button", { name: /Starting conversation/ })
+  ).toBeNull()
 })
 
 it("uses real inline consent and held answer cards, followed by access, sent/shared answers and unfinished setup", async () => {
@@ -747,7 +709,7 @@ it("polls bounded chat details every thirty seconds while lists stay quick and m
         viewerId={OWNER}
         primaryChatActivity={activity}
         onOpenRequests={vi.fn()}
-        onOpenHistory={vi.fn()}
+        onOpenAgent={vi.fn()}
         onOpenTools={vi.fn()}
         onOpenKnowledge={vi.fn()}
       />
@@ -1074,19 +1036,11 @@ it("keeps preview read-only and does not fetch private APIs", async () => {
 })
 
 it("leaves unsupported conversation callbacks visibly disabled and drafts editable", async () => {
-  stubApi({
-    [`${path}/threads`]: { threads: [chat("one", "Waiting chat")] },
-    [`${path}/threads/one`]: {
-      ...chat("one", "Waiting chat"),
-      items: [],
-      pending_confirmations: ["a"],
-    },
-  })
+  stubApi({ [`${path}/threads`]: { threads: [chat("one")] } })
   renderHome({ onOpenConversation: undefined, onNewChat: undefined })
-  await screen.findByRole("button", { name: /Waiting chat/ })
+  await screen.findByRole("button", { name: /one/ })
   expect(
-    screen.getByRole<HTMLButtonElement>("button", { name: /Waiting chat/ })
-      .disabled
+    screen.getByRole<HTMLButtonElement>("button", { name: /one/ }).disabled
   ).toBe(true)
   expect(
     screen.getByText("Conversation shortcuts are unavailable.")
@@ -1123,17 +1077,9 @@ it.each([
     key: agentKeys.requestBox(ORG, "sent"),
   },
   {
-    // The desk names a conversation only where it waits on the member.
     name: "conversations",
     route: `${path}/threads`,
     seed: { threads: [chat("private", "Private recent title")] },
-    extra: {
-      [`${path}/threads/private`]: {
-        ...chat("private", "Private recent title"),
-        items: [],
-        pending_confirmations: ["a"],
-      },
-    },
     privateText: "Private recent title",
     key: threadKeys.list(ORG),
   },
@@ -1160,10 +1106,9 @@ it.each([
   },
 ])(
   "removes private $name after a refused refresh, preserving the unsent composer",
-  async ({ name, route, seed, privateText, key, ...rest }) => {
+  async ({ name, route, seed, privateText, key }) => {
     let deny = false
-    const extra = "extra" in rest ? rest.extra : {}
-    stubApi({ ...extra, [route]: () => (deny ? refused() : json(seed)) })
+    stubApi({ [route]: () => (deny ? refused() : json(seed)) })
     const view = renderHome()
     await screen.findByText(privateText)
     const field = screen.getByRole<HTMLTextAreaElement>("textbox", {

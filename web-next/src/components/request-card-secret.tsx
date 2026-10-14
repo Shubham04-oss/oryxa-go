@@ -13,7 +13,7 @@ import { useEffect, useId, useRef, useState } from "react"
 import type { ClipboardEvent, FormEvent } from "react"
 import { Check, Copy, KeyRound } from "lucide-react"
 import { agentsErrorMessage } from "./agents-format"
-import { clockTime } from "./time-format"
+import { clockTime } from "./direct-message-format"
 import { whenPhrase } from "./request-card-format"
 import {
   SECRET_MAX_TTL_SECONDS,

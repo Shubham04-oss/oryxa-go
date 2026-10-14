@@ -518,7 +518,7 @@ function AppsUpdate({ entry }: { entry: MessageEntry }) {
 }
 
 /** A confirmation the member answers: what would run, why it asks, and Decline and Approve. */
-function ConfirmationCard({
+export function ConfirmationCard({
   entry,
   actionable,
   submitted,

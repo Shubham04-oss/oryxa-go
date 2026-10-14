@@ -11,7 +11,7 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { WorkspaceSlackSettings } from "./slack-settings"
-import { clockTime } from "./time-format"
+import { clockTime } from "./direct-message-format"
 import { NOW, ORG, OWNER, failure, fakeGo } from "./request-card-fixtures"
 import type { Route } from "./request-card-fixtures"
 import type { Role } from "@/lib/auth/client"

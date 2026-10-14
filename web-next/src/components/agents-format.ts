@@ -1,9 +1,19 @@
-// Small, pure helpers shared by the chat, the desk and the request views:
-// identities for the voxel avatars, time labels, and the copy for the agents
-// service's refusals.
+// Small, pure helpers shared by Agents mode's views: identities for the
+// voxel avatars, status and time labels, the server's length rules, and the
+// copy for the agents service's refusals.
 import { ApiError } from "@/lib/api/client"
 import { isUnavailableHere } from "@/lib/agents/policy"
 import type { AvatarIdentity } from "./workspace-avatar"
+
+/** Characters as Go counts them (runes), not UTF-16 code units. */
+export function runeCount(value: string): number {
+  return [...value].length
+}
+
+/** Collapses whitespace runs the way the server cleans names and roles. */
+export function cleanLine(value: string): string {
+  return value.split(/\s+/).filter(Boolean).join(" ")
+}
 
 function initialsOf(name: string): string {
   return (
@@ -17,8 +27,8 @@ function initialsOf(name: string): string {
 }
 
 /**
- * An agent's voxel avatar, seeded by its id so it survives a rename and is
- * the same wherever the agent is shown.
+ * An agent's voxel avatar, seeded by its id so it survives a rename and
+ * matches the one the agent panel shows for the same agent.
  */
 export function agentIdentity(agent: {
   id: string
@@ -32,13 +42,26 @@ export function agentIdentity(agent: {
   }
 }
 
-function formatDate(iso: string): string {
+export function statusLabel(status: "active" | "disabled"): string {
+  return status === "active" ? "Active" : "Paused"
+}
+
+export function formatDate(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ""
   return date.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
     year: "numeric",
+  })
+}
+
+export function formatTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ""
+  return date.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
   })
 }
 
@@ -68,8 +91,8 @@ export function plural(count: number, one: string, many = `${one}s`) {
  */
 export type ErrorCopy = Partial<Record<string, string>>
 
-// The agents service prefixes some 400s with its sentinel ("invalid <thing>:
-// <reason>"); the reason is what the member needs.
+// The agents service prefixes some 400s with its sentinel, such as
+// "invalid agent team: a team needs at least one specialist".
 const sentinel = /^invalid [a-z ]+: /i
 
 function sentence(message: string): string {

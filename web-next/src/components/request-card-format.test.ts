@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
-import { clockTime } from "./time-format"
+import { clockTime } from "./direct-message-format"
 import {
   DENY,
   LET_MY_AGENT_ANSWER,

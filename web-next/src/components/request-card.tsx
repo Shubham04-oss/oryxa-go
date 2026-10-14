@@ -20,7 +20,7 @@ import {
 import "./request-card.css"
 import { AgentMarkdown } from "./agent-timeline"
 import { agentsErrorMessage } from "./agents-format"
-import { clockTime, fullTime } from "./time-format"
+import { clockTime } from "./direct-message-format"
 import { HeldAnswerReview } from "./request-card-review"
 import { ReplyFirst, ReplyOption } from "./request-card-reply"
 import type { FirstChoice } from "./request-card-reply"
@@ -53,7 +53,7 @@ import {
   requestDetailQueryOptions,
   usePeopleNames,
 } from "./requests-view-queries"
-import { personIdentity } from "./people-format"
+import { fullTime, personIdentity } from "./teamspace-format"
 import { IdentityAvatar } from "./workspace-avatar"
 import { ApiError } from "@/lib/api/client"
 import {

@@ -17,7 +17,7 @@ import {
 } from "lucide-react"
 import { AgentsNotice } from "./agents-parts"
 import { agentsErrorMessage } from "./agents-format"
-import { clockTime, dayLabel, fullTime } from "./time-format"
+import { clockTime, dayLabel } from "./direct-message-format"
 import {
   activityIcon,
   activitySentence,
@@ -32,6 +32,7 @@ import {
 } from "./requests-view-queries"
 import { shortName } from "./request-card-format"
 import type { Reader } from "./request-card-format"
+import { fullTime } from "./teamspace-format"
 import { isLeaseLive, revokeAgentLease } from "@/lib/agents/agent-requests"
 import type { AgentActivityEntry } from "@/lib/agents/agent-requests"
 import { isUnavailableHere } from "@/lib/agents/policy"

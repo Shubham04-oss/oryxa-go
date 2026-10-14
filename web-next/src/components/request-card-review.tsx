@@ -7,7 +7,7 @@
 import { useState } from "react"
 import { AgentMarkdown } from "./agent-timeline"
 import { isSummaryRuleHold } from "./request-card-format"
-import { capitalized } from "./request-words"
+import { capitalized } from "./side-conversation-format"
 import { resultText } from "@/lib/side/asking"
 import type {
   AgentRequest,

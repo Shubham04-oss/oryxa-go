@@ -1,9 +1,9 @@
-// Opening Requests from anywhere, on a request's card when one is named. A
-// note in a conversation and a link each want "open this request" without
-// threading a callback through the chat and the shell, so this is one call
-// any of them makes, and one listener the shell keeps (`useRequestsEntry`).
-// Small on purpose: it imports nothing of the view, so whoever calls it does
-// not pull the view in.
+// Opening Agents → Requests from anywhere, on a request's card when one is
+// named. A DM, a note in a conversation, an Agent overview tile and a link
+// each want "open this request" without threading a callback through the
+// panel and the shell, so this is one call any of them makes, and one listener
+// the shell keeps (`useRequestsEntry`). Small on purpose: it imports nothing
+// of the view, so whoever calls it does not pull the view in.
 import { useEffect, useRef } from "react"
 
 /** The event `openRequests` dispatches on the window. */
@@ -12,7 +12,7 @@ export const OPEN_REQUESTS_EVENT = "oryxa:open-requests"
 export type OpenRequestsDetail = { requestId?: string }
 
 /**
- * Opens Requests, on `requestId`'s card when one is named: the
+ * Opens Agents → Requests, on `requestId`'s card when one is named: the
  * request appears first, above the lists, and takes focus. Does nothing where
  * there is no page to open it in (a server render).
  */

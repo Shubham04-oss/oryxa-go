@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ApiError } from "@/lib/api/client"
-import { getAgent, listAgents, updateAgent } from "./managed-agents"
-import type { ManagedAgent } from "./managed-agents"
+import {
+  createAgent,
+  deleteAgent,
+  getAgent,
+  listAgents,
+  updateAgent,
+} from "./managed-agents"
+import type { CreateAgentInput, ManagedAgent } from "./managed-agents"
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -66,6 +72,37 @@ describe("managed agents API", () => {
     ])
   })
 
+  it("creates a specialist with only the fields the handler reads", async () => {
+    const fetchMock = stubFetch(() => json(specialist, 201))
+
+    // A page handing over a wider object must not send its extra fields:
+    // the handler decodes strictly and would answer 400.
+    const wider = {
+      name: "Sales",
+      description: "Own pipeline",
+      instructions: "Review CRM.",
+      kind: "specialist",
+    } as CreateAgentInput
+    expect(await createAgent("org-1", wider)).toEqual(specialist)
+    await createAgent("org-1", { name: "Research", instructions: "Cite." })
+
+    expect(sent(fetchMock)).toEqual([
+      [
+        "POST",
+        "/v1/organizations/org-1/agents",
+        '{"name":"Sales","description":"Own pipeline","instructions":"Review CRM."}',
+      ],
+      [
+        "POST",
+        "/v1/organizations/org-1/agents",
+        '{"name":"Research","instructions":"Cite."}',
+      ],
+    ])
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({
+      "Content-Type": "application/json",
+    })
+  })
+
   it("updates only what is set, even when handed a whole agent", async () => {
     const fetchMock = stubFetch(() => json(specialist))
 
@@ -86,15 +123,30 @@ describe("managed agents API", () => {
     ])
   })
 
+  it("deletes a specialist and resolves on 204", async () => {
+    const fetchMock = stubFetch(() => new Response(null, { status: 204 }))
+
+    await expect(deleteAgent("org-1", "agt_sales")).resolves.toBeUndefined()
+    expect(sent(fetchMock)).toEqual([
+      ["DELETE", "/v1/organizations/org-1/agents/agt_sales", undefined],
+    ])
+  })
+
   it("keeps the service's status and code on a refusal", async () => {
     const answers = [
       failure(409, "name_conflict", "agent name is already in use"),
-      failure(400, "invalid_request", "send at least one field to change"),
+      failure(
+        409,
+        "agent_in_use",
+        "agent belongs to an agent team: remove the specialist from its teams and teamspaces first"
+      ),
+      failure(400, "invalid_request", "instructions are required"),
     ]
     stubFetch(() => answers.shift() ?? json({}))
 
-    const conflict = await updateAgent("org-1", "agt_sales", {
+    const conflict = await createAgent("org-1", {
       name: "Sales",
+      instructions: "x",
     }).catch((error: unknown) => error)
     expect(conflict).toBeInstanceOf(ApiError)
     expect(conflict).toMatchObject({
@@ -102,10 +154,16 @@ describe("managed agents API", () => {
       code: "name_conflict",
       message: "agent name is already in use",
     })
-    await expect(updateAgent("org-1", "agt_sales", {})).rejects.toMatchObject({
+    await expect(deleteAgent("org-1", "agt_sales")).rejects.toMatchObject({
+      status: 409,
+      code: "agent_in_use",
+    })
+    await expect(
+      createAgent("org-1", { name: "Sales", instructions: "" })
+    ).rejects.toMatchObject({
       status: 400,
       code: "invalid_request",
-      message: "send at least one field to change",
+      message: "instructions are required",
     })
   })
 

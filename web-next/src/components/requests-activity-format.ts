@@ -4,7 +4,7 @@
 // back. The words follow the request card's (request-card-format.ts).
 import { consentWords, shortName } from "./request-card-format"
 import type { Reader } from "./request-card-format"
-import { clockTime } from "./time-format"
+import { clockTime } from "./direct-message-format"
 import type { AgentActivityEntry } from "@/lib/agents/agent-requests"
 
 /** What sort of thing an entry is, for its icon. */

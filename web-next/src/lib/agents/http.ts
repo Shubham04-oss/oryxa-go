@@ -1,4 +1,4 @@
-// Request helpers shared by lib/agents, lib/home, lib/answer-guard and lib/rooms.
+// Request helpers shared by lib/agents, lib/teamspaces and lib/rooms.
 //
 // The agents service (agents/primary/internal/httpserver/server.go) decodes
 // every body with DisallowUnknownFields, nested objects included: one field
