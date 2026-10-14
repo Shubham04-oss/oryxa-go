@@ -47,12 +47,15 @@ interface Operation<O extends string> {
   schema?: z.ZodType;
   // agentOnly is false for what only a member may do.
   agent?: boolean;
+  // readOnly is watching: it doesn't count as use, so it doesn't keep an
+  // idle child running.
+  readOnly?: boolean;
 }
 
 const SANDBOX_OPS: Record<string, Operation<SandboxOp>> = {
   "POST exec/code": { op: "exec/code", method: "POST", scope: "sandbox:exec", web: false, schema: ExecCodeRequest },
   "POST exec/command": { op: "exec/command", method: "POST", scope: "sandbox:exec", web: false, schema: ExecCommandRequest },
-  "GET files": { op: "files/list", method: "GET", scope: "sandbox:files", web: true },
+  "GET files": { op: "files/list", method: "GET", scope: "sandbox:files", web: true, readOnly: true },
   "POST files/read": { op: "files/read", method: "POST", scope: "sandbox:files", web: true, schema: ReadFilesRequest },
   "POST files/write": { op: "files/write", method: "POST", scope: "sandbox:files", web: false, schema: WriteFilesRequest },
   "POST files/remove": { op: "files/remove", method: "POST", scope: "sandbox:files", web: false, schema: RemoveFilesRequest },
@@ -72,7 +75,7 @@ const BROWSER_OPS: Record<string, Operation<BrowserOp>> = {
   "POST reset": { op: "reset", method: "POST", scope: "browser:drive", web: false },
   "POST live": { op: "live", method: "POST", scope: "browser:drive", web: true, schema: LiveRequest },
   "POST handoff": { op: "handoff", method: "POST", scope: "browser:drive", web: false, schema: HandoffRequest },
-  "GET handoff": { op: "handoff/state", method: "GET", scope: "browser:drive", web: true },
+  "GET handoff": { op: "handoff/state", method: "GET", scope: "browser:drive", web: true, readOnly: true },
   "POST resume": { op: "resume", method: "POST", scope: "browser:drive", web: true, agent: false, schema: ResumeRequest },
 };
 
@@ -132,6 +135,11 @@ export class Children {
     const operation = table[`${request.method} ${tail}`];
     if (!operation) throw new EdgeError("not_found", "no such route");
     if (caller.kind === "web" && !operation.web) throw new EdgeError("forbidden", "members can't do that here");
+    // A terminal types into the sandbox: members get one only in their own
+    // private sandbox; shared ones are watch-only (owner's decision on #270).
+    if (caller.kind === "web" && kind === "sandbox" && operation.op === "terminal" && name !== `private-${caller.identity.member}`) {
+      throw new EdgeError("forbidden", "a terminal opens only in your own private sandbox; shared sandboxes are watch-only");
+    }
     if (caller.kind === "agent") {
       if (operation.agent === false) throw new EdgeError("forbidden", "only a member can do that");
       requireScope(caller, operation.scope);
@@ -153,7 +161,9 @@ export class Children {
     const context = this.context(caller, kind, name, existing);
     const reply = await this.call(kind, name, context, operation.op, body, query);
 
-    this.touch(kind, name, context, reply.status < 300 && !(kind === "sandbox" && operation.op === "reset") && !(kind === "browser" && operation.op === "reset"));
+    if (!(operation.readOnly && existing)) {
+      this.touch(kind, name, context, reply.status < 300 && !(kind === "sandbox" && operation.op === "reset") && !(kind === "browser" && operation.op === "reset"));
+    }
     if (operation.op === "reset") this.setStatus(kind, name, "stopped");
     this.log(context, reply);
     await this.scheduleSweep();
