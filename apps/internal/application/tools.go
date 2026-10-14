@@ -68,6 +68,9 @@ func (s *Service) SearchTools(ctx context.Context, credentials authclient.Creden
 	if limit <= 0 || limit > maxToolSearch {
 		limit = maxToolSearch
 	}
+	if views, ok, err := s.pipedreamToolViews(ctx, organizationID, caller.UserID, toolkit, query, limit); ok || err != nil {
+		return views, err
+	}
 	specs, own, err := s.ownSpecs(ctx, organizationID, caller.UserID, toolkit)
 	if err != nil {
 		return nil, err
@@ -154,7 +157,7 @@ func (s *Service) RunTool(ctx context.Context, credentials authclient.Credential
 	if json.Unmarshal(arguments, &object) != nil {
 		return ToolRun{}, fmt.Errorf("a tool's arguments are a JSON object: %w", domain.ErrInvalid)
 	}
-	route, err := s.routeTool(ctx, slug)
+	route, err := s.routeTool(ctx, organizationID, caller.UserID, slug)
 	if err != nil {
 		return ToolRun{}, err
 	}
@@ -171,11 +174,17 @@ func (s *Service) RunTool(ctx context.Context, credentials authclient.Credential
 	if err != nil {
 		return ToolRun{}, err
 	}
+	if route.pipedream != nil {
+		return s.runPipedreamTool(ctx, caller, connection, *route.pipedream, key, object)
+	}
 	if connection.Oryxa() {
 		if !route.hasOwn {
 			return ToolRun{}, notOwnTool(route.slug)
 		}
 		return s.runOwnTool(ctx, caller, connection, route.own, key, arguments, input.OnlyReads)
+	}
+	if !connection.Composio() {
+		return ToolRun{}, errNotComposio(connection)
 	}
 	return s.runComposioTool(ctx, caller, organizationID, connection, route.slug, key, input.IdempotencyKey, input.OnlyReads, arguments)
 }

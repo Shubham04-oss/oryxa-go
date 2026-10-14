@@ -71,7 +71,7 @@ func Run(ctx context.Context, config Config, definitions []Definition, logger *s
 	}
 	defer closeServices(services)
 	reportEventSigning(platform.EventAuth, config.EnforceEventSignatures, logger)
-	return serve(ctx, listener, services, config.ShutdownTimeout, logger)
+	return serve(ctx, listener, services, config.ShutdownTimeout, config.DrainTimeout, logger)
 }
 
 // Migrate installs the selected services' schemas and returns.
@@ -312,9 +312,11 @@ func mount(ctx context.Context, platform Platform, selected []Definition) ([]mou
 }
 
 // serve runs the services on listener until ctx is cancelled. On the way
-// down, requests drain before the workers stop, because a request may have
-// left work behind for one of them, such as an event in an outbox.
-func serve(ctx context.Context, listener net.Listener, services []mounted, shutdownTimeout time.Duration, logger *slog.Logger) error {
+// down, the services' work in flight drains (Service.Drain) alongside the
+// requests, within drainTimeout, and both before the workers stop, because a
+// request may have left work behind for one of them, such as an event in an
+// outbox, and a run in flight still needs the workers that record it.
+func serve(ctx context.Context, listener net.Listener, services []mounted, shutdownTimeout, drainTimeout time.Duration, logger *slog.Logger) error {
 	handler, err := routes(services)
 	if err != nil {
 		return err
@@ -357,12 +359,16 @@ func serve(ctx context.Context, listener net.Listener, services []mounted, shutd
 		}
 	}
 
-	logger.Info("shutting down", "timeout", shutdownTimeout.String())
-	drainContext, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	logger.Info("shutting down", "timeout", shutdownTimeout.String(), "drain_timeout", drainTimeout.String())
+	drained := drainServices(context.WithoutCancel(ctx), services, drainTimeout, logger)
+	// A request streaming a run ends when the run does, so requests are given
+	// the drain's time as well as their own.
+	drainContext, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout+shutdownTimeout)
 	if err := server.Shutdown(drainContext); err != nil {
 		logger.Error("requests did not drain in time", "error", err)
 	}
 	cancelDrain()
+	<-drained
 
 	stopWorkers()
 	stopped := make(chan struct{})
@@ -376,6 +382,30 @@ func serve(ctx context.Context, listener net.Listener, services []mounted, shutd
 		logger.Error("workers did not stop in time", "timeout", shutdownTimeout.String())
 	}
 	return serveErr
+}
+
+// drainServices calls every service's Drain at once, each given drainTimeout,
+// and closes the channel it returns once all of them have returned.
+func drainServices(ctx context.Context, services []mounted, drainTimeout time.Duration, logger *slog.Logger) <-chan struct{} {
+	drained := make(chan struct{})
+	var draining sync.WaitGroup
+	for _, entry := range services {
+		if entry.service.Drain == nil {
+			continue
+		}
+		draining.Go(func() {
+			started := time.Now()
+			deadline, cancel := context.WithTimeout(ctx, drainTimeout)
+			defer cancel()
+			entry.service.Drain(deadline)
+			logger.Info("work in flight drained", "component", entry.name, "took", time.Since(started).Round(time.Millisecond).String())
+		})
+	}
+	go func() {
+		draining.Wait()
+		close(drained)
+	}()
+	return drained
 }
 
 func closeServices(services []mounted) {

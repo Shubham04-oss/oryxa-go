@@ -44,8 +44,11 @@ type Options struct {
 	StubAddr     string
 	ComposioAddr string
 	BedrockAddr  string
-	EgressAddr   string
-	PprofAddr    string
+	// PipedreamAddr serves FakePipedream. Nothing in oryxa is pointed at it
+	// yet: apps learns Pipedream only once its broker seam reads PIPEDREAM_*.
+	PipedreamAddr string
+	EgressAddr    string
+	PprofAddr     string
 
 	PostgresAdminURL string
 	LocalStack       string
@@ -73,6 +76,7 @@ func (opt *Options) Defaults() {
 	set(&opt.StubAddr, "127.0.0.1:18091")
 	set(&opt.ComposioAddr, "127.0.0.1:18092")
 	set(&opt.BedrockAddr, "127.0.0.1:18093")
+	set(&opt.PipedreamAddr, "127.0.0.1:18094")
 	set(&opt.EgressAddr, "127.0.0.1:18098")
 	set(&opt.PprofAddr, "127.0.0.1:18099")
 	set(&opt.PostgresAdminURL, "postgres://oryxa:oryxa-dev-password@localhost:5435/postgres?sslmode=disable")
@@ -98,6 +102,7 @@ type State struct {
 	StubURL        string            `json:"stub_url"`
 	ComposioURL    string            `json:"composio_url"`
 	BedrockURL     string            `json:"bedrock_url"`
+	PipedreamURL   string            `json:"pipedream_url"`
 	LocalStackURL  string            `json:"localstack_url"`
 	MailpitURL     string            `json:"mailpit_url"`
 	LogPath        string            `json:"log_path"`
@@ -118,11 +123,12 @@ type Rig struct {
 	Options Options
 	State   State
 
-	Stub     *stubauth.Stub
-	Composio *FakeComposio
-	Bedrock  *FakeBedrock
-	Egress   *Egress
-	Clients  *Clients
+	Stub      *stubauth.Stub
+	Composio  *FakeComposio
+	Bedrock   *FakeBedrock
+	Pipedream *FakePipedream
+	Egress    *Egress
+	Clients   *Clients
 
 	servers []*http.Server
 	oryxa   *exec.Cmd
@@ -192,6 +198,7 @@ func (rig *Rig) up(ctx context.Context) error {
 		RunID: opt.RunID, Prefix: prefix, Database: database, DatabaseURL: databaseURL,
 		OryxaURL: "http://" + opt.OryxaAddr, PprofURL: "http://" + opt.PprofAddr,
 		StubURL: "http://" + opt.StubAddr, ComposioURL: "http://" + opt.ComposioAddr, BedrockURL: "http://" + opt.BedrockAddr,
+		PipedreamURL:  "http://" + opt.PipedreamAddr,
 		LocalStackURL: opt.LocalStack, MailpitURL: opt.Mailpit,
 		LogPath:  filepath.Join(opt.WorkDir, "logs", "oryxa.log"),
 		Services: strings.Split(opt.Services, ","),
@@ -211,14 +218,18 @@ func (rig *Rig) up(ctx context.Context) error {
 		return err
 	}
 
-	logf("starting fakes: auth stub, Composio, Bedrock, egress guard")
+	logf("starting fakes: auth stub, Composio, Pipedream, Bedrock, egress guard")
 	rig.Stub = stubauth.New()
 	rig.Composio = NewFakeComposio()
+	rig.Pipedream = NewFakePipedream()
 	rig.Bedrock = NewFakeBedrock()
 	if err := rig.serve(opt.StubAddr, rig.Stub); err != nil {
 		return err
 	}
 	if err := rig.serve(opt.ComposioAddr, controlled(rig.Composio, rig.Composio.SetMode, rig.Composio.Requests)); err != nil {
+		return err
+	}
+	if err := rig.serve(opt.PipedreamAddr, controlled(rig.Pipedream, rig.Pipedream.SetMode, rig.Pipedream.Requests)); err != nil {
 		return err
 	}
 	if err := rig.serve(opt.BedrockAddr, controlled(rig.Bedrock, rig.Bedrock.SetMode, rig.Bedrock.Requests)); err != nil {

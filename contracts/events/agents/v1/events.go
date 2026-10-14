@@ -205,7 +205,24 @@ type InteractionChanged struct {
 	// the request is decided, for a rejection, and for an approval that granted
 	// no consent, which is every approval made before Slack asks.
 	Consent string `json:"consent,omitempty"`
+	// AnswerBy is who is to answer the request, as Jev judged it when it was
+	// made: InteractionAnswerByOwner for one that needs its owner's own
+	// judgment, which no agent decides and none runs for until its owner lets
+	// one, whatever Approval says; InteractionAnswerByAgent otherwise. Absent
+	// from a request made before it was kept, and from an event an older build
+	// published, which is to be read as InteractionAnswerByAgent.
+	AnswerBy string `json:"answer_by,omitempty"`
 }
+
+// Who is to answer a request, as InteractionChanged.AnswerBy.
+const (
+	// InteractionAnswerByOwner is a request whose answer needs its owner's own
+	// judgment: it waits for them.
+	InteractionAnswerByOwner = "owner"
+	// InteractionAnswerByAgent is a request its owner's agent may answer once
+	// allowed.
+	InteractionAnswerByAgent = "agent"
+)
 
 // Where a request was made, as InteractionChanged.Origin.
 const (
@@ -544,4 +561,8 @@ type RunFailed struct {
 	Models         []ModelUsage `json:"models"`
 	DurationMillis int64        `json:"duration_millis"`
 	FailedAt       time.Time    `json:"failed_at"`
+	// Interrupted is a run its process stopped as it was replaced, at the end
+	// of the drain a deploy gives it: not a failure of its own. Absent
+	// otherwise, and from an older build's events.
+	Interrupted bool `json:"interrupted,omitempty"`
 }

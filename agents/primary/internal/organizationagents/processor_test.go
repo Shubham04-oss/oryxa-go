@@ -10,6 +10,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
 type fakeDeliveryStore struct {
@@ -231,6 +232,24 @@ func TestProcessorRetriesModelAndValidationFailures(t *testing.T) {
 				t.Fatal("a synthesis that failed on its own was released without counting an attempt")
 			}
 		})
+	}
+}
+
+// TestProcessorRetriesASynthesisTheDrainStoppedWithoutUsingAnAttempt: the
+// process's drain refuses or interrupts a run while the processor's own
+// context still lives; that is a restart, not a failed synthesis.
+func TestProcessorRetriesASynthesisTheDrainStoppedWithoutUsingAnAttempt(t *testing.T) {
+	for _, cause := range []error{threads.ErrDraining, threads.ErrInterrupted} {
+		delivery, sources := synthesisFixture()
+		store := &fakeDeliveryStore{}
+		processor, err := NewProcessor(store, sources, &fakeSynthesizer{err: cause}, ProcessorConfig{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		processor.process(context.Background(), delivery)
+		if store.releases != 1 || store.releasedFailed || !strings.HasPrefix(store.released, "interrupted: ") {
+			t.Fatalf("%v: releases=%d failed=%v reason=%q, want one uncounted release", cause, store.releases, store.releasedFailed, store.released)
+		}
 	}
 }
 

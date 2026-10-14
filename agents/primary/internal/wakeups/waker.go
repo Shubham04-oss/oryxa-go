@@ -215,6 +215,12 @@ func (waker *Waker) wake(ctx context.Context, batch Batch) {
 		logger.InfoContext(ctx, "wake-up waits: the member's updates thread is busy", "reason", err)
 		waker.release(ctx, batch, false, logger)
 		return
+	case threads.Interrupted(err):
+		// The process is stopping: the next one wakes Krude, and this attempt
+		// counts for nothing.
+		logger.InfoContext(ctx, "wake-up waits for the next process", "reason", err)
+		waker.release(ctx, batch, false, logger)
+		return
 	case err != nil:
 		report(ctx, logger, slog.LevelError, "wake-up could not start", "error", err)
 		waker.release(ctx, batch, true, logger)
@@ -222,12 +228,20 @@ func (waker *Waker) wake(ctx context.Context, batch Batch) {
 	}
 
 	var ended string
+	interrupted := false
 	run.Execute(ctx, func(item threads.Item) error {
 		if item.Type == threads.ItemRunCompleted || item.Type == threads.ItemRunFailed {
-			ended = item.Type
+			ended, interrupted = item.Type, item.Interrupted
 		}
 		return nil
 	})
+	if interrupted {
+		// The process stopped it as it was replaced: the events are told
+		// again by the next one, and this attempt counts for nothing.
+		logger.InfoContext(ctx, "wake-up run was interrupted by a restart", "run_id", run.ID())
+		waker.release(ctx, batch, false, logger)
+		return
+	}
 	if ended != threads.ItemRunCompleted {
 		report(ctx, logger, slog.LevelWarn, "wake-up run did not complete", "run_id", run.ID())
 		waker.release(ctx, batch, true, logger)

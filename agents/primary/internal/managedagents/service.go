@@ -117,6 +117,8 @@ type Config struct {
 	Runs       threads.RunStore
 	Prices     *pricing.Table
 	Logger     *slog.Logger
+	// Drain is the process's, shared with every engine (threads.Config.Drain).
+	Drain *threads.Drain
 }
 
 // Run is the execution handle returned to HTTP. *threads.Run implements it.
@@ -145,6 +147,7 @@ type Service struct {
 	runs       threads.RunStore
 	prices     *pricing.Table
 	logger     *slog.Logger
+	drain      *threads.Drain
 }
 
 func New(config Config) (*Service, error) {
@@ -167,7 +170,7 @@ func New(config Config) (*Service, error) {
 	return &Service{
 		repository: config.Repository, factory: config.Factory, unattended: config.Unattended, sessions: config.Sessions,
 		artifacts: config.Artifacts, memory: config.Memory, runs: config.Runs,
-		prices: config.Prices, logger: logger,
+		prices: config.Prices, logger: logger, drain: config.Drain,
 	}, nil
 }
 
@@ -407,7 +410,7 @@ func (service *Service) engineIn(definition Definition, profile UnattendedProfil
 	engine, err := threads.New(threads.Config{
 		AppName: application, Agent: built, Unattended: unattended, Sessions: service.sessions,
 		Artifacts: service.artifacts, Memory: memory, Runs: service.runs,
-		Prices: service.prices, Logger: service.logger,
+		Prices: service.prices, Logger: service.logger, Drain: service.drain,
 		InitialState: map[string]any{
 			primaryagents.AgentIDKey:   definition.ID,
 			primaryagents.AgentNameKey: definition.Name,

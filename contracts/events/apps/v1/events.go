@@ -50,6 +50,10 @@ const (
 // they stay byte-identical to what they were before there was a choice.
 const BrokerOryxa = "oryxa"
 
+// BrokerPipedream is the Broker of a connection made through Pipedream
+// Connect.
+const BrokerPipedream = "pipedream"
+
 // Why a connection never became usable. A connection fails before it is ever
 // active, so nothing could have been read or run through it.
 const (

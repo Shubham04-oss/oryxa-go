@@ -383,7 +383,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		sessionStore.Close()
 	}
 
+	// Every run this process holds is tracked in one drain, whichever engine
+	// started it, so that stopping the process lets them finish first.
+	runDrain := threads.NewDrain()
 	service, err := threads.New(threads.Config{
+		Drain:      runDrain,
 		AppName:    agents.RootName,
 		Agent:      krude.Root,
 		Unattended: krude.Unattended,
@@ -442,7 +446,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			return krude.ManagedUnattended(spec, withApps)
 		},
 		Sessions: sessions, Artifacts: krude.Artifacts, Memory: krude.Memory,
-		Runs: runstore.New(platform.Database), Prices: priceTable, Logger: logger,
+		Runs: runstore.New(platform.Database), Prices: priceTable, Logger: logger, Drain: runDrain,
 	})
 	if err != nil {
 		closeAll()
@@ -525,7 +529,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			})
 		},
 		Sessions: sessions, Artifacts: krude.Artifacts, Runs: runstore.New(platform.Database),
-		Prices: priceTable, Logger: logger, RunTimeout: settings.RunTimeout,
+		Prices: priceTable, Logger: logger, RunTimeout: settings.RunTimeout, Drain: runDrain,
 	})
 	if err != nil {
 		closeAll()
@@ -810,6 +814,17 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Timeouts: timeouts,
 		Workers:  workers,
 		Close:    closeAll,
+		// A deploy lets the runs going finish, and interrupts what is left at
+		// the drain's deadline: whoever started those starts them again on
+		// the next process (threads.ErrInterrupted).
+		Drain: func(ctx context.Context) {
+			going := runDrain.Running()
+			if interrupted := runDrain.Drain(ctx); interrupted > 0 {
+				logger.Warn("agent runs were interrupted by the shutdown", "going", going, "interrupted", interrupted)
+				return
+			}
+			logger.Info("agent runs drained", "going", going)
+		},
 	}, nil
 }
 

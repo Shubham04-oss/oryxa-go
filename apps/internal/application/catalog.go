@@ -2,7 +2,10 @@ package application
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
@@ -23,6 +26,9 @@ type ToolkitView struct {
 	NoAuth        bool `json:"no_auth,omitempty"`
 	ToolsCount    int  `json:"tools_count"`
 	TriggersCount int  `json:"triggers_count"`
+	// Broker is who a new connect to it goes through: composio, oryxa or
+	// pipedream.
+	Broker string `json:"broker"`
 }
 
 type CategoryView struct {
@@ -34,7 +40,7 @@ func toolkitView(toolkit composio.Toolkit) ToolkitView {
 	view := ToolkitView{
 		Toolkit: toolkit.Slug, Name: toolkit.Name, Description: toolkit.Description, Logo: toolkit.Logo,
 		Categories: []CategoryView{}, AuthSchemes: toolkit.AuthSchemes, NoAuth: toolkit.NoAuth,
-		ToolsCount: toolkit.ToolsCount, TriggersCount: toolkit.TriggersCount,
+		ToolsCount: toolkit.ToolsCount, TriggersCount: toolkit.TriggersCount, Broker: domain.BrokerComposio,
 	}
 	if view.AuthSchemes == nil {
 		view.AuthSchemes = []string{}
@@ -62,12 +68,19 @@ type CatalogQuery struct {
 // maxCatalogPage bounds one page of the catalog.
 const maxCatalogPage = 100
 
-// Catalog lists Composio's apps. It holds nothing of any organization, so it
-// needs no caller.
+// Catalog lists Composio's apps, then the ones only Pipedream has. It holds
+// nothing of any organization, so it needs no caller.
 func (s *Service) Catalog(ctx context.Context, query CatalogQuery) ([]ToolkitView, string, error) {
 	limit := query.Limit
 	if limit <= 0 || limit > maxCatalogPage {
 		limit = maxCatalogPage
+	}
+	if offset, ok := strings.CutPrefix(query.Cursor, pipedreamCursor); ok && s.pipedream != nil {
+		at, err := strconv.Atoi(offset)
+		if err != nil {
+			return nil, "", fmt.Errorf("the cursor is not one the catalog answered: %w", domain.ErrInvalid)
+		}
+		return s.pipedreamPage(ctx, query, at, limit)
 	}
 	page, err := s.composio.Toolkits(ctx, composio.ToolkitQuery{
 		Search: strings.TrimSpace(query.Search), Category: strings.TrimSpace(query.Category),
@@ -78,9 +91,33 @@ func (s *Service) Catalog(ctx context.Context, query CatalogQuery) ([]ToolkitVie
 	}
 	views := make([]ToolkitView, 0, len(page.Items))
 	for _, toolkit := range page.Items {
-		views = append(views, toolkitView(toolkit))
+		view := toolkitView(toolkit)
+		view.Broker = s.catalogBroker(view.Toolkit, view.Broker)
+		views = append(views, view)
 	}
-	return views, page.NextCursor, nil
+	next := page.NextCursor
+	if next == "" && s.pipedream != nil {
+		// Composio's apps are done; Pipedream's own follow, if any match.
+		// The catalog stays Composio's alone while Pipedream's cannot be read.
+		if more, _, err := s.pipedreamPage(ctx, query, 0, 1); err != nil {
+			s.logger.WarnContext(ctx, "list Pipedream's apps in the catalog", "error", err)
+		} else if len(more) > 0 {
+			next = pipedreamCursor + "0"
+		}
+	}
+	return views, next, nil
+}
+
+// catalogBroker is the broker the catalog shows for an app its broker
+// lists: the one a pin or Oryxa's own sign-in sends it to instead, if any.
+func (s *Service) catalogBroker(toolkit, listed string) string {
+	if broker, ok := s.toolkitBrokers[toolkit]; ok {
+		return broker
+	}
+	if s.oryxa != nil && s.oryxa.enabled[toolkit] {
+		return domain.BrokerOryxa
+	}
+	return listed
 }
 
 // CatalogToolkit describes one app.
@@ -90,10 +127,21 @@ func (s *Service) CatalogToolkit(ctx context.Context, slug string) (ToolkitView,
 		return ToolkitView{}, err
 	}
 	toolkit, err := s.composio.Toolkit(ctx, slug)
+	if errors.Is(err, composio.ErrNotFound) && s.pipedream != nil {
+		catalog, catalogErr := s.pipedreamCatalog(ctx)
+		if catalogErr != nil {
+			return ToolkitView{}, catalogErr
+		}
+		if app, ok := catalog.bySlug[slug]; ok {
+			return s.pipedreamView(app), nil
+		}
+	}
 	if err != nil {
 		return ToolkitView{}, composioError("read the app", err)
 	}
-	return toolkitView(toolkit), nil
+	view := toolkitView(toolkit)
+	view.Broker = s.catalogBroker(slug, view.Broker)
+	return view, nil
 }
 
 // CatalogTools lists an app's tools, featured first when there is no search.
@@ -126,6 +174,18 @@ func (s *Service) CatalogTriggers(ctx context.Context, slug, cursor string, limi
 	}
 	if limit <= 0 || limit > 50 {
 		limit = 50
+	}
+	if s.pipedream != nil {
+		// ponytail: the catalog answers by the broker a new connect would
+		// use, so a connection kept on another broker after a pin moved its
+		// app sees the new broker's events. Pass the broker if that matters.
+		broker, err := s.brokerFor(ctx, slug)
+		if err != nil {
+			return nil, "", err
+		}
+		if broker == domain.BrokerPipedream {
+			return s.pipedreamTriggerViews(ctx, slug, cursor, limit)
+		}
 	}
 	page, err := s.composio.TriggerTypes(ctx, composio.TriggerTypeQuery{Toolkits: []string{slug}, Cursor: cursor, Limit: limit})
 	if err != nil {

@@ -75,5 +75,13 @@ func TestKMSCallsThatNeverAnswerGiveUp(t *testing.T) {
 			_, err := verifier.Verify(context.Background(), token)
 			return err
 		})
+		// The key lookup holds a lock every verification waits on, so a
+		// caller's later deadline does not lift the bound.
+		withinTimeout(t, func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			_, err := verifier.Verify(ctx, token)
+			return err
+		})
 	})
 }

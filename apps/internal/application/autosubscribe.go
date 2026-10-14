@@ -93,9 +93,9 @@ func (s *Service) subscribeConnections(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if connection.Oryxa() {
+		if !connection.Composio() {
 			// The store claims only Composio's; subscribing is a Composio
-			// call, which an Oryxa connection has no account for.
+			// call, which no other broker's connection has an account for.
 			continue
 		}
 		if err := s.allowToolkit(ctx, connection.OrganizationID, connection.Toolkit); err != nil {

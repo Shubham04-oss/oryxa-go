@@ -33,6 +33,13 @@ locals {
       # ever names them.
       APPS_SLACK_APP                  = "slack-app"
       AGENTS_PRIMARY_SLACK_TICKET_KEY = "slack-ticket-key"
+      # Pipedream Connect, the broker beside Composio (internal/pipedream):
+      # the workspace's OAuth client and the Connect project it acts in. The
+      # containers exist whatever pipedream_ready says, so put-secrets.sh can
+      # fill them in before the task ever names them.
+      PIPEDREAM_CLIENT_ID     = "pipedream-client-id"
+      PIPEDREAM_CLIENT_SECRET = "pipedream-client-secret"
+      PIPEDREAM_PROJECT_ID    = "pipedream-project-id"
     },
     # Only when Jev judges: the tasks cannot start while a secret they name
     # holds no value, so it exists only once there is one to put in it.
@@ -53,6 +60,10 @@ locals {
     # the one switch.
     APPS_SLACK_APP                  = var.slack_app_ready
     AGENTS_PRIMARY_SLACK_TICKET_KEY = var.slack_app_ready
+    # All three of Pipedream's wait for the one switch: none is any use alone.
+    PIPEDREAM_CLIENT_ID     = var.pipedream_ready
+    PIPEDREAM_CLIENT_SECRET = var.pipedream_ready
+    PIPEDREAM_PROJECT_ID    = var.pipedream_ready
   }
 
   task_secrets = { for variable, slug in local.external_secrets : variable => slug if lookup(local.secret_gates, variable, true) }
@@ -79,6 +90,28 @@ variable "slack_app_ready" {
   description = "Whether the Slack app's secrets (APPS_SLACK_APP and AGENTS_PRIMARY_SLACK_TICKET_KEY) hold real values yet, which turns the Slack consent loop on. False keeps both out of the task definition, since ECS refuses to start a task whose definition names a secret with no value, and keeps the whole loop off: no Slack surface in apps, no consent asked in Slack by agents, no internal caller for apps. Set in slack.auto.tfvars.json, so every checkout applies the same."
   type        = bool
   default     = false
+}
+
+# Declared here too, beside the secrets it gates. Put the three PIPEDREAM_
+# values in Secrets Manager first (deploy/scripts/put-secrets.sh), then turn
+# this on and apply.
+variable "pipedream_ready" {
+  description = "Whether PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET and PIPEDREAM_PROJECT_ID hold real values yet. False keeps them out of the task definition, since ECS refuses to start a task whose definition names a secret with no value."
+  type        = bool
+  default     = false
+}
+
+# Pipedream's development environment lets only the Pipedream workspace's own
+# members connect accounts: right for trying it in production before the plan
+# includes the production environment, and set in pipedream.auto.tfvars.json.
+variable "pipedream_environment" {
+  description = "The Pipedream Connect environment apps acts in: production, or development while only the workspace's own members should connect."
+  type        = string
+  default     = "production"
+  validation {
+    condition     = contains(["production", "development"], var.pipedream_environment)
+    error_message = "pipedream_environment is production or development."
+  }
 }
 
 resource "aws_secretsmanager_secret" "external" {

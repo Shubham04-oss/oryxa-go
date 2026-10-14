@@ -37,6 +37,7 @@ go run ./cmd/oryxa migrate            # install schemas, then exit
 | `ORYXA_AUTO_MIGRATE` | `true` | Install schemas at start, before serving |
 | `ORYXA_DATABASE_MAX_CONNS` | `32` | Size of the shared pool, unless `DATABASE_URL` sets `pool_max_conns` |
 | `ORYXA_SHUTDOWN_TIMEOUT` | `30s` | Bound on draining requests, then on waiting for workers |
+| `ORYXA_DRAIN_TIMEOUT` | `20s` | How long work in flight (agent runs) gets to finish once the process is told to stop; what is left is interrupted, recorded `interrupted` and started again by the next process. The whole way down must fit ECS's `stopTimeout` |
 | `DATABASE_URL` | — | The PostgreSQL every service shares |
 | `AWS_REGION`, `EVENT_BUS_NAME` | `ap-south-1`, `default` | Shared by every service |
 | `DEPLOYMENT_ENVIRONMENT` (or `ENVIRONMENT`) | `development` | Named in logs and traces; `production` makes event queues required |

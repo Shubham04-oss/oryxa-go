@@ -210,8 +210,9 @@ func (verifier *Verifier) publicKey(ctx context.Context, keyID string) (*ecdsa.P
 	}
 
 	// The lock is held across this call, so a stuck one would hold up every
-	// verification; it is bounded.
-	ctx, cancel := kmscall.Context(ctx)
+	// verification: it is bounded by kmscall.Timeout even when the caller's
+	// own deadline is later.
+	ctx, cancel := context.WithTimeout(ctx, kmscall.Timeout)
 	defer cancel()
 	output, err := verifier.keys.GetPublicKey(ctx, &kms.GetPublicKeyInput{KeyId: &keyID})
 	if err != nil {

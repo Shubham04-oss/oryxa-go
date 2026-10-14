@@ -765,3 +765,71 @@ func (m *slowModel) GenerateContent(context.Context, *model.LLMRequest, bool) it
 		yield(&model.LLMResponse{Content: genai.NewContentFromText("ok", genai.RoleModel), TurnComplete: true}, nil)
 	}
 }
+
+// drainingThreads is newThreads with the process's drain.
+func drainingThreads(t *testing.T, llm model.LLM, drain *threads.Drain) *threads.Service {
+	t.Helper()
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: llm, Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := threads.New(threads.Config{AppName: "krude", Agent: krude, Sessions: session.InMemoryService(), Runs: &recordingRuns{}, Prices: prices, Drain: drain})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+// A deploy's drain reaches its deadline while a wake-up runs, or has begun
+// before the wake-up starts: either way its events are given back for the next
+// process, counting as no attempt, and nothing says it failed.
+func TestAWakeUpARestartStopsIsGivenBackWithoutCountingAsAFailure(t *testing.T) {
+	t.Run("interrupted at the drain's deadline", func(t *testing.T) {
+		llm := &waitingModel{started: make(chan struct{})}
+		drain := threads.NewDrain()
+		store := &fakeBatches{pending: []Batch{batchFor("wb_1")}}
+		var logs bytes.Buffer
+		waker := loggingWaker(store, drainingThreads(t, llm, drain), fakeMembers{}, &logs)
+		woken := make(chan struct{})
+		go func() {
+			defer close(woken)
+			_ = waker.WakeDue(context.Background())
+		}()
+		select {
+		case <-llm.started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the wake-up's run never started")
+		}
+		deadline, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		if interrupted := drain.Drain(deadline); interrupted != 1 {
+			t.Fatalf("the drain interrupted %d runs, want the wake-up's", interrupted)
+		}
+		<-woken
+		if failed, released := store.released["wb_1"]; !released || failed || len(store.done) != 0 {
+			t.Fatalf("released = %v, done = %v, want released without a failure", store.released, store.done)
+		}
+		if got := logs.String(); strings.Contains(got, "level=ERROR") || strings.Contains(got, "level=WARN") || !strings.Contains(got, "interrupted by a restart") {
+			t.Fatalf("logs:\n%s", got)
+		}
+	})
+	t.Run("refused, the process draining", func(t *testing.T) {
+		drain := threads.NewDrain()
+		drain.Drain(context.Background())
+		store := &fakeBatches{pending: []Batch{batchFor("wb_1")}}
+		var logs bytes.Buffer
+		if err := loggingWaker(store, drainingThreads(t, &answeringModel{}, drain), fakeMembers{}, &logs).WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if failed, released := store.released["wb_1"]; !released || failed || len(store.done) != 0 {
+			t.Fatalf("released = %v, done = %v, want released without a failure", store.released, store.done)
+		}
+		if got := logs.String(); strings.Contains(got, "level=ERROR") || strings.Contains(got, "level=WARN") {
+			t.Fatalf("a refusal to start while draining was reported as a problem:\n%s", got)
+		}
+	})
+}

@@ -12,9 +12,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/slackbot"
+	"github.com/Shubham04-oss/oryxa-go/internal/pipedream"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
@@ -59,6 +61,26 @@ type Config struct {
 	// APPS_ORYXA_TOOLKITS, a comma list. Empty means it is off, and every
 	// Oryxa request is refused.
 	OryxaToolkits []string
+	// ToolkitBrokers pins a toolkit's new connects to one broker, whatever
+	// the preference of Oryxa, then Composio, then Pipedream would choose:
+	// APPS_TOOLKIT_BROKERS, a comma list of toolkit=broker, such as
+	// github=composio,linear=pipedream. Existing connections keep theirs.
+	ToolkitBrokers map[string]string
+	// PipedreamDenyActions are Pipedream action keys agents are never
+	// offered nor allowed to run, such as gmail-delete-email:
+	// APPS_PIPEDREAM_DENY_ACTIONS, a comma list.
+	PipedreamDenyActions []string
+	// PipedreamMinPoll is the shortest interval a polling Pipedream trigger
+	// is deployed with, since every poll costs credits:
+	// APPS_PIPEDREAM_MIN_POLL_SECONDS, a whole number of seconds. Zero, when
+	// unset, is apps' default of fifteen minutes.
+	PipedreamMinPoll time.Duration
+	// Pipedream is Pipedream Connect's project, or nil when this deployment
+	// has none: PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET and
+	// PIPEDREAM_PROJECT_ID, all three or none; PIPEDREAM_ENVIRONMENT,
+	// development unless it says production; and PIPEDREAM_BASE_URL, only
+	// ever a loopback fake's.
+	Pipedream *pipedream.Config
 	// SigninKMSKeyID is the KMS key Oryxa's sign-in seals credentials and
 	// webhook secrets with, bound to service oryxa-apps:
 	// APPS_SIGNIN_KMS_KEY_ID. Required once a toolkit is switched on.
@@ -135,6 +157,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		EventBridgeEndpoint:   endpointOr(getenv, "EVENTBRIDGE_ENDPOINT", genericEndpoint),
 		SQSEndpoint:           endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
 		EventsQueueURL:        strings.TrimSpace(getenv("APPS_EVENTS_QUEUE_URL")),
+		PipedreamDenyActions:  splitList(getenv("APPS_PIPEDREAM_DENY_ACTIONS")),
 		NoAutoSubscribe:       !autoSubscribe,
 	}
 	if config.AuthURL == "" || config.ComposioAPIKey == "" || config.PublicBaseURL == "" {
@@ -156,6 +179,19 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("APPS_ALLOWED_ORIGINS must list absolute origins")
 		}
 	}
+	if config.ToolkitBrokers, err = toolkitBrokers(getenv("APPS_TOOLKIT_BROKERS")); err != nil {
+		return Config{}, err
+	}
+	if config.Pipedream, err = readPipedream(getenv); err != nil {
+		return Config{}, err
+	}
+	if value := strings.TrimSpace(getenv("APPS_PIPEDREAM_MIN_POLL_SECONDS")); value != "" {
+		seconds, err := strconv.Atoi(value)
+		if err != nil || seconds <= 0 {
+			return Config{}, errors.New("APPS_PIPEDREAM_MIN_POLL_SECONDS must be a positive whole number of seconds")
+		}
+		config.PipedreamMinPoll = time.Duration(seconds) * time.Second
+	}
 	if err := readOryxa(getenv, &config); err != nil {
 		return Config{}, err
 	}
@@ -163,6 +199,46 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	return config, nil
+}
+
+// readPipedream reads Pipedream Connect's project. One or two of its three
+// credentials set is a mistake, refused rather than read as off. Its messages
+// never quote a secret.
+func readPipedream(getenv func(string) string) (*pipedream.Config, error) {
+	config := pipedream.Config{
+		ClientID:     strings.TrimSpace(getenv("PIPEDREAM_CLIENT_ID")),
+		ClientSecret: strings.TrimSpace(getenv("PIPEDREAM_CLIENT_SECRET")),
+		ProjectID:    strings.TrimSpace(getenv("PIPEDREAM_PROJECT_ID")),
+		Environment:  strings.TrimSpace(getenv("PIPEDREAM_ENVIRONMENT")),
+		BaseURL:      endpoint(getenv, "PIPEDREAM_BASE_URL"),
+	}
+	set := 0
+	for _, value := range []string{config.ClientID, config.ClientSecret, config.ProjectID} {
+		if value != "" {
+			set++
+		}
+	}
+	switch set {
+	case 0:
+		return nil, nil
+	case 3:
+	default:
+		return nil, errors.New("PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET and PIPEDREAM_PROJECT_ID are set together or not at all")
+	}
+	if config.Environment == "" {
+		config.Environment = pipedream.EnvironmentDevelopment
+	}
+	if config.Environment != pipedream.EnvironmentDevelopment && config.Environment != pipedream.EnvironmentProduction {
+		return nil, errors.New("PIPEDREAM_ENVIRONMENT must be development or production")
+	}
+	if config.BaseURL != "" {
+		parsed, err := url.Parse(config.BaseURL)
+		if err != nil || parsed.Host == "" || (config.BaseURL != pipedream.DefaultBaseURL && !loopbackHost(parsed.Hostname())) {
+			// The project's secret is sent wherever this points.
+			return nil, errors.New("PIPEDREAM_BASE_URL must be Pipedream's own or on a loopback host")
+		}
+	}
+	return &config, nil
 }
 
 // minSlackSecret is the shortest signing or client secret taken: Slack's are
@@ -245,6 +321,28 @@ func loopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// toolkitBrokers reads APPS_TOOLKIT_BROKERS. A broker must be named: an
+// empty one would read as Composio, which is a default, not a pin.
+func toolkitBrokers(raw string) (map[string]string, error) {
+	var brokers map[string]string
+	for _, pair := range splitList(raw) {
+		toolkit, broker, _ := strings.Cut(pair, "=")
+		checkedToolkit, toolkitErr := domain.CheckToolkit(toolkit)
+		checkedBroker, brokerErr := domain.CheckBroker(broker)
+		if toolkitErr != nil || brokerErr != nil || strings.TrimSpace(broker) == "" {
+			return nil, fmt.Errorf("APPS_TOOLKIT_BROKERS must list toolkit=broker pairs, such as github=composio: %q is not one", pair)
+		}
+		if _, seen := brokers[checkedToolkit]; seen {
+			return nil, fmt.Errorf("APPS_TOOLKIT_BROKERS names %s twice", checkedToolkit)
+		}
+		if brokers == nil {
+			brokers = map[string]string{}
+		}
+		brokers[checkedToolkit] = checkedBroker
+	}
+	return brokers, nil
 }
 
 // readOryxa reads Oryxa's own sign-in's configuration. None of its messages

@@ -221,6 +221,55 @@ func TestConnectSaysWhichBrokerTakesWhat(t *testing.T) {
 	}
 }
 
+// A connect that names no broker takes the toolkit's own, and one routed to
+// Pipedream goes to Pipedream's connect rather than Composio's.
+func TestConnectWithoutABrokerTakesTheToolkitsOwn(t *testing.T) {
+	t.Parallel()
+	oryxa := &fakeOryxa{connected: application.OryxaConnect{Connection: domain.Connection{ID: "apc_1", Broker: domain.BrokerOryxa}}}
+	native := New(&fakeService{broker: domain.BrokerOryxa}, Config{Oryxa: oryxa}, nil)
+	recorder := call(native, http.MethodPost, "/v1/organizations/org_1/apps/connections", `{"toolkit":"github"}`, "Authorization", "Bearer member")
+	if recorder.Code != http.StatusCreated || oryxa.connectInput.Toolkit != "github" {
+		t.Fatalf("oryxa = %d %v: %s", recorder.Code, oryxa.connectInput, recorder.Body)
+	}
+
+	fake := &fakeService{
+		broker:     domain.BrokerPipedream,
+		connection: domain.Connection{ID: "apc_2", Broker: domain.BrokerPipedream, Status: domain.ConnectionPending},
+		redirect:   "https://pipedream.com/_static/connect.html?token=ctok_1&app=linear",
+	}
+	server := New(fake, Config{Oryxa: &fakeOryxa{}}, nil)
+	for _, body := range []string{`{"toolkit":"linear"}`, `{"toolkit":"linear","broker":"pipedream"}`} {
+		fake.pipedreamInput = application.ConnectInput{}
+		recorder := call(server, http.MethodPost, "/v1/organizations/org_1/apps/connections", body, "Authorization", "Bearer member")
+		if recorder.Code != http.StatusCreated || fake.pipedreamInput.Toolkit != "linear" {
+			t.Fatalf("%s = %d: %s", body, recorder.Code, recorder.Body)
+		}
+		answer := decodeBody(t, recorder)
+		if answer["redirect_url"] != fake.redirect || answer["connection"].(map[string]any)["broker"] != "pipedream" {
+			t.Fatalf("%s answered %v", body, answer)
+		}
+	}
+	// Oryxa's own fields are no Pipedream connect's.
+	recorder = call(server, http.MethodPost, "/v1/organizations/org_1/apps/connections", `{"toolkit":"linear","broker":"pipedream","kind":"api_token"}`, "Authorization", "Bearer member")
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("kind = %d: %s", recorder.Code, recorder.Body)
+	}
+	// Without a Pipedream the application refuses it as not connectable.
+	refusing := &fakeService{broker: domain.BrokerPipedream, err: fmt.Errorf("linear: %w", domain.ErrNotConnectable)}
+	recorder = call(New(refusing, Config{}, nil), http.MethodPost, "/v1/organizations/org_1/apps/connections", `{"toolkit":"linear"}`, "Authorization", "Bearer member")
+	if recorder.Code != http.StatusUnprocessableEntity || errorCode(t, recorder) != "not_connectable" {
+		t.Fatalf("no Pipedream = %d: %s", recorder.Code, recorder.Body)
+	}
+	if fake.connectInput.Toolkit != "" {
+		t.Fatalf("Composio's connect ran for %v", fake.connectInput)
+	}
+	// A broker the caller names is kept, whatever the toolkit's own is.
+	recorder = call(server, http.MethodPost, "/v1/organizations/org_1/apps/connections", `{"toolkit":"linear","broker":"composio"}`, "Authorization", "Bearer member")
+	if recorder.Code != http.StatusCreated || fake.connectInput.Toolkit != "linear" {
+		t.Fatalf("composio = %d: %s", recorder.Code, recorder.Body)
+	}
+}
+
 func TestInvalidCredentialsNamesTheFieldAndNeverTheValue(t *testing.T) {
 	t.Parallel()
 	oryxa := &fakeOryxa{err: fmt.Errorf("connect github: %w", &domain.InvalidCredentials{Field: "token", Rule: "was refused by the app"})}

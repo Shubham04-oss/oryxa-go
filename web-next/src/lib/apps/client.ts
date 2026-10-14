@@ -29,6 +29,8 @@ export type Toolkit = {
   no_auth?: boolean
   tools_count: number
   triggers_count: number
+  /** Who a new connect to it goes through. Missing from an older apps. */
+  broker?: Broker
 }
 
 /** The event a subscription watches for, as its own kind of catalog entry. */
@@ -166,10 +168,11 @@ export type ConnectionStatus =
   "active" | "expired" | "failed" | "pending" | "removed"
 
 /**
- * Who holds a connection's credential: Composio, the default, or Oryxa's own
- * sign-in (`apps/README.md`, "Oryxa's own sign-in").
+ * Who holds a connection's credential: Composio, the default, Oryxa's own
+ * sign-in (`apps/README.md`, "Oryxa's own sign-in"), or Pipedream Connect for
+ * the apps neither serves (`apps/README.md`, "Which broker serves an app").
  */
-export type Broker = "composio" | "oryxa"
+export type Broker = "composio" | "oryxa" | "pipedream"
 
 /**
  * One member's connection to one app. See `README.md` alongside this file for

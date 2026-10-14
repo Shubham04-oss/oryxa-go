@@ -27,6 +27,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
+	"github.com/Shubham04-oss/oryxa-go/internal/pipedream"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
@@ -76,6 +77,16 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	if err != nil {
 		return host.Service{}, err
 	}
+	var pipedreamClient *pipedream.Client
+	if config.Pipedream != nil {
+		if pipedreamClient, err = pipedream.New(*config.Pipedream); err != nil {
+			return host.Service{}, err
+		}
+		logger.Info("Pipedream Connect is configured: apps neither Oryxa nor Composio serves connect through it",
+			"environment", config.Pipedream.Environment)
+	} else {
+		logger.Info("Pipedream Connect is not configured (PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET and PIPEDREAM_PROJECT_ID are not set): no app connects through it")
+	}
 	eventClient := eventbridge.NewFromConfig(platform.AWS, func(options *eventbridge.Options) {
 		if config.EventBridgeEndpoint != "" {
 			options.BaseEndpoint = aws.String(config.EventBridgeEndpoint)
@@ -108,6 +119,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Store:     store,
 		Directory: directory,
 		Composio:  client,
+		Pipedream: pipedreamClient,
 		Sink:      publisher,
 		Verifier:  platform.EventAuth.Verifier(),
 		Logger:    logger,
@@ -116,6 +128,11 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	if oryxa != nil {
 		dependencies.Signin, dependencies.Hooks, dependencies.Integrations = oryxa.signin, oryxa.hooks, oryxa.registry
 		dependencies.Slack = oryxa.slack
+		// Pipedream triggers' signing keys are sealed with the same vault key
+		// as every other secret apps keeps.
+		dependencies.Sealer = oryxa.sealer
+	} else if pipedreamClient != nil {
+		logger.Warn("APPS_SIGNIN_KMS_KEY_ID is not set: apps connected through Pipedream cannot subscribe to events, whose signing keys it seals")
 	}
 	if services != nil {
 		dependencies.Services = services
@@ -127,13 +144,16 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		})
 	}
 	service, err := New(dependencies, Config{
-		PublicBaseURL:       config.PublicBaseURL,
-		AllowedOrigins:      config.AllowedOrigins,
-		WebhookSecret:       config.ComposioWebhookSecret,
-		NoAutoSubscribe:     config.NoAutoSubscribe,
-		OryxaToolkits:       config.OryxaToolkits,
-		SigninRedirectURI:   config.SigninRedirectURI,
-		DefaultOAuthClients: defaults,
+		PublicBaseURL:        config.PublicBaseURL,
+		AllowedOrigins:       config.AllowedOrigins,
+		WebhookSecret:        config.ComposioWebhookSecret,
+		NoAutoSubscribe:      config.NoAutoSubscribe,
+		OryxaToolkits:        config.OryxaToolkits,
+		ToolkitBrokers:       config.ToolkitBrokers,
+		PipedreamDenyActions: config.PipedreamDenyActions,
+		PipedreamMinPoll:     config.PipedreamMinPoll,
+		SigninRedirectURI:    config.SigninRedirectURI,
+		DefaultOAuthClients:  defaults,
 	})
 	if err != nil {
 		return host.Service{}, err
@@ -174,6 +194,8 @@ type oryxaParts struct {
 	hooks    *hooks.Service
 	// slack is nil unless APPS_SLACK_SURFACE is on.
 	slack *slackbot.Service
+	// sealer is the KMS envelope everything here seals with.
+	sealer secrets.Envelope
 }
 
 // mountOryxa builds Oryxa's own sign-in and its webhook ingress on apps'
@@ -271,5 +293,5 @@ func mountOryxa(platform host.Platform, config serviceconfig.Config, store *post
 		logger.Info("Oryxa's own sign-in is on", "toolkits", strings.Join(config.OryxaToolkits, ","),
 			"redirect_uri", config.SigninRedirectURI, "webhook_base", config.PublicBaseURL+hooks.PathPrefix)
 	}
-	return &oryxaParts{registry: registry, signin: signinService, hooks: hooksService, slack: slack}, nil
+	return &oryxaParts{registry: registry, signin: signinService, hooks: hooksService, slack: slack, sealer: envelope}, nil
 }
