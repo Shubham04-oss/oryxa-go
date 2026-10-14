@@ -48,6 +48,7 @@ const browser: LiveChild = {
 
 const fetchMock = vi.fn<typeof fetch>()
 let handoff = { active: false } as { active: boolean; reason?: string }
+let extraEvents: object[] = []
 
 function calls(path: string, method = "GET") {
   return fetchMock.mock.calls.filter(
@@ -63,6 +64,7 @@ function bodyOf(path: string, method = "POST") {
 
 beforeEach(() => {
   handoff = { active: false }
+  extraEvents = []
   vi.stubGlobal("WebSocket", QuietSocket)
   vi.stubGlobal("fetch", fetchMock)
   fetchMock.mockImplementation(async (url, init) => {
@@ -86,6 +88,7 @@ beforeEach(() => {
             durationMs: 1200,
             private: false,
           },
+          ...extraEvents,
         ],
         next: 1,
         more: false,
@@ -225,6 +228,21 @@ describe("RoomLive", () => {
 
   it("takes a browser over when the agent asks, and hands it back", async () => {
     handoff = { active: true, reason: "Sign in to the reseller portal" }
+    extraEvents = [
+      {
+        seq: 2,
+        at: now,
+        org: "org_1",
+        room,
+        actor: { type: "agent", id: "agt_0", onBehalfOf: "usr_ada" },
+        run: "run_1",
+        type: "browser.handoff",
+        summary: "Asked for a sign-in",
+        data: { child: "br_1" },
+        durationMs: 0,
+        private: false,
+      },
+    ]
     renderLive()
     expect(
       await screen.findByRole("button", {
@@ -265,6 +283,76 @@ describe("RoomLive", () => {
     )
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Take over" })).toBeNull()
+    )
+  })
+
+  it("asks no browser anything until its pane opens, and then only once", async () => {
+    renderLive()
+    await screen.findByRole("button", { name: "Open Your browser" })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(calls("/browser/br_1/handoff")).toHaveLength(0)
+    expect(calls("/browser/br_1/live", "POST")).toHaveLength(0)
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Your browser" }))
+    await screen.findByTitle("The agent's browser, live")
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(calls("/browser/br_1/handoff")).toHaveLength(1)
+    expect(calls("/browser/br_1/live", "POST")).toHaveLength(1)
+  })
+
+  it("never wakes a stopped browser", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      const target = String(url)
+      if (target.endsWith(`${base}/children`)) {
+        return json({ children: [{ ...browser, status: "stopped" }] })
+      }
+      if (target.includes(`${base}/log`))
+        return json({ events: [], next: 0, more: false })
+      return json({ url: "https://live.example/tab", expiresAt: now })
+    })
+    renderLive()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Your browser" })
+    )
+    expect(await screen.findByText(/This browser has stopped/)).toBeTruthy()
+    expect(calls("/browser/br_1/live", "POST")).toHaveLength(0)
+    expect(calls("/browser/br_1/handoff")).toHaveLength(0)
+  })
+
+  it("gives a shell only in the member's own private sandbox", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      const target = String(url)
+      if (target.endsWith(`${base}/children`)) {
+        return json({
+          children: [sandbox, { ...sandbox, name: "private-usr_ada" }],
+        })
+      }
+      if (target.includes(`${base}/log`))
+        return json({ events: [], next: 0, more: false })
+      return json({ path: "", entries: [] })
+    })
+    renderLive()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Shared sandbox" })
+    )
+    expect(screen.queryByRole("tab", { name: "Terminal" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Back" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Your private sandbox" })
+    )
+    expect(screen.getByRole("tab", { name: "Terminal" })).toBeTruthy()
+  })
+
+  it("frames a preview without its own origin", async () => {
+    renderLive()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Shared sandbox" })
+    )
+    fireEvent.click(screen.getByRole("tab", { name: "Preview" }))
+    fireEvent.click(screen.getByRole("button", { name: "Open preview" }))
+    const frame = await screen.findByTitle("Preview of port 3000")
+    expect(frame.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-forms allow-popups"
     )
   })
 })

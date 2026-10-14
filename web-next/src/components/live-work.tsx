@@ -5,14 +5,14 @@
 import { useEffect, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeft, Globe, Hand, SquareTerminal } from "lucide-react"
-import { BrowserPane, HANDOFF_POLL_MS } from "./browser-pane"
+import { BrowserPane } from "./browser-pane"
 import { SandboxPane } from "./sandbox-pane"
 import { timeAgo } from "./agents-format"
 import {
+  askedForHand,
   childKey,
   childLabel,
   listChildren,
-  readHandoff,
 } from "@/lib/live/children"
 import type { LiveChild } from "@/lib/live/children"
 import type { LiveEvent, LiveRoom } from "@/lib/live/client"
@@ -57,46 +57,18 @@ function ChildIcon({ child }: { child: LiveChild }) {
   )
 }
 
-/** A running browser is asked whether its agent wants a hand. */
-function useAskedForHand(
-  organizationId: string,
-  room: LiveRoom,
-  child: LiveChild
-) {
-  const watch = child.kind === "browser" && child.status === "running"
-  const handoff = useQuery({
-    queryKey: [
-      "live",
-      organizationId,
-      room.kind,
-      room.id,
-      "browser",
-      child.name,
-      "handoff",
-    ],
-    queryFn: ({ signal }) =>
-      readHandoff(organizationId, room, child.name, signal),
-    enabled: watch,
-    refetchInterval: watch ? HANDOFF_POLL_MS : false,
-    retry: false,
-  })
-  return handoff.data?.active === true
-}
-
 function ChildTile({
-  organizationId,
-  room,
   child,
+  asked,
   viewerId,
   onOpen,
 }: {
-  organizationId: string
-  room: LiveRoom
   child: LiveChild
+  /** The agent is asking for a hand with this browser (from the room's log). */
+  asked: boolean
   viewerId?: string
   onOpen: (child: LiveChild) => void
 }) {
-  const asked = useAskedForHand(organizationId, room, child)
   const running = child.status === "running"
   const label = childLabel(child, viewerId)
   return (
@@ -146,7 +118,7 @@ export function LiveChildren({
   onOpen: (child: LiveChild) => void
   title?: string
 }) {
-  const { children } = useRoomChildren(organizationId, room)
+  const { children, log } = useRoomChildren(organizationId, room)
   if (!room || !children.data || children.data.length === 0) return null
   const sorted = [...children.data].sort(
     (a, b) =>
@@ -160,9 +132,12 @@ export function LiveChildren({
         {sorted.map((child) => (
           <ChildTile
             key={`${child.kind}:${child.name}`}
-            organizationId={organizationId}
-            room={room}
             child={child}
+            asked={
+              child.kind === "browser" &&
+              child.status === "running" &&
+              askedForHand(log.events, child.name)
+            }
             viewerId={viewerId}
             onOpen={onOpen}
           />
@@ -179,6 +154,7 @@ export function LivePane({
   child,
   viewerId,
   agentName,
+  events,
   onBack,
 }: {
   organizationId: string
@@ -186,8 +162,13 @@ export function LivePane({
   child: LiveChild
   viewerId?: string
   agentName?: string
+  /** The room's log when the page already follows it; otherwise the pane does. */
+  events?: readonly LiveEvent[]
   onBack: () => void
 }) {
+  const own = useRoomLog(organizationId, room, {
+    enabled: events === undefined,
+  })
   const label = childLabel(child, viewerId)
   return (
     <div className="live-viewer" aria-label={label} role="region">
@@ -211,12 +192,14 @@ export function LivePane({
           organizationId={organizationId}
           room={room}
           sandbox={child.name}
+          viewerId={viewerId}
         />
       ) : (
         <BrowserPane
           organizationId={organizationId}
           room={room}
-          browser={child.name}
+          child={child}
+          events={events ?? own.events}
           agentName={agentName}
         />
       )}
@@ -298,8 +281,13 @@ export function RoomLive({
       <LivePane
         organizationId={organizationId}
         room={room}
-        child={open}
+        child={
+          children.data?.find(
+            (item) => item.kind === open.kind && item.name === open.name
+          ) ?? open
+        }
         viewerId={viewerId}
+        events={log.events}
         onBack={() => setOpen(null)}
       />
     )

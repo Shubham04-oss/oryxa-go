@@ -5,11 +5,20 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowUpRight, Hand } from "lucide-react"
-import { handBack, openLiveView, readHandoff } from "@/lib/live/children"
-import type { LiveRoom } from "@/lib/live/client"
+import {
+  askedForHand,
+  handBack,
+  openLiveView,
+  readHandoff,
+} from "@/lib/live/children"
+import type { LiveChild } from "@/lib/live/children"
+import type { LiveEvent, LiveRoom } from "@/lib/live/client"
 
-/** How often a watched browser is asked whether the agent wants a hand. */
-export const HANDOFF_POLL_MS = 5_000
+/** A live-view link is used until this long before it expires. */
+export const LIVE_LINK_MARGIN_MS = 60_000
+
+/** The events that change whether a browser is asking for a hand. */
+const HANDOFF_TYPES = /^browser\.(handoff|resume|stopped|reset)$/
 
 function handoffKey(organizationId: string, room: LiveRoom, browser: string) {
   return [
@@ -29,17 +38,28 @@ function elapsed(ms: number | undefined): string | undefined {
   return minutes < 1 ? "just now" : `${minutes} min ago`
 }
 
+/**
+ * Every request to a browser keeps it awake (and billed), so the pane asks
+ * as little as it can: the live view only of a running browser, and the
+ * handoff state once when it opens, and again only when the room's log says
+ * the handoff changed.
+ */
 export function BrowserPane({
   organizationId,
   room,
-  browser,
+  child,
+  events,
   agentName = "The agent",
 }: {
   organizationId: string
   room: LiveRoom
-  browser: string
+  child: LiveChild
+  /** The room's log, which says when the agent asks for a hand. */
+  events: readonly LiveEvent[]
   agentName?: string
 }) {
+  const browser = child.name
+  const running = child.status === "running"
   const queryClient = useQueryClient()
   const [mode, setMode] = useState<"tab" | "full">("tab")
   const [note, setNote] = useState("")
@@ -55,15 +75,55 @@ export function BrowserPane({
       mode,
     ],
     queryFn: () => openLiveView(organizationId, room, browser, mode),
-    staleTime: Infinity,
+    enabled: running,
+    // A link is good until shortly before it expires.
+    staleTime: (query) =>
+      query.state.data
+        ? Math.max(
+            0,
+            Date.parse(query.state.data.expiresAt) -
+              Date.now() -
+              LIVE_LINK_MARGIN_MS
+          )
+        : 0,
+    refetchOnWindowFocus: false,
     retry: false,
   })
   const handoff = useQuery({
     queryKey: handoffKey(organizationId, room, browser),
     queryFn: ({ signal }) => readHandoff(organizationId, room, browser, signal),
-    refetchInterval: HANDOFF_POLL_MS,
+    enabled: running,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    retry: false,
   })
-  const asked = handoff.data?.active === true
+  // The latest event that changed this browser's handoff, if the log has one.
+  const lastHandoffEvent = [...events]
+    .reverse()
+    .find(
+      (event) => HANDOFF_TYPES.test(event.type) && event.data.child === browser
+    )
+  useEffect(() => {
+    if (lastHandoffEvent === undefined || !running) return
+    void queryClient.invalidateQueries({
+      queryKey: handoffKey(organizationId, room, browser),
+    })
+  }, [
+    lastHandoffEvent?.seq,
+    running,
+    organizationId,
+    room.kind,
+    room.id,
+    browser,
+    queryClient,
+  ])
+  // The handoff this page already answered, until the log says what's next.
+  const [answered, setAnswered] = useState<number | null>(null)
+  const asked =
+    running &&
+    (lastHandoffEvent
+      ? askedForHand(events, browser) && lastHandoffEvent.seq !== answered
+      : handoff.data?.active === true && answered === null)
   const back = useMutation({
     mutationFn: (success: boolean) =>
       handBack(
@@ -74,6 +134,7 @@ export function BrowserPane({
         note.trim() || undefined
       ),
     onSuccess: () => {
+      setAnswered(lastHandoffEvent?.seq ?? -1)
       setMode("tab")
       setNote("")
       return queryClient.invalidateQueries({
@@ -95,7 +156,7 @@ export function BrowserPane({
           <div className="browser-handoff-text">
             <strong>{agentName} needs a hand</strong>
             <span>
-              {handoff.data?.reason}
+              {handoff.data?.reason ?? lastHandoffEvent?.summary}
               {elapsed(handoff.data?.elapsedMs)
                 ? ` · asked ${elapsed(handoff.data?.elapsedMs)}`
                 : ""}
@@ -144,7 +205,12 @@ export function BrowserPane({
         </p>
       )}
       <div className="live-pane-body">
-        {live.isPending ? (
+        {!running ? (
+          <p className="live-quiet">
+            This browser has stopped. The agent starts it again when it needs
+            it.
+          </p>
+        ) : live.isPending ? (
           <p className="live-quiet">Opening the browser…</p>
         ) : live.isError ? (
           <p className="live-quiet" role="alert">

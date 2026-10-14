@@ -276,11 +276,17 @@ not permission to copy every incidental value into a new component.
     conversation's own as tiles, and one opens in the work panel like a
     file. A teamspace has a Live tab with its tiles, the open one, and the
     run log.
-  - **A sandbox** has Files (folders and a reader), Preview (a port it
-    serves, in a frame) and Terminal (xterm, loaded when opened). The
-    terminal stays dark in both themes (`--terminal-*`).
-  - **A browser** shows the agent's browser live. When the agent asks for
-    a hand, its tile says "Needs a hand" and the pane says why. "Take over"
+  - **A sandbox** has Files (folders and a reader) and Preview (a port it
+    serves, in a frame without its own origin). A member gets a Terminal
+    (xterm, loaded when opened) only in their own private sandbox (owner's
+    decision, 15 Oct 2026): a shell runs anything, so a shared or a run's
+    sandbox is to watch. The terminal stays dark in both themes
+    (`--terminal-*`).
+  - **A browser** shows the agent's browser live, only while it runs (a
+    stopped one isn't woken by looking). When the agent asks for a hand,
+    its tile says "Needs a hand" and the pane says why; the page reads
+    that from the room's log, since every request to a browser keeps it
+    awake and billed. "Take over"
     gives the member the controls; "Hand back" returns them with an
     optional note, and "I couldn't do it" says so.
   - **The run log** shows who did what (you, your agent, a teammate),

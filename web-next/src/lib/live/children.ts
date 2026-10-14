@@ -207,3 +207,37 @@ export function childLabel(child: LiveChild, viewerId?: string): string {
   if (child.name.startsWith("private-")) return "Your private sandbox"
   return "A run's sandbox"
 }
+
+/** The events that start or end a browser's ask for a hand. */
+const HANDOFF_EVENTS = new Set([
+  "browser.handoff",
+  "browser.resume",
+  "browser.stopped",
+  "browser.reset",
+])
+
+/**
+ * Whether the agent is asking for a hand with `browser`, from the room's log:
+ * its latest handoff, resume, stop or reset is a handoff. The page reads the
+ * log it already follows rather than asking the browser, since every ask
+ * would keep the browser awake.
+ */
+export function askedForHand(
+  events: readonly { type: string; data: Record<string, unknown> }[],
+  browser: string
+): boolean {
+  for (const event of [...events].reverse()) {
+    if (HANDOFF_EVENTS.has(event.type) && event.data.child === browser) {
+      return event.type === "browser.handoff"
+    }
+  }
+  return false
+}
+
+/** Whether `sandbox` is the viewer's own private one: the only one they get a shell in. */
+export function isOwnPrivateSandbox(
+  sandbox: string,
+  viewerId?: string
+): boolean {
+  return viewerId !== undefined && sandbox === `private-${viewerId}`
+}

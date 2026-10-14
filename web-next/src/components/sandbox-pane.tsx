@@ -5,7 +5,12 @@ import { lazy, Suspense, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { ArrowUpRight, ChevronRight, Folder, RefreshCw } from "lucide-react"
 import { FileKindBadge } from "./file-kind"
-import { listFiles, openPreview, readFile } from "@/lib/live/children"
+import {
+  isOwnPrivateSandbox,
+  listFiles,
+  openPreview,
+  readFile,
+} from "@/lib/live/children"
 import type { FileEntry } from "@/lib/live/children"
 import type { LiveRoom } from "@/lib/live/client"
 import { cn } from "@/lib/utils"
@@ -17,18 +22,24 @@ const SandboxTerminal = lazy(() =>
 )
 
 type Tab = "Files" | "Preview" | "Terminal"
-const tabs: Tab[] = ["Files", "Preview", "Terminal"]
 
 export function SandboxPane({
   organizationId,
   room,
   sandbox,
+  viewerId,
 }: {
   organizationId: string
   room: LiveRoom
   sandbox: string
+  viewerId?: string
 }) {
   const [tab, setTab] = useState<Tab>("Files")
+  // A shell runs anything, so a member gets one only in their own private
+  // sandbox (the owner's decision); a shared or a run's sandbox is to watch.
+  const tabs: Tab[] = isOwnPrivateSandbox(sandbox, viewerId)
+    ? ["Files", "Preview", "Terminal"]
+    : ["Files", "Preview"]
   return (
     <div className="live-pane">
       <div className="live-pane-tabs" role="tablist" aria-label="Sandbox views">
@@ -60,7 +71,7 @@ export function SandboxPane({
             sandbox={sandbox}
           />
         )}
-        {tab === "Terminal" && (
+        {tab === "Terminal" && tabs.includes("Terminal") && (
           <Suspense fallback={<p className="live-quiet">Opening a shell…</p>}>
             <SandboxTerminal
               organizationId={organizationId}
@@ -309,7 +320,9 @@ function SandboxPreview({
           className="sandbox-preview-frame"
           src={preview.data.url}
           title={`Preview of port ${port}`}
-          sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
+          // Never allow-same-origin: every organization's previews share the
+          // edge's origin, so a page could reach another's (a service worker).
+          sandbox="allow-scripts allow-forms allow-popups"
         />
       ) : (
         <p className="live-quiet">
