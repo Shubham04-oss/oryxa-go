@@ -228,9 +228,11 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		return fail("model router", err)
 	}
 	if settings.GuardrailIdentifier != "" {
-		// Every agent's every call, main and lite: Krude, its specialists and
-		// the organization agent, whichever model they answer on (L5). A run
-		// whose profile is not guarded skips it (threads, runprofile).
+		// The answers that reach a person, main and lite: Krude's, its
+		// specialists' and the organization agent's, whichever model they
+		// answer on (L5). Internal calls (planner, helpers, sub-agents,
+		// compaction) are not screened. A run whose profile is not guarded
+		// skips it (threads, runprofile).
 		bedrock := bedrockruntime.NewFromConfig(options.AWS)
 		router = router.Guarded(func(llm model.LLM) model.LLM {
 			return guardrail.Model(llm, bedrock, guardrail.Config{
@@ -240,7 +242,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 				Logger:     logger,
 			})
 		})
-		logger.InfoContext(ctx, "guardrail screens every agent's model; their answers do not stream",
+		logger.InfoContext(ctx, "guardrail screens every agent's answer; those answers do not stream",
 			"guardrail", settings.GuardrailIdentifier, "version", settings.GuardrailVersion, "fail_closed", settings.GuardrailFailClosed)
 	}
 	krude.router = router

@@ -113,8 +113,9 @@ type Profile struct {
 	// ReadsMemory and WritesMemory: load_memory on the runner, and the run
 	// handed to Memory Bank once it ends.
 	ReadsMemory, WritesMemory bool
-	// Guarded is whether the Bedrock guardrail screens every model call of
-	// the run, main and lite, when one is configured (modelrouter.WithGuard).
+	// Guarded is whether the Bedrock guardrail screens the answering agent's
+	// model calls in the run, main or lite, when one is configured
+	// (modelrouter.Router.Answer, WithGuard).
 	Guarded bool
 	// Decides is whether the agent may decide a request addressed to it.
 	Decides bool

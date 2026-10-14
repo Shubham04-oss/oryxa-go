@@ -118,6 +118,15 @@ func TestTheGuardrailScreensASpecialistAndTheOrganizationAgent(t *testing.T) {
 	}
 }
 
+// A call whose output only feeds other code, as compacting a room's brief, is
+// not screened (the planner, helpers and sub-agents: modelrouter.Router.For).
+func TestTheGuardrailLeavesCompactionAlone(t *testing.T) {
+	krude, screens := guardedKrude(t, "gr-1")
+	if got, err := krude.Compact(context.Background(), "Compact this room."); err != nil || got != unguardedAnswer || screens.Load() != 0 {
+		t.Errorf("Compact() = %q, %v after %d screens, want the model's own answer and none", got, err, screens.Load())
+	}
+}
+
 func TestWithoutAGuardrailEveryModelAnswersAsItIs(t *testing.T) {
 	krude, screens := guardedKrude(t, "")
 	specialist, err := krude.Managed(agents.ManagedSpec{ID: "agt_s", Name: "Scout", Instructions: "Answer."})

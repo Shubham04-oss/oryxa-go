@@ -62,7 +62,7 @@ Return only the required JSON synthesis. Preserve still-relevant facts, decision
 
 	return llmagent.New(llmagent.Config{
 		Name: machineName(spec.ID), Description: spec.Description,
-		Model: router.For(modelrouter.RoleWork), Instruction: instruction,
+		Model: router.Answer(modelrouter.RoleWork), Instruction: instruction,
 		OutputSchema: organizationSynthesisSchema, Mode: llmagent.ModeChat,
 		DisallowTransferToParent: true, DisallowTransferToPeers: true,
 	})

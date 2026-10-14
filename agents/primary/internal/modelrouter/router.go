@@ -53,8 +53,11 @@ func DefaultPolicy() map[Role]Tier {
 
 // Router hands out the model a role runs on.
 type Router struct {
-	tiers  map[Tier]model.LLM
-	policy map[Role]Tier
+	tiers map[Tier]model.LLM
+	// answers are the tiers' models for an agent whose reply reaches a
+	// person: tiers, screened once [Router.Guarded] is applied.
+	answers map[Tier]model.LLM
+	policy  map[Role]Tier
 }
 
 // New routes with the default policy.
@@ -77,10 +80,8 @@ func NewWithPolicy(mainModel, liteModel model.LLM, policy map[Role]Tier) (*Route
 			return nil, fmt.Errorf("the policy routes %q to unknown tier %q", role, tier)
 		}
 	}
-	return &Router{
-		tiers:  map[Tier]model.LLM{Main: mainModel, Lite: liteModel},
-		policy: policy,
-	}, nil
+	tiers := map[Tier]model.LLM{Main: mainModel, Lite: liteModel}
+	return &Router{tiers: tiers, answers: tiers, policy: policy}, nil
 }
 
 // For returns the model the role runs on. An unknown role gets the lite
@@ -92,6 +93,16 @@ func (r *Router) For(role Role) model.LLM {
 	return r.tiers[Lite]
 }
 
+// Answer is the model the role runs on for an agent whose reply reaches a
+// person: the run's answering agent (Krude, a specialist, the organization
+// agent). On a [Router.Guarded] router it is screened; [Router.For] never is,
+// so internal calls (planner, helpers, sub-agents, compaction) stay cheap and
+// keep streaming. Their output reaches a person only through the answering
+// agent, whose screen reads it as its newest input.
+func (r *Router) Answer(role Role) model.LLM {
+	return r.answers[r.Tier(role)]
+}
+
 // Tier names the tier a role runs on, for logs and tests.
 func (r *Router) Tier(role Role) Tier {
 	if tier, routed := r.policy[role]; routed {
@@ -100,16 +111,16 @@ func (r *Router) Tier(role Role) Tier {
 	return Lite
 }
 
-// Guarded is the router with every tier's model screened by screen (the
-// Bedrock guardrail), so every call of every agent, main and lite, passes it.
-// A call whose run's profile is not guarded ([WithGuard]) skips the screen; a
-// call outside any run is screened.
+// Guarded is the router with every answering agent's model ([Router.Answer]),
+// main and lite, screened by screen (the Bedrock guardrail). A call whose
+// run's profile is not guarded ([WithGuard]) skips the screen; a call outside
+// any run is screened.
 func (r *Router) Guarded(screen func(model.LLM) model.LLM) *Router {
-	tiers := map[Tier]model.LLM{}
+	answers := map[Tier]model.LLM{}
 	for tier, llm := range r.tiers {
-		tiers[tier] = screened{LLM: llm, guarded: screen(llm)}
+		answers[tier] = screened{LLM: llm, guarded: screen(llm)}
 	}
-	return &Router{tiers: tiers, policy: r.policy}
+	return &Router{tiers: r.tiers, answers: answers, policy: r.policy}
 }
 
 type guardKey struct{}

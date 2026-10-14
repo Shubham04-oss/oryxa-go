@@ -136,7 +136,7 @@ func managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, sp
 
 	return llmagent.New(llmagent.Config{
 		Name: machineName(spec.ID), Description: spec.Description,
-		Model: router.For(modelrouter.RoleWork), InstructionProvider: instruction,
+		Model: router.Answer(modelrouter.RoleWork), InstructionProvider: instruction,
 		OutputSchema: managedResultSchema, Tools: tools, GenerateContentConfig: delivering.config(),
 		AfterToolCallbacks:  delivering.afterTools(),
 		BeforeToolCallbacks: []llmagent.BeforeToolCallback{recordRunSource},
