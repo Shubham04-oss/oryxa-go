@@ -542,6 +542,7 @@ var publicRoutePatterns = map[string]string{
 	"GET /healthz": "a liveness probe the host's load balancer calls before any caller can be identified; it answers 204 with no body and touches no organization or member state.",
 	"GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor-source":    "a document server fetch authenticated by a signed, expiring, resource-scoped ticket, tested in documents_test.go; it accepts no member cookie.",
 	"POST /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor-callback": "a document server save authenticated by both a signed, expiring, resource-scoped ticket and an ONLYOFFICE JWT, tested in documents_test.go; it accepts no member cookie.",
+	"POST /v1/edge/dispatch": "the edge's voice agent handing work over: authenticated by an edge→agents token (ES256, the edge's own key, iss edge, aud agents, single-use jti) whose organization, room and member the body must match, tested in edge_dispatch_test.go and edgedispatch/token_test.go; it accepts no member cookie or bearer token, and answers 404 unless configured.",
 }
 
 // TestEveryServerPatternIsAuthorizationTested is the coverage guard: every
