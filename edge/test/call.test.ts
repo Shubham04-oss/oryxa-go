@@ -6,7 +6,7 @@ import { env, exports } from "cloudflare:workers";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { DispatchRequest, VoiceFrame } from "../src/call/contracts";
 import { setCallProvider } from "../src/call/providers";
-import { RealtimeKit, type CallProvider } from "../src/call/realtimekit";
+import { RealtimeKit, apiURL, type CallProvider } from "../src/call/realtimekit";
 import { handleRealtimeKitWebhook, recordingPrefix } from "../src/call/webhook";
 import type { Event, LogResponse } from "../src/contracts";
 import type { Env } from "../src/env";
@@ -651,4 +651,24 @@ describe("the real clients, in workerd", () => {
     }
   });
 
+  it("send RealtimeKit requests to REALTIMEKIT_API_URL when it is set", async () => {
+    const client = RealtimeKit.fromEnv({
+      REALTIMEKIT_ACCOUNT_ID: "acct",
+      REALTIMEKIT_APP_ID: "app",
+      REALTIMEKIT_API_TOKEN: "token",
+      REALTIMEKIT_API_URL: "http://127.0.0.1:9/accounts/",
+    } as Env)!;
+    await expect(client.createMeeting("oryxa:test")).rejects.toThrow(/RealtimeKit did not answer/);
+  });
+
+  it("take REALTIMEKIT_API_URL only over https or to this machine", () => {
+    const real = "https://api.cloudflare.com/client/v4/accounts";
+    expect(apiURL(undefined)).toBe(real);
+    expect(apiURL("https://rtk.example.test/accounts")).toBe("https://rtk.example.test/accounts");
+    expect(apiURL("http://127.0.0.1:8790/accounts")).toBe("http://127.0.0.1:8790/accounts");
+    expect(apiURL("http://localhost:8790")).toBe("http://localhost:8790");
+    expect(apiURL("http://rtk.example.test/accounts")).toBe(real);
+    expect(apiURL("http://127.0.0.1.example.test")).toBe(real);
+    expect(apiURL("not a url")).toBe(real);
+  });
 });

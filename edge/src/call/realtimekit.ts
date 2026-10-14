@@ -37,6 +37,21 @@ export interface CallProvider {
 const API = "https://api.cloudflare.com/client/v4/accounts";
 const TIMEOUT_MS = 10_000;
 
+// apiURL takes REALTIMEKIT_API_URL (a stand-in for RealtimeKit when testing
+// locally, test/live/call/fakertk) only over https or to this machine: the
+// API token goes with every request. Anything else is ignored.
+export function apiURL(configured: string | undefined): string {
+  if (!configured) return API;
+  try {
+    const url = new URL(configured);
+    if (url.protocol === "https:") return configured;
+    if (url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return configured;
+  } catch {
+    // not a URL
+  }
+  return API;
+}
+
 interface Envelope<T> {
   success?: boolean;
   data?: T;
@@ -53,14 +68,15 @@ export class RealtimeKit implements CallProvider {
     // Workers refuse the global fetch called as another object's method, so
     // it is wrapped rather than stored as is.
     private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
+    api: string = API,
   ) {
-    this.base = `${API}/${encodeURIComponent(accountId)}/realtime/kit/${encodeURIComponent(appId)}`;
+    this.base = `${api.replace(/\/+$/, "")}/${encodeURIComponent(accountId)}/realtime/kit/${encodeURIComponent(appId)}`;
   }
 
   // fromEnv returns the client, or undefined when calls aren't set up here.
   static fromEnv(env: Env): RealtimeKit | undefined {
     if (!env.REALTIMEKIT_ACCOUNT_ID || !env.REALTIMEKIT_APP_ID || !env.REALTIMEKIT_API_TOKEN) return undefined;
-    return new RealtimeKit(env.REALTIMEKIT_ACCOUNT_ID, env.REALTIMEKIT_APP_ID, env.REALTIMEKIT_API_TOKEN);
+    return new RealtimeKit(env.REALTIMEKIT_ACCOUNT_ID, env.REALTIMEKIT_APP_ID, env.REALTIMEKIT_API_TOKEN, undefined, apiURL(env.REALTIMEKIT_API_URL));
   }
 
   async createMeeting(title: string): Promise<Meeting> {
