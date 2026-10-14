@@ -97,6 +97,24 @@ describe("exec", () => {
     expect(third.sessionRecreated).toBe(true);
   });
 
+  it("kills a kernel a cell wedged, so the next cell gets a fresh one", async () => {
+    await post("/sandbox/shared/exec/code", { language: "javascript", code: "const kept = 1" });
+    const stuck = (await (await post("/sandbox/shared/exec/code", { language: "javascript", code: "await null; while (true) {}", timeoutMs: 1_000 })).json()) as ExecResult;
+    expect(stuck).toMatchObject({ timedOut: true, exitCode: -1 });
+    expect(workspace().kernels.get(8898)!.kills).toBe(1);
+    const next = (await (await post("/sandbox/shared/exec/code", { language: "javascript", code: "1 + 1" })).json()) as ExecResult;
+    expect(next.exitCode).toBe(0);
+    expect(next.sessionRecreated).toBe(true);
+  }, 20_000);
+
+  it("kills a kernel that won't answer its health check rather than wait on it", async () => {
+    await post("/sandbox/shared/exec/code", { language: "python", code: "x = 1" });
+    workspace().kernels.get(8899)!.wedged = true;
+    const result = (await (await post("/sandbox/shared/exec/code", { language: "python", code: "x" })).json()) as ExecResult;
+    expect(workspace().kernels.get(8899)!.kills).toBe(1);
+    expect(result.sessionRecreated).toBe(true);
+  }, 20_000);
+
   it("refuses a preview on a kernel's port", async () => {
     expect((await post("/sandbox/shared/preview", { port: 8899 })).status).toBe(400);
   });

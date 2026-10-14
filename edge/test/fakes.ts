@@ -24,9 +24,11 @@ export class FakeWorkspace implements Workspace {
   ports = new Map<number, (request: Request) => Response>();
   // The code kernels (A12): each records its cells and resets, and its pid
   // changes when a test says it restarted. kernelRun answers a cell.
-  kernels = new Map<number, { pid: number; cells: { code: string; language: string }[]; resets: number }>([
-    [8899, { pid: 100, cells: [], resets: 0 }],
-    [8898, { pid: 200, cells: [], resets: 0 }],
+  // wedged is a kernel stuck in a cell: it answers nothing until pkill
+  // kills it, and start.sh brings a fresh one (a new pid).
+  kernels = new Map<number, { pid: number; cells: { code: string; language: string }[]; resets: number; wedged: boolean; kills: number }>([
+    [8899, { pid: 100, cells: [], resets: 0, wedged: false, kills: 0 }],
+    [8898, { pid: 200, cells: [], resets: 0, wedged: false, kills: 0 }],
   ]);
   kernelRun: ((body: { code: string; language: string; timeoutMs: number }, workspace: FakeWorkspace) => ExecOutcome) | null = null;
 
@@ -50,6 +52,14 @@ export class FakeWorkspace implements Workspace {
 
   async exec(argv: string[], options: ExecOptions): Promise<ExecOutcome> {
     if (!this.isRunning) throw new Error("container not running");
+    if (argv[0] === "pkill") {
+      const port = argv[3]?.endsWith("kernel.py") ? 8899 : 8898;
+      const kernel = this.kernels.get(port)!;
+      kernel.kills++;
+      kernel.wedged = false;
+      kernel.pid++;
+      return { stdout: "", stderr: "", exitCode: 0, truncated: false, timedOut: false };
+    }
     if (argv[0] === "sh" && argv[2]?.includes("touch /tmp/oryxa/mark")) {
       this.changedSinceMark.clear();
       const command = argv.slice(4);
@@ -143,6 +153,13 @@ export class FakeWorkspace implements Workspace {
         fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
           const request = new Request(input, init);
           const path = new URL(request.url).pathname;
+          const stuck = () =>
+            new Promise<Response>((_, reject) => {
+              const signal = init?.signal;
+              if (signal?.aborted) return reject(signal.reason);
+              signal?.addEventListener("abort", () => reject(signal.reason));
+            });
+          if (kernel.wedged) return stuck();
           if (path === "/health") return Response.json({ ok: true, pid: kernel.pid });
           if (path === "/reset") {
             kernel.resets++;
@@ -150,6 +167,10 @@ export class FakeWorkspace implements Workspace {
           }
           const body = (await request.json()) as { code: string; language: string; timeoutMs: number };
           kernel.cells.push({ code: body.code, language: body.language });
+          if (body.code.includes("await null; while (true)")) {
+            kernel.wedged = true;
+            return stuck();
+          }
           const outcome = this.kernelRun?.(body, this) ?? {
             stdout: `${body.language}: ${body.code}\n`,
             stderr: "",

@@ -108,6 +108,18 @@ describe("the JavaScript and TypeScript kernel", () => {
     expect((await cell(node, "survives")).stdout).toBe("'yes'\n");
   });
 
+  it("can be wedged by a cell vm's timeout can't reach, which only killing it ends", async () => {
+    const wedged = await start("node", "kernel.mjs", "ORYXA_JS_KERNEL_PORT");
+    void cell(wedged, "await null; while (true) {}", { timeoutMs: 300 }).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // It no longer answers even its health check: SandboxDO's probe times
+    // out and kills it, as here.
+    await expect(fetch(`http://127.0.0.1:${wedged.port}/health`, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
+    wedged.process.kill("SIGKILL");
+    const fresh = await start("node", "kernel.mjs", "ORYXA_JS_KERNEL_PORT");
+    expect((await cell(fresh, "1 + 1")).stdout).toBe("2\n");
+  }, 20_000);
+
   it("forgets everything on reset", async () => {
     await cell(node, "const gone = 1");
     await reset(node);

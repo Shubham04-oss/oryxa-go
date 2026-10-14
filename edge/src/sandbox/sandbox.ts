@@ -285,7 +285,7 @@ export class SandboxDO extends DurableObject<Env> {
       port,
       "/exec",
       { code: request.code, language: request.language, timeoutMs: limit, stdoutLimit: STDOUT_LIMIT, stderrLimit: STDERR_LIMIT },
-      limit + 15_000,
+      limit + kernelSlack(limit),
     );
     const result = await this.collect(workspace, outcome, Date.now() - started, recreated || lost);
     events.push({
@@ -556,7 +556,29 @@ export function backupPrefix(identity: SandboxIdentity): string {
 // (containers/sandbox/start.sh): Python, and Node for JavaScript and
 // TypeScript.
 export const KERNEL_PORTS = { python: 8899, javascript: 8898, typescript: 8898 } as const;
+const KERNEL_SCRIPTS: Record<number, string> = { 8899: "kernel.py", 8898: "kernel.mjs" };
 const KERNEL_START_MS = 20_000;
+// HEALTH_PROBE_MS bounds one health check: a kernel wedged by a cell (say
+// `await null; while (true) {}`, which vm's timeout can't reach) never
+// answers, and is killed instead of waited on.
+const HEALTH_PROBE_MS = 3_000;
+
+// kernelSlack is how much past a cell's own limit the DO waits for the
+// kernel's answer before it kills the kernel: kernels answer at the limit
+// themselves unless they're wedged.
+function kernelSlack(limitMs: number): number {
+  return Math.min(15_000, Math.max(2_000, limitMs));
+}
+
+// killKernel ends a kernel so start.sh starts a fresh one. Kernels run as
+// the agent user, as exec does, so pkill reaches them.
+async function killKernel(workspace: Workspace, port: number): Promise<void> {
+  const script = KERNEL_SCRIPTS[port];
+  if (!script) return;
+  await workspace
+    .exec(["pkill", "-9", "-f", `/opt/oryxa/${script}`], { timeoutMs: 10_000, stdoutLimit: 1024, stderrLimit: 1024 })
+    .catch((error) => console.error(JSON.stringify({ msg: "kill a stuck kernel failed", port, error: String(error) })));
+}
 
 function clampTimeout(timeoutMs: number | undefined): number {
   return Math.min(Math.max(timeoutMs ?? DEFAULT_EXEC_MS, 1_000), MAX_EXEC_MS);
@@ -567,13 +589,20 @@ function clampTimeout(timeoutMs: number | undefined): number {
 async function kernelReady(workspace: Workspace, port: number): Promise<number> {
   const deadline = Date.now() + KERNEL_START_MS;
   let last: unknown;
+  let killed = false;
   for (let delay = 100; Date.now() < deadline; delay = Math.min(delay * 2, 1_000)) {
     try {
-      const response = await workspace.port(port).fetch("http://kernel/health");
+      const response = await workspace.port(port).fetch("http://kernel/health", { signal: AbortSignal.timeout(HEALTH_PROBE_MS) });
       if (response.ok) return ((await response.json()) as { pid: number }).pid;
       last = new Error(`kernel answered ${response.status}`);
     } catch (error) {
       last = error;
+      // Listening but silent: a cell has it stuck. Kill it once; start.sh
+      // brings up a fresh one, which the next probes find.
+      if (!killed && (error as Error)?.name === "TimeoutError") {
+        killed = true;
+        await killKernel(workspace, port);
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, delay));
   }
@@ -593,10 +622,16 @@ async function kernelCall(workspace: Workspace, port: number, path: string, body
     if (!response.ok) throw new Error(`kernel answered ${response.status}`);
     return (await response.json()) as ExecOutcome;
   } catch (error) {
+    // Past the cell's limit with no answer, the kernel is stuck: kill it so
+    // start.sh starts a fresh one, and report the cell as timed out. The
+    // next cell finds a new pid, so it is told its state was lost.
+    if (abort.signal.aborted) {
+      await killKernel(workspace, port);
+      return { stdout: "", stderr: "", exitCode: -1, truncated: false, timedOut: true };
+    }
     // The kernel died under the cell (it ran the process out of memory, or
     // exited it): report it as the cell's failure, and the next call starts
     // with a fresh kernel.
-    if (abort.signal.aborted) return { stdout: "", stderr: "", exitCode: -1, truncated: false, timedOut: true };
     return { stdout: "", stderr: `The code kernel stopped while running this: ${String(error)}`, exitCode: 1, truncated: false, timedOut: false };
   } finally {
     clearTimeout(timer);
