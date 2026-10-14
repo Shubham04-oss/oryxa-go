@@ -269,6 +269,28 @@ not permission to copy every incidental value into a new component.
     Anyone who may not read it (403) sees no card at all.
   - **Agent overview** lists the follow-ups from the member's teamspaces,
     grouped by teamspace.
+- **Live work** (live layer A8): the sandboxes and browsers agents run in a
+  room, as far as a member may see them (the edge hides another member's
+  private ones).
+  - **Where:** beside the primary agent's chat, Agent overview shows the
+    conversation's own as tiles, and one opens in the work panel like a
+    file. A teamspace has a Live tab with its tiles, the open one, and the
+    run log.
+  - **A sandbox** has Files (folders and a reader) and Preview (a port it
+    serves, in a frame without its own origin). A member gets a Terminal
+    (xterm, loaded when opened) only in their own private sandbox (owner's
+    decision, 15 Oct 2026): a shell runs anything, so a shared or a run's
+    sandbox is to watch. The terminal stays dark in both themes
+    (`--terminal-*`).
+  - **A browser** shows the agent's browser live, only while it runs (a
+    stopped one isn't woken by looking). When the agent asks for a hand,
+    its tile says "Needs a hand" and the pane says why; the page reads
+    that from the room's log, since every request to a browser keeps it
+    awake and billed. "Take over"
+    gives the member the controls; "Hand back" returns them with an
+    optional note, and "I couldn't do it" says so.
+  - **The run log** shows who did what (you, your agent, a teammate),
+    newest first, with how long it took.
 - **Library** (was Knowledge bases; founder's redesign, 14 Oct 2026). Each
   collection is a filled tile on the canvas, with no outline, and lifts to
   the raised tile on hover; search, the source list, an open document and an

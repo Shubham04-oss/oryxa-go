@@ -241,6 +241,9 @@
   --file-code: #3d7fb8;
   --file-doc: #6b6b6b;
   --on-file: #ffffff;
+  /* A sandbox's terminal stays dark in both themes, as a shell does. */
+  --terminal-bg: #0d0d0d;
+  --terminal-fg: #e6e6e6;
   /* A parley's camera tiles stay dark in both themes, as video does
      (call.css); everything around them follows the theme. */
   --call-cam: #2a2a2a;

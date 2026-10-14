@@ -15,6 +15,7 @@ import { TeamspaceConversation } from "./teamspace-room"
 import { useHasCalls } from "./call-provider"
 import { ParleyButton, ParleyStrip } from "./call-surfaces"
 import { TeamSynthesis } from "./team-synthesis"
+import { RoomLive } from "./live-work"
 import {
   agentIdentity,
   memberName,
@@ -44,8 +45,8 @@ import {
 } from "@/lib/teamspaces/queries"
 import { cn } from "@/lib/utils"
 
-type WorkTab = "Overview" | "Tasks" | "Files" | "Activity"
-const tabs: WorkTab[] = ["Overview", "Tasks", "Files", "Activity"]
+type WorkTab = "Overview" | "Tasks" | "Files" | "Live" | "Activity"
+const tabs: WorkTab[] = ["Overview", "Tasks", "Files", "Live", "Activity"]
 
 /**
  * A teamspace as focused work (DESIGN.md §3): no left sidebar, the room as
@@ -226,6 +227,22 @@ export function TeamspaceFocus({
             )}
             {tab === "Files" && (
               <FilesPanel organizationId={organizationId} space={space} />
+            )}
+            {tab === "Live" && (
+              <>
+                <WorkHeading
+                  eyebrow="Live"
+                  title="Live work"
+                  description="Sandboxes and browsers agents run for this room, and what they do there."
+                />
+                <div className="workspace-work-body">
+                  <RoomLive
+                    organizationId={organizationId}
+                    room={{ kind: "teamspace", id: space.id }}
+                    viewerId={viewerId}
+                  />
+                </div>
+              </>
             )}
             {tab === "Activity" && (
               <ActivityPanel organizationId={organizationId} space={space} />
