@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
+
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
@@ -58,15 +60,27 @@ func (server *Server) mintAgentToken(writer http.ResponseWriter, request *http.R
 		return
 	}
 
+	// agent and role name the agent the token acts as, with the edge
+	// token's claim names. A caller that names neither gets the primary.
 	var input struct {
 		UserID string `json:"user_id"`
+		Agent  string `json:"agent"`
+		Role   string `json:"role"`
 	}
 	if err := readJSON(request, &input); err != nil || strings.TrimSpace(input.UserID) == "" {
 		writeError(writer, http.StatusBadRequest, "user_id is required")
 		return
 	}
+	identity := domain.AgentIdentity{Agent: strings.TrimSpace(input.Agent), Role: input.Role}
+	if identity.Role == "" {
+		identity.Role = domain.AgentRolePrimary
+	}
+	if !domain.ValidAgentRole(identity.Role) || len(identity.Agent) > 128 {
+		writeError(writer, http.StatusBadRequest, "role must be primary, specialist or organization")
+		return
+	}
 
-	accessToken, expiresIn, err := server.config.AgentGrants.MintToken(request.Context(), input.UserID)
+	accessToken, expiresIn, err := server.config.AgentGrants.MintToken(request.Context(), input.UserID, identity)
 	if err != nil {
 		server.handleError(writer, err)
 		return

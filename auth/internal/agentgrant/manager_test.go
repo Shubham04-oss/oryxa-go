@@ -31,6 +31,7 @@ type fakeStore struct {
 	upserted *domain.AgentGrant
 	deleted  []string
 	replaced *domain.SealedData
+	bound    map[string]domain.AgentIdentity
 }
 
 func (f *fakeStore) SaveLoginFlow(_ context.Context, flow domain.LoginFlow) error {
@@ -73,6 +74,22 @@ func (f *fakeStore) DeleteAgentGrant(_ context.Context, userID string) error {
 func (f *fakeStore) ReplaceAgentGrantToken(_ context.Context, _ string, sealed domain.SealedData, _ time.Time) error {
 	f.replaced = &sealed
 	return nil
+}
+
+func (f *fakeStore) BindAgentToken(_ context.Context, tokenHash, userID string, identity domain.AgentIdentity, _ time.Time) error {
+	if f.bound == nil {
+		f.bound = map[string]domain.AgentIdentity{}
+	}
+	f.bound[userID+"/"+tokenHash] = identity
+	return nil
+}
+
+func (f *fakeStore) AgentTokenIdentity(_ context.Context, tokenHash, userID string) (domain.AgentIdentity, error) {
+	identity, ok := f.bound[userID+"/"+tokenHash]
+	if !ok {
+		return domain.AgentIdentity{}, domain.ErrNotFound
+	}
+	return identity, nil
 }
 
 type fakeIdentityVerifier struct {
@@ -412,7 +429,7 @@ func TestMintTokenSavesRotatedRefreshTokenAndReturnsAccessToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	accessToken, expiresIn, err := manager.MintToken(context.Background(), "member-1")
+	accessToken, expiresIn, err := manager.MintToken(context.Background(), "member-1", domain.AgentIdentity{Role: domain.AgentRolePrimary})
 	if err != nil {
 		t.Fatalf("MintToken() error = %v", err)
 	}
@@ -424,12 +441,44 @@ func TestMintTokenSavesRotatedRefreshTokenAndReturnsAccessToken(t *testing.T) {
 	}
 }
 
+// TestMintedTokenNamesItsAgent: a token minted for a specialist answers that
+// specialist, and a token auth never bound (one minted before bindings
+// existed) answers the primary, so it keeps working.
+func TestMintedTokenNamesItsAgent(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(writer).Encode(tokenResponse{AccessToken: "specialist-token", ExpiresIn: 3600})
+	}))
+	defer tokenServer.Close()
+	store := &fakeStore{
+		grant:   domain.AgentGrant{UserID: "member-1", EncryptedRefreshToken: domain.SealedData{Ciphertext: []byte("sealed:refresh-token")}},
+		grantOK: true,
+	}
+	manager, err := New(testConfig(tokenServer.URL), store, &fakeIdentityVerifier{}, &fakeSealer{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	specialist := domain.AgentIdentity{Agent: "agt_writer", Role: domain.AgentRoleSpecialist}
+	token, _, err := manager.MintToken(context.Background(), "member-1", specialist)
+	if err != nil {
+		t.Fatalf("MintToken() error = %v", err)
+	}
+	if got, err := manager.AgentIdentity(context.Background(), "member-1", token); err != nil || got != specialist {
+		t.Fatalf("AgentIdentity(minted) = %+v, %v; want %+v", got, err, specialist)
+	}
+	if got, err := manager.AgentIdentity(context.Background(), "member-2", token); err != nil || got != (domain.AgentIdentity{Role: domain.AgentRolePrimary}) {
+		t.Fatalf("AgentIdentity(another member) = %+v, %v; want the bare primary", got, err)
+	}
+	if got, err := manager.AgentIdentity(context.Background(), "member-1", "legacy-token"); err != nil || got != (domain.AgentIdentity{Role: domain.AgentRolePrimary}) {
+		t.Fatalf("AgentIdentity(legacy) = %+v, %v; want the primary", got, err)
+	}
+}
+
 func TestMintTokenAnswersNotFoundWithoutGrant(t *testing.T) {
 	manager, err := New(testConfig("https://identity.example.com"), &fakeStore{}, &fakeIdentityVerifier{}, &fakeSealer{})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if _, _, err := manager.MintToken(context.Background(), "member-1"); !errors.Is(err, domain.ErrNotFound) {
+	if _, _, err := manager.MintToken(context.Background(), "member-1", domain.AgentIdentity{Role: domain.AgentRolePrimary}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("MintToken() error = %v, want not found", err)
 	}
 }
@@ -449,7 +498,7 @@ func TestMintTokenDeletesGrantWhenCognitoRefusesTheRefreshToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if _, _, err := manager.MintToken(context.Background(), "member-1"); !errors.Is(err, domain.ErrConflict) {
+	if _, _, err := manager.MintToken(context.Background(), "member-1", domain.AgentIdentity{Role: domain.AgentRolePrimary}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("MintToken() error = %v, want conflict", err)
 	}
 	if len(store.deleted) != 1 || store.deleted[0] != "member-1" {
@@ -470,7 +519,7 @@ func TestMintTokenReturnsUnavailableWhenCognitoDoesNotAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if _, _, err := manager.MintToken(context.Background(), "member-1"); !errors.Is(err, domain.ErrUnavailable) {
+	if _, _, err := manager.MintToken(context.Background(), "member-1", domain.AgentIdentity{Role: domain.AgentRolePrimary}); !errors.Is(err, domain.ErrUnavailable) {
 		t.Fatalf("MintToken() error = %v, want unavailable", err)
 	}
 	if len(store.deleted) != 0 {
@@ -503,7 +552,7 @@ func TestMintTokenRetriesWithATokenRotatedMeanwhileAndKeepsTheGrant(t *testing.T
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	accessToken, _, err := manager.MintToken(context.Background(), "member-1")
+	accessToken, _, err := manager.MintToken(context.Background(), "member-1", domain.AgentIdentity{Role: domain.AgentRolePrimary})
 	if err != nil || accessToken != "new-access-token" {
 		t.Fatalf("MintToken() = %q, %v, want the token the rotated grant mints", accessToken, err)
 	}
@@ -538,7 +587,7 @@ func TestMintTokenKeepsTheGrantUnlessCognitoRefusesIt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
 			}
-			_, _, err = manager.MintToken(context.Background(), "member-1")
+			_, _, err = manager.MintToken(context.Background(), "member-1", domain.AgentIdentity{Role: domain.AgentRolePrimary})
 			if err == nil || errors.Is(err, domain.ErrConflict) || (test.want != nil && !errors.Is(err, test.want)) {
 				t.Fatalf("MintToken() error = %v, want %v and never a conflict", err, test.want)
 			}

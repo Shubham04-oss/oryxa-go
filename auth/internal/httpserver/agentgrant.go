@@ -27,8 +27,10 @@ type AgentGrantsFlow interface {
 	// Revoke revokes the member's grant. A missing grant is not an error.
 	Revoke(ctx context.Context, userID string) error
 	// MintToken exchanges the member's stored refresh token for a short-lived
-	// access token.
-	MintToken(ctx context.Context, userID string) (accessToken string, expiresIn int, err error)
+	// access token acting as identity, the agent it names.
+	MintToken(ctx context.Context, userID string, identity domain.AgentIdentity) (accessToken string, expiresIn int, err error)
+	// AgentIdentity answers which agent the member's agent token acts as.
+	AgentIdentity(ctx context.Context, userID, rawToken string) (domain.AgentIdentity, error)
 }
 
 func (server *Server) agentGrantStatus(writer http.ResponseWriter, request *http.Request) {

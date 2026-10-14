@@ -59,6 +59,8 @@ type Store interface {
 	UpsertAgentGrant(context.Context, domain.AgentGrant) error
 	DeleteAgentGrant(context.Context, string) error
 	ReplaceAgentGrantToken(context.Context, string, domain.SealedData, time.Time) error
+	BindAgentToken(ctx context.Context, tokenHash, userID string, identity domain.AgentIdentity, expiresAt time.Time) error
+	AgentTokenIdentity(ctx context.Context, tokenHash, userID string) (domain.AgentIdentity, error)
 }
 
 // Sealer envelope-encrypts and opens a member's stored agent refresh token.
@@ -242,14 +244,15 @@ func (m *Manager) Revoke(ctx context.Context, userID string) error {
 // domain.ErrConflict means Cognito refused the refresh token, in which case
 // the now-useless grant is deleted before the error is returned.
 // domain.ErrUnavailable means Cognito did not answer. A refresh token
-// Cognito rotates is sealed and saved before the access token is returned.
+// Cognito rotates is sealed and saved before the access token is returned,
+// and the access token is bound to identity, the agent it acts as.
 //
 // Another mint for the same member, say on another instance, may rotate the
 // stored token while this one exchanges it, and Cognito then refuses the
 // token this one read. So a refusal deletes the grant only when the stored
 // token is still the one refused; otherwise the exchange is tried once more
 // with the token now stored.
-func (m *Manager) MintToken(ctx context.Context, userID string) (string, int, error) {
+func (m *Manager) MintToken(ctx context.Context, userID string, identity domain.AgentIdentity) (string, int, error) {
 	grant, err := m.store.GetAgentGrant(ctx, userID)
 	if err != nil {
 		return "", 0, err
@@ -280,7 +283,27 @@ func (m *Manager) MintToken(ctx context.Context, userID string) (string, int, er
 			return "", 0, err
 		}
 	}
+	// The token is handed out only once it names its agent, so no agent
+	// token minted from here on goes without one.
+	expiresAt := m.now().UTC().Add(time.Duration(tokens.ExpiresIn) * time.Second)
+	if err := m.store.BindAgentToken(ctx, tokenHash(tokens.AccessToken), userID, identity, expiresAt); err != nil {
+		return "", 0, fmt.Errorf("bind agent token: %w", err)
+	}
 	return tokens.AccessToken, tokens.ExpiresIn, nil
+}
+
+// AgentIdentity answers which agent the member userID's agent token
+// rawToken acts as, as MintToken bound it.
+//
+// ponytail: a token with no binding (minted before bindings existed) is the
+// primary. Once every such token has expired, a deploy cycle after this
+// shipped, this can answer ErrUnauthorized instead.
+func (m *Manager) AgentIdentity(ctx context.Context, userID, rawToken string) (domain.AgentIdentity, error) {
+	identity, err := m.store.AgentTokenIdentity(ctx, tokenHash(rawToken), userID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return domain.AgentIdentity{Role: domain.AgentRolePrimary}, nil
+	}
+	return identity, err
 }
 
 // exchangeGrant opens a grant's refresh token just long enough to exchange it.
