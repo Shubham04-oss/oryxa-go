@@ -1,7 +1,8 @@
 # The room sandbox (A1): what an agent's sandbox_* tools run in. Python,
 # Node/TypeScript and common CLI tools, plus sandbox-shim, the helper that
-# @cloudflare/sandbox's Files and DirectoryBackup run (it must match the
-# package's version). Cloudflare runs linux/amd64.
+# @cloudflare/sandbox's Files and DirectoryBackup run. It must be the same
+# release as the package (edge/package.json, exactly); version.node.test.ts
+# fails when they drift. Cloudflare runs linux/amd64.
 FROM docker.io/cloudflare/sandbox:1.0.1 AS shim
 
 FROM docker.io/library/python:3.13-slim-bookworm
