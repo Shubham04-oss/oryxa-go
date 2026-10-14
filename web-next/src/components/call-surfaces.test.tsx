@@ -20,8 +20,24 @@ const room = { kind: "teamspace", id: "tsp_1" } as const
 const base = "/live/org_1/rooms/teamspace/tsp_1"
 
 class QuietSocket extends EventTarget {
+  static all: QuietSocket[] = []
+  constructor(readonly url: string) {
+    super()
+    QuietSocket.all.push(this)
+  }
   send() {}
   close() {}
+  frame(data: unknown) {
+    this.dispatchEvent(
+      new MessageEvent("message", { data: JSON.stringify(data) })
+    )
+  }
+}
+
+function socketFor(path: string) {
+  return [...QuietSocket.all]
+    .reverse()
+    .find((socket) => socket.url.includes(path))
 }
 
 function json(body: unknown, status = 200) {
@@ -118,7 +134,9 @@ function Parley({ onRoomPage }: { onRoomPage: boolean }) {
   )
 }
 
-function renderParley(join = vi.fn(async () => fakeMedia())) {
+function renderParley(
+  join: () => Promise<CallMedia> = vi.fn(async () => fakeMedia())
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -144,6 +162,7 @@ function requests(path: string, method = "GET") {
 }
 
 beforeEach(() => {
+  QuietSocket.all = []
   current = view()
   vi.stubGlobal("WebSocket", QuietSocket)
   vi.stubGlobal("fetch", fetchMock)
@@ -363,5 +382,115 @@ describe("a parley in a teamspace", () => {
       "You can't join a parley in this room yet."
     )
     expect(join).not.toHaveBeenCalled()
+  })
+
+  it("gives the seat back when the member leaves while still joining", async () => {
+    const media = fakeMedia()
+    let joined: (value: CallMedia) => void = () => undefined
+    const { leaveRoomPage } = renderParley(
+      vi.fn(
+        () =>
+          new Promise<CallMedia>((resolve) => {
+            joined = resolve
+          })
+      )
+    )
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    await waitFor(() => expect(requests("/call/join", "POST")).toHaveLength(1))
+    leaveRoomPage()
+    const pip = await screen.findByRole("region", { name: /mini player/ })
+    fireEvent.click(within(pip).getByRole("button", { name: "Leave" }))
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: /mini player/ })).toBeNull()
+    )
+
+    joined(media)
+    await waitFor(() => expect(media.leave).toHaveBeenCalled())
+    await waitFor(() => expect(requests("/call/leave", "POST")).toHaveLength(1))
+    expect(screen.queryByRole("region", { name: /mini player/ })).toBeNull()
+  })
+
+  it("gives the seat back when the media can't start", async () => {
+    renderParley(
+      vi.fn(async () => {
+        throw new DOMException("Permission denied", "NotAllowedError")
+      })
+    )
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Allow the microphone and camera to join."
+    )
+    await waitFor(() => expect(requests("/call/leave", "POST")).toHaveLength(1))
+  })
+
+  it("lets go when someone else ends the call", async () => {
+    const media = fakeMedia()
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    await screen.findByText(/^You're in the parley/)
+
+    current = null
+    socketFor("/live")?.frame({
+      type: "event",
+      event: {
+        seq: 9,
+        at: new Date().toISOString(),
+        org: "org_1",
+        room,
+        actor: { type: "member", id: "usr_raya" },
+        run: null,
+        type: "call.ended",
+        summary: "Raya ended the parley",
+        data: {},
+        durationMs: 0,
+        private: false,
+      },
+    })
+    await waitFor(() => expect(media.leave).toHaveBeenCalled())
+    expect(screen.queryByText(/^You're in the parley/)).toBeNull()
+    // The call is over: there is no seat to give back.
+    expect(requests("/call/leave", "POST")).toHaveLength(0)
+  })
+
+  it("lets go when the agent's voice says the call ended", async () => {
+    const media = fakeMedia()
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    await screen.findByText(/^You're in the parley/)
+    socketFor("/voice/live")?.frame({
+      type: "voice.stop",
+      utteranceId: "u1",
+      reason: "call_ended",
+    })
+    await waitFor(() => expect(media.leave).toHaveBeenCalled())
+    expect(screen.queryByText(/^You're in the parley/)).toBeNull()
+  })
+
+  it("leaves with a bodiless beacon when the tab closes", async () => {
+    const beacon = vi.fn(() => true)
+    Object.defineProperty(navigator, "sendBeacon", {
+      value: beacon,
+      configurable: true,
+    })
+    renderParley()
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    await screen.findByText(/^You're in the parley/)
+    window.dispatchEvent(new Event("pagehide"))
+    expect(beacon).toHaveBeenCalledWith(`${base}/call/leave`)
   })
 })

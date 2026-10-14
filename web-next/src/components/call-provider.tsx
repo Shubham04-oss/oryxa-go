@@ -12,7 +12,7 @@ import {
   useState,
 } from "react"
 import type { ReactNode } from "react"
-import { useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ApiError } from "@/lib/api/client"
 import {
   MAX_SEGMENTS,
@@ -21,12 +21,14 @@ import {
   joinCall,
   leaveCall,
   parseVoiceFrame,
+  readCall,
   sendTranscript,
   setAgentPresent,
   setRecording,
 } from "@/lib/call/client"
 import type { TranscriptSegment } from "@/lib/call/client"
 import { joinMedia } from "@/lib/call/media"
+import { CALL_REFRESH_MS } from "@/lib/call/use-room-call"
 import type { CallMedia, CallTile } from "@/lib/call/media"
 import { livePath, liveSocketUrl } from "@/lib/live/client"
 import type { LiveRoom } from "@/lib/live/client"
@@ -180,6 +182,12 @@ export function CallProvider({
   const cleanups = useRef<(() => void)[]>([])
   const activeRef = useRef<ActiveCall | null>(null)
   activeRef.current = active
+  // Each join is one attempt; leaving or ending, or another join, makes it
+  // stale. The edge holds a member's seat until /call/leave, so a stale join
+  // gives back whatever it got.
+  const attempt = useRef(0)
+  /** When the member's media joined: a view older than this can't end it. */
+  const joinedAt = useRef(0)
 
   const update = useCallback(
     (change: Partial<ActiveCall>) =>
@@ -204,6 +212,8 @@ export function CallProvider({
 
   const teardownAndLeave = useCallback(async () => {
     const current = activeRef.current
+    // A join still under way sees this and leaves for itself.
+    attempt.current += 1
     await teardown()
     setActive(null)
     if (current?.phase === "in") {
@@ -231,8 +241,13 @@ export function CallProvider({
         agentSpeaking: false,
         expanded: false,
       })
-      let joined: CallMedia
+      const id = (attempt.current += 1)
+      const stale = () => attempt.current !== id
+      const giveBack = () =>
+        leaveCall(options.organizationId, options.room).catch(() => undefined)
+
       let callId: string
+      let token: string
       try {
         const answer = await joinCall(
           options.organizationId,
@@ -240,15 +255,34 @@ export function CallProvider({
           options.name
         )
         callId = answer.callId
+        token = answer.token
+      } catch (error) {
+        if (!stale()) update({ phase: "failed", error: joinError(error) })
+        return
+      }
+      // The edge gave the member a seat: from here on, every way out leaves.
+      if (stale()) {
+        void giveBack()
+        return
+      }
+      let joined: CallMedia
+      try {
         joined = await joinMediaWith({
-          token: answer.token,
+          token,
           mic: options.mic,
           camera: options.camera,
         })
       } catch (error) {
-        update({ phase: "failed", error: joinError(error) })
+        void giveBack()
+        if (!stale()) update({ phase: "failed", error: joinError(error) })
         return
       }
+      if (stale()) {
+        void joined.leave().catch(() => undefined)
+        void giveBack()
+        return
+      }
+      joinedAt.current = Date.now()
       media.current = joined
       update({ phase: "in", callId, tiles: joined.tiles() })
       refreshCall(options.organizationId, options.room)
@@ -334,15 +368,55 @@ export function CallProvider({
           onQuiet: () => update({ agentSpeaking: false }),
           onPrivate: (text) => update({ privateAnswer: text }),
           onState: () => refreshCall(options.organizationId, options.room),
+          onEnded: () => void endedElsewhere(id),
         })
       )
     },
     [joinMediaWith, refreshCall, teardownAndLeave, update]
   )
 
+  /**
+   * Someone else ended the call: there is no seat to give back, only the
+   * media and the page's own state to clear.
+   */
+  const endedElsewhere = useCallback(
+    async (id: number) => {
+      if (attempt.current !== id) return
+      attempt.current += 1
+      await teardown()
+      setActive(null)
+    },
+    [teardown]
+  )
+
+  // The edge's view of the call the member is in: once a view read after
+  // they joined has no call, or another one, theirs has ended.
+  const inCall = active?.phase === "in" ? active : undefined
+  const view = useQuery({
+    queryKey: callKey(
+      inCall?.organizationId ?? "",
+      inCall?.room ?? { kind: "thread", id: "" }
+    ),
+    queryFn: ({ signal }) =>
+      readCall(
+        inCall?.organizationId ?? "",
+        inCall?.room ?? { kind: "thread", id: "" },
+        signal
+      ),
+    enabled: inCall !== undefined,
+    refetchInterval: CALL_REFRESH_MS,
+  })
+  useEffect(() => {
+    if (!inCall || !view.isSuccess) return
+    if (view.dataUpdatedAt <= joinedAt.current) return
+    if (view.data && view.data.callId === inCall.callId) return
+    void endedElsewhere(attempt.current)
+  }, [endedElsewhere, inCall, view.data, view.dataUpdatedAt, view.isSuccess])
+
   const end = useCallback(async () => {
     const current = activeRef.current
     if (!current) return
+    attempt.current += 1
     await endCall(current.organizationId, current.room).catch(() => undefined)
     await teardown()
     setActive(null)
@@ -391,9 +465,9 @@ export function CallProvider({
     const leaveOnUnload = () => {
       const current = activeRef.current
       if (current?.phase !== "in") return
+      // No body: Chrome refuses a beacon with a JSON one, and leave needs none.
       navigator.sendBeacon(
-        livePath(current.organizationId, current.room, "/call/leave"),
-        new Blob(["{}"], { type: "application/json" })
+        livePath(current.organizationId, current.room, "/call/leave")
       )
     }
     window.addEventListener("pagehide", leaveOnUnload)
@@ -448,6 +522,8 @@ function followVoice(
     onQuiet: () => void
     onPrivate: (text: string) => void
     onState: () => void
+    /** The call ended for everyone. */
+    onEnded: () => void
   }
 ): () => void {
   let stopped = false
@@ -505,6 +581,7 @@ function followVoice(
         playNext()
       } else if (frame.type === "voice.stop") {
         stop(frame.utteranceId)
+        if (frame.reason === "call_ended") on.onEnded()
       } else {
         on.onPrivate(frame.text)
       }
