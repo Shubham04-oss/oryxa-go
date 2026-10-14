@@ -220,6 +220,12 @@ not permission to copy every incidental value into a new component.
   (Organisation, People & invitations, Teams, Billing) and Connections (Tool
   access, Sign-in apps, Slack, Email), on one tile, the open page the raised
   tile.
+- **Chats and DMs as tiles** (founder's redesign, 14 Oct 2026). The open
+  chat in the chat list is the raised tile and the others lift on hover; DM
+  rows are rounded the same way, with unread as a filled count. The member's
+  bubble is a raised tile in a 720px reading column, and a file made in a
+  chat is a filled block, not an outline. The log keeps its rules below: the
+  member on the right, nobody named.
 - **Library** (was Knowledge bases; founder's redesign, 14 Oct 2026). Each
   collection is a filled tile on the canvas, with no outline, and lifts to
   the raised tile on hover; search, the source list, an open document and an
