@@ -22,6 +22,13 @@ export class FakeWorkspace implements Workspace {
   changedSinceMark = new Set<string>();
   handler: ExecHandler | null = null;
   ports = new Map<number, (request: Request) => Response>();
+  // The code kernels (A12): each records its cells and resets, and its pid
+  // changes when a test says it restarted. kernelRun answers a cell.
+  kernels = new Map<number, { pid: number; cells: { code: string; language: string }[]; resets: number }>([
+    [8899, { pid: 100, cells: [], resets: 0 }],
+    [8898, { pid: 200, cells: [], resets: 0 }],
+  ]);
+  kernelRun: ((body: { code: string; language: string; timeoutMs: number }, workspace: FakeWorkspace) => ExecOutcome) | null = null;
 
   running(): boolean {
     return this.isRunning;
@@ -130,6 +137,30 @@ export class FakeWorkspace implements Workspace {
   }
 
   port(port: number): Fetcher {
+    const kernel = this.kernels.get(port);
+    if (kernel && !this.ports.has(port)) {
+      return {
+        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(input, init);
+          const path = new URL(request.url).pathname;
+          if (path === "/health") return Response.json({ ok: true, pid: kernel.pid });
+          if (path === "/reset") {
+            kernel.resets++;
+            return Response.json({ reset: true });
+          }
+          const body = (await request.json()) as { code: string; language: string; timeoutMs: number };
+          kernel.cells.push({ code: body.code, language: body.language });
+          const outcome = this.kernelRun?.(body, this) ?? {
+            stdout: `${body.language}: ${body.code}\n`,
+            stderr: "",
+            exitCode: 0,
+            truncated: false,
+            timedOut: false,
+          };
+          return Response.json(outcome);
+        },
+      } as unknown as Fetcher;
+    }
     const handler = this.ports.get(port);
     return {
       fetch: async (input: RequestInfo | URL, init?: RequestInit) => {

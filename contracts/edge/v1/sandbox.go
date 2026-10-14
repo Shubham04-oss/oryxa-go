@@ -10,11 +10,10 @@ const (
 	LanguageTypeScript = "typescript"
 )
 
-// ExecCodeRequest is POST …/exec/code.
-//
-// ClearContext is accepted for the sandbox_execute_code tool's sake; each
-// run is its own process, so there is no interpreter context to clear, and
-// files persist either way.
+// ExecCodeRequest is POST …/exec/code. Code runs in the sandbox's kernel for
+// its language, whose state (variables, imports) lasts from one call to the
+// next (A12); ClearContext resets that state first. Files persist either
+// way.
 type ExecCodeRequest struct {
 	Language     string `json:"language"`
 	Code         string `json:"code"`

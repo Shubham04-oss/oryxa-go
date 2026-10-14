@@ -70,14 +70,40 @@ describe("exec", () => {
     });
   });
 
-  it("removes the script it wrote", async () => {
-    await post("/sandbox/shared/exec/code", { language: "typescript", code: "console.log(1)" });
+  it("runs each language in its kernel, so state lasts between cells", async () => {
+    await post("/sandbox/shared/exec/code", { language: "python", code: "x = 41" });
+    await post("/sandbox/shared/exec/code", { language: "python", code: "x + 1" });
+    await post("/sandbox/shared/exec/code", { language: "typescript", code: "const n: number = 1" });
+    expect(workspace().kernels.get(8899)!.cells.map((cell) => cell.code)).toEqual(["x = 41", "x + 1"]);
+    expect(workspace().kernels.get(8898)!.cells).toEqual([{ code: "const n: number = 1", language: "typescript" }]);
     expect([...workspace().files.keys()].filter((path) => path.includes(".oryxa"))).toEqual([]);
+  });
+
+  it("resets a kernel when the call clears its context", async () => {
+    await post("/sandbox/shared/exec/code", { language: "python", code: "x = 1" });
+    await post("/sandbox/shared/exec/code", { language: "python", code: "x", clearContext: true });
+    expect(workspace().kernels.get(8899)!.resets).toBe(1);
+    const events = await log();
+    expect(events.filter((event) => event.type === "sandbox.exec").at(-1)?.data).toMatchObject({ contextCleared: true });
+  });
+
+  it("says the session was recreated when the kernel restarted since its last cell", async () => {
+    const first = (await (await post("/sandbox/shared/exec/code", { language: "python", code: "x = 1" })).json()) as ExecResult;
+    expect(first.sessionRecreated).toBe(true);
+    const second = (await (await post("/sandbox/shared/exec/code", { language: "python", code: "x" })).json()) as ExecResult;
+    expect(second.sessionRecreated).toBeUndefined();
+    workspace().kernels.get(8899)!.pid = 101;
+    const third = (await (await post("/sandbox/shared/exec/code", { language: "python", code: "x" })).json()) as ExecResult;
+    expect(third.sessionRecreated).toBe(true);
+  });
+
+  it("refuses a preview on a kernel's port", async () => {
+    expect((await post("/sandbox/shared/preview", { port: 8899 })).status).toBe(400);
   });
 
   it("reports files a run changed, logs them, and returns small images as results", async () => {
     await post("/sandbox/shared/exec/command", { command: "true" });
-    workspace().handler = (_argv, _options, ws) => {
+    workspace().kernelRun = (_body, ws) => {
       ws.write("/workspace/chart.png", new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
       ws.write("/workspace/out.csv", "a,b\n");
       return { stdout: "", stderr: "", exitCode: 0, truncated: false, timedOut: false };
