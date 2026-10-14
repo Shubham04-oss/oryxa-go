@@ -16,6 +16,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 )
@@ -63,9 +64,10 @@ func (bank *recallingMemory) touched() (int, int) {
 // room runs on the room's reduced agent, with no memory at all, whether its
 // owner is reading the room (a team turn) or away (an unwatched one): the
 // owner being there does not make the room's words their own conversation.
-// The same team turn on any other profile is the member's own agent, and is
-// remembered, as a team delegation always was. Without the reduced agent, a
-// turn in a room does not run at all.
+// The same team turn on any other profile is a team turn (runprofile.TeamTurn):
+// another agent's words steer it, so it answers on the reduced agent and
+// remembers nothing either (L3). Without the reduced agent, a turn in a room
+// does not run at all.
 func TestATurnInARoomAnswersFromTheRoomEvenBesideItsOwner(t *testing.T) {
 	repo := newFakeRepository()
 	prices, err := pricing.NewTable(nil)
@@ -121,11 +123,17 @@ func TestATurnInARoomAnswersFromTheRoomEvenBesideItsOwner(t *testing.T) {
 	if written, searched := bank.touched(); written != 0 || searched != 0 {
 		t.Fatalf("turns in a room wrote %d and looked up %d memories, want none", written, searched)
 	}
-	if said := turn(agentsv1.StartedByTeam, UnattendedReads); said != "the member's own agent" {
-		t.Fatalf("a team turn elsewhere was answered by %q", said)
+	if said := turn(agentsv1.StartedByTeam, UnattendedReads); said != "the reduced agent" {
+		t.Fatalf("a team turn elsewhere was answered by %q, want the reduced agent", said)
+	}
+	if written, searched := bank.touched(); written != 0 || searched != 0 {
+		t.Fatalf("a team turn elsewhere wrote %d and looked up %d memories, want none", written, searched)
+	}
+	if said := turn(agentsv1.StartedByMember, UnattendedReads); said != "the member's own agent" {
+		t.Fatalf("the member's own turn was answered by %q", said)
 	}
 	if written, _ := bank.touched(); written != 1 {
-		t.Fatalf("a team turn elsewhere wrote %d memories, want it remembered as ever", written)
+		t.Fatalf("the member's own turn wrote %d memories, want it remembered", written)
 	}
 
 	service.unattended = nil
@@ -141,8 +149,9 @@ func TestATurnInARoomAnswersFromTheRoomEvenBesideItsOwner(t *testing.T) {
 // agent.
 func TestOnlyATurnInARoomIsConfined(t *testing.T) {
 	for _, profile := range []UnattendedProfile{UnattendedReads, UnattendedQuiet, DeliveryReads, DeliveryApps, DeliveryQuiet, DeliveryReport, RoomSeat, "everything"} {
-		if confined := profile.Confined(); confined != (profile == RoomSeat) {
-			t.Errorf("%q confined = %t", profile, confined)
+		mode, err := runprofile.ModeOf(agentsv1.StartedByMember, runprofile.Toolset(profile))
+		if confined := err == nil && runprofile.Lookup(runprofile.Primary, mode).Reduced(); confined != (profile == RoomSeat) {
+			t.Errorf("%q: a member's own turn is reduced = %t (%v)", profile, confined, err)
 		}
 	}
 	if RoomSeat.ReadsApps() || RoomSeat.Delivers() {

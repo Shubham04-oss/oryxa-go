@@ -1424,18 +1424,15 @@ func TestARunNobodyWatchesIsAnsweredByTheUnattendedAgent(t *testing.T) {
 	if answers := find(items, ItemMessage); answers[len(answers)-1].Text != "attended" {
 		t.Fatalf("a member's run was answered by %q", answers[len(answers)-1].Text)
 	}
-	// A schedule firing, and the organization agent reading what members
-	// published, are as unwatched as an app event. A team delegation is not:
-	// the member asked for it in their own thread.
-	for _, startedBy := range []string{agentsv1.StartedByWorkflow, agentsv1.StartedByOrganization} {
+	// A schedule firing, the organization agent reading what members
+	// published, and a team coordinator's turn or delegation are as unwatched
+	// as an app event: another agent's output steers a team turn, so it must
+	// not hold the member's write tools (L3).
+	for _, startedBy := range []string{agentsv1.StartedByWorkflow, agentsv1.StartedByOrganization, agentsv1.StartedByTeam} {
 		items, _ = h.run(away, created.ID, RunInput{Message: "run it", StartedBy: startedBy})
 		if answers := find(items, ItemMessage); answers[len(answers)-1].Text != "unattended" {
 			t.Fatalf("a %s run was answered by %q", startedBy, answers[len(answers)-1].Text)
 		}
-	}
-	items, _ = h.run(asha, created.ID, RunInput{Message: "delegate", StartedBy: agentsv1.StartedByTeam})
-	if answers := find(items, ItemMessage); answers[len(answers)-1].Text != "attended" {
-		t.Fatalf("a team delegation the member asked for was answered by %q", answers[len(answers)-1].Text)
 	}
 
 	other, err := llmagent.New(llmagent.Config{Name: "someone_else", Model: answering("x"), Instruction: "x"})
@@ -1496,8 +1493,8 @@ func TestARunNobodyWatchesRemembersNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	away := Member{UserID: asha.UserID, OrganizationID: asha.OrganizationID}
-	for _, startedBy := range []string{agentsv1.StartedByTrigger, agentsv1.StartedByWorkflow, agentsv1.StartedByOrganization} {
-		h.run(away, created.ID, RunInput{Message: "the invoice mentions tungsten, " + startedBy, StartedBy: startedBy})
+	for _, startedBy := range []string{agentsv1.StartedByTrigger, agentsv1.StartedByWorkflow, agentsv1.StartedByOrganization, agentsv1.StartedByTeam} {
+		h.run(away, created.ID, RunInput{Message: "tungsten is in the invoice, " + startedBy, StartedBy: startedBy})
 		if remembered := recalled("tungsten"); remembered != 0 {
 			t.Fatalf("a %s run left %d memories behind", startedBy, remembered)
 		}

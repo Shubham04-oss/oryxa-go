@@ -704,9 +704,10 @@ using the cross-user interaction API.
 
 A member can compose persistent specialists into reusable teams. The member's
 primary agent is always the sole coordinator; specialists are active workers
-with explicit roles, stable identities, their own durable conversations, and
-the same member-scoped tools and confirmation boundaries as their standalone
-runs. Teams never copy or broaden an agent's instructions.
+with explicit roles, stable identities and their own durable conversations.
+A delegated or team-room turn is a team turn (`internal/runprofile`): another
+agent's output steers it, so it answers on the reduced agent, with the
+member's apps and knowledge read-only, no memory, and no request decided. Teams never copy or broaden an agent's instructions.
 
 The `agent_system` toolbox makes the primary agent the conversational control
 plane. It can list the member's definitions, help draft a precise specialist,
@@ -739,8 +740,8 @@ per member message and 90 seconds; unknown or outside-team targets never run.
 When the coordinator requests a teammate's contribution, it takes one final
 turn to synthesize what was actually said instead of presenting a handoff as a
 finished answer.
-Each agent keeps a separate durable thread for this team, and its ordinary
-member-scoped tools and confirmation rules still apply. An action awaiting
+Each agent keeps a separate durable thread for this team, and answers there as
+a team turn: reads only, no memory. An action awaiting
 confirmation is **not** auto-approved in group chat: the member reviews it in
 that agent's direct conversation. Deleting a team removes its group-chat
 messages and team-thread pointers, but not the agents themselves.
@@ -1822,14 +1823,18 @@ wakes Krude for each batch it hands over, as `batching.trigger-batch.ready.v1`
   it. The events arrive there as a message from their apps (`author: apps`),
   not from them, and Krude's answer follows.
 - **Answered by the reduced agent, with no memory.** A run a member is not
-  watching — an app event, a schedule or durable workflow, the organization
-  agent, or an interaction another member's agent addressed here — is answered
-  by the reduced agent rather than the one the member talks to, and neither
-  reads nor writes memory. Every persistent agent has such a variant, not only
-  Krude itself. A team delegation is not unwatched: the member asked for it in
-  their own thread. A turn in a room is answered by the room's own agent even
-  when its member is reading the room (see
-  [A teamspace is a room](#a-teamspace-is-a-room)).
+  watching — an app event, the edge, a schedule or durable workflow, the
+  organization agent, a team coordinator's turn or delegation, or an
+  interaction another member's agent addressed here — is answered by the
+  reduced agent rather than the one the member talks to, neither reads nor
+  writes memory, and decides no request. Every persistent agent has such a
+  variant, not only Krude itself. A team turn counts as unwatched because
+  another agent's output steers it. A turn in a room is answered by the room's
+  own agent even when its member is reading the room (see
+  [A teamspace is a room](#a-teamspace-is-a-room)). Which tools, knowledge,
+  memory, guardrail, decide rights and model tier each run gets is one table,
+  by agent role and run mode, in `internal/runprofile`; its test pins every
+  row.
 - **Told, not acted on.** The message hands Krude the events as data, never
   instructions — nothing in them changes what it may do — and asks it to say
   what happened and what needs the member's attention, reading more from
@@ -2068,7 +2073,8 @@ who can email them or open an issue wrote (see [Wake-ups](#wake-ups)).
 Remembering one would let that text put facts about the member into what
 Krude knows, where they would outlive the run and steer later ones; reading
 would hand that text what Krude already knows. The member's own runs in the
-same thread are remembered as usual.
+same thread are remembered as usual. Which runs read and write memory is the
+run-profile table in `internal/runprofile`.
 
 That boundary is not airtight, and it cannot be: a member's own run on a
 thread a wake-up already wrote to answers with that text still in context, so
