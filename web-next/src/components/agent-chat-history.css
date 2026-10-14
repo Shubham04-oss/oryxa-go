@@ -7,10 +7,14 @@
 .workspace-chat-history-toggle svg[data-expanded="true"] { transform: rotate(0); }
 .workspace-chat-history-list { max-height: 190px; overflow-y: auto; }
 .workspace-chat-history-list ul { list-style: none; margin: 0; padding: 0; }
-.workspace-chat-history-list li { display: flex; align-items: center; gap: 4px; border-radius: 7px; }
+.workspace-chat-history-list ul { display: flex; flex-direction: column; gap: 2px; }
+.workspace-chat-history-list li { display: flex; align-items: center; gap: 4px; border-radius: 11px; }
 .workspace-chat-history-open { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: flex-start; gap: 2px; padding: 7px 8px; text-align: left; }
 .workspace-chat-history-open > span:first-child { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tone-d6d6d6); }
-.workspace-chat-history-open[aria-current="true"], .workspace-chat-history-list li:hover { background: var(--canvas); border-radius: 7px; }
+/* The open chat is the raised tile, as in the sidebar; another lifts on hover. */
+.workspace-chat-history-list li:hover { background: var(--hover); }
+.workspace-chat-history-list li:has(> [aria-current="true"]) { background: var(--raised); box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66); }
+.workspace-chat-history-open { border-radius: 11px; }
 .workspace-chat-history-meta { font-size: 10px; }
 .workspace-chat-history-delete { display: grid; place-items: center; width: 30px; min-height: 32px; flex-shrink: 0; }
 .workspace-chat-history-confirm { display: flex; flex-shrink: 0; gap: 6px; padding-right: 8px; }
