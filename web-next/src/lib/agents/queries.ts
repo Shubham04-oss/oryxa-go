@@ -4,6 +4,7 @@
 // key beneath it: invalidating it refreshes the list, each detail and what
 // hangs off them.
 import { queryOptions } from "@tanstack/react-query"
+import { ApiError } from "@/lib/api/client"
 import { getAgentRequest, listAgentRequests } from "./agent-requests"
 import type { AgentRequestBox } from "./agent-requests"
 import {
@@ -22,6 +23,7 @@ import { getAgent, listAgents } from "./managed-agents"
 import {
   getOrganizationAgent,
   getOrganizationContext,
+  getTeamspaceSynthesis,
   listOrganizationFollowUps,
 } from "./organization-agent"
 import { hasExecutionInFlight, isExecutionInFlight } from "./policy"
@@ -131,6 +133,8 @@ export const agentKeys = {
   organizationAgent,
   organizationContext: (organizationId: string) =>
     [...organizationAgent(organizationId), "context"] as const,
+  teamspaceSynthesis: (organizationId: string, teamspaceId: string) =>
+    [...organizationAgent(organizationId), "teamspace", teamspaceId] as const,
   /** Without `limit`, the prefix of every page size. */
   organizationFollowUps: (organizationId: string, limit?: number) => {
     const prefix = [...organizationAgent(organizationId), "follow-ups"] as const
@@ -297,6 +301,21 @@ export function organizationContextQueryOptions(organizationId: string) {
   return queryOptions({
     queryKey: agentKeys.organizationContext(organizationId),
     queryFn: ({ signal }) => getOrganizationContext(organizationId, { signal }),
+  })
+}
+
+/** `getTeamspaceSynthesis`: one team's synthesis; a 403 is final. */
+export function teamspaceSynthesisQueryOptions(
+  organizationId: string,
+  teamspaceId: string
+) {
+  return queryOptions({
+    queryKey: agentKeys.teamspaceSynthesis(organizationId, teamspaceId),
+    queryFn: ({ signal }) =>
+      getTeamspaceSynthesis(organizationId, teamspaceId, { signal }),
+    retry: (count, error) =>
+      !(error instanceof ApiError && [401, 403, 404].includes(error.status)) &&
+      count < 2,
   })
 }
 

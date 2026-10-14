@@ -184,3 +184,33 @@ describe("who may drive whose browser", () => {
     expect((await post(`/browser/m4/navigate`, { url: LOGIN }, { member: "m4" })).status).toBe(429);
   });
 });
+
+describe("watching and handing back (A15)", () => {
+  it("lets only the browser's own member open its live view or hand it back", async () => {
+    await post("/browser/usr_1/navigate", { url: LOGIN }, { member: "usr_1" });
+    await post("/browser/usr_1/handoff", { reason: "Sign in" }, { member: "usr_1" });
+    // usr_2 is a room member too: their agent acted here.
+    await post("/browser/usr_2/navigate", { url: LOGIN }, { member: "usr_2" });
+
+    const theirLive = await web().fetch(`https://edge.test${base}/browser/usr_1/live`, { method: "POST", headers: asMember("usr_2"), body: "{}" });
+    expect(theirLive.status).toBe(403);
+    const theirResume = await web().fetch(`https://edge.test${base}/browser/usr_1/resume`, {
+      method: "POST",
+      headers: asMember("usr_2"),
+      body: JSON.stringify({ success: true }),
+    });
+    expect(theirResume.status).toBe(403);
+    const theirState = await web().fetch(`https://edge.test${base}/browser/usr_1/handoff`, { headers: asMember("usr_2") });
+    expect(theirState.status).toBe(403);
+    expect(driver().handoffActive).toBe(true);
+
+    const ownLive = await web().fetch(`https://edge.test${base}/browser/usr_1/live`, { method: "POST", headers: asMember("usr_1"), body: "{}" });
+    expect(ownLive.status).toBe(200);
+    const ownResume = await web().fetch(`https://edge.test${base}/browser/usr_1/resume`, {
+      method: "POST",
+      headers: asMember("usr_1"),
+      body: JSON.stringify({ success: true }),
+    });
+    expect(ownResume.status).toBe(200);
+  });
+});

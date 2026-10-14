@@ -35,11 +35,15 @@ export type UpdateOrganizationAgentInput = {
 }
 
 /**
- * The organization-wide synthesis. Before anything was synthesized it is
- * empty: revision 0, `agent_id` "", no `updated_at`.
+ * A synthesis: the organization-wide one, or one teamspace's (with
+ * `teamspace_id`), which only its team and the organization's owners and
+ * admins may read. Before anything was synthesized it is empty: revision 0,
+ * `agent_id` "", no `updated_at`.
  */
 export type OrganizationContext = {
   organization_id: string
+  /** The teamspace whose team it is for; none for the organization's. */
+  teamspace_id?: string
   agent_id: string
   revision: number
   summary: string
@@ -100,7 +104,23 @@ export function getOrganizationContext(
   )
 }
 
-/** `GET …/organization-agent/follow-ups[?limit=]` (server.listOrganizationAgentFollowUps): newest first; 100 by default, at most 500. */
+/**
+ * `GET …/teamspaces/{teamspaceID}/synthesis` (server.getTeamspaceSynthesis):
+ * the team's own synthesis, built from posts only that team may read. 403
+ * for anyone else, who sees no panel.
+ */
+export function getTeamspaceSynthesis(
+  organizationId: string,
+  teamspaceId: string,
+  { signal }: ReadOptions = {}
+): Promise<OrganizationContext> {
+  return apiRequest<OrganizationContext>(
+    organizationPath(organizationId, "teamspaces", teamspaceId, "synthesis"),
+    { signal }
+  )
+}
+
+/** `GET …/organization-agent/follow-ups[?limit=]` (server.listOrganizationAgentFollowUps): newest first; 100 by default, at most 500. Only those from the caller's teams' teamspaces, or every one for an owner or admin. */
 export async function listOrganizationFollowUps(
   organizationId: string,
   { limit, signal }: ReadOptions & { limit?: number } = {}

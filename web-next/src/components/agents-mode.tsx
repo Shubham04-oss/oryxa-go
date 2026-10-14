@@ -19,6 +19,7 @@ import { AgentTeamsSection } from "./multi-agent-teams-section"
 import { LiveChildren } from "./live-work"
 import { threadRoom } from "@/lib/live/children"
 import type { LiveTarget } from "@/lib/live/children"
+import { FollowUpsByTeamspace } from "./team-synthesis"
 import { PrimaryAgentFiles } from "./primary-agent-files"
 import { WorkflowOverview } from "./workflow-overview"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
@@ -430,6 +431,8 @@ function AgentsOverview({
           </AgentsNotice>
         )}
       </section>
+
+      <FollowUpsByTeamspace organizationId={organizationId} />
 
       <WorkflowOverview organizationId={organizationId} />
     </div>

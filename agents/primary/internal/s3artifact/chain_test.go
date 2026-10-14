@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"slices"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/genai"
@@ -108,4 +109,58 @@ func keysOf(fake *fakeS3) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// racingStore saves, just before each explicitly numbered save it is asked
+// for, the same version itself for the first races calls: another writer
+// taking the number this one picked.
+type racingStore struct {
+	*Service
+	races int
+}
+
+func (store *racingStore) Save(ctx context.Context, request *artifact.SaveRequest) (*artifact.SaveResponse, error) {
+	if request.Version != 0 && store.races > 0 {
+		store.races--
+		rival := *request
+		rival.Part = genai.NewPartFromText("the other writer's")
+		if _, err := store.Service.Save(ctx, &rival); err != nil {
+			return nil, err
+		}
+	}
+	return store.Service.Save(ctx, request)
+}
+
+// Two saves at once while old versions are on S3: the one that loses the
+// race takes the next number instead of failing (A16).
+func TestChainRetriesWhenAnotherWriterTakesItsVersion(t *testing.T) {
+	legacy := newTestService(t, newFakeS3())
+	saveText(t, legacy, "report.csv", "v1 on S3")
+	current := &racingStore{Service: newTestService(t, newFakeS3()), races: 2}
+	chain, _ := NewChain(current, legacy)
+	chain.sleep = func(context.Context, time.Duration) error { return nil }
+
+	version := saveText(t, chain, "report.csv", "mine")
+	if version != 4 {
+		t.Fatalf("saved as version %d, want 4 after rivals took 2 and 3", version)
+	}
+	if got := loadText(t, chain, "report.csv", 4); got != "mine" {
+		t.Errorf("version 4 = %q", got)
+	}
+	if got := loadText(t, chain, "report.csv", 2); got != "the other writer's" {
+		t.Errorf("version 2 = %q", got)
+	}
+}
+
+func TestChainGivesUpAfterItsBudget(t *testing.T) {
+	legacy := newTestService(t, newFakeS3())
+	saveText(t, legacy, "report.csv", "v1")
+	chain, _ := NewChain(&racingStore{Service: newTestService(t, newFakeS3()), races: maxSaveAttempts}, legacy)
+	chain.sleep = func(context.Context, time.Duration) error { return nil }
+	_, err := chain.Save(context.Background(), &artifact.SaveRequest{
+		AppName: "krude", UserID: "usr_1", SessionID: "sess_1", FileName: "report.csv", Part: genai.NewPartFromText("x"),
+	})
+	if !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("err = %v", err)
+	}
 }
