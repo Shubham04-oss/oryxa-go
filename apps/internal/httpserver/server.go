@@ -43,6 +43,9 @@ type appsService interface {
 	CatalogTriggers(ctx context.Context, toolkit, cursor string, limit int) ([]application.TriggerTypeView, string, error)
 	OfferedTools(ctx context.Context, credentials authclient.Credentials, organizationID string) (application.OfferPolicy, error)
 	Connect(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ConnectInput) (domain.Connection, string, error)
+	BrokerFor(ctx context.Context, toolkit string) (string, error)
+	ConnectPipedream(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ConnectInput) (domain.Connection, string, error)
+	CompletePipedreamConnection(ctx context.Context, state, status string) (application.Completion, error)
 	CompleteConnection(ctx context.Context, state, status, accountID string) (application.Completion, error)
 	Connections(ctx context.Context, credentials authclient.Credentials, organizationID, toolkit string, organization bool) ([]domain.Connection, error)
 	Connection(ctx context.Context, credentials authclient.Credentials, organizationID, id string) (domain.Connection, error)
@@ -55,6 +58,7 @@ type appsService interface {
 	Triggers(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]domain.Trigger, error)
 	RemoveTrigger(ctx context.Context, credentials authclient.Credentials, organizationID, id string) error
 	ReceiveWebhook(ctx context.Context, header http.Header, body []byte) error
+	ReceivePipedreamWebhook(ctx context.Context, triggerID string, header http.Header, body io.Reader) error
 }
 
 type Config struct {
@@ -110,7 +114,9 @@ func New(service appsService, config Config, logger *slog.Logger) *Server {
 	server.handle("GET /v1/apps/catalog/{toolkit}/tools", server.catalogTools)
 	server.handle("GET /v1/apps/catalog/{toolkit}/triggers", server.catalogTriggers)
 	server.handle("GET /v1/apps/connect/callback", server.completeConnection)
+	server.handle("GET /v1/apps/connect/pipedream/callback", server.completePipedreamConnection)
 	server.handle("POST /v1/apps/webhooks/composio", server.receiveWebhook)
+	server.handle("POST "+application.PipedreamWebhookPrefix+"{triggerID}", server.receivePipedreamWebhook)
 	server.handle("GET /v1/organizations/{organizationID}/apps/offer", server.offeredTools)
 	server.handle("GET /v1/organizations/{organizationID}/apps/connections", server.listConnections)
 	server.handle("POST /v1/organizations/{organizationID}/apps/connections", server.connect)
@@ -215,7 +221,8 @@ func (server *Server) offeredTools(writer http.ResponseWriter, request *http.Req
 type connectionView struct {
 	ID      string `json:"id"`
 	Toolkit string `json:"toolkit"`
-	// Broker is composio or oryxa: who holds the connection's credential.
+	// Broker is composio, oryxa or pipedream: who holds the connection's
+	// credential.
 	Broker string `json:"broker"`
 	// CredentialKind is an Oryxa connection's credential kind (oauth2_code,
 	// api_token, basic, oauth2_client_credentials) once it holds one. Only a
@@ -269,8 +276,8 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 		// AutoSubscribe left out means the deployment's default, which is to
 		// subscribe to everything the app can deliver.
 		AutoSubscribe *bool `json:"auto_subscribe"`
-		// Broker is composio, the default, or oryxa; Kind and Fields are
-		// Oryxa's own sign-in's.
+		// Broker is composio, oryxa or pipedream; left out, the toolkit's own
+		// broker is chosen. Kind and Fields are Oryxa's own sign-in's.
 		Broker string            `json:"broker"`
 		Kind   string            `json:"kind"`
 		Fields map[string]string `json:"fields"`
@@ -279,6 +286,9 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	broker, err := domain.CheckBroker(body.Broker)
+	if err == nil && strings.TrimSpace(body.Broker) == "" {
+		broker, err = server.service.BrokerFor(request.Context(), body.Toolkit)
+	}
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -294,7 +304,11 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 		writeError(writer, http.StatusBadRequest, "invalid_request", "kind and fields are for connecting through broker oryxa")
 		return
 	}
-	connection, redirectURL, err := server.service.Connect(request.Context(), credentials, request.PathValue("organizationID"),
+	connect := server.service.Connect
+	if broker == domain.BrokerPipedream {
+		connect = server.service.ConnectPipedream
+	}
+	connection, redirectURL, err := connect(request.Context(), credentials, request.PathValue("organizationID"),
 		application.ConnectInput{
 			Toolkit: body.Toolkit, ReturnTo: body.ReturnTo, Alias: body.Alias,
 			AutoSubscribe: body.AutoSubscribe,
@@ -312,6 +326,18 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 func (server *Server) completeConnection(writer http.ResponseWriter, request *http.Request) {
 	query := request.URL.Query()
 	completion, err := server.service.CompleteConnection(request.Context(), query.Get("state"), query.Get("status"), query.Get("connected_account_id"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	server.sendBack(writer, request, completion)
+}
+
+// completePipedreamConnection is where Pipedream's hosted connect sends the
+// member's browser back, answered as completeConnection answers Composio's.
+func (server *Server) completePipedreamConnection(writer http.ResponseWriter, request *http.Request) {
+	query := request.URL.Query()
+	completion, err := server.service.CompletePipedreamConnection(request.Context(), query.Get("state"), query.Get("status"))
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -557,6 +583,23 @@ func (server *Server) receiveWebhook(writer http.ResponseWriter, request *http.R
 	// it: it logs the delivery as failed and sends it again, so every event
 	// arrived four times.
 	writer.WriteHeader(http.StatusOK)
+}
+
+// receivePipedreamWebhook takes a deployed Pipedream trigger's delivery. The
+// application reads the body, capped, only once the trigger is known.
+func (server *Server) receivePipedreamWebhook(writer http.ResponseWriter, request *http.Request) {
+	err := server.service.ReceivePipedreamWebhook(request.Context(), request.PathValue("triggerID"), request.Header, request.Body)
+	switch {
+	case err == nil:
+		writer.WriteHeader(http.StatusOK)
+	case errors.Is(err, application.ErrDeliveryTooLarge):
+		writeError(writer, http.StatusRequestEntityTooLarge, "invalid_request", "the delivery is too large")
+	case errors.Is(err, application.ErrUnverified):
+		server.logger.WarnContext(request.Context(), "unverified Pipedream delivery refused", "error", err)
+		writeError(writer, http.StatusUnauthorized, "unauthorized", "the delivery is not signed by Pipedream")
+	default:
+		server.handleError(writer, request, err)
+	}
 }
 
 func (server *Server) credentials(writer http.ResponseWriter, request *http.Request) (authclient.Credentials, bool) {

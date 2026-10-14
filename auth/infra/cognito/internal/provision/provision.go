@@ -113,7 +113,7 @@ func ensureUserPool(ctx context.Context, client *cognitoidentityprovider.Client,
 		for _, pool := range output.UserPools {
 			if aws.ToString(pool.Name) == config.PoolName {
 				poolID := aws.ToString(pool.Id)
-				if err := updateUserPool(ctx, client, poolID, config.PoolName); err != nil {
+				if err := updateUserPool(ctx, client, poolID, config); err != nil {
 					return "", err
 				}
 				return poolID, nil
@@ -136,6 +136,7 @@ func ensureUserPool(ctx context.Context, client *cognitoidentityprovider.Client,
 			types.VerifiedAttributeTypeEmail,
 		},
 		DeletionProtection: types.DeletionProtectionTypeActive,
+		EmailConfiguration: emailConfiguration(config),
 		Policies: &types.UserPoolPolicyType{PasswordPolicy: &types.PasswordPolicyType{
 			MinimumLength:                 aws.Int32(12),
 			RequireLowercase:              true,
@@ -166,10 +167,27 @@ func ensureUserPool(ctx context.Context, client *cognitoidentityprovider.Client,
 	return aws.ToString(output.UserPool.Id), nil
 }
 
-func updateUserPool(ctx context.Context, client *cognitoidentityprovider.Client, poolID, poolName string) error {
+// emailConfiguration is the pool's sender. UpdateUserPool resets what it is
+// not given, so both create and update pass it, or every run would put the
+// pool back on Cognito's 50-a-day sender.
+func emailConfiguration(config Config) *types.EmailConfigurationType {
+	if config.EmailSourceARN == "" {
+		return &types.EmailConfigurationType{EmailSendingAccount: types.EmailSendingAccountTypeCognitoDefault}
+	}
+	email := &types.EmailConfigurationType{
+		EmailSendingAccount: types.EmailSendingAccountTypeDeveloper,
+		SourceArn:           aws.String(config.EmailSourceARN),
+	}
+	if config.EmailFrom != "" {
+		email.From = aws.String(config.EmailFrom)
+	}
+	return email
+}
+
+func updateUserPool(ctx context.Context, client *cognitoidentityprovider.Client, poolID string, config Config) error {
 	_, err := client.UpdateUserPool(ctx, &cognitoidentityprovider.UpdateUserPoolInput{
 		UserPoolId:            aws.String(poolID),
-		PoolName:              aws.String(poolName),
+		PoolName:              aws.String(config.PoolName),
 		AdminCreateUserConfig: &types.AdminCreateUserConfigType{AllowAdminCreateUserOnly: true},
 		AccountRecoverySetting: &types.AccountRecoverySettingType{RecoveryMechanisms: []types.RecoveryOptionType{{
 			Name:     types.RecoveryOptionNameTypeVerifiedEmail,
@@ -177,6 +195,7 @@ func updateUserPool(ctx context.Context, client *cognitoidentityprovider.Client,
 		}}},
 		AutoVerifiedAttributes: []types.VerifiedAttributeType{types.VerifiedAttributeTypeEmail},
 		DeletionProtection:     types.DeletionProtectionTypeActive,
+		EmailConfiguration:     emailConfiguration(config),
 		Policies: &types.UserPoolPolicyType{PasswordPolicy: &types.PasswordPolicyType{
 			MinimumLength:                 aws.Int32(12),
 			RequireLowercase:              true,

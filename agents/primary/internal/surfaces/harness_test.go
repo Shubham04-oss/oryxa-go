@@ -100,9 +100,14 @@ func (l *fakeLedger) ConsentTickets(_ context.Context, requestID, notice string)
 		return interactions.ConsentTickets{}, interactions.ErrExpired
 	}
 	ticket := func(choice string) string { return "t1." + choice + "." + requestID + "." + notice }
-	return interactions.ConsentTickets{
+	made := interactions.ConsentTickets{
 		Summary: ticket("summary"), Access: ticket("access"), Deny: ticket("deny"), Reply: ticket("reply.pending"), ExpiresAt: request.ExpiresAt,
-	}, nil
+	}
+	if interactions.OwnerFirst(request) {
+		// As the ledger does: an owner-first ask offers no access.
+		made.Access = ""
+	}
+	return made, nil
 }
 
 // ReviewTickets is the real one's contract too: only the answer of a request

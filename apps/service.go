@@ -16,6 +16,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/slackbot"
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
+	"github.com/Shubham04-oss/oryxa-go/internal/pipedream"
 )
 
 // Name is what this service calls itself: to the bus when it publishes, and
@@ -48,6 +50,13 @@ type Dependencies struct {
 	Directory application.Directory
 	// Composio is the API every app is reached through. Required.
 	Composio application.Composio
+	// Pipedream is Pipedream Connect, for the apps neither Composio nor
+	// Oryxa's own sign-in serves, or nil when this deployment has none.
+	Pipedream *pipedream.Client
+	// Sealer seals Pipedream triggers' signing keys: the KMS envelope bound
+	// to service oryxa-apps. Without it, Pipedream connections cannot
+	// subscribe to their apps' events.
+	Sealer application.Sealer
 	// Policy is the applied workspace file, when workspace is mounted.
 	Policy application.PolicySource
 	// Sink is where published events go. Without one, apps still works and
@@ -93,6 +102,13 @@ type Config struct {
 	// OryxaToolkits are the toolkits Oryxa's own sign-in is switched on for.
 	// Empty means off: every Oryxa request is refused.
 	OryxaToolkits []string
+	// ToolkitBrokers pins toolkits' new connects to a broker.
+	ToolkitBrokers map[string]string
+	// PipedreamDenyActions are Pipedream action keys agents never see.
+	PipedreamDenyActions []string
+	// PipedreamMinPoll is the shortest interval a polling Pipedream trigger
+	// is deployed with; zero is fifteen minutes.
+	PipedreamMinPoll time.Duration
 	// SigninRedirectURI is the one OAuth callback registered with every app.
 	SigninRedirectURI string
 	// DefaultOAuthClients are Oryxa's own OAuth apps, which Oryxa's sign-in
@@ -134,18 +150,28 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	case len(config.OryxaToolkits) > 0 || len(config.DefaultOAuthClients) > 0:
 		return nil, errors.New("apps: Oryxa's sign-in is given toolkits or default OAuth apps, and is not configured")
 	}
-	app, err := application.New(application.Dependencies{
+	applicationDependencies := application.Dependencies{
 		Store:     dependencies.Store,
 		Directory: dependencies.Directory,
 		Composio:  dependencies.Composio,
 		Policy:    dependencies.Policy,
 		Oryxa:     oryxa,
+		Sealer:    dependencies.Sealer,
 		Logger:    logger,
-	}, application.Config{
-		PublicBaseURL:   config.PublicBaseURL,
-		ReturnOrigins:   config.AllowedOrigins,
-		WebhookSecret:   config.WebhookSecret,
-		NoAutoSubscribe: config.NoAutoSubscribe,
+	}
+	if dependencies.Pipedream != nil {
+		// Only when there is one: a nil client in the interface would read as
+		// a Pipedream that panics.
+		applicationDependencies.Pipedream = pipedreamPort{client: dependencies.Pipedream}
+	}
+	app, err := application.New(applicationDependencies, application.Config{
+		PublicBaseURL:    config.PublicBaseURL,
+		ReturnOrigins:    config.AllowedOrigins,
+		WebhookSecret:    config.WebhookSecret,
+		NoAutoSubscribe:  config.NoAutoSubscribe,
+		ToolkitBrokers:   config.ToolkitBrokers,
+		PipedreamDeny:    config.PipedreamDenyActions,
+		PipedreamMinPoll: config.PipedreamMinPoll,
 	})
 	if err != nil {
 		return nil, err

@@ -419,6 +419,38 @@ func TestFinishFailedRecordsTheErrorText(t *testing.T) {
 	}
 }
 
+// TestFinishInterruptedFreesTheSessionAndSaysSo: a run a restart stopped is
+// recorded interrupted, which the database's status check now knows, and its
+// conversation is free for the run that replaces it.
+func TestFinishInterruptedFreesTheSessionAndSaysSo(t *testing.T) {
+	database := openTestDatabase(t)
+	store := New(database)
+	ctx := context.Background()
+
+	run := testRun(testID("session"))
+	event := testEvent(t, run.ID, agentsv1.RunFailedDetailType)
+	again := testRun(run.SessionID)
+	t.Cleanup(func() { deleteRuns(t, database, run.ID, again.ID) })
+	t.Cleanup(func() { deleteOutboxEvents(t, database, event.ID) })
+
+	if err := store.Start(ctx, run, time.Minute); err != nil {
+		t.Fatalf("Start(): %v", err)
+	}
+	outcome := Outcome{Status: StatusInterrupted, Error: "the run was interrupted because Oryxa restarted"}
+	if err := store.Finish(ctx, run.ID, outcome, event); err != nil {
+		t.Fatalf("Finish(): %v", err)
+	}
+	if row := fetchRun(t, database, run.ID); row.Status != StatusInterrupted {
+		t.Fatalf("status = %q, want %q", row.Status, StatusInterrupted)
+	}
+	if err := store.Start(ctx, again, time.Minute); err != nil {
+		t.Fatalf("starting the run again in its conversation: %v", err)
+	}
+	if err := store.Finish(ctx, again.ID, Outcome{Status: "paused"}, testEvent(t, again.ID, agentsv1.RunFailedDetailType)); err == nil {
+		t.Fatal("an outcome nobody knows was recorded")
+	}
+}
+
 // TestStartConcurrencyAllowsExactlyOneLiveRunPerSession is what actually
 // proves the partial unique index does its job: ten replicas racing to start
 // a run in the same conversation must leave exactly one of them running.

@@ -421,7 +421,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 		return Toolbox{}, err
 	}
 	decide, err := functiontool.New(functiontool.Config{
-		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. The member who asked reads an agent's decision in fixed words, approved or declined, never its message. A request whose approval is \"owner\", and every request made outside a teamspace, is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it. A request made in a teamspace is checked against it again first, and may turn out held for the member, or closed by Oryxa because it no longer stands there.",
+		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. The member who asked reads an agent's decision in fixed words, approved or declined, never its message. A request whose approval is \"owner\", and every request made outside a teamspace, is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it. A request made in a teamspace is checked against it again first, and may turn out held for the member, or closed by Oryxa because it no longer stands there. It works only in a conversation your member started: in a run nobody is watching, it refuses.",
 	}, tools.decide)
 	if err != nil {
 		return Toolbox{}, err
@@ -439,7 +439,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 		return Toolbox{
 			Name: InteractionsToolboxName, Description: description,
 			Instructions: interactionsInstructions,
-			Toolset:      deliveringTools{tools: []tool.Tool{get, decide, respond}},
+			Toolset:      deliveringTools{tools: []tool.Tool{get, respond}},
 		}, nil
 	}
 	return Toolbox{
@@ -450,14 +450,14 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 }
 
 // DeliveryTools are the interactions tools a run delivering one interaction
-// for purpose is offered, by name: reading its request, and deciding it in a
-// run that decides, or answering it in one doing the approved work. A
-// report, and a run that does not say what it is for, only read it. Each
-// tool also refuses, when called, whatever its run is not for.
+// for purpose is offered, by name: reading its request, and answering it in
+// one doing the approved work. A report, a run that does not say what it is
+// for, and one for DeliveryDecides only read it: a delivery is a run nobody is
+// watching, and no such run decides a request (interactions.Service.Decide
+// refuses it too). Each tool also refuses, when called, whatever its run is
+// not for.
 func DeliveryTools(purpose string) []string {
 	switch purpose {
-	case DeliveryDecides:
-		return []string{"interactions_get", "interactions_decide"}
 	case DeliveryWorks:
 		return []string{"interactions_get", "interactions_respond"}
 	default:

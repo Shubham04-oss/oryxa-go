@@ -35,6 +35,8 @@ type fakeStore struct {
 	// subscribeAttempts counts what ConnectionsAwaitingSubscribe has claimed,
 	// the way the column does.
 	subscribeAttempts map[string]int
+	// signingKeys are Pipedream triggers' sealed signing keys, by trigger.
+	signingKeys map[string][]byte
 }
 
 func newFakeStore() *fakeStore {
@@ -111,6 +113,42 @@ func (store *fakeStore) ActivateConnection(_ context.Context, id, label string, 
 	store.clearState(id)
 	store.events = append(store.events, event)
 	return connection, true, nil
+}
+
+func (store *fakeStore) ActivatePipedreamConnection(_ context.Context, id, accountID, label string, now time.Time, event domain.Event) (domain.Connection, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	connection := store.connections[id]
+	if connection.Status != domain.ConnectionPending || !connection.Pipedream() {
+		return connection, false, nil
+	}
+	for _, other := range store.connections {
+		if other.PipedreamAccountID == accountID {
+			return domain.Connection{}, false, domain.ErrConflict
+		}
+	}
+	connection.Status, connection.Label, connection.PipedreamAccountID = domain.ConnectionActive, label, accountID
+	connection.UpdatedAt, connection.ConnectedAt = now, &now
+	store.connections[id] = connection
+	store.clearState(id)
+	store.events = append(store.events, event)
+	return connection, true, nil
+}
+
+func (store *fakeStore) PipedreamConnections(_ context.Context, afterID string, limit int) ([]domain.Connection, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var listed []domain.Connection
+	for _, connection := range store.connections {
+		if connection.Pipedream() && connection.Status == domain.ConnectionActive && connection.PipedreamAccountID != "" && connection.ID > afterID {
+			listed = append(listed, connection)
+		}
+	}
+	sort.Slice(listed, func(i, j int) bool { return listed[i].ID < listed[j].ID })
+	if len(listed) > limit {
+		listed = listed[:limit]
+	}
+	return listed, nil
 }
 
 func (store *fakeStore) FailConnection(_ context.Context, id, reason string, now time.Time, event domain.Event) (bool, error) {
@@ -321,6 +359,38 @@ func (store *fakeStore) CreateTrigger(_ context.Context, trigger domain.Trigger,
 	store.triggers[trigger.ID] = trigger
 	store.events = append(store.events, event)
 	return trigger, true, nil
+}
+
+func (store *fakeStore) CreatePipedreamTrigger(_ context.Context, trigger domain.Trigger, sealedKey []byte, event domain.Event) (domain.Trigger, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if connection := store.connections[trigger.ConnectionID]; connection.Status != domain.ConnectionActive {
+		return domain.Trigger{}, false, domain.ErrNotConnected
+	}
+	key := OwnKey(trigger.ConnectionID, trigger.Slug, trigger.Config)
+	for _, existing := range store.triggers {
+		if existing.PipedreamTriggerID != "" && existing.Status != domain.TriggerRemoved &&
+			OwnKey(existing.ConnectionID, existing.Slug, existing.Config) == key {
+			return existing, false, nil
+		}
+	}
+	if store.signingKeys == nil {
+		store.signingKeys = map[string][]byte{}
+	}
+	store.triggers[trigger.ID] = trigger
+	store.signingKeys[trigger.ID] = sealedKey
+	store.events = append(store.events, event)
+	return trigger, true, nil
+}
+
+func (store *fakeStore) PipedreamTrigger(_ context.Context, id string) (domain.Trigger, []byte, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	trigger, ok := store.triggers[id]
+	if !ok || trigger.PipedreamTriggerID == "" {
+		return domain.Trigger{}, nil, domain.ErrNotFound
+	}
+	return trigger, store.signingKeys[id], nil
 }
 
 func (store *fakeStore) Trigger(_ context.Context, organizationID, id string) (domain.Trigger, error) {
@@ -556,6 +626,9 @@ func (fake *fakeComposio) Toolkits(context.Context, composio.ToolkitQuery) (comp
 func (fake *fakeComposio) Toolkit(_ context.Context, slug string) (composio.Toolkit, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	if fake.toolkitsErr != nil {
+		return composio.Toolkit{}, fake.toolkitsErr
+	}
 	toolkit, ok := fake.toolkits[slug]
 	if !ok {
 		return composio.Toolkit{}, composio.ErrNotFound

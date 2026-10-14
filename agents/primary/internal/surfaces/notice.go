@@ -40,10 +40,11 @@ type ownerNoticeParams struct {
 }
 
 // noticeTickets are the values of the notice's buttons: the three choices, and
-// Reply yourself, which an ask of a secret has none of.
+// Reply yourself, which an ask of a secret has none of. An owner-first ask has
+// no Access: the ledger mints none for it.
 type noticeTickets struct {
 	Summary string `json:"summary"`
-	Access  string `json:"access"`
+	Access  string `json:"access,omitempty"`
 	Deny    string `json:"deny"`
 	Reply   string `json:"reply,omitempty"`
 }

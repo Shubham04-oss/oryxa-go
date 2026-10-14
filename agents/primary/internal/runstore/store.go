@@ -55,6 +55,9 @@ const (
 	StatusCompleted = "completed"
 	StatusFailed    = "failed"
 	StatusAbandoned = "abandoned"
+	// StatusInterrupted is a run its process stopped as it was replaced, at
+	// the end of its drain: not a failure of the run's own.
+	StatusInterrupted = "interrupted"
 )
 
 // Run is a run about to start.
@@ -69,7 +72,7 @@ type Run struct {
 
 // Outcome is how a run ended.
 type Outcome struct {
-	// Status is StatusCompleted or StatusFailed.
+	// Status is StatusCompleted, StatusFailed or StatusInterrupted.
 	Status string
 	// Error says why a failed run failed, in words fit to keep.
 	Error string
@@ -156,8 +159,8 @@ func (store *Store) Renew(ctx context.Context, runID string, lease time.Duration
 // in the agents outbox. It answers ErrNotRunning, and records nothing, when
 // the run already finished.
 func (store *Store) Finish(ctx context.Context, runID string, outcome Outcome, event events.Event) error {
-	if outcome.Status != StatusCompleted && outcome.Status != StatusFailed {
-		return fmt.Errorf("a run's outcome must be %q or %q", StatusCompleted, StatusFailed)
+	if outcome.Status != StatusCompleted && outcome.Status != StatusFailed && outcome.Status != StatusInterrupted {
+		return fmt.Errorf("a run's outcome must be %q, %q or %q", StatusCompleted, StatusFailed, StatusInterrupted)
 	}
 	if event.ID == "" || event.DetailType == "" || event.OccurredAt.IsZero() {
 		return errors.New("finishing a run needs an event with an id, a detail type and when it occurred")

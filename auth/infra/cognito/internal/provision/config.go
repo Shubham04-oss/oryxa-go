@@ -32,6 +32,13 @@ type Config struct {
 	CLICallbackURL string
 	// CLICallbackURLs includes registered fallback ports for concurrent sign-ins.
 	CLICallbackURLs []string
+	// EmailSourceARN is COGNITO_EMAIL_SOURCE_ARN: a verified SES identity the
+	// pool sends its mail from. Empty keeps Cognito's own sender, which allows
+	// 50 messages a day; production sets it.
+	EmailSourceARN string
+	// EmailFrom is COGNITO_EMAIL_FROM, the From line with that identity, such
+	// as "Oryxa <no-reply@oryxa.in>". Optional; used only with EmailSourceARN.
+	EmailFrom string
 }
 
 func FromEnv() (Config, error) {
@@ -48,10 +55,18 @@ func FromEnv() (Config, error) {
 		AgentCallbackURL:   strings.TrimSpace(os.Getenv("COGNITO_AGENT_CALLBACK_URL")),
 		CLICallbackURL:     strings.TrimSpace(os.Getenv("COGNITO_CLI_CALLBACK_URL")),
 		CLICallbackURLs:    splitList(os.Getenv("COGNITO_CLI_CALLBACK_URLS")),
+		EmailSourceARN:     strings.TrimSpace(os.Getenv("COGNITO_EMAIL_SOURCE_ARN")),
+		EmailFrom:          strings.TrimSpace(os.Getenv("COGNITO_EMAIL_FROM")),
 	}
 
 	if config.DomainPrefix == "" {
 		return Config{}, errors.New("COGNITO_DOMAIN_PREFIX is required")
+	}
+	if config.EmailFrom != "" && config.EmailSourceARN == "" {
+		return Config{}, errors.New("COGNITO_EMAIL_FROM needs COGNITO_EMAIL_SOURCE_ARN")
+	}
+	if config.EmailSourceARN != "" && !strings.HasPrefix(config.EmailSourceARN, "arn:aws:ses:") {
+		return Config{}, errors.New("COGNITO_EMAIL_SOURCE_ARN must be an SES identity ARN")
 	}
 	if config.DemoPasswordOnly {
 		if config.GoogleClientID != "" || config.GoogleClientSecret != "" {

@@ -19,7 +19,7 @@ func TestTheMemberWhoAskedReadsAnAgentsDecisionInFixedWords(t *testing.T) {
 		// an agent.
 		service, _ := teamspaceService(t, teamspaceSeats())
 		created := createInTeamspace(t, service, "agt_auto")
-		decided, err := service.Decide(context.Background(), autoSpecialist, created.ID, agents.InteractionDecisionInput{
+		decided, err := service.Decide(inMemberChat(), autoSpecialist, created.ID, agents.InteractionDecisionInput{
 			Decision: decision, Message: "Ann's phone is 555-0100 and she lives at 100 Main Street.",
 		})
 		if err != nil || decided.Decision == nil || decided.Decision.Message != want {

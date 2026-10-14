@@ -75,7 +75,7 @@ if [[ $(PATH="$WORK/bin:$PATH" command -v aws) != "$WORK/bin/aws" || $(PATH="$WO
 fi
 
 BOTH="oryxa-test/slack-app oryxa-test/slack-ticket-key"
-OTHERS="oryxa-test/composio-api-key oryxa-test/typesafe-api-key oryxa-test/realtime-purge-secret oryxa-test/apps-default-oauth-clients oryxa-test/apps-hook-secrets"
+OTHERS="oryxa-test/composio-api-key oryxa-test/typesafe-api-key oryxa-test/pipedream-client-id oryxa-test/pipedream-client-secret oryxa-test/pipedream-project-id oryxa-test/realtime-purge-secret oryxa-test/apps-default-oauth-clients oryxa-test/apps-hook-secrets"
 failures=0
 out="" code=0
 
@@ -120,6 +120,17 @@ has composio-api-key
 check "the other secrets were still stored" $?
 ! has slack-app && ! has slack-ticket-key
 check "nothing for Slack was stored" $?
+
+# 1b. Pipedream's are optional: skipped unset, stored as given when set.
+! has pipedream-client-id && ! has pipedream-client-secret && ! has pipedream-project-id
+check "Pipedream's values are skipped when unset" $?
+fresh
+run "" PIPEDREAM_CLIENT_ID=pd-id PIPEDREAM_CLIENT_SECRET=pd-secret-for-the-test PIPEDREAM_PROJECT_ID=proj_test
+[[ $code -eq 0 && $(stored pipedream-client-id) == pd-id && $(stored pipedream-client-secret) == pd-secret-for-the-test &&
+  $(stored pipedream-project-id) == proj_test ]]
+check "Pipedream's values are stored when set" $?
+! grep -q pd-secret-for-the-test "$WORK/store/argv.log" && [[ $out != *pd-secret-for-the-test* ]]
+check "Pipedream's secret is neither printed nor in an argument list" $?
 
 # 2. No containers but a value given: refused, and it says why.
 fresh

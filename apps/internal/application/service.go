@@ -45,13 +45,28 @@ type Config struct {
 	// that would rather they chose sets this, and a member can always say so
 	// per connection.
 	NoAutoSubscribe bool
+	// ToolkitBrokers pins a toolkit's new connects to a broker, whatever
+	// brokerFor would otherwise choose: APPS_TOOLKIT_BROKERS.
+	ToolkitBrokers map[string]string
+	// PipedreamDeny are Pipedream action keys agents are never offered nor
+	// allowed to run: APPS_PIPEDREAM_DENY_ACTIONS.
+	PipedreamDeny []string
+	// PipedreamMinPoll is the shortest interval a polling Pipedream trigger
+	// is deployed with, since every poll costs credits:
+	// APPS_PIPEDREAM_MIN_POLL_SECONDS. Zero is the default, fifteen minutes.
+	PipedreamMinPoll time.Duration
 }
 
 type Dependencies struct {
 	Store     Store
 	Directory Directory
 	Composio  Composio
-	Policy    PolicySource
+	// Pipedream is Pipedream Connect, or nil when this deployment has none.
+	Pipedream Pipedream
+	// Sealer seals Pipedream triggers' signing keys. Without one, a Pipedream
+	// connection cannot subscribe to its app's events.
+	Sealer Sealer
+	Policy PolicySource
 	// Oryxa is Oryxa's own sign-in, when this deployment has one: signin,
 	// hooks and the integrations. Without it every Oryxa request is refused.
 	Oryxa  *Oryxa
@@ -63,15 +78,18 @@ type Dependencies struct {
 type PolicySource = policy.Provider
 
 type Service struct {
-	store         Store
-	directory     Directory
-	composio      Composio
-	policy        PolicySource
-	logger        *slog.Logger
-	now           func() time.Time
-	publicBaseURL string
-	returnOrigins []*url.URL
-	webhookSecret string
+	store     Store
+	directory Directory
+	composio  Composio
+	pipedream Pipedream
+	policy    PolicySource
+	// toolkitBrokers are the deployment's per-toolkit broker overrides.
+	toolkitBrokers map[string]string
+	logger         *slog.Logger
+	now            func() time.Time
+	publicBaseURL  string
+	returnOrigins  []*url.URL
+	webhookSecret  string
 	// autoSubscribe says a newly connected app is subscribed to everything it
 	// can deliver.
 	autoSubscribe bool
@@ -81,6 +99,17 @@ type Service struct {
 
 	toolsMu sync.Mutex
 	tools   map[string]cachedTool
+	// pipedreamActions holds each Pipedream app's agent-ready actions for a
+	// while, under toolsMu, so resolving a PD_ slug costs no listing.
+	pipedreamActions map[string]cachedPipedreamActions
+	pipedreamDeny    map[string]bool
+	// pipedreamTriggers is pipedreamActions for each app's triggers.
+	pipedreamTriggers map[string]cachedPipedreamActions
+	pipedreamMinPoll  time.Duration
+	sealer            Sealer
+	// pipedreamKeys holds opened signing keys briefly, so a burst of
+	// deliveries, forged or not, does not make a KMS call each.
+	pipedreamKeys openedKeys
 	// triggers holds each app's trigger definitions for a while, so checking
 	// a subscription against the event it names costs no catalog walk.
 	triggers *triggerCatalog
@@ -94,22 +123,43 @@ type Service struct {
 	// defaultsSaved says Oryxa's own OAuth apps have all been saved once.
 	defaultsMu    sync.Mutex
 	defaultsSaved bool
+
+	// pipedreamAppCatalog is Pipedream's catalog, held for a day.
+	pipedreamAppCatalog pipedreamCatalog
+	// pipedreamCheckedAt is when the maintenance sweep last checked every
+	// Pipedream account's health; it does so once a day.
+	pipedreamCheckedAt time.Time
 }
 
 func New(dependencies Dependencies, config Config) (*Service, error) {
 	service := &Service{
-		store:         dependencies.Store,
-		directory:     dependencies.Directory,
-		composio:      dependencies.Composio,
-		policy:        dependencies.Policy,
-		logger:        dependencies.Logger,
-		now:           dependencies.Clock,
-		publicBaseURL: strings.TrimRight(config.PublicBaseURL, "/"),
-		webhookSecret: config.WebhookSecret,
-		autoSubscribe: !config.NoAutoSubscribe,
-		wait:          sleep,
-		tools:         map[string]cachedTool{},
-		subscribeWake: make(chan struct{}, 1),
+		store:          dependencies.Store,
+		directory:      dependencies.Directory,
+		composio:       dependencies.Composio,
+		pipedream:      dependencies.Pipedream,
+		policy:         dependencies.Policy,
+		toolkitBrokers: config.ToolkitBrokers,
+		logger:         dependencies.Logger,
+		now:            dependencies.Clock,
+		publicBaseURL:  strings.TrimRight(config.PublicBaseURL, "/"),
+		webhookSecret:  config.WebhookSecret,
+		autoSubscribe:  !config.NoAutoSubscribe,
+		wait:           sleep,
+		tools:          map[string]cachedTool{},
+		subscribeWake:  make(chan struct{}, 1),
+
+		pipedreamActions: map[string]cachedPipedreamActions{},
+		pipedreamDeny:    map[string]bool{},
+
+		pipedreamTriggers: map[string]cachedPipedreamActions{},
+		pipedreamMinPoll:  config.PipedreamMinPoll,
+		sealer:            dependencies.Sealer,
+	}
+	if service.pipedreamMinPoll <= 0 {
+		service.pipedreamMinPoll = DefaultPipedreamMinPoll
+	}
+	for _, key := range config.PipedreamDeny {
+		service.pipedreamDeny[strings.TrimSpace(key)] = true
 	}
 	if service.logger == nil {
 		service.logger = slog.New(slog.DiscardHandler)

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
 const (
@@ -219,7 +220,9 @@ func interrupted(ctx context.Context) bool { return ctx.Err() != nil }
 // and the attempt does not count toward dropping the delivery.
 func (processor *Processor) retry(ctx context.Context, delivery Delivery, cause error, logger *slog.Logger) {
 	failed, reason := true, cause.Error()
-	if interrupted(ctx) {
+	// A run the process's drain refused or stopped (threads.Interrupted) was
+	// cut short the same way, while ctx still lives.
+	if interrupted(ctx) || threads.Interrupted(cause) {
 		logger.InfoContext(ctx, "organization synthesis interrupted; it is tried again", "reason", reason)
 		failed, reason = false, "interrupted: "+reason
 	}

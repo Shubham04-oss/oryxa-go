@@ -1959,6 +1959,9 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusConflict, "run_in_progress"
 	case errors.Is(err, threads.ErrConfirmationPending):
 		return http.StatusConflict, "confirmation_pending"
+	case errors.Is(err, threads.ErrDraining):
+		// This process is stopping; the one replacing it takes the run.
+		return http.StatusServiceUnavailable, "restarting"
 	case errors.Is(err, authclient.ErrRateLimited):
 		return http.StatusTooManyRequests, "rate_limited"
 	case errors.Is(err, authclient.ErrUnavailable):

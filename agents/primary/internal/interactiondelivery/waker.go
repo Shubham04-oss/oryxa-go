@@ -319,6 +319,12 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 		logger.InfoContext(ctx, "interaction delivery waits for the agent conversation", "reason", err)
 		waker.release(ctx, delivery, false, err.Error(), logger)
 		return
+	case threads.Interrupted(err):
+		// The process is stopping: the next one runs it, and this attempt
+		// counts for nothing.
+		logger.InfoContext(ctx, "interaction delivery waits for the next process", "reason", err)
+		waker.release(ctx, delivery, false, err.Error(), logger)
+		return
 	case errors.Is(err, managedagents.ErrDisabled) && forTheTarget(delivery.Kind):
 		// A member may turn their agent on again, so what it was asked to
 		// decide or do is not given up: the delivery waits for it,
@@ -350,12 +356,19 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 		"interaction_tools", agents.DeliveryTools(purpose(delivery.Kind)))
 
 	var ended string
+	interrupted := false
 	started.Run.Execute(ctx, func(item threads.Item) error {
 		if item.Type == threads.ItemRunCompleted || item.Type == threads.ItemRunFailed {
-			ended = item.Type
+			ended, interrupted = item.Type, item.Interrupted
 		}
 		return nil
 	})
+	if interrupted {
+		// The process stopped it as it was replaced: the next one runs it
+		// again, and this attempt counts for nothing.
+		waker.release(ctx, delivery, false, "interaction delivery run was interrupted by a restart", logger)
+		return
+	}
 	if ended != threads.ItemRunCompleted {
 		waker.release(ctx, delivery, true, "interaction delivery run did not complete", logger)
 		return
@@ -510,11 +523,6 @@ func (waker *Waker) recheck(ctx context.Context, delivery Delivery, request agen
 	return request, false
 }
 
-// heldForOwner is a new request only the addressed agent's member may
-// decide. Nothing in it is the agent's to act on yet, so its delivery is
-// completed without a run: the member decides in their own session, and an
-// approval arrives as a delivery of its own, which wakes the agent to do the
-// work.
 // forTheTarget is whether a delivery asks the addressed agent to decide or
 // to work, rather than tell the member who asked how it went. Its request's
 // expiry settles it, one way or the other.
@@ -522,8 +530,17 @@ func forTheTarget(kind string) bool {
 	return kind == KindTargetRequested || kind == KindTargetApproved
 }
 
-func heldForOwner(delivery Delivery, request agents.Interaction) bool {
-	return delivery.Kind == KindTargetRequested && interactions.HeldForOwner(request)
+// heldForOwner is a new request, which no run the waker starts decides.
+// Nothing in it is the agent's to act on yet, so its delivery is completed
+// without a run: the member decides in their own session, or their agent does
+// in a conversation they started, and an approval arrives as a delivery of its
+// own, which wakes the agent to do the work. That holds for a request its
+// agent may decide (one made in a teamspace to a specialist with automatic
+// delegation) as much as for one held for its owner: a delivery is a run
+// nobody is watching, steered by another member's words, and the ledger
+// refuses a decision from one (interactions.Service.Decide).
+func heldForOwner(delivery Delivery, _ agents.Interaction) bool {
+	return delivery.Kind == KindTargetRequested
 }
 
 // deliverySatisfied is whether what a delivery asks of its agent is done, or no

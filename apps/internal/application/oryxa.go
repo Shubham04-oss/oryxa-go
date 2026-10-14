@@ -257,8 +257,11 @@ func errOryxaNotYet(toolkit string) error {
 // for an Oryxa connection, and nothing for Composio's, whose events stay
 // byte for byte what they were.
 func eventBroker(connection domain.Connection) string {
-	if connection.Oryxa() {
+	switch {
+	case connection.Oryxa():
 		return appsv1.BrokerOryxa
+	case connection.Pipedream():
+		return appsv1.BrokerPipedream
 	}
 	return ""
 }

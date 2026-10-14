@@ -81,6 +81,9 @@ func (s *Service) ConnectionTargets(ctx context.Context, credentials authclient.
 		// either fail or, worse, answer for an account it has none of.
 		return s.ownTargets(ctx, connection)
 	}
+	if !connection.Composio() {
+		return nil, errNotComposio(connection)
+	}
 	return s.targetsOf(ctx, connection)
 }
 

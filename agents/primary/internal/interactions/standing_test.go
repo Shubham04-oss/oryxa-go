@@ -90,7 +90,7 @@ func TestAnAgentDecidingReadsTheTeamspaceAgain(t *testing.T) {
 			if testCase.change != nil {
 				testCase.change(spaces, tokens)
 			}
-			_, err := service.Decide(context.Background(), autoSpecialist, created.ID, approve)
+			_, err := service.Decide(inMemberChat(), autoSpecialist, created.ID, approve)
 			testCase.want(t, err, repo.requests[created.ID], repo)
 		})
 	}
@@ -136,7 +136,7 @@ func TestAnAgentDecidingReadsTheTeamspaceAsItsMember(t *testing.T) {
 			t.Fatal(err)
 		}
 		created := delegatedRequest(t, service)
-		if _, err := service.Decide(ctx, autoSpecialist, created.ID, approve); err != nil {
+		if _, err := service.Decide(inMemberChatFrom(ctx), autoSpecialist, created.ID, approve); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		if last := directory.tokens[len(directory.tokens)-1]; last != name {

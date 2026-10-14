@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
+	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 )
 
 // B's agents, as their own tool calls present them, and member C's.
@@ -24,6 +26,42 @@ var approve = agents.InteractionDecisionInput{Decision: DecisionApproved, Messag
 func inOwnSession(actor agents.InteractionActor) agents.InteractionActor {
 	actor.Session = agents.SessionMember
 	return actor
+}
+
+// inMemberChat is the context of a run its member started, the only run in
+// which an agent may decide a request.
+func inMemberChat() context.Context { return inMemberChatFrom(context.Background()) }
+
+func inMemberChatFrom(ctx context.Context) context.Context {
+	return memberauth.WithRunOrigin(ctx, agentsv1.StartedByMember)
+}
+
+// TestNoAgentDecidesInARunNobodyIsWatching: a request its agent may decide,
+// a specialist's with automatic delegation, is decided by that agent only in a
+// run its member started. In a run an app trigger, a schedule, a team, the
+// organization agent or a delivery started, or one that says nothing of who
+// started it, the ledger refuses, and the request stays pending.
+func TestNoAgentDecidesInARunNobodyIsWatching(t *testing.T) {
+	for _, origin := range []string{"", agentsv1.StartedByTrigger, agentsv1.StartedByWorkflow, agentsv1.StartedByTeam, agentsv1.StartedByOrganization} {
+		service, repo := teamspaceService(t, teamspaceSeats())
+		delegated := createInTeamspace(t, service, "agt_auto")
+		ctx := context.Background()
+		if origin != "" {
+			ctx = memberauth.WithRunOrigin(ctx, origin)
+		}
+		_, err := service.Decide(ctx, autoSpecialist, delegated.ID, approve)
+		if !errors.Is(err, ErrForbidden) || !strings.Contains(err.Error(), "conversation its member started") {
+			t.Fatalf("origin %q: the agent's decision = %v, want ErrForbidden", origin, err)
+		}
+		if status := repo.requests[delegated.ID].Status; status != StatusPending {
+			t.Fatalf("origin %q: the request became %s", origin, status)
+		}
+	}
+	service, _ := teamspaceService(t, teamspaceSeats())
+	delegated := createInTeamspace(t, service, "agt_auto")
+	if decided, err := service.Decide(inMemberChat(), autoSpecialist, delegated.ID, approve); err != nil || decided.Status != StatusApproved {
+		t.Fatalf("in a run its member started: %+v, %v", decided, err)
+	}
 }
 
 func createInTeamspace(t *testing.T, service *Service, target string) agents.Interaction {
@@ -51,7 +89,7 @@ func TestNoAgentDecidesARequestHeldForItsOwner(t *testing.T) {
 		{"the specialist, asked itself", askSpecialist, askContribution.ID},
 		{"the primary agent, mediating for the specialist", targetPrimary, askContribution.ID},
 	} {
-		_, err := service.Decide(context.Background(), attempt.actor, attempt.request, approve)
+		_, err := service.Decide(inMemberChat(), attempt.actor, attempt.request, approve)
 		if !errors.Is(err, ErrForbidden) || !strings.Contains(err.Error(), "your member's own decision") {
 			t.Fatalf("%s: error=%v, want ErrForbidden saying the member decides", attempt.name, err)
 		}
@@ -109,7 +147,7 @@ func TestOnlyTheAddressedMemberDecidesAsOwner(t *testing.T) {
 func TestAnAgentStillDecidesWhatItsOwnerDelegated(t *testing.T) {
 	service, _ := teamspaceService(t, teamspaceSeats())
 	delegated := createInTeamspace(t, service, "agt_auto")
-	if decided, err := service.Decide(context.Background(), autoSpecialist, delegated.ID, approve); err != nil || decided.Status != StatusApproved {
+	if decided, err := service.Decide(inMemberChat(), autoSpecialist, delegated.ID, approve); err != nil || decided.Status != StatusApproved {
 		t.Fatalf("the delegated specialist's own decision = %+v, %v", decided, err)
 	}
 
@@ -153,7 +191,7 @@ func TestAnApprovalNobodyKnowsIsHeldForTheOwner(t *testing.T) {
 	unknown := between("irq_unknown", "user_a", "agt_a", "user_b", "agt_b", "tsp_1")
 	unknown.Approval = "team"
 	repo.requests[unknown.ID] = unknown
-	if _, err := service.Decide(context.Background(), targetPrimary, unknown.ID, approve); !errors.Is(err, ErrForbidden) {
+	if _, err := service.Decide(inMemberChat(), targetPrimary, unknown.ID, approve); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("an agent deciding a request with an unknown approval: error=%v, want ErrForbidden", err)
 	}
 	if decided, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", unknown.ID, approve); err != nil || decided.Status != StatusApproved {
@@ -172,7 +210,7 @@ func TestATeamspaceRequestNamingNoApprovalIsHeld(t *testing.T) {
 	unnamed := between("irq_unnamed", "user_a", "agt_a", "user_b", "agt_b", "tsp_1")
 	unnamed.Approval = ""
 	repo.requests[unnamed.ID] = unnamed
-	if _, err := service.Decide(context.Background(), targetPrimary, unnamed.ID, approve); !errors.Is(err, ErrForbidden) {
+	if _, err := service.Decide(inMemberChat(), targetPrimary, unnamed.ID, approve); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("an agent deciding it: error=%v, want ErrForbidden", err)
 	}
 	if status := repo.requests[unnamed.ID].Status; status != StatusPending {
@@ -213,7 +251,7 @@ func TestOnlyTheMembersOwnSessionDecidesAsOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Decide(context.Background(), inOwnSession(targetPrimary), outside.ID, approve); !errors.Is(err, ErrForbidden) {
+	if _, err := service.Decide(inMemberChat(), inOwnSession(targetPrimary), outside.ID, approve); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("the member's own session deciding as an agent: error=%v, want ErrForbidden", err)
 	}
 	if repo.requests[held.ID].Status != StatusPending || repo.requests[outside.ID].Status != StatusPending {
@@ -236,7 +274,7 @@ func TestADecisionRecordsWhoMadeIt(t *testing.T) {
 		t.Fatalf("the member's own decision = %+v, %v; want decided_by the member", byOwner.Decision, err)
 	}
 	delegated := createInTeamspace(t, service, "agt_auto")
-	byAgent, err := service.Decide(context.Background(), autoSpecialist, delegated.ID, approve)
+	byAgent, err := service.Decide(inMemberChat(), autoSpecialist, delegated.ID, approve)
 	if err != nil || byAgent.Decision == nil || byAgent.Decision.DecidedBy == nil ||
 		*byAgent.Decision.DecidedBy != (agents.InteractionDecider{Kind: DecidedByAgent, UserID: "user_b", AgentID: "agt_auto"}) || DecidedByItsOwner(byAgent) {
 		t.Fatalf("the specialist's decision = %+v, %v; want decided_by agt_auto", byAgent.Decision, err)

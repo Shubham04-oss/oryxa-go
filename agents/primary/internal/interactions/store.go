@@ -910,7 +910,7 @@ func changed(request agents.Interaction) agentsv1.InteractionChanged {
 		TargetUserID: request.Target.UserID, TargetAgentID: request.Target.AgentID,
 		Status: request.Status, Revision: request.Revision, ChangedAt: request.UpdatedAt.UTC(),
 		TeamspaceID: request.TeamspaceID, Approval: request.Approval,
-		AskID: request.AskID, Origin: request.Origin, Consent: consentOf(request),
+		AskID: request.AskID, Origin: request.Origin, Consent: consentOf(request), AnswerBy: request.AnswerBy,
 	}
 	if request.Decision != nil && request.Decision.DecidedBy != nil {
 		decider := request.Decision.DecidedBy

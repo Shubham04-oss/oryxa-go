@@ -2,11 +2,14 @@ package application
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
+	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 )
 
 // Store is what the application needs of apps' own tables. Every write that
@@ -24,6 +27,13 @@ type Store interface {
 	// and writes event. It answers false, changing nothing, if the
 	// connection is no longer pending.
 	ActivateConnection(ctx context.Context, id, label string, now time.Time, event domain.Event) (domain.Connection, bool, error)
+	// ActivatePipedreamConnection is ActivateConnection for a Pipedream
+	// connection, recording the account it was read back as. ErrConflict if
+	// another connection already records that account.
+	ActivatePipedreamConnection(ctx context.Context, id, accountID, label string, now time.Time, event domain.Event) (domain.Connection, bool, error)
+	// PipedreamConnections pages through every organization's active
+	// Pipedream connections that have an account, in id order after afterID.
+	PipedreamConnections(ctx context.Context, afterID string, limit int) ([]domain.Connection, error)
 	// FailConnection marks a pending connection failed, clears its state and
 	// writes event. It answers false, writing nothing, if the connection is
 	// no longer pending.
@@ -76,6 +86,15 @@ type Store interface {
 	Trigger(ctx context.Context, organizationID, id string) (domain.Trigger, error)
 	// TriggerByComposioID reads the live trigger a Composio instance backs.
 	TriggerByComposioID(ctx context.Context, composioTriggerID string) (domain.Trigger, error)
+	// CreatePipedreamTrigger records a trigger deployed at Pipedream, with its
+	// sealed signing key, and writes event. If a live one already exists for
+	// the same connection, event and config it answers that one instead, with
+	// false, and writes nothing.
+	CreatePipedreamTrigger(ctx context.Context, trigger domain.Trigger, sealedKey []byte, event domain.Event) (domain.Trigger, bool, error)
+	// PipedreamTrigger reads a trigger deployed at Pipedream by apps' own id,
+	// in any organization and whatever its status, with its sealed signing
+	// key. ErrNotFound for an id that is not a Pipedream trigger.
+	PipedreamTrigger(ctx context.Context, id string) (domain.Trigger, []byte, error)
 	// Triggers lists an organization's live triggers, optionally one
 	// member's or one connection's, newest first. TriggerQuery.IncludeRemoved
 	// also lists what was removed, for a caller that needs a connection's
@@ -155,4 +174,168 @@ type Composio interface {
 	TriggerTypes(ctx context.Context, query composio.TriggerTypeQuery) (composio.Page[composio.TriggerType], error)
 	UpsertTrigger(ctx context.Context, slug string, subscription composio.TriggerSubscription) (string, error)
 	DeleteTrigger(ctx context.Context, id string) error
+}
+
+// Pipedream is the part of Pipedream Connect apps uses, for the apps neither
+// Oryxa nor Composio serves. Its types are apps' own rather than a client
+// package's, so the client can change without this layer noticing. A nil
+// Pipedream means the deployment has none: no app is routed to it, and a
+// connect an override sends to it is refused as not connectable.
+//
+// externalUserID is the user Pipedream files a member's accounts under, one
+// per member per organization, as Composio's user is.
+//
+// An implementation answers an error that errors.Is domain.ErrNotFound for
+// something Pipedream does not have, so deleting what is already gone can be
+// told from a failure.
+type Pipedream interface {
+	// CreateConnectToken starts a member's connect: the short-lived token and
+	// the link their browser opens to finish it.
+	CreateConnectToken(ctx context.Context, request PipedreamTokenRequest) (PipedreamConnectToken, error)
+	// ListAccounts lists a user's accounts, of one app when app is not "".
+	ListAccounts(ctx context.Context, externalUserID, app string) ([]PipedreamAccount, error)
+	GetAccount(ctx context.Context, id string) (PipedreamAccount, error)
+	DeleteAccount(ctx context.Context, id string) error
+	// DeleteUser deletes a user and every account and trigger of theirs.
+	DeleteUser(ctx context.Context, externalUserID string) error
+	// ListApps searches Pipedream's apps; an empty query lists them.
+	ListApps(ctx context.Context, query string) ([]PipedreamApp, error)
+	ListActions(ctx context.Context, app string) ([]PipedreamComponent, error)
+	RunAction(ctx context.Context, request PipedreamRunRequest) (PipedreamRunResult, error)
+	ListTriggers(ctx context.Context, app string) ([]PipedreamComponent, error)
+	DeployTrigger(ctx context.Context, request PipedreamDeployRequest) (PipedreamDeployedTrigger, error)
+	DeleteTrigger(ctx context.Context, externalUserID, id string) error
+	// Proxy makes a request to the app as the account, with Pipedream adding
+	// the account's credential.
+	Proxy(ctx context.Context, request PipedreamProxyRequest) (PipedreamProxyResponse, error)
+}
+
+// Sealer seals and opens one secret at a time: secrets.Envelope, bound to
+// service oryxa-apps.
+type Sealer interface {
+	Seal(ctx context.Context, binding secrets.Binding, plaintext []byte) (secrets.SealedData, error)
+	Open(ctx context.Context, binding secrets.Binding, sealed secrets.SealedData) ([]byte, error)
+}
+
+// PipedreamTokenRequest is what a connect token is made for.
+type PipedreamTokenRequest struct {
+	ExternalUserID string
+	// App is the app the link opens on.
+	App string
+	// SuccessRedirectURI and ErrorRedirectURI are where the member's browser
+	// goes once they finish.
+	SuccessRedirectURI string
+	ErrorRedirectURI   string
+	// WebhookURI is told when the account was made or failed.
+	WebhookURI string
+	// ExpiresIn is how long the token lives; zero is Pipedream's default.
+	ExpiresIn time.Duration
+}
+
+type PipedreamConnectToken struct {
+	Token          string
+	ConnectLinkURL string
+	ExpiresAt      time.Time
+}
+
+type PipedreamAccount struct {
+	ID             string
+	ExternalUserID string
+	App            string
+	// Name identifies the account to the member, such as their email.
+	Name string
+	// Healthy is false once Pipedream can no longer renew the credential;
+	// Dead says it has given up on the account for good.
+	Healthy   bool
+	Dead      bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type PipedreamApp struct {
+	// Slug is Pipedream's name_slug, which is what apps calls a toolkit.
+	Slug        string
+	Name        string
+	Description string
+	Logo        string
+	AuthType    string
+	Categories  []string
+}
+
+// PipedreamComponent is an action or a trigger, as Pipedream registers it.
+type PipedreamComponent struct {
+	// Key is the component's own name, such as slack-send-message.
+	Key         string
+	Name        string
+	Description string
+	Version     string
+	// Props are the component's props, as Pipedream describes them.
+	Props json.RawMessage
+	// ReadOnlyHint and DestructiveHint are the component's own annotations,
+	// nil when it declares none. They are kept as declared, not defaulted,
+	// because only an explicit read-only mark lets an action run unconfirmed.
+	ReadOnlyHint    *bool
+	DestructiveHint *bool
+}
+
+type PipedreamRunRequest struct {
+	ExternalUserID  string
+	ComponentKey    string
+	ConfiguredProps map[string]any
+}
+
+// PipedreamActionError is what RunAction answers when the action ran and
+// failed, in its own code or at the app, as opposed to Pipedream itself
+// failing. Its message is the app's, which a caller needs to try again
+// differently. RunAction answers an error wrapping domain.ErrRateLimited when
+// Pipedream itself is rate limiting.
+type PipedreamActionError struct {
+	Message string
+	// Origin is where Pipedream attributes the failure, such as upstream_api.
+	Origin string
+	// UpstreamStatus is what the app's API answered on the action's last
+	// call, when there was one; 429 means the app is rate limiting.
+	UpstreamStatus int
+}
+
+func (err *PipedreamActionError) Error() string {
+	return "the pipedream action failed (" + err.Origin + "): " + err.Message
+}
+
+// PipedreamRunResult is what an action exported and returned.
+type PipedreamRunResult struct {
+	Exports json.RawMessage
+	Return  json.RawMessage
+}
+
+type PipedreamDeployRequest struct {
+	ExternalUserID  string
+	ComponentKey    string
+	ConfiguredProps map[string]any
+	// WebhookURL is where the deployed trigger delivers its events.
+	WebhookURL string
+	// Timer is how often a polling trigger polls; zero keeps its own.
+	Timer time.Duration
+}
+
+type PipedreamDeployedTrigger struct {
+	ID string
+	// SigningKey signs what the trigger delivers. It is a secret: apps keeps
+	// it sealed and never logs it.
+	SigningKey []byte
+}
+
+type PipedreamProxyRequest struct {
+	ExternalUserID string
+	AccountID      string
+	Method         string
+	URL            string
+	Header         http.Header
+	Body           []byte
+}
+
+type PipedreamProxyResponse struct {
+	Status int
+	Header http.Header
+	Body   []byte
 }

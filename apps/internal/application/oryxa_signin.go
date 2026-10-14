@@ -379,7 +379,7 @@ func (s *Service) ReplaceCredential(ctx context.Context, credentials authclient.
 		return domain.Connection{}, err
 	}
 	if !connection.Oryxa() {
-		return domain.Connection{}, fmt.Errorf("the %s connection's credential is Composio's, so it is replaced by connecting again: %w",
+		return domain.Connection{}, fmt.Errorf("the %s connection's credential is its broker's, not Oryxa's, so it is replaced by connecting again: %w",
 			connection.Toolkit, domain.ErrInvalid)
 	}
 	if _, err := s.enabled(connection.Toolkit); err != nil {

@@ -100,6 +100,9 @@ const (
 	// BrokerOryxa is Oryxa's own sign-in: apps keeps the credential, sealed,
 	// and a toolkit takes this route only once APPS_ORYXA_TOOLKITS names it.
 	BrokerOryxa = "oryxa"
+	// BrokerPipedream is Pipedream Connect: Pipedream holds the credential and
+	// runs the calls, for the toolkits neither Oryxa nor Composio serves.
+	BrokerPipedream = "pipedream"
 )
 
 // CheckBroker normalizes and checks a broker; empty is Composio.
@@ -107,10 +110,10 @@ func CheckBroker(broker string) (string, error) {
 	switch broker = strings.ToLower(strings.TrimSpace(broker)); broker {
 	case "", BrokerComposio:
 		return BrokerComposio, nil
-	case BrokerOryxa:
-		return BrokerOryxa, nil
+	case BrokerOryxa, BrokerPipedream:
+		return broker, nil
 	}
-	return "", errors.Join(ErrInvalid, errors.New("a broker is composio or oryxa"))
+	return "", errors.Join(ErrInvalid, errors.New("a broker is composio, oryxa or pipedream"))
 }
 
 // ConnectionStatus is where a connection is in its life.
@@ -135,8 +138,8 @@ type Connection struct {
 	OrganizationID string
 	MemberID       string
 	Toolkit        string
-	// Broker is who holds the credential: BrokerComposio or BrokerOryxa. An
-	// empty Broker is Composio's.
+	// Broker is who holds the credential: BrokerComposio, BrokerOryxa or
+	// BrokerPipedream. An empty Broker is Composio's.
 	Broker string
 	// CredentialKind is the kind of credential an Oryxa connection holds
 	// (oauth2_code, api_token, basic, oauth2_client_credentials), once it
@@ -150,8 +153,11 @@ type Connection struct {
 	// ComposioAccountID is Composio's connected account, known once a link
 	// was created.
 	ComposioAccountID string
-	Status            ConnectionStatus
-	StatusReason      string
+	// PipedreamAccountID is Pipedream's account, known once a Pipedream
+	// connection finished connecting.
+	PipedreamAccountID string
+	Status             ConnectionStatus
+	StatusReason       string
 	// Label identifies the connected account to the member, such as
 	// github_red-castle.
 	Label string
@@ -177,6 +183,16 @@ type Connection struct {
 // Composio's paths may act through it.
 func (connection Connection) Oryxa() bool { return connection.Broker == BrokerOryxa }
 
+// Composio says Composio holds the connection's credential, which is the only
+// case in which a Composio path may act through it. Guarding Composio's paths
+// on this rather than on !Oryxa() keeps every other broker out of them.
+func (connection Connection) Composio() bool {
+	return connection.Broker == "" || connection.Broker == BrokerComposio
+}
+
+// Pipedream says Pipedream Connect holds the connection's credential.
+func (connection Connection) Pipedream() bool { return connection.Broker == BrokerPipedream }
+
 // ConnectionQuery narrows a listing. An org admin may list the organization's
 // connections; anyone else lists their own.
 type ConnectionQuery struct {
@@ -188,7 +204,8 @@ type ConnectionQuery struct {
 
 // ComposioUserID is the Composio user a member is in one organization. It is
 // stable, so the same member reconnecting finds their own accounts, and it
-// differs per organization, so nothing crosses between them.
+// differs per organization, so nothing crosses between them. Pipedream files
+// the member's accounts under the same id, as its external user.
 func ComposioUserID(organizationID, memberID string) string {
 	return "oryxa." + organizationID + "." + memberID
 }
@@ -212,8 +229,11 @@ type Trigger struct {
 	Slug              string
 	Config            json.RawMessage
 	ComposioTriggerID string
-	Status            TriggerStatus
-	StatusReason      string
+	// PipedreamTriggerID is the deployed Pipedream trigger behind a trigger
+	// on a Pipedream connection.
+	PipedreamTriggerID string
+	Status             TriggerStatus
+	StatusReason       string
 	// Kind is what the catalog said when this was subscribed: webhook, which
 	// the app pushes, or poll, which arrives on Composio's own interval.
 	Kind string
