@@ -15,14 +15,20 @@ export default defineConfig({
   test: {
     projects: [
       {
-        test: { name: "contracts", include: ["src/contracts/**/*.test.ts"], environment: "node" },
+        test: { name: "contracts", include: ["src/**/*.node.test.ts", "src/contracts/**/*.test.ts"], environment: "node" },
       },
       {
         plugins: [
           cloudflareTest({
             wrangler: { configPath: "./wrangler.jsonc" },
             miniflare: {
-              bindings: { AGENTS_TOKEN_PUBLIC_KEYS: JSON.stringify([spki]), TEST_SIGNING_KEY: jwk, ENVIRONMENT: "test" },
+              bindings: {
+                AGENTS_TOKEN_PUBLIC_KEYS: JSON.stringify([spki]),
+                TEST_SIGNING_KEY: jwk,
+                ENVIRONMENT: "test",
+                EDGE_URL_SIGNING_KEY: "test-signing-key-test-signing-key-0123456789",
+                EDGE_PUBLIC_URL: "https://edge.test",
+              },
             },
           }),
         ],

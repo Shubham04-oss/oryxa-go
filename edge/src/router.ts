@@ -5,7 +5,7 @@
 import { Room, roomDOName, type TokenClaims } from "./contracts";
 import { importKeys, verifyEdgeToken } from "./auth/token";
 import type { Env } from "./env";
-import { EdgeError, toResponse } from "./http";
+import { EdgeError, MAX_BODY_BYTES, discardBody, toResponse } from "./http";
 import { CLAIMS_HEADER, REST_HEADER, ROOM_HEADER, WEB_HEADER, type WebIdentity } from "./room/room";
 
 const ROOM_PATH = /^\/v1\/rooms\/([^/]+)\/([^/]+)(\/.*)?$/;
@@ -34,7 +34,7 @@ export async function authenticate(request: Request, env: Env): Promise<TokenCla
 // forward sends request to the room's DO, naming the room, the rest of the
 // path and exactly one caller header; any copy of those headers the client
 // sent is dropped.
-export function forward(
+export async function forward(
   request: Request,
   env: Env,
   org: string,
@@ -43,13 +43,19 @@ export function forward(
   caller: { claims: TokenClaims } | { web: WebIdentity },
 ): Promise<Response> {
   const headers = new Headers(request.headers);
+  // API bodies are bounded JSON: read them here, so the room gets the whole
+  // body and this request is never left half-read when the room refuses it.
+  const length = Number(request.headers.get("content-length") ?? "0");
+  if (length > MAX_BODY_BYTES) throw new EdgeError("too_large", `body over ${MAX_BODY_BYTES} bytes`);
+  const body = request.body ? await request.arrayBuffer() : null;
+  if (body && body.byteLength > MAX_BODY_BYTES) throw new EdgeError("too_large", `body over ${MAX_BODY_BYTES} bytes`);
   for (const name of [CLAIMS_HEADER, WEB_HEADER, ROOM_HEADER, REST_HEADER, "authorization"]) headers.delete(name);
   headers.set(ROOM_HEADER, JSON.stringify(room));
   headers.set(REST_HEADER, rest);
   if ("claims" in caller) headers.set(CLAIMS_HEADER, JSON.stringify(caller.claims));
   else headers.set(WEB_HEADER, JSON.stringify(caller.web));
   const stub = env.ROOM.getByName(roomDOName(org, room));
-  return stub.fetch(new Request(request, { headers }));
+  return stub.fetch(new Request(request.url, { method: request.method, headers, body }));
 }
 
 export async function handleApi(request: Request, env: Env): Promise<Response> {
@@ -63,6 +69,7 @@ export async function handleApi(request: Request, env: Env): Promise<Response> {
     }
     return await forward(request, env, claims.org, room, rest, { claims });
   } catch (error) {
+    await discardBody(request);
     return toResponse(error);
   }
 }

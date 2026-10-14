@@ -80,3 +80,9 @@ export function base64UrlDecode(value: string): Uint8Array {
 export function base64UrlEncode(bytes: Uint8Array): string {
   return base64Encode(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
+
+// discardBody reads what's left of a refused request's body, which the
+// runtime insists on before the response goes out.
+export async function discardBody(request: Request): Promise<void> {
+  if (request.body && !request.bodyUsed) await request.body.cancel().catch(() => undefined);
+}

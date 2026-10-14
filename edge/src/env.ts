@@ -15,4 +15,12 @@ export interface Env {
   // during a rotation.
   AGENTS_TOKEN_PUBLIC_KEYS: string;
   ENVIRONMENT: string;
+  // BROWSER is the Browser Run binding.
+  BROWSER: Fetcher;
+  // EDGE_URL_SIGNING_KEY signs preview and terminal URLs (a secret, 32+
+  // characters); EDGE_PUBLIC_URL is where those URLs point.
+  EDGE_URL_SIGNING_KEY: string;
+  EDGE_PUBLIC_URL: string;
+  // SANDBOX_INSTANCE is the sandbox containers' instance type.
+  SANDBOX_INSTANCE?: string;
 }

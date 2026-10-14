@@ -18,8 +18,21 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomDO", "SandboxDO", "BrowserDO", "VoiceDO"] }],
   "r2_buckets": [{ "binding": "RUNS", "bucket_name": "oryxa-runs" }],
+  "browser": { "binding": "BROWSER" },
+  // The room sandbox image (A1). Cloudflare builds and pushes it on deploy;
+  // A9's CI job builds it on every change to catch a broken Dockerfile.
+  "containers": [
+    {
+      "name": "oryxa-sandbox",
+      "class_name": "SandboxDO",
+      "images": { "sandbox": { "dockerfile": "./containers/sandbox/Dockerfile" } },
+      "scheduling_policy": "durable_object"
+    }
+  ],
   "vars": {
     "ENVIRONMENT": "production",
+    "EDGE_PUBLIC_URL": "https://edge.oryxa.in",
+    "SANDBOX_INSTANCE": "standard-1",
     // agents' serviceauth KMS public key (base64 DER SPKI). Public, so a var.
     "AGENTS_TOKEN_PUBLIC_KEYS": "[]"
   },
@@ -35,7 +48,21 @@
         ]
       },
       "r2_buckets": [{ "binding": "RUNS", "bucket_name": "oryxa-runs-staging" }],
-      "vars": { "ENVIRONMENT": "staging", "AGENTS_TOKEN_PUBLIC_KEYS": "[]" }
+      "browser": { "binding": "BROWSER" },
+      "containers": [
+        {
+          "name": "oryxa-sandbox-staging",
+          "class_name": "SandboxDO",
+          "images": { "sandbox": { "dockerfile": "./containers/sandbox/Dockerfile" } },
+          "scheduling_policy": "durable_object"
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "EDGE_PUBLIC_URL": "https://edge-staging.oryxa.in",
+        "SANDBOX_INSTANCE": "standard-1",
+        "AGENTS_TOKEN_PUBLIC_KEYS": "[]"
+      }
     }
   }
 }

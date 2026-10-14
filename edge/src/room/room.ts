@@ -19,7 +19,7 @@ import {
   runPrefix,
 } from "../contracts";
 import type { Env } from "../env";
-import { EdgeError, json, readJson, toResponse } from "../http";
+import { EdgeError, discardBody, json, readJson, toResponse } from "../http";
 import { Children } from "./children";
 
 export const CLAIMS_HEADER = "x-oryxa-edge-claims";
@@ -150,6 +150,7 @@ export class RoomDO extends DurableObject<Env> {
     try {
       caller = this.authenticate(request);
     } catch (error) {
+      await discardBody(request);
       return toResponse(error);
     }
     const url = new URL(request.url);
@@ -160,6 +161,7 @@ export class RoomDO extends DurableObject<Env> {
       if (error instanceof EdgeError && (error.code === "forbidden" || error.code === "unauthorized")) {
         this.denied(caller, `${request.method} ${rest}`, error.message);
       }
+      await discardBody(request);
       return toResponse(error);
     }
   }
