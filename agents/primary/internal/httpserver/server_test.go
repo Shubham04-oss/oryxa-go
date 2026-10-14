@@ -235,9 +235,10 @@ type fakeTeamspaces struct {
 
 // fakeOrganizationContext records, in call order, the organization id every
 // method was invoked with. The interface takes no user identity at all: the
-// organization-agent's synthesis and follow-ups are shared, organization-wide
-// context by design (like a teamspace), not a member-owned resource, so the
-// only boundary this layer can and must hold is the organization one.
+// organization-agent's synthesis and follow-ups are organization-level state,
+// not a member-owned resource. Who may read them (owners and admins, since
+// they are built from team-only posts) is the handler's check, made before
+// this is ever called.
 type fakeOrganizationContext struct {
 	organizationIDs []string
 }
@@ -1396,5 +1397,34 @@ func TestDeleteAgentConversationUsesAuthenticatedOwnerAndExactIDs(t *testing.T) 
 	unauthenticated := serve(server, http.MethodDelete, "/v1/organizations/org_1/agents/agt_sales/threads/agent_thread_1", "", nil)
 	if unauthenticated.Code != http.StatusUnauthorized {
 		t.Fatalf("no auth = %d", unauthenticated.Code)
+	}
+}
+
+// The organization agent's synthesis and follow-ups are built from teamspace
+// posts that only each team may read, so a member who cannot manage the
+// organization gets neither, and the synthesis is never even read for them.
+func TestOrganizationSynthesisNeedsAManager(t *testing.T) {
+	for _, path := range []string{
+		"/v1/organizations/org_1/organization-agent/context",
+		"/v1/organizations/org_1/organization-agent/follow-ups?limit=20",
+	} {
+		t.Run(path, func(t *testing.T) {
+			spaces := &fakeTeamspaces{organizationAgent: teamspaces.OrganizationAgent{
+				ID: "oag_oryxa", OrganizationID: "org_1", Name: "Oryxa Agent", Status: teamspaces.StatusActive, CanManage: false,
+			}}
+			synthesis := &fakeOrganizationContext{}
+			server := New(member(), &fakeThreads{}, Config{
+				AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute,
+				Teamspaces: spaces, OrganizationContext: synthesis,
+			}, nil)
+
+			response := serve(server, http.MethodGet, path, "", bearer)
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403: %s", response.Code, response.Body.String())
+			}
+			if len(synthesis.organizationIDs) != 0 {
+				t.Fatalf("the synthesis was read for a member who may not see it: %v", synthesis.organizationIDs)
+			}
+		})
 	}
 }

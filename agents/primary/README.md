@@ -1580,8 +1580,8 @@ transaction cannot create a second revision or duplicate proposal.
 | --- | --- |
 | `GET /v1/organizations/{org}/organization-agent` | Gets or lazily creates the organization's singleton coordinating agent |
 | `PATCH /v1/organizations/{org}/organization-agent` | Lets an organization owner or admin change that agent's name, instructions, or lifecycle status |
-| `GET /v1/organizations/{org}/organization-agent/context` | Reads the latest durable shared synthesis; an untouched organization returns revision zero |
-| `GET /v1/organizations/{org}/organization-agent/follow-ups` | Lists proposed follow-ups; these are auditable proposals, not claims of executed work |
+| `GET /v1/organizations/{org}/organization-agent/context` | Reads the latest durable shared synthesis; an untouched organization returns revision zero. **Organization owners and admins only** (403 otherwise): it is built from team-only teamspace posts |
+| `GET /v1/organizations/{org}/organization-agent/follow-ups` | Lists proposed follow-ups; these are auditable proposals, not claims of executed work. **Organization owners and admins only**, for the same reason |
 | `GET /v1/organizations/{org}/teamspaces` | Lists spaces whose human teams are currently visible to the member |
 | `POST /v1/organizations/{org}/teamspaces` | Creates one shared work space for a team the caller manages and binds the organization agent |
 | `GET /v1/organizations/{org}/teamspaces/{space}` | Reads the organization agent, live whisperer roster, and safe contributed-specialist handles |
@@ -2450,6 +2450,9 @@ The compose service has no secret of its own to fall back on, and binds `127.0.0
 | `AGENTS_PRIMARY_CACHE_TTL_SECONDS` | `3600` | How long a created cache lives; 60–86400 seconds |
 | `AGENTS_PRIMARY_CACHE_MIN_TOKENS` | `4096` | Smallest prefix worth an explicit cache; Vertex's floor for these models. Below it, implicit caching applies |
 | `AGENTS_PRIMARY_ARTIFACT_BUCKET` | unset | S3 bucket artifacts are kept in; without it they are held in memory and go with the process |
+| `AGENTS_PRIMARY_ARTIFACT_ENDPOINT` | unset | The R2 account's S3 endpoint (`https://{account}.r2.cloudflarestorage.com`). When set, new artifact versions are written to R2 under `artifacts/`, numbered after any on S3, and `AGENTS_PRIMARY_ARTIFACT_BUCKET` is still read for older ones |
+| `AGENTS_PRIMARY_ARTIFACT_R2_BUCKET` | `oryxa-runs` | The R2 bucket artifacts are written to |
+| `AGENTS_PRIMARY_ARTIFACT_ACCESS_KEY_ID`, `AGENTS_PRIMARY_ARTIFACT_SECRET_ACCESS_KEY` | unset | R2 API token credentials for that bucket; required with the endpoint |
 | `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE` | unset | Vertex AI agent engine whose memory bank holds what Krude remembers across a member's threads, scoped to their organization. Its bank needs similarity search configured. Without it Krude remembers nothing between threads (see [Memory](#memory)) |
 | `AGENTS_PRIMARY_MEMORY_RECALLED` | `0` (10) | How many memories one search returns. Memory Bank caps it at 100 |
 | `AGENTS_PRIMARY_MEMORY_LOCATION` | `GOOGLE_CLOUD_LOCATION` | Region the memory agent engine is in, such as `us-west1`; never `global` |

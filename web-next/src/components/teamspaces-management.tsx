@@ -214,8 +214,17 @@ export function TeamspacesManagement({
 
   return (
     <div className="workspace-teamspaces-page">
-      {canCreate && (
-        <div className="workspace-teamspaces-intro">
+      <div className="workspace-teamspaces-scene" aria-hidden="true" />
+      <header className="workspace-teamspaces-hello">
+        <div>
+          <h2>Teamspaces</h2>
+          <p aria-label="Teamspace summary">
+            <strong>{loaded ? activeCount : "–"}</strong> active ·{" "}
+            <strong>{loaded ? list.length - activeCount : "–"}</strong> paused ·{" "}
+            <strong>{loaded ? list.length : "–"}</strong> in all
+          </p>
+        </div>
+        {canCreate && (
           <button
             className="workspace-teamspace-primary-button"
             type="button"
@@ -225,8 +234,8 @@ export function TeamspacesManagement({
             <Plus size={17} strokeWidth={1.8} />
             New teamspace
           </button>
-        </div>
-      )}
+        )}
+      </header>
 
       {canCreate && isCreating && (
         <CreateTeamspaceForm
@@ -241,27 +250,6 @@ export function TeamspacesManagement({
           }}
         />
       )}
-
-      <div
-        className="workspace-teamspace-metrics"
-        aria-label="Teamspace summary"
-      >
-        <div>
-          <span>Active</span>
-          <strong>{loaded ? activeCount : "–"}</strong>
-          <small>Open for collaboration</small>
-        </div>
-        <div>
-          <span>Paused</span>
-          <strong>{loaded ? list.length - activeCount : "–"}</strong>
-          <small>Rooms closed for now</small>
-        </div>
-        <div>
-          <span>Total spaces</span>
-          <strong>{loaded ? list.length : "–"}</strong>
-          <small>Across your teams</small>
-        </div>
-      </div>
 
       <div className="workspace-teamspace-toolbar">
         <div
@@ -357,6 +345,18 @@ export function TeamspacesManagement({
               <ArrowRight size={17} strokeWidth={1.7} aria-hidden="true" />
             </button>
           ))}
+          {canCreate && !isCreating && filter === "all" && !needle && (
+            <button
+              className="workspace-teamspace-new"
+              type="button"
+              onClick={() => setIsCreating(true)}
+            >
+              <strong>Open a new teamspace</strong>
+              <span>
+                A room, its files and its parleys, for people and their agents.
+              </span>
+            </button>
+          )}
         </div>
       ) : list.length ? (
         <div className="workspace-teamspace-empty">

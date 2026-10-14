@@ -49,7 +49,11 @@ not permission to copy every incidental value into a new component.
 - Use a restrained spacing rhythm based on 8, 12, 16, 24, and 32px. Rounded
   cards and pill controls are welcome; avoid ornamental gradients, broad
   shadows, glass effects, or divider lines between shell regions. Borders may
-  group content *inside* a surface. Shadows are for overlays, not page depth.
+  group content *inside* a surface. Shadows are for overlays, not page depth,
+  with one exception: the selected item in a tiled group is a **raised tile**
+  (`--raised` fill, a 1px `--border-quiet` hairline and a 1–3px
+  `--shade-66` shadow), never a sunken fill. The same raised tile marks the
+  selected pill in a segmented control.
 - A chat composer (message to a person, room, or agent) is a pill-shaped
   field — full pill at one line, softening to a large radius once its
   content wraps past one line — with a circular icon send button inside,
@@ -63,19 +67,31 @@ not permission to copy every incidental value into a new component.
 
 ## 2. Global shell and navigation
 
-- The base `#111111` surface carries the two sidebars without separate cards.
-  The `#1e1e1e` canvas sits between them. No shell separator/divider lines.
+- The base `#111111` surface carries the two sidebars. Their groups (the
+  navigation, the conversation list, the profile, the collapsed rails) are
+  **tiles**: filled `--canvas` blocks with a 14px radius, the same surface as
+  the central canvas, so each group reads at a glance. The expanded agent
+  panel's body is one such tile. No shell separator/divider lines; tiles are
+  separated by the base showing between them. (Founder, 14 Oct 2026: "use
+  the same surfaces … instead of just borders … use tiling".)
 - On desktop, the left sidebar is 20% when expanded and a 48px rail when
   collapsed. The right agent panel has a 48px collapsed rail and a wider
   expanded panel. The center takes all remaining width.
 - Expanding the right panel collapses the left. Collapsing the right expands
   the center; it must **not** automatically expand the left. A manually
   collapsed left sidebar stays collapsed until the user opens it.
-- Home, Team, and Agents are the three primary icon-first pill controls. The
-  active one is slightly enlarged and more prominent, not a giant tab.
+- **One sidebar** (founder, 14 Oct 2026): every page is listed at once, in
+  three tiles headed Home, Team and Agents, so nothing is a mode switch away.
+  Picking a page opens it and its area; the page you are on is the raised
+  tile. The sidebar's top row names the workspace. Collapsed, the rail shows
+  the same three tiles as icons. (The Home/Team/Agents mode pills are gone.)
 - The right agent panel holds the member's agent and team conversations. Its
-  tabs, Agents (the default), DMs and Teams, use the same icon-first pills;
-  the Agents pill carries the primary agent's voxel avatar. When the member
+  tabs, Agents (the default), DMs, Teams and **At a glance**, use the same
+  icon-first pills. At a glance keeps Today's widgets (from your apps,
+  teammates, conversations, knowledge, files, recurring work) one tab away on
+  every page, as compact tiles in one column, without Today's composer
+  (founder, 14 Oct 2026: the sidebar's quick widgets stay). The
+  Agents pill carries the primary agent's voxel avatar. When the member
   has more than one agent, the Agents tab's top row is a quick switch between
   them: the one in use is the oval pill with its name, like the pills
   elsewhere, and the rest stay avatar-only. With a single agent the row is not
@@ -86,11 +102,11 @@ not permission to copy every incidental value into a new component.
   one icon per tab, and each opens the panel on that tab. A tab without a
   live service shows a one-line empty state, never example people, rooms or
   messages.
-- Sidebar content follows the primary mode:
+- The sidebar's tiles, in order (Team's recent conversations follow them):
 
-  | Mode | Left navigation |
+  | Tile | Pages |
   | --- | --- |
-  | Home | Today, Knowledge bases, Tools |
+  | Home | My workspace, Library, Tools |
   | Team | Teamspaces, People, then up to three visible recent conversations |
   | Agents | Agent overview, Requests, Multi-agent teams, Specialists |
 
@@ -106,14 +122,20 @@ not permission to copy every incidental value into a new component.
 
 ## 3. Focused work and content pages
 
-- **Home — Today.** Home is the member's desk: what their apps said, who
-  needs them, a place to ask, and their own stack. Start with both rails
-  collapsed and preserve the member's explicit toggle choices on return. Use a
-  centered column at most 880px wide on the canvas. Every section is naked:
-  a small muted heading and plain rows (a 26px mark, a 13px line clamped to
-  two lines, an 11px quiet line), a hover tint and no cards, borders or
-  fills. On a phone the columns stack and controls wrap without horizontal
-  scrolling. No greeting or starter prompts.
+- **Home — My workspace** (was Today; founder's redesign, 14 Oct 2026).
+  Home is the member's desk: what their apps said, who needs them, a place to
+  ask, and their own stack. Start with both rails collapsed and preserve the
+  member's explicit toggle choices on return. One calm centered column at
+  most 760px wide, under a faint band of the sea-of-bottles scene that fades
+  out before the content (no text on it). In order: a greeting by the
+  member's clock and first name ("Good afternoon, Ada"; no name when only an
+  email is known) with one line saying how many things need them, only when
+  something does; Teammates (what needs them) as one tile; the composer and
+  their tools; then **Pick up where you left off**, a row of cards that
+  scrolls sideways (snapping, the next card faded at the edge): From your
+  apps, Conversations, Knowledge, Files and Recurring work. Inside a card or
+  tile, rows stay plain (a 26px mark, a 13px line clamped to two lines, an
+  11px quiet line) with a hover tint. No starter prompts.
   - **From your apps** (top left): at most four briefs, newest first. A brief
     is the first sentence of what Krude told the member in their wake-up
     thread (`origin: "wakeup"`, "Updates from your apps") after a batch of
@@ -179,6 +201,36 @@ not permission to copy every incidental value into a new component.
   and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
   sit **above** the work panel. The panel's top area belongs to the selected
   view's heading and state, not the tab strip.
+  - **A teamspace** (founder's redesign, 14 Oct 2026) opens under a faint
+    band of the harbour scene, its name a title (28px) beside its planet,
+    with its status, team and how many people. Its room is the main tile
+    (on the base), and its work the side tile, the tabs a segmented control
+    whose selected tab is the raised tile.
+  - **The teamspaces list** is a title with the counts (active, paused, in
+    all) under the same faint band, segmented status filters and a search,
+    and the teamspaces as a grid of cards: planet, status, name, purpose,
+    team and when it was last updated, how many people. For a member who
+    can open one, the last card opens a new teamspace, drawn as the ship's
+    lines on deep sea.
+- **People, Agents and Settings as tiles** (founder's redesign, 14 Oct
+  2026). People is a grid of cards (the person, their presence, what you
+  share, Message). On the Agents pages the primary agent, the stats, teams,
+  specialists and workflows are filled tiles on the canvas, with no
+  outlines. Settings' menu is three groups, You (Account), Workspace
+  (Organisation, People & invitations, Teams, Billing) and Connections (Tool
+  access, Sign-in apps, Slack, Email), on one tile, the open page the raised
+  tile.
+- **Chats and DMs as tiles** (founder's redesign, 14 Oct 2026). The open
+  chat in the chat list is the raised tile and the others lift on hover; DM
+  rows are rounded the same way, with unread as a filled count. The member's
+  bubble is a raised tile in a 720px reading column, and a file made in a
+  chat is a filled block, not an outline. The log keeps its rules below: the
+  member on the right, nobody named.
+- **Library** (was Knowledge bases; founder's redesign, 14 Oct 2026). Each
+  collection is a filled tile on the canvas, with no outline, and lifts to
+  the raised tile on hover; search, the source list, an open document and an
+  answer are tiles too. The code keeps the corpus names; only what a member
+  reads says Library.
 - Expanding the primary agent's chat uses Agent overview as focused work:
   the same mounted conversation sits on the left, and the overview occupies
   the work panel. The right rail offers only DMs and Teams in this state.
@@ -388,8 +440,15 @@ not permission to copy every incidental value into a new component.
   which names people and states and never a question or an answer. A filter
   (All, Slack, Oryxa) narrows the first two. The lists are re-read as the page
   is focused and every few seconds, so a request decided in Slack settles here
-  without a reload. A request a link or a DM's line names opens first, above
-  the lists (`/?org=…&view=requests&request=…`).
+  without a reload. **One request at a time** (founder's redesign, 14 Oct
+  2026): the lists are compact rows on a tile (who asked or was asked, where,
+  what, when, and a tag for what it waits on), and the request open is its
+  card beside them, its row the raised tile. The request a row, a link or a
+  DM's line names opens (`/?org=…&view=requests&request=…`); without one, the
+  first on show that waits opens, and stays open once answered so the member
+  sees what their choice did. When nothing waits and none is open, the side
+  says "Every ask answered." under a small scene. Below 1100px the card
+  replaces the list while one is opened, with "Back to all requests".
   - **The request card** says who asked, the question, where it came from (in
     Slack, or in Oryxa), where it stands and, for the person it is theirs to
     answer, what to do, in one set of words wherever the request came from,
@@ -492,10 +551,22 @@ not permission to copy every incidental value into a new component.
 - Use real integration logos where recognizable. Keep them legible against the
   dark UI, often on a small light tile. Do not substitute a generic UI icon
   for a known brand.
-- Auth is the one expressive screen: full `#1e1e1e` page, compact `#111111`
-  form inset toward the right, and a small detailed live pixel cyclone behind
-  it. It has no decorative card shadow. The Google option uses the full-color
-  Google mark. Keep the motion subtle and honor reduced-motion preferences.
+- Auth is the one expressive screen (founder's redesign, 14 Oct 2026): a
+  painted brand scene (from the site and gtm/brand, in `public/scenes/`) as
+  one rounded tile on the left, and the wordmark and form on the base to its
+  right. Each page has its scene: sign-in the ships, sign-up the crow's nest,
+  check-your-inbox the sea of bottles, password reset the deck, a failed or
+  used link the locked sea gate, an invitation and a new workspace the
+  harbour. Words on a scene are white (`--on-scene`) over a deep-sea shade at
+  its foot; no text sits on the painting anywhere else. On a phone the scene
+  is a band across the top that fades into the page. The Google option uses
+  the full-color Google mark.
+- Setting up a new workspace continues in the same layout (`?setup=`, in
+  `components/onboarding.tsx`), with a five-part stepper: Workspace, then
+  Krude (background access), Tools (connect apps), Crew (invite by email)
+  and Teamspace (the first one). Each step does real work through the
+  existing APIs and can be skipped; an app's or the grant's sign-in page
+  returns to the step it left.
 
 ## 5. Small screens and keyboard
 
