@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,6 +21,8 @@ type ManagedSpec struct {
 	Name         string
 	Description  string
 	Instructions string
+	// Model is the tier it answers on; empty is its role's, lite.
+	Model modelrouter.Tier
 }
 
 var managedResultSchema = &genai.Schema{
@@ -136,7 +139,7 @@ func managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, sp
 
 	return llmagent.New(llmagent.Config{
 		Name: machineName(spec.ID), Description: spec.Description,
-		Model: router.Answer(modelrouter.RoleWork), InstructionProvider: instruction,
+		Model: router.AnswerOn(cmp.Or(spec.Model, router.Tier(modelrouter.RoleWork))), InstructionProvider: instruction,
 		OutputSchema: managedResultSchema, Tools: tools, GenerateContentConfig: delivering.config(),
 		AfterToolCallbacks:  delivering.afterTools(),
 		BeforeToolCallbacks: []llmagent.BeforeToolCallback{recordRunSource},

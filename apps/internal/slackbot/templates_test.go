@@ -70,6 +70,7 @@ var templateGoldens = []struct{ name, template, params string }{
 	{"answer_access", TemplateAnswer, `{"text":"The launch is on the 14th, per the plan: \"ship Tuesday\".","owner_name":"Raya","mode":"access"}`},
 	{"answer_lease", TemplateAnswer, `{"text":"Still the 14th.","owner_name":"Raya","mode":"lease"}`},
 	{"answer_bypass", TemplateAnswer, `{"text":"The launch is on the 14th.","owner_name":"Raya","mode":"bypass"}`},
+	{"answer_access_named_agent", TemplateAnswer, `{"text":"The launch is on the 14th.","owner_name":"Raya","mode":"access","agent_name":"Nova"}`},
 	{"answer_reply", TemplateAnswer, `{"text":"The 14th, and I sign it off myself.","owner_name":"Raya","mode":"reply"}`},
 	{"status_waiting", TemplateStatus, `{"state":"waiting","owner_name":"Raya"}`},
 	{"status_working", TemplateStatus, `{"state":"working","owner_name":"Raya"}`},

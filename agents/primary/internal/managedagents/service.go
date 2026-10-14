@@ -19,6 +19,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
@@ -208,12 +209,25 @@ func (service *Service) Create(ctx context.Context, scope Scope, input CreateInp
 }
 
 func (service *Service) Update(ctx context.Context, scope Scope, id string, input UpdateInput) (Definition, error) {
-	if input.Name == nil && input.Description == nil && input.Instructions == nil && input.Status == nil && input.Grant == nil {
+	if input.Name == nil && input.Description == nil && input.Instructions == nil && input.Status == nil && input.Grant == nil && input.ModelTier == nil {
 		return Definition{}, fmt.Errorf("%w: send at least one field to change", ErrInvalid)
 	}
 	current, err := service.repository.Get(ctx, scope, id)
 	if err != nil {
 		return Definition{}, err
+	}
+	// The primary runs on Krude's own instruction, which no stored text
+	// reaches, so instructions written to it would be kept and never followed.
+	if input.Instructions != nil && current.Kind == KindPrimary {
+		return Definition{}, fmt.Errorf("%w: the primary agent follows Oryxa's own instructions; give a specialist instructions instead", ErrInvalid)
+	}
+	if input.ModelTier != nil {
+		if current.Kind != KindSpecialist {
+			return Definition{}, fmt.Errorf("%w: only a specialist has a model tier; the primary always answers on the main model", ErrInvalid)
+		}
+		if *input.ModelTier != modelrouter.Lite && *input.ModelTier != modelrouter.Main {
+			return Definition{}, fmt.Errorf("%w: model_tier must be lite or main", ErrInvalid)
+		}
 	}
 	if input.Name != nil {
 		value := cleanLine(*input.Name)

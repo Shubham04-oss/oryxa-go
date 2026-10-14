@@ -36,7 +36,7 @@ func TestAnAnswerIsPostedInTheThreadSayingHowFarItsOwnerLetItGo(t *testing.T) {
 			if answer.Target != h.threadTarget() {
 				t.Fatalf("target = %+v, want the thread the question was asked in", answer.Target)
 			}
-			if answer.param("text") != "The launch is on the 14th." || answer.param("owner_name") != "Raya" || answer.param("mode") != test.mode || len(answer.Params) != 3 {
+			if answer.param("text") != "The launch is on the 14th." || answer.param("owner_name") != "Raya" || answer.param("mode") != test.mode || answer.param("agent_name") != "Krude" || len(answer.Params) != 4 {
 				t.Fatalf("params = %v", answer.Params)
 			}
 			if answer.Key != "surfaces:irq_1:answer" {

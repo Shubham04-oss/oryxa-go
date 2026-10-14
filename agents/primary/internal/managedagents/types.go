@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runprofile"
 )
 
@@ -54,6 +55,9 @@ type Definition struct {
 	// Grant is what a specialist may reach in its owner's apps; a primary
 	// has none, and reaches all its member does.
 	Grant *runprofile.Grant `json:"grant,omitempty"`
+	// ModelTier is the model the agent answers on: lite for a specialist
+	// unless its owner set main, and always main for a primary.
+	ModelTier modelrouter.Tier `json:"model_tier"`
 }
 
 // SpecialistGrant is the specialist's grant, or the default for one read
@@ -90,4 +94,6 @@ type UpdateInput struct {
 	Status       *Status `json:"status,omitempty"`
 	// Grant replaces a specialist's whole grant.
 	Grant *runprofile.Grant `json:"grant,omitempty"`
+	// ModelTier moves a specialist to the lite or the main model.
+	ModelTier *modelrouter.Tier `json:"model_tier,omitempty"`
 }
