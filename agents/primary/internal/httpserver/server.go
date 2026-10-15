@@ -206,6 +206,9 @@ type Rooms interface {
 	Catchup(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64) (rooms.Brief, []rooms.Message, error)
 	MarkRead(ctx context.Context, actor rooms.Actor, roomID string, seq int64) (int64, error)
 	Activity(ctx context.Context, actor rooms.Actor, spaces []teamspaces.Space) ([]teamspaces.Space, error)
+	// PostParleyNotes answers to the edge, not to a member: the caller has
+	// bound the organization and the room to the edge's token.
+	PostParleyNotes(ctx context.Context, organizationID, roomID string, notes rooms.ParleyNotes) (rooms.Message, bool, error)
 }
 
 // Config is how the server runs.
