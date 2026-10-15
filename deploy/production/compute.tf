@@ -165,12 +165,23 @@ locals {
       GOOGLE_WORKLOAD_IDENTITY_PROVIDER = local.gcp_workload_identity_audience
       GOOGLE_SERVICE_ACCOUNT            = google_service_account.runtime.email
 
-      AGENTS_PRIMARY_MODEL               = var.model
-      AGENTS_PRIMARY_MODEL_LITE          = var.model
-      AGENTS_PRIMARY_SERVICE_KEY_ID      = aws_kms_alias.service["agents-primary"].name
-      AGENTS_PRIMARY_ARTIFACT_BUCKET     = local.artifacts_bucket
-      AGENTS_PRIMARY_MEMORY_AGENT_ENGINE = var.memory_agent_engine
-      AGENTS_PRIMARY_MEMORY_LOCATION     = var.gcp_region
+      AGENTS_PRIMARY_MODEL          = var.model
+      AGENTS_PRIMARY_MODEL_LITE     = var.model
+      AGENTS_PRIMARY_SERVICE_KEY_ID = aws_kms_alias.service["agents-primary"].name
+      # Admits members to the edge's rooms (DMs, side conversations,
+      # teamspaces); the edge trusts the key above.
+      AGENTS_PRIMARY_EDGE_URL = "https://edge.oryxa.in"
+      # These organizations' sandbox and browser run on the edge (Cloudflare
+      # Sandbox and Browser Run); everyone else's stay on AgentCore. Once this
+      # holds, AGENTS_PRIMARY_LIVE_BACKEND=cloudflare moves everyone.
+      AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS = "org__80adSFLC_LAUD90"
+      # The voice agent in a call hands work to Krude (POST /v1/edge/dispatch),
+      # signed with the edge's EDGE_SIGNING_KEY; this is its public half (base64
+      # DER SPKI). List both keys while one rotates.
+      AGENTS_PRIMARY_EDGE_TOKEN_PUBLIC_KEYS = jsonencode(["MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE3WEgTxZ3pvI62Dh1jEcG3Fhsy2P9lzOpvlTAqp0kJsFJ6pKmWFg+Zaq0C3mH1c2AUv1e/dqX4YCGHTo070w0vQ=="])
+      AGENTS_PRIMARY_ARTIFACT_BUCKET        = local.artifacts_bucket
+      AGENTS_PRIMARY_MEMORY_AGENT_ENGINE    = var.memory_agent_engine
+      AGENTS_PRIMARY_MEMORY_LOCATION        = var.gcp_region
       # Every answer one member's agent gives another is read by this
       # guardrail before they read it (answer_guard.tf).
       AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID      = aws_bedrock_guardrail.agent_answers.guardrail_id

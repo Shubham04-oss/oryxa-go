@@ -68,6 +68,7 @@ type authHarness struct {
 	guardPolicy  *fakeAnswerGuardPreferences
 	secrets      *fakeSecretShares
 	edgeMembers  *fakeEdgeMembers
+	runs         *fakeRunStopper
 	server       *Server
 }
 
@@ -91,6 +92,7 @@ func newAuthHarness() *authHarness {
 		guardPolicy:  &fakeAnswerGuardPreferences{},
 		secrets:      &fakeSecretShares{},
 		edgeMembers:  &fakeEdgeMembers{},
+		runs:         &fakeRunStopper{going: true},
 	}
 	h.server = New(h.directory, h.threadsSvc, Config{
 		AllowedOrigins: []string{"https://app.oryxa.test"},
@@ -114,6 +116,7 @@ func newAuthHarness() *authHarness {
 		AnswerGuardPreferences: h.guardPolicy,
 		SecretShares:           h.secrets,
 		EdgeMembers:            h.edgeMembers,
+		Runs:                   h.runs,
 	}, nil)
 	return h
 }
@@ -212,6 +215,10 @@ func lastRoomActor(h *authHarness) (string, string) {
 	return a.OrganizationID, a.UserID
 }
 
+func lastRunStopper(h *authHarness) (string, string) {
+	return h.runs.org, h.runs.user
+}
+
 func lastEdgeMembership(h *authHarness) (string, string) {
 	m := h.edgeMembers.admitted[len(h.edgeMembers.admitted)-1]
 	return m.Org, m.Member
@@ -269,6 +276,10 @@ var authzRoutes = []authzRoute{
 	{
 		pattern: "POST /v1/organizations/{organizationID}/threads/{threadID}/runs", method: http.MethodPost,
 		path: "/v1/organizations/org_1/threads/thread_1/runs", body: "{}", malformedBody: unknownField, identity: lastThreadsMember,
+	},
+	{
+		pattern: "POST /v1/organizations/{organizationID}/runs/{runID}/stop", method: http.MethodPost,
+		path: "/v1/organizations/org_1/runs/run_1/stop", identity: lastRunStopper,
 	},
 	{
 		pattern: "GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}", method: http.MethodGet,
@@ -567,8 +578,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 72 {
-		t.Fatalf("authzRoutes has %d entries, want 71 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 73 {
+		t.Fatalf("authzRoutes has %d entries, want 73 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -660,8 +671,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 38 {
-		t.Fatalf("tested %d state-changing routes, want 38 - a route's method changed without updating this expectation", tested)
+	if tested != 39 {
+		t.Fatalf("tested %d state-changing routes, want 39 - a route's method changed without updating this expectation", tested)
 	}
 }
 

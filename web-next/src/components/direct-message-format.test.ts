@@ -236,6 +236,7 @@ describe("people", () => {
       email: "ada@sim.oryxa",
       role: "member",
       spaces: ["Launch room", "Design"],
+      agents: [],
     },
     {
       id: "user-owen",
@@ -243,6 +244,7 @@ describe("people", () => {
       email: "owen@sim.oryxa",
       role: "owner",
       spaces: [],
+      agents: [],
     },
   ]
 

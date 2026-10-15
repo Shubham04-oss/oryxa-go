@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { Session } from "@/lib/auth/client"
@@ -51,6 +52,14 @@ describe("Organisation settings", () => {
     )
     vi.stubGlobal("fetch", fetchMock)
     const client = setup("owner")
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }))
+    const form = screen.getByRole("form", { name: "Rename organisation" })
+    // The action row: Cancel, then the primary on the right.
+    expect(
+      within(form)
+        .getAllByRole("button")
+        .map((button) => button.textContent)
+    ).toEqual(["Cancel", "Save changes"])
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
       target: { value: "New name" },
     })
@@ -68,10 +77,53 @@ describe("Organisation settings", () => {
 
   it("keeps organisation editing owner-only", () => {
     setup("member")
+    expect(screen.queryByRole("button", { name: "Rename" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull()
     expect(
-      screen.getByRole("textbox", { name: "Name" }).hasAttribute("disabled")
-    ).toBe(true)
-    expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull()
+      screen.getByText("Only owners can change these details.")
+    ).toBeTruthy()
+    expect(screen.getByText("old-name")).toBeTruthy()
+  })
+
+  it("saves the email domains with the name and slug it has", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Response(
+          JSON.stringify({
+            ...organization,
+            ...(JSON.parse(String(init?.body ?? "{}")) as object),
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    setup("owner")
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Email domains" }), {
+      target: { value: "northstar.io, @Northwind.de" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+    await waitFor(() =>
+      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+        name: "Old name",
+        slug: "old-name",
+        domains: ["northstar.io", "northwind.de"],
+      })
+    )
+  })
+
+  it("puts deleting in a Danger zone with a destructive confirm after Cancel", () => {
+    setup("owner")
+    const zone = screen.getByRole("region", { name: "Danger zone" })
+    fireEvent.click(
+      within(zone).getByRole("button", { name: "Delete organisation" })
+    )
+    const buttons = within(zone).getAllByRole("button")
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Delete organisation",
+    ])
+    expect(buttons[1].getAttribute("data-tone")).toBe("danger")
   })
 
   it("requires an exact name before deleting an organisation", () => {

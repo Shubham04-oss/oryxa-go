@@ -13,15 +13,23 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { KeyboardEvent } from "react"
 import { useQuery } from "@tanstack/react-query"
+import { Search, X } from "lucide-react"
 import "./requests-view.css"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { AgentsNotice } from "./agents-parts"
 import { agentsErrorMessage, plural } from "./agents-format"
 import { RequestCard, RequestCardById } from "./request-card"
 import { originLabel, waitsOnOwner } from "./request-card-format"
 import { IdentityAvatar } from "./workspace-avatar"
 import { personIdentity } from "./people-format"
-import { agoPhrase } from "./today-format"
-import { needsOwnerReply } from "@/lib/agents/agent-requests"
+import {
+  clearStats,
+  matchesSearch,
+  rowTag,
+  rowTime,
+  waitWords,
+} from "./requests-view-format"
 import { RequestsActivity } from "./requests-activity"
 import { useStableLayout } from "./requests-view-layout"
 import {
@@ -30,14 +38,14 @@ import {
   usePeopleNames,
 } from "./requests-view-queries"
 import type { OriginFilter } from "./requests-view-queries"
-import { AGENT_REQUESTS_LIMIT } from "@/lib/agents/queries"
+import { AGENT_REQUESTS_LIMIT, agentsQueryOptions } from "@/lib/agents/queries"
+import { primaryAgent, isUnavailableHere } from "@/lib/agents/policy"
 import type {
   AgentActivityEntry,
   AgentLease,
   AgentRequest,
   AgentRequestBox,
 } from "@/lib/agents/agent-requests"
-import { isUnavailableHere } from "@/lib/agents/policy"
 
 type Tab = "inbox" | "sent" | "activity"
 
@@ -121,25 +129,6 @@ const emptyWords: Record<
   },
 }
 
-/** What a row says a request waits on, or where it stands. */
-function rowTag(request: AgentRequest, waits: boolean): string {
-  if (waits) {
-    if (request.status === "review") return "Answer held for you"
-    return needsOwnerReply(request) ? "Needs your reply" : "Waiting for your OK"
-  }
-  const words: Record<AgentRequest["status"], string> = {
-    pending: "Waiting",
-    approved: "Approved",
-    review: "In review",
-    rejected: "Declined",
-    completed: "Answered",
-    failed: "Failed",
-    expired: "Expired",
-    withheld: "Withheld",
-  }
-  return words[request.status]
-}
-
 function RequestRow({
   request,
   box,
@@ -147,6 +136,7 @@ function RequestRow({
   selected,
   nameOf,
   now,
+  agentName,
   onSelect,
 }: {
   request: AgentRequest
@@ -155,6 +145,8 @@ function RequestRow({
   selected: boolean
   nameOf: (userId: string) => string | undefined
   now: number
+  /** The member's agent, for "Answered by Krude". */
+  agentName?: string
   onSelect: (requestId: string) => void
 }) {
   // Inbox rows name who asked; Sent rows name who was asked.
@@ -179,11 +171,13 @@ function RequestRow({
           <strong>{name}</strong>
           <small>· {originLabel(request)}</small>
           <time dateTime={request.created_at}>
-            {agoPhrase(request.created_at, now)}
+            {rowTime(request.created_at, now)}
           </time>
         </span>
         <span className="requests-row-what">{what}</span>
-        <span className="requests-row-tag">{rowTag(request, waits)}</span>
+        <span className="requests-row-tag">
+          {rowTag(request, waits, now, box === "inbox" ? agentName : undefined)}
+        </span>
       </span>
     </button>
   )
@@ -196,19 +190,26 @@ function RequestList({
   origin,
   selectedId,
   onSelect,
+  search,
+  agentName,
 }: {
   organizationId: string
   viewerId: string
   box: AgentRequestBox
   origin: OriginFilter
+  /** What the member typed in the list's search: only the requests it matches show. */
+  search: string
+  agentName?: string
   /** The request open beside the list. */
   selectedId: string | null
   onSelect: (requestId: string) => void
 }) {
   const people = usePeopleNames(organizationId, viewerId)
   const query = useQuery(requestListQueryOptions(organizationId, box, origin))
-  const requests = query.data ?? []
   const now = Date.now()
+  const requests = (query.data ?? []).filter((request) =>
+    matchesSearch(request, search, people.nameOf)
+  )
   const waitsNow = (request: AgentRequest) =>
     box === "inbox" && waitsOnOwner(request, viewerId, now)
   // Each request keeps the place it first had while the list is open: the one
@@ -236,28 +237,35 @@ function RequestList({
         alert={!unavailable}
         action={
           !unavailable && (
-            <button
-              className="workspace-agents-button"
-              type="button"
-              onClick={() => void query.refetch()}
-            >
+            <Button variant="outline" onClick={() => void query.refetch()}>
               Try again
-            </button>
+            </Button>
           )
         }
       />
     )
   }
-  if (requests.length === 0) {
+  if (requests.length === 0 && search.trim()) {
+    return (
+      <p className="workspace-agents-muted" role="status">
+        Nothing matches “{search.trim()}”.
+      </p>
+    )
+  }
+  if (requests.length === 0 && box === "sent") {
     const words = emptyWords[box][origin]
     return <AgentsNotice title={words.title}>{words.body}</AgentsNotice>
   }
 
-  // Headings only while something waits: they are items of the one list, so
+  // The inbox is headed "Waiting for you N" even at none (the board's
+  // all-clear), then "Earlier"; the headings are items of the one list, so
   // one going or coming never makes a card again.
-  const headed = layout.waiting.some(waitsNow)
-  const rows: Array<{ heading: string } | { request: AgentRequest }> = [
-    ...(headed ? [{ heading: "Waiting for you" }] : []),
+  const headed = box === "inbox"
+  const waitingNow = layout.waiting.filter(waitsNow).length
+  const rows: Array<
+    { heading: string; count?: number } | { request: AgentRequest }
+  > = [
+    ...(headed ? [{ heading: "Waiting for you", count: waitingNow }] : []),
     ...layout.waiting.map((request) => ({ request })),
     ...(headed && layout.earlier.length > 0 ? [{ heading: "Earlier" }] : []),
     ...layout.earlier.map((request) => ({ request })),
@@ -272,7 +280,15 @@ function RequestList({
         {rows.map((row) =>
           "heading" in row ? (
             <li className="workspace-requests-heading" key={row.heading}>
-              <p className="workspace-eyebrow">{row.heading}</p>
+              <p className="workspace-eyebrow">
+                {row.heading}
+                {row.count !== undefined && " "}
+                {row.count !== undefined && (
+                  <b className="workspace-requests-heading-count">
+                    {row.count}
+                  </b>
+                )}
+              </p>
             </li>
           ) : (
             <li key={row.request.id}>
@@ -283,12 +299,18 @@ function RequestList({
                 selected={row.request.id === selectedId}
                 nameOf={people.nameOf}
                 now={now}
+                agentName={agentName}
                 onSelect={onSelect}
               />
             </li>
           )
         )}
       </ul>
+      {requests.length === 0 && (
+        <AgentsNotice title={emptyWords[box][origin].title}>
+          {emptyWords[box][origin].body}
+        </AgentsNotice>
+      )}
       {query.data.length >= AGENT_REQUESTS_LIMIT && (
         <p className="workspace-agents-note">
           Showing the latest {plural(AGENT_REQUESTS_LIMIT, "request")}.
@@ -320,6 +342,12 @@ export function RequestsView({
 }: RequestsViewProps) {
   const [tab, setTab] = useState<Tab>("inbox")
   const [origin, setOrigin] = useState<OriginFilter>("all")
+  // The list's search, filtered here over what the lists hold.
+  const [searching, setSearching] = useState(false)
+  const [search, setSearch] = useState("")
+  const searchRef = useRef<HTMLInputElement>(null)
+  const agents = useQuery(agentsQueryOptions(organizationId))
+  const agentName = agents.data ? primaryAgent(agents.data)?.name : undefined
   // The request the member opened: from a row, a link, a note or Activity.
   const [chosen, setChosen] = useState<string | null>(focusRequestId ?? null)
   // Opened by a link, a note or Activity, a request reads itself, as it may
@@ -386,6 +414,16 @@ export function RequestsView({
     : undefined
   const allClear =
     !openId && tab === "inbox" && inbox.isSuccess && waiting === 0
+  const stats = inboxAll ? clearStats(inboxAll, viewerId, now) : undefined
+
+  useEffect(() => {
+    if (searching) searchRef.current?.focus()
+  }, [searching])
+
+  function closeSearch() {
+    setSearch("")
+    setSearching(false)
+  }
 
   function selectTab(index: number) {
     setTab(tabs[index].key)
@@ -479,21 +517,48 @@ export function RequestsView({
               ))}
             </div>
             {tab !== "activity" && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="workspace-requests-search-toggle"
+                aria-label={searching ? "Close search" : "Search requests"}
+                aria-expanded={searching}
+                onClick={() => (searching ? closeSearch() : setSearching(true))}
+              >
+                {searching ? <X /> : <Search />}
+              </Button>
+            )}
+            {tab !== "activity" && searching && (
+              <Input
+                ref={searchRef}
+                type="search"
+                className="workspace-requests-search"
+                aria-label="Search requests"
+                placeholder="Search who asked, or what"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") closeSearch()
+                }}
+              />
+            )}
+            {tab !== "activity" && (
               <div
                 className="workspace-requests-filter"
                 role="group"
                 aria-label="Where requests were made"
               >
                 {filters.map((item) => (
-                  <button
-                    className="workspace-agent-pill"
-                    type="button"
+                  <Button
+                    variant={origin === item.key ? "secondary" : "ghost"}
+                    size="sm"
+                    className="workspace-requests-filter-item"
                     key={item.key}
                     aria-pressed={origin === item.key}
                     onClick={() => setOrigin(item.key)}
                   >
                     {item.label}
-                  </button>
+                  </Button>
                 ))}
               </div>
             )}
@@ -519,6 +584,8 @@ export function RequestsView({
                 origin={origin}
                 selectedId={openId}
                 onSelect={choose}
+                search={search}
+                agentName={agentName}
               />
             )}
           </div>
@@ -546,6 +613,7 @@ export function RequestsView({
                 request={openRequest}
                 lease={leases.get(openRequest.id)}
                 autoFocus={chosen === openRequest.id}
+                shortcuts
               />
             ) : (
               <RequestCardById
@@ -555,6 +623,7 @@ export function RequestsView({
                 requestId={openId}
                 lease={leases.get(openId)}
                 autoFocus
+                shortcuts
               />
             )}
           </section>
@@ -565,7 +634,34 @@ export function RequestsView({
           >
             <div className="requests-clear-scene" aria-hidden="true" />
             <h2>Every ask answered.</h2>
-            <p>The next one will open here.</p>
+            <p>
+              Nothing is waiting for you.{" "}
+              {agentName
+                ? `${agentName} will flag the next one.`
+                : "The next one opens here."}
+            </p>
+            {stats && (inboxAll?.length ?? 0) < AGENT_REQUESTS_LIMIT && (
+              <dl className="requests-clear-stats" aria-label="Today">
+                <div>
+                  <dt>asks today</dt>
+                  <dd>{stats.asks}</dd>
+                </div>
+                <div>
+                  <dt>by {agentName ?? "your agent"}</dt>
+                  <dd>{stats.byAgent}</dd>
+                </div>
+                <div>
+                  <dt>by you</dt>
+                  <dd>{stats.byYou}</dd>
+                </div>
+                {stats.averageWaitMs !== undefined && (
+                  <div>
+                    <dt>average wait</dt>
+                    <dd>{waitWords(stats.averageWaitMs)}</dd>
+                  </div>
+                )}
+              </dl>
+            )}
           </section>
         ) : (
           <div

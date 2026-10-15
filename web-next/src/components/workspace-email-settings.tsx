@@ -1,86 +1,115 @@
-import { ArrowUpRight } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
+import { connectionsQueryOptions } from "@/lib/apps/client"
 import type { Organization } from "@/lib/auth/client"
+import { ToolkitLogo } from "./workspace-tool-logo"
+import {
+  SettingsButton,
+  SettingsGroup,
+  SettingsNote,
+  SettingsRow,
+  SettingsStatus,
+  SettingsValue,
+} from "./settings-kit"
 
+/**
+ * Settings → Email. Forwarding asks to oryxa by email, who may send them and
+ * the address replies come from have no route yet: one honest line says so.
+ * Gmail's connection is real, read from the member's own connections, and
+ * masking lives with Your agent rather than in a second switch here. What
+ * oryxa always sends stays listed.
+ */
 export function WorkspaceEmailSettings({
   organization,
+  preview = false,
   onBilling,
-  onAccount,
+  onAgent,
+  onOpenTools,
 }: {
   organization?: Organization
+  preview?: boolean
   onBilling: () => void
-  onAccount: () => void
+  onAgent: () => void
+  onOpenTools: () => void
 }) {
+  const gmail = useQuery({
+    ...connectionsQueryOptions(organization?.id ?? "", { toolkit: "gmail" }),
+    enabled: !preview && Boolean(organization),
+    retry: false,
+  })
+  const connected = gmail.data?.some(
+    (connection) => connection.status === "active"
+  )
+
   return (
-    <div className="workspace-settings-account">
-      <section
-        className="workspace-settings-section"
-        aria-label="Always sent email"
-      >
-        <div className="workspace-settings-section-title">
-          <h3>Always sent</h3>
-          <p>
-            Some email always goes out because accounts depend on it
-            {organization ? ` in ${organization.name}` : ""}.
-          </p>
-        </div>
-        <div className="workspace-settings-row">
-          <div>
-            <strong>Account access</strong>
-            <small>
-              Verification, password resets, and invitations each use a one-time
-              link.
-            </small>
-          </div>
-          <span className="workspace-settings-tag">Always on</span>
-        </div>
-        <div className="workspace-settings-row">
-          <div>
-            <strong>Membership changes</strong>
-            <small>
-              When a person’s role changes or they are removed, we tell that
-              person.
-            </small>
-          </div>
-          <span className="workspace-settings-tag">To that member</span>
-        </div>
-      </section>
-      <section
-        className="workspace-settings-section"
-        aria-label="Billing email"
-      >
-        <div className="workspace-settings-section-title">
-          <h3>Billing</h3>
-          <p>
-            Payment and renewal notices go to the billing contact, not every
-            admin.
-          </p>
-        </div>
-        <button
-          className="workspace-settings-action"
-          type="button"
-          onClick={onBilling}
+    <>
+      <SettingsGroup label="Your address">
+        <SettingsRow
+          title="Forward asks here"
+          description="Forwarding mail to oryxa so it lands in Requests is coming soon."
+        />
+        <SettingsRow
+          media={
+            <ToolkitLogo
+              toolkit={{ toolkit: "gmail", name: "Gmail", logo: undefined }}
+            />
+          }
+          title="Gmail"
+          description={
+            preview || !organization
+              ? "Sign in to see your Gmail connection."
+              : gmail.isPending
+                ? "Checking your connection…"
+                : gmail.isError
+                  ? "Could not check your Gmail connection."
+                  : connected
+                    ? "Your agent reads your mail through your own Gmail connection."
+                    : "Connect Gmail so your agent can read your mail."
+          }
         >
-          Open billing <ArrowUpRight size={14} />
-        </button>
-      </section>
-      <section
-        className="workspace-settings-section"
-        aria-label="Team call email"
-      >
-        <div className="workspace-settings-section-title">
-          <h3>Team calls</h3>
-          <p>
-            Each member decides, team by team, whether calls trigger an email.
-          </p>
-        </div>
-        <button
-          className="workspace-settings-action"
-          type="button"
-          onClick={onAccount}
+          {connected ? (
+            <SettingsStatus>Connected</SettingsStatus>
+          ) : (
+            !preview &&
+            organization &&
+            !gmail.isPending && (
+              <SettingsButton onClick={onOpenTools}>Connect</SettingsButton>
+            )
+          )}
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup label="Replies">
+        <SettingsRow
+          title="Mask sensitive details"
+          description="Answers follow what your agent hides when it answers."
         >
-          Your preferences <ArrowUpRight size={14} />
-        </button>
-      </section>
-    </div>
+          <SettingsButton onClick={onAgent}>Your agent</SettingsButton>
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup label="Always sent">
+        <SettingsRow
+          title="Account access"
+          description="Verification, password resets and invitations each use a one-time link."
+        >
+          <SettingsValue>Always on</SettingsValue>
+        </SettingsRow>
+        <SettingsRow
+          title="Membership changes"
+          description="When a person's role changes or they are removed, we tell that person."
+        >
+          <SettingsValue>To that member</SettingsValue>
+        </SettingsRow>
+        <SettingsRow
+          title="Billing"
+          description="Payment and renewal notices go to the billing contact, not every admin."
+        >
+          <SettingsButton onClick={onBilling}>Open billing</SettingsButton>
+        </SettingsRow>
+      </SettingsGroup>
+      <SettingsNote>
+        Parley emails are chosen team by team in Notifications.
+      </SettingsNote>
+    </>
   )
 }

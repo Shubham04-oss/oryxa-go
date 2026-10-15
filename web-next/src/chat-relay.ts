@@ -220,6 +220,7 @@ export async function relayGoRun<TSocket extends MemberSocket>({
   present,
 }: RelayGoRunOptions<TSocket>): Promise<void> {
   let runId: string | undefined
+  let stop: (() => void) | undefined
   try {
     if (!connection?.cookie) {
       // Nothing ran. A reopened socket carries the page's cookie again.
@@ -242,6 +243,14 @@ export async function relayGoRun<TSocket extends MemberSocket>({
     })
     if (!response.ok) throw await runStartError(response, words.refusals)
     runId = response.headers.get("X-Oryxa-Run") ?? undefined
+    // Go keeps a run going when its stream drops, so stopping the turn has
+    // to say so.
+    const acceptedRun = runId
+    if (acceptedRun) {
+      stop = () => void stopRun(url, connection, acceptedRun, label)
+      if (signal?.aborted) stop()
+      else signal?.addEventListener("abort", stop, { once: true })
+    }
     onAccepted?.(response)
     if (!response.body) {
       throw new RunStartError("The agent did not return a stream.")
@@ -281,5 +290,42 @@ export async function relayGoRun<TSocket extends MemberSocket>({
       error: error instanceof RunStartError ? error.message : words.unreachable,
       code: error instanceof RunStartError ? error.code : undefined,
     })
+  } finally {
+    if (stop) signal?.removeEventListener("abort", stop)
+  }
+}
+
+/**
+ * Stops a run in Go (`POST …/runs/{run}/stop`): a run outlives its stream,
+ * so dropping the stream no longer stops it. `runsURL` is the turn's runs
+ * route, whose organization the stop route shares.
+ */
+async function stopRun(
+  runsURL: URL,
+  connection: MemberSocket,
+  runId: string,
+  label: string
+): Promise<void> {
+  const organization = runsURL.pathname.split("/")[3]
+  try {
+    const response = await fetch(
+      new URL(
+        `/v1/organizations/${organization}/runs/${encodeURIComponent(runId)}/stop`,
+        runsURL
+      ),
+      {
+        method: "POST",
+        headers: {
+          Cookie: connection.cookie,
+          ...(connection.origin ? { Origin: connection.origin } : {}),
+        },
+      }
+    )
+    // 404: it had already ended.
+    if (!response.ok && response.status !== 404) {
+      console.error(`${label}: Go did not stop run ${runId}`, response.status)
+    }
+  } catch (error) {
+    console.error(`${label}: the run could not be stopped`, error)
   }
 }

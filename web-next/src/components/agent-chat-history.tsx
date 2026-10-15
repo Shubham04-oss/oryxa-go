@@ -17,6 +17,8 @@ export function AgentChatHistory({
   onDelete,
   openRequest,
   onOpened,
+  open,
+  onOpenChange,
 }: {
   threads: readonly Thread[]
   selected?: string | null
@@ -30,9 +32,21 @@ export function AgentChatHistory({
   /** An explicit Home shortcut, consumed once without changing the chat. */
   openRequest?: object | null
   onOpened?: () => void
+  /**
+   * Held by the agent panel, whose header carries the History button: the
+   * list then shows while `open`, and has no toggle of its own.
+   */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
   const id = useId()
-  const [expanded, setExpanded] = useState(false)
+  const [ownExpanded, setOwnExpanded] = useState(false)
+  const controlled = open !== undefined
+  const expanded = controlled ? open : ownExpanded
+  const setExpanded = (next: boolean) => {
+    if (controlled) onOpenChange?.(next)
+    else setOwnExpanded(next)
+  }
   const [confirm, setConfirm] = useState<string>()
   const [deleting, setDeleting] = useState<string>()
   const [failure, setFailure] = useState("")
@@ -70,15 +84,17 @@ export function AgentChatHistory({
       className="workspace-chat-history"
       aria-label="Conversation history"
     >
-      <button
-        className="workspace-chat-history-toggle"
-        type="button"
-        aria-expanded={expanded}
-        aria-controls={id}
-        onClick={() => setExpanded(!expanded)}
-      >
-        <ChevronDown size={13} data-expanded={expanded} /> History
-      </button>
+      {!controlled && (
+        <button
+          className="workspace-chat-history-toggle"
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={id}
+          onClick={() => setExpanded(!expanded)}
+        >
+          <ChevronDown size={13} data-expanded={expanded} /> History
+        </button>
+      )}
       {expanded && (
         <div id={id} className="workspace-chat-history-list">
           {loading ? (

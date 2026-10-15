@@ -75,6 +75,35 @@ export type TeamDetail = {
   membership: TeamMembership | null
   can_manage: boolean
 }
+/** A team a person is in, as the directory lists it. */
+export type DirectoryTeamRef = {
+  id: string
+  name: string
+  path?: string
+  /** Set when the membership comes from a team nested inside. */
+  member_path?: string
+  role: "admin" | "member"
+}
+export type DirectoryPerson = {
+  user_id: string
+  email: string
+  display_name?: string
+  org_role: string
+  teams: DirectoryTeamRef[] | null
+}
+export type Directory = {
+  organization: { id: string; name: string }
+  teams: Team[] | null
+  members: DirectoryPerson[] | null
+}
+/**
+ * `GET …/directory` (Teams): the organisation's visible team tree and its
+ * people with the teams each is in, in one call instead of one per team.
+ */
+export function getDirectory(id: string) {
+  return apiRequest<Directory>(`${orgPath(id)}/directory`)
+}
+
 export async function listTeams(id: string) {
   const result = await apiRequest<{ teams: Team[] }>(`${orgPath(id)}/teams`)
   return result.teams
