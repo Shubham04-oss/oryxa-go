@@ -1031,12 +1031,18 @@ function CopyField({
   const input = useRef<HTMLInputElement>(null)
   const [copied, setCopied] = useState(false)
 
+  // A copied flag that clears itself, and a timer that does not outlive the field.
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(false), 2000)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+
   async function copy() {
     try {
       await navigator.clipboard.writeText(value)
       setCopied(true)
       notifyCopied(/^https?:\/\//.test(value) ? "Link" : label)
-      window.setTimeout(() => setCopied(false), 2000)
     } catch {
       // No clipboard here (plain http, a denied permission): the value is
       // selected for the admin to copy.
