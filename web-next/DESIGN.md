@@ -358,9 +358,9 @@ not permission to copy every incidental value into a new component.
 - **Live work** (live layer A8): the sandboxes and browsers agents run in a
   room, as far as a member may see them (the edge hides another member's
   private ones).
-  - **Where:** beside the primary agent's chat, Agent overview shows the
-    conversation's own as tiles, and one opens in the work panel like a
-    file. A teamspace shows a Live card beside its room, only while a
+  - **Where:** beside the primary agent's chat, the session's Live tab
+    shows the conversation's own as tiles, and one opens in the work panel
+    like a file. A teamspace shows a Live card beside its room, only while a
     sandbox or browser is running there (stopped ones don't count), with
     its tiles, the open one, and the run log.
   - **A sandbox** has Files (folders and a reader) and Preview (a port it
@@ -405,9 +405,18 @@ not permission to copy every incidental value into a new component.
   two stack, the chat above; with the keyboard up the chat takes the screen
   below the header. The Viewer boards' right-docked agent panel is
   superseded by this. The right rail offers only DMs and Teams in this state.
-  Files from the current conversation appear in the overview, following the
-  conversation the chat is on: a new chat has none, and neither does a chat
-  that has not opened yet. Selecting a file in the overview or a file chip in
+  With nothing open, the work panel is a segmented control (the chosen tab
+  the raised tile) over four tabs (`agent-session-work.tsx`): **Overview**
+  (the agent's own page: the agent, stats, teams and specialists, follow-ups
+  and workflows, nothing of one conversation), **Files** (this
+  conversation's files, latest version first, "Version 2 of 3"), **Live**
+  (its sandboxes and browsers) and **Requests** (the requests its agent
+  filed in it, as request cards; nothing from other conversations). Each
+  tab counts what it holds, and an empty one says what lands there in one
+  line. Opening a file or a live child swaps in its viewer, and Back returns
+  to the same tab. The tabs follow the conversation the chat is on: a new
+  chat has none of these, and neither does a chat that has not opened yet.
+  Selecting a file in the Files tab or a file chip in
   the chat (in the panel or in the session), or a newly saved file while the
   chat is in view (the expanded panel's Agents tab, or this view), turns the
   work panel into a clean, compact viewer while the chat stays on the left,

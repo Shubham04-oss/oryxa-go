@@ -17,6 +17,60 @@
   display: none;
 }
 
+/* The work column's tabs (Overview, Files, Live, Requests): a segmented
+   control whose chosen tab is the raised tile, above the tab's own page. */
+.agent-session-tabs {
+  flex: 1;
+  gap: 0;
+  min-height: 0;
+}
+.agent-session-tab-list {
+  flex: none;
+  gap: 2px;
+  height: 36px;
+  margin: 16px 24px 0;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--base);
+}
+.agent-session-tab-list [data-slot="tabs-trigger"] {
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.agent-session-tab-list [data-slot="tabs-trigger"]:hover {
+  color: var(--text);
+}
+.agent-session-tab-list [data-slot="tabs-trigger"][data-active] {
+  border: 1px solid var(--border-quiet);
+  background: var(--raised);
+  box-shadow: 0 1px 3px var(--shade-66);
+  color: var(--text);
+}
+.agent-session-tab-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.agent-session-tab-panel {
+  min-height: 0;
+  overflow-y: auto;
+}
+.agent-session-tab-padded {
+  padding: 24px;
+}
+.agent-session-quiet {
+  max-width: 520px;
+}
+.agent-session-requests {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+}
+
 @media (max-width: 960px) {
   /* A phone stacks them: the chat above, the work below. */
   .agent-session .agent-session-chat {
