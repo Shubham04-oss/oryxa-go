@@ -2,8 +2,21 @@
 // a confirm step, workflow rows and the focused view's work column.
 import { useQuery } from "@tanstack/react-query"
 import type { ReactNode } from "react"
-import { ArrowLeft, ArrowUpRight, GitBranch } from "lucide-react"
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  ChevronRight,
+  GitBranch,
+  MoreHorizontal,
+} from "lucide-react"
 import { IdentityAvatar } from "./workspace-avatar"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   agentIdentity,
   formatDate,
@@ -175,6 +188,141 @@ export function AgentTeamEntry({
         {team.coordinator_name}
       </span>
     </button>
+  )
+}
+
+/**
+ * A team on Agent overview (AgentsNew board): its chain, the coordinator
+ * leading to each specialist, then its name, purpose and status. The whole
+ * row opens the team.
+ */
+export function AgentTeamRow({
+  team,
+  onOpen,
+}: {
+  team: AgentTeam
+  onOpen: () => void
+}) {
+  const members = [...team.members].sort(
+    (left, right) => left.position - right.position
+  )
+  return (
+    <button
+      className="agents-team-row"
+      type="button"
+      aria-label={`Open ${team.name}`}
+      data-screen-context-kind="agent_team"
+      data-screen-context-id={team.id}
+      data-screen-context-name={team.name}
+      onClick={onOpen}
+    >
+      <span className="agents-team-chain" aria-hidden="true">
+        <IdentityAvatar
+          identity={agentIdentity({
+            id: team.coordinator_agent_id,
+            name: team.coordinator_name,
+          })}
+        />
+        {members.length > 0 && <ChevronRight className="agents-team-arrow" />}
+        <AgentAvatarStack
+          agents={members.map((member) => ({
+            id: member.agent_id,
+            name: member.name,
+          }))}
+          max={3}
+        />
+      </span>
+      <span className="agents-team-copy">
+        <strong>{team.name}</strong>
+        <small>
+          {[
+            team.description || undefined,
+            `led by ${team.coordinator_name}, ${plural(members.length, "specialist")}`,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </small>
+      </span>
+      <StatusPill status={team.status} />
+    </button>
+  )
+}
+
+/**
+ * A specialist on Agent overview: a filled card with its name, kind and
+ * status, what it does, and when it was paused (Go keeps no actor, so the
+ * card says when, never who). Its ⋯ menu opens, pauses or resumes, and edits.
+ */
+export function SpecialistCard({
+  agent,
+  busy = false,
+  onOpen,
+  onToggle,
+  onEdit,
+}: {
+  agent: ManagedAgent
+  /** Its pause or resume is on its way. */
+  busy?: boolean
+  onOpen: () => void
+  onToggle: () => void
+  onEdit: () => void
+}) {
+  const paused = agent.status !== "active"
+  return (
+    <article
+      className="agents-specialist-card"
+      aria-label={agent.name}
+      data-status={agent.status}
+      data-screen-context-kind="specialist"
+      data-screen-context-id={agent.id}
+      data-screen-context-name={agent.name}
+    >
+      <div className="agents-specialist-head">
+        <AgentFace agent={agent} />
+        <button
+          className="agents-specialist-open"
+          type="button"
+          aria-label={`Open ${agent.name}`}
+          onClick={onOpen}
+        >
+          <strong>{agent.name}</strong>
+          <small>Specialist · {statusLabel(agent.status)}</small>
+        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`More for ${agent.name}`}
+                disabled={busy}
+              />
+            }
+          >
+            <MoreHorizontal />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={onOpen}>Open</DropdownMenuItem>
+            <DropdownMenuItem onClick={onToggle}>
+              {paused ? "Resume" : "Pause"}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onEdit}>Edit</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      <p className="agents-specialist-description">
+        {agent.description || "No description yet."}
+      </p>
+      <small className="agents-specialist-meta">
+        {busy
+          ? paused
+            ? "Resuming…"
+            : "Pausing…"
+          : paused
+            ? `Paused · updated ${formatDate(agent.updated_at)}`
+            : `Created ${formatDate(agent.created_at)}`}
+      </small>
+    </article>
   )
 }
 

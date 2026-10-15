@@ -471,3 +471,49 @@
   gap: 18px;
   padding: 4px 0 12px;
 }
+
+/* One browser's steps (BrowserSteps): done, then the one happening now. */
+.live-steps {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.live-steps li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.live-steps-mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-quiet);
+}
+.live-steps li[data-now="true"] {
+  color: var(--text);
+}
+.live-steps li[data-now="true"] .live-steps-mark {
+  background: var(--tone-7fcf98);
+}
+.live-steps-what {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-steps small {
+  font-size: 11px;
+}
+
+/* A browser as a compact tile (in a parley): the live page fills it. */
+.live-pane[data-compact="true"] {
+  padding: 0;
+}
+.live-pane[data-compact="true"] .live-pane-body {
+  min-height: 0;
+  border-radius: 0;
+}

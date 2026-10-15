@@ -15,8 +15,10 @@ import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { useAgent } from "agents/react"
 import { Expand, SquarePen } from "lucide-react"
 import { AgentChatHistory } from "./agent-chat-history"
+import { AgentChatMenu } from "./agent-chat-menu"
 import { AgentComposer } from "./agent-composer"
-import { AgentActivity, AgentTimeline } from "./agent-timeline"
+import { AgentTimeline } from "./agent-timeline"
+import { LookingAt } from "./agent-run"
 import { AgentConversation } from "./agent-conversation"
 import { ApiError } from "@/lib/api/client"
 import { getSession } from "@/lib/auth/client"
@@ -84,6 +86,13 @@ const RUN_SETTLE_MS = 2000
 
 function composerLabel(agentName?: string): string {
   return agentName ? `Message ${agentName}` : "Message your agent"
+}
+
+/** The task bar's prompt: a working session takes tasks, not chat. */
+function composerPlaceholder(agentName?: string): string {
+  return agentName
+    ? `Give ${agentName} a task, or ask anything`
+    : "Give your agent a task, or ask anything"
 }
 
 /** An API refusal's own words, or `fallback` for anything without them. */
@@ -180,6 +189,8 @@ export function AgentChat({
   getScreenContext,
   openHistoryRequest,
   onHistoryOpened,
+  historyOpen,
+  onHistoryOpenChange,
 }: {
   organizationId: string
   /** Whose choices the chat remembers for the session; without it none are. */
@@ -205,8 +216,16 @@ export function AgentChat({
   getScreenContext?: () => ScreenContext
   openHistoryRequest?: object | null
   onHistoryOpened?: () => void
+  /**
+   * In the agent panel, its header holds History and New chat: the history
+   * list shows while this is true, and the row above the log only names the
+   * conversation. Left undefined (Agent overview), the row keeps both.
+   */
+  historyOpen?: boolean
+  onHistoryOpenChange?: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
+  const headerControls = historyOpen !== undefined
   const hydrated = useHydrated()
   // The list is this member's own entry in the cache: another member's
   // (same organization, the page taken over without a reload) is never read.
@@ -424,6 +443,22 @@ export function AgentChat({
     dispatch({ type: "move", thread: null })
   }
 
+  // Clears the live chat object first, then the Go thread (DESIGN.md §3).
+  async function deleteConversation(id: string) {
+    await deleteThreadChat(organizationId, id)
+    await queryClient.cancelQueries({ queryKey: list.queryKey })
+    queryClient.setQueryData<Thread[]>(list.queryKey, (old) =>
+      old?.filter((thread) => thread.id !== id)
+    )
+    queryClient.removeQueries({
+      queryKey: threadKeys.detail(organizationId, id),
+    })
+    if (threadId === id) startNew()
+    void queryClient.invalidateQueries({
+      queryKey: threadKeys.list(organizationId),
+    })
+  }
+
   // The message its conversation's chat has yet to take.
   const waiting =
     first && first.threadId === threadId && !first.taken ? first.text : null
@@ -481,6 +516,7 @@ export function AgentChat({
           agentName={agentName}
           state={first || notSent ? "ready" : "empty"}
           error={chat.notice}
+          variant="session"
         >
           {notSent}
           {first && (
@@ -491,7 +527,7 @@ export function AgentChat({
         </AgentConversation>
         <AgentComposer
           label={composerLabel(agentName)}
-          placeholder={composerLabel(agentName)}
+          placeholder={composerPlaceholder(agentName)}
           value={draft}
           onChange={onDraftChange}
           onSubmit={(message) =>
@@ -503,6 +539,11 @@ export function AgentChat({
           }
           disabled={first !== null}
           status={first ? "Connecting…" : undefined}
+          context={
+            getScreenContext && (
+              <LookingAt getScreenContext={getScreenContext} />
+            )
+          }
           onFocus={() => onComposingChange(true)}
           onBlur={() => onComposingChange(false)}
         />
@@ -528,9 +569,21 @@ export function AgentChat({
   return (
     <>
       <div className="workspace-agent-thread-bar">
-        <p className="workspace-agent-thread-title" title={title}>
-          {title}
-        </p>
+        <div className="workspace-agent-thread-heading">
+          <p className="workspace-agent-thread-title" title={title}>
+            {title}
+          </p>
+          <p className="workspace-agent-thread-privacy">
+            Only you{agentName ? ` · ${agentName}` : ""}
+          </p>
+        </div>
+        {threadId && listed && (
+          <AgentChatMenu
+            title={title}
+            disabled={first !== null || state === "running"}
+            onDelete={() => deleteConversation(threadId)}
+          />
+        )}
         {onOpenOverview && !inOverview && (
           <button
             className="workspace-agent-new"
@@ -542,20 +595,24 @@ export function AgentChat({
             <Expand size={15} strokeWidth={1.7} />
           </button>
         )}
-        <button
-          className="workspace-agent-new workspace-agent-new-chat"
-          type="button"
-          aria-label="New conversation"
-          title="New conversation"
-          disabled={first !== null}
-          onClick={startNew}
-        >
-          <SquarePen size={15} strokeWidth={1.7} /> New chat
-        </button>
+        {!headerControls && (
+          <button
+            className="workspace-agent-new workspace-agent-new-chat"
+            type="button"
+            aria-label="New conversation"
+            title="New conversation"
+            disabled={first !== null}
+            onClick={startNew}
+          >
+            <SquarePen size={15} strokeWidth={1.7} /> New chat
+          </button>
+        )}
       </div>
       <AgentChatHistory
         openRequest={openHistoryRequest}
         onOpened={onHistoryOpened}
+        open={historyOpen}
+        onOpenChange={onHistoryOpenChange}
         threads={history}
         selected={threadId}
         waiting={approvals}
@@ -568,20 +625,7 @@ export function AgentChat({
         onRetry={() => void threads.refetch()}
         disabled={first !== null || state === "running"}
         onOpen={(id) => dispatch({ type: "move", thread: id })}
-        onDelete={async (id) => {
-          await deleteThreadChat(organizationId, id)
-          await queryClient.cancelQueries({ queryKey: list.queryKey })
-          queryClient.setQueryData<Thread[]>(list.queryKey, (old) =>
-            old?.filter((thread) => thread.id !== id)
-          )
-          queryClient.removeQueries({
-            queryKey: threadKeys.detail(organizationId, id),
-          })
-          if (threadId === id) startNew()
-          void queryClient.invalidateQueries({
-            queryKey: threadKeys.list(organizationId),
-          })
-        }}
+        onDelete={deleteConversation}
       />
       {body}
     </>
@@ -686,6 +730,7 @@ function OpeningConversation({
         state={pending || notSent ? "ready" : "loading"}
         error={error}
         onRetry={onRetry}
+        variant="session"
       >
         {pending ? (
           <p className="workspace-agent-message" data-from="member">
@@ -700,7 +745,7 @@ function OpeningConversation({
       </AgentConversation>
       <AgentComposer
         label={composerLabel(agentName)}
-        placeholder={composerLabel(agentName)}
+        placeholder={composerPlaceholder(agentName)}
         value={draft}
         onChange={onDraftChange}
         sendDisabled
@@ -1007,9 +1052,10 @@ function ThreadChat({
     return () => onStateChange(threadId, "idle")
   }, [threadId, state])
 
-  const lastEntry = entries.at(-1)
-  const drafting =
-    lastEntry?.kind === "message" && lastEntry.state === "streaming"
+  function stop() {
+    setStopped(true)
+    void chat.stop()
+  }
   const lastMemberMessage = lastUserMessageId(chat.messages)
   const label = composerLabel(agentName)
   const status =
@@ -1034,11 +1080,15 @@ function ThreadChat({
         }
         error={runError}
         follow={lastMemberMessage}
+        variant="session"
       >
         <AgentTimeline
+          variant="session"
           entries={entries}
+          items={items}
           running={running}
           ended={ended}
+          onStop={stop}
           agentName={agentName}
           actionable={actionable}
           submitted={submitted}
@@ -1052,12 +1102,11 @@ function ThreadChat({
             {pending}
           </p>
         )}
-        {running && !drafting && <AgentActivity />}
         {notSent}
       </AgentConversation>
       <AgentComposer
         label={label}
-        placeholder={label}
+        placeholder={composerPlaceholder(agentName)}
         value={draft}
         onChange={onDraftChange}
         onSubmit={(message) => {
@@ -1067,11 +1116,11 @@ function ThreadChat({
         disabled={actionable.size > 0}
         sendDisabled={connection !== "open"}
         streaming={running}
-        onStop={() => {
-          setStopped(true)
-          void chat.stop()
-        }}
+        onStop={stop}
         status={status}
+        context={
+          getScreenContext && <LookingAt getScreenContext={getScreenContext} />
+        }
         onFocus={() => onComposingChange(true)}
         onBlur={() => onComposingChange(false)}
       />

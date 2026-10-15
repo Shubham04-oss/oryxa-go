@@ -18,6 +18,8 @@ import {
   LoaderCircle,
 } from "lucide-react"
 import "./request-card.css"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { AgentMarkdown } from "./agent-timeline"
 import { agentsErrorMessage } from "./agents-format"
 import { clockTime } from "./direct-message-format"
@@ -28,6 +30,7 @@ import { OpenSecret, ShareSecret } from "./request-card-secret"
 import {
   DENY,
   LET_MY_AGENT_ANSWER_DETAIL,
+  REPLY_YOURSELF,
   SHARE_ANSWER,
   consentChoicePending,
   consentChoices,
@@ -40,6 +43,7 @@ import {
   requestTitle,
   askerName,
   ownerName,
+  replyYourselfName,
   shareAnswerName,
   shortName,
   sideOf,
@@ -181,6 +185,32 @@ export type RequestCardProps = {
   lease?: AgentLease
   /** Takes focus as it opens, for the card a link named. */
   autoFocus?: boolean
+  /**
+   * The card open on the Requests page: S, A, R and D pick its choices
+   * (Share answer, Allow for 1 hour, Reply yourself, Deny) from anywhere on
+   * the page but a text field.
+   */
+  shortcuts?: boolean
+}
+
+/** One of the owner's choices in the card's grid, with its key. */
+type GridChoice = {
+  key: "s" | "a" | "r" | "d"
+  label: string
+  /** What its button is called to a screen reader. */
+  name: string
+  detail: string
+  variant: "default" | "outline" | "destructive"
+  pick: () => void
+}
+
+/** Whether a key press is someone typing, which a shortcut must leave alone. */
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return (
+    target.isContentEditable ||
+    ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
+  )
 }
 
 /**
@@ -194,6 +224,7 @@ export function RequestCard({
   request: given,
   lease: knownLease,
   autoFocus,
+  shortcuts = false,
 }: RequestCardProps) {
   const queryClient = useQueryClient()
   const people = usePeopleNames(organizationId, viewerId)
@@ -214,6 +245,9 @@ export function RequestCard({
   // dropped, and whether the last send was refused for it.
   const [draft, setDraft] = useState("")
   const [replyInvalid, setReplyInvalid] = useState(false)
+  // Reply yourself, opened from the grid's R.
+  const [replyOpen, setReplyOpen] = useState(false)
+  const replyChoiceRef = useRef<HTMLButtonElement>(null)
   const cardRef = useRef<HTMLElement>(null)
   const noteRef = useRef<HTMLInputElement>(null)
   const replyRef = useRef<HTMLTextAreaElement>(null)
@@ -453,6 +487,90 @@ export function RequestCard({
         ? "deny"
         : undefined
 
+  // The owner's choices, in one grid with their keys (RequestsNew board):
+  // a Slack ask's Share answer, Allow for 1 hour, Reply yourself and Deny,
+  // or another request's Share answer, Reply yourself and Deny.
+  const gridChoices: GridChoice[] =
+    (canChoose || canDecide) && !replyFirst
+      ? [
+          ...(canChoose
+            ? consentChoices
+                .filter((choice) => choice.choice !== "deny")
+                .map((choice): GridChoice => ({
+                  key: choice.choice === "summary" ? "s" : "a",
+                  label:
+                    consent.isPending && consent.variables === choice.choice
+                      ? consentChoicePending(choice.choice)
+                      : choice.label,
+                  name: choice.name(askerShort),
+                  detail: choice.detail(askerShort),
+                  variant: choice.choice === "summary" ? "default" : "outline",
+                  pick: () => {
+                    setProblem("")
+                    consent.mutate(choice.choice)
+                  },
+                }))
+            : [
+                {
+                  key: "s" as const,
+                  label:
+                    decide.isPending && decide.variables === "approved"
+                      ? "Sharing…"
+                      : SHARE_ANSWER,
+                  name: shareAnswerName(askerShort),
+                  detail: `${agent} answers ${askerShort} with what the request asked for.`,
+                  variant: "default" as const,
+                  pick: () => {
+                    setProblem("")
+                    decide.mutate("approved")
+                  },
+                },
+              ]),
+          {
+            key: "r",
+            label: REPLY_YOURSELF,
+            name: replyYourselfName(askerShort),
+            detail: `${askerShort} gets your words as you write them. ${agent} stays out.`,
+            variant: "outline",
+            pick: () => setReplyOpen(true),
+          },
+          {
+            key: "d",
+            label:
+              (consent.isPending && consent.variables === "deny") ||
+              (decide.isPending && decide.variables === "rejected")
+                ? "Denying…"
+                : DENY,
+            name: denyName(askerShort),
+            detail: `Nothing is shared. ${askerShort} is told you said no.`,
+            variant: "destructive",
+            pick: () => {
+              setProblem("")
+              if (canChoose) consent.mutate("deny")
+              else decide.mutate("rejected")
+            },
+          },
+        ]
+      : []
+  const pickByKey = useRef<(key: string) => boolean>(() => false)
+  pickByKey.current = (key) => {
+    const choice = gridChoices.find((item) => item.key === key)
+    if (!choice || busy) return false
+    choice.pick()
+    return true
+  }
+  const keyed = shortcuts && gridChoices.length > 0
+  useEffect(() => {
+    if (!keyed) return
+    function onKey(event: globalThis.KeyboardEvent) {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return
+      if (isTyping(event.target)) return
+      if (pickByKey.current(event.key.toLowerCase())) event.preventDefault()
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [keyed])
+
   // Access the owner gave the asker in the request's Slack thread: this
   // card's own, or the one a follow-up was approved under.
   const lease = ownLease ?? knownLease
@@ -507,6 +625,15 @@ export function RequestCard({
             {!consentAsk && request.purpose ? ` · ${request.purpose}` : ""}
           </span>
         </div>
+        {open && expires && side === "owner" && (
+          <Badge
+            variant="outline"
+            className="workspace-request-expiry"
+            title={fullTime(request.expires_at)}
+          >
+            {expires.replace(/\.$/, "")}
+          </Badge>
+        )}
         <time
           dateTime={request.created_at}
           title={fullTime(request.created_at)}
@@ -540,9 +667,6 @@ export function RequestCard({
       {status.detail && (
         <p className="workspace-request-detail">{status.detail}</p>
       )}
-      {open && expires && side === "owner" && (
-        <p className="workspace-request-detail">{expires}</p>
-      )}
       {lostNow && (
         <p className="workspace-request-lost" role="status">
           <strong>Already decided.</strong>{" "}
@@ -550,41 +674,6 @@ export function RequestCard({
             ? winnerLine(lost.winner, request, reader)
             : "Another click got there first."}
         </p>
-      )}
-
-      {canChoose && !replyFirst && (
-        <div
-          className="workspace-request-choices"
-          role="group"
-          aria-label={`Choose what ${agent} may share with ${askerShort}`}
-        >
-          {consentChoices.map((choice) => {
-            const pressed =
-              consent.isPending && consent.variables === choice.choice
-            return (
-              <button
-                className="workspace-request-choice"
-                data-choice={choice.choice}
-                type="button"
-                key={choice.choice}
-                aria-label={choice.name(askerShort)}
-                aria-describedby={`${choicesId}-${choice.choice}`}
-                disabled={busy}
-                onClick={() => {
-                  setProblem("")
-                  consent.mutate(choice.choice)
-                }}
-              >
-                <strong>
-                  {pressed ? consentChoicePending(choice.choice) : choice.label}
-                </strong>
-                <span id={`${choicesId}-${choice.choice}`}>
-                  {choice.detail(askerShort)}
-                </span>
-              </button>
-            )
-          })}
-        </div>
       )}
 
       {canDecide && !replyFirst && (
@@ -606,39 +695,52 @@ export function RequestCard({
               />
             </label>
           ) : (
-            <button
-              className="workspace-agent-text-button"
-              type="button"
+            <Button
+              variant="link"
+              size="sm"
+              className="workspace-request-note-toggle"
               onClick={() => setNoting(true)}
             >
               Add a note
-            </button>
+            </Button>
           )}
-          <div className="workspace-request-actions">
-            <button
-              className="workspace-agent-pill"
-              type="button"
-              aria-label={denyName(askerShort)}
+        </div>
+      )}
+
+      {gridChoices.length > 0 && (
+        <div
+          className="workspace-request-choices"
+          role="group"
+          aria-label={
+            canChoose
+              ? `Choose what ${agent} may share with ${askerShort}`
+              : `Decide ${possessive(askerShort)} request`
+          }
+          data-count={gridChoices.length}
+        >
+          {gridChoices.map((choice) => (
+            <Button
+              key={choice.key}
+              variant={choice.variant}
+              className="workspace-request-choice"
+              data-choice={choice.key}
+              aria-label={choice.name}
+              aria-describedby={`${choicesId}-${choice.key}`}
+              aria-keyshortcuts={
+                shortcuts ? choice.key.toUpperCase() : undefined
+              }
+              aria-expanded={choice.key === "r" ? replyOpen : undefined}
               disabled={busy}
-              onClick={() => decide.mutate("rejected")}
+              ref={choice.key === "r" ? replyChoiceRef : undefined}
+              onClick={choice.pick}
             >
-              {decide.isPending && decide.variables === "rejected"
-                ? "Denying…"
-                : DENY}
-            </button>
-            <button
-              className="workspace-agent-pill"
-              data-primary="true"
-              type="button"
-              aria-label={shareAnswerName(askerShort)}
-              disabled={busy}
-              onClick={() => decide.mutate("approved")}
-            >
-              {decide.isPending && decide.variables === "approved"
-                ? "Sharing…"
-                : SHARE_ANSWER}
-            </button>
-          </div>
+              {shortcuts && (
+                <kbd aria-hidden="true">{choice.key.toUpperCase()}</kbd>
+              )}
+              <strong>{choice.label}</strong>
+              <span id={`${choicesId}-${choice.key}`}>{choice.detail}</span>
+            </Button>
+          ))}
         </div>
       )}
 
@@ -675,6 +777,12 @@ export function RequestCard({
 
       {canReply && !replyFirst && (
         <ReplyOption
+          open={gridChoices.length > 0 ? replyOpen : undefined}
+          onOpenChange={(next) => {
+            setReplyOpen(next)
+            // Cancel gives focus back to the choice that opened it.
+            if (!next) replyChoiceRef.current?.focus()
+          }}
           askerName={askerShort}
           value={draft}
           onChange={editReply}
@@ -738,9 +846,9 @@ export function RequestCard({
                   ? `${askerShort}'s follow-ups in that Slack thread are answered without asking you until ${clockTime(lease.expires_at)}.`
                   : `${askerShort}'s follow-ups in that Slack thread are answered without asking you while this access lasts.`}
               </p>
-              <button
-                className="workspace-agent-pill"
-                type="button"
+              <Button
+                variant="destructive"
+                size="sm"
                 aria-label={`End ${askerShort}'s access`}
                 disabled={busy}
                 onClick={() => {
@@ -749,7 +857,7 @@ export function RequestCard({
                 }}
               >
                 {endAccess.isPending ? "Ending…" : "End access"}
-              </button>
+              </Button>
             </>
           )}
         </div>
@@ -795,12 +903,14 @@ export function RequestCardById({
   requestId,
   lease,
   autoFocus,
+  shortcuts,
 }: {
   organizationId: string
   viewerId: string
   requestId: string
   lease?: AgentLease
   autoFocus?: boolean
+  shortcuts?: boolean
 }) {
   const people = usePeopleNames(organizationId, viewerId)
   const query = useQuery(
@@ -830,13 +940,9 @@ export function RequestCardById({
               : agentsErrorMessage(query.error, "Couldn't load this request.")}
         </p>
         {!notFound && !isUnavailableHere(query.error) && (
-          <button
-            className="workspace-agent-pill"
-            type="button"
-            onClick={() => void query.refetch()}
-          >
+          <Button variant="outline" onClick={() => void query.refetch()}>
             Try again
-          </button>
+          </Button>
         )}
       </div>
     )
@@ -848,6 +954,12 @@ export function RequestCardById({
       request={query.data}
       lease={lease}
       autoFocus={autoFocus}
+      shortcuts={shortcuts}
     />
   )
+}
+
+/** A first name as a possessive ("Raya's"), and "your" for the reader. */
+function possessive(name: string): string {
+  return name === "you" ? "your" : `${name}'s`
 }

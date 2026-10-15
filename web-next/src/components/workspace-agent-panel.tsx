@@ -1,19 +1,23 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react"
-import type { ComponentType, Dispatch, KeyboardEvent, ReactNode } from "react"
+import type { ComponentType, Dispatch, ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft,
   ArrowRight,
+  History,
   LayoutGrid,
+  Lock,
   MessageCircle,
   PanelRightClose,
   PanelRightOpen,
-  UsersRound,
+  SquarePen,
 } from "lucide-react"
 import { AgentChat } from "./agent-chat"
-import { AgentComposer } from "./agent-composer"
+import { AgentComposer, AgentComposerLookingAt } from "./agent-composer"
+import { AgentPanelChips } from "./agent-panel-chips"
 import { AgentConversation } from "./agent-conversation"
 import { AgentSwitcher, FALLBACK_AGENT_NAME } from "./agent-switcher"
+import { OpenArtifactContext } from "./agent-timeline"
 import type { AgentSwitcherEntry } from "./agent-switcher"
 import { countLabel, firstName } from "./direct-message-format"
 import { DirectMessagesTab, dmPanelList } from "./direct-message-inbox"
@@ -25,8 +29,10 @@ import type { Teammate } from "./side-conversation-format"
 import { TeamspaceTeammates } from "./side-conversation-teammates"
 import { SpecialistChat } from "./specialist-chat"
 import type { ChatSpecialist } from "./specialist-chat"
+import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import { IdentityAvatar } from "./workspace-avatar"
 import type { AvatarIdentity } from "./workspace-avatar"
+import { useAgentChatHost } from "@/hooks/use-agent-chat-host"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
 import type { ManagedAgent } from "@/lib/agents/managed-agents"
 import { primaryAgent, specialistAgents } from "@/lib/agents/policy"
@@ -37,6 +43,7 @@ import type { Teamspace } from "@/lib/teamspaces/client"
 import { teamspaceKeys, teamspaceQueryOptions } from "@/lib/teamspaces/queries"
 import {
   claimPrimaryChatRequest,
+  firstMessage,
   initialPrimaryChat,
   primaryChatReducer,
   shownThread,
@@ -47,10 +54,18 @@ import type {
   PrimaryChat,
   PrimaryChatAction,
 } from "@/lib/threads/chat-choice"
-import { cn } from "@/lib/utils"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useNeedsYouCount } from "@/hooks/use-needs-you"
 import type { ScreenContext } from "@/lib/agents/screen-context"
 
-export type AgentPanelTab = "agents" | "dms" | "teams" | "glance"
+/**
+ * The panel's views: the member's agent ("agents", the default), At a
+ * glance, and their direct messages. DMs keep a quiet place here until the
+ * sidebar's Messages section holds them (DESIGN.md §2).
+ */
+export type AgentPanelTab = "agents" | "glance" | "dms"
 
 /**
  * The shell bringing a tab forward (Team's "All conversations" opens DMs).
@@ -96,24 +111,18 @@ const panelTabs: Array<{
   icon?: ComponentType<{ size?: number; strokeWidth?: number }>
   empty?: string
 }> = [
-  { key: "agents", label: "Agents" },
-  {
-    key: "dms",
-    label: "DMs",
-    icon: MessageCircle,
-    empty: "Direct messages will appear here.",
-  },
-  {
-    key: "teams",
-    label: "Teams",
-    icon: UsersRound,
-    empty: "Team rooms will appear here.",
-  },
+  { key: "agents", label: FALLBACK_AGENT_NAME },
   {
     key: "glance",
     label: "At a glance",
     icon: LayoutGrid,
     empty: "Your apps, teammates and conversations will appear here.",
+  },
+  {
+    key: "dms",
+    label: "DMs",
+    icon: MessageCircle,
+    empty: "Direct messages will appear here.",
   },
 ]
 
@@ -154,8 +163,13 @@ export function WorkspaceAgentPanel({
   onPrimaryThreadChange,
   onPrimaryFileCreated,
   onPrimaryComposingChange,
+  onOpenPrimaryFile,
+  primaryChatSlot,
   getScreenContext,
   glance,
+  place,
+  lookingAt,
+  onOpenRequests,
 }: {
   expanded: boolean
   onExpand: () => void
@@ -187,9 +201,28 @@ export function WorkspaceAgentPanel({
     version?: number
   }) => void
   onPrimaryComposingChange?: (composing: boolean) => void
+  /**
+   * Opens a file from the primary chat in the agent session's work column,
+   * beside the chat, rather than in a new browser tab.
+   */
+  onOpenPrimaryFile?: (file: PrimaryAgentFileTarget) => void
+  /**
+   * The agent session's conversation column while the session is open: the
+   * Agents tab's mounted chat moves into it (useAgentChatHost).
+   */
+  primaryChatSlot?: HTMLElement | null
   getScreenContext?: () => ScreenContext
+  /** Where the member is ("EU launch", "My workspace"): the header's "Only you · in …". */
+  place?: string
+  /** What the page shows, as the composer names it ("Looking at …"). */
+  lookingAt?: string
+  /** Opens Requests, from the "Needs you" chip. */
+  onOpenRequests?: () => void
 }) {
   const [tab, setTab] = useState<AgentPanelTab>("agents")
+  const chatHost = useAgentChatHost(primaryChatSlot)
+  // The primary chat's history list, opened from the header's History.
+  const [historyOpen, setHistoryOpen] = useState(false)
   const visibleTabs = primaryWork
     ? panelTabs.filter((item) => item.key !== "agents")
     : panelTabs
@@ -288,8 +321,10 @@ export function WorkspaceAgentPanel({
       setDmView(dmPanelList)
       setDmDrafts({})
       setHistoryRequest(null)
+      setHistoryOpen(false)
     }
   }
+  const needs = useNeedsYouCount(organizationId, viewerId)
   // On a teamspace page, its teammates: read as the page reads it (one
   // query, shared with the focused view), what the list knows shown at once.
   const queryClient = useQueryClient()
@@ -435,23 +470,22 @@ export function WorkspaceAgentPanel({
     onExpand()
   }
 
-  function moveBetweenTabs(
-    event: KeyboardEvent<HTMLButtonElement>,
-    index: number
-  ) {
-    const last = visibleTabs.length - 1
-    const moves: Partial<Record<string, number>> = {
-      ArrowRight: index === last ? 0 : index + 1,
-      ArrowLeft: index === 0 ? last : index - 1,
-      Home: 0,
-      End: last,
-    }
-    const next = moves[event.key]
-    if (next === undefined) return
-    event.preventDefault()
-    setTab(visibleTabs[next].key)
-    tabRefs.current[visibleTabs[next].key]?.focus()
+  // The primary agent's own controls, in the header while its chat lives
+  // in the panel (Agent overview keeps them on the chat's own row).
+  const primaryControls = Boolean(organizationId) && !primaryWork && !agentId
+
+  /** Brings the primary chat forward: History and New chat act on it. */
+  function showPrimaryChat() {
+    setTab("agents")
+    setAgentsSide(null)
   }
+
+  // Shown as text, so never the "Primary agent" stand-in for screen readers.
+  const agentLabel = agentName ?? "Your agent"
+  const needsLabel =
+    needs && needs > 0
+      ? `${needs} ${needs === 1 ? "request needs" : "requests need"} you`
+      : undefined
 
   return (
     <aside
@@ -466,48 +500,51 @@ export function WorkspaceAgentPanel({
     >
       <div className="workspace-right-top">
         {expanded && (
-          <div
-            className="workspace-switcher"
-            role="tablist"
-            aria-label="Agent panel views"
-          >
-            {visibleTabs.map((item, index) => {
-              const Icon = item.icon
-              const selected = activeTab === item.key
-              return (
-                <button
-                  className={cn(
-                    "workspace-switcher-item",
-                    selected && "is-selected"
-                  )}
-                  type="button"
-                  role="tab"
-                  key={item.key}
-                  id={`workspace-agent-tab-${item.key}`}
-                  ref={(element) => {
-                    tabRefs.current[item.key] = element
-                  }}
-                  aria-label={tabLabel(item.key, item.label, unread)}
-                  aria-selected={selected}
-                  aria-controls={`workspace-agent-view-${item.key}`}
-                  tabIndex={selected ? 0 : -1}
-                  title={selected ? undefined : item.label}
-                  onClick={() => setTab(item.key)}
-                  onKeyDown={(event) => moveBetweenTabs(event, index)}
-                >
-                  {Icon ? (
-                    <Icon size={18} strokeWidth={1.8} />
-                  ) : (
-                    <IdentityAvatar identity={tabIcon} />
-                  )}
-                  {selected && <span>{item.label}</span>}
-                  {item.key === "dms" && unread > 0 && (
-                    <UnreadBadge count={unread} />
-                  )}
-                </button>
-              )
-            })}
+          <div className="workspace-agent-head">
+            <IdentityAvatar identity={tabIcon} />
+            <div className="workspace-agent-head-title">
+              <strong>{agentLabel}</strong>
+              <small>
+                <Lock size={10} strokeWidth={2.2} aria-hidden="true" />
+                <span>Only you{place ? ` · in ${place}` : ""}</span>
+              </small>
+            </div>
           </div>
+        )}
+        {expanded && primaryControls && (
+          <>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="workspace-agent-head-button"
+              aria-label="History"
+              title="History"
+              aria-pressed={tab === "agents" && !agentsSide && historyOpen}
+              onClick={() => {
+                const opening =
+                  !(tab === "agents" && !agentsSide) || !historyOpen
+                showPrimaryChat()
+                setHistoryOpen(opening)
+              }}
+            >
+              <History size={16} strokeWidth={1.7} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="workspace-agent-head-button"
+              aria-label="New chat"
+              title="New chat"
+              disabled={firstMessage(chat) !== null}
+              onClick={() => {
+                showPrimaryChat()
+                setHistoryOpen(false)
+                dispatch({ type: "move", thread: null })
+              }}
+            >
+              <SquarePen size={16} strokeWidth={1.7} />
+            </Button>
+          </>
         )}
         <button
           className="workspace-icon-button"
@@ -556,131 +593,199 @@ export function WorkspaceAgentPanel({
           )}
         </button>
       </div>
-
+      {expanded && (
+        <Tabs
+          className="workspace-agent-segment-root"
+          value={activeTab}
+          onValueChange={(value) => setTab(value as AgentPanelTab)}
+        >
+          <TabsList
+            className="workspace-agent-segment"
+            aria-label="Agent panel views"
+            activateOnFocus
+          >
+            {visibleTabs.map((item) => {
+              const Icon = item.icon
+              const label = item.key === "agents" ? agentLabel : item.label
+              return (
+                <TabsTrigger
+                  className="workspace-agent-segment-item"
+                  value={item.key}
+                  key={item.key}
+                  id={`workspace-agent-tab-${item.key}`}
+                  ref={(element: HTMLButtonElement | null) => {
+                    tabRefs.current[item.key] = element
+                  }}
+                  aria-label={tabLabel(item.key, label, unread, needsLabel)}
+                  aria-controls={`workspace-agent-view-${item.key}`}
+                  title={item.key === "dms" ? item.label : undefined}
+                  data-icon-only={item.key === "dms" ? "true" : undefined}
+                >
+                  {item.key === "dms" && Icon ? (
+                    <Icon size={16} strokeWidth={1.8} />
+                  ) : (
+                    <span>{label}</span>
+                  )}
+                  {item.key === "glance" &&
+                    needs !== undefined &&
+                    needs > 0 && (
+                      <Badge
+                        variant="secondary"
+                        className="workspace-agent-segment-count"
+                        aria-hidden="true"
+                      >
+                        {countLabel(needs, 99)}
+                      </Badge>
+                    )}
+                  {item.key === "dms" && unread > 0 && (
+                    <UnreadBadge count={unread} />
+                  )}
+                </TabsTrigger>
+              )
+            })}
+          </TabsList>
+        </Tabs>
+      )}
       {hasOpened.current &&
         panelTabs.map((item) => (
           <div
             className="workspace-agent-view"
-            role={primaryWork && item.key === "agents" ? "region" : "tabpanel"}
+            role="tabpanel"
             key={item.key}
+            ref={item.key === "agents" ? chatHost.pageRef : undefined}
             id={`workspace-agent-view-${item.key}`}
-            aria-labelledby={
-              primaryWork && item.key === "agents"
-                ? undefined
-                : `workspace-agent-tab-${item.key}`
-            }
-            aria-label={
-              primaryWork && item.key === "agents"
-                ? `Conversation with ${agentName ?? "primary agent"}`
-                : undefined
-            }
-            data-primary-chat={
-              primaryWork && item.key === "agents" ? "true" : undefined
-            }
+            aria-labelledby={`workspace-agent-tab-${item.key}`}
             tabIndex={0}
-            hidden={
-              item.key === "agents" && primaryWork
-                ? false
-                : !expanded || activeTab !== item.key
-            }
+            hidden={!expanded || activeTab !== item.key}
           >
             {item.key === "agents" ? (
-              <>
-                {/* Mounted only while it shows, as a DM is: an open
+              // One conversation, in this tab or in the agent session's
+              // chat column: moved there, never mounted twice.
+              chatHost.render(
+                <OpenArtifactContext.Provider value={onOpenPrimaryFile ?? null}>
+                  {/* Mounted only while it shows, as a DM is: an open
                     conversation is what makes the member online in it. */}
-                {agentsSide &&
-                  organizationId &&
-                  directMessages &&
-                  tab === "agents" &&
-                  expanded && (
-                    <AgentsTabSide
-                      key={`${agentsSide.teamspaceId}~${agentsSide.peerId}`}
-                      organizationId={organizationId}
-                      directMessages={directMessages}
-                      open={agentsSide}
-                      name={sideName(agentsSide.teamspaceId, agentsSide.peerId)}
-                      teamspaceName={
-                        space.data?.id === agentsSide.teamspaceId
-                          ? space.data.name
-                          : agentsSide.teamspaceName
-                      }
-                      drafts={sideDrafts}
-                      onDraftChange={changeSideDraft}
-                      onComposingChange={setComposing}
-                      autoFocus={sidePicked}
-                      onBack={() => {
-                        setSidePicked(false)
-                        setAgentsSide(null)
-                        // Back to the teammate it was with, or, away from
-                        // their teamspace now, to the tab.
-                        if (offersTeammates) setSideReturnTo(agentsSide.peerId)
-                        else tabRefs.current.agents?.focus()
-                      }}
-                    />
-                  )}
-                <div
-                  className="workspace-agents-home"
-                  hidden={Boolean(agentsSide)}
-                >
-                  <AgentsView
-                    openHistoryRequest={historyRequest}
-                    onHistoryOpened={() => setHistoryRequest(null)}
-                    organizationId={organizationId}
-                    visible={agentsVisible}
-                    scope={scope}
-                    owner={owner}
-                    chatAgent={chatAgent}
-                    agents={agents.data}
-                    agentId={agentId}
-                    onSelectAgent={setAgentId}
-                    chat={chat}
-                    dispatch={dispatch}
-                    agentName={agentName}
-                    agentSeed={agentSeed}
-                    onComposingChange={(value) => {
-                      setComposing(value)
-                      if (primaryWork) onPrimaryComposingChange?.(value)
-                    }}
-                    inAgentOverview={primaryWork}
-                    onOpenAgentOverview={onOpenAgentOverview}
-                    onPrimaryFileCreated={
-                      agentsVisible && !agentId
-                        ? onPrimaryFileCreated
-                        : undefined
-                    }
-                    getScreenContext={getScreenContext}
-                    teammates={
-                      offersTeammates && directMessages ? (
-                        <TeamspaceTeammates
-                          space={
-                            space.data?.id === teamspaceId
-                              ? space.data
-                              : undefined
-                          }
-                          failed={space.isError}
-                          viewerId={directMessages.viewerId}
-                          nameOf={(userId) =>
-                            directMessages.people.find(userId)?.name
-                          }
-                          unreadOf={(peerId) => {
-                            const name = teamspaceId
-                              ? sideName(teamspaceId, peerId)
-                              : undefined
-                            return (
-                              directMessages.inbox.conversations.find(
-                                (conversation) => conversation.name === name
-                              )?.unread ?? 0
-                            )
-                          }}
-                          onOpen={openTeammate}
-                          focusPeerId={agentsSide ? null : sideReturnTo}
-                          onFocused={() => setSideReturnTo(null)}
-                        />
-                      ) : undefined
-                    }
-                  />
-                </div>
-              </>
+                  {agentsSide &&
+                    organizationId &&
+                    directMessages &&
+                    tab === "agents" &&
+                    expanded && (
+                      <AgentsTabSide
+                        key={`${agentsSide.teamspaceId}~${agentsSide.peerId}`}
+                        organizationId={organizationId}
+                        directMessages={directMessages}
+                        open={agentsSide}
+                        name={sideName(
+                          agentsSide.teamspaceId,
+                          agentsSide.peerId
+                        )}
+                        teamspaceName={
+                          space.data?.id === agentsSide.teamspaceId
+                            ? space.data.name
+                            : agentsSide.teamspaceName
+                        }
+                        drafts={sideDrafts}
+                        onDraftChange={changeSideDraft}
+                        onComposingChange={setComposing}
+                        autoFocus={sidePicked}
+                        onBack={() => {
+                          setSidePicked(false)
+                          setAgentsSide(null)
+                          // Back to the teammate it was with, or, away from
+                          // their teamspace now, to the tab.
+                          if (offersTeammates)
+                            setSideReturnTo(agentsSide.peerId)
+                          else tabRefs.current.agents?.focus()
+                        }}
+                      />
+                    )}
+                  <div
+                    className="workspace-agents-home"
+                    hidden={Boolean(agentsSide)}
+                  >
+                    {!primaryWork && organizationId && (
+                      <AgentPanelChips
+                        organizationId={organizationId}
+                        viewerId={viewerId}
+                        teamspace={
+                          teamspaceId
+                            ? {
+                                id: teamspaceId,
+                                name:
+                                  space.data?.id === teamspaceId
+                                    ? space.data.name
+                                    : (place ?? ""),
+                              }
+                            : undefined
+                        }
+                        needs={needs}
+                        onOpenRequests={onOpenRequests}
+                      />
+                    )}
+                    <AgentComposerLookingAt value={lookingAt}>
+                      <AgentsView
+                        historyOpen={primaryWork ? undefined : historyOpen}
+                        onHistoryOpenChange={setHistoryOpen}
+                        openHistoryRequest={historyRequest}
+                        onHistoryOpened={() => setHistoryRequest(null)}
+                        organizationId={organizationId}
+                        visible={agentsVisible}
+                        scope={scope}
+                        owner={owner}
+                        chatAgent={chatAgent}
+                        agents={agents.data}
+                        agentId={agentId}
+                        onSelectAgent={setAgentId}
+                        chat={chat}
+                        dispatch={dispatch}
+                        agentName={agentName}
+                        agentSeed={agentSeed}
+                        onComposingChange={(value) => {
+                          setComposing(value)
+                          if (primaryWork) onPrimaryComposingChange?.(value)
+                        }}
+                        inAgentOverview={primaryWork}
+                        onOpenAgentOverview={onOpenAgentOverview}
+                        onPrimaryFileCreated={
+                          agentsVisible && !agentId
+                            ? onPrimaryFileCreated
+                            : undefined
+                        }
+                        getScreenContext={getScreenContext}
+                        teammates={
+                          offersTeammates && directMessages ? (
+                            <TeamspaceTeammates
+                              space={
+                                space.data?.id === teamspaceId
+                                  ? space.data
+                                  : undefined
+                              }
+                              failed={space.isError}
+                              viewerId={directMessages.viewerId}
+                              nameOf={(userId) =>
+                                directMessages.people.find(userId)?.name
+                              }
+                              unreadOf={(peerId) => {
+                                const name = teamspaceId
+                                  ? sideName(teamspaceId, peerId)
+                                  : undefined
+                                return (
+                                  directMessages.inbox.conversations.find(
+                                    (conversation) => conversation.name === name
+                                  )?.unread ?? 0
+                                )
+                              }}
+                              onOpen={openTeammate}
+                              focusPeerId={agentsSide ? null : sideReturnTo}
+                              onFocused={() => setSideReturnTo(null)}
+                            />
+                          ) : undefined
+                        }
+                      />
+                    </AgentComposerLookingAt>
+                  </div>
+                </OpenArtifactContext.Provider>
+              )
             ) : item.key === "glance" && organizationId && glance ? (
               activeTab === "glance" && expanded && glance
             ) : item.key === "dms" && organizationId && directMessages ? (
@@ -713,13 +818,18 @@ export function WorkspaceAgentPanel({
         <div className="workspace-right-rail">
           {visibleTabs.map((item) => {
             const Icon = item.icon
+            const label = item.key === "agents" ? agentLabel : item.label
             return (
               <button
                 className="workspace-rail-button"
                 type="button"
                 key={item.key}
-                aria-label={`Open ${tabLabel(item.key, item.label, unread)}`}
-                title={item.label}
+                aria-label={
+                  item.key === "agents"
+                    ? `Open chat with ${label}`
+                    : `Open ${tabLabel(item.key, label, unread, needsLabel)}`
+                }
+                title={label}
                 onClick={() => openTab(item.key)}
               >
                 {Icon ? (
@@ -730,6 +840,9 @@ export function WorkspaceAgentPanel({
                 {item.key === "dms" && unread > 0 && (
                   <UnreadBadge count={unread} />
                 )}
+                {item.key === "glance" && needs !== undefined && needs > 0 && (
+                  <UnreadBadge count={needs} />
+                )}
               </button>
             )
           })}
@@ -739,9 +852,19 @@ export function WorkspaceAgentPanel({
   )
 }
 
-/** A tab's name, with the DMs' unread total when there is one. */
-function tabLabel(key: AgentPanelTab, label: string, unread: number): string {
-  return key === "dms" && unread > 0 ? `${label}, ${unread} unread` : label
+/**
+ * A view's name: the DMs' with their unread total, At a glance's with how
+ * many requests need the member, when there are any.
+ */
+function tabLabel(
+  key: AgentPanelTab,
+  label: string,
+  unread: number,
+  needsLabel?: string
+): string {
+  if (key === "dms" && unread > 0) return `${label}, ${unread} unread`
+  if (key === "glance" && needsLabel) return `${label}, ${needsLabel}`
+  return label
 }
 
 /** The DMs' unread total on their tab and rail icon: a small badge, "9+" past nine. */
@@ -811,6 +934,8 @@ function AgentsTabSide({
  * (REALTIME.md).
  */
 function AgentsView({
+  historyOpen,
+  onHistoryOpenChange,
   openHistoryRequest,
   onHistoryOpened,
   visible,
@@ -832,6 +957,9 @@ function AgentsView({
   onPrimaryFileCreated,
   getScreenContext,
 }: {
+  /** The primary chat's history list, held by the panel's header (see AgentChat). */
+  historyOpen?: boolean
+  onHistoryOpenChange?: (open: boolean) => void
   openHistoryRequest?: object | null
   onHistoryOpened?: () => void
   visible: boolean
@@ -918,6 +1046,8 @@ function AgentsView({
         />
       ) : organizationId ? (
         <AgentChat
+          historyOpen={historyOpen}
+          onHistoryOpenChange={onHistoryOpenChange}
           openHistoryRequest={openHistoryRequest}
           onHistoryOpened={onHistoryOpened}
           key={owner}

@@ -87,19 +87,20 @@ describe("PeopleManagement", () => {
 
     await screen.findByText("Avery Morgan")
     await screen.findByText("jordan@example.com")
-    fireEvent.change(screen.getByRole("textbox", { name: "Email address" }), {
-      target: { value: "sam@example.com" },
+    fireEvent.change(screen.getByRole("textbox", { name: "Email addresses" }), {
+      target: { value: "sam@example.com, kim@example.com" },
     })
-    fireEvent.change(screen.getByRole("combobox", { name: "Role" }), {
-      target: { value: "admin" },
-    })
+    fireEvent.click(screen.getByRole("combobox", { name: "Role" }))
+    const admin = await screen.findByRole("option", { name: "Admin" })
+    fireEvent.pointerDown(admin)
+    fireEvent.click(admin)
     fireEvent.click(screen.getByRole("button", { name: "Send invite" }))
+    // One invitation per address, in order.
     await waitFor(() =>
-      expect(sendInvitation).toHaveBeenCalledWith(
-        "org-1",
-        "sam@example.com",
-        "admin"
-      )
+      expect(vi.mocked(sendInvitation).mock.calls).toEqual([
+        ["org-1", "sam@example.com", "admin"],
+        ["org-1", "kim@example.com", "admin"],
+      ])
     )
 
     fireEvent.click(
