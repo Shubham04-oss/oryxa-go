@@ -52,19 +52,6 @@
   cursor: default;
   opacity: 0.55;
 }
-.home-card > header button,
-.home-quiet button {
-  flex: none;
-  padding: 3px 0;
-  border: 0;
-  background: none;
-  color: var(--workspace-muted, var(--text-muted));
-  font-size: 11px;
-}
-.home-card > header button:not(:disabled):hover,
-.home-quiet button:not(:disabled):hover {
-  color: var(--workspace-text, var(--text));
-}
 .home-overview button:focus-visible {
   outline: 2px solid var(--tone-aaaaaa);
   outline-offset: 3px;
@@ -174,9 +161,6 @@
 .home-empty {
   padding: 2px 2px;
 }
-.home-quiet button {
-  margin-left: 8px;
-}
 @media (max-width: 800px) {
   .home-overview {
     width: calc(100% - 32px);
@@ -246,23 +230,22 @@
 }
 .home-column-head div {
   display: flex;
-  gap: 14px;
+  gap: 8px;
 }
-.home-column-head button,
+.home-more { align-self: flex-start; }
+/* Header and inline actions are ui/button (ghost or link, sm), quiet in
+   colour only (DESIGN.md §1, Buttons and action rows). */
+.home-column-head [data-slot="button"],
+.home-section-head [data-slot="button"],
 .home-more {
-  padding: 0;
-  border: 0;
-  background: none;
   color: var(--text-muted);
-  font-size: 11px;
 }
-.home-more {
-  align-self: flex-start;
-  margin-top: 2px;
-}
-.home-column-head button:not(:disabled):hover,
-.home-more:not(:disabled):hover {
-  color: var(--text);
+.home-quiet [data-slot="button"],
+.home-setup-line [data-slot="button"] {
+  height: auto;
+  padding: 0 0 0 8px;
+  color: var(--text-soft);
+  font-size: inherit;
 }
 .home-list {
   display: flex;
@@ -355,51 +338,6 @@ div.home-item:hover {
 .home-item-action:not(:disabled):hover {
   border-color: var(--border-strong);
 }
-.home-compose {
-  width: min(600px, 100%);
-  margin: 44px auto 0;
-}
-.home-tools {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 6px 8px;
-  margin-top: 14px;
-}
-.home-tool {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 10px 4px 4px;
-  border: 1px solid var(--border-quiet);
-  border-radius: 999px;
-  background: none;
-  color: var(--text-soft);
-  font-size: 12px;
-}
-.home-tool .workspace-tool-logo {
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-}
-.home-tool .workspace-tool-logo svg,
-.home-tool .workspace-tool-logo img {
-  width: 12px;
-  height: 12px;
-}
-.home-tool-connect {
-  padding: 5px 12px;
-  border-style: dashed;
-  color: var(--text-muted);
-}
-.home-tool:hover {
-  border-color: var(--border-strong);
-  color: var(--text);
-}
-.home-tools > .home-quiet {
-  flex-basis: 100%;
-  text-align: center;
-}
 .home-setup-line {
   display: flex;
   flex-wrap: wrap;
@@ -409,18 +347,6 @@ div.home-item:hover {
   color: var(--text-muted);
   font-size: 11px;
 }
-.home-setup-line button {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--text-soft);
-  font-size: 11px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.home-setup-line button:not(:disabled):hover {
-  color: var(--text);
-}
 @media (max-width: 800px) {
   .home-today {
     width: calc(100% - 32px);
@@ -429,9 +355,6 @@ div.home-item:hover {
   .home-top,
   .home-stack {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .home-compose {
-    margin-top: 32px;
   }
 }
 
@@ -485,10 +408,13 @@ div.home-item:hover {
   padding: 2px;
 }
 
-/* My workspace (founder's redesign, 14 Oct 2026): one calm centred column
-   under a faint scene, the greeting first, what needs you as one tile, and
-   "Pick up where you left off" as a row of cards that scrolls sideways. */
-.workspace-canvas:has(> .home-today:not(.home-glance)) { position: relative; }
+
+/* My workspace, centred (founder's redesign, 15 Oct 2026, WorkspaceV3): one
+   column on an axis under a faint scene band. Top to bottom: the live parley
+   pill (only while one runs), the greeting, a large composer, suggestions,
+   two equal tiles (Needs you, While you were away) and four equal "Pick up"
+   cards. */
+.workspace-canvas:has(> .home-centred) { position: relative; }
 .home-scene {
   position: absolute;
   inset: 0 0 auto;
@@ -500,69 +426,232 @@ div.home-item:hover {
   opacity: var(--scene-band-opacity);
   pointer-events: none;
 }
-.home-today:not(.home-glance) > :not(.home-scene) { position: relative; }
-.home-today:not(.home-glance) {
-  width: min(760px, calc(100% - 48px));
-  margin-top: 96px;
+.home-centred {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  width: min(720px, calc(100% - 48px));
+  margin: 72px auto 48px;
 }
-.home-hello { margin-bottom: 28px; }
+.home-centred > :not(.home-scene) { position: relative; }
+
+.home-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 4px 0 14px;
+  border-radius: 999px;
+  background: var(--tone-263a2e);
+  box-shadow: 0 0 0 1px var(--tone-385c49);
+  color: var(--tone-b9e6c6);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.home-live b { font-weight: 600; }
+.home-live-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tone-7fcf98);
+}
+.home-live-faces { display: inline-flex; }
+.home-live-faces .workspace-avatar {
+  width: 20px;
+  height: 20px;
+  box-shadow: 0 0 0 2px var(--tone-263a2e);
+}
+.home-live-faces .workspace-avatar + .workspace-avatar { margin-left: -6px; }
+.home-live .home-live-action {
+  height: 26px;
+  border-radius: 999px;
+  background: var(--tone-385c49);
+  color: var(--tone-b9e6c6);
+}
+
+.home-centred .home-hello { margin: 0; text-align: center; }
 .home-hello h2 {
   margin: 0;
   color: var(--text);
-  font-size: 32px;
+  font-size: 34px;
   font-weight: 700;
-  letter-spacing: -.03em;
-  line-height: 1.15;
+  letter-spacing: -.035em;
+  line-height: 1.1;
 }
 .home-hello p {
-  margin: 8px 0 0;
+  max-width: 46ch;
+  margin: 10px auto 0;
   color: var(--text-muted);
   font-size: 14px;
+  line-height: 1.5;
+  text-wrap: balance;
 }
-.home-today:not(.home-glance) .home-top {
-  grid-template-columns: minmax(0, 1fr);
+
+.home-ask { display: flex; flex-direction: column; gap: 14px; width: 100%; }
+.home-ask .workspace-agent-composer { padding: 0; }
+.home-ask .workspace-composer {
+  --composer-send-size: 42px;
+  min-height: 60px;
+  padding: 8px 9px 8px 22px;
+  border-color: var(--border-quiet);
+  background: var(--canvas);
+  box-shadow: 0 6px 22px var(--shade-66);
 }
-.home-today:not(.home-glance) .home-top .home-column {
-  padding: 14px 14px 10px;
+.home-ask .workspace-composer[data-multiline="true"] { border-radius: 26px; }
+.home-ask .workspace-composer textarea { font-size: 15px; line-height: 22px; }
+.home-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+.home-centred .home-chip {
+  max-width: 100%;
+  border-color: var(--border-quiet);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-centred .home-chip:hover { background: var(--hover); color: var(--text); }
+
+.home-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin-top: 14px;
+}
+.home-pair .home-column {
+  padding: 6px 6px 8px;
   border-radius: 18px;
   background: var(--base);
 }
-.home-today:not(.home-glance) .home-top .home-list { margin: 0 -4px; }
-.home-today:not(.home-glance) .home-compose { margin-top: 24px; }
-.home-row-title {
-  margin: 32px 0 10px;
+.home-pair .home-column-head {
+  justify-content: flex-start;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 10px;
+}
+.home-pair .home-column-head h2 { font-weight: 600; }
+.home-pair .home-column-head > button { margin-left: auto; }
+.home-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--raised);
+  box-shadow: 0 0 0 1px var(--border-quiet);
+  color: var(--text);
+  font-size: 11px;
+}
+.home-pair .home-list { margin: 0; }
+.home-pair .home-item { min-height: 56px; align-items: center; }
+.home-pair .home-quiet { padding: 4px 10px 6px; }
+.home-centred .home-item-action {
+  height: 28px;
+  border-color: var(--border-quiet);
+  border-radius: 999px;
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 12px;
+}
+.home-centred .home-item-action:hover { background: var(--hover); }
+
+.home-pickup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 10px;
+}
+.home-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+}
+.home-section-head h2 {
+  margin: 0;
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
 }
-.home-today:not(.home-glance) .home-stack {
+.home-grow { flex: 1; }
+.home-pickup-cards {
   display: grid;
-  grid-auto-columns: 236px;
-  grid-auto-flow: column;
-  grid-template-columns: none;
-  gap: 10px;
-  margin: 0 -24px;
-  padding: 0 24px 12px;
-  border-top: 0;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scroll-padding: 0 24px;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: thin;
-  /* The next card shows faded at the edge: the row goes on. */
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
-@media (max-width: 800px) {
-  .home-today:not(.home-glance) { margin-top: 56px; }
-  .home-hello h2 { font-size: 26px; }
-}
-.home-today:not(.home-glance) .home-stack .home-column {
-  scroll-snap-align: start;
-  min-height: 150px;
-  padding: 12px 12px 8px;
+.home-pickup-card.home-pickup-card {
+  height: 100%;
+  padding: 0;
   border-radius: 16px;
   background: var(--base);
+  box-shadow: none;
+  color: var(--text-muted);
 }
-.home-today:not(.home-glance) .home-stack .home-list { margin: 0 -4px; }
-.home-today:not(.home-glance) .home-stack .home-item { padding: 7px 6px; }
+.home-pickup-card > button,
+.home-pickup-card > div {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  padding: 6px 6px 12px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  text-align: left;
+  transition: background .2s;
+}
+.home-pickup-card > button:not(:disabled):hover { background: var(--hover); }
+.home-pickup-thumb {
+  display: grid;
+  height: 84px;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--border-quiet);
+  color: var(--text-muted);
+}
+.home-pickup-thumb svg { width: 22px; height: 22px; }
+.home-pickup-thumb .workspace-file-kind { transform: scale(1.25); }
+.home-pickup-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 0 6px;
+}
+.home-pickup-meta b {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-pickup-meta small {
+  overflow: hidden;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 800px) {
+  .home-centred { width: calc(100% - 32px); margin-top: 48px; }
+  .home-hello h2 { font-size: 26px; }
+  .home-pair { grid-template-columns: minmax(0, 1fr); }
+  .home-pickup-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

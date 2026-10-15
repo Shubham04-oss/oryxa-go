@@ -374,10 +374,9 @@ describe("WorkspaceShell navigation", () => {
       { kind: "new", message: "Start from Home" }
     )
     fireEvent.click(
-      within(screen.getByRole("region", { name: "Conversations" })).getByRole(
-        "button",
-        { name: "New chat" }
-      )
+      within(
+        screen.getByRole("region", { name: "Pick up where you left off" })
+      ).getByRole("button", { name: "New chat" })
     )
     expect(request).toHaveBeenLastCalledWith(
       { organizationId: "org_sim", userId: viewerId },
@@ -389,7 +388,7 @@ describe("WorkspaceShell navigation", () => {
       { target: { value: "Still composing on Home" } }
     )
     const all = within(
-      screen.getByRole("region", { name: "Conversations" })
+      screen.getByRole("region", { name: "Pick up where you left off" })
     ).getByRole("button", { name: "All conversations" })
     fireEvent.click(all)
     const history = await screen.findByRole("button", { name: "History" })

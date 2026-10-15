@@ -242,7 +242,7 @@ it("shows the same chats at a glance in the agent panel, without its own compose
   expect(view.onOpenConversation).toHaveBeenCalledWith("one")
 })
 
-it("keeps the composer under Your agent and three titled recent chats under Conversations, opening exact chats and history", async () => {
+it("keeps three titled recent chats under Conversations at a glance, opening exact chats and history", async () => {
   stubApi({
     [`${path}/threads`]: {
       threads: [
@@ -255,13 +255,7 @@ it("keeps the composer under Your agent and three titled recent chats under Conv
       ],
     },
   })
-  const view = renderHome()
-  const agent = screen.getByRole("region", { name: "Your agent" })
-  expect(
-    within(agent).getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Start a new conversation",
-    }).placeholder
-  ).toBe("Ask your agent…")
+  const view = renderHome({ variant: "glance" })
   const conversations = screen.getByRole("region", { name: "Conversations" })
   await within(conversations).findByRole("button", { name: /First/ })
   expect(
@@ -289,16 +283,54 @@ it("keeps the composer under Your agent and three titled recent chats under Conv
     })
   )
   expect(view.onNewChat).toHaveBeenLastCalledWith()
-  fireEvent.change(within(agent).getByRole<HTMLTextAreaElement>("textbox"), {
-    target: { value: "  Check the launch plan  " },
+})
+
+it("asks Krude from the large composer in the middle of the page, starting a new chat", async () => {
+  stubApi()
+  const view = renderHome()
+  const agent = screen.getByRole("region", { name: "Your agent" })
+  const field = within(agent).getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Start a new conversation",
   })
+  expect(field.placeholder).toBe("Ask Krude anything")
+  fireEvent.change(field, { target: { value: "  Check the launch plan  " } })
   fireEvent.click(
     within(agent).getByRole<HTMLButtonElement>("button", {
       name: "Send message",
     })
   )
   expect(view.onNewChat).toHaveBeenLastCalledWith("Check the launch plan")
-  expect(within(agent).getByRole<HTMLTextAreaElement>("textbox").value).toBe("")
+  expect(field.value).toBe("")
+  // A suggestion asks at once, in a new chat.
+  fireEvent.click(
+    within(agent).getByRole("button", { name: "What needs me today?" })
+  )
+  expect(view.onNewChat).toHaveBeenLastCalledWith("What needs me today?")
+})
+
+it("suggests catching up only on an app the member really connected", async () => {
+  stubApi()
+  const first = renderHome()
+  await screen.findByText("Nothing needs you right now.")
+  expect(screen.queryByRole("button", { name: /Catch me up/ })).toBeNull()
+  // Without a connected tool, While you were away offers to connect one.
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Connect your tools" })
+  )
+  expect(first.onOpenTools).toHaveBeenCalledOnce()
+  first.unmount()
+
+  stubApi({
+    [`${path}/apps/connections`]: {
+      connections: [connection("linear", "expired"), connection("github")],
+    },
+  })
+  const view = renderHome()
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Catch me up on GitHub" })
+  )
+  expect(view.onNewChat).toHaveBeenLastCalledWith("Catch me up on GitHub")
+  expect(screen.queryByRole("button", { name: /Linear/ })).toBeNull()
 })
 
 it("pins a running open chat once and keeps starting chat truthful until an ID exists", async () => {
@@ -313,6 +345,7 @@ it("pins a running open chat once and keeps starting chat truthful until an ID e
     },
   })
   const view = renderHome({
+    variant: "glance",
     primaryChatActivity: { state: "running", threadId: "open" },
   })
   const recents = await screen.findByRole("list", {
@@ -343,7 +376,7 @@ it("greets by the member's clock and first name", () => {
   expect(greeting(at(9), "ada@northstar.io")).toBe("Good morning")
 })
 
-it("lays My workspace out as the greeting, teammates, the composer, then one row from your apps through recurring work", async () => {
+it("lays My workspace out on one axis: greeting, composer, Needs you beside While you were away, then Pick up", async () => {
   stubApi()
   const view = renderHome({ viewerName: "Ada Brennan" })
   await screen.findByText("Nothing needs you right now.")
@@ -351,34 +384,115 @@ it("lays My workspace out as the greeting, teammates, the composer, then one row
     screen.getAllByRole("heading", { level: 2 }).map((node) => node.textContent)
   ).toEqual([
     expect.stringMatching(/^Good (morning|afternoon|evening), Ada$/),
-    "Teammates",
+    "Needs you",
+    "While you were away",
     "Pick up where you left off",
-    "From your apps",
-    "Conversations",
-    "Knowledge",
-    "Files",
-    "Recurring work",
   ])
-  const row = screen.getByRole("region", { name: "Pick up where you left off" })
-  for (const name of ["From your apps", "Conversations", "Recurring work"])
-    expect(within(row).getByRole("region", { name })).toBeTruthy()
   const order = [
-    screen.getByRole("region", { name: "Teammates" }),
     screen.getByRole("region", { name: "Your agent" }),
-    row,
+    screen.getByRole("region", { name: "Needs you" }),
+    screen.getByRole("region", { name: "While you were away" }),
+    screen.getByRole("region", { name: "Pick up where you left off" }),
   ]
-  expect(
-    order[0].compareDocumentPosition(order[1]) &
-      Node.DOCUMENT_POSITION_FOLLOWING
-  ).toBeTruthy()
-  expect(
-    order[1].compareDocumentPosition(order[2]) &
-      Node.DOCUMENT_POSITION_FOLLOWING
-  ).toBeTruthy()
+  for (let i = 1; i < order.length; i++)
+    expect(
+      order[i - 1].compareDocumentPosition(order[i]) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  // The two tiles sit side by side, as a pair.
+  expect(order[1].parentElement).toBe(order[2].parentElement)
+  // The page is decluttered: no tool pills, stack or setup line.
+  expect(screen.queryByLabelText("Your tools")).toBeNull()
+  expect(screen.queryByRole("region", { name: "Recurring work" })).toBeNull()
   expect(view.container.querySelector(".home-card")).toBeNull()
   expect(
     screen.queryByText(/Your requests|shared answers|You asked/)
   ).toBeNull()
+  // No parley runs (the teamspaces read is not served here): no pill.
+  expect(screen.queryByRole("status", { name: "Live parley" })).toBeNull()
+})
+
+it("says how many things need the member and what Krude handled for them today", async () => {
+  stubApi({
+    [`${path}/agent-requests/inbox`]: {
+      requests: [
+        request({ id: "waiting", task: "Waiting on you" }),
+        ...["a", "b"].map((id) =>
+          request({
+            id,
+            status: "completed",
+            decision: {
+              decision: "approved",
+              message: "Approved by their agent.",
+              allowed_tools: [],
+              granted_permissions: [],
+              decided_at: new Date(NOW - 60_000).toISOString(),
+              decided_by: { kind: "agent" },
+            },
+          })
+        ),
+      ],
+    },
+  })
+  renderHome({ viewerName: "Ada" })
+  expect(
+    await screen.findByText("1 thing needs you. Krude handled 2 more today.")
+  ).toBeTruthy()
+  expect(screen.getByLabelText("1 waiting").textContent).toBe("1")
+})
+
+it("orders Pick up where you left off by what was touched last, four at most", async () => {
+  const artifact = (id: string, at: string, name: string) =>
+    ({
+      type: "artifact",
+      id,
+      at,
+      author: "Krude",
+      artifact: name,
+      version: 1,
+    }) as Item
+  stubApi({
+    [`${path}/threads`]: {
+      threads: [
+        { ...chat("one", "Launch plan"), updated_at: minutesAgo(30) },
+        { ...chat("two", "Old chat"), updated_at: minutesAgo(900) },
+      ],
+    },
+    [`${path}/threads/one`]: {
+      ...chat("one", "Launch plan"),
+      items: [artifact("e1", minutesAgo(5), "deck.pptx")],
+      pending_confirmations: [],
+    },
+    [`${path}/corpora`]: {
+      corpora: [
+        { ...base, id: "k1", name: "Handbook", updated_at: minutesAgo(60) },
+        { ...base, id: "k2", name: "Archive", updated_at: minutesAgo(2000) },
+      ],
+    },
+  })
+  const view = renderHome()
+  const row = screen.getByRole("region", { name: "Pick up where you left off" })
+  await within(row).findByText("deck.pptx")
+  expect(
+    within(row)
+      .getAllByRole("listitem")
+      .map((card) => card.textContent)
+  ).toEqual([
+    "PPTXdeck.pptxLaunch plan · 5 min ago",
+    "Launch planChat · 30 min ago",
+    "HandbookLibrary · 1 document",
+    "Old chatChat · 15 h ago",
+  ])
+  fireEvent.click(within(row).getByRole("button", { name: /deck\.pptx/ }))
+  expect(view.onOpenConversation).toHaveBeenLastCalledWith("one")
+  fireEvent.click(within(row).getByRole("button", { name: /Handbook/ }))
+  expect(view.onOpenKnowledge).toHaveBeenCalledOnce()
+  fireEvent.click(within(row).getByRole("button", { name: "Open Library" }))
+  expect(view.onOpenKnowledge).toHaveBeenCalledTimes(2)
+  fireEvent.click(
+    within(row).getByRole("button", { name: "All conversations" })
+  )
+  expect(view.onOpenAgent).toHaveBeenCalledOnce()
 })
 
 it("lists waiting teammate requests as rows with one action that opens that exact request in Requests", async () => {
@@ -507,7 +621,7 @@ it("keeps only this member's unexpired owner decisions and held reviews; bounds 
   expect(screen.queryByText("Expired request")).toBeNull()
   expect(screen.getByText("1 more waiting in Requests.")).toBeTruthy()
   fireEvent.click(
-    within(screen.getByRole("region", { name: "Teammates" })).getByRole(
+    within(screen.getByRole("region", { name: "Needs you" })).getByRole(
       "button",
       { name: "All requests" }
     )
@@ -576,7 +690,7 @@ it("reads briefs from the wake-up thread with their apps, newest first, and open
     ]),
   })
   const view = renderHome()
-  const apps = screen.getByRole("region", { name: "From your apps" })
+  const apps = screen.getByRole("region", { name: "While you were away" })
   await within(apps).findByText("The Launch page changed!")
   const rows = within(apps).getAllByRole("listitem")
   expect(rows.map((row) => row.textContent)).toEqual([
@@ -594,7 +708,7 @@ it("reads briefs from the wake-up thread with their apps, newest first, and open
 
 it("says what lands under From your apps before there are briefs", async () => {
   stubApi()
-  const first = renderHome()
+  const first = renderHome({ variant: "glance" })
   const apps = screen.getByRole("region", { name: "From your apps" })
   expect(
     await within(apps).findByText("Connect a tool and its news lands here.")
@@ -610,54 +724,13 @@ it("says what lands under From your apps before there are briefs", async () => {
       said("a1", minutesAgo(4), "Hi there."),
     ]),
   })
-  const view = renderHome()
+  const view = renderHome({ variant: "glance" })
   const updates = screen.getByRole("region", { name: "From your apps" })
   expect(
     await within(updates).findByText("No updates from your apps yet.")
   ).toBeTruthy()
   fireEvent.click(within(updates).getByRole("button", { name: "All updates" }))
   expect(view.onOpenConversation).toHaveBeenCalledWith("wake")
-})
-
-it("lists only the member's active app connections as tools, each once, with + Connect opening Tools", async () => {
-  stubApi({
-    [`${path}/apps/connections`]: {
-      connections: [
-        connection("github"),
-        connection("linear", "expired"),
-        connection("github", "active", "github-2"),
-        connection("notion"),
-        connection("slack", "pending"),
-      ],
-    },
-  })
-  const view = renderHome()
-  const tools = await screen.findByLabelText("Your tools")
-  await within(tools).findByRole("button", { name: "+ Connect" })
-  expect(
-    within(tools)
-      .getAllByRole("button")
-      .map((button) => button.textContent)
-  ).toEqual(["GitHub", "Notion", "+ Connect"])
-  fireEvent.click(within(tools).getByRole("button", { name: "+ Connect" }))
-  expect(view.onOpenTools).toHaveBeenCalledOnce()
-  fireEvent.click(within(tools).getByRole("button", { name: "GitHub" }))
-  expect(view.onOpenTools).toHaveBeenCalledTimes(2)
-})
-
-it("offers to connect tools when none is active", async () => {
-  stubApi({
-    [`${path}/apps/connections`]: {
-      connections: [connection("linear", "expired")],
-    },
-  })
-  const view = renderHome()
-  const tools = await screen.findByLabelText("Your tools")
-  fireEvent.click(
-    await within(tools).findByRole("button", { name: "Connect your tools" })
-  )
-  expect(view.onOpenTools).toHaveBeenCalledOnce()
-  expect(within(tools).getAllByRole("button")).toHaveLength(1)
 })
 
 it("shows the three most recently updated knowledge bases, and All opens Knowledge", async () => {
@@ -682,7 +755,7 @@ it("shows the three most recently updated knowledge bases, and All opens Knowled
       ],
     },
   })
-  const view = renderHome()
+  const view = renderHome({ variant: "glance" })
   const knowledge = screen.getByRole("region", { name: "Knowledge" })
   await within(knowledge).findByText("Newest")
   expect(
@@ -702,7 +775,7 @@ it("shows the three most recently updated knowledge bases, and All opens Knowled
 
 it("invites knowledge when there is none to look up", async () => {
   stubApi({ [`${path}/corpora`]: { corpora: [] } })
-  const view = renderHome()
+  const view = renderHome({ variant: "glance" })
   const knowledge = screen.getByRole("region", { name: "Knowledge" })
   await within(knowledge).findByText(/Nothing to look up yet\./)
   fireEvent.click(
@@ -737,7 +810,7 @@ it("lists the files the agent saved in recent chats, latest version once, newest
       pending_confirmations: [],
     },
   })
-  const view = renderHome()
+  const view = renderHome({ variant: "glance" })
   const files = screen.getByRole("region", { name: "Files" })
   await within(files).findByText("notes.md")
   expect(
@@ -778,7 +851,7 @@ it("shows the viewer's own recurring work with its schedule in words", async () 
       ],
     },
   })
-  renderHome()
+  renderHome({ variant: "glance" })
   const recurring = screen.getByRole("region", { name: "Recurring work" })
   await within(recurring).findByText("Weekday digest")
   expect(
@@ -794,7 +867,7 @@ it("shows the viewer's own recurring work with its schedule in words", async () 
 
 it("says when nothing runs on a schedule", async () => {
   stubApi()
-  renderHome()
+  renderHome({ variant: "glance" })
   const recurring = screen.getByRole("region", { name: "Recurring work" })
   expect(
     await within(recurring).findByText("Nothing runs on a schedule yet.")
@@ -810,7 +883,7 @@ it("lists every unfinished setup step on one Finish setup line, each opening its
     [`${path}/corpora`]: { corpora: [{ ...base, document_count: 0 }] },
     "/v1/agent-grant": { granted: false },
   })
-  const view = renderHome()
+  const view = renderHome({ variant: "glance" })
   const setup = await screen.findByLabelText("Finish setup")
   await within(setup).findByRole("button", { name: "Connect Slack" })
   await within(setup).findByRole("button", {
@@ -834,7 +907,7 @@ it("lists every unfinished setup step on one Finish setup line, each opening its
 
 it("reads apps, tools and recurring work, and never sent requests or shared activity", async () => {
   const go = stubApi()
-  renderHome()
+  renderHome({ variant: "glance" })
   await screen.findByText("Nothing needs you right now.")
   await screen.findByText("Nothing runs on a schedule yet.")
   const paths = go.calls.map((call) => call.url.pathname)
@@ -1030,7 +1103,7 @@ it("gives quiet complete empty Home exactly once, with only unfinished setup", a
     [`${path}/apps/slack/status`]: { status: "ended", can_manage: false },
     "/v1/agent-grant": { granted: false },
   })
-  renderHome()
+  renderHome({ variant: "glance" })
   expect(
     await screen.findAllByText("Nothing needs you right now.")
   ).toHaveLength(1)
@@ -1145,7 +1218,7 @@ it("makes every live access page reachable without pretending a first page is co
   renderHome()
   await screen.findAllByText(/can ask your agent/)
   const section = screen.getByRole("list", { name: "Needs you" })
-  const teammates = screen.getByRole("region", { name: "Teammates" })
+  const teammates = screen.getByRole("region", { name: "Needs you" })
   expect(within(section).getAllByRole("listitem")).toHaveLength(3)
   fireEvent.click(
     within(teammates).getByRole<HTMLButtonElement>("button", {
@@ -1287,8 +1360,10 @@ it.each([
     name: "your tools",
     route: `${path}/apps/connections`,
     seed: { connections: [connection("github")] },
-    privateText: "GitHub",
+    // Tools only feed a suggestion on the page: it goes, without a notice.
+    privateText: "Catch me up on GitHub",
     key: appsQueryKey(ORG),
+    notice: false,
   },
   {
     name: "knowledge bases",
@@ -1303,25 +1378,39 @@ it.each([
     seed: { workflows: [workflow("Private weekly digest")] },
     privateText: "Private weekly digest",
     key: agentKeys.workflowList(ORG),
+    // Recurring work is at a glance only, where there is no composer.
+    glance: true,
   },
 ])(
   "removes private $name after a refused refresh, preserving the unsent composer",
-  async ({ name, route, seed, privateText, key, needsCheck, extra }) => {
+  async ({
+    name,
+    route,
+    seed,
+    privateText,
+    key,
+    needsCheck,
+    extra,
+    notice = true,
+    glance = false,
+  }) => {
     let deny = false
     stubApi({ ...extra, [route]: () => (deny ? refused() : json(seed)) })
-    const view = renderHome()
+    const view = renderHome(glance ? { variant: "glance" } : {})
     await screen.findByText(privateText)
-    const field = screen.getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Start a new conversation",
-    })
-    fireEvent.change(field, { target: { value: "Keep this draft" } })
+    const field = glance
+      ? null
+      : screen.getByRole<HTMLTextAreaElement>("textbox", {
+          name: "Start a new conversation",
+        })
+    if (field) fireEvent.change(field, { target: { value: "Keep this draft" } })
     deny = true
     await act(async () => {
       await view.client.invalidateQueries({ queryKey: key })
     })
-    await screen.findByText(`Couldn’t load ${name}.`)
-    expect(screen.queryByText(privateText)).toBeNull()
-    expect(field.value).toBe("Keep this draft")
+    if (notice) await screen.findByText(`Couldn’t load ${name}.`)
+    await waitFor(() => expect(screen.queryByText(privateText)).toBeNull())
+    if (field) expect(field.value).toBe("Keep this draft")
     // A read that decides whether anything needs the member never lets a
     // refusal pass for quiet.
     if (needsCheck)
@@ -1346,17 +1435,13 @@ it.each([
     key: ["auth", "agent-grant"],
   },
 ])(
-  "drops the setup step a refused $name refresh leaves unknown, quietly, preserving the unsent composer",
+  "drops the setup step a refused $name refresh leaves unknown, quietly, at a glance",
   async ({ route, seed, step, key }) => {
     let deny = false
     stubApi({ [route]: () => (deny ? refused() : json(seed)) })
-    const view = renderHome()
+    const view = renderHome({ variant: "glance" })
     const setup = await screen.findByLabelText("Finish setup")
     expect(within(setup).getByRole("button", { name: step })).toBeTruthy()
-    const field = screen.getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Start a new conversation",
-    })
-    fireEvent.change(field, { target: { value: "Keep this draft" } })
     deny = true
     await act(async () => {
       await view.client.invalidateQueries({ queryKey: key })
@@ -1366,7 +1451,6 @@ it.each([
     )
     expect(screen.queryByLabelText("Finish setup")).toBeNull()
     expect(screen.queryByText(/Couldn’t load|not available here/)).toBeNull()
-    expect(field.value).toBe("Keep this draft")
     expect(screen.queryByText("private diagnostic")).toBeNull()
   }
 )

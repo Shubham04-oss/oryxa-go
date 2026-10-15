@@ -637,6 +637,7 @@ function WorkspaceShellContent({
     onOpenAgent: openHomeHistory,
     onOpenTools: () => navigateFromHome("home", "tools"),
     onOpenKnowledge: () => navigateFromHome("home", "knowledge"),
+    onOpenTeamspace: openTeamspace,
     onOpenSlack: () => {
       setSettingsPage("slack")
       setSettingsOpen(true)
