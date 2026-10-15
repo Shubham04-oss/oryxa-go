@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings: organisation</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f32f190865fef0a2e9f8e77cc5498886">
+<link rel="stylesheet" href="/_blob/6f45e0000cdc5d3b68022ff8772ba543">
+<link rel="stylesheet" href="/_blob/8fcfc97a611eed1a77ab799e995e95b4">
+<link rel="stylesheet" href="/_blob/7743306d36203a29330ca2062623300f">
+<link rel="stylesheet" href="/_blob/ec979927ac7a03464841432d3a3c8647">
+<link rel="stylesheet" href="/_blob/7f1c8e04043980095bbe8579a80b07f3">
+<link rel="stylesheet" href="/_blob/025a4b47209a2499891a8940fa4267b3">
+<link rel="stylesheet" href="/_blob/083214e58caff373f8c4d1a3d8313ba1">
+<link rel="stylesheet" href="/_blob/410b88033d344161c928828a7e5fb905">
+<link rel="stylesheet" href="/_blob/ce6e0619dbb034591877238ebf104282">
+<link rel="stylesheet" href="/_blob/51516eac9bc0c7b27f4890ce3e6ba3d5">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@700&amp;family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="background: var(--base)">
+<div class="nx-app" style="font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif">
+  <dc-import name="Rail" active="settings" live="{{no}}" hint-size="60px,100%"></dc-import>
+  <main class="nx-main" aria-label="Settings">
+    <header class="nx-head">
+      <div class="nx-crumbs"><strong>Settings</strong><span class="nx-sep">·</span><span>Northstar</span></div>
+      <div class="nx-head-actions"></div>
+    </header>
+    <div class="st">
+      <nav class="st-nav" aria-label="Settings"><span class="lib-h">You</span><div class="lib-col"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>Account</div><div class="lib-col"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>Your agent</div><div class="lib-col"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg>Notifications</div><span class="lib-h">Workspace</span><div class="lib-col is-active"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="20" x="4" y="2" rx="2" ry="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M12 6h.01"/><path d="M12 10h.01"/><path d="M12 14h.01"/><path d="M16 10h.01"/><path d="M16 14h.01"/><path d="M8 10h.01"/><path d="M8 14h.01"/></svg>Organisation</div><div class="lib-col"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/></svg>People</div><div class="lib-col"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>Teams</div><div class="lib-col"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>Billing</div><span class="lib-h">Connections</span><div class="lib-col"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>Tool access</div><div class="lib-col"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="3" height="8" x="13" y="2" rx="1.5"/><path d="M19 8.5V10h1.5A1.5 1.5 0 1 0 19 8.5"/><rect width="3" height="8" x="8" y="14" rx="1.5"/><path d="M5 15.5V14H3.5A1.5 1.5 0 1 0 5 15.5"/><rect width="8" height="3" x="14" y="13" rx="1.5"/><path d="M15.5 19H14v1.5a1.5 1.5 0 1 0 1.5-1.5"/><rect width="8" height="3" x="2" y="8" rx="1.5"/><path d="M8.5 5H10V3.5A1.5 1.5 0 1 0 8.5 5"/></svg>Slack</div><div class="lib-col"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>Email</div></nav>
+      <section class="st-body"><div class="st-in"><h1>Organisation</h1><p class="st-sub">Northstar's name, address and where its data lives.</p>
+        <div class="st-group"><span>Workspace</span><div class="st-card">
+          <div class="st-row"><span class="sg-org-mark" style="display: grid; place-items: center; width: 44px; height: 44px; border-radius: 13px; background: #1c3350; color: #fff; font-size: 18px; font-weight: 700">N</span><span class="st-grow"><b>Northstar</b>Created 30 Sept 2026 by Ada</span><button class="rs-btn" type="button">Rename</button><button class="rs-btn" type="button">Change mark</button></div>
+          <div class="st-row"><span class="st-grow"><b>Address</b>Where people sign in</span><span class="st-mono">northstar.oryxa.in</span></div>
+          <div class="st-row"><span class="st-grow"><b>Allowed email domains</b>People with these addresses can join without an invitation.</span><span class="st-mono">northstar.io</span><button class="rs-btn" type="button">Edit</button></div>
+        </div></div>
+        <div class="st-group"><span>Data</span><div class="st-card">
+          <div class="st-row"><span class="st-grow"><b>Data region</b>Files, chats and recordings are stored here. Backups stay in the same region.</span><span class="st-val">EU · Frankfurt</span></div>
+          <div class="st-row"><span class="st-grow"><b>Keep parley recordings</b>Older recordings and transcripts are deleted.</span><span style="display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 9px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--border-quiet); font-size: 12px; font-weight: 600">90 days <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
+          <div class="st-row"><span class="st-grow"><b>Export everything</b>A copy of Northstar's files, chats and settings, as a zip.</span><button class="rs-btn" type="button">Request export</button></div>
+        </div></div>
+        <div class="st-group"><span>Danger zone</span><div class="st-card">
+          <div class="st-row"><span class="st-grow"><b class="st-danger">Delete Northstar</b>Everything is removed after 30 days. Only owners can do this.</span><button class="rs-btn is-danger" type="button">Delete workspace</button></div>
+        </div></div></div></section>
+    </div>
+  </main>
+  <span style="width: 8px"></span>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { yes: true, no: false, themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : 'dark' };
+  }
+}
+</script>
+</body>
+</html>

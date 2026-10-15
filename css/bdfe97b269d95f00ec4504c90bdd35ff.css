@@ -1,0 +1,56 @@
+/* My workspace v3b (15 Oct): one centred column on an axis. The founder asked
+   for the composer in the middle and a symmetric, decluttered page. Both
+   sidebars start as rails (DESIGN.md: Home opens with both rails collapsed). */
+.c3 { position: relative; z-index: 1; flex: 1; min-height: 0; overflow: auto; }
+.c3-in { max-width: 780px; margin: 0 auto; padding: 64px 32px 48px; display: flex; flex-direction: column; align-items: center; gap: 22px; box-sizing: border-box; }
+.c3-live { display: inline-flex; align-items: center; gap: 10px; height: 34px; padding: 0 5px 0 14px; border-radius: 999px; background: var(--tone-263a2e); box-shadow: 0 0 0 1px var(--tone-385c49); color: var(--tone-b9e6c6); font-size: 12.5px; font-weight: 500; }
+.c3-live b { font-weight: 600; }
+.c3-live .w3-faces img { width: 20px; height: 20px; box-shadow: 0 0 0 2px var(--tone-263a2e); }
+.c3-live .w3-btn { height: 26px; padding: 0 11px; font-size: 12px; background: var(--tone-385c49); box-shadow: none; color: var(--tone-b9e6c6); }
+.c3-hello { text-align: center; }
+.c3-hello h1 { margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -.035em; line-height: 1.1; }
+.c3-hello p { margin: 10px auto 0; max-width: 46ch; color: var(--text-muted); font-size: 14px; line-height: 1.5; text-wrap: balance; }
+.c3-compose { display: flex; align-items: center; gap: 6px; width: 100%; height: 60px; padding: 0 9px 0 10px; border-radius: 999px; background: var(--canvas); box-shadow: 0 0 0 1px var(--border-quiet), 0 6px 22px var(--shade-66); color: var(--text-muted); font-size: 15px; box-sizing: border-box; }
+.c3-compose .c3-ph { flex: 1; padding-left: 4px; }
+.c3-compose kbd { display: inline-grid; place-items: center; height: 22px; padding: 0 7px; border-radius: 6px; background: var(--base); color: var(--text-muted); font: inherit; font-size: 11px; font-weight: 600; }
+.c3-icon { display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); cursor: pointer; }
+.c3-icon:hover { background: var(--hover); color: var(--text); }
+.c3-send { display: grid; place-items: center; width: 42px; height: 42px; border: 0; border-radius: 50%; background: var(--text); color: var(--canvas); cursor: pointer; }
+.c3-chips { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; margin-top: -8px; }
+.c3-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 100%; margin-top: 14px; }
+.c3-tile { display: flex; flex-direction: column; padding: 6px; border-radius: 18px; background: var(--canvas); min-width: 0; }
+.c3-tile-h { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.c3-tile-h .w3-grow { flex: 1; }
+.c3-tile-h a { color: var(--text-muted); font-weight: 500; text-decoration: none; }
+.c3-tile-h a:hover { color: var(--text); }
+.c3-tile .w3-row { min-height: 56px; }
+.c3-tile .w3-row .w3-btn { height: 28px; padding: 0 11px; font-size: 12px; flex: none; }
+.c3-sec { display: flex; flex-direction: column; gap: 10px; width: 100%; margin-top: 10px; }
+.c3-sec-h { display: flex; align-items: center; padding: 0 4px; color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.c3-sec-h .w3-grow { flex: 1; }
+.c3-sec-h a { color: var(--text-muted); font-weight: 500; text-decoration: none; }
+.c3-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.c3-card { display: flex; flex-direction: column; gap: 10px; padding: 6px 6px 12px; border-radius: 16px; background: var(--canvas); color: var(--text-muted); font-size: 11.5px; text-decoration: none; transition: background .2s; }
+.c3-card:hover { background: var(--hover); }
+.c3-thumb { position: relative; height: 84px; border-radius: 11px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--border-quiet); padding: 11px 12px; box-sizing: border-box; }
+.c3-thumb.is-doc { background: #fbfbfa; }
+.c3-thumb.is-doc i { display: block; height: 4px; margin-bottom: 6px; border-radius: 2px; background: #e2e2de; }
+.c3-thumb.is-doc i:first-child { width: 55%; height: 6px; background: #9a9a96; margin-bottom: 9px; }
+.c3-thumb.is-doc i.hl { width: 70%; background: #f3d58a; }
+.c3-thumb.is-slide { background: #1b1714; color: #f4efe9; font-size: 11px; font-weight: 700; line-height: 1.3; }
+.c3-thumb.is-slide i { display: block; width: 36%; height: 3px; margin-bottom: 8px; border-radius: 2px; background: #d98e62; }
+.c3-thumb.is-sheet { background: #fbfbfa; background-image: linear-gradient(#e6e6e2 1px, transparent 1px), linear-gradient(90deg, #e6e6e2 1px, transparent 1px); background-size: 100% 14px, 34px 100%; }
+.c3-thumb.is-web { background: #fbfbfa; }
+.c3-thumb.is-web i { display: block; height: 4px; margin-bottom: 6px; border-radius: 2px; background: #e2e2de; }
+.c3-thumb.is-web i:first-child { width: 40%; height: 6px; background: #9a9a96; }
+.c3-thumb .c3-working { position: absolute; left: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border-radius: 999px; background: rgba(17,17,17,.82); color: #b9e6c6; font-size: 10.5px; font-weight: 600; }
+.c3-meta { display: flex; align-items: center; gap: 8px; padding: 0 6px; min-width: 0; }
+.c3-meta img { width: 20px; height: 20px; border-radius: 50%; flex: none; }
+.c3-meta .w3-line b { font-size: 12.5px; }
+/* the agent sidebar, collapsed: a rail that mirrors the left one */
+.c3-rail { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 60px; padding: 8px 0; box-sizing: border-box; }
+.c3-rail-group { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; border-radius: 14px; background: var(--canvas); }
+.c3-rail button { position: relative; display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 11px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.c3-rail button:hover { background: var(--hover); color: var(--text); }
+.c3-rail button img { width: 26px; height: 26px; border-radius: 50%; }
+.c3-rail .c3-badge { position: absolute; top: 3px; right: 3px; display: grid; place-items: center; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; background: var(--text); color: var(--canvas); font-size: 9.5px; font-weight: 700; box-sizing: border-box; }

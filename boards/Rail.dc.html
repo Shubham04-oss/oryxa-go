@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sidebar, collapsed</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f32f190865fef0a2e9f8e77cc5498886">
+<link rel="stylesheet" href="/_blob/6f45e0000cdc5d3b68022ff8772ba543">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@700&amp;family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<nav class="nx-rail" aria-label="Workspace" style="font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; color: var(--text); background: var(--base); height: 100dvh">
+  <button class="nx-item" type="button" aria-label="Expand sidebar · Northstar"><span class="nx-org-mark" aria-hidden="true">N</span></button>
+  <button class="nx-item" type="button" aria-label="Search or jump to, Command K"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg></button>
+  <div class="nx-rail-group"><a class="nx-item {{a.today}}" href="#today" aria-label="My workspace"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg></a>
+  <a class="nx-item {{a.requests}}" href="#requests" aria-label="Requests, 3 waiting"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span class="nx-badge" aria-hidden="true">3</span></a>
+  <a class="nx-item {{a.chats}}" href="#chats" aria-label="Chats with Krude"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg></a></div>
+  <div class="nx-rail-group"><a class="nx-item {{a.eu}}" href="#eu-launch" aria-label="EU launch"><svg class="nx-planet" style="width: 22px; height: 22px" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="32" fill="#3e2936"/><circle cx="32" cy="32" r="17" fill="#dc849d"/><circle cx="26" cy="26" r="7" fill="#ffb5b3" opacity=".7"/></svg><sc-if value="{{live}}" hint-placeholder-val="{{false}}"><span class="nx-live-dot" aria-label="Parley live"></span></sc-if></a>
+  <a class="nx-item {{a.sales}}" href="#sales" aria-label="Sales"><svg class="nx-planet" style="width: 22px; height: 22px" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="32" fill="#23324b"/><circle cx="32" cy="32" r="17" fill="#849fe1"/><circle cx="26" cy="26" r="7" fill="#b7cbff" opacity=".7"/></svg></a></div>
+  <div class="nx-rail-group"><a class="nx-item {{a.priya}}" href="#priya" aria-label="Priya Shah, 2 unread"><img class="nx-av" style="width: 24px; height: 24px" alt="" src="/_blob/0177ed8ec461e9d6e02efb051320cb58"><span class="nx-badge" aria-hidden="true">2</span></a>
+  <a class="nx-item {{a.rohan}}" href="#rohan" aria-label="Rohan Mehta, 1 unread"><img class="nx-av" style="width: 24px; height: 24px" alt="" src="/_blob/9e1491933c13feda7c1f7a1841e49db0"><span class="nx-badge" aria-hidden="true">1</span></a></div>
+  <div class="nx-rail-group"><a class="nx-item {{a.krude}}" href="#krude" aria-label="Krude, your agent"><img class="nx-av" style="width: 24px; height: 24px" alt="" src="/_blob/a83a89cb62825033a2c8663412697fe2"></a>
+  <a class="nx-item {{a.knowledge}}" href="#knowledge" aria-label="Library"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v16"/><path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z"/></svg></a></div>
+  <span style="flex: 1"></span>
+  <button class="nx-item" type="button" aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg></button>
+  <img alt="Ada Lovelace" src="/_blob/a14c0494a347b872dc9fa3ada6b82dd1" style="width: 30px; height: 30px; border-radius: 50%">
+</nav>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"active":{"editor":"enum","options":["today","requests","chats","eu","sales","priya","rohan","krude","knowledge"],"default":"today"},"live":{"editor":"boolean","default":false},"$preview":{"width":60,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const active = this.props.active ?? 'today';
+    const a = {};
+    ['today','requests','chats','eu','sales','priya','rohan','krude','knowledge'].forEach((k) => { a[k] = k === active ? 'is-active' : ''; });
+    return { a, live: !!this.props.live };
+  }
+}
+</script>
+</body>
+</html>

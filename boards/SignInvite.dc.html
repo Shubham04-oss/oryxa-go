@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Accept invitation</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f32f190865fef0a2e9f8e77cc5498886">
+<link rel="stylesheet" href="/_blob/6f45e0000cdc5d3b68022ff8772ba543">
+<link rel="stylesheet" href="/_blob/8fcfc97a611eed1a77ab799e995e95b4">
+<link rel="stylesheet" href="/_blob/7743306d36203a29330ca2062623300f">
+<link rel="stylesheet" href="/_blob/ec979927ac7a03464841432d3a3c8647">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@700&amp;family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{themeClass}}">
+<div class="sg">
+  <div class="sg-side">
+    <span class="sg-mark" aria-label="oryxa">oryxa<i>.</i></span>
+    <div class="sg-form" aria-label="Join your team">
+      <h1>Join your team</h1>
+      <p class="sg-sub">Your invitation is ready. Accept it to enter the workspace.</p>
+      <div class="sg-org">
+        <div class="sg-org-top"><span class="sg-org-mark">N</span><div><b>Northstar</b><small>12 people · 9 agents · 4 teamspaces</small></div></div>
+        <div class="sg-org-who"><span class="ts-faces"><img alt="" src="/_blob/f622cb1b08b3c2361d7aa6e797f0d2f3"><img alt="" src="/_blob/0177ed8ec461e9d6e02efb051320cb58"><img alt="" src="/_blob/9e1491933c13feda7c1f7a1841e49db0"><img alt="" src="/_blob/a861cf76529742228156025ea49ebb7c"></span><span>Raya, Priya, Rohan and 9 others</span></div>
+        <div class="sg-from"><img alt="" src="/_blob/f622cb1b08b3c2361d7aa6e797f0d2f3"><span><b style="color: var(--text)">Raya Patel</b> invited you to join as a member, with EU launch shared.</span></div>
+      </div>
+      <button class="sg-submit" type="button">Accept invitation</button>
+      <div class="sg-as"><img alt="" src="/_blob/a14c0494a347b872dc9fa3ada6b82dd1">Signed in as ada@northstar.io<a href="#signout">Use another account</a></div>
+    </div>
+    <div class="sg-foot"><span class="sg-grow">© 2026 oryxa</span><a href="#privacy">Privacy</a><a href="#terms">Terms</a></div>
+  </div>
+  <div class="sg-scene" style="background-image: url('/_blob/85cf8403fd50e7bbfc1f9db8bb27db6f')" role="img" aria-label="Painted scene">
+    
+    <div class="sg-line"><strong>Welcome to the harbour.</strong><span>Your crew is already here.</span></div>
+  </div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { yes: true, themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : 'dark' };
+  }
+}
+</script>
+</body>
+</html>

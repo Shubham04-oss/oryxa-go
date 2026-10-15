@@ -1,0 +1,78 @@
+/* Sign in (14 Oct): the form on the app's surface, a painted scene beside it as one tile. On a phone the scene
+   becomes a band at the top that fades into the surface, the same way pop-ups carry it. */
+.sg { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(420px, 1fr); gap: 0; height: 100dvh; min-height: 640px; background: var(--base); color: var(--text); font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; font-size: 13px; }
+.sg-side { display: flex; flex-direction: column; padding: 28px 40px; }
+.sg-mark { color: var(--text); font-family: Inter, sans-serif; font-weight: 700; font-size: 22px; letter-spacing: -.055em; }
+.sg-mark i { font-style: normal; color: #d98e62; }
+.sg-form { width: 100%; max-width: 360px; margin: auto; display: flex; flex-direction: column; gap: 14px; }
+.sg-form h1 { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -.02em; }
+.sg-form .sg-sub { margin: -6px 0 6px; color: var(--text-muted); font-size: 13.5px; line-height: 1.5; }
+.sg-google { position: relative; display: flex; align-items: center; justify-content: center; gap: 10px; height: 46px; border: 0; border-radius: 14px; background: var(--raised); box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66); color: var(--text); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.sg-last { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); padding: 2px 8px; border-radius: 999px; background: var(--tone-263a2e); color: var(--tone-b9e6c6); font-size: 10.5px; font-weight: 600; }
+.sg-or { display: flex; align-items: center; gap: 12px; color: var(--text-muted); font-size: 11.5px; }
+.sg-or::before, .sg-or::after { content: ""; flex: 1; height: 1px; background: var(--border-quiet); }
+.sg-field { display: flex; flex-direction: column; gap: 6px; }
+.sg-field label { display: flex; align-items: center; color: var(--text-soft); font-size: 12px; font-weight: 600; }
+.sg-field label a { margin-left: auto; color: var(--text-muted); font-weight: 500; text-decoration: none; }
+.sg-input { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 14px; box-sizing: border-box; border-radius: 12px; background: var(--canvas); box-shadow: inset 0 0 0 1px var(--border-quiet); color: var(--text); font-size: 13.5px; }
+.sg-input.is-focus { box-shadow: inset 0 0 0 1.5px var(--text), 0 0 0 4px var(--hover); }
+.sg-input .sg-ph { color: var(--text-muted); }
+.sg-input .sg-eye { margin-left: auto; color: var(--text-muted); }
+.sg-input .sg-caret { width: 1.5px; height: 18px; margin-left: -6px; background: var(--text); }
+.sg-meter { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.sg-meter i { height: 4px; border-radius: 2px; background: var(--hover); }
+.sg-meter i.on { background: #3f9d63; }
+.sg-hint { color: var(--text-muted); font-size: 11.5px; }
+.sg-submit { height: 46px; border: 0; border-radius: 14px; background: var(--text); color: var(--canvas); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.sg-alt { color: var(--text-muted); font-size: 12.5px; text-align: center; }
+.sg-alt a { color: var(--text); font-weight: 600; text-decoration: none; }
+.sg-foot { display: flex; gap: 16px; color: var(--text-muted); font-size: 11.5px; }
+.sg-foot a { color: inherit; text-decoration: none; }
+.sg-foot .sg-grow { flex: 1; }
+
+.sg-scene { order: -1; position: relative; margin: 12px 0 12px 12px; border-radius: 22px; background-size: cover; background-position: center; overflow: hidden; }
+.dark .sg-scene { filter: saturate(.92); }
+.sg-scene::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(10, 18, 30, 0) 50%, rgba(10, 18, 30, .55) 100%); }
+.sg-line { position: absolute; left: 36px; bottom: 34px; z-index: 1; color: #ffffff; }
+.sg-line strong { display: block; font-size: 30px; font-weight: 700; letter-spacing: -.02em; line-height: 1.15; text-shadow: 0 2px 18px rgba(0,0,0,.25); }
+.sg-line span { display: block; margin-top: 8px; color: rgba(255,255,255,.82); font-size: 13.5px; }
+.sg-glass { position: absolute; right: 28px; top: 28px; z-index: 1; display: flex; align-items: center; gap: 10px; padding: 10px 14px 10px 10px; border-radius: 16px; background: rgba(12, 20, 34, .34); box-shadow: inset 0 0 0 1px rgba(255,255,255,.22); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); color: #ffffff; font-size: 12px; }
+.sg-glass img { width: 30px; height: 30px; border-radius: 50%; }
+.sg-glass b { display: block; font-size: 12.5px; }
+.sg-glass span { color: rgba(255,255,255,.8); }
+
+/* Check your inbox */
+.sg-sent { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 18px; background: var(--raised); box-shadow: 0 0 0 1px var(--border-quiet), 0 4px 14px var(--shade-66); color: var(--text); }
+.sg-row { display: flex; gap: 8px; }
+.sg-row .sg-btn { flex: 1; }
+.sg-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 44px; border: 0; border-radius: 14px; background: var(--raised); box-shadow: 0 0 0 1px var(--border-quiet); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.sg-mail { padding: 2px 8px; border-radius: 8px; background: var(--hover); color: var(--text); font-weight: 600; }
+
+/* Phone */
+.sgm { width: 100%; min-height: 100dvh; display: flex; flex-direction: column; background: var(--base); color: var(--text); font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; font-size: 13px; }
+.sgm-band { position: relative; height: 300px; flex: none; background-size: cover; background-position: center 60%; -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%); mask-image: linear-gradient(to bottom, #000 55%, transparent 100%); }
+.dark .sgm-band { filter: brightness(.86) saturate(.92); }
+.sgm-band .sg-mark { position: absolute; left: 22px; top: 54px; color: #ffffff; text-shadow: 0 1px 8px rgba(0,0,0,.25); }
+.sgm .sg-form { margin: -44px 0 0; padding: 0 22px 24px; max-width: none; box-sizing: border-box; position: relative; }
+.sgm .sg-form h1 { font-size: 26px; }
+
+/* The rest of the auth pages */
+.sg-rules { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; color: var(--text-muted); font-size: 12px; }
+.sg-rules span { display: inline-flex; align-items: center; gap: 6px; }
+.sg-rules span.ok { color: var(--text-soft); }
+.sg-rules span.ok svg { color: #3f9d63; }
+.sg-notice { display: flex; gap: 10px; padding: 12px 14px; border-radius: 12px; background: var(--hover); color: var(--text-soft); font-size: 12.5px; line-height: 1.5; }
+.sg-notice svg { flex: none; margin-top: 1px; color: var(--text-muted); }
+.sg-sent.is-ok { background: var(--tone-263a2e); color: var(--tone-b9e6c6); box-shadow: none; }
+.sg-org { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 16px; background: var(--raised); box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66); }
+.sg-org-top { display: flex; align-items: center; gap: 12px; }
+.sg-org-mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 13px; background: #1c3350; color: #ffffff; font-size: 18px; font-weight: 700; }
+.sg-org-top b { display: block; font-size: 15px; }
+.sg-org-top small { color: var(--text-muted); font-size: 12px; }
+.sg-org-who { display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 12px; }
+.sg-org-who .ts-faces img { width: 22px; height: 22px; }
+.sg-from { display: flex; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border-quiet); color: var(--text-soft); font-size: 12.5px; line-height: 1.45; }
+.sg-from img { width: 28px; height: 28px; border-radius: 50%; }
+.sg-as { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
+.sg-as img { width: 20px; height: 20px; border-radius: 50%; }
+.sg-as a { margin-left: auto; color: var(--text); font-weight: 600; text-decoration: none; }

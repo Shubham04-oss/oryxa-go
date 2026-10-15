@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Onboarding: name your workspace</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f32f190865fef0a2e9f8e77cc5498886">
+<link rel="stylesheet" href="/_blob/6f45e0000cdc5d3b68022ff8772ba543">
+<link rel="stylesheet" href="/_blob/8fcfc97a611eed1a77ab799e995e95b4">
+<link rel="stylesheet" href="/_blob/7743306d36203a29330ca2062623300f">
+<link rel="stylesheet" href="/_blob/ec979927ac7a03464841432d3a3c8647">
+<link rel="stylesheet" href="/_blob/7f1c8e04043980095bbe8579a80b07f3">
+<link rel="stylesheet" href="/_blob/025a4b47209a2499891a8940fa4267b3">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@700&amp;family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{themeClass}}">
+<div class="sg ob">
+  <div class="sg-side">
+    <span class="sg-mark" aria-label="oryxa">oryxa<i>.</i></span>
+    <div class="sg-form" aria-label="Onboarding: name your workspace">
+      <div class="ob-steps" aria-label="Step 1 of 5"><span class="now">Workspace</span><span class="">Krude</span><span class="">Tools</span><span class="">Crew</span><span class="">Teamspace</span></div>
+      <h1>Make room for your work</h1>
+      <p class="sg-sub">Name the workspace your team and its agents will share. You can change it later.</p>
+      <div class="sg-field"><label>Workspace name</label><div class="sg-input is-focus">Northstar<span class="sg-caret" style="margin-left: 0"></span></div><span class="sg-hint">Your address will be northstar.oryxa.in</span></div>
+      <div class="sg-or">or</div>
+      <div class="ob-opt"><img alt="" src="/_blob/f622cb1b08b3c2361d7aa6e797f0d2f3" style="width: 30px; height: 30px; border-radius: 50%"><span class="ob-grow"><b>Raya invited you to Atlas Labs</b>Join their workspace instead.</span><button class="rs-btn" type="button">Join</button></div>
+      <div class="ob-nav"><span class="ob-grow"></span><button class="sg-submit" type="button">Continue</button></div>
+    </div>
+    <div class="sg-foot"><span class="sg-grow">© 2026 oryxa</span><a href="#privacy">Privacy</a><a href="#terms">Terms</a></div>
+  </div>
+  <div class="sg-scene" style="background-image: url('/_blob/85cf8403fd50e7bbfc1f9db8bb27db6f')" role="img" aria-label="Painted scene">
+    <div class="ob-preview" aria-label="Preview"><small>Your workspace</small>
+      <div class="ob-row"><span class="ob-mark">N</span><div><b>Northstar</b><span>northstar.oryxa.in · 1 person</span></div></div></div>
+    <div class="sg-line"><strong>Every crew needs a harbour.</strong><span>Yours is ready in a few seconds.</span></div>
+  </div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { yes: true, themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : 'dark' };
+  }
+}
+</script>
+</body>
+</html>

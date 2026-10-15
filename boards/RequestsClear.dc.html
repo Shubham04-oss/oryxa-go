@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Requests, all clear</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f32f190865fef0a2e9f8e77cc5498886">
+<link rel="stylesheet" href="/_blob/6f45e0000cdc5d3b68022ff8772ba543">
+<link rel="stylesheet" href="/_blob/8fcfc97a611eed1a77ab799e995e95b4">
+<link rel="stylesheet" href="/_blob/7743306d36203a29330ca2062623300f">
+<link rel="stylesheet" href="/_blob/ec979927ac7a03464841432d3a3c8647">
+<link rel="stylesheet" href="/_blob/7f1c8e04043980095bbe8579a80b07f3">
+<link rel="stylesheet" href="/_blob/025a4b47209a2499891a8940fa4267b3">
+<link rel="stylesheet" href="/_blob/083214e58caff373f8c4d1a3d8313ba1">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@700&amp;family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="background: var(--base)">
+<div class="nx-app" style="font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif">
+  <dc-import name="Rail" active="requests" live="{{no}}" hint-size="60px,100%"></dc-import>
+  <main class="nx-main" aria-label="Requests">
+    <header class="nx-head">
+      <div class="nx-crumbs"><strong>Requests</strong><span class="nx-sep">·</span><span>All clear</span></div>
+      <div class="nx-head-actions"></div>
+    </header>
+    <div class="rq">
+      <section class="ws-tile" aria-label="Requests">
+        <div class="rq-top"><div class="hd-seg" role="tablist"><button class="is-active" type="button">Inbox</button><button type="button">Sent</button><button type="button">Activity</button></div><span class="rq-grow"></span><button class="hd-btn is-quiet" type="button" aria-label="Search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg></button></div>
+        <div class="rq-filters"><span class="is-on">All</span><span><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><rect x="10" y="2" width="4" height="9" rx="2" fill="#36C5F0"/><rect x="13" y="10" width="9" height="4" rx="2" fill="#2EB67D"/><rect x="10" y="13" width="4" height="9" rx="2" fill="#ECB22E"/><rect x="2" y="10" width="9" height="4" rx="2" fill="#E01E5A"/></svg>Slack</span><span>oryxa</span></div>
+        <div class="rq-group">Waiting for you <b>0</b></div>
+        <div class="rq-list"></div>
+        <div class="rq-group">Earlier</div>
+        <div class="rq-list"><div class="rq-item is-done"><img alt="" src="/_blob/0177ed8ec461e9d6e02efb051320cb58"><div style="min-width: 0"><span class="rq-name">Priya Shah<small>· oryxa</small></span><p>Which region hosts the EU customer data?</p><span class="rq-tag ">Answered by Krude</span></div><time>6:00 PM</time></div><div class="rq-item is-done"><img alt="" src="/_blob/a861cf76529742228156025ea49ebb7c"><div style="min-width: 0"><span class="rq-name">Kenji Sato<small>· Slack</small></span><p>Are prices VAT-inclusive for consumers?</p><span class="rq-tag ">Answered by Krude</span></div><time>4:10 PM</time></div></div>
+      </section>
+      <div class="ts4-g" aria-hidden="true"><span></span></div>
+      <section class="ws-tile rq-calm" aria-label="All clear">
+        <div class="rq-calm-scene" style="background-image: url('/_blob/e488c320d85d63031817cefad7cde69d')" aria-hidden="true"></div>
+        <h2>Every ask answered.</h2>
+        <p>Nothing is waiting for you. Krude will flag the next one.</p>
+        <div class="rq-nums"><span><b>9</b>asks today</span><span><b>6</b>by Krude</span><span><b>3</b>by you</span><span><b>4 min</b>average wait</span></div>
+      </section>
+    </div>
+  </main>
+  <span style="width: 8px"></span>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { yes: true, no: false, themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : 'dark' };
+  }
+}
+</script>
+</body>
+</html>

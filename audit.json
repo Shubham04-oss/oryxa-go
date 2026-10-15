@@ -1,0 +1,2274 @@
+[
+ {
+  "area": "Settings",
+  "summary": "The previous redesign stack did not reach Settings, so it is still the old modal. WorkspaceSettings in web-next/src/components/workspace-settings.tsx opens as a backdrop dialog from the sidebar profile menu, with its own sidebar, an X button and a \"Back to workspace\" link. The boards show a full-page Settings section inside nx-main. It opens from the Rail's Settings button, has a \"Settings \u00b7 <org>\" crumb header, and a left st-nav. Every page in the boards is built from st-group > st-card > st-row blocks, with switches, selects and chips. The code instead uses workspace-settings-section, -row and -form blocks with h3 titles and forms. The design adds two pages, \"Your agent\" and \"Notifications\". The code puts agent access, app updates, the answer guard and team call emails on Account and has no notification matrix. People, Teams and Billing are lists or forms in the code where the boards show tables or a plan card. Tool access, Slack and Email are only partly there: Slack is close, Tool access is a read-only rollup, and Email shows static \"always sent\" copy where the board has a forwarding address. Most of the restructuring works with existing routes. The notification matrix, quiet hours, answer style, custom masking categories, per-tool \"who can use\", email forwarding, Slack ask-display toggles, data region, retention, export, invoices, payment method and profile edit have no API, so they must be stubbed.",
+  "gaps": [
+   {
+    "board": "all Settings*New",
+    "element": "Page frame: Rail (active=settings) + nx-main with crumbs 'Settings \u00b7 Northstar', no modal",
+    "status": "differs",
+    "detail": "Code renders Settings as a modal (workspace-settings-backdrop/dialog) with X close and 'Back to workspace'. It opens from the profile menu (workspace-shell.tsx around line 795) and from ?view=billing|slack. The board has a full page in the main column, opened from the Rail's Settings button, with crumb header 'Settings \u00b7 {org}' and empty head actions. There is no agent panel on these boards.",
+    "code": "web-next/src/components/workspace-shell.tsx (settingsOpen/settingsPage state, render branch at ~1103; make it a section instead of an overlay), web-next/src/components/workspace-settings.tsx WorkspaceSettings",
+    "api": "none needed"
+   },
+   {
+    "board": "all Settings*New",
+    "element": "st-nav: You (Account, Your agent, Notifications) / Workspace (Organisation, People, Teams, Billing) / Connections (Tool access, Slack, Email)",
+    "status": "differs",
+    "detail": "Code nav has You: Account only. 'Your agent' and 'Notifications' are missing. The People label is 'People & invitations' (the board says 'People'). 'Sign-in apps' is an extra admin-only entry with no board, so keep it under Connections or Organisation. The nav uses lucide buttons, not the lib-h/lib-col style from the board. SettingsPage union lacks 'agent' and 'notifications'.",
+    "code": "workspace-settings.tsx nav + pageTitles; web-next/src/lib/settings/page-choice.ts (SettingsPage, pages)",
+    "api": "none needed"
+   },
+   {
+    "board": "all Settings*New",
+    "element": "Page heading: h1 + st-sub subtitle, then st-group label + st-card of st-rows (title/subtitle left, control right)",
+    "status": "differs",
+    "detail": "Code has a header h2 per page, and each component uses its own workspace-settings-section/-row/-form markup and workspace-people-card eyebrows ('02 / PEOPLE'). It needs shared SettingsGroup/SettingsCard/SettingsRow/Switch/Chips/Select primitives styled from theme tokens.",
+    "code": "new web-next/src/components/settings-kit.tsx; web-next/src/components/workspace-settings.css",
+    "api": "none needed"
+   },
+   {
+    "board": "SettingsAccountNew",
+    "element": "Profile row: avatar, name, 'email \u00b7 Admin of Northstar', Edit button",
+    "status": "differs",
+    "detail": "Code shows an account card plus a dl of Organisation and Role, with no Edit. The row form is easy to build, but the Edit button needs a profile update route.",
+    "code": "web-next/src/components/workspace-account-settings.tsx WorkspaceAccountSettings",
+    "api": "missing: PATCH /v1/auth/me (display_name, avatar_url). Hide Edit until it exists. Read is available via session.user from GET /v1/auth/me"
+   },
+   {
+    "board": "SettingsAccountNew",
+    "element": "Sign-in: Google row 'Last used today' + Connected; Password 'Send reset link'; Sign out",
+    "status": "differs",
+    "detail": "Password reset and Sign out exist as rows (requestPasswordReset, onSignOut). The Google identity row with its last-used time is missing.",
+    "code": "workspace-account-settings.tsx",
+    "api": "available: POST /v1/auth/password/forgot (requestPasswordReset), POST /v1/auth/logout. missing: a per-user list of linked identity providers with last_used_at (e.g. GET /v1/auth/me/identities). GET /v1/auth/config only lists the providers the server offers"
+   },
+   {
+    "board": "SettingsAccountNew",
+    "element": "Appearance: Theme swatch picker Light / Dark / System",
+    "status": "missing",
+    "detail": "Theme exists only as a cycling profile-menu item (ThemeMenuItem, next-themes). Settings needs a 3-option radio of swatches.",
+    "code": "workspace-account-settings.tsx (new ThemePicker using next-themes useTheme, reuse logic from theme-menu-item.tsx)",
+    "api": "none needed (client-side next-themes)"
+   },
+   {
+    "board": "SettingsAccountNew",
+    "element": "Account no longer holds agent permissions, answer guard, team call emails",
+    "status": "differs",
+    "detail": "Code's Account page also renders 'What your agents may do' (agent grant, app updates), WorkspaceAnswerCheckSettings and 'Team call emails'. The boards move these to Your agent and Notifications.",
+    "code": "workspace-account-settings.tsx (remove sections, move into new components)",
+    "api": "none needed"
+   },
+   {
+    "board": "SettingsAgentNew",
+    "element": "Krude row: agent avatar, name, \"Ada's agent \u00b7 reads Slack (14 channels), Notion and Drive\", Rename",
+    "status": "missing",
+    "detail": "There is no agent page in Settings. Get the primary agent from the agents list and rename it with updateAgent({name}). The 'reads \u2026' line can come from the member's own connections, plus target counts where a provider has them.",
+    "code": "new web-next/src/components/workspace-agent-settings.tsx",
+    "api": "available: GET /v1/organizations/{id}/agents (agentsQueryOptions / listAgents, primaryAgent in lib/agents/policy.ts), PATCH /v1/organizations/{id}/agents/{agentID} (updateAgent), GET \u2026/apps/connections (lib/apps/client listConnections), GET \u2026/apps/connections/{id}/targets (listConnectionTargets)"
+   },
+   {
+    "board": "SettingsAgentNew",
+    "element": "'How it answers' select (Suggests, you decide / \u2026)",
+    "status": "missing",
+    "detail": "No per-member answer mode exists anywhere.",
+    "code": "workspace-agent-settings.tsx",
+    "api": "missing: per-member answer-mode preference (e.g. extend GET/PUT /v1/organizations/{id}/preferences with answer_mode: suggest|auto). Stub: hide the row or show a fixed honest 'Suggests, you decide' label with no control"
+   },
+   {
+    "board": "SettingsAgentNew",
+    "element": "'Works while you're away' switch",
+    "status": "differs",
+    "detail": "This exists as 'Background agent access' with a Turn on / Revoke button on Account. The board shows a switch. Turning it on still has to redirect through authorizeAgentGrant (OAuth), and turning it off reuses revoke.",
+    "code": "workspace-agent-settings.tsx (move from workspace-account-settings.tsx)",
+    "api": "available: GET/DELETE /v1/agent-grant, POST /v1/agent-grant/authorize (getAgentGrant, authorizeAgentGrant, revokeAgentGrant in lib/auth/settings.ts)"
+   },
+   {
+    "board": "SettingsAgentNew",
+    "element": "'Keeps updates from your apps' switch",
+    "status": "differs",
+    "detail": "This exists as 'Updates from your apps' on Account. Move it and reword it.",
+    "code": "workspace-agent-settings.tsx",
+    "api": "available: GET/PUT /v1/organizations/{id}/preferences (getAppPreferences, setAppUpdates)"
+   },
+   {
+    "board": "SettingsAgentNew",
+    "element": "'What it hides when it answers': chips Email addresses / Phone numbers / Money amounts / Customer names / + Add",
+    "status": "differs",
+    "detail": "Code has WorkspaceAnswerCheckSettings, a radio per origin (owner/peer) of two levels, 'secrets' and 'strict'. The board shows category chips plus Add. Levels can be shown honestly as fixed chips: strict covers emails, phone numbers and addresses; secrets covers passwords, keys, and card, bank and ID numbers. Money amounts, customer names and custom categories do not exist.",
+    "code": "web-next/src/components/workspace-answer-check-settings.tsx (restyle into chip summary + level select), used from workspace-agent-settings.tsx",
+    "api": "available: GET/PUT /v1/organizations/{id}/answer-guard/preferences (answerGuardPreferencesQueryOptions, setAnswerGuardPreferences). missing: category-level masking list with custom entries (e.g. answer-guard preferences categories[]). Stub the Add chip and the unsupported categories"
+   },
+   {
+    "board": "SettingsAgentNew",
+    "element": "Danger zone: Revoke background access",
+    "status": "differs",
+    "detail": "Revoke exists with an inline confirm on Account. It needs to become a danger-styled row in its own group.",
+    "code": "workspace-agent-settings.tsx",
+    "api": "available: DELETE /v1/agent-grant (revokeAgentGrant)"
+   },
+   {
+    "board": "SettingsNotificationsNew",
+    "element": "Matrix: events \u00d7 In app / Email / Slack checkboxes (agent asked, parley starts, mentioned, long work done, weekly summary)",
+    "status": "missing",
+    "detail": "No notification preferences exist in code or API.",
+    "code": "new web-next/src/components/workspace-notification-settings.tsx",
+    "api": "missing: GET/PUT /v1/organizations/{id}/notification-preferences {event -> {in_app,email,slack}}. Stub: a 'coming soon' card with no checkboxes"
+   },
+   {
+    "board": "SettingsNotificationsNew",
+    "element": "Quiet hours: Pause notifications switch with schedule text",
+    "status": "missing",
+    "detail": "Nothing in code.",
+    "code": "workspace-notification-settings.tsx",
+    "api": "missing: quiet-hours preference (schedule + timezone) in the same notification-preferences route. Stub: hidden"
+   },
+   {
+    "board": "SettingsNotificationsNew",
+    "element": "Parley emails by team: a switch per team 'Email when a parley starts without you'",
+    "status": "differs",
+    "detail": "This exists as 'Team call emails' (TeamCallEmailRow) on Account. Move it here, restyle as st-rows, and reword to parley.",
+    "code": "workspace-notification-settings.tsx (move TeamCallEmailRow from workspace-account-settings.tsx)",
+    "api": "available: GET \u2026/teams (listTeams), GET \u2026/teams/{id} (getTeam \u2192 membership.notify_email), PATCH \u2026/teams/{id}/notification (setTeamEmailNotices)"
+   },
+   {
+    "board": "SettingsOrgNew",
+    "element": "Workspace row: org mark letter, name, 'Created 30 Sept 2026 by Ada', Rename, Change mark",
+    "status": "differs",
+    "detail": "Code has a Building2 icon card plus a Name/Handle form with Save. The board wants a row with a Rename button that opens an inline edit or dialog. Created-at and created-by are returned by Go but missing from the web Organization type. Change mark has no API.",
+    "code": "web-next/src/components/workspace-organization-settings.tsx; web-next/src/lib/auth/client.ts Organization type (add created_at, created_by, domains, timezone, guests_allowed)",
+    "api": "available: GET/PATCH /v1/organizations/{id} (updateOrganization in lib/auth/settings.ts; the response already carries created_at/created_by/domains). missing: an org logo/mark upload. Stub: hide Change mark"
+   },
+   {
+    "board": "SettingsOrgNew",
+    "element": "Address row: 'northstar.oryxa.in' (mono)",
+    "status": "differs",
+    "detail": "Code edits the slug as 'Handle'. The board shows it read-only as an address. Show the slug as a mono value. Show a subdomain only if one is actually served.",
+    "code": "workspace-organization-settings.tsx",
+    "api": "available: slug on GET /v1/organizations/{id}"
+   },
+   {
+    "board": "SettingsOrgNew",
+    "element": "Allowed email domains: mono value + Edit",
+    "status": "missing",
+    "detail": "Not shown in code. Go stores Organization.domains, and PATCH accepts domains. The board's promise ('can join without an invitation') must be checked against auth: no join-by-domain route was found.",
+    "code": "workspace-organization-settings.tsx; lib/auth/settings.ts updateOrganization (allow domains in body)",
+    "api": "available: PATCH /v1/organizations/{id} with domains (auth UpdateOrganizationInput.Domains). missing: invite-free join by domain, if that is the intended meaning. Otherwise reword the subtitle"
+   },
+   {
+    "board": "SettingsOrgNew",
+    "element": "Data group: Data region, Keep parley recordings (90 days select), Export everything (Request export)",
+    "status": "missing",
+    "detail": "Nothing in code.",
+    "code": "workspace-organization-settings.tsx",
+    "api": "missing: org data region (read-only field), recording retention setting (GET/PUT), export job (POST /v1/organizations/{id}/exports). Stub: hide the group or show region/retention as 'coming soon'"
+   },
+   {
+    "board": "SettingsOrgNew",
+    "element": "Danger zone: Delete Northstar ('removed after 30 days, only owners')",
+    "status": "differs",
+    "detail": "Owner delete (type the name to confirm) and member Leave exist as a section. Restyle as a danger row. The copy must not promise a 30-day grace unless the backend has one: DELETE appears immediate.",
+    "code": "workspace-organization-settings.tsx",
+    "api": "available: DELETE /v1/organizations/{id} (deleteOrganization), DELETE \u2026/members/{userID} for leave"
+   },
+   {
+    "board": "SettingsPeopleNew",
+    "element": "Subtitle '5 of 10 seats used. Everyone brings their own agent.'",
+    "status": "missing",
+    "detail": "Code shows no seat count.",
+    "code": "web-next/src/components/people-management.tsx",
+    "api": "available: GET /v1/billing/organizations/{id} (getBillingSummary \u2192 entitlements.member_limit) + GET \u2026/members (getMembers) count"
+   },
+   {
+    "board": "SettingsPeopleNew",
+    "element": "Invite: one input 'Email addresses, separated by commas', role select, Send invite",
+    "status": "differs",
+    "detail": "Code has an eyebrow card ('Make room for someone new.') with a single email input and a native select. The board has a compact single row that takes several comma-separated emails, which can be sent one by one on the client.",
+    "code": "people-management.tsx submit/form",
+    "api": "available: POST /v1/organizations/{id}/invitations (sendInvitation), called once per address"
+   },
+   {
+    "board": "SettingsPeopleNew",
+    "element": "Members table: Person (avatar, name, email) / Agent (avatar + agent name) / Role select / actions",
+    "status": "differs",
+    "detail": "Code has a ul list with a role dropdown and an X remove, with no table header and no Agent column. Other members' primary agent names are not exposed.",
+    "code": "people-management.tsx MemberRow",
+    "api": "available: GET \u2026/members (getMembers), PATCH/DELETE \u2026/members/{userID} (changeMemberRole, removeOrganizationMember). missing: each member's primary agent name/avatar (add primary_agent {id,name} to GET /v1/organizations/{id}/directory or members). Stub: hide the Agent column"
+   },
+   {
+    "board": "SettingsPeopleNew",
+    "element": "On their way: pending row 'Invited by Raya \u00b7 expires in 6 days', Resend, Cancel",
+    "status": "differs",
+    "detail": "Code shows role and expiry with an X revoke. 'Invited by' is not in the Invitation type. Resend is missing.",
+    "code": "people-management.tsx pending list",
+    "api": "available: GET \u2026/invitations (getInvitations), DELETE \u2026/invitations/{id} (revokeInvitation \u2192 Cancel). missing: invited_by on Invitation and POST \u2026/invitations/{id}/resend. Stub: hide Resend and the 'Invited by' text"
+   },
+   {
+    "board": "SettingsTeamsNew",
+    "element": "Teams table: Team (name, 'N people') / Lead / Members faces / Teamspace chip / row action; 'New team' button",
+    "status": "differs",
+    "detail": "Code lists teams as button rows ('You are a member') with an inline create form (name + 'Inside' parent select), and drills into a detail/members editor. The board has a table plus a 'New team' button. Member counts, lead (team admins) and faces can come from the directory or the team members list. The teamspace chip can come from teamspaces' team_id.",
+    "code": "web-next/src/components/workspace-teams-settings.tsx (list view \u2192 table; New team \u2192 dialog; keep the detail editor)",
+    "api": "available: GET \u2026/teams (listTeams), GET \u2026/teams/{id}/members (listTeamMembers, role admin = lead), GET /v1/organizations/{id}/directory (members[].teams[] with role, which avoids N calls; needs a web client), GET \u2026/teamspaces (useTeamspaces, Teamspace.team_id), POST \u2026/teams (createTeam)"
+   },
+   {
+    "board": "SettingsBillingNew",
+    "element": "Plan scene card: 'Current plan', 'Team \u00b7 \u20ac49 a seat', 'Renews 1 November 2026 \u00b7 prices include VAT', seats '5 of 10' + bar, Change plan",
+    "status": "differs",
+    "detail": "Code has a 'Current plan' section with a tag and hint text, plus a separate Plans list with checkout rows and a 'Manage billing' portal button. The board has one hero card with a seat bar. Change plan should open the portal when a subscription exists and checkout otherwise. Plan price is not in the Plan type.",
+    "code": "web-next/src/components/workspace-billing-settings.tsx",
+    "api": "available: GET /v1/billing/organizations/{id} (getBillingSummary: plan, quantity, renews_at, member_limit), GET /v1/billing/plans (getPlans), POST \u2026/checkout (startCheckout), POST \u2026/portal (openBillingPortal), getMembers for seats used. missing: plan price/currency on /v1/billing/plans. Stub: omit the price"
+   },
+   {
+    "board": "SettingsBillingNew",
+    "element": "Payment: 'Visa ending 4242' Update; Billing contact 'finance@\u2026' Change",
+    "status": "missing",
+    "detail": "Code only has a text section saying the billing contact is set in the portal.",
+    "code": "workspace-billing-settings.tsx",
+    "api": "missing: payment method summary and billing contact email on the billing summary. Stub: one row 'Payment and billing contact are managed in the billing portal' with an Open portal button (openBillingPortal)"
+   },
+   {
+    "board": "SettingsBillingNew",
+    "element": "Invoices table: Date / Amount / Paid / PDF",
+    "status": "missing",
+    "detail": "Nothing in code.",
+    "code": "workspace-billing-settings.tsx",
+    "api": "missing: GET /v1/billing/organizations/{id}/invoices (date, amount, status, pdf_url). Stub: hidden, or a link to the portal"
+   },
+   {
+    "board": "SettingsToolsNew",
+    "element": "Subtitle + 'Connected \u00b7 N': a row per tool with logo, name, 'Everyone \u00b7 14 channels' and a 'Who can use' select + overflow button",
+    "status": "differs",
+    "detail": "Code is admin-only: grouped toolkit rows ('N members connected \u00b7 M active') plus an 'Open my tools \u2192' button. There is no per-tool audience and no counts of what each connection reaches.",
+    "code": "web-next/src/components/workspace-tool-access-settings.tsx; lib/settings/client.ts listOrganizationConnections (duplicates lib/apps/client listConnections({scope:'organization'}))",
+    "api": "available: GET \u2026/apps/connections[?scope=organization] (listConnections), GET \u2026/apps/connections/{id}/targets (listConnectionTargets for '14 channels'/'3 repos'), DELETE \u2026/apps/connections/{id} (disconnectConnection for overflow). missing: per-connection audience policy (Everyone / team / only me), e.g. PUT \u2026/apps/connections/{id}/audience. Stub: show the audience as a read-only label ('Only you' for personal) and hide the select"
+   },
+   {
+    "board": "SettingsToolsNew",
+    "element": "Add a tool: 'Search 250+ tools' + grid of catalog tools with category + Connect",
+    "status": "missing",
+    "detail": "Code sends people to the separate tools section. The board embeds catalog search and connect.",
+    "code": "workspace-tool-access-settings.tsx (reuse search/connect pieces from workspace-tools.tsx / workspace-tool-connection.tsx)",
+    "api": "available: GET /v1/apps/catalog (listCatalog with search), POST \u2026/apps/connections (connect)"
+   },
+   {
+    "board": "SettingsSlackNew",
+    "element": "Workspace row: Slack logo, 'Northstar', 'Connected on Wed 30 Sept at 10:52 by Ada', Connected pill, Disconnect",
+    "status": "differs",
+    "detail": "InstallCard shows the team, connected time and status. It lacks 'by <person>' (SlackInstall has no installed_by) and the Disconnect button sits elsewhere. Restyle as an st-row. Code's extra 'your Slack account link' section (SlackAccountLink) is not on the board but is functional; keep it as a row.",
+    "code": "web-next/src/components/slack-settings.tsx InstallCard, SlackSettings",
+    "api": "available: GET \u2026/apps/slack/install (getSlackInstall), DELETE \u2026/apps/slack/install (disconnectSlack). missing: installed_by on the install status. Stub: omit 'by'"
+   },
+   {
+    "board": "SettingsSlackNew",
+    "element": "High-priority channels: explainer row + a switch per channel ('Private \u00b7 6 people')",
+    "status": "differs",
+    "detail": "This exists in SlackChannels with switches and 'Marked by \u2026' text. The board's subtitle wants visibility plus member count, and lists public channels as off. Member count is not in SlackChannel.",
+    "code": "slack-settings.tsx SlackChannels",
+    "api": "available: GET/PUT \u2026/apps/slack/channels (listSlackChannels, setSlackHighPriorityChannels). missing: member_count on SlackChannel. Stub: 'Private' only"
+   },
+   {
+    "board": "SettingsSlackNew",
+    "element": "How asks look in Slack: 'Say who answered' switch, 'Let people ask in DMs' switch",
+    "status": "missing",
+    "detail": "Nothing in code.",
+    "code": "slack-settings.tsx",
+    "api": "missing: org Slack display settings (attribution footer, DM asks), e.g. GET/PUT \u2026/apps/slack/settings. Stub: hidden"
+   },
+   {
+    "board": "SettingsEmailNew",
+    "element": "Your address: 'Forward asks here' mono per-member address + Copy",
+    "status": "missing",
+    "detail": "Code's Email page is static copy ('Always sent', Billing link, Team calls link) unrelated to the board.",
+    "code": "web-next/src/components/workspace-email-settings.tsx (rewrite)",
+    "api": "missing: inbound email address per member (GET /v1/organizations/{id}/email/address) and an inbound pipeline into Requests. Stub: a 'coming soon' row"
+   },
+   {
+    "board": "SettingsEmailNew",
+    "element": "Gmail row: 'Krude reads threads you label oryxa' + Connected",
+    "status": "missing",
+    "detail": "Not shown. Connection status can be read from the member's own connections (toolkit gmail).",
+    "code": "workspace-email-settings.tsx",
+    "api": "available: GET \u2026/apps/connections?toolkit=gmail (listConnections). The label-based reading behaviour is not confirmed, so word it honestly"
+   },
+   {
+    "board": "SettingsEmailNew",
+    "element": "Who can email asks: allowed-sender chips + Add",
+    "status": "missing",
+    "detail": "Nothing in code.",
+    "code": "workspace-email-settings.tsx",
+    "api": "missing: allowed sender domains for inbound asks. Stub: hidden"
+   },
+   {
+    "board": "SettingsEmailNew",
+    "element": "Replies: 'Reply from' select; 'Mask sensitive details' switch",
+    "status": "missing",
+    "detail": "Nothing in code. Masking could link to Your agent's answer-guard setting rather than a separate switch.",
+    "code": "workspace-email-settings.tsx",
+    "api": "missing: reply-from address setting. Masking: available via answer-guard preferences (show as a link to Your agent, not a separate switch)"
+   }
+  ],
+  "slices": [
+   {
+    "title": "Settings as a full page: shell section, new nav, settings kit",
+    "order": 1,
+    "owns": [
+     "web-next/src/components/workspace-settings.tsx",
+     "web-next/src/components/workspace-settings.css",
+     "web-next/src/components/settings-kit.tsx (new)",
+     "web-next/src/lib/settings/page-choice.ts",
+     "web-next/src/components/workspace-settings.test.tsx",
+     "web-next/src/components/workspace-shell.tsx (render branch + Rail/profile Settings entry only)"
+    ],
+    "delivers": "Settings renders in nx-main with the 'Settings \u00b7 {org}' crumb header instead of the modal. The Rail Settings button opens it, and ?view=billing|slack keep working. The new st-nav groups are You (Account, Your agent, Notifications), Workspace (Organisation, People, Teams, Billing) and Connections (Tool access, Sign-in apps for admins, Slack, Email). Adds SettingsGroup/Card/Row/Switch/Chips/Select primitives on theme tokens. The 'agent' and 'notifications' page keys are added; until slice 2 lands they render a small 'moving here' note, and the existing pages keep their content.",
+    "stubbed": "Your agent and Notifications bodies until slice 2",
+    "size": "M",
+    "dependsOn": ""
+   },
+   {
+    "title": "Account, Your agent and Notifications pages",
+    "order": 2,
+    "owns": [
+     "web-next/src/components/workspace-account-settings.tsx",
+     "web-next/src/components/workspace-agent-settings.tsx (new)",
+     "web-next/src/components/workspace-notification-settings.tsx (new)",
+     "web-next/src/components/workspace-answer-check-settings.tsx",
+     "web-next/src/components/workspace-account-settings.test.tsx",
+     "web-next/src/components/workspace-answer-check-settings.test.tsx"
+    ],
+    "delivers": "Account gets a profile row, sign-in rows (reset link, sign out) and a Light/Dark/System theme picker. Your agent gets the Krude row with Rename, a 'Works while you're away' switch on the agent grant, a 'Keeps updates' switch on app_updates, answer-guard levels as chips plus a select, and a danger-zone revoke. Notifications gets the 'Parley emails by team' switches moved from Account. Closes the Account, Agent and Notifications gaps that existing routes can serve.",
+    "stubbed": "Profile Edit hidden (no PATCH /v1/auth/me). Google identity row hidden. 'How it answers' select hidden. Custom and extra masking categories and the Add chip hidden. Notification matrix and quiet hours shown as an honest 'coming soon' card.",
+    "size": "L",
+    "dependsOn": "slice 1"
+   },
+   {
+    "title": "Organisation and People pages",
+    "order": 3,
+    "owns": [
+     "web-next/src/components/workspace-organization-settings.tsx",
+     "web-next/src/components/people-management.tsx",
+     "web-next/src/lib/auth/client.ts (Organization type fields)",
+     "web-next/src/lib/auth/settings.ts (domains in update)",
+     "web-next/src/components/workspace-organization-settings.test.tsx"
+    ],
+    "delivers": "Organisation gets a mark-letter row with 'Created \u2026 by \u2026' and Rename (inline edit of name), the slug shown as Address, editable allowed email domains, and a danger-zone delete/leave. People gets a seat-count subtitle from the billing summary, a one-row comma-separated multi-email invite, a members table (Person / Role select / remove), and a pending table with Cancel.",
+    "stubbed": "Change mark hidden. Data group (region, retention, export) hidden or 'coming soon'. Agent column hidden. Resend and 'Invited by' hidden. The 30-day deletion wording is dropped unless the backend has a grace period.",
+    "size": "M",
+    "dependsOn": "slice 1"
+   },
+   {
+    "title": "Teams table",
+    "order": 4,
+    "owns": [
+     "web-next/src/components/workspace-teams-settings.tsx",
+     "web-next/src/lib/settings/client.ts (directory client)"
+    ],
+    "delivers": "The teams list becomes a table: name and people count, Lead (team admins), member faces, and a teamspace chip from teamspaces.team_id. 'New team' becomes a button that opens a create dialog (name + parent). The existing detail and member editor stays as the row's drill-in. Adds a getDirectory client for GET /v1/organizations/{id}/directory to avoid one call per team.",
+    "stubbed": "none (all data exists)",
+    "size": "M",
+    "dependsOn": "slice 1"
+   },
+   {
+    "title": "Billing plan card",
+    "order": 5,
+    "owns": [
+     "web-next/src/components/workspace-billing-settings.tsx",
+     "web-next/src/routes/settings.billing.tsx (only if the redirect target changes)"
+    ],
+    "delivers": "A plan scene card with the current plan, renewal date, a seats used/limit bar, and a Change plan button (portal if subscribed, otherwise an inline checkout plan picker). The Payment group becomes one row that opens the billing portal.",
+    "stubbed": "Price per seat omitted. Card details and billing contact replaced by 'managed in the billing portal'. Invoices table hidden.",
+    "size": "S",
+    "dependsOn": "slice 1"
+   },
+   {
+    "title": "Connections: Tool access, Slack, Email",
+    "order": 6,
+    "owns": [
+     "web-next/src/components/workspace-tool-access-settings.tsx",
+     "web-next/src/components/slack-settings.tsx",
+     "web-next/src/components/slack-settings.css",
+     "web-next/src/components/workspace-email-settings.tsx",
+     "web-next/src/components/slack-settings.test.tsx"
+    ],
+    "delivers": "Tool access gets a 'Connected \u00b7 N' list with target counts (listConnectionTargets), an audience label, and an overflow menu with disconnect. It adds an 'Add a tool' catalog search grid with Connect (listCatalog + connect). Slack's install, link and channels move into st-rows, and Disconnect moves onto the workspace row. Email shows Gmail connection status from listConnections(toolkit gmail) and points masking to Your agent.",
+    "stubbed": "'Who can use' select is read-only or hidden (no audience API). Slack installed-by, channel member counts and the 'How asks look' toggles are hidden. Email forwarding address, allowed senders and Reply from are shown as 'coming soon'.",
+    "size": "L",
+    "dependsOn": "slice 1"
+   }
+  ],
+  "apiAsks": [
+   "PATCH /v1/auth/me: update display_name and avatar_url (Account Edit)",
+   "GET /v1/auth/me/identities: linked sign-in providers with last_used_at (Account sign-in rows)",
+   "Per-member answer mode (suggest vs act), e.g. answer_mode on GET/PUT /v1/organizations/{id}/preferences (Your agent 'How it answers')",
+   "Answer-guard categories: a list of masked categories incl. money amounts, customer names and custom entries on /answer-guard/preferences (Your agent chips + Add)",
+   "GET/PUT /v1/organizations/{id}/notification-preferences: event x channel (in_app/email/slack) matrix + quiet hours schedule",
+   "Org mark/logo upload on /v1/organizations/{id} (Organisation 'Change mark')",
+   "Confirm or add invite-free join by Organization.domains (Organisation 'Allowed email domains')",
+   "Org data region (read-only), parley recording retention (GET/PUT) and POST /v1/organizations/{id}/exports (Organisation Data group)",
+   "primary_agent {id,name,avatar} per member on GET /v1/organizations/{id}/directory or /members (People Agent column)",
+   "invited_by on Invitation and POST /v1/organizations/{id}/invitations/{id}/resend (People pending row)",
+   "Plan price and currency on GET /v1/billing/plans; payment method summary and billing contact email on GET /v1/billing/organizations/{id}; GET /v1/billing/organizations/{id}/invoices (Billing)",
+   "Per-connection audience policy (everyone/team/only me), e.g. PUT /v1/organizations/{id}/apps/connections/{id}/audience (Tool access 'Who can use')",
+   "installed_by on Slack install status; member_count on SlackChannel; GET/PUT /v1/organizations/{id}/apps/slack/settings for answer attribution and DM asks",
+   "Inbound email asks: per-member forwarding address, allowed sender domains and reply-from setting (Email page)"
+  ]
+ },
+ {
+  "area": "Library and file viewers",
+  "summary": "The Library is far from the board. #240 only renamed the section, so knowledge-bases.tsx still shows a grid of knowledge-base cards that open a separate detail page (knowledge-base-detail.tsx) with forms and an Ask box. The board instead has one two-pane page: a Collections and Sources rail, search, a List/Grid toggle, an out-of-date note, Pinned tiles and a Recent table showing owner, tags and update time. Nothing in the Library opens a file: document rows only link out to external URLs. The one viewer in the app is PrimaryAgentFileViewer, which is reachable only from Agents. It has a back button, a badge, the name, Edit and Download over DocumentPreview, which has single-page PDF, docx, pptx-as-images, xlsx/csv tables, markdown and text, with no thumbnails, zoom, search, line numbers, video or code. Of the board's viewer features, these can be built in the browser today: thumbnails, zoom, page counter, find in page, sheet row/column headers and formula bar, slide filmstrip, image fit/zoom, line-numbered code, download and open original. Cited-passage highlights work only for text documents. Pinned, cited counts, out-of-date flags, comment pins, versions, recordings and transcripts, repo tree/blame/history, presence and Show in parley have no API.",
+  "gaps": [
+   {
+    "board": "Library",
+    "element": "Page layout: header crumbs 'Library \u00b7 128 files from 4 sources' + 'Add files' pill, two-pane body (lib-cols rail + lib-main)",
+    "status": "differs",
+    "detail": "Code is a single column: 'New knowledge base' button, then a search box and a grid of corpus cards. Clicking a card replaces the page with KnowledgeBaseDetail, and the shell header switches to a back arrow, a BookOpenText icon and 'Knowledge base'. There is no file count or source count in the header and no persistent rail.",
+    "code": "src/components/knowledge-bases.tsx (KnowledgeBaseList, KnowledgeBases), src/components/workspace-shell.tsx (detailTitle/detailKind/header block ~L358-376, L926-960), knowledge-bases.css",
+    "api": "available: GET /v1/organizations/{org}/corpora -> listCorpora/corporaQueryOptions (document_count per corpus gives the file total); GET /v1/organizations/{org}/sources -> listSources/sourcesQueryOptions (source count)"
+   },
+   {
+    "board": "Library",
+    "element": "Collections list (All files + coloured dot per collection + count, active state)",
+    "status": "differs",
+    "detail": "Collections map 1:1 to rag corpora, but they render as cards and not as a rail. 'All files' does not exist, and there is no colour per collection. A colour could come from a hash of the id, or be stored as corpus metadata.colour (corpus metadata is set only at create).",
+    "code": "knowledge-bases.tsx -> new LibraryRail component; knowledge-format.ts (count labels)",
+    "api": "available: listCorpora (name, document_count). 'All files' total = sum of document_count. Colour: none needed (derive client-side)"
+   },
+   {
+    "board": "Library",
+    "element": "Creating a collection (today's 'New knowledge base' form)",
+    "status": "differs",
+    "detail": "The board has no visible create control. The rail needs a quiet '+' at the Collections heading that opens the existing form in a dialog, so createCorpus and the scope choice are kept.",
+    "code": "knowledge-bases.tsx (create form moves into a dialog)",
+    "api": "available: POST /corpora -> createCorpus"
+   },
+   {
+    "board": "Library",
+    "element": "Sources list (Slack, Notion, Drive, GitHub with brand logos and per-source file counts)",
+    "status": "missing",
+    "detail": "Sources appear only under Tools. The Library has no Sources group. Brand logos exist (AppLogo/siNotion etc. in knowledge-base-detail.tsx). Clicking a source should filter the table to documents whose metadata.provider matches.",
+    "code": "new LibraryRail in knowledge-bases.tsx; reuse AppLogo from knowledge-base-detail.tsx (move to a shared file)",
+    "api": "available: GET /v1/organizations/{org}/sources -> listSources (provider, status). missing: per-source document counts (no facet or count route; rag listDocuments is per corpus and only filters by status). Needs a count by metadata.provider/knowledge_source_id"
+   },
+   {
+    "board": "Library",
+    "element": "'All files' table across every collection (Recent: kind badge, name, sub-line source \u00b7 pages/duration, owner avatar+name, updated)",
+    "status": "missing",
+    "detail": "Documents are listed only inside one corpus (DocumentRow: origin icon, title, origin \u00b7 bytes \u00b7 added, status pill, remove). There is no cross-collection list and no FileKindBadge on rows. Owners are not resolved from created_by. The board shows 'Updated', but the code shows 'Added' from created_at. updated_at exists on documents.",
+    "code": "knowledge-base-detail.tsx (DocumentRow -> new LibraryFileRow with FileKindBadge + owner), knowledge-bases.tsx",
+    "api": "available per collection: GET /corpora/{id}/documents -> listDocuments/documentsInfiniteQueryOptions; owner names: membersQueryOptions (src/lib/auth/queries.ts). missing: org-wide GET /v1/organizations/{org}/documents (newest first, cursor, corpus_id in each row). Until it exists, All files has to fan out over every corpus's first page"
+   },
+   {
+    "board": "Library",
+    "element": "Row tags: 'Indexing\u2026', 'Cited 4\u00d7', 'Out of date', 'Shows USD'",
+    "status": "differs",
+    "detail": "An indexing/failed status pill already exists (statusLabels) and can be restyled as the lib-tag 'Indexing\u2026'. 'Cited N\u00d7' and 'Out of date'/reason tags have no data.",
+    "code": "knowledge-base-detail.tsx DocumentRow status span",
+    "api": "available: document.status. missing: cited count per document (rag would need to record citations from answer); staleness flag + reason per document"
+   },
+   {
+    "board": "Library",
+    "element": "Search bar 'Search 128 files, or ask Krude' with / shortcut",
+    "status": "differs",
+    "detail": "Search only filters corpus names on the client. Searching or asking within one corpus exists only inside the detail view (AskKnowledgeBase). The search does not cover all files.",
+    "code": "knowledge-bases.tsx toolbar; knowledge-base-detail.tsx AskKnowledgeBase",
+    "api": "available: POST /corpora/{id}/search -> searchCorpus, POST /corpora/{id}/answer -> answerCorpus (per corpus). Client-side title filter is possible over loaded rows. missing: org-wide search/answer across corpora. 'Ask Krude' could hand off to the agent panel instead"
+   },
+   {
+    "board": "Library",
+    "element": "List / Grid segmented toggle",
+    "status": "missing",
+    "detail": "No toggle exists. Grid needs a tile per file. Without thumbnails it has to be a large FileKindBadge tile and not a rendered preview.",
+    "code": "new LibraryFiles view in knowledge-bases.tsx",
+    "api": "none needed (thumbnail previews would need a thumbnail API; use kind tiles)"
+   },
+   {
+    "board": "Library",
+    "element": "Out-of-date note ('2 files look out of date\u2026' + Review)",
+    "status": "missing",
+    "detail": "Nothing like it exists.",
+    "code": "knowledge-bases.tsx",
+    "api": "missing: staleness detection job + GET of flagged documents with reason"
+   },
+   {
+    "board": "Library",
+    "element": "Pinned section (3 tiles with thumbnail, kind badge, name, source \u00b7 presence/sync)",
+    "status": "missing",
+    "detail": "There are no pins. Presence ('3 editing') and sync ('synced now') also have no data.",
+    "code": "knowledge-bases.tsx",
+    "api": "missing: per-member pins (PUT/DELETE/GET /v1/organizations/{org}/pins). sync time partly available from Source.last_synced_at"
+   },
+   {
+    "board": "Library",
+    "element": "Add files (header pill)",
+    "status": "differs",
+    "detail": "Adding content is done per corpus, through 'Add content' with a Note/Link/File form. The file picker accepts only text types, because rag indexes extracted text only. The board shows PDFs, XLSX, PNG and MP4 in the Library. Files uploads expire after at most 90 days, and the size limit is 8 MiB.",
+    "code": "knowledge-base-detail.tsx AddContentForm",
+    "api": "available: POST /files -> uploadFile/addFileDocument, POST /corpora/{id}/documents -> addDocument. missing: indexing of PDF/Office (rag rejects non-text: domain.textContentTypes), a non-expiring library purpose in files, a larger upload limit for video"
+   },
+   {
+    "board": "Library",
+    "element": "Clicking a row opens the file viewer",
+    "status": "missing",
+    "detail": "Rows cannot be opened. Only an external href on the title goes anywhere, and it leaves the app.",
+    "code": "knowledge-base-detail.tsx DocumentRow; workspace-shell.tsx (needs a library file selection state)",
+    "api": "available: file docs -> source.ref + fileContentUrl/downloadFile (GET /files/{id}/content); app docs -> metadata.knowledge_document_id + GET /v1/organizations/{org}/documents/{id} (knowledge: body, url, mime). The route exists, but web-next has no client fn for it. missing: text of inline notes (rag GET document omits text)"
+   },
+   {
+    "board": "Library",
+    "element": "Agent panel page=knowledge ('Reads this knowledge base' chip, 'Looking at Product docs', staleness answer)",
+    "status": "differs",
+    "detail": "The panel is generic. The screen selection already sends kind knowledge_base, but the panel shows no 'Looking at\u2026' context chip and no per-page capability toggles.",
+    "code": "workspace-agent-panel.tsx (shared, agent-panel area); workspace-shell.tsx screenSelection",
+    "api": "available: screen-context (src/lib/agents/screen-context.ts)"
+   },
+   {
+    "board": "ViewerPdf (all viewers)",
+    "element": "Viewer frame: crumbs 'Knowledge / Product docs / file', vw-bar with kind badge, name + meta sub-line, tools group, Show in parley, Download, Open original, More",
+    "status": "differs",
+    "detail": "PrimaryAgentFileViewer has a back button, FileKindBadge, the name, Edit and Download/open. It has no meta line (uploader, pages, comments), no crumbs, no separate Open original, no More menu, no Show in parley, and is used only in Agents. The Library needs the same frame as a shared component.",
+    "code": "src/components/primary-agent-files.tsx (PrimaryAgentFileViewer header) -> extract FileViewerFrame; workspace-shell.tsx",
+    "api": "available: Download via fileContentUrl/downloadFile or fetchArtifactLink; Open original via external url (knowledge document url / externalSourceLink); meta from CorpusDocument/StoredFile + membersQueryOptions. missing: Show in parley (no API to share a file into the active call; edge /call has join/leave/end/transcript/recording/agent only)"
+   },
+   {
+    "board": "ViewerPdf",
+    "element": "Page thumbnails rail with active page",
+    "status": "missing",
+    "detail": "PdfPreview draws one canvas and has prev/next only.",
+    "code": "document-preview.tsx PdfPreview",
+    "api": "none needed (pdf.js render at small scale)"
+   },
+   {
+    "board": "ViewerPdf",
+    "element": "Search in document, page counter '3 / 12', zoom - / 100% / +",
+    "status": "differs",
+    "detail": "There is a page counter ('Page 3 of 12' in a bottom nav). There is no search. Zoom is fixed to the frame width (scale capped at 1.6).",
+    "code": "document-preview.tsx PdfPreview, PageNavigation",
+    "api": "none needed (pdf.js getTextContent + text layer, scale state)"
+   },
+   {
+    "board": "ViewerPdf",
+    "element": "Continuous paper pages with agent/cited highlights (vw-hl is-agent)",
+    "status": "missing",
+    "detail": "Pages show one at a time and there are no highlights. PDFs are never indexed in rag (text only), so citations cannot point into a PDF. For text and markdown file documents, a citation's start_byte/end_byte can be highlighted in the decoded text.",
+    "code": "document-preview.tsx (markdown/text branch), knowledge-base-detail.tsx AskKnowledgeBase citations",
+    "api": "available for text docs: Citation.start_byte/end_byte from answerCorpus + file bytes via fileContentUrl. missing for PDF: PDF text extraction with page mapping at ingest"
+   },
+   {
+    "board": "ViewerPdf",
+    "element": "Comment pins ('Priya \u00b7 2 replies', 'Krude \u00b7 cited')",
+    "status": "missing",
+    "detail": "Files have no comments of any kind.",
+    "code": "document-preview.tsx",
+    "api": "missing: file comments API with anchors (page+rect, cell, line, timestamp) and replies"
+   },
+   {
+    "board": "ViewerSheet",
+    "element": "Grid with column letters/row numbers, formula bar with cell ref + formula, selected cell",
+    "status": "differs",
+    "detail": "TablePreview is a plain table with no A/B/C or 1/2/3 headers, no cell selection and no formula bar. exceljs gives cell.formula, so a formula bar is feasible for xlsx. The cap is 300x40.",
+    "code": "document-preview.tsx TablePreview, SpreadsheetPreview",
+    "api": "none needed"
+   },
+   {
+    "board": "ViewerSheet",
+    "element": "Sheet tabs at the bottom",
+    "status": "differs",
+    "detail": "Tabs exist (role=tablist, shown when there is more than one sheet). The '+' and the board's tab styling are missing. The '+' should be dropped because the view is read-only.",
+    "code": "document-preview.tsx TablePreview",
+    "api": "none needed"
+   },
+   {
+    "board": "ViewerSheet",
+    "element": "Krude suggestions (F7:F12 is-sugg, Accept/Undo), peer presence (Rohan tag), 'synced just now'",
+    "status": "missing",
+    "detail": "There is no live co-editing or suggestion model. The ONLYOFFICE edit exists only for thread artifacts.",
+    "code": "document-preview.tsx; office-editor.tsx",
+    "api": "missing: suggested-edit API for files, presence for files, Google Sheets live sync (knowledge stores extracted text only)"
+   },
+   {
+    "board": "ViewerSlides",
+    "element": "Stage + filmstrip thumbnails + prev/next + speaker notes",
+    "status": "differs",
+    "detail": "PptxPreview renders slides to SVG blob URLs and shows one with prev/next. Those same URLs can feed a filmstrip, so no filmstrip is a cheap gap. Notes are not read. Whether @office-kit/pptx exposes notes is unverified.",
+    "code": "document-preview.tsx PptxPreview",
+    "api": "none needed"
+   },
+   {
+    "board": "ViewerSlides",
+    "element": "'Show in parley' as primary action",
+    "status": "missing",
+    "detail": "See frame. Present this slide into the call.",
+    "code": "FileViewerFrame",
+    "api": "missing: call share-file/present API on edge /call"
+   },
+   {
+    "board": "ViewerRecording",
+    "element": "Parley recording player with chapters/markers, transcript with speakers, timestamps, decisions/actions, 'Recorded by Krude \u00b7 35 min \u00b7 5 people'",
+    "status": "missing",
+    "detail": "There is no recording viewer and no REC kind in file-kind.tsx. Edge saves recordings and transcripts to R2 (recording.ts, transcript.ts) and logs recordingSaved/transcriptSaved with an R2 key in the room log. No route lists past calls or serves those R2 objects.",
+    "code": "new recording viewer; file-kind.tsx (add 'rec'); src/lib/live (readLog can find the saved events)",
+    "api": "partly available: room log via readLog (src/lib/live/client.ts) shows recordingSaved/transcriptSaved events. missing: edge GET past calls for a room + signed URL for recording and transcript keys, chapters/decisions/actions extraction"
+   },
+   {
+    "board": "ViewerImage",
+    "element": "Image with Fit / zoom % / Compare",
+    "status": "differs",
+    "detail": "An image renders as a plain <img> with no zoom or fit controls. Compare needs versions.",
+    "code": "document-preview.tsx (image branch)",
+    "api": "none needed for fit/zoom; Compare: missing versions"
+   },
+   {
+    "board": "ViewerImage",
+    "element": "Numbered marks + note pin, Versions rail (v3/v2/v1)",
+    "status": "missing",
+    "detail": "Files are immutable and have no version chain. There are no notes.",
+    "code": "document-preview.tsx",
+    "api": "missing: file versions (replaces link in files) and comments/marks API"
+   },
+   {
+    "board": "ViewerVideo",
+    "element": "Video player with scrub, avatar comment markers on timeline, captions, chapters, comments list + 'Comment at 2:35' composer",
+    "status": "missing",
+    "detail": "previewKind has no video or audio kind, so they fall to 'unsupported'. A native <video> player is feasible. Files stores mp4 as application/octet-stream, which may block playback, and the 8 MiB upload limit rules out real videos.",
+    "code": "document-preview.tsx previewKind/DocumentPreview",
+    "api": "partly available: bytes via fileContentUrl. missing: video/* content types in files allowlist, larger uploads, comments API, captions/chapters"
+   },
+   {
+    "board": "ViewerCode",
+    "element": "Line-numbered, highlighted code with highlighted range, Code/Blame/History tabs, repo file tree, line comment pin",
+    "status": "missing",
+    "detail": "previewKind sends .go/.ts etc. to 'unsupported', so code gets no line numbers or highlighting. The knowledge GitHub source indexes issues. It does not index repository files, so there is no tree, blame or history.",
+    "code": "document-preview.tsx previewKind (add 'code'); file-kind.tsx already maps code extensions",
+    "api": "available: bytes of an uploaded code file via fileContentUrl, or a sandbox file via readFile (src/lib/live/children.ts). missing: GitHub repo contents/tree/blame/history proxy, and comments"
+   },
+   {
+    "board": "Viewer* (all)",
+    "element": "Agent panel page=file chips ('Reads this file', 'Highlights what it cites') and 'Looking at <file>'",
+    "status": "differs",
+    "detail": "The screen context for a Library file is not set. screenSelection covers knowledge_base and artifact only. A 'document' selection is needed.",
+    "code": "workspace-shell.tsx screenSelection/screenView; workspace-agent-panel.tsx",
+    "api": "available: screen-context"
+   }
+  ],
+  "slices": [
+   {
+    "title": "Library: two-pane page with Collections rail and per-collection file table",
+    "order": 1,
+    "owns": [
+     "web-next/src/components/knowledge-bases.tsx",
+     "web-next/src/components/knowledge-bases.css",
+     "web-next/src/components/knowledge-base-detail.tsx",
+     "web-next/src/components/knowledge-format.ts",
+     "web-next/src/components/library-rail.tsx (new)",
+     "web-next/src/components/knowledge-bases.test.tsx",
+     "web-next/src/components/workspace-shell.tsx (Library header lines only)"
+    ],
+    "delivers": "Replaces the card grid and the detail page with the board layout. The header reads 'Library \u00b7 N files from M sources' with an Add files pill. The Collections rail has All files, each corpus with a derived colour dot and its document_count, and a '+' that opens the existing create form in a dialog. Each collection opens a table of Kind badge, Name with a sub-line, Owner from created_by via membersQueryOptions, and Updated. The status pill becomes the 'Indexing\u2026' tag. A title filter runs over loaded rows. Delete-collection, Add content and Ask move into the collection header or a More menu.",
+    "dependsOn": "",
+    "stubbed": "Pinned, out-of-date note, Cited/Out-of-date tags and the Grid toggle are hidden. All files fans out over each corpus's first page and says 'Showing the latest from each collection' until an org-wide route exists.",
+    "size": "L"
+   },
+   {
+    "title": "Library: Sources group and source filter",
+    "order": 2,
+    "owns": [
+     "web-next/src/components/library-rail.tsx",
+     "web-next/src/components/app-logo.tsx (moved from knowledge-base-detail.tsx)",
+     "web-next/src/lib/knowledge/client.ts (no route change)"
+    ],
+    "delivers": "A Sources heading in the rail, built from listSources and grouped by provider with brand logos, plus a paused/needs-reconnect hint. Clicking a source filters the table by document.metadata.provider within the connected-apps corpus.",
+    "dependsOn": "1",
+    "stubbed": "Per-source counts are left out until a count route exists. They are never estimated from partial pages.",
+    "size": "S"
+   },
+   {
+    "title": "Shared file viewer frame and opening Library files",
+    "order": 3,
+    "owns": [
+     "web-next/src/components/file-viewer-frame.tsx (new)",
+     "web-next/src/components/primary-agent-files.tsx",
+     "web-next/src/components/workspace-shell.tsx (library file selection + crumbs + screenSelection kind 'document')",
+     "web-next/src/lib/knowledge/client.ts (add getKnowledgeDocument)",
+     "web-next/src/components/file-kind.tsx (add 'rec' kind)"
+    ],
+    "delivers": "A FileViewerFrame with crumbs (Library / collection / file), kind badge, name, meta line (owner, size or pages, source), a tools slot, Download (fileContentUrl or downloadFile, artifact link), Open original (knowledge document url or external link) and More. PrimaryAgentFileViewer uses it. Library rows open file documents through their files id and app documents through the knowledge body as markdown or text. Screen context reports the open document.",
+    "dependsOn": "1",
+    "stubbed": "Show in parley is hidden. Inline notes show 'Preview isn't available for notes yet' with no fake text.",
+    "size": "M"
+   },
+   {
+    "title": "PDF viewer: thumbnails, zoom, page counter, find in document",
+    "order": 4,
+    "owns": [
+     "web-next/src/components/document-preview.tsx (PdfPreview, PageNavigation)",
+     "web-next/src/components/pdf-viewer.tsx (new, split out)",
+     "web-next/src/components/document-preview.test.tsx"
+    ],
+    "delivers": "A thumbnail rail with the active page, continuous or paged view, 'n / N' in the frame tools, zoom -, % and +, and Fit. Find runs on pdf.js getTextContent with a text layer and highlights matches.",
+    "dependsOn": "3",
+    "stubbed": "Comment pins and the cited-passage highlight on PDFs are not shown, because PDFs are not indexed.",
+    "size": "M"
+   },
+   {
+    "title": "Sheet and slides viewer upgrades",
+    "order": 5,
+    "owns": [
+     "web-next/src/components/document-preview.tsx (TablePreview, SpreadsheetPreview, PptxPreview)",
+     "web-next/src/components/sheet-viewer.tsx (new)",
+     "web-next/src/components/slides-viewer.tsx (new)"
+    ],
+    "delivers": "Sheets get column letters and row numbers, a selectable cell and a formula bar with the cell ref and formula from exceljs, a 'N sheets' count and styled tabs. Slides get a stage, a filmstrip from the rendered SVGs, prev/next, and speaker notes if the library exposes them.",
+    "dependsOn": "3",
+    "stubbed": "Krude suggestions, Accept/Undo, peer presence, 'synced' and Show in parley are hidden.",
+    "size": "M"
+   },
+   {
+    "title": "Image, video/audio and code viewers",
+    "order": 6,
+    "owns": [
+     "web-next/src/components/document-preview.tsx (previewKind + image branch)",
+     "web-next/src/components/media-viewer.tsx (new)",
+     "web-next/src/components/code-viewer.tsx (new)"
+    ],
+    "delivers": "Images get Fit and zoom %. A native <video>/<audio> player has time, speed and full screen. Code files get a code previewKind with line numbers, light highlighting through a pinned small highlighter, and wrap/copy.",
+    "dependsOn": "3",
+    "stubbed": "Compare and Versions, marks and notes, timeline comments and the composer, captions and chapters, and the Code/Blame/History tabs and repo tree are hidden. Video says honestly when the stored type cannot play.",
+    "size": "M"
+   },
+   {
+    "title": "Cited passages: open a citation into the viewer with the passage highlighted",
+    "order": 7,
+    "owns": [
+     "web-next/src/components/knowledge-base-detail.tsx (AskKnowledgeBase citations)",
+     "web-next/src/components/document-preview.tsx (text/markdown highlight)",
+     "web-next/src/components/file-viewer-frame.tsx"
+    ],
+    "delivers": "Clicking a [n] citation opens the document in the viewer, scrolled to start_byte..end_byte with the vw-hl highlight, for text, markdown and csv file documents and for knowledge app documents.",
+    "dependsOn": "3",
+    "stubbed": "PDF and Office citations open the file without a highlight. Inline notes are unsupported until rag returns text.",
+    "size": "S"
+   },
+   {
+    "title": "Recording viewer (after the edge API lands)",
+    "order": 8,
+    "owns": [
+     "web-next/src/components/recording-viewer.tsx (new)",
+     "web-next/src/lib/call/recordings.ts (new)",
+     "web-next/src/components/knowledge-bases.tsx (Parley recordings collection entry)"
+    ],
+    "delivers": "A player with scrub and chapters, plus a transcript with speakers and timestamps, read from the past-calls route. Clicking a transcript line seeks the player. A 'Parley recordings' entry appears in the Library rail.",
+    "dependsOn": "edge API for past calls + signed R2 URLs",
+    "stubbed": "Decisions and actions chips stay hidden until a summary exists. Without the API the whole slice waits; the room log alone cannot be played.",
+    "size": "M"
+   }
+  ],
+  "apiAsks": [
+   "rag: GET /v1/organizations/{org}/documents: org-wide list across visible corpora, newest first, cursor, filter by provider/knowledge_source_id/corpus, each row carrying corpus_id",
+   "rag: counts by metadata.provider (or knowledge_source_id) for the Sources rail, e.g. a facets field on the org-wide list",
+   "rag: POST /v1/organizations/{org}/search and /answer across every visible corpus (Library search bar / 'ask Krude')",
+   "rag: GET .../documents/{id}/text (or include text on getDocument) so inline notes and highlights can show the indexed text",
+   "rag: count citations per document (cited_count on CorpusDocument, updated when answer cites it)",
+   "rag or agents: staleness flags per document (stale bool + reason + compared_against), listable for the 'N files look out of date' note",
+   "rag: index PDF and Office files (extract text with page numbers into chunk metadata) so PDFs live in collections and citations map to pages",
+   "files: a non-expiring 'library' purpose (uploads currently expire in 90 days at most), video/* and Office content types in the allowlist, a larger upload limit for media",
+   "new: per-member pins: GET/PUT/DELETE /v1/organizations/{org}/pins (document or file id)",
+   "new: file comments with anchors (page+rect, sheet cell, code line, media timestamp) and replies",
+   "files: version chain (replaces_file_id) so an image or file can list v1..vN",
+   "edge: GET past calls for a room (duration, participants, recording/transcript keys) + signed URLs for the R2 recording and transcript",
+   "edge: share or present a file into the active parley ('Show in parley')",
+   "knowledge: index GitHub repository files (tree), with blame/history proxied, for the code viewer",
+   "web-next client only (route exists): getKnowledgeDocument -> GET /v1/organizations/{org}/documents/{documentID} (body, url, mime, source_updated_at)"
+  ]
+ },
+ {
+  "area": "Parleys and pop-ups",
+  "summary": "With #304\u2013#306 counted as merged (feat/parley-room-chat is a superset of all three), the code has three parley surfaces: the strip on the teamspace page, the mini player and a full-page overlay (CallFullPage). The full page is fairly close to HuddleFull, and the device picker, room chat pane and ended dialog are all there. Three of the four parley boards are a different structure. HuddleShare, HuddleBrowse and HuddleMix put the parley in the main column, with the Rail and the agent panel still on screen. That view has a crumb header and a Full page pill, a shared screen with a column of named cams beside it, live browser tiles and a Mix tiling of people, the room, the screen and a browser. None of that exists today: call-surfaces.tsx has only pip and overlay modes, and live browsers are never shown inside a parley. The pop-ups are mostly missing. There is no shared pop-up primitive (only ui/dialog.tsx, used by the credential dialog), no welcome, invite, upgrade or hover card, no styled toasts (the Toaster is mounted but toast() is never called) and no modal delete; deletes are inline ConfirmStep groups. Several board elements need APIs that don't exist yet: parley notes and decisions, a list of past parleys, a member-started shared browser and driving, browser URL and title, members stopping an agent's browser, an org-wide \"parley live\" signal, agent access when inviting, and plan limits for parleys.",
+  "gaps": [
+   {
+    "board": "HuddleShare",
+    "element": "Parley stage inside the workspace (Rail + main column + agent panel stay visible)",
+    "status": "missing",
+    "detail": "Today a parley is the strip, the mini player or the full-page overlay (CallFullPage, role=dialog aria-modal, covers the whole shell). The board puts the parley stage in nx-main, with the Rail on 'EU launch' and AgentPanel page=huddle still beside it.",
+    "code": "web-next/src/components/call-surfaces.tsx: CallSurface/CallFullPage; call-provider.tsx: ActiveCall.expanded (boolean) and expand(); mount point in teamspace-focus.tsx (main.workspace-focus-layout)",
+    "api": "none needed (CallView via useRoomCall, tiles via CallProvider)"
+   },
+   {
+    "board": "HuddleShare",
+    "element": "Header: teamspace avatar + name \u00b7 live 'Parley \u00b7 18:42', participant faces, 'Full page' pill",
+    "status": "missing",
+    "detail": "Only the overlay has a header (back button, 'Parley', recording line). There are no crumbs with the live duration, no face stack and no Full page pill for moving from the stage to the overlay.",
+    "code": "call-surfaces.tsx: new CallStage header; reuse useDuration, TeamspaceAvatar, IdentityAvatar",
+    "api": "available: CallView.participants/startedAt from GET \u2026/call (lib/call/client.ts readCall via useRoomCall)"
+   },
+   {
+    "board": "HuddleShare",
+    "element": "Split: shared screen as the focused tile (label 'Priya's screen', 'Fill') with a column of small named cams beside it",
+    "status": "differs",
+    "detail": "ShareCam is one tile in the same grid as the big cams. There is no share and cam-column split, and the small cams (CallCam size=small) hide their name and mic state, which the board shows. 'Fill' (make the share fill the stage) is missing.",
+    "code": "call-surfaces.tsx: ShareCam, CallCam (size small hides .call-name), new split layout in CallStage; call.css",
+    "api": "none needed (CallTile.screenTrack)"
+   },
+   {
+    "board": "HuddleShare",
+    "element": "Share subtitle (window title 'EU launch plan'), 'Ask for control', named cursor overlay",
+    "status": "missing",
+    "detail": "RealtimeKit gives a screen track only: no window title, no remote control, no pointer stream.",
+    "code": "call-surfaces.tsx ShareCam",
+    "api": "missing: remote control and pointer broadcast (RealtimeKit has no remote control); stub: hide all three"
+   },
+   {
+    "board": "HuddleShare",
+    "element": "Tile flags: 'Sharing' on the sharer's cam, agent tile 'Notes' with wave",
+    "status": "differs",
+    "detail": "CallCam takes a flag prop that nothing passes. AgentCam's flag reads 'Listening/Speaking' and is hidden at small size.",
+    "code": "call-surfaces.tsx CallCam/AgentCam",
+    "api": "available: tile.screenTrack (CallTile, lib/call/media.ts); 'Notes' derivable from CallView.agent.present"
+   },
+   {
+    "board": "HuddleShare",
+    "element": "Dock: mute, camera, share screen, share a browser, raise hand, react, Leave; right side: captions, Room with unread badge, Full page",
+    "status": "differs",
+    "detail": "The dock exists only inside CallFullPage. It has mute, camera, share, record, agent, devices and Leave, then captions, room, transcript and End for everyone; keep those extras. Missing: share a browser, raise hand, react, the Room unread badge and the Full page / Exit full page toggle. Left copy says 'listening', not 'taking notes'.",
+    "code": "call-surfaces.tsx: extract CallDock from CallFullPage so stage and full page share it",
+    "api": "Room badge available: count new teamspace messages from lib/rooms/client.ts / rooms queries since the pane was last open; raise hand and react missing (see below); share a browser missing"
+   },
+   {
+    "board": "HuddleShare",
+    "element": "Raise hand (dock button + hand flag on a tile) and React",
+    "status": "missing",
+    "detail": "Nothing in CallMedia, CallProvider or the edge carries a hand or a reaction.",
+    "code": "lib/call/media.ts CallMedia (add a broadcast signal), call-provider.tsx (hands/reactions state), call-surfaces.tsx flags",
+    "api": "missing: either add RealtimeKit broadcastMessage to CallMedia (no Oryxa route; confirm the member preset allows it) or an edge POST \u2026/call/signal {kind:'hand'|'reaction'}"
+   },
+   {
+    "board": "HuddleBrowse",
+    "element": "Live browser tiles in the parley (agent's browser: 'Krude's browser', Working status, live page)",
+    "status": "missing",
+    "detail": "Room browsers exist as LiveChildren/LivePane/BrowserPane in live-work.tsx and browser-pane.tsx, but they are never shown in a parley surface.",
+    "code": "call-surfaces.tsx CallStage + live-work.tsx useRoomChildren + browser-pane.tsx BrowserPane (live view iframe)",
+    "api": "available: GET \u2026/children (lib/live/children.ts listChildren via useRoomChildren), POST \u2026/browser/{id}/live (openLiveView), GET \u2026/browser/{id}/handoff (readHandoff), POST \u2026/resume (handBack)"
+   },
+   {
+    "board": "HuddleBrowse",
+    "element": "Agent browser steps list (done / now) under the page",
+    "status": "missing",
+    "detail": "The steps can be built from the room log's browser.* events. LiveActivity already renders event summaries, but not per browser.",
+    "code": "live-work.tsx LiveActivity (filter by child), new BrowserSteps in call-surfaces or live-work",
+    "api": "available: room log via lib/live/use-room-log.ts useRoomLog (GET \u2026/log + /live socket)"
+   },
+   {
+    "board": "HuddleBrowse",
+    "element": "Browser bar: back, forward, reload, URL with lock; 'Asked by Kenji'; 'Stop' button",
+    "status": "missing",
+    "detail": "LiveChild has no url, title or requester. Members can't navigate (BROWSER_OPS navigate web:false) and can't DELETE a browser (requireScope rejects web callers).",
+    "code": "lib/live/children.ts LiveChild; browser-pane.tsx",
+    "api": "missing: web-readable browser state GET \u2026/browser/{id} {url,title,requestedBy}; member stop (allow DELETE \u2026/browser/{id} for web members of the room). Stub: hide the nav buttons and Stop, and show the child label instead of the URL"
+   },
+   {
+    "board": "HuddleBrowse",
+    "element": "Member's own shared browser ('Rohan's browser', 'Rohan driving', 'Ask to drive', 'Browser' flag on cam, dock 'Share a browser', multi cursors)",
+    "status": "missing",
+    "detail": "Browsers are agent-only. A member can only take one over when the agent asks for a hand.",
+    "code": "call-surfaces.tsx dock; lib/live/children.ts",
+    "api": "missing: member-created browser in a call (POST \u2026/browser for web callers), driver state and a request-control/hand-over route; stub: hide 'Share a browser' (or disabled 'coming soon')"
+   },
+   {
+    "board": "HuddleBrowse",
+    "element": "Filmstrip of small named cams above the shared work",
+    "status": "missing",
+    "detail": "There is no filmstrip layout. The full page grid always mixes cams and shares.",
+    "code": "call-surfaces.tsx CallStage layout, call.css",
+    "api": "none needed"
+   },
+   {
+    "board": "HuddleFull",
+    "element": "Layout segment Gallery / Speaker / Shared",
+    "status": "differs",
+    "detail": "Only Gallery and Speaker exist. 'Shared' (the share large, cams as a strip) is missing, and the sharer's flag 'Sharing in Shared' points to it.",
+    "code": "call-surfaces.tsx CallFullPage Layout type + .call-seg",
+    "api": "none needed"
+   },
+   {
+    "board": "HuddleFull",
+    "element": "Header: subtitle under 'Parley' (teamspace description, 'Launch on 4 November') and 'Invite' pill",
+    "status": "missing",
+    "detail": "The header shows only 'Parley' and the recording line. ActiveCall carries just roomName, and no invite exists anywhere.",
+    "code": "call-surfaces.tsx CallFullPage header; JoinOptions in call-provider.tsx (add a subtitle); ParleyButton/ParleyStrip callers in teamspace-focus.tsx pass space.description",
+    "api": "subtitle available: Teamspace.description (lib/teamspaces/client.ts getTeamspace). Invite: see the PopupsDialogs Invite row"
+   },
+   {
+    "board": "HuddleFull",
+    "element": "Tile flags: 'Camera off', 'Raised hand', agent 'Taking notes \u00b7 3 decisions'",
+    "status": "differs",
+    "detail": "Camera off isn't flagged (the avatar just shows). Raised hand is missing. The agent flag says Listening/Speaking with no decision count.",
+    "code": "call-surfaces.tsx CallCam/AgentCam",
+    "api": "camera off available (CallTile.video). Hand: see raise hand. Decision count missing: needs live parley notes (see apiAsks)"
+   },
+   {
+    "board": "HuddleFull",
+    "element": "Captions overlay, mute/camera/share/leave, live time and people count",
+    "status": "differs",
+    "detail": "Already matches apart from the dock gaps above (copy 'listening' vs 'taking notes', exit full page icon vs back button).",
+    "code": "call-surfaces.tsx CallFullPage",
+    "api": "none needed"
+   },
+   {
+    "board": "HuddleMix",
+    "element": "Tiled mix: People tile (mini cams + mini controls mute/camera/share/full page/Leave), Room tile (conversation + composer), right stack of screen + browser with resize grips",
+    "status": "missing",
+    "detail": "The room chat can already move into a pane (RoomChatPane + useRoomChatHost, #306), but only as a side pane of the overlay. There is no tiled mix, no people tile with compact controls and no resizable grips. The crumb reads 'Parley, room, Priya's screen and Rohan's browser'.",
+    "code": "call-surfaces.tsx (new CallMix inside CallStage, reuse RoomChatPane), call.css",
+    "api": "available: room conversation via the room chat slot (call-provider.tsx useRoomChatHost/setRoomChat), tiles, children; member browser part missing as above"
+   },
+   {
+    "board": "HuddleShare (AgentPanel page=huddle)",
+    "element": "Agent panel during a parley: 'In the parley \u00b7 Live notes' chip, 'Listening to the parley, 18 min' row, live notes",
+    "status": "missing",
+    "detail": "The agent panel doesn't know about the call. Listening state and duration can be derived. The live notes can't. The panel file belongs to the agent panel area; it is listed here so the parley work can expose a hook.",
+    "code": "call-provider.tsx (expose useCall active/view) consumed by the agent panel component",
+    "api": "listening and duration available (CallView.agent.present, startedAt); live notes missing (see apiAsks)"
+   },
+   {
+    "board": "PopupsDialogs / PopupsSmall",
+    "element": "Shared pop-up primitive (pp: scene band, close X, icon, kicker, head, body list, switch line, foot with grow + buttons; plain variant for warnings)",
+    "status": "missing",
+    "detail": "Each dialog is hand-rolled: CallEnded has its own focus trap, workspace-settings uses role=dialog, the credential dialog uses ui/dialog.tsx. There is no shared themed pop-up with the scene.",
+    "code": "new web-next/src/components/popup.tsx (+ popup.css) built on components/ui/dialog.tsx (base-ui), tokens from theme.css",
+    "api": "none needed"
+   },
+   {
+    "board": "PopupsDialogs / PopupInContext",
+    "element": "Parley ended: close X, agent icon, kicker 'Parley ended \u00b7 35 min \u00b7 5 people', title 'Krude's notes from the parley', decisions/actions list with owners, 'Save the recording and transcript' switch, 'Edit first', 'Post notes to the room'",
+    "status": "differs",
+    "detail": "CallEnded (#305) shows the title 'Parley ended', facts, a kept/recorded sentence and Done. Missing: notes list, decision tags, owner avatars, save switch, Edit first, Post notes and the close X. It only shows when this member ends the call or it ends elsewhere, not when they Leave.",
+    "code": "call-surfaces.tsx CallEnded; call-provider.tsx EndedCall/remember",
+    "api": "missing: parley notes (decisions + actions with owners) per call, a post-to-room action and post-call recording keep/discard; stub: hide the list, switch and Post until the API lands, keep the honest facts line"
+   },
+   {
+    "board": "PopupInContext",
+    "element": "Posted parley notes card in the room ('Parley notes \u00b7 35 min \u00b7 posted by Krude')",
+    "status": "missing",
+    "detail": "The room conversation has no notes message kind.",
+    "code": "teamspace room message rendering (teamspace area's TeamspaceConversation), notes card component from this area",
+    "api": "missing: the same parley-notes API, plus a room message type that carries it"
+   },
+   {
+    "board": "PopupsDialogs",
+    "element": "Invite people to a teamspace (people/email tags, access select, 'let their agents read' switch, Copy link, 'Send N invites')",
+    "status": "missing",
+    "detail": "Nothing in the teamspace page or the parley invites. People management lives only in Settings.",
+    "code": "new components/teamspace-invite-dialog.tsx; open from teamspace-focus.tsx hero and the CallFullPage header",
+    "api": "partly available: org members GET \u2026/invitations + getMembers (lib/auth/invitations.ts getMembers, sendInvitation \u2192 POST /v1/organizations/{org}/invitations), team membership POST \u2026/teams/{team}/members (lib/settings/client.ts addTeamMember, admin/member role for 'access'). Missing: a per-teamspace agent-read toggle and a teamspace share link; stub: hide both"
+   },
+   {
+    "board": "PopupsDialogs",
+    "element": "Welcome dialog with the wordmark hero and a 3-step checklist (Connect Slack, Invite your team, Ask Krude)",
+    "status": "missing",
+    "detail": "There is no first-run welcome dialog in the workspace.",
+    "code": "new component on the popup primitive, mounted from workspace-shell.tsx for first sessions",
+    "api": "available: app connections (lib/apps client), invitations (getInvitations), threads list (lib/threads) to tick the steps; 'seen' flag can be per-viewer localStorage"
+   },
+   {
+    "board": "PopupsDialogs",
+    "element": "Upgrade dialog (Team vs Business plans, parley 40-min limit, recordings)",
+    "status": "missing",
+    "detail": "No upgrade pop-up, and nothing in a parley enforces or reads a plan limit.",
+    "code": "new component on the popup primitive",
+    "api": "plans available: GET /v1/billing/plans (lib/settings/client.ts getPlans), getBillingSummary, startCheckout. Missing: parley entitlements (max minutes, recordings) and a limit signal from the edge; stub: don't trigger it"
+   },
+   {
+    "board": "PopupsSmall",
+    "element": "Toasts with a scene strip, avatar and action ('Krude finished\u2026' Open, 'Raya started a parley' Join, plain 'Link copied')",
+    "status": "missing",
+    "detail": "The sonner Toaster is mounted in routes/__root.tsx, but toast() is never called and the toasts aren't themed to the board.",
+    "code": "components/ui/sonner.tsx (theme + custom toast), callers: copy-link actions, call start",
+    "api": "Link copied: none needed. Parley started: available only for rooms the member has open (room log call.* events via useRoomLog); org-wide missing. Run finished: room log per open room"
+   },
+   {
+    "board": "PopupsSmall",
+    "element": "Teamspace hover card from the sidebar (scene, name, description, members/agents count, faces, 'Parley live')",
+    "status": "missing",
+    "detail": "Sidebar teamspace items have no hover card.",
+    "code": "sidebar in workspace-shell.tsx (sidebar area's file) + a HoverCard component on the popup styles",
+    "api": "available: Teamspace (description, whisperers, contributions) from listTeamspaces; 'Parley live' needs readCall per teamspace (N requests); missing: an org-wide active-calls read"
+   },
+   {
+    "board": "PopupsSmall",
+    "element": "Empty state 'No parleys yet' (ship lines, Start a parley)",
+    "status": "missing",
+    "detail": "There is no parleys list anywhere for it to be empty in. .workspace-empty-scene exists (teamspaces-management.tsx, knowledge-bases.tsx) and can be reused.",
+    "code": "new parley history list (teamspace Parleys tab is the teamspace area's); reuse .workspace-empty-scene in workspace.css",
+    "api": "missing: list of a room's past parleys (edge stores call_calls/call_participants but has no list route)"
+   },
+   {
+    "board": "PopupsSmall",
+    "element": "Delete confirmation as a plain modal alertdialog (icon, consequence copy, Cancel / Delete danger)",
+    "status": "differs",
+    "detail": "Deletes use inline confirm groups (agents-parts.tsx ConfirmStep, teamspaces-management.tsx workspace-teamspace-confirm, knowledge-base-detail.tsx). Same behaviour, but not the modal alertdialog from the board.",
+    "code": "agents-parts.tsx ConfirmStep \u2192 popup primitive 'plain' variant; adopters in other areas' files",
+    "api": "none needed (restore-for-30-days copy only where the delete is soft)"
+   }
+  ],
+  "slices": [
+   {
+    "title": "Pop-up primitive and Parley ended on it",
+    "order": 1,
+    "owns": [
+     "web-next/src/components/popup.tsx",
+     "web-next/src/components/popup.css",
+     "web-next/src/components/popup.test.tsx",
+     "web-next/src/components/call-surfaces.tsx (CallEnded only)",
+     "web-next/src/components/call.css (call-ended rules removed)",
+     "web-next/DESIGN.md (pop-up section)"
+    ],
+    "delivers": "A themed Popup on ui/dialog.tsx (base-ui focus trap): scene band, close X, icon, kicker, head, list lines with a Decision tag, switch line, foot. Plain alertdialog variant with danger button. CallEnded rebuilt on it with the 'Parley ended \u00b7 N min \u00b7 N people' kicker, close X and Done. Closes the pop-up primitive gap and part of Parley ended.",
+    "stubbed": "Notes list, decision tags, 'Save the recording' switch, 'Edit first' and 'Post notes to the room' stay hidden until a parley-notes API exists; the facts and recorded/transcript sentence stay as now.",
+    "size": "M",
+    "dependsOn": "#304-#306 merged"
+   },
+   {
+    "title": "Shared dock and tile flags",
+    "order": 2,
+    "owns": [
+     "web-next/src/components/call-surfaces.tsx (CallCam, AgentCam, ShareCam, new CallDock extracted from CallFullPage)",
+     "web-next/src/components/call.css",
+     "web-next/src/components/call-surfaces.test.tsx"
+    ],
+    "delivers": "CallDock as one component, with a mode prop for the stage or full page (Full page vs Exit full page) and a Room button with an unread badge counted from the room's messages since the pane last opened. Small cams show their name and mic. Flags: Sharing, Camera off, agent 'Taking notes' (from agent.present). 'Shared' layout added to the full page segment. Full page header gets the teamspace description as its subtitle (subtitle added to JoinOptions/ActiveCall). Closes the HuddleFull layout, flags and subtitle gaps and the dock copy.",
+    "stubbed": "Share a browser, Raise hand and React are not rendered yet. The decision count on the agent flag is omitted. Invite pill not shown until slice 6.",
+    "size": "M",
+    "dependsOn": "#304-#306 merged"
+   },
+   {
+    "title": "Parley stage in the workspace (screen share view)",
+    "order": 3,
+    "owns": [
+     "web-next/src/components/call-stage.tsx",
+     "web-next/src/components/call-stage.css",
+     "web-next/src/components/call-stage.test.tsx",
+     "web-next/src/components/call-provider.tsx (expanded boolean \u2192 view: 'pip' | 'stage' | 'full')",
+     "web-next/src/components/call-surfaces.tsx (CallSurface routing)",
+     "web-next/src/components/teamspace-focus.tsx (render CallStage in place of workspace-focus-layout while the stage is open; coordinate, hot file)"
+    ],
+    "delivers": "HuddleShare: the parley in the main column with Rail and agent panel kept. Crumb header (teamspace avatar, name, live 'Parley \u00b7 duration'), face stack and Full page pill. A shared screen becomes the focused tile with a Fill toggle and a column of named small cams beside it; with no share, a cam grid. CallDock at the bottom. The strip's Open goes to the stage. Full page \u2194 stage \u2194 mini player transitions, and Escape behaviour.",
+    "stubbed": "Share subtitle (window title), 'Ask for control' and the cursor overlay are hidden: RealtimeKit has none of them.",
+    "size": "L",
+    "dependsOn": "slice 2"
+   },
+   {
+    "title": "Agent browsers in the parley",
+    "order": 4,
+    "owns": [
+     "web-next/src/components/call-stage.tsx (browser tiles + filmstrip layout)",
+     "web-next/src/components/live-work.tsx (export a per-browser steps view from LiveActivity)",
+     "web-next/src/components/browser-pane.tsx (compact tile mode)",
+     "web-next/src/components/call-stage.test.tsx"
+    ],
+    "delivers": "HuddleBrowse for agent browsers. The room's running browsers (useRoomChildren) become tiles beside the share, each with the agent's live view (BrowserPane/openLiveView), a Working/Stopped status, a steps list built from the room log's browser.* events, and the existing take-over / hand-back when the agent asks. When browsers are shown, the cams move to a filmstrip on top.",
+    "stubbed": "URL bar, back/forward/reload, 'Asked by \u2026' and Stop are hidden until a web-readable browser state route and member stop exist. The child label stands in for the URL.",
+    "size": "M",
+    "dependsOn": "slice 3"
+   },
+   {
+    "title": "Mix layout: people, room, screen and browser as tiles",
+    "order": 5,
+    "owns": [
+     "web-next/src/components/call-stage.tsx (CallMix)",
+     "web-next/src/components/call-stage.css",
+     "web-next/src/components/call-surfaces.tsx (RoomChatPane reused as a tile)",
+     "web-next/src/components/call-stage.test.tsx"
+    ],
+    "delivers": "HuddleMix: a People tile with mini cams and compact controls (mute, camera, share, full page, Leave), the Room tile hosting the moved conversation (useRoomChatHost slot), and a right stack of the shared screen and a browser with resize grips. The crumb names what's open. Chosen automatically when a share or browser is open together with the room pane.",
+    "stubbed": "Member-driven browser tile ('Rohan driving', 'Ask to drive') is not rendered; only agent browsers appear.",
+    "size": "M",
+    "dependsOn": "slice 4"
+   },
+   {
+    "title": "Invite to teamspace dialog",
+    "order": 6,
+    "owns": [
+     "web-next/src/components/teamspace-invite-dialog.tsx",
+     "web-next/src/components/teamspace-invite-dialog.test.tsx",
+     "web-next/src/components/teamspace-focus.tsx (Invite pill in hero; coordinate, hot file)",
+     "web-next/src/components/call-surfaces.tsx (Invite pill in the full-page header)"
+    ],
+    "delivers": "Invite on the Popup primitive: a people picker from org members (getMembers) and email tags. Emails go through sendInvitation; existing members are added to the teamspace's team (addTeamMember, admin = 'Can manage' / member = 'Can edit'). Send N invites, with errors per person. Opened from the teamspace hero and the parley full page.",
+    "stubbed": "'Let their agents read this teamspace' switch and 'Copy link' are hidden (no API). Invite is disabled with a reason for callers who can't manage the team (can_manage false).",
+    "size": "M",
+    "dependsOn": "slice 1"
+   },
+   {
+    "title": "Raise hand and reactions",
+    "order": 7,
+    "owns": [
+     "web-next/src/lib/call/media.ts (CallMedia.signal / onSignal over RealtimeKit broadcastMessage)",
+     "web-next/src/components/call-provider.tsx (hands, reactions state)",
+     "web-next/src/components/call-surfaces.tsx (CallDock buttons, hand flag, reaction burst)",
+     "web-next/src/components/call-surfaces.test.tsx"
+    ],
+    "delivers": "Raise and lower a hand, with a hand flag on the tile and the dock button pressed. Reactions show briefly on the sender's tile. Both work in the stage, the full page and Mix.",
+    "stubbed": "If the member preset doesn't allow broadcast messages, the buttons stay hidden until the edge adds a /call/signal route.",
+    "size": "S",
+    "dependsOn": "slice 2"
+   },
+   {
+    "title": "Toasts, welcome and teamspace hover card",
+    "order": 8,
+    "owns": [
+     "web-next/src/components/ui/sonner.tsx (themed toast with scene strip, avatar, action)",
+     "web-next/src/components/workspace-toasts.ts",
+     "web-next/src/components/welcome-dialog.tsx",
+     "web-next/src/components/teamspace-hover-card.tsx",
+     "web-next/src/components/workspace-shell.tsx (mount welcome; hover card on sidebar items; coordinate with the sidebar owner)"
+    ],
+    "delivers": "PopupsSmall toasts: 'Link copied' everywhere a link is copied, and 'X started a parley \u00b7 Join' for rooms the member has open (room log call.* events). The welcome dialog, its checklist ticked from app connections, invitations and threads, shown once per viewer. The teamspace hover card with name, description, people/agent counts and faces.",
+    "stubbed": "Org-wide 'started a parley' toast and the hover card's 'Parley live' are left out until an org-wide active-calls read exists. Upgrade dialog not built (no parley limit to trigger it).",
+    "size": "M",
+    "dependsOn": "slice 1"
+   },
+   {
+    "title": "Parley notes, history and the 'No parleys yet' state (API-gated)",
+    "order": 9,
+    "owns": [
+     "web-next/src/lib/call/client.ts (listCalls, readNotes, postNotes)",
+     "web-next/src/components/call-surfaces.tsx (CallEnded notes list + Post notes + keep recording)",
+     "web-next/src/components/parley-history.tsx",
+     "web-next/src/components/parley-notes-card.tsx"
+    ],
+    "delivers": "Once the edge routes land: Krude's notes in Parley ended (decisions, actions with owners), 'Post notes to the room' and the posted notes card, the save-recording switch, the agent tile's decision count, and a parley history list with the ship-lines empty state.",
+    "stubbed": "Everything here is blocked on apiAsks. Until then only the empty-state component can ship, and nothing calls it.",
+    "size": "M",
+    "dependsOn": "slice 1 and the edge routes in apiAsks"
+   }
+  ],
+  "apiAsks": [
+   "Edge: GET \u2026/calls (room's past parleys: callId, startedAt, endedAt, participants, recording present, transcript present) from call_calls/call_participants, for the Parleys history and empty state",
+   "Edge/agent: parley notes per call: GET \u2026/call/{callId}/notes {decisions[], actions[{text, owner}]}, live while the call runs (or a call.notes room log event), plus POST \u2026/call/{callId}/notes/post to post them to the room as a notes message",
+   "Edge: post-call keep/discard of the recording and transcript (POST \u2026/call/{callId}/keep {recording:boolean}) for the Parley ended switch",
+   "Edge: web-readable browser state GET \u2026/browser/{id} {url, title, requestedBy, step} (LiveChild today has no url, title or requester)",
+   "Edge: let room members stop an agent's browser (DELETE \u2026/browser/{id} currently needs browser:drive, which requireScope refuses for web callers)",
+   "Edge: member-started shared browser in a call (POST \u2026/browser for web callers) plus driver state and a request/hand-over-control route ('Ask to drive', 'Rohan driving')",
+   "Edge: POST \u2026/call/signal {kind:'hand'|'reaction', value} broadcast to the call, only if RealtimeKit broadcastMessage isn't allowed by the member preset",
+   "Edge or Go: org-wide active calls read (which teamspaces have a live parley and who started it), for the 'started a parley' toast and the hover card's 'Parley live'",
+   "Go: per-teamspace setting 'let members' agents read this teamspace' and a teamspace share link, for the Invite dialog",
+   "Go billing: parley entitlements on the plan (max parley minutes, recordings allowed) and an edge refusal code when a limit is hit, to trigger the Upgrade dialog"
+  ]
+ },
+ {
+  "area": "Teamspaces (TeamspacesNew, TeamspaceHome, Teamspace3, TeamspaceGlance, HuddleJoin, HuddleMini)",
+  "summary": "Already in place: the directory (a card grid, a scene and the \"Open a new teamspace\" card), the room itself (message rows, agent tags, Markdown), the join strip and the mini player. Everything inside a teamspace is still the old layout. Opening a teamspace hides the rail. The header has a back arrow and no breadcrumbs. Overview/Tasks/Files/Live/Activity tabs sit in a right-hand work column, where the boards show a Room/Plan/Files/Parleys tab row and, beside the room, a side column with Launch, Files and Last parley cards. Most of what the founder cares about has no data source yet: the launch date and checklist, Krude's parley notes in the room, the last-parley summary and the Parleys list, the shared plan with cursors and suggested edits, and on cards the unread count, the editor count and the last activity line. Two things already have data: the faces, counts, team, files card, Invite, live-parley chip and agent-panel privacy and context lines can use existing routes (teamspace detail, team files, team members, the edge /call read). So the first slices can ship the new frame honestly, and the rest should be stubbed until a1 lands the API. Note: the current branch, feat/parley-room-chat, carries unmerged parley work in call-surfaces.tsx, call-provider.tsx and teamspace-focus.tsx. These slices should start after it merges.",
+  "gaps": [
+   {
+    "board": "TeamspacesNew",
+    "element": "Hello subtitle (\"4 active, and a parley is live in EU launch.\")",
+    "status": "differs",
+    "detail": "Code shows \"N active \u00b7 N paused \u00b7 N in all\" and never says a parley is live.",
+    "code": "src/components/teamspaces-management.tsx TeamspacesManagement header .workspace-teamspaces-hello",
+    "api": "available: counts from GET /v1/organizations/{org}/teamspaces (listTeamspaces / teamspacesQueryOptions); live parley from edge GET /live/{org}/rooms/teamspace/{id}/call (readCall in src/lib/call/client.ts), one request per space; a batch route is asked for below"
+   },
+   {
+    "board": "TeamspacesNew",
+    "element": "Filter segment with counts (All 5 / Active 4 / Paused 1), search with / shortcut on the left",
+    "status": "differs",
+    "detail": "Filters have no counts and come before search; the / shortcut to focus search is missing.",
+    "code": "teamspaces-management.tsx filters[] + .workspace-teamspace-toolbar",
+    "api": "none needed"
+   },
+   {
+    "board": "TeamspacesNew",
+    "element": "Card top: avatar, name, \"<Team> team \u00b7 N people\" (or \"paused\"), More (\u2026) button",
+    "status": "differs",
+    "detail": "The card shows a description, \"team \u00b7 updated X\", a people icon count, a status pill and an arrow. It has no More menu, and clicking it opens the management detail (TeamspaceDetail), not the teamspace. In the design, clicking opens the room, and Manage/Pause/Delete go in the More menu.",
+    "code": "teamspaces-management.tsx card button (.workspace-teamspace-row) onClick=onSelect; TeamspaceDetail",
+    "api": "available: Teamspace.team_name, whisperers, status; updateTeamspace/deleteTeamspace for menu actions"
+   },
+   {
+    "board": "TeamspacesNew",
+    "element": "Live signals row on cards: \"Parley \u00b7 18 min\", \"3 editing the plan\", \"2 new\", custom facts (\"Northwind renews 1 Dec\", \"Pen test: 2 open\")",
+    "status": "missing",
+    "detail": "No live line on cards.",
+    "code": "teamspaces-management.tsx (new TeamspaceCard component)",
+    "api": "Parley: available per room via readCall (edge GET \u2026/rooms/teamspace/{id}/call), but that is N polls, so a batch is asked for. Editing: missing (needs doc editor presence). New: missing (no per-member unread cursor; room_presence.last_read_at is presence, not a seq cursor). Facts: missing (needs milestone/target date)"
+   },
+   {
+    "board": "TeamspacesNew",
+    "element": "Card footer: last activity line (author avatar + \"Krude: suggested an edit to the plan\") and faces stack",
+    "status": "missing",
+    "detail": "Neither is rendered. Faces can come from whisperers. The last line can't come from GET \u2026/messages, because reading records presence and starts at the oldest message.",
+    "code": "teamspaces-management.tsx TeamspaceCard",
+    "api": "faces: available (Teamspace.whisperers). Last activity: missing; the list should carry last_message {author, kind, preview, created_at}"
+   },
+   {
+    "board": "TeamspacesNew",
+    "element": "Paused card: \"Paused until January. Rooms are read-only.\" / \"Paused by Raya on 2 Oct\"",
+    "status": "differs",
+    "detail": "Code shows a Paused pill, and its copy says the room closes. The design says the room is read-only and names who paused it and when.",
+    "code": "teamspaces-management.tsx card + teamspace-room.tsx blockedCopy",
+    "api": "missing: paused_by_user_id / paused_at on Teamspace; read-only paused room (Go currently answers 400 on a paused room read)"
+   },
+   {
+    "board": "TeamspacesNew",
+    "element": "New-teamspace card: scene lines, title, copy, a \"New teamspace\" button; create as a pop-up",
+    "status": "differs",
+    "detail": "The card has no scene image or button. Create opens an inline form at the top of the page, not a pop-up sheet (pp-sheet).",
+    "code": "teamspaces-management.tsx .workspace-teamspace-new + CreateTeamspaceForm",
+    "api": "available: POST \u2026/teamspaces (createTeamspace), listTeams"
+   },
+   {
+    "board": "TeamspaceHome",
+    "element": "Shell: rail stays, nx-head crumbs \"Teamspaces / EU launch\"",
+    "status": "differs",
+    "detail": "An open teamspace sets isFocused, which hides the whole left sidebar, and the page uses a back-arrow header.",
+    "code": "src/components/workspace-shell.tsx isFocused (teamspaces.openId) and data-view=focused; teamspace-focus.tsx header",
+    "api": "none needed"
+   },
+   {
+    "board": "TeamspaceHome",
+    "element": "Hero: subtitle \"Launch on 4 November \u00b7 in 21 days \u00b7 5 people and 3 agents\", faces stack, Parley pill, Invite pill",
+    "status": "differs",
+    "detail": "Code shows \"Teamspace \u00b7 Active \u00b7 team \u00b7 N people\" and a Parley button. It has no faces, no agents count, no launch date and no Invite.",
+    "code": "teamspace-focus.tsx TeamspaceFocus header .workspace-teamspace-hero",
+    "api": "people/agents/faces: available (whisperers + contributions). Invite: available via GET \u2026/members/search + POST \u2026/teams/{teamID}/members (addTeamMember in src/lib/settings/client.ts), team managers only. Launch date: missing"
+   },
+   {
+    "board": "TeamspaceHome",
+    "element": "Tab row Room / Plan / Files 12 / Parleys 3 under the hero",
+    "status": "differs",
+    "detail": "Code has Overview/Tasks/Files/Live/Activity buttons inside the right work column. Plan and Parleys don't exist. Live (RoomLive) and Activity (the ledger) have no place on the boards, so the owner needs to decide where they go (proposal: Live as a side card shown only while something runs; Activity folded into Files/Parleys or kept as a quiet extra tab).",
+    "code": "teamspace-focus.tsx tabs[] / WorkTab",
+    "api": "Files count: available (listFiles scope=team, filesQueryOptions). Parleys count/list: missing (edge call history). Plan: missing"
+   },
+   {
+    "board": "TeamspaceHome",
+    "element": "Room tile label \"Room \u00b7 Everyone \u00b7 5 people, 3 agents\" and composer \"Message everyone, or @mention an agent\"",
+    "status": "differs",
+    "detail": "Code heads the room with a presence pill and a row of seat avatars, and its placeholder reads \"Message the room, or @mention someone\".",
+    "code": "src/components/teamspace-room.tsx TeamspaceConversation, composerPlaceholder",
+    "api": "available (room presence seats from useTeamspaceRoom)"
+   },
+   {
+    "board": "TeamspaceHome",
+    "element": "Krude's parley notes posted in the room (th-notes: \"Parley notes \u00b7 35 min \u00b7 posted by Krude\", decisions tagged Decision, actions with owner avatar)",
+    "status": "missing",
+    "detail": "RoomMessage has no kind or structured payload, and nothing posts notes when a parley ends. CallEnded says the notes \"arrive with an API for them\".",
+    "code": "teamspace-room.tsx RoomLine (new ParleyNotes renderer); call-surfaces.tsx CallEnded",
+    "api": "missing: RoomMessage.kind='parley_notes' + data {call_id, duration_ms, decisions[], actions[{text, owner_user_id}]}, posted by the voice agent on call.ended"
+   },
+   {
+    "board": "TeamspaceHome",
+    "element": "Side card Launch: \"6 of 9 done\", date + \"in 21 days\", progress bar, checklist with done/strike-through and owner avatar",
+    "status": "missing",
+    "detail": "There is no milestone or task model. The Tasks tab says \"Teamspaces don't track tasks yet.\"",
+    "code": "teamspace-focus.tsx (new src/components/teamspace-side.tsx LaunchCard)",
+    "api": "missing: Teamspace.target_date/target_label and /teamspaces/{id}/tasks CRUD (title, owner_user_id, done, position). Partial stand-in: synthesis (GET \u2026/teamspaces/{id}/synthesis) decisions/open_questions and organization follow-ups, but these have no done state"
+   },
+   {
+    "board": "TeamspaceHome",
+    "element": "Side card Files: count + recent 4 with kind badge, name and meta (\"2 editing\", \"Cited 3\u00d7\", \"Synced now\", \"Raya \u00b7 1 h ago\")",
+    "status": "missing",
+    "detail": "Files exist only as a full tab list with a download button. There is no compact card and no open-in-viewer.",
+    "code": "teamspace-focus.tsx FilesPanel; new teamspace-side.tsx FilesCard; reuse file-kind.tsx FileKindBadge and the file frame",
+    "api": "available: GET \u2026/files?scope=team&team_id= (listFiles/filesQueryOptions) gives name, content_type, created_by, created_at. Missing: editing count, cited count, source/sync status"
+   },
+   {
+    "board": "TeamspaceHome",
+    "element": "Side card Last parley: thumb, \"14 October \u00b7 35 min\", \"2 decisions \u00b7 3 actions \u00b7 transcript\"",
+    "status": "missing",
+    "detail": "Nothing reads past calls. The room log (readLog) can only be paged forward from seq 0, so it can't serve this.",
+    "code": "new teamspace-side.tsx LastParleyCard",
+    "api": "missing: edge GET /live/{org}/rooms/{kind}/{id}/calls?limit= returning [{callId, startedAt, endedAt, participants, recording, transcript, decisions, actions}]"
+   },
+   {
+    "board": "TeamspaceHome",
+    "element": "Agent panel on a teamspace: \"Krude \u00b7 Only you \u00b7 in EU launch\" header (history, new chat, collapse), Krude / At a glance switch, chips \"Parley \u00b7 Join\" and \"Needs you 2\", quick toggles, \"Looking at EU launch plan\" context line",
+    "status": "differs",
+    "detail": "The panel has four tabs (Agents/DMs/Teams/At a glance) and a teammates list for side conversations. It shows no privacy line, no parley or needs-you chips, no toggles and no visible context line. Screen context is sent, just not shown.",
+    "code": "src/components/workspace-agent-panel.tsx panelTabs / AgentsView; side-conversation-teammates.tsx",
+    "api": "privacy/context: available from getScreenContext (src/lib/agents/screen-context.ts). Parley chip: available (useRoomCall). Needs you: available (agent-requests, as home-overview uses). Toggles: missing (per-scope agent permissions)"
+   },
+   {
+    "board": "Teamspace3",
+    "element": "Plan tab: room tile + focused shared doc tile (resizable ts4 gutter), editors' faces \"3 editing\", live cursors with name caret, inline del/ins suggestion",
+    "status": "missing",
+    "detail": "There is no teamspace document. ONLYOFFICE editing exists only for thread artifacts (primary-agent-files.tsx via GET \u2026/threads/{id}/artifacts/{name}/editor), not for team files.",
+    "code": "new src/components/teamspace-plan.tsx, mounted from teamspace-focus.tsx Plan tab",
+    "api": "missing: Teamspace.plan_file_id (PATCH), GET \u2026/files/{fileID}/editor (an ONLYOFFICE co-editing config for team-scoped docx, mirroring documentEditor; its native cursors and track changes cover the cursors and ins/del), and editor presence (who is editing) taken from the ONLYOFFICE callback users"
+   },
+   {
+    "board": "Teamspace3",
+    "element": "Krude suggested-edit card (\"for you \u00b7 2 min ago\", Accept / Reject / Ask in room)",
+    "status": "missing",
+    "detail": "There is no suggestion model.",
+    "code": "teamspace-plan.tsx SuggestionCard",
+    "api": "missing: GET/POST \u2026/teamspaces/{id}/suggestions {file_id, anchor, before, after, rationale, author_agent_id, for_user_id} + POST \u2026/suggestions/{id}:accept|:reject; Ask in room can reuse POST \u2026/teamspaces/{id}/messages"
+   },
+   {
+    "board": "TeamspaceGlance",
+    "element": "At a glance view in the teamspace's agent panel, with a count badge on the tab",
+    "status": "differs",
+    "detail": "The content already matches: HomeOverview variant=glance shows From your apps, Teammates, Conversations, Knowledge, Files and Recurring work. What differs is the tab: it has no count badge and sits among four tabs, where the boards have a two-way Krude / At a glance switch.",
+    "code": "workspace-agent-panel.tsx panelTabs (glance tab label/badge); workspace-shell.tsx glance prop",
+    "api": "available (same reads HomeOverview uses)"
+   },
+   {
+    "board": "HuddleJoin",
+    "element": "Join strip text \"Raya is talking \u00b7 Priya is sharing EU launch plan \u00b7 Rohan, Kenji and Krude are in\" and a shared-screen thumbnail (jn-screen)",
+    "status": "differs",
+    "detail": "Before joining, the strip says only who is in (whoIsIn). It has no speaker, no sharing line and no screen thumbnail. The cams, live dot, duration, mic/camera toggles, Listen in and Join already match.",
+    "code": "src/components/call-surfaces.tsx ParleyStrip",
+    "api": "missing: CallView.speaking (member) and CallView.sharing {member, name, title} from the edge (edge/src/call)"
+   },
+   {
+    "board": "HuddleJoin",
+    "element": "Live dot on the teamspace in the rail/sidebar and a Teamspaces section listing each space (+ New teamspace)",
+    "status": "missing",
+    "detail": "The sidebar has one Teamspaces nav item with a count. It lists no spaces and shows no live or unread dots. This may belong to the nav auditor; flagged here because the boards rely on it.",
+    "code": "workspace-shell.tsx nav (item.key === 'teamspaces')",
+    "api": "spaces: available (useTeamspaces). Live: available per room (readCall), batch asked. Unread: missing"
+   },
+   {
+    "board": "HuddleJoin",
+    "element": "Hero Parley pill stays while a parley is live",
+    "status": "differs",
+    "detail": "ParleyButton returns null while a call runs, so the hero loses its Parley pill.",
+    "code": "call-surfaces.tsx ParleyButton",
+    "api": "available (useRoomCall)"
+   },
+   {
+    "board": "HuddleMini",
+    "element": "Mini player: shared screen with the speaker's cam inset (pip-speaker)",
+    "status": "differs",
+    "detail": "While someone shares, CallMiniPlayer shows only the share tile (shown = []), so the speaking member's cam is missing. The title, people count, mute, back and leave already match.",
+    "code": "call-surfaces.tsx CallMiniPlayer",
+    "api": "available (active.tiles + active.caption via speakingMember)"
+   }
+  ],
+  "slices": [
+   {
+    "title": "Teamspaces directory: cards that match the board",
+    "order": 1,
+    "owns": [
+     "web-next/src/components/teamspaces-management.tsx",
+     "web-next/src/components/teamspaces.css",
+     "web-next/src/components/teamspaces-management.test.tsx"
+    ],
+    "delivers": "A new TeamspaceCard component, with the top line \"<Team> team \u00b7 N people\" (or paused), a More menu (Open, Manage details, Pause/Resume, Delete; reuses the TeamspaceDetail confirms), and clicking the card opens the teamspace. The faces stack comes from whisperers. A live row carries the Parley \u00b7 N min chip from a lightweight per-card readCall query (no log socket, active spaces only). Filter counts and order, the / shortcut, and the subtitle \"N active, and a parley is live in X\". Paused copy. The new-teamspace card gets its scene and button and opens CreateTeamspaceForm as a pp-sheet pop-up. Closes the TeamspacesNew gaps except the API-bound ones.",
+    "stubbed": "These stay hidden until the list carries the data: the \"N new\" chip, \"N editing\", custom facts, the last-activity footer line, and \"Paused by X on date\" (paused cards show a plain \"Paused\").",
+    "size": "M"
+   },
+   {
+    "title": "Teamspace frame: rail kept, crumbs, hero, Room/Plan/Files/Parleys tabs",
+    "order": 2,
+    "dependsOn": "feat/parley-room-chat merged (teamspace-focus.tsx and call-surfaces.tsx are touched there)",
+    "owns": [
+     "web-next/src/components/teamspace-focus.tsx",
+     "web-next/src/components/workspace-shell.tsx (isFocused for teamspaces + crumbs only; a hot file, so announce it)",
+     "web-next/src/components/teamspaces.css",
+     "web-next/src/components/teamspace-focus.test.tsx"
+    ],
+    "delivers": "An open teamspace no longer hides the rail or sidebar, and the header becomes the Teamspaces / <name> crumbs. The hero gets faces, \"N people and M agents\", Parley and Invite (a dialog with members/search + addTeamMember, only for can_manage). A segmented tab row: Room (room tile + side column), Plan, Files (the existing FilesPanel, full width, with count), Parleys. Overview's synthesis, purpose and agents move into the side column or the Manage view. Live (RoomLive) becomes a side card shown only while children run. Activity stays reachable, placed where the owner decides. The ParleyButton pill stays visible while live.",
+    "stubbed": "The Plan tab shows an honest \"A shared plan is coming\" empty scene. The Parleys tab shows an honest empty state (\"Past parleys will be listed here\"). There is no launch date in the hero subtitle.",
+    "size": "L"
+   },
+   {
+    "title": "Room side column: Files and Last parley cards, and the room tile header",
+    "order": 3,
+    "dependsOn": "slice 2",
+    "owns": [
+     "web-next/src/components/teamspace-side.tsx (new)",
+     "web-next/src/components/teamspace-side.test.tsx (new)",
+     "web-next/src/components/teamspace-room.tsx",
+     "web-next/src/components/teamspaces.css"
+    ],
+    "delivers": "The th-side column. A Files card lists the 4 most recent team files with FileKindBadge, name and \"<creator> \u00b7 <when>\", opens the existing file frame, and shows the count. A Live card (RoomLive) appears only when active. A \"What's open\" card shows synthesis decisions and open questions until the Launch API exists. The room tile header becomes \"Room \u00b7 Everyone \u00b7 N people, M agents\", with the seats kept as a compact row, and the placeholder becomes \"Message everyone, or @mention an agent\".",
+    "stubbed": "The Last parley card is hidden until the call history API exists. The Launch card (date, checklist, progress) is hidden or replaced by the synthesis card. The files card has no editing, cited or synced meta.",
+    "size": "M"
+   },
+   {
+    "title": "Agent panel on a teamspace: Only you header, chips, context line",
+    "order": 4,
+    "dependsOn": "coordinate with the agent-panel/nav auditor's slice (the same file)",
+    "owns": [
+     "web-next/src/components/workspace-agent-panel.tsx",
+     "web-next/src/components/workspace-agent-panel.test.tsx"
+    ],
+    "delivers": "A \"Krude \u00b7 Only you \u00b7 in <teamspace>\" subtitle, taken from screen context. A \"Parley \u00b7 Join\" chip when useRoomCall shows a live call. A \"Needs you N\" chip from agent-requests. A \"Looking at <selection or teamspace>\" line above the composer. A count badge on the At a glance tab. If the panel moves to the two-way Krude / At a glance switch, side conversations go under Krude.",
+    "stubbed": "The quick toggles (Reads room and files / Suggests, doesn't edit / Web) stay hidden until per-scope permissions exist.",
+    "size": "M"
+   },
+   {
+    "title": "Parley join strip and mini player parity",
+    "order": 5,
+    "dependsOn": "feat/parley-room-chat merged",
+    "owns": [
+     "web-next/src/components/call-surfaces.tsx",
+     "web-next/src/components/call.css",
+     "web-next/src/components/call-surfaces.test.tsx"
+    ],
+    "delivers": "The mini player shows the speaker's cam inset over a shared screen. The strip's text names the speaker and the sharer once the edge sends them. Per-teamspace live dots in the sidebar if the nav slice exposes teamspace items (the hook is shared).",
+    "stubbed": "Until CallView carries speaking and sharing, the jn-screen thumbnail and the \"X is talking \u00b7 Y is sharing\" line stay hidden; the strip keeps whoIsIn.",
+    "size": "S"
+   },
+   {
+    "title": "Parley notes in the room and the Parleys tab",
+    "order": 6,
+    "dependsOn": "API: RoomMessage.kind/data parley_notes + edge call history",
+    "owns": [
+     "web-next/src/components/teamspace-room.tsx",
+     "web-next/src/components/parley-notes.tsx (new)",
+     "web-next/src/lib/rooms/client.ts",
+     "web-next/src/lib/call/client.ts",
+     "web-next/src/components/teamspace-side.tsx"
+    ],
+    "delivers": "A ParleyNotes renderer (th-notes: duration, posted by Krude, Decision tags, actions with owner avatars) for room messages of kind parley_notes. The Parleys tab lists past calls, linked to the recording viewer. The Last parley side card. The CallEnded dialog shows the notes.",
+    "stubbed": "Nothing is shown until a1 ships the routes. Without them, this slice should not open.",
+    "size": "M"
+   },
+   {
+    "title": "Launch milestone and checklist",
+    "order": 7,
+    "dependsOn": "API: Teamspace.target_date + /teamspaces/{id}/tasks",
+    "owns": [
+     "web-next/src/lib/teamspaces/client.ts",
+     "web-next/src/lib/teamspaces/queries.ts",
+     "web-next/src/components/teamspace-side.tsx",
+     "web-next/src/components/teamspace-focus.tsx (hero subtitle)"
+    ],
+    "delivers": "The Launch card: date, \"in N days\", \"X of Y done\", a progress bar, and a checklist with toggling done, owner avatars and adding an item. The hero subtitle shows \"Launch on <date> \u00b7 in N days\". Cards show the date as a fact chip.",
+    "stubbed": "Editing the date is limited to managers; it stays read-only for others.",
+    "size": "M"
+   },
+   {
+    "title": "Plan tab: multiplayer document beside the room",
+    "order": 8,
+    "dependsOn": "API: plan_file_id, team-file ONLYOFFICE editor route, editor presence, suggestions",
+    "owns": [
+     "web-next/src/components/teamspace-plan.tsx (new)",
+     "web-next/src/components/teamspace-plan.test.tsx (new)",
+     "web-next/src/lib/teamspaces/client.ts",
+     "web-next/src/lib/files/client.ts",
+     "web-next/src/components/teamspaces.css"
+    ],
+    "delivers": "The room tile and the plan tile side by side, with the ts4 gutter and a focused tile. The ONLYOFFICE co-editor for the team's plan .docx gives the native cursors and track changes. The tile header shows editor faces and \"N editing\". The Krude suggested-edit card offers Accept, Reject and Ask in room; Ask in room posts to the room. A \"Choose the plan\" picker over team files is for managers. Card and file meta show \"N editing\".",
+    "stubbed": "Without the suggestions API the suggestion card is hidden. Without editor presence the faces and \"N editing\" are hidden.",
+    "size": "L"
+   }
+  ],
+  "apiAsks": [
+   "GET /v1/organizations/{org}/teamspaces: add per-space last_message {author_handle, author_kind, author_name, preview, created_at} and unread_count for the caller (needs a per-member read seq cursor; room_presence.last_read_at is presence only)",
+   "Teamspace: add paused_by_user_id and paused_at; let a paused room be read-only (GET \u2026/messages works, POST refused) instead of 400 on read",
+   "Teamspace: add target_date (date) and target_label, settable via PATCH \u2026/teamspaces/{id} by managers",
+   "New: GET/POST/PATCH/DELETE /v1/organizations/{org}/teamspaces/{id}/tasks {title, owner_user_id, done, position, due_date}",
+   "Room messages: add kind ('message' | 'parley_notes') and data; on call.ended the voice agent posts parley_notes {call_id, duration_ms, decisions[], actions[{text, owner_user_id}]}",
+   "Edge: GET /live/{org}/rooms/{kind}/{id}/calls?limit= returning past calls {callId, startedAt, endedAt, participants, recording ref, transcript ref, decisions, actions}",
+   "Edge: a batch call status, e.g. GET /live/{org}/calls?rooms=teamspace:a,teamspace:b \u2192 {room: {startedAt, participants}} (or active_call on the Go teamspace list) for card and sidebar live dots",
+   "Edge CallView: add speaking (member) and sharing {member, name, title} so the join strip can say who is talking and what is shared",
+   "Teamspace: plan_file_id (PATCH) + GET /v1/organizations/{org}/files/{fileID}/editor returning an ONLYOFFICE co-editing config for team-scoped docx/xlsx/pptx (mirror threads documentEditor), with a callback to save back",
+   "Editor presence: GET /v1/organizations/{org}/files/{fileID}/editors \u2192 current editors (from ONLYOFFICE callback users) for \"N editing\"",
+   "New: GET/POST /v1/organizations/{org}/teamspaces/{id}/suggestions {file_id, anchor, before, after, rationale, author_agent_id, for_user_id} + POST \u2026/suggestions/{sid}:accept and :reject",
+   "Optional: file metadata on StoredFile: cited_count (from agent citations) and source/sync status for connected files",
+   "Optional: per-scope agent permissions for the panel toggles (reads room and files, suggests vs edits, web) per member per teamspace"
+  ]
+ },
+ {
+  "area": "Shell, My workspace and Requests",
+  "summary": "The shell is still the first-pass layout. One sidebar is split into Home/Team/Agents tiles. The right panel has four tabs (Agents, DMs, Teams, At a glance). There is no command palette (ui/command.tsx exists but nothing uses it, and it imports `cn` from \"cn\", a broken path). The boards use a different structure. The sidebar has org switcher, \u2318K search, My workspace/Requests (count)/Chats, Live now, each teamspace listed, Messages, Agents with counts, a Library grid and a settings gear. The right panel becomes Krude plus At a glance, with a privacy/location line, chips, a \"Looking at\" composer chip and quick toggles. My workspace and Requests already have the right building blocks: greeting, scene, Needs-you rows, Inbox/Sent/Activity, filters, consent choices and the all-clear scene. They differ in content and structure. My workspace has no page composer on the board and the agent panel is open there. \"Pick up where you left off\" is a filtered, paged card slider, not text columns. Requests needs a header count, row tags, an expiry pill, S/A/R/D shortcuts and all-clear stats. Most nav, palette and Requests gaps can use existing routes. Some data is missing from the API: org-wide live calls, teamspace unread, the request draft preview before consent and its Slack thread, per-app digests, agent quick-setting toggles, and what Krude read at first run. DESIGN.md \u00a72/\u00a73 currently encode the old structure (three tiles, four panel tabs, both rails collapsed on Home, no starter prompts), so each slice must update it in the same PR.",
+  "gaps": [
+   {
+    "board": "Sidebar",
+    "element": "Section structure: top section (My workspace, Requests, Chats with Krude), Teamspaces, Messages, Agents, Library grid",
+    "status": "differs",
+    "detail": "Code groups pages under Home (My workspace, Library, Tools), Team (Teamspaces, People) and Agents (Agent overview, Multi-agent teams, Specialists, Requests) tiles. The board puts Requests at the top. It adds a 'Chats with Krude' item and lists Teamspaces, Messages and Agents as their own sections. Library becomes a 3-tile grid (Knowledge, Files, Tools).",
+    "code": "web-next/src/components/workspace-shell.tsx: `navigation`, `primaryModes`, `selectNav` and the <aside className=\"workspace-left\"> block. Extract to a new workspace-sidebar.tsx. DESIGN.md \u00a72 table.",
+    "api": "none needed (navigation only)"
+   },
+   {
+    "board": "Sidebar",
+    "element": "Org switcher button (mark, name, chevron) at the top",
+    "status": "differs",
+    "detail": "Code shows the org name as plain text in workspace-left-top, plus a <select> in the page header when there is more than one org. The board puts a switcher button with a menu in the sidebar.",
+    "code": "workspace-shell.tsx: workspace-left-top and the `workspace-organization-switcher` label in the header",
+    "api": "available: session.organizations (lib/auth/client Session)"
+   },
+   {
+    "board": "Sidebar",
+    "element": "'Search or jump to \u2318K' button",
+    "status": "missing",
+    "detail": "No search entry and no global \u2318K handler.",
+    "code": "workspace-shell.tsx (new button and keydown listener), new workspace-command-palette.tsx",
+    "api": "none needed for the button"
+   },
+   {
+    "board": "Sidebar",
+    "element": "Requests count badge (strong)",
+    "status": "missing",
+    "detail": "Requests has no count in the nav. The board shows how many wait on the member.",
+    "code": "workspace-shell.tsx nav item; reuse waitsOnOwner logic from requests-view.tsx",
+    "api": "available: GET /v1/organizations/{org}/agent-requests/inbox via agentRequestsQueryOptions(org,'inbox') + waitsOnOwner"
+   },
+   {
+    "board": "Sidebar",
+    "element": "'Chats with Krude' item",
+    "status": "missing",
+    "detail": "No page entry for the member's chats with Krude. Today, chat history lives inside the panel's AgentChat History toggle.",
+    "code": "workspace-shell.tsx Section union; until the Chats page (another area) lands, it opens the panel history via openHomeHistory()",
+    "api": "available: threadListQueryOptions (GET /v1/organizations/{org}/threads)"
+   },
+   {
+    "board": "Sidebar",
+    "element": "Live now block (parley row with timer, 'Krude is browsing Notion', mute/camera/leave)",
+    "status": "missing",
+    "detail": "No live section in the sidebar. The member's own call exists in CallProvider (useCall().active, setMic, setCamera, leave), and CallMiniPlayer floats separately. Krude's browser sessions are only visible per room.",
+    "code": "new LiveNow component in workspace-sidebar.tsx using useCall() from call-provider.tsx",
+    "api": "own call: available via useCall(). Agent browser sessions: per room only (listChildren in lib/live/children.ts with threadRoom()). An org-wide list of live rooms and sessions is missing."
+   },
+   {
+    "board": "Sidebar",
+    "element": "Teamspaces listed individually (planet icon, live dot, unread dot, + new teamspace)",
+    "status": "differs",
+    "detail": "Code has one 'Teamspaces' item with a count. The board lists each teamspace, which opens TeamspaceFocus directly, and a + that opens create.",
+    "code": "workspace-sidebar.tsx using useTeamspaces().spaces and openTeamspace(); + goes to TeamspacesManagement create",
+    "api": "list: available via listTeamspaces (GET /v1/organizations/{org}/teamspaces). Live dot: per-room readCall (lib/call/client) only, N reads. Unread dot: missing (no per-member unread on teamspaces)."
+   },
+   {
+    "board": "Sidebar",
+    "element": "Messages section (DMs with unread counts, + new message, People with count)",
+    "status": "differs",
+    "detail": "RecentConversations shows up to 3 DMs under the heading 'Conversations' with an 'All' link to the panel's DMs tab. People sits under Team with no count, and there is no + button.",
+    "code": "direct-message-inbox.tsx RecentConversations; workspace-shell.tsx People item",
+    "api": "available: useInbox (conversations[].unread), useDmPeople (count); DM picker exists in DirectMessagesTab (dmPanelList)"
+   },
+   {
+    "board": "Sidebar",
+    "element": "Agents section: Krude 'Your agent', Specialists N, Agent teams N, Workflows N, + new specialist",
+    "status": "differs",
+    "detail": "Code has Agent overview, Multi-agent teams and Specialists with no counts, and no Workflows item.",
+    "code": "workspace-shell.tsx navigation.agents; AgentsCanvas sections in agents-mode.tsx",
+    "api": "available: agentsQueryOptions, agentTeamsQueryOptions, agentWorkflowsQueryOptions (lib/agents/queries.ts)"
+   },
+   {
+    "board": "Sidebar",
+    "element": "Footer: avatar, name, role, Settings gear",
+    "status": "differs",
+    "detail": "Code has a profile button that opens a menu (theme, Settings, Sign out). The board has a direct settings gear beside the identity.",
+    "code": "workspace-shell.tsx workspace-profile-area",
+    "api": "none needed"
+   },
+   {
+    "board": "Rail",
+    "element": "Collapsed rail grouping and badges",
+    "status": "differs",
+    "detail": "The board rail has: org mark (expand), search, [My workspace, Requests with badge, Chats], [teamspaces with live dot], [unread DMs with badges], [Krude, Library], spacer, Settings, avatar. Code's collapsed left shows an expand button, the 9 nav icons from three modes, recent DM avatars and the profile.",
+    "code": "workspace-shell.tsx collapsed branch (leftExpanded=false) / new workspace-sidebar.tsx rail mode",
+    "api": "same as Sidebar rows (teamspaces, inbox unread, request count available; live dot needs readCall or the org live list)"
+   },
+   {
+    "board": "NavCommand",
+    "element": "\u2318K 'Jump to' palette: Go to (teamspaces, requests, chats, files) and Do (start a parley \u2318\u21e7H, Ask Krude \u2318\u21b5, have Krude open a page), footer key hints",
+    "status": "missing",
+    "detail": "No palette exists. ui/command.tsx (cmdk) is unused and imports `cn` from \"cn\", which is wrong.",
+    "code": "new src/components/workspace-command-palette.tsx; fix src/components/ui/command.tsx import; mount and \u2318K/\u2318\u21e7H listeners in workspace-shell.tsx",
+    "api": "available, filtered client-side: listTeamspaces, listAgentRequests inbox, threadListQueryOptions, filesQueryOptions (lib/files/client). Ask Krude: requestPrimaryChat. Start a parley: useCall().join with a teamspace room. Browser preview: send as a primary-chat ask. A server-wide search is missing (optional)."
+   },
+   {
+    "board": "AgentPanel",
+    "element": "Header: Krude avatar, name, 'Only you \u00b7 in {place}', History, New chat, Collapse",
+    "status": "differs",
+    "detail": "Code's header is a row of tab pills plus a collapse toggle. History and New conversation live inside AgentChat's own toolbar. There is no privacy or location line.",
+    "code": "workspace-agent-panel.tsx WorkspaceAgentPanel top; agent-chat.tsx (lift the history/new controls via props); workspace-shell.tsx passes a place label from screenSelection/heading",
+    "api": "available: screen context (lib/agents/screen-context), agentsQueryOptions for the name"
+   },
+   {
+    "board": "AgentPanel",
+    "element": "Two-way segment 'Krude | At a glance (needs count)'",
+    "status": "differs",
+    "detail": "Code has four tabs: Agents, DMs, Teams and At a glance. Teams only shows an empty state. On the board, DMs move to the sidebar's Messages section, and the glance tab carries the needs count.",
+    "code": "workspace-agent-panel.tsx panelTabs/visibleTabs; DESIGN.md \u00a72 right-panel paragraph",
+    "api": "available: needs count from the inbox + waitsOnOwner"
+   },
+   {
+    "board": "AgentPanel",
+    "element": "Strip chips: 'Parley \u00b7 Join' (teamspace/home), 'In the parley \u00b7 Live notes' (huddle), 'Needs you N'",
+    "status": "missing",
+    "detail": "No chip strip.",
+    "code": "workspace-agent-panel.tsx (new AgentStrip); pageTeamspaceId already passed",
+    "api": "Needs you: available (inbox). Join on a teamspace page: available via useRoomCall/readCall for that teamspace room. Join on home: missing (needs the org-wide live list). In the parley: useCall().active."
+   },
+   {
+    "board": "AgentPanel",
+    "element": "Quick settings toggles (Reads room and files / Suggests, doesn't edit / Web; varies by page)",
+    "status": "missing",
+    "detail": "No per-context capability toggles.",
+    "code": "workspace-agent-panel.tsx",
+    "api": "missing: per-member, per-context agent capability flags (read scope, edit vs suggest, web) GET/PATCH"
+   },
+   {
+    "board": "AgentPanel",
+    "element": "Composer context chip 'Looking at {item}'",
+    "status": "missing",
+    "detail": "Screen context is sent with messages but never shown. File viewers do not add a file selection to screenSelection.",
+    "code": "workspace-shell.tsx screenSelection (add primaryFile and viewer files); agent-chat.tsx or agent-composer.tsx shows a chip",
+    "api": "available: captureScreenContext / ScreenItem"
+   },
+   {
+    "board": "AgentPanel",
+    "element": "Page variants (teamspace, knowledge, huddle, file kinds, home) as one location-aware chat",
+    "status": "differs",
+    "detail": "The log content is just conversation, which already works. What changes per page is the place line, chips, toggles and context chip above. The teamspace teammates list (TeamspaceTeammates) is not on the board's panel. Keep it under the chat, or decide to drop it in DESIGN.md.",
+    "code": "workspace-agent-panel.tsx AgentsView `teammates`",
+    "api": "none needed beyond rows above"
+   },
+   {
+    "board": "AgentPanelGlance",
+    "element": "From your apps: app icon row with per-app counts, latest mention row, Manage link",
+    "status": "differs",
+    "detail": "Code glance lists wake-up briefs as text rows with an 'All updates' link.",
+    "code": "home-overview.tsx appsSection (glance variant)",
+    "api": "icons: available via connectionsQueryOptions. Latest brief: available via briefsOf on the wake-up thread. Per-app counts: missing."
+   },
+   {
+    "board": "AgentPanelGlance",
+    "element": "Teammates: avatar row with names, 'All' link to People",
+    "status": "differs",
+    "detail": "Code glance 'Teammates' is the Needs-you request list. The board shows teammate avatars, and needs-you moves to the chip and count.",
+    "code": "home-overview.tsx glance variant, a new TeammatesGlance",
+    "api": "available: useDmPeople / members directory + usePeerOnline presence"
+   },
+   {
+    "board": "AgentPanelGlance",
+    "element": "Conversations (New chat), Knowledge (Library link), Files Krude made, Recurring work ('All N' link)",
+    "status": "differs",
+    "detail": "These mostly match. Missing: the 'All N' link to workflows on Recurring work, and the heading 'Files Krude made' with a file-kind badge.",
+    "code": "home-overview.tsx stack sections",
+    "api": "available (agentWorkflowsQueryOptions, agentFilesOf)"
+   },
+   {
+    "board": "WorkspaceNew",
+    "element": "Header crumb 'My workspace \u00b7 {weekday date}'",
+    "status": "differs",
+    "detail": "The header shows only the title.",
+    "code": "workspace-shell.tsx header (subtitle per section)",
+    "api": "none needed"
+   },
+   {
+    "board": "WorkspaceNew",
+    "element": "Hello line 'Krude answered N asks for you\u2026 Three are worth a look.'",
+    "status": "differs",
+    "detail": "Code says 'N things need you.' only when something waits.",
+    "code": "home-overview.tsx helloLine",
+    "api": "available: inbox requests with decision.decided_by.kind==='agent' today (listAgentRequests inbox, max 100)"
+   },
+   {
+    "board": "WorkspaceNew",
+    "element": "'Needs you' block with All requests: request rows (draft ready \u00b7 expires), Krude-suggested edit, Parley in teamspace with Join",
+    "status": "differs",
+    "detail": "Code has a 'Teammates' tile with request rows (Decide/Review/Reply), waiting tool confirmations and access leases. It lacks the heading, the expiry phrase, the parley row and suggested-edit rows.",
+    "code": "home-overview.tsx Teammates section",
+    "api": "requests and expiry: available (expiresPhrase). Parley row: per teamspace readCall (N reads), or missing org-wide live list. Suggested plan edits: missing (no suggestions API)."
+   },
+   {
+    "board": "WorkspaceNew",
+    "element": "No page composer or tool pills; agent panel open on My workspace",
+    "status": "differs",
+    "detail": "Code renders AgentComposer and tool pills on the page, and starts with both rails collapsed, as DESIGN.md \u00a73 requires. The board has no page composer and opens the panel (page=home).",
+    "code": "home-overview.tsx home-compose; workspace-shell.tsx initial rightExpanded; DESIGN.md \u00a73",
+    "api": "none needed"
+   },
+   {
+    "board": "WorkspaceNew",
+    "element": "'Pick up where you left off' slider: All / Your work / From your apps filters, '1\u20134 of 7' pager, arrows and dots, visual cards (doc thumbnail, Krude's live browser, Slack/Gmail/GitHub/Notion/Drive previews with counts)",
+    "status": "differs",
+    "detail": "Code shows a stack of text columns (From your apps, Conversations, Knowledge, Files, Recurring work).",
+    "code": "home-overview.tsx home-stack, a new home-pickup.tsx, home-overview.css",
+    "api": "Your work: available via agentFilesOf, threadListQueryOptions, corpora, and live browser sessions via listChildren(threadRoom) for the open thread. From your apps cards: briefs only (text). Per-app counts, previews and 'N editing' presence: missing."
+   },
+   {
+    "board": "OnbFirstRun",
+    "element": "First-run My workspace: 'Getting started 3 of 5 \u00b7 Next: \u2026' pill, Krude 'Read \u2026 \u00b7 only you see this', greeting, 'Three things stood out' brief rows, big Ask composer, chips (Draft\u2026, What needs me today?, Start a parley), sea horizon, no panel",
+    "status": "missing",
+    "detail": "Onboarding's onDone lands on the normal workspace. No first-run variant exists. The chips conflict with DESIGN.md's 'No starter prompts' rule.",
+    "code": "new home-first-run.tsx; routes/index.tsx onDone (pass a welcome flag); workspace-shell.tsx; onboarding.tsx",
+    "api": "progress: available client-side (agents, connectionsQueryOptions, teamspaces, invitations/members, threads). Brief rows: available via briefsOf on the wake-up thread. Ask: requestPrimaryChat. 'What Krude read' (channel/source counts): missing."
+   },
+   {
+    "board": "RequestsNew",
+    "element": "Header crumb 'Requests \u00b7 N waiting for you' / 'All clear'",
+    "status": "differs",
+    "detail": "The header shows only 'Requests'.",
+    "code": "workspace-shell.tsx header; count from requests-view.tsx",
+    "api": "available: inbox + waitsOnOwner"
+   },
+   {
+    "board": "RequestsNew",
+    "element": "Search button in the list tile",
+    "status": "missing",
+    "detail": "No search.",
+    "code": "requests-view.tsx RequestsView bar",
+    "api": "available, filtered client-side over listAgentRequests (max 100). A server ?q= is missing (optional)."
+   },
+   {
+    "board": "RequestsNew",
+    "element": "Group heading 'Waiting for you N' (shown with 0 in all-clear), 'Earlier'",
+    "status": "differs",
+    "detail": "Code shows headings only while something waits, and without a count.",
+    "code": "requests-view.tsx RequestList rows",
+    "api": "available"
+   },
+   {
+    "board": "RequestsNew",
+    "element": "Row tag and time: 'Expires in 1 h', 'Wants your reply', 'Answered by Krude', clock time, new-dot",
+    "status": "differs",
+    "detail": "rowTag says 'Waiting for your OK', 'Needs your reply' or 'Answered', and time is agoPhrase. There is no expiry, no answered-by-agent and no unread marker.",
+    "code": "requests-view.tsx rowTag/RequestRow; request-card-format.ts",
+    "api": "expiry and answered-by: available (expires_at, decision.decided_by, result.written_by_owner). New/unread marker: missing (no per-member seen state)."
+   },
+   {
+    "board": "RequestsNew",
+    "element": "Row warn tag 'Has an email address'",
+    "status": "missing",
+    "detail": "No warning before an answer exists.",
+    "code": "requests-view.tsx rowTag",
+    "api": "missing: guard findings on the draft before consent"
+   },
+   {
+    "board": "RequestsNew",
+    "element": "Detail head 'X asked you', 'Slack \u00b7 #channel \u00b7 time', expiry pill",
+    "status": "differs",
+    "detail": "The card head has the title, origin and time. Expiry is a separate detail line, and there is no channel name.",
+    "code": "request-card.tsx header",
+    "api": "expiry: available. Slack channel name: missing (only Lease has channel_id; the request carries no channel)."
+   },
+   {
+    "board": "RequestsNew",
+    "element": "'If you share, Krude will say' draft with masked email, source chips, 'N masked'",
+    "status": "missing",
+    "detail": "A drafted answer shows only after consent, while status is 'review' (HeldAnswerReview).",
+    "code": "request-card.tsx; new request-card-draft.tsx",
+    "api": "missing: a draft answer before consent for the target (content, sources, masked count) on GET agent-requests/{id}"
+   },
+   {
+    "board": "RequestsNew",
+    "element": "Four choices in one grid with S/A/R/D shortcuts (Share answer, Allow for 1 hour, Reply yourself, Deny)",
+    "status": "differs",
+    "detail": "Code shows three consent choices plus Reply yourself as a separate ReplyOption below, and has no keyboard shortcuts.",
+    "code": "request-card.tsx workspace-request-choices + request-card-reply.tsx ReplyOption",
+    "api": "available: consentAgentRequest, replyToAgentRequest"
+   },
+   {
+    "board": "RequestsNew",
+    "element": "'In the thread \u00b7 #channel' Slack messages",
+    "status": "missing",
+    "detail": "No thread context.",
+    "code": "request-card.tsx",
+    "api": "missing: GET agent-requests/{id}/thread (recent Slack thread messages, owner only)"
+   },
+   {
+    "board": "RequestsClear",
+    "element": "All-clear tile copy and stats row (asks today, by Krude, by you, average wait)",
+    "status": "differs",
+    "detail": "The scene and 'Every ask answered.' match. The subline differs, and the stats row is missing.",
+    "code": "requests-view.tsx requests-clear section",
+    "api": "available, computed client-side from the inbox (created_at, decision.decided_by, decided_at; max 100). A stats endpoint is optional."
+   },
+   {
+    "board": "RequestsNew",
+    "element": "No agent panel on Requests (detail tile takes the width)",
+    "status": "differs",
+    "detail": "Code always renders the right panel or rail, and openRequestsSection collapses it only on mobile.",
+    "code": "workspace-shell.tsx openRequestsSection; DESIGN.md \u00a72",
+    "api": "none needed"
+   }
+  ],
+  "slices": [
+   {
+    "title": "Sidebar sections: extract workspace-sidebar.tsx with the board's structure",
+    "order": 1,
+    "owns": [
+     "web-next/src/components/workspace-sidebar.tsx (new)",
+     "web-next/src/components/workspace-shell.tsx (nav block, Section union, selectNav)",
+     "web-next/src/components/direct-message-inbox.tsx (RecentConversations \u2192 Messages)",
+     "web-next/src/workspace.css (sidebar rules)",
+     "web-next/DESIGN.md \u00a72"
+    ],
+    "delivers": "Org switcher button in the sidebar, which replaces the header <select>. A search button that is inert until slice 2. Top section with My workspace, Requests with the live waiting count, and Chats with Krude, which opens panel history for now. Each teamspace listed, with + new. Messages with DM unread counts, + new message and People with count. Agents with Krude, Specialists, Agent teams and Workflows, all with counts. A Library 3-tile grid. Footer with a settings gear. Closes the Sidebar structure, org switcher, Requests count, Teamspaces list, Messages, Agents and footer gaps.",
+    "stubbed": "Teamspace unread dot hidden (no API). Live dot and the Live now block deferred to slice 4.",
+    "size": "L",
+    "dependsOn": ""
+   },
+   {
+    "title": "Collapsed rail to match the Rail board",
+    "order": 2,
+    "owns": [
+     "web-next/src/components/workspace-sidebar.tsx (rail mode)",
+     "web-next/src/workspace.css (rail rules)"
+    ],
+    "delivers": "Rail groups: org mark/expand, search, [My workspace, Requests badge, Chats], [teamspaces], [unread DMs with badges], [Krude, Library], Settings, avatar. Closes the Rail gap.",
+    "stubbed": "Teamspace live dot hidden until slice 4.",
+    "size": "S",
+    "dependsOn": "1"
+   },
+   {
+    "title": "\u2318K Jump-anywhere palette",
+    "order": 3,
+    "owns": [
+     "web-next/src/components/workspace-command-palette.tsx (new)",
+     "web-next/src/components/workspace-command-palette.css (new)",
+     "web-next/src/components/ui/command.tsx (fix cn import)",
+     "web-next/src/components/workspace-shell.tsx (mount, \u2318K/\u2318\u21e7H listeners, open handlers)"
+    ],
+    "delivers": "Palette with Go to (teamspaces, inbox requests, Krude chats, files, filtered client-side from existing queries) and Do (Start a parley in the matched teamspace via useCall().join, Ask Krude about the query via requestPrimaryChat, have Krude open a page sent as a chat ask), with key hints and keyboard navigation. Wires the sidebar and rail search buttons. Closes the NavCommand and search-button gaps.",
+    "stubbed": "Nothing faked. Results are limited to what the loaded lists hold. A note says when a list is capped (requests: 100).",
+    "size": "M",
+    "dependsOn": "1"
+   },
+   {
+    "title": "Live now in the sidebar and live dots",
+    "order": 4,
+    "owns": [
+     "web-next/src/components/workspace-sidebar.tsx (LiveNow block, live dots)",
+     "web-next/src/lib/live/org-live.ts (new client, when the API exists)"
+    ],
+    "delivers": "Live now block for the member's own parley (name, timer, mute, camera, leave) via useCall(). A teamspace live dot from readCall per listed teamspace (capped) until an org-wide list exists. Closes the Live now and live-dot gaps.",
+    "stubbed": "'Krude is browsing \u2026' rows hidden until the org-wide live sessions API exists. The per-teamspace live dot is hidden past the cap.",
+    "size": "S",
+    "dependsOn": "1"
+   },
+   {
+    "title": "Agent panel: Krude / At a glance, header, chips, context chip",
+    "order": 5,
+    "owns": [
+     "web-next/src/components/workspace-agent-panel.tsx",
+     "web-next/src/components/agent-chat.tsx (lift History/New conversation to header props)",
+     "web-next/src/components/workspace-shell.tsx (place label, needs count, file selection in screenSelection)",
+     "web-next/src/workspace.css (panel rules)",
+     "web-next/DESIGN.md \u00a72 right panel"
+    ],
+    "delivers": "Header with Krude avatar and name, 'Only you \u00b7 in {place}', History, New chat and Collapse. Two-way segment with the needs count on At a glance. DMs and Teams tabs removed: DMs now live in the sidebar and canvas, and TeamspaceTeammates stays under the chat on teamspace pages. Chip strip: Needs you N (opens Requests), Parley \u00b7 Join on a teamspace page via useRoomCall, In the parley when useCall().active. 'Looking at {item}' chip on the composer. Collapsed rail shows Krude and At a glance. Closes the AgentPanel header, segment, strip and context-chip gaps.",
+    "stubbed": "Quick-setting toggles hidden (no capability API). The Parley Join chip on My workspace is hidden until the org live list exists.",
+    "size": "L",
+    "dependsOn": "1"
+   },
+   {
+    "title": "At a glance widgets to the board",
+    "order": 6,
+    "owns": [
+     "web-next/src/components/home-overview.tsx (glance variant)",
+     "web-next/src/components/home-glance.tsx (new, if split)",
+     "web-next/src/components/home-overview.css"
+    ],
+    "delivers": "From your apps as an app icon row (connections) plus the latest brief row and a Manage link. Teammates as avatars with presence and an All link to People. Conversations, Knowledge with a Library link, 'Files Krude made' with a kind badge, and Recurring work with an 'All N' link. Needs-you leaves the glance, since it is now the chip and count. Closes the AgentPanelGlance gaps.",
+    "stubbed": "Per-app count badges hidden until the app digest API exists.",
+    "size": "M",
+    "dependsOn": "5"
+   },
+   {
+    "title": "My workspace top half: header date, hello line, Needs you, panel open, no page composer",
+    "order": 7,
+    "owns": [
+     "web-next/src/components/home-overview.tsx (page hello, Needs you, remove home-compose)",
+     "web-next/src/components/today-format.ts",
+     "web-next/src/components/workspace-shell.tsx (header subtitle, rightExpanded default on overview)",
+     "web-next/DESIGN.md \u00a73 Home"
+    ],
+    "delivers": "'My workspace \u00b7 {date}' crumb. Hello line counting asks Krude answered today, from inbox decisions. 'Needs you' heading with All requests. Request rows with the expiry phrase. Remove the page composer and tool pills, and open the agent panel by default on My workspace. Closes the WorkspaceNew header, hello, Needs-you and composer gaps.",
+    "stubbed": "Parley row hidden until the org live list exists (or limited to teamspaces checked in slice 4). 'Krude suggested an edit' rows hidden (no suggestions API).",
+    "size": "M",
+    "dependsOn": "5"
+   },
+   {
+    "title": "Pick up where you left off: card slider",
+    "order": 8,
+    "owns": [
+     "web-next/src/components/home-pickup.tsx (new)",
+     "web-next/src/components/home-overview.tsx (replace home-stack on the page)",
+     "web-next/src/components/home-overview.css"
+    ],
+    "delivers": "A sideways slider with All / Your work / From your apps filters, a pager ('1\u20134 of N'), arrows and dots. Your work cards: agent files with kind thumbnails (file-kind.tsx), recent Krude chats, the live browser card from listChildren on the open thread room, and knowledge bases. From your apps cards: one per toolkit from the wake-up briefs, as a text preview. Closes the WorkspaceNew slider gap.",
+    "stubbed": "Per-app counts, message previews and 'N editing' presence hidden until the digest and presence APIs exist. A card shows only the real brief text.",
+    "size": "L",
+    "dependsOn": "7"
+   },
+   {
+    "title": "First run in the app",
+    "order": 9,
+    "owns": [
+     "web-next/src/components/home-first-run.tsx (new)",
+     "web-next/src/components/home-first-run.css (new)",
+     "web-next/src/routes/index.tsx (welcome flag on onboarding onDone)",
+     "web-next/src/components/onboarding.tsx (onDone flag)",
+     "web-next/src/components/workspace-shell.tsx (first-run branch, panel hidden)",
+     "web-next/DESIGN.md \u00a73 (starter-chip decision)"
+    ],
+    "delivers": "A first-run My workspace: a 'Getting started n of 5 \u00b7 Next: \u2026' pill computed from real reads (agent, connections, members/invitations, teamspaces, first chat). Krude's header line. Greeting. Brief rows from the wake-up thread. A large Ask composer that starts a chat via requestPrimaryChat. Chips once DESIGN.md is updated. Closes the OnbFirstRun gap.",
+    "stubbed": "'Read 14 Slack channels and your Notion' becomes a plain 'only you see this' line until the API exists. With no briefs yet, the brief list shows an honest one-line empty state.",
+    "size": "M",
+    "dependsOn": "7"
+   },
+   {
+    "title": "Requests to the board: header, rows, choice grid, shortcuts, all-clear stats",
+    "order": 10,
+    "owns": [
+     "web-next/src/components/requests-view.tsx",
+     "web-next/src/components/requests-view.css",
+     "web-next/src/components/request-card.tsx",
+     "web-next/src/components/request-card-format.ts",
+     "web-next/src/components/request-card.css",
+     "web-next/src/components/request-card-reply.tsx",
+     "web-next/src/components/workspace-shell.tsx (Requests header subtitle, collapse panel on Requests)"
+    ],
+    "delivers": "'Requests \u00b7 N waiting for you' / 'All clear' crumb. Client-side search over the list. 'Waiting for you N' heading, shown even at 0. Row tags with expiry, Wants your reply, and Answered by Krude or by you, plus clock time. Card head 'X asked you' with an expiry pill. One four-choice grid with Reply yourself, and S/A/R/D keyboard shortcuts. All-clear copy plus a stats row computed from the inbox. Agent panel collapsed on Requests. Closes the RequestsNew and RequestsClear gaps that can use available data.",
+    "stubbed": "Hidden until the APIs exist: the draft preview with sources and masked count, the Slack thread context, the #channel name, the new/unread dot, and the 'Has an email address' tag.",
+    "size": "M",
+    "dependsOn": "1"
+   }
+  ],
+  "apiAsks": [
+   "Org-wide live list (edge via Worker, e.g. GET /live/rooms for an org): rooms with an active call (room kind/id, name, participant count, started_at) and active agent sessions (child kind, room, label). Used by the sidebar Live now block, teamspace live dots, the Parley Join chip on My workspace, the Needs-you parley row and \u2318K.",
+   "Per-member teamspace unread: add `unread` (or `last_read_seq`/`latest_seq`) to GET /v1/organizations/{org}/teamspaces items, for the sidebar unread dot.",
+   "Draft preview before consent on GET /v1/organizations/{org}/agent-requests/{id} for the target member: `draft {content, sources[{kind,id,name}], masked_count, guard_findings}`, for 'If you share, Krude will say' and the 'Has an email address' tag.",
+   "Slack context on requests: `slack {channel_name, permalink}` on the request, plus GET /v1/organizations/{org}/agent-requests/{id}/thread returning recent thread messages (target member only).",
+   "Per-member seen state for requests: `seen_at` on the target's reads and POST \u2026/agent-requests/{id}/seen, for the new/unread row marker.",
+   "(Optional) GET /v1/organizations/{org}/agent-requests/stats?since= returning asks, answered_by_agent, answered_by_owner and avg_wait_seconds, for the all-clear stats without the 100-row cap.",
+   "Per-app digest: GET /v1/organizations/{org}/apps/digest returning, per toolkit, {count, summary, items[{title, subtitle, url, at}]}, for the From your apps cards and the glance icon counts.",
+   "Agent quick settings per context: GET/PATCH /v1/organizations/{org}/agents/{id}/context-settings {reads_scope, suggest_only, web}, for the panel toggles.",
+   "First-run summary: what the agent read during setup (source counts by toolkit) for the first-run Krude line; optionally GET /v1/organizations/{org}/setup with step completion.",
+   "(Optional) GET /v1/organizations/{org}/search?q= across teamspaces, requests, threads and files for \u2318K beyond the loaded lists.",
+   "(Optional) document presence ('N editing') for agent files and teamspace docs, for the slider cards."
+  ]
+ },
+ {
+  "area": "Chats and messages (ChatsNew, DmNew, PeopleNew, AgentsNew + agent-chat redesign + chat-left/file-right consistency)",
+  "summary": "The first redesign pass in this area changed CSS only: tiles, raised bubbles, the people grid and filled agent tiles. None of the boards' page structures exist yet. There is no Chats page; the agent chat lives only in the right panel (workspace-agent-panel.tsx \u2192 AgentChat) or in the Agent overview focus, with history as a collapsed disclosure. There is no Messages page either: the canvas DM is DirectMessageView on its own, with no list beside it and no person card. People cards have no presence, no agent and no Ask action, and Agents overview is one mixed \"Agentic work\" grid with different stats from the board. The agent conversation still reads as a messenger log: bubbles, one folded tool row, and file chips that open in a new browser tab. The founder's direction needs a working-session design built from run grouping, expandable steps, approvals, outputs and a work pane. Most of the data for that is already in thread items; run boundaries, usage, sources and file counts need small API additions. Chat-left/file-right already holds on desktop in Agent overview, but only through a fixed-position overlay of the right panel's chat (workspace.css:871-881 over an empty aria-hidden slot, workspace-shell.tsx:866-870). Everywhere else a file from the agent chat opens in a new tab with the chat left in the right panel, and every Viewer board docks AgentPanel on the right. The fix is a real two-column session that moves the mounted chat into the left column, using the same host-element pattern useRoomChatHost uses in call-provider.tsx (commit a3ffebd9).",
+  "gaps": [
+   {
+    "board": "ChatsNew",
+    "element": "Chats page (list tile + conversation tile), sidebar entry 'Chats with Krude'",
+    "status": "missing",
+    "detail": "No 'chats' section exists. The agent chat renders only inside the right panel (AgentsView/AgentChat) or the Agent overview focus. History is a collapsed disclosure above the log, not a 300px list column.",
+    "code": "web-next/src/components/workspace-shell.tsx (Section union l.80, navigation l.99, render branches ~l.994); agent-chat.tsx AgentChat (thread bar l.528-590); agent-chat-history.tsx AgentChatHistory",
+    "api": "available: GET /v1/organizations/{org}/threads \u2192 threadListQueryOptions/listThreads; GET \u2026/threads/{id} \u2192 threadDetailQueryOptions (lib/threads/client.ts)"
+   },
+   {
+    "board": "ChatsNew",
+    "element": "Chat list: 'Search chats', Today/Earlier groups, raised active row",
+    "status": "missing",
+    "detail": "The history disclosure lists title + relative time + Needs approval + delete. It has no search and no day groups.",
+    "code": "agent-chat-history.tsx AgentChatHistory (reuse its rows in a new list component)",
+    "api": "available for client-side title filter and grouping by updated_at (listThreads); no server search (not needed at current volumes)"
+   },
+   {
+    "board": "ChatsNew",
+    "element": "Chat row meta: '1 file' / 'Slides' tag",
+    "status": "missing",
+    "detail": "Thread rows have no idea which files a thread made.",
+    "code": "agent-chat-history.tsx row render",
+    "api": "missing: GET \u2026/threads list items need artifact_count (or latest artifact names/kinds) per thread; until then hide the meta"
+   },
+   {
+    "board": "ChatsNew",
+    "element": "Conversation header: avatar, title, 'Only you \u00b7 Krude', \u22ef menu",
+    "status": "differs",
+    "detail": "The code's thread bar is the title, an Expand-to-overview button and New chat. There is no privacy line, and delete lives only in history rows. A \u22ef menu would hold Delete (available) and Rename (missing).",
+    "code": "agent-chat.tsx AgentChat thread bar (.workspace-agent-thread-bar)",
+    "api": "available: DELETE \u2026/threads/{id} via deleteThreadChat; missing: PATCH \u2026/threads/{id} {title} for Rename"
+   },
+   {
+    "board": "ChatsNew",
+    "element": "Tool group row ('Read #eu-launch, \u2026 \u00b7 Done')",
+    "status": "differs",
+    "detail": "ToolGroup matches the board, but the founder's direction asks for visible run steps. DESIGN.md says the row 'never expands', and that rule must change.",
+    "code": "agent-timeline.tsx ToolGroup/groupToolActivity; DESIGN.md \u00a73 'An agent conversation reads as a quiet log'",
+    "api": "available: tool_call items carry tool + arguments, tool_result carries failed/error (Item in lib/threads/client.ts); missing: any result text or sources"
+   },
+   {
+    "board": "ChatsNew",
+    "element": "File made in chat: kind tile, name, 'Draft \u00b7 made in this chat', Open, Share to <teamspace>",
+    "status": "differs",
+    "detail": "ArtifactItem is a chip without a FileKindBadge. Clicking it window.open()s a new browser tab or downloads; it does not open the in-app viewer. There is no Share action.",
+    "code": "agent-timeline.tsx ArtifactItem l.597-690 (open() l.619); file-kind.tsx FileKindBadge; primary-agent-files.tsx PrimaryAgentFileViewer",
+    "api": "available: Open in-app via fetchArtifactLink + PrimaryAgentFileViewer (GET \u2026/threads/{id}/artifacts/{name}); missing: POST \u2026/threads/{id}/artifacts/{name}/share {teamspace_id} for 'Share to teamspace'"
+   },
+   {
+    "board": "ChatsNew",
+    "element": "Composer 'Ask Krude'",
+    "status": "differs",
+    "detail": "AgentComposer matches the board. Under the new direction it becomes a task bar with a 'Looking at \u2026' context chip (AgentPanel board ap-context) and Stop.",
+    "code": "agent-composer.tsx AgentComposer",
+    "api": "available: getScreenContext (lib/agents/screen-context.ts) already goes with each run; stop: POST /v1/organizations/{org}/runs/{runID}/stop (on main, 872c2803/a22755e0, not yet on this branch)"
+   },
+   {
+    "board": "Agent chat (founder direction)",
+    "element": "Working-session layout distinct from people chat (runs, steps, approvals, outputs, sources)",
+    "status": "missing",
+    "detail": "Today it is a messenger log: member bubbles on the right, markdown answers, one folded tool row, confirmation cards, file chips. Nothing groups a turn into a run, and nothing shows elapsed time, usage, outputs or what the agent read.",
+    "code": "agent-timeline.tsx AgentTimeline; lib/threads/timeline.ts buildTimeline; agent-conversation.tsx; agent-chat.tsx ThreadChat l.1040-1080",
+    "api": "available: message/tool_call/tool_result/confirmation/artifact/request/run_failed items with `at`; run_started/run_completed(usage) only on the live stream. missing: thread detail drops run_* items, so history cannot show run boundaries, duration or token usage; no structured sources"
+   },
+   {
+    "board": "File views (ViewerPdf/ViewerSlides + AgentPanel page=file; primary-agent-files.tsx)",
+    "element": "Chat left, file right",
+    "status": "differs",
+    "detail": "In Agent overview the chat sits left only because the panel's chat is position:fixed over an empty slot. Its width formula, max(300px, (100vw - var(--right-width) - 52px)*.3), does not track the grid column minmax(300px,30%), so it drifts when the right panel is expanded. Every other path leaves the chat in the right panel: a file chip clicked in the panel chat opens a new tab, and the boards' Viewer artboards dock AgentPanel on the right. Fix: a real two-column session whose left column receives the mounted chat through a movable host element, as useRoomChatHost does. Remove the fixed rules and make ArtifactItem open the right pane.",
+    "code": "workspace.css l.871-881 and l.1193-1206 (fixed overlay); workspace-shell.tsx l.860-905 (primaryWork branch, .workspace-primary-conversation-slot); workspace-agent-panel.tsx data-primary-chat view l.560-590; agent-timeline.tsx ArtifactItem; call-provider.tsx useRoomChatHost (pattern)",
+    "api": "none needed"
+   },
+   {
+    "board": "DmNew",
+    "element": "Messages page: 280px DM list | conversation | 300px person card",
+    "status": "missing",
+    "detail": "The canvas DM is DirectMessageView alone under the shell header. The DM list (rows with preview + unread count) exists only in the panel's DMs tab and as three recents in the sidebar.",
+    "code": "workspace-shell.tsx people branch l.1011-1040; direct-message-inbox.tsx DirectMessagesTab/DmRow; direct-message.tsx DirectMessageView layout=\"canvas\"; direct-messages.css",
+    "api": "available: useInbox (lib/dms/use-inbox.ts, live DM layer), useDmPeople members (GET \u2026/members)"
+   },
+   {
+    "board": "DmNew",
+    "element": "Header 'Messages \u00b7 3 unread', 'Find a person' search in list",
+    "status": "missing",
+    "detail": "The header names the peer only, and the list has no person search.",
+    "code": "workspace-shell.tsx header detail; direct-message-inbox.tsx",
+    "api": "available: inbox.unreadTotal; filterPeople (direct-message-people.ts)"
+   },
+   {
+    "board": "DmNew",
+    "element": "Person card: avatar, name, role, local time, presence, Parley, Profile",
+    "status": "missing",
+    "detail": "Nothing shows a person's details next to a DM. Role is available. Parley exists (ParleyButton with directRoom), but only in the DM bar. Presence is known only while a DM is open (usePeerOnline). There is no local time and no profile page.",
+    "code": "new components/person-card.tsx; call-surfaces.tsx ParleyButton; direct-message-presence.ts usePeerOnline",
+    "api": "available: role (members), ParleyButton/directRoom (lib/live/rooms.ts); missing: member timezone (profile), org-wide presence (Active/Away/In a parley) from the live layer, a profile page"
+   },
+   {
+    "board": "DmNew",
+    "element": "Person card: 'Her agent Nia \u00b7 Ask Nia', Shared teamspaces chips, Shared files",
+    "status": "missing",
+    "detail": "Shared teamspaces are already computed (DmPerson.spaces). The peer's agent is known only through shared teamspaces' whisperers (agent_id, agent_name). There is no web-next function to file an agent request outside a side conversation, and no shared-files query.",
+    "code": "direct-message-people.ts useDmPeople (add agent from Teamspace.whisperers); lib/agents/agent-requests.ts (add createAgentRequest)",
+    "api": "available: POST /v1/organizations/{org}/agent-requests (teamspace_id optional \u2192 owner-approved; interactions/service.go validateCreate), but no client fn yet; missing: members' primary agent for people with no shared teamspace; files shared between two people"
+   },
+   {
+    "board": "DmNew",
+    "element": "Peer's agent answering inside the DM log ('Nia \u00b7 Priya's agent') and '@Nia' in composer",
+    "status": "missing",
+    "detail": "The DM log carries only messages and request notes. Asking an agent in-thread exists only in teamspace-scoped side conversations (askTeammateAgent).",
+    "code": "direct-message.tsx; lib/side/use-side-conversation.ts (pattern)",
+    "api": "missing: DM live object support for agent asks/answers (edge DM room posting the request and its answer); stub: Ask opens the request flow and the answer lands in Requests"
+   },
+   {
+    "board": "DmNew",
+    "element": "Message rendering (avatar + name + time per message)",
+    "status": "differs",
+    "detail": "The code uses bubbles for the member and plain text for the peer. The founder says people chats are fine, so keep them. Only the list beside the conversation is new.",
+    "code": "direct-message.tsx",
+    "api": "none needed"
+   },
+   {
+    "board": "PeopleNew",
+    "element": "Header: 'Everyone and their agents' + Invite pill; search with '/' kbd",
+    "status": "differs",
+    "detail": "There is a search field but no '/' shortcut and no Invite. Invitations live in Settings \u2192 People.",
+    "code": "people-directory.tsx PeopleDirectory; workspace-shell.tsx (open settings page 'people')",
+    "api": "available: existing settings invitation flow (people-management.tsx)"
+   },
+   {
+    "board": "PeopleNew",
+    "element": "Teamspace filter segment (Everyone / EU launch / Sales \u2026) and 'Northstar \u00b7 5 people, 5 agents'",
+    "status": "missing",
+    "detail": "Neither exists.",
+    "code": "people-directory.tsx",
+    "api": "available: teamspaces list + DmPerson.spaces; agent count only for people met through teamspaces (see API ask)"
+   },
+   {
+    "board": "PeopleNew",
+    "element": "Person card: presence line, their agent row, Message + 'Ask <agent>'; own card with 'Your agent' + Settings",
+    "status": "differs",
+    "detail": "PersonRow is one button (avatar with DM-known online dot, name, role/spaces context, Message). It has no agent row and no Ask action, and the viewer is excluded from the list.",
+    "code": "people-directory.tsx PersonRow; direct-message-people.ts",
+    "api": "available: whisperers (agent id/name in shared teamspaces), own primary via ownAgentsQueryOptions, POST agent-requests; missing: general presence, primary agent per member org-wide"
+   },
+   {
+    "board": "AgentsNew",
+    "element": "Hero: Krude, 'reads Slack, Notion and Drive \u00b7 suggests, you decide', stats (answered today / waiting for you / files made), Settings",
+    "status": "differs",
+    "detail": "The code has a primary section (name, description, status) and a separate stats dl of Specialists / Teams / Workflows / Requests waiting. There is no connected-apps line and no Settings button.",
+    "code": "agents-mode.tsx AgentsOverview l.295-360, Stat",
+    "api": "available: waiting = agentRequestsQueryOptions inbox; apps via connectionsQueryOptions (lib/apps/client.ts); missing: 'answered today' and 'files made' counts for the primary agent"
+   },
+   {
+    "board": "AgentsNew",
+    "element": "Multi-agent teams section: chain (coordinator \u2192 members avatars), description, status, '+ New team'",
+    "status": "differs",
+    "detail": "Teams are mixed with specialists in one 'Agentic work' grid (AgentTeamEntry) with no chain and no inline New team.",
+    "code": "agents-mode.tsx AgentsOverview work grid; agents-parts.tsx AgentTeamEntry",
+    "api": "available: AgentTeam.coordinator_name + members (agentTeamsQueryOptions)"
+   },
+   {
+    "board": "AgentsNew",
+    "element": "Specialists section cards with \u22ef menu, 'Used 12 times this week', 'Paused by Ada on 10 Oct', '+ New specialist'",
+    "status": "differs",
+    "detail": "SpecialistEntry shows kind, status, title, description and meta. It has no usage, no who-paused and no inline New specialist.",
+    "code": "agents-parts.tsx SpecialistEntry; specialists-section.tsx",
+    "api": "missing: per-specialist run count over 7 days; paused_by/paused_at (only updated_at exists)"
+   },
+   {
+    "board": "AgentsNew",
+    "element": "Workflows rows: name, schedule, last run, Run now/Start, '+ New workflow'",
+    "status": "differs",
+    "detail": "WorkflowOverview already has schedule, Run now and executions. The difference is presentation (a compact row per workflow, last run inline, New workflow in the section head).",
+    "code": "workflow-overview.tsx (rendered from AgentsOverview)",
+    "api": "available: agentWorkflowsQueryOptions, executions, POST \u2026/agent-workflows/{id}/executions"
+   },
+   {
+    "board": "AgentsNew",
+    "element": "Overview extras not on board (Current conversation files, Live sandbox/browser, Follow-ups)",
+    "status": "differs",
+    "detail": "PrimaryAgentFiles and LiveChildren belong to the current chat, not to the agent's overview. They should move into the agent session's work pane.",
+    "code": "agents-mode.tsx AgentsOverview l.362-378; primary-agent-files.tsx; live components",
+    "api": "available: threadDetailQueryOptions, lib/live/children.ts"
+   },
+   {
+    "board": "Specialist / team chats",
+    "element": "Same working-session design for specialist and multi-agent team chats",
+    "status": "differs",
+    "detail": "Specialist chat uses the same AgentTimeline. Its files are name-only (ArtifactName) because Go has no artifact route for specialist threads. The team room is a message list.",
+    "code": "specialist-chat.tsx; specialist-focus.tsx; multi-agent-team-room.tsx; multi-agent-team-focus.tsx",
+    "api": "missing: GET \u2026/agents/{agentID}/threads/{threadID}/artifacts/{name}"
+   }
+  ],
+  "slices": [
+   {
+    "title": "Agent session: chat left, file/work right (replace the fixed overlay)",
+    "order": 1,
+    "owns": [
+     "web-next/src/components/agent-session.tsx (new)",
+     "web-next/src/components/agent-session.css (new)",
+     "web-next/src/hooks/use-agent-chat-host.ts (new, modelled on useRoomChatHost in call-provider.tsx)",
+     "web-next/src/components/workspace-shell.tsx (primaryWork render branch only, hot file)",
+     "web-next/src/workspace.css (delete l.871-881, l.1193-1206 overlay rules)",
+     "web-next/src/components/workspace-agent-panel.tsx (render AgentsView into the movable host; W-PANEL lane, ask first)",
+     "web-next/src/components/primary-agent-files.tsx",
+     "web-next/src/components/agent-timeline.tsx (ArtifactItem gets onOpenFile)"
+    ],
+    "delivers": "A real two-column session: the left column hosts the mounted primary chat, moved by a host element so draft, scroll and socket survive; the right column holds the overview, file viewer or live pane. File chips in the chat open the in-app viewer on the right instead of a new browser tab, keeping download as a secondary action. Phone stacks as today. Closes the 'File views chat left/file right' gap and the in-app Open of the 'File made in chat' gap. DESIGN.md \u00a73 note: chat is always left, work always right, and the Viewer boards' right-docked AgentPanel is superseded.",
+    "stubbed": "nothing; Share to teamspace is not shown",
+    "size": "M"
+   },
+   {
+    "title": "Run cards: the agent conversation as a working session",
+    "order": 2,
+    "owns": [
+     "web-next/src/lib/threads/timeline.ts (group entries into turns/runs)",
+     "web-next/src/components/agent-run.tsx (new: TurnHeader, RunCard, RunSteps, RunOutputs)",
+     "web-next/src/components/agent-run.css (new)",
+     "web-next/src/components/agent-timeline.tsx",
+     "web-next/src/components/agent-conversation.tsx",
+     "web-next/src/components/agent-composer.tsx",
+     "web-next/DESIGN.md (\u00a73 agent conversation paragraph)"
+    ],
+    "delivers": "Each member message becomes a task line (left-aligned, no bubble, small 'You \u00b7 09:41'). Under it, one run card on --canvas: a status pill (Working with Thinking Orb / Waiting for you / Done / Interrupted / Failed), elapsed time from item `at`, and Stop while running. Steps sit in an expandable list, one line per tool call with app mark, humanized name and key argument (query, file, URL, channel), and failed steps show their error. 'What it opened' is derived honestly from tool_call arguments. Approvals are inline blocking cards (existing ConfirmationCard). Outputs are file cards (FileKindBadge, name, vN, Open \u2192 right pane, Download) and request cards. The answer is markdown at the end of the card. The composer becomes a task bar with a 'Looking at \u2026' chip from getScreenContext. This is visibly different from DM bubbles. Closes the working-session gap and the tool-row and composer differences.",
+    "stubbed": "Token usage and exact run duration appear only for runs streamed in this session, because history has no run_* items; past runs show elapsed time from item timestamps only. Step results show only Done/Failed (Go stores no result text). No Sources tab until the API returns sources.",
+    "size": "L",
+    "dependsOn": "1"
+   },
+   {
+    "title": "Session work pane: Files, Live, Requests tabs beside the chat",
+    "order": 3,
+    "owns": [
+     "web-next/src/components/agent-session.tsx",
+     "web-next/src/components/agents-mode.tsx (remove PrimaryAgentFiles/LiveChildren from AgentsOverview)",
+     "web-next/src/components/agents-parts.tsx (AgentsWorkColumn reuse)",
+     "web-next/src/components/primary-agent-files.tsx",
+     "web-next/src/components/agents-mode.css"
+    ],
+    "delivers": "With no file open, the right column shows segmented tabs: Files (this conversation's artifacts with versions), Live (sandbox and browser via LiveChildren), Requests (request entries from this thread). Opening a file swaps in the viewer, and Back returns to the tab. Agent overview then holds only agent-level content.",
+    "stubbed": "Requests tab lists only request items found in this thread; nothing cross-thread",
+    "size": "M",
+    "dependsOn": "1"
+   },
+   {
+    "title": "Chats page (Chats with Krude)",
+    "order": 4,
+    "owns": [
+     "web-next/src/components/chats-page.tsx (new)",
+     "web-next/src/components/chats-page.css (new)",
+     "web-next/src/components/agent-chat-history.tsx (extract row list for reuse)",
+     "web-next/src/components/agent-chat.tsx (header \u22ef menu with Delete, 'Only you \u00b7 <agent>')",
+     "web-next/src/components/workspace-shell.tsx (Section 'chats', nav entry, render branch)"
+    ],
+    "delivers": "A full-page Chats section: a 300px list tile (client-side title search, Today/Earlier groups, Needs approval badge, raised active row, New chat) beside the agent session from slices 1-3. Selecting a row moves the shared primary chat to that thread, using dispatch move as history does today. Closes the Chats page, list, header and sidebar-entry gaps.",
+    "stubbed": "Row file meta is hidden until thread list returns artifact counts. Rename is not offered and Share to teamspace is not shown, both until their APIs exist.",
+    "size": "M",
+    "dependsOn": "1, 2"
+   },
+   {
+    "title": "Messages page: DM list | conversation | person card",
+    "order": 5,
+    "owns": [
+     "web-next/src/components/messages-page.tsx (new)",
+     "web-next/src/components/person-card.tsx (new)",
+     "web-next/src/components/direct-message-inbox.tsx (export the list + DmRow for canvas use)",
+     "web-next/src/components/direct-messages.css",
+     "web-next/src/components/workspace-shell.tsx (people branch when a DM is open; header 'Messages \u00b7 N unread')"
+    ],
+    "delivers": "An open DM shows three columns: the DM list (rows with preview and unread count, 'Find a person' search, New message), the existing DirectMessageView, and a person card (avatar, name, role, the DM-known online state, Parley via ParleyButton, shared teamspaces chips, their agent from shared-teamspace whisperers). Under 1100px the card collapses and under 800px the list does. Message rendering stays as is (founder: people chats are fine).",
+    "stubbed": "There is no local time, no Profile and no Shared files. Presence shows only when the DM knows they are online, never Away or offline. The agent row is hidden for people with no shared teamspace. Ask <agent> is wired in slice 6.",
+    "size": "M"
+   },
+   {
+    "title": "People cards and 'Ask their agent'",
+    "order": 6,
+    "owns": [
+     "web-next/src/components/people-directory.tsx",
+     "web-next/src/components/people-directory.css",
+     "web-next/src/components/direct-message-people.ts (agent per person from Teamspace.whisperers)",
+     "web-next/src/lib/agents/agent-requests.ts (createAgentRequest: POST \u2026/agent-requests)",
+     "web-next/src/components/ask-agent-dialog.tsx (new)",
+     "web-next/src/components/person-card.tsx"
+    ],
+    "delivers": "People becomes a grid of person cards with presence, their agent row, Message and Ask <agent>. Ask opens a small dialog that files an agent request (owner-approved when no teamspace) and points to Requests for the answer. The viewer's own card shows their agent and Settings. A teamspace segmented filter, an 'Org \u00b7 N people, M agents' heading, '/' to focus search and an Invite pill opening Settings \u2192 People complete the page. The same Ask is enabled on the Messages person card.",
+    "stubbed": "No department, and no presence beyond DM-known online. People reachable through no shared teamspace show no agent row or Ask until the members API names primaries.",
+    "size": "M",
+    "dependsOn": "5"
+   },
+   {
+    "title": "Agents overview to the board's sections",
+    "order": 7,
+    "owns": [
+     "web-next/src/components/agents-mode.tsx",
+     "web-next/src/components/agents-parts.tsx (AgentTeamRow with coordinator \u2192 member chain, SpecialistCard with \u22ef menu)",
+     "web-next/src/components/agents-mode.css",
+     "web-next/src/components/multi-agent-teams-section.tsx (New team entry point)",
+     "web-next/src/components/workflow-overview.tsx (compact rows, section head New workflow)"
+    ],
+    "delivers": "A hero with the agent's avatar and name, a line naming connected apps, inline stats and Settings. Then sections for Multi-agent teams (chain rows, status, New team), Specialists (cards, \u22ef menu with Open/Pause/Edit, New specialist) and Workflows (rows with schedule, last run, Run now/Start, New workflow). This replaces the mixed 'Agentic work' grid and the old stats dl.",
+    "stubbed": "Stats show only what Go can count: Requests waiting for you, Specialists, Teams. 'Answered today' and 'files made' are hidden. Specialist usage is hidden. A paused card reads 'Paused \u00b7 updated <date>' with no actor.",
+    "size": "M"
+   },
+   {
+    "title": "Specialist and team chats on run cards",
+    "order": 8,
+    "owns": [
+     "web-next/src/components/specialist-chat.tsx",
+     "web-next/src/components/specialist-focus.tsx",
+     "web-next/src/components/multi-agent-team-room.tsx",
+     "web-next/src/components/multi-agent-team-focus.tsx"
+    ],
+    "delivers": "Specialist and team conversations use the RunCard and task-line components from slice 2, so every agent chat reads as a working session and every people chat as a messenger. Specialist work results (summary, tools used, files, hand-offs) map onto the run card's outputs.",
+    "stubbed": "Specialist files stay name-only (ArtifactName, no Open) until Go serves specialist thread artifacts.",
+    "size": "S",
+    "dependsOn": "2"
+   }
+  ],
+  "apiAsks": [
+   "GET /v1/organizations/{org}/threads: add artifact_count (or the latest artifact names/kinds) to each thread, for Chats list meta",
+   "GET /v1/organizations/{org}/threads/{id}: keep run_started/run_completed/run_failed items (run_id, at, usage) in history so past runs show boundaries, duration and tokens",
+   "tool_result items: add a bounded result summary and/or structured sources [{kind,label,url|file|doc_id}] so the run card can show what the agent read",
+   "PATCH /v1/organizations/{org}/threads/{id} {title}: rename a chat",
+   "POST /v1/organizations/{org}/threads/{id}/artifacts/{name}/share {teamspace_id}: share a chat-made file to a teamspace's files",
+   "GET /v1/organizations/{org}/agents/{agentID}/threads/{threadID}/artifacts/{name}: open a specialist's files like primary-thread artifacts",
+   "Members list (GET /v1/organizations/{org}/members) or a read-only endpoint: each member's primary agent {agent_id, name}, so People and DMs can show and ask anyone's agent without a shared teamspace",
+   "Org-wide presence from the live edge layer (active / away / in a parley), not only DM-open presence",
+   "Member profile fields: timezone (for local time) and title/department",
+   "Agent stats: primary agent answered-today and files-made counts; per-specialist run count over the last 7 days; paused_by and paused_at on agents",
+   "DM live room: post an agent request and its answer into the DM log so '@<agent>' works inside a direct message"
+  ]
+ }
+]

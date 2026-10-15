@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Onboarding preview</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f32f190865fef0a2e9f8e77cc5498886">
+<link rel="stylesheet" href="/_blob/6f45e0000cdc5d3b68022ff8772ba543">
+<link rel="stylesheet" href="/_blob/8fcfc97a611eed1a77ab799e995e95b4">
+<link rel="stylesheet" href="/_blob/7743306d36203a29330ca2062623300f">
+<link rel="stylesheet" href="/_blob/ec979927ac7a03464841432d3a3c8647">
+<link rel="stylesheet" href="/_blob/7f1c8e04043980095bbe8579a80b07f3">
+<link rel="stylesheet" href="/_blob/025a4b47209a2499891a8940fa4267b3">
+<link rel="stylesheet" href="/_blob/083214e58caff373f8c4d1a3d8313ba1">
+<link rel="stylesheet" href="/_blob/410b88033d344161c928828a7e5fb905">
+<link rel="stylesheet" href="/_blob/ce6e0619dbb034591877238ebf104282">
+<link rel="stylesheet" href="/_blob/51516eac9bc0c7b27f4890ce3e6ba3d5">
+<link rel="stylesheet" href="/_blob/57f0b0e27065b18b12d8b68517734163">
+<link rel="stylesheet" href="/_blob/e61dcef6ad2c0e70682f81164cd631ab">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@700&amp;family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif">
+<div class="o3-model" role="img" aria-label="A preview of your workspace as you set it up">
+  <div class="o3-pane">
+    <div class="o3-ws {{n1}}"><i>N</i>Northstar</div>
+    <div class="o3-nav-i is-on"><u></u>My workspace</div>
+    <div class="o3-nav-i"><u></u>Requests</div>
+    <div class="o3-nav-i"><u></u>Library</div>
+    <sc-if value="{{s5}}" hint-placeholder-val="{{false}}"><div class="o3-nav-i {{n5}}" style="margin-top: 6px"><svg class="o3-planet" style="width: 11px; height: 11px; flex: none" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="32" fill="#3e2936"/><circle cx="32" cy="32" r="17" fill="#dc849d"/><circle cx="26" cy="26" r="7" fill="#ffb5b3" opacity=".7"/></svg>EU launch</div></sc-if>
+    <sc-if value="{{s4}}" hint-placeholder-val="{{false}}"><div class="{{n4}}" style="display: flex; flex-direction: column; gap: 3px; margin-top: 6px; padding: 2px 0"><div class="o3-nav-i"><img alt="" src="/_blob/f622cb1b08b3c2361d7aa6e797f0d2f3">Raya Okafor</div><div class="o3-nav-i"><img alt="" src="/_blob/a861cf76529742228156025ea49ebb7c">Kenji Sato</div></div></sc-if>
+    <sc-if value="{{not4}}" hint-placeholder-val="{{true}}"><div class="o3-ghost" style="width: 70%; margin-top: 8px"></div><div class="o3-ghost" style="width: 55%"></div></sc-if>
+  </div>
+  <div class="o3-pane">
+    <div class="o3-hello">Good morning, {{who}}</div>
+    <sc-if value="{{s3}}" hint-placeholder-val="{{false}}"><div class="{{n3}}" style="display: flex; flex-direction: column; gap: 4px; padding: 2px"><div class="o3-mrow"><span class="o3-mlogo"><svg width="9" height="9" viewBox="0 0 24 24" aria-hidden="true"><rect x="10" y="2" width="4" height="9" rx="2" fill="#36C5F0"/><rect x="13" y="10" width="9" height="4" rx="2" fill="#2EB67D"/><rect x="10" y="13" width="4" height="9" rx="2" fill="#ECB22E"/><rect x="2" y="10" width="9" height="4" rx="2" fill="#E01E5A"/></svg></span><span>3 mentions in #eu-launch</span></div><div class="o3-mrow"><span class="o3-mlogo"><svg width="9" height="9" viewBox="0 0 24 24" style="color: var(--text)" aria-hidden="true"><path fill="currentColor" d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z"/></svg></span><span>Roadmap Q4 looks out of date</span></div><div class="o3-mrow"><span class="o3-mlogo"><svg width="9" height="9" viewBox="0 0 24 24" aria-hidden="true"><path fill="#EA4335" d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z"/></svg></span><span>Northwind legal: EU terms?</span></div></div></sc-if>
+    <sc-if value="{{not3}}" hint-placeholder-val="{{true}}"><div class="o3-ghost" style="height: 14px"></div><div class="o3-ghost" style="height: 14px"></div><div class="o3-ghost" style="height: 14px; width: 80%"></div></sc-if>
+    <sc-if value="{{s5}}" hint-placeholder-val="{{false}}"><div class="o3-mrow {{n5}}" style="margin-top: 4px"><svg class="o3-planet" style="width: 13px; height: 13px; flex: none" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="32" fill="#3e2936"/><circle cx="32" cy="32" r="17" fill="#dc849d"/><circle cx="26" cy="26" r="7" fill="#ffb5b3" opacity=".7"/></svg><span><b>EU launch</b> · you, Raya, Kenji and Krude</span></div></sc-if>
+  </div>
+  <div class="o3-pane">
+    <sc-if value="{{s2}}" hint-placeholder-val="{{false}}"><div class="{{n2}}" style="display: flex; flex-direction: column; gap: 6px; padding: 2px; flex: 1"><div class="o3-kh"><img alt="" src="/_blob/a83a89cb62825033a2c8663412697fe2">Krude<span style="font-weight: 500; opacity: .6">· only you</span></div><div class="o3-bubble">{{krudeLine}}</div><div class="o3-mcompose"></div></div></sc-if>
+    <sc-if value="{{not2}}" hint-placeholder-val="{{true}}"><div class="o3-ghost" style="width: 60%"></div><div class="o3-ghost" style="height: 30px"></div><div class="o3-mcompose"></div></sc-if>
+  </div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"step":{"editor":"int","min":1,"max":5,"default":1},"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":560,"height":368}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const step = Number(this.props.step ?? 1);
+    return { yes: true, no: false, themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : 'dark', s2: step >= 2, s3: step >= 3, s4: step >= 4, s5: step >= 5, not2: step < 2, not3: step < 3, not4: step < 4,
+      n1: step === 1 ? 'o3-new' : '', n2: step === 2 ? 'o3-new' : '', n3: step === 3 ? 'o3-new' : '', n4: step === 4 ? 'o3-new' : '', n5: step === 5 ? 'o3-new' : '',
+      who: step >= 2 ? 'Ada' : 'there',
+      krudeLine: step >= 3 ? 'I read 14 channels and your Notion. Three things stood out.' : "Hi Ada. I'll suggest, you decide. Connect a tool and I'll know where your work lives." };
+  }
+}
+</script>
+</body>
+</html>

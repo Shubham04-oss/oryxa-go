@@ -1,0 +1,112 @@
+/* Huddles (14 Oct): people as camera tiles, plus whatever is being shown (a shared screen, a live browser session).
+   Camera tiles stay dark in both themes, like video does; everything around them follows the theme. */
+.hd-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 0 12px 12px; }
+.hd-cam { position: relative; display: grid; place-items: center; min-width: 0; min-height: 0; border-radius: 14px; overflow: hidden; background: radial-gradient(120% 95% at 50% 30%, var(--c, #2a2a2a) 0%, #131313 78%); color: #f1f1f1; }
+.hd-cam.is-speaking { box-shadow: inset 0 0 0 2px #7fcf98, 0 0 0 3px rgba(127, 207, 152, .16); }
+.hd-cam.is-off { background: #171717; }
+.hd-face { width: 64px; height: 64px; border-radius: 50%; box-shadow: 0 6px 20px rgba(0, 0, 0, .35); }
+.hd-cam.is-big .hd-face { width: 104px; height: 104px; }
+.hd-cam.is-small .hd-face { width: 40px; height: 40px; }
+.hd-name { position: absolute; left: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 5px; max-width: calc(100% - 16px); height: 22px; padding: 0 8px; box-sizing: border-box; border-radius: 999px; background: rgba(0, 0, 0, .55); color: #f1f1f1; font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; }
+.hd-name svg { flex: none; }
+.hd-name .is-muted { color: #f0a8a8; }
+.hd-cam.is-small .hd-name { left: 6px; bottom: 6px; height: 20px; padding: 0 7px; font-size: 10.5px; }
+.hd-flag { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; background: rgba(0, 0, 0, .55); color: #e9e9e9; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+.hd-flag.is-agent { background: rgba(38, 58, 46, .9); color: #b9e6c6; }
+.hd-flag.is-hand { background: #e9e9e9; color: #111111; }
+.hd-cam.is-small .hd-flag { top: 6px; right: 6px; height: 20px; padding: 0 6px; }
+.hd-wave { display: inline-flex; align-items: center; gap: 2px; height: 12px; }
+.hd-wave i { display: block; width: 2px; border-radius: 2px; background: currentColor; }
+.hd-wave i:nth-child(1) { height: 5px; } .hd-wave i:nth-child(2) { height: 11px; } .hd-wave i:nth-child(3) { height: 7px; } .hd-wave i:nth-child(4) { height: 9px; }
+
+/* What is being shown: a shared screen is someone else's window, so it gets a paper page, not our surfaces. */
+.hd-show { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-radius: 14px; background: var(--base); overflow: hidden; }
+.hd-show .ws2-label img { width: 20px; height: 20px; border-radius: 50%; }
+.hd-show .ws2-label .hd-acts { margin-left: auto; display: flex; gap: 6px; }
+.hd-screen { position: relative; flex: 1; min-height: 0; margin: 0 8px 8px; border-radius: 10px; background: #f7f7f5; color: #1f1f1f; overflow: hidden; }
+.hd-screen-bar { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; background: #ececea; color: #6b6b6b; font-size: 11px; }
+.hd-screen-bar i { width: 9px; height: 9px; border-radius: 50%; background: #d4d4d1; }
+.hd-screen-bar span { margin-left: 8px; }
+.hd-paper { padding: 22px 34px; }
+.hd-paper h1 { margin: 0 0 6px; font-size: 22px; font-weight: 700; color: #1f1f1f; }
+.hd-paper h2 { margin: 16px 0 6px; font-size: 14px; font-weight: 700; color: #1f1f1f; }
+.hd-paper p, .hd-paper li { margin: 0 0 6px; color: #4a4a4a; font-size: 13px; line-height: 1.6; }
+.hd-paper ul { margin: 0; padding-left: 18px; list-style: disc; }
+.hd-paper mark { background: #fde7b0; color: inherit; border-radius: 3px; padding: 0 2px; }
+.hd-screen .nx-cursor span { background: #3e2936; color: #ffd9e4; }
+.hd-screen.is-compact .hd-paper { padding: 14px 22px; }
+.hd-screen.is-compact .hd-paper h1 { font-size: 18px; }
+
+/* Live captions sit on the stage, above the dock. */
+.hd-cc { position: absolute; left: 50%; bottom: 54px; transform: translateX(-50%); max-width: 70%; padding: 8px 14px; border-radius: 12px; background: rgba(0, 0, 0, .72); color: #f1f1f1; font-size: 13px; line-height: 1.45; text-align: center; }
+.hd-cc b { color: #b9e6c6; font-weight: 600; margin-right: 6px; }
+
+/* Dock: huddle controls. */
+.hd-dock { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 10px 0 14px; flex: none; border-radius: 14px; background: var(--base); }
+.hd-dock .hd-side { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.hd-dock .hd-side.is-end { justify-content: flex-end; }
+.hd-dock .hd-time { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.hd-ctrls { display: flex; align-items: center; gap: 6px; }
+.hd-btn { position: relative; display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--canvas); color: var(--text); cursor: pointer; }
+.hd-btn:hover { background: var(--selected); }
+.hd-btn.is-off { background: var(--tone-3a2323); color: var(--tone-f0a8a8); }
+.hd-btn.is-on { background: var(--tone-263a2e); color: var(--tone-b9e6c6); }
+.hd-btn.is-quiet { width: 34px; height: 34px; background: transparent; color: var(--text-muted); }
+.hd-btn.is-quiet:hover { background: var(--hover); color: var(--text); }
+.hd-btn .nx-badge { position: absolute; top: 2px; right: 0; min-width: 15px; height: 15px; padding: 0 4px; box-sizing: border-box; border-radius: 999px; background: var(--text); color: var(--canvas); font-size: 9px; font-weight: 700; display: grid; place-items: center; }
+.hd-leave { display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 16px; border: 0; border-radius: 999px; background: #d4544f; color: #ffffff; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.hd-leave.is-small { height: 30px; padding: 0 12px; font-size: 12px; }
+.hd-seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--canvas); }
+.hd-seg button { height: 28px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.hd-seg button.is-active { background: var(--raised); color: var(--text); box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66); }
+
+/* Layouts */
+.hd-split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 208px; gap: 10px; }
+.hd-col { display: grid; grid-auto-rows: minmax(0, 1fr); gap: 8px; min-height: 0; }
+.hd-film { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; height: 118px; flex: none; }
+.hd-pair { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.15fr) 14px minmax(0, 1fr); }
+.hd-pair .ts4-g, .hd-mix .ts4-g { display: grid; place-items: center; }
+.hd-pair .ts4-g span, .hd-mix .ts4-g span { width: 4px; height: 36px; border-radius: 999px; background: var(--tone-3a3a3a); }
+.hd-mix .ts4-g.is-h span { width: 36px; height: 4px; }
+
+/* Browser sessions inside a huddle */
+.hd-show .nx-browser-bar { border-bottom: 0; padding: 0 8px 8px; height: auto; }
+.hd-show .nx-page { flex: 1; margin: 0 8px 8px; border-radius: 10px; }
+.hd-driver { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px 0 3px; border-radius: 999px; background: var(--canvas); color: var(--text-soft); font-size: 11px; font-weight: 600; }
+.hd-driver img { width: 18px; height: 18px; border-radius: 50%; }
+.hd-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.hd-table td, .hd-table th { padding: 8px 6px; border-bottom: 1px solid var(--border-quiet); text-align: left; color: var(--text-soft); white-space: nowrap; }
+.hd-table th { color: var(--text-muted); font-weight: 600; font-size: 11px; }
+.hd-ok, .hd-fail, .hd-retry { display: inline-flex; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; }
+.hd-ok { background: var(--tone-263a2e); color: var(--tone-b9e6c6); }
+.hd-fail { background: var(--tone-3a2323); color: var(--tone-f0a8a8); }
+.hd-retry { background: var(--hover); color: var(--text-soft); }
+
+/* Full page */
+.hd-full { display: flex; flex-direction: column; height: 100dvh; min-height: 640px; background: var(--base); color: var(--text); font-size: 13px; overflow: hidden; }
+.hd-top { display: flex; align-items: center; gap: 10px; height: 60px; padding: 0 16px; flex: none; }
+.hd-top .hd-title { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.hd-top .hd-title small { color: var(--text-muted); font-size: 12px; }
+.hd-top .hd-grow { flex: 1; }
+.hd-back { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px 0 8px; border: 0; border-radius: 999px; background: var(--canvas); color: var(--text-soft); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.hd-gallery { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0 16px 10px; }
+.hd-full .hd-dock { margin: 0 16px 14px; height: 64px; background: var(--canvas); }
+.hd-full .hd-btn { background: var(--base); }
+.hd-full .hd-btn:hover { background: var(--selected); }
+.hd-full .hd-btn.is-off { background: var(--tone-3a2323); }
+.hd-full .hd-btn.is-on { background: var(--tone-263a2e); }
+.hd-full .hd-btn.is-quiet { background: transparent; }
+.hd-full .hd-seg { background: var(--base); }
+
+/* Mix: the huddle as one tile among the room, the shared screen and a browser */
+.hd-mix { flex: 1; min-height: 0; display: grid; grid-template-columns: 296px 14px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); padding: 0 12px 12px; }
+.hd-mix > .hd-people { grid-column: 1; grid-row: 1; }
+.hd-mix > .hd-room { grid-column: 1; grid-row: 2; margin-top: 10px; }
+.hd-mix > .ts4-g.is-v { grid-column: 2; grid-row: 1 / span 2; }
+.hd-mix > .hd-right { grid-column: 3; grid-row: 1 / span 2; display: grid; grid-template-rows: minmax(0, 1.1fr) 14px minmax(0, 1fr); min-height: 0; }
+.hd-people .hd-mini { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 78px; gap: 6px; padding: 0 8px 8px; }
+.hd-people .hd-mini-ctrls { display: flex; align-items: center; gap: 6px; padding: 0 8px 8px; }
+.hd-people .hd-mini-ctrls .hd-btn { width: 34px; height: 34px; background: var(--canvas); }
+.hd-people .hd-mini-ctrls .hd-btn.is-off { background: var(--tone-3a2323); }
+.hd-people .hd-mini-ctrls .hd-grow { flex: 1; }
+.hd-room .ws-conv { padding: 4px 14px 10px; }

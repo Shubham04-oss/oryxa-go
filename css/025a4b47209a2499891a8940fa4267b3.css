@@ -1,0 +1,89 @@
+/* Pop-ups with a slight scene (14 Oct). The brand's painted scenes sit only at the top of a pop-up and fade
+   into its surface, so text always sits on the surface, never on the painting. Moments get a scene (welcome,
+   invite, huddle ended, upgrade); warnings, errors and destructive confirms never do. */
+.pp-sheet { min-height: 100dvh; box-sizing: border-box; padding: 48px 56px; background: var(--base); color: var(--text); font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; font-size: 13px; }
+.pp-row { display: flex; align-items: flex-start; gap: 32px; flex-wrap: wrap; }
+.pp-cell { display: flex; flex-direction: column; gap: 10px; }
+.pp-cap { color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.pp-cap b { color: var(--text); letter-spacing: 0; text-transform: none; font-size: 12px; margin-right: 6px; }
+
+.pp { position: relative; width: 420px; border-radius: 18px; background: var(--raised); box-shadow: 0 0 0 1px var(--border-quiet), 0 24px 64px var(--shade-66); overflow: hidden; }
+.pp.is-wide { width: 480px; }
+.pp-scene { height: 112px; background-size: cover; background-position: center 60%; -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,.7) 45%, transparent 100%); mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,.7) 45%, transparent 100%); }
+.dark .pp-scene { filter: brightness(.82) saturate(.9); }
+.pp-scene.is-tall { height: 168px; }
+.pp-close { position: absolute; top: 12px; right: 12px; display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 50%; background: rgba(0,0,0,.35); color: #ffffff; cursor: pointer; backdrop-filter: blur(6px); }
+.pp-body { position: relative; margin-top: -34px; padding: 0 22px 20px; display: flex; flex-direction: column; gap: 14px; }
+.pp-body.is-plain { margin-top: 0; padding-top: 20px; }
+.pp-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--raised); box-shadow: 0 0 0 1px var(--border-quiet), 0 4px 12px var(--shade-66); }
+.pp-icon img { width: 24px; height: 24px; border-radius: 50%; }
+.pp h3 { margin: 0; color: var(--text); font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+.pp p { margin: 0; color: var(--text-soft); font-size: 13px; line-height: 1.55; }
+.pp-head { display: flex; flex-direction: column; gap: 6px; }
+.pp-field { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 40px; padding: 5px 8px; box-sizing: border-box; border-radius: 12px; background: var(--canvas); box-shadow: inset 0 0 0 1px var(--border-quiet); color: var(--text-muted); font-size: 12.5px; }
+.pp-tag { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px 0 3px; border-radius: 999px; background: var(--hover); color: var(--text); font-size: 12px; font-weight: 600; }
+.pp-tag img { width: 20px; height: 20px; border-radius: 50%; }
+.pp-tag.is-text { padding-left: 10px; }
+.pp-line { display: flex; align-items: center; gap: 10px; color: var(--text-soft); font-size: 12.5px; }
+.pp-line .pp-grow { flex: 1; min-width: 0; }
+.pp-line small { display: block; color: var(--text-muted); font-size: 11.5px; }
+.pp-switch { position: relative; width: 32px; height: 18px; border-radius: 999px; background: #3f9d63; flex: none; }
+.pp-switch::after { content: ""; position: absolute; top: 2px; right: 2px; width: 14px; height: 14px; border-radius: 50%; background: #ffffff; }
+.pp-switch.is-off { background: var(--selected); }
+.pp-switch.is-off::after { right: auto; left: 2px; }
+.pp-select { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 9px; background: var(--canvas); box-shadow: inset 0 0 0 1px var(--border-quiet); color: var(--text); font-size: 12px; font-weight: 600; }
+.pp-foot { display: flex; align-items: center; gap: 8px; padding-top: 4px; }
+.pp-foot .pp-grow { flex: 1; color: var(--text-muted); font-size: 12px; }
+.pp-btn { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--canvas); box-shadow: inset 0 0 0 1px var(--border-quiet); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.pp-btn.is-primary { background: var(--text); color: var(--canvas); box-shadow: none; }
+.pp-btn.is-danger { background: #d4544f; color: #ffffff; box-shadow: none; }
+.pp-list { display: flex; flex-direction: column; gap: 2px; padding: 6px; border-radius: 12px; background: var(--canvas); }
+.pp-list .pp-line { padding: 6px 6px; }
+.pp-list .pp-line img { width: 22px; height: 22px; border-radius: 50%; }
+.pp-kicker { display: inline-flex; align-items: center; gap: 6px; color: var(--tone-b9e6c6); font-size: 11.5px; font-weight: 600; }
+.pp-dec { display: inline-flex; padding: 1px 7px; border-radius: 999px; background: var(--tone-263a2e); color: var(--tone-b9e6c6); font-size: 10.5px; font-weight: 600; }
+.pp-plans { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pp-plan { padding: 12px; border-radius: 12px; background: var(--canvas); box-shadow: inset 0 0 0 1px var(--border-quiet); }
+.pp-plan.is-picked { box-shadow: inset 0 0 0 2px var(--text); }
+.pp-plan b { display: block; font-size: 13px; color: var(--text); }
+.pp-plan strong { display: block; margin: 6px 0 2px; font-size: 20px; color: var(--text); }
+.pp-plan span { color: var(--text-muted); font-size: 11.5px; }
+.pp-plan ul { margin: 8px 0 0; padding-left: 16px; color: var(--text-soft); font-size: 11.5px; line-height: 1.6; list-style: disc; }
+
+/* Welcome: the one pop-up where the wordmark sits on the painting. */
+.pp-hero { position: relative; height: 200px; background-size: cover; background-position: center 55%; }
+.pp-hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(0,0,0,.05) 0%, rgba(0,0,0,0) 40%, var(--raised) 100%); }
+.pp-mark { position: absolute; left: 22px; top: 18px; z-index: 1; color: #ffffff; font-family: Inter, sans-serif; font-weight: 700; font-size: 22px; letter-spacing: -.055em; text-shadow: 0 1px 8px rgba(0,0,0,.25); }
+.pp-mark i { font-style: normal; color: #f2b79f; }
+.pp-steps { display: flex; flex-direction: column; gap: 4px; }
+.pp-step { display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 10px; border-radius: 10px; background: var(--canvas); color: var(--text-soft); font-size: 12.5px; }
+.pp-step i { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--hover); color: var(--text-muted); font-style: normal; font-size: 10.5px; font-weight: 700; }
+.pp-step.is-done i { background: #3f9d63; color: #ffffff; }
+.pp-step.is-done { color: var(--text-muted); text-decoration: line-through; }
+
+/* Small pop-ups: toasts and a hover card take a thin strip of scene on their edge. */
+.pp-toast { position: relative; display: flex; align-items: center; gap: 12px; width: 380px; min-height: 64px; padding: 10px 12px 10px 74px; box-sizing: border-box; border-radius: 16px; background: var(--raised); box-shadow: 0 0 0 1px var(--border-quiet), 0 12px 32px var(--shade-66); overflow: hidden; }
+.pp-strip { position: absolute; left: 0; top: 0; bottom: 0; width: 96px; background-position: center; background-size: cover; -webkit-mask-image: linear-gradient(to right, #000 30%, transparent); mask-image: linear-gradient(to right, #000 30%, transparent); }
+.dark .pp-strip { filter: brightness(.82) saturate(.9); }
+.pp-toast img.av { position: absolute; left: 16px; top: 50%; width: 34px; height: 34px; margin-top: -17px; border-radius: 50%; box-shadow: 0 0 0 2px var(--raised); z-index: 1; }
+.pp-toast .pp-grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pp-toast strong { color: var(--text); font-size: 12.5px; }
+.pp-toast span { color: var(--text-muted); font-size: 12px; }
+.pp-toast.is-plain { padding-left: 14px; }
+.pp-card { width: 300px; border-radius: 16px; background: var(--raised); box-shadow: 0 0 0 1px var(--border-quiet), 0 12px 32px var(--shade-66); overflow: hidden; }
+.pp-card .pp-scene { height: 72px; }
+.pp-card .pp-body { margin-top: -26px; padding: 0 14px 14px; gap: 10px; }
+.pp-card .pp-icon { width: 36px; height: 36px; }
+.pp-card h3 { margin: 0; color: var(--text); font-size: 14px; font-weight: 700; }
+.pp-card p { margin: 0; color: var(--text-soft); line-height: 1.5; }
+.pp-card p { font-size: 12px; }
+.pp-empty { position: relative; width: 420px; height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 8px; padding-bottom: 34px; box-sizing: border-box; border-radius: 18px; background: #1c3350; text-align: center; overflow: hidden; }
+.pp-lines { position: absolute !important; inset: 0; background-position: center 16px; background-size: 180px auto; background-repeat: no-repeat; opacity: .42; }
+.pp-empty > * { position: relative; }
+.pp-empty h3 { margin: 0; font-size: 15px; font-weight: 700; color: #ffffff; }
+.pp-empty p { margin: 0; max-width: 280px; color: #c9d6e6; font-size: 12.5px; line-height: 1.5; }
+.pp-empty .pp-btn { margin-top: 6px; background: #ffffff; color: #1c3350; box-shadow: none; }
+
+/* In context: a pop-up over the app */
+.pp-scrim { position: absolute; inset: 0; display: grid; place-items: center; background: var(--shade-99); z-index: 5; }
+.pp-stack { position: absolute; right: 388px; bottom: 20px; display: flex; flex-direction: column; gap: 10px; z-index: 6; }

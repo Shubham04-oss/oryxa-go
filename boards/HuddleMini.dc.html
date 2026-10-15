@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Parley: mini player on another page</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f32f190865fef0a2e9f8e77cc5498886">
+<link rel="stylesheet" href="/_blob/6f45e0000cdc5d3b68022ff8772ba543">
+<link rel="stylesheet" href="/_blob/8fcfc97a611eed1a77ab799e995e95b4">
+<link rel="stylesheet" href="/_blob/7743306d36203a29330ca2062623300f">
+<link rel="stylesheet" href="/_blob/ec979927ac7a03464841432d3a3c8647">
+<link rel="stylesheet" href="/_blob/7f1c8e04043980095bbe8579a80b07f3">
+<link rel="stylesheet" href="/_blob/025a4b47209a2499891a8940fa4267b3">
+<link rel="stylesheet" href="/_blob/083214e58caff373f8c4d1a3d8313ba1">
+<link rel="stylesheet" href="/_blob/410b88033d344161c928828a7e5fb905">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@700&amp;family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="background: var(--base)">
+<div class="nx-app" style="font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif">
+  <dc-import name="Rail" active="knowledge" live="{{yes}}" hint-size="60px,100%"></dc-import>
+  <main class="nx-main has-pip" aria-label="Library">
+    <header class="nx-head">
+      <div class="nx-crumbs"><strong>Library</strong><span class="nx-sep">·</span><span>128 files from 4 sources</span></div>
+      <div class="nx-head-actions"><button class="nx-pill" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Add files</button></div>
+    </header>
+    <div class="lib">
+      <nav class="lib-cols" aria-label="Collections">
+        <span class="lib-h">Collections</span><div class="lib-col is-active"><span class="lib-dot" style="background: #8a8a8a"></span>All files<span class="lib-n">128</span></div><div class="lib-col"><span class="lib-dot" style="background: #d98e62"></span>Product docs<span class="lib-n">24</span></div><div class="lib-col"><span class="lib-dot" style="background: #5b8fd6"></span>Sales<span class="lib-n">31</span></div><div class="lib-col"><span class="lib-dot" style="background: #3f9d63"></span>Engineering<span class="lib-n">42</span></div><div class="lib-col"><span class="lib-dot" style="background: #5b5bd6"></span>Parley recordings<span class="lib-n">9</span></div>
+        <span class="lib-h" style="margin-top: 10px">Sources</span><div class="lib-col"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="10" y="2" width="4" height="9" rx="2" fill="#36C5F0"/><rect x="13" y="10" width="9" height="4" rx="2" fill="#2EB67D"/><rect x="10" y="13" width="4" height="9" rx="2" fill="#ECB22E"/><rect x="2" y="10" width="9" height="4" rx="2" fill="#E01E5A"/></svg>Slack<span class="lib-n">14</span></div><div class="lib-col"><svg width="14" height="14" viewBox="0 0 24 24" style="color: var(--text)" aria-hidden="true"><path fill="currentColor" d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z"/></svg>Notion<span class="lib-n">38</span></div><div class="lib-col"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z"/></svg>Drive<span class="lib-n">52</span></div><div class="lib-col"><svg width="14" height="14" viewBox="0 0 24 24" style="color: var(--text)" aria-hidden="true"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>GitHub<span class="lib-n">21</span></div>
+      </nav>
+      <section class="lib-main" aria-label="All files">
+        <div class="lib-bar"><div class="lib-search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>Search 128 files, or ask Krude<kbd>/</kbd></div>
+          <div class="hd-seg" role="group" aria-label="View"><button class="is-active" type="button">List</button><button type="button">Grid</button></div></div>
+        <div class="lib-note"><img alt="" src="/_blob/a83a89cb62825033a2c8663412697fe2"><span class="lib-grow"><b>2 files look out of date</b> against Slack and the launch plan.</span><button class="rs-btn" type="button">Review</button></div>
+        <div class="lib-sec">Pinned</div>
+        <div class="lib-pins"><div class="lib-pin"><div class="lib-thumb is-doc"><i></i><i></i><i class="hl"></i><i></i><i style="width: 80%"></i></div><div class="lib-pin-meta"><span class="vw-kind is-doc">DOC</span><div><b>EU launch plan</b><small>Notion · 3 editing</small></div></div></div><div class="lib-pin"><div class="lib-thumb is-slide"><i></i><b>Live in five countries on 4 November</b></div><div class="lib-pin-meta"><span class="vw-kind is-slides">PPT</span><div><b>EU launch board update</b><small>Slides · Raya</small></div></div></div><div class="lib-pin"><div class="lib-thumb is-sheet"></div><div class="lib-pin-meta"><span class="vw-kind is-sheet">XLS</span><div><b>EU price list.xlsx</b><small>Sheets · synced now</small></div></div></div></div>
+        <div class="lib-sec" style="padding-top: 14px">Recent</div>
+        <div class="lib-table"><div class="lib-row is-head"><span></span><span>Name</span><span>Owner</span><span></span><span>Updated</span></div><div class="lib-row is-hover"><span class="vw-kind is-pdf">PDF</span><span class="lib-name"><b>Pricing policy 2026.pdf<span class="lib-tag is-cited">Cited 4×</span></b><small>Uploaded · 12 pages</small></span><span style="display: flex; align-items: center; gap: 8px"><img alt="" src="/_blob/0177ed8ec461e9d6e02efb051320cb58">Priya</span><span></span><span>2 d ago</span></div><div class="lib-row"><span class="vw-kind is-doc">DOC</span><span class="lib-name"><b>Roadmap Q4<span class="lib-tag is-old">Out of date</span></b><small>Notion</small></span><span style="display: flex; align-items: center; gap: 8px"><img alt="" src="/_blob/f622cb1b08b3c2361d7aa6e797f0d2f3">Raya</span><span></span><span>12 d ago</span></div><div class="lib-row"><span class="vw-kind is-rec">REC</span><span class="lib-name"><b>Parley · 14 October</b><small>EU launch · 35 min</small></span><span style="display: flex; align-items: center; gap: 8px"><img alt="" src="/_blob/a14c0494a347b872dc9fa3ada6b82dd1">Ada</span><span></span><span>Today</span></div><div class="lib-row"><span class="vw-kind is-code">GO</span><span class="lib-name"><b>billing/retry.go</b><small>GitHub · oryxa-go</small></span><span style="display: flex; align-items: center; gap: 8px"><img alt="" src="/_blob/9e1491933c13feda7c1f7a1841e49db0">Rohan</span><span></span><span>3 h ago</span></div><div class="lib-row"><span class="vw-kind is-vid">MP4</span><span class="lib-name"><b>Onboarding walkthrough.mp4<span class="lib-tag is-old">Shows USD</span></b><small>Uploaded · 4 min</small></span><span style="display: flex; align-items: center; gap: 8px"><img alt="" src="/_blob/f622cb1b08b3c2361d7aa6e797f0d2f3">Raya</span><span></span><span>5 d ago</span></div><div class="lib-row"><span class="vw-kind is-img">IMG</span><span class="lib-name"><b>Launch banner v3.png</b><small>Uploaded</small></span><span style="display: flex; align-items: center; gap: 8px"><img alt="" src="/_blob/f622cb1b08b3c2361d7aa6e797f0d2f3">Raya</span><span></span><span>20 min ago</span></div><div class="lib-row"><span class="vw-kind is-doc">DOC</span><span class="lib-name"><b>Data residency FAQ<span class="lib-tag is-idx">Indexing…</span></b><small>Drive</small></span><span style="display: flex; align-items: center; gap: 8px"><img alt="" src="/_blob/a861cf76529742228156025ea49ebb7c">Kenji</span><span></span><span>Just now</span></div></div>
+      </section>
+    </div>
+    <div class="pip" role="region" aria-label="EU launch parley, mini player">
+      <div class="pip-stage">
+        <div class="hd-screen is-compact">
+            <div class="hd-screen-bar"><i></i><i></i><i></i><span>Notion · EU launch plan</span></div>
+            <div class="hd-paper">
+              <h1>EU launch plan</h1>
+              <p>Launch on <b>4 November</b>. Billing retry tests run the week before.</p>
+              <h2>Risks</h2>
+              <ul>
+                <li><mark>Two medium pen-test findings are still open</mark>, owned by Rohan.</li>
+                <li>Customer data stays in Frankfurt (eu-central-1), per clause 7.2.</li>
+              </ul>
+              <h2>Pricing</h2>
+              <p>EU prices in EUR for all three plans; the 15% annual discount stays. Consumer prices include VAT.</p>
+              <h2>Sign-offs</h2>
+              <p>Billing: done · Legal: Priya, Friday · Security: Rohan, Thursday</p>
+            </div>
+            
+          </div>
+        <div class="hd-cam pip-speaker" style="--c: #3d2b4a"><img class="hd-face" alt="" src="/_blob/f622cb1b08b3c2361d7aa6e797f0d2f3"><span class="hd-name"><span class="hd-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Raya</span></div>
+      </div>
+      <div class="pip-bar">
+        <div class="pip-title"><strong><span class="nx-live-dot" aria-hidden="true" style="width: 7px; height: 7px; box-shadow: none"></span>EU launch · 18:42</strong><small>Priya is sharing · 5 people</small></div>
+        <button class="hd-btn" type="button" aria-label="Mute"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19v3"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><rect x="9" y="2" width="6" height="13" rx="3"/></svg></button>
+        <button class="hd-btn" type="button" aria-label="Back to the parley"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/></svg></button>
+        <button class="hd-leave" type="button" aria-label="Leave"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.1 13.9a14 14 0 0 0 3.732 2.668 1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 .244.473"/><path d="m2 2 20 20"/></svg></button>
+      </div>
+    </div>
+  </main>
+  <dc-import name="AgentPanel" page="knowledge" hint-size="372px,100%"></dc-import>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { yes: true, no: false, themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : 'dark' };
+  }
+}
+</script>
+</body>
+</html>

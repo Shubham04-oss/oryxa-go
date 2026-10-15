@@ -1,0 +1,30 @@
+/* Krude's sidebar keeps the overview widgets (14 Oct): a Krude / At a glance switch, and small widgets that are
+   always one click away on every page: what your apps want, teammates, conversations, knowledge, files and
+   recurring work. Same tiles as the rest: canvas cards on the sidebar's tile. */
+.apg-seg { display: flex; gap: 2px; margin: 0 12px 4px; padding: 3px; border-radius: 999px; background: var(--base); }
+.apg-seg button { flex: 1; height: 28px; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.apg-seg button.is-active { background: var(--raised); color: var(--text); box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66); }
+.apg-seg button .rs-count { margin-left: 6px; }
+.apg { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 8px; padding: 6px 12px 12px; }
+.apg-w { display: flex; flex-direction: column; gap: 2px; padding: 10px 10px 8px; border-radius: 14px; background: var(--base); }
+.apg-h { display: flex; align-items: center; gap: 8px; padding: 0 2px 6px; color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.apg-h .apg-grow { flex: 1; }
+.apg-h a { color: var(--text-muted); font-size: 11px; font-weight: 500; letter-spacing: 0; text-transform: none; text-decoration: none; }
+.apg-row { display: flex; align-items: center; gap: 10px; min-height: 30px; padding: 3px 4px; border-radius: 9px; color: var(--text-soft); font-size: 12px; }
+.apg-row .apg-grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.apg-row b { color: var(--text); font-weight: 600; }
+.apg-row small { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.apg-row img { width: 22px; height: 22px; border-radius: 50%; flex: none; }
+.apg-ic { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--raised); box-shadow: 0 0 0 1px var(--border-quiet); flex: none; }
+.apg-n { padding: 1px 7px; border-radius: 999px; background: var(--text); color: var(--canvas); font-size: 10.5px; font-weight: 700; }
+.apg-apps { display: flex; align-items: center; gap: 6px; padding: 2px 4px 4px; }
+.apg-apps .apg-ic { position: relative; width: 30px; height: 30px; border-radius: 9px; }
+.apg-apps .apg-ic i { position: absolute; top: -4px; right: -4px; min-width: 15px; height: 15px; padding: 0 3px; box-sizing: border-box; border-radius: 999px; background: var(--text); color: var(--canvas); font-style: normal; font-size: 9px; font-weight: 700; display: grid; place-items: center; }
+.apg-apps .apg-add { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: var(--text-muted); box-shadow: inset 0 0 0 1px var(--border-quiet); }
+.apg-mates { display: flex; gap: 10px; padding: 2px 4px 4px; }
+.apg-mate { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 44px; color: var(--text-muted); font-size: 10.5px; text-align: center; }
+.apg-mate span.apg-av { position: relative; }
+.apg-mate img { width: 32px; height: 32px; border-radius: 50%; }
+.apg-mate span.apg-av::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 9px; height: 9px; border-radius: 50%; background: var(--dot); box-shadow: 0 0 0 2px var(--base); }
+.apg-w.is-closed { padding-bottom: 4px; }
+.apg-w.is-closed .apg-h { padding-bottom: 2px; }

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Navigation: jump anywhere</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/f32f190865fef0a2e9f8e77cc5498886">
+<link rel="stylesheet" href="/_blob/6f45e0000cdc5d3b68022ff8772ba543">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@700&amp;family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="nx-app" style="font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; position: relative">
+  <dc-import name="Sidebar" active="today" live="{{no}}" hint-size="264px,100%"></dc-import>
+  <main class="nx-main" aria-label="Today">
+    <header class="nx-head">
+      <div class="nx-crumbs"><strong>Today</strong><span class="nx-sep">·</span><span>Tuesday 14 October</span></div>
+      <div class="nx-head-actions"><button class="nx-pill is-primary" type="button">New chat</button></div>
+    </header>
+    <div class="nx-body"></div>
+  </main>
+  <aside class="nx-panel-rail" aria-label="Agent panel, closed">
+    <button type="button" aria-label="Open Krude"><img alt="" src="/_blob/a83a89cb62825033a2c8663412697fe2"></button>
+  </aside>
+
+  <div class="nx-scrim" style="align-items: flex-start">
+    <div class="nx-palette" role="dialog" aria-label="Jump to">
+      <div class="nx-palette-input">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+        <span class="nx-typed">eu</span><span class="nx-caret" aria-hidden="true"></span>
+      </div>
+      <div class="nx-palette-list">
+        <div class="nx-group">Go to</div>
+        <div class="nx-opt is-active"><svg class="nx-planet" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="32" fill="#3e2936"/><circle cx="32" cy="32" r="17" fill="#dc849d"/><circle cx="26" cy="26" r="7" fill="#ffb5b3" opacity=".7"/></svg><span class="nx-grow">EU launch</span><span class="nx-hint">Teamspace · 4 people</span><span class="nx-kbd">↵</span></div>
+        <div class="nx-opt"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span class="nx-grow">What is the plan for the EU launch?</span><span class="nx-hint">Request from Raya</span></div>
+        <div class="nx-opt"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg><span class="nx-grow">Plan the EU launch</span><span class="nx-hint">Chat with Krude · 4 min ago</span></div>
+        <div class="nx-opt"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg><span class="nx-grow">eu-launch-plan.md</span><span class="nx-hint">File · version 2</span></div>
+        <div class="nx-group">Do</div>
+        <div class="nx-opt"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg><span class="nx-grow">Start a parley in EU launch</span><span class="nx-kbd">⌘⇧H</span></div>
+        <div class="nx-opt"><img class="nx-av" alt="" src="/_blob/a83a89cb62825033a2c8663412697fe2"><span class="nx-grow">Ask Krude about “eu”</span><span class="nx-kbd">⌘↵</span></div>
+        <div class="nx-opt"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg><span class="nx-grow">Have Krude open a page and show you</span><span class="nx-hint">Browser preview</span></div>
+      </div>
+      <div class="nx-palette-foot"><span><span class="nx-kbd">↑↓</span> move</span><span><span class="nx-kbd">↵</span> open</span><span><span class="nx-kbd">⌘↵</span> ask Krude</span><span><span class="nx-kbd">esc</span> close</span></div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { no: false };
+  }
+}
+</script>
+</body>
+</html>
