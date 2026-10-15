@@ -355,6 +355,39 @@
 .settings-icon-danger[data-slot="button"] { color: var(--text-muted); }
 .settings-icon-danger[data-slot="button"]:hover { background: var(--hover); color: var(--tone-e58b8b); }
 
+/* Teams: a row opens its team; a lead and the faces of who is in it. */
+.settings-table .settings-tr-link { cursor: pointer; }
+.settings-table .settings-tr-link:hover { background: var(--hover); }
+.settings-agent { display: inline-flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 12px; }
+.settings-agent .workspace-avatar { width: 24px; height: 24px; }
+.settings-faces { display: inline-flex; align-items: center; }
+.settings-faces .workspace-avatar { width: 24px; height: 24px; box-shadow: 0 0 0 2px var(--canvas); }
+.settings-faces .workspace-avatar + .workspace-avatar { margin-left: -8px; }
+.settings-faces small,
+.settings-badges small { margin-left: 8px; color: var(--text-muted); font-size: 11px; }
+.settings-badges { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* "All teams" above a team's own page, and a page's own action under its groups. */
+.settings-back[data-slot="button"] { margin-left: -8px; color: var(--text-muted); }
+.settings-back[data-slot="button"]:hover { color: var(--text); }
+.settings-page-actions { display: flex; gap: 8px; }
+
+/* A small form in a dialog over Settings (New team): fields, then the footer. */
+.settings-form-dialog[data-slot="dialog-content"] {
+  width: min(440px, calc(100% - 32px));
+  max-width: none;
+  gap: 8px;
+  padding: 24px;
+  border: 1px solid var(--border-quiet);
+  border-radius: 16px;
+  background: var(--canvas);
+}
+.settings-form-dialog [data-slot="dialog-title"] { color: var(--text); font-size: 16px; font-weight: 650; }
+.settings-form-dialog [data-slot="dialog-description"] { color: var(--text-muted); font-size: 12.5px; }
+.settings-form-dialog-body { display: flex; flex-direction: column; gap: 16px; margin-top: 8px; }
+.settings-field { display: flex; flex-direction: column; gap: 8px; color: var(--text); font-size: 12.5px; font-weight: 600; }
+.settings-field .settings-input[data-slot="input"] { width: 100%; }
+.settings-dialog-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
 /* Older page blocks, until each page moves onto the kit. */
 .workspace-settings-account { padding: 0; }
 .workspace-settings-account > * {
@@ -485,8 +518,6 @@
   line-height: 1.5;
 }
 .workspace-settings-confirm input,
-.workspace-settings-inline-form input,
-.workspace-settings-inline-form select,
 .workspace-settings-plan-actions input {
   min-height: 32px;
   padding: 0 9px;
@@ -500,8 +531,6 @@
   width: 100%;
 }
 .workspace-settings-action,
-.workspace-settings-inline-form button,
-.workspace-settings-member-actions button,
 .workspace-settings-plan-actions button {
   display: inline-flex;
   align-items: center;
@@ -516,73 +545,21 @@
   font-size: 12px;
 }
 .workspace-settings-action:hover,
-.workspace-settings-inline-form button:hover,
-.workspace-settings-member-actions button:hover,
 .workspace-settings-plan-actions button:hover {
   background: var(--tone-3c3c3c);
 }
 .workspace-settings-action:disabled,
-.workspace-settings-inline-form button:disabled,
-.workspace-settings-member-actions button:disabled,
 .workspace-settings-plan-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
-.workspace-settings-inline-form {
-  display: flex;
-  align-items: end;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin: 12px 0;
-}
-.workspace-settings-inline-form label {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 7px;
-  min-width: 160px;
-  color: var(--tone-aaaaaa);
-  font-size: 12px;
-}
-.workspace-settings-team-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 12px 0;
-  border-top: 1px solid var(--tone-383838);
-  color: var(--tone-dddddd);
-  text-align: left;
-}
-.workspace-settings-team-row:hover {
-  color: var(--tone-ffffff);
-}
-.workspace-settings-team-row > span:nth-child(2) {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 3px;
-}
-.workspace-settings-team-row strong,
 .workspace-settings-tool-row strong {
   font-size: 13px;
 }
-.workspace-settings-team-row small,
 .workspace-settings-tool-row small {
   color: var(--text-muted);
   font-size: 11px;
 }
-.workspace-settings-back-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--tone-aaaaaa);
-  font-size: 12px;
-}
-.workspace-settings-back-inline:hover {
-  color: var(--tone-ffffff);
-}
-.workspace-settings-member-actions,
 .workspace-settings-plan-actions {
   display: flex;
   align-items: center;
@@ -615,28 +592,6 @@
   font-size: 10px;
   font-weight: 500;
   text-transform: capitalize;
-}
-.workspace-settings-role-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-}
-.workspace-settings-role-trigger:hover {
-  border-color: var(--tone-6a6a6a);
-  color: var(--tone-eeeeee);
-}
-.workspace-settings-role-trigger:focus-visible {
-  outline: 2px solid var(--tone-8a8a8a);
-  outline-offset: 2px;
-}
-.workspace-settings-role-trigger[data-popup-open] {
-  border-color: var(--tone-8a8a8a);
-  color: var(--tone-ffffff);
-}
-.workspace-settings-role-trigger:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
 }
 .workspace-settings-plan-row {
   border-top: 1px solid var(--tone-383838);

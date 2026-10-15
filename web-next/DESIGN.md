@@ -478,6 +478,12 @@ not permission to copy every incidental value into a new component.
     that asks before removing), its label counting seats when the plan has
     a limit; On their way lists invitations with who sent them, when they
     expire, and Cancel.
+  - **Teams:** the library's table, one row a team (its name and how many
+    people, its lead, the faces of who is in it, its teamspaces as chips),
+    from the directory in one read; a row opens the team's own page (name,
+    members with an Admin/Member menu, Add a member, Danger zone → Delete
+    team). New team is a small dialog (name, inside which team), Cancel then
+    Create.
 - **Chats** (ChatsNew; `chats-page.tsx`): the member's chats with their
   agent as a page. It is the agent session (a focused view, the header
   "Chats · Only you see these") with a 280px list tile before the chat:
