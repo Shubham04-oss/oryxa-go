@@ -682,12 +682,37 @@ not permission to copy every incidental value into a new component.
   its foot; no text sits on the painting anywhere else. On a phone the scene
   is a band across the top that fades into the page. The Google option uses
   the full-color Google mark.
-- Setting up a new workspace continues in the same layout (`?setup=`, in
-  `components/onboarding.tsx`), with a five-part stepper: Workspace, then
-  Krude (background access), Tools (connect apps), Crew (invite by email)
-  and Teamspace (the first one). Each step does real work through the
-  existing APIs and can be skipped; an app's or the grant's sign-in page
-  returns to the step it left.
+- **Setting up a new workspace** (onboarding v3, founder's redesign of 15
+  Oct 2026; boards OnbV3s1–s5 and Onb3Model) uses the sign-in layout through
+  `OnboardingFrame` (`components/onboarding-frame.tsx`). Naming the
+  workspace is step 1 (routes/index `NewWorkspace`); `?setup=` carries steps
+  2–5 in `components/onboarding.tsx`: Krude (background access), Tools
+  (connect apps), Crew (invite by email) and Teamspace (the first one).
+  - **The scene** on the left holds a miniature of the member's workspace
+    (`WorkspaceModel`): navigation, the page and Krude's panel, as three
+    panes. One part fills in per step, from what is really set up: the
+    workspace's name as it is typed, Krude's panel, connected apps,
+    invited addresses (pending invitations and this session's), and the
+    teamspace's name as it is typed. Parts not yet set up stay as quiet
+    ghost lines (`ui/skeleton`, no pulse); never example people or apps.
+    The scene's caption sits at its foot; on narrow screens the miniature
+    is hidden.
+  - **The form** on the right sits under "Step N of 5 · Name" and a
+    five-part bar (an ordered list; the current part is `aria-current`).
+    Each step opens with an eyebrow, a question (30px) and one line.
+  - **Navigation** follows §1's buttons: Back (`ghost`) on the left, Skip
+    for now (`ghost`) and Continue (`default`, with its ↵ hint) on the
+    right. Enter anywhere outside a field, button or link continues; in a
+    field it submits that field's form. Steps 1 and 2 have no Back (the
+    workspace exists once named; step 1 offers Sign out there). Skip for
+    now shows only while the step has nothing done; the last step's
+    primary is "Open my workspace", which lands on My workspace's first
+    run (§3).
+  - Each step does real work through the existing APIs, and an app's or
+    the grant's sign-in page returns to the step it left. Board elements
+    with no API stay out: the workspace address and domain join, how far
+    Krude acts on its own and what it calls the member (#322), per-person
+    roles on invites, and teamspace starters.
 
 ## 5. Small screens and keyboard
 
