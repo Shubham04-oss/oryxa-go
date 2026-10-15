@@ -267,9 +267,18 @@ not permission to copy every incidental value into a new component.
   - **Once you're in:** the strip says so, with Open and Leave. On any other
     page a mini player follows you (bottom left) with mute, back to the
     parley, and leave.
-  - **The full page:** a gallery or speaker layout, live captions, the
-    transcript as this page heard it, and a dock (mic, camera, screen,
-    record, ask the agent in, devices, leave), plus "End for everyone".
+  - **The full page:** "Parley" with the teamspace's description under it
+    (or the recording line), a Gallery / Speaker / Shared layout (Shared,
+    while someone shares: the screen fills the stage and the people are a
+    row of small tiles), live captions, and the transcript as this page
+    heard it.
+  - **The dock** (`CallDock`, one component for every surface, built from
+    the library's toggles and buttons): on the left the live time and "5
+    people, Krude taking notes"; in the middle mic, camera, screen, record,
+    ask the agent in, devices and Leave; on the right captions, the Room
+    (with a count of what others said there since its pane was last open,
+    from the room page's messages; no count while no page reports them),
+    the transcript, "End for everyone", and Full page / Exit full page.
     Devices opens a small panel over the stage to choose the microphone,
     camera and speaker, and follows devices plugged in or out. Beside the
     call is the Transcript or the **Room**: the room's own conversation,
@@ -277,8 +286,11 @@ not permission to copy every incidental value into a new component.
     one, so the room is never open twice). From any other page the Room
     pane says to open the room's page.
   - **Tiles:** camera tiles stay dark in both themes, as video does
-    (`--call-*` tokens). A person keeps their tile colour everywhere. The
-    agent is a tile with no camera, marked Listening or Speaking.
+    (`--call-*` tokens). A person keeps their tile colour everywhere. Every
+    tile names its person with their mic, small ones too; only the faces in
+    the join strip go without. Flags sit top right: Sharing, Camera off (big
+    tiles only). The agent is a tile with no camera, flagged Taking notes
+    (Notes when small) or Speaking.
   - **Recording:** while it is on, everyone in the call sees who turned it
     on, and when.
   - **Parley ended:** when the call the member is in ends (someone ended it,

@@ -12,6 +12,7 @@ import {
   MessageSquareText,
   Mic,
   MicOff,
+  Minimize2,
   MonitorUp,
   PhoneOff,
   ScrollText,
@@ -22,6 +23,10 @@ import {
   X,
 } from "lucide-react"
 import { roomKey, useCall } from "./call-provider"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Toggle } from "@/components/ui/toggle"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { ActiveCall, EndedCall } from "./call-provider"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { Popup, PopupFoot, PopupHead, PopupIcon } from "./popup"
@@ -79,6 +84,47 @@ function Wave() {
   )
 }
 
+/** A small label at a tile's top right: sharing, camera off, the agent. */
+export function CallFlag({
+  icon,
+  agent = false,
+  children,
+}: {
+  icon?: React.ReactNode
+  agent?: boolean
+  children?: React.ReactNode
+}) {
+  return (
+    <span className="call-flag" data-agent={agent ? "true" : undefined}>
+      {icon}
+      {children}
+    </span>
+  )
+}
+
+/**
+ * What a person's tile says about them on its own: they're sharing, or (on
+ * a big tile) their camera is off. A flag passed in takes its place.
+ */
+function flagOf(
+  tile: CallTile | undefined,
+  size: "default" | "big" | "small"
+): React.ReactNode {
+  if (tile?.screenTrack)
+    return (
+      <CallFlag icon={<MonitorUp size={11} aria-hidden="true" />}>
+        Sharing
+      </CallFlag>
+    )
+  if (tile && !tile.video && size === "big")
+    return (
+      <CallFlag icon={<VideoOff size={11} aria-hidden="true" />}>
+        Camera off
+      </CallFlag>
+    )
+  return undefined
+}
+
 /** A person in the call: their camera, or their avatar on their colour. */
 export function CallCam({
   member,
@@ -87,6 +133,7 @@ export function CallCam({
   size = "default",
   speaking = false,
   flag,
+  named = true,
 }: {
   member: string
   name: string
@@ -94,9 +141,11 @@ export function CallCam({
   size?: "default" | "big" | "small"
   speaking?: boolean
   flag?: React.ReactNode
+  /** Its name, mic and flags; a face in a row of faces has none. */
+  named?: boolean
 }) {
   const muted = tile ? !tile.audio : false
-  const label = `${tile?.self ? "You" : name}${speaking ? ", speaking" : ""}${muted ? ", muted" : ""}`
+  const label = `${tile?.self ? "You" : name}${speaking ? ", speaking" : ""}${muted ? ", muted" : ""}${tile?.screenTrack ? ", sharing" : ""}`
   return (
     <div
       className="call-cam"
@@ -112,8 +161,8 @@ export function CallCam({
       ) : (
         <IdentityAvatar identity={personIdentity(member, name)} />
       )}
-      {flag}
-      {size !== "small" && (
+      {named && (flag ?? flagOf(tile, size))}
+      {named && (
         <span className="call-name">
           {speaking ? (
             <Wave />
@@ -136,10 +185,12 @@ function AgentCam({
   name,
   speaking,
   size = "default",
+  named = true,
 }: {
   name: string
   speaking: boolean
   size?: "default" | "big" | "small"
+  named?: boolean
 }) {
   return (
     <div
@@ -151,13 +202,15 @@ function AgentCam({
       style={{ "--c": "var(--call-tint-6)" } as CSSProperties}
     >
       <IdentityAvatar identity={agentIdentity(`agent:${name}`, name)} />
-      {size !== "small" && (
-        <span className="call-flag" data-agent="true">
-          {speaking ? <Wave /> : <Sparkles size={11} aria-hidden="true" />}
-          {speaking ? "Speaking" : "Listening"}
-        </span>
+      {named && (
+        <CallFlag
+          agent
+          icon={speaking ? <Wave /> : <Sparkles size={11} aria-hidden="true" />}
+        >
+          {speaking ? "Speaking" : size === "small" ? "Notes" : "Taking notes"}
+        </CallFlag>
       )}
-      {size !== "small" && <span className="call-name">{name}</span>}
+      {named && <span className="call-name">{name}</span>}
     </div>
   )
 }
@@ -216,12 +269,15 @@ export function ParleyButton({
   organizationId,
   room,
   roomName,
+  subtitle,
   member,
   name,
 }: {
   organizationId: string
   room: LiveRoom
   roomName: string
+  /** The line under "Parley" on the full page: the room's description. */
+  subtitle?: string
   member: string
   name?: string
 }) {
@@ -244,6 +300,7 @@ export function ParleyButton({
           organizationId,
           room,
           roomName,
+          subtitle,
           member,
           name,
           mic: true,
@@ -262,12 +319,15 @@ export function ParleyStrip({
   organizationId,
   room,
   roomName,
+  subtitle,
   member,
   name,
 }: {
   organizationId: string
   room: LiveRoom
   roomName: string
+  /** The line under "Parley" on the full page: the room's description. */
+  subtitle?: string
   member: string
   name?: string
 }) {
@@ -345,6 +405,7 @@ export function ParleyStrip({
       organizationId,
       room,
       roomName,
+      subtitle,
       member,
       name,
       mic: withMic,
@@ -360,10 +421,16 @@ export function ParleyStrip({
             member={person.member}
             name={person.name}
             size="small"
+            named={false}
           />
         ))}
         {call.agent.present && (
-          <AgentCam name={call.agent.name} speaking={false} size="small" />
+          <AgentCam
+            name={call.agent.name}
+            speaking={false}
+            size="small"
+            named={false}
+          />
         )}
       </div>
       <div className="call-strip-text">
@@ -741,14 +808,50 @@ function RoomChatPane({ room, roomName }: { room: string; roomName: string }) {
   )
 }
 
-type Layout = "gallery" | "speaker"
+type Layout = "gallery" | "speaker" | "shared"
 
-function CallFullPage({
+/** What sits beside the call: what's been said, the room's conversation, or neither. */
+type Side = "transcript" | "room" | null
+
+/** "5 people, Krude taking notes": who the call has, for the dock. */
+function dockLine(active: ActiveCall, view: CallView | null): string {
+  const people = view?.participants.length ?? active.tiles.length
+  const agent = view?.agent
+  return `${people} ${people === 1 ? "person" : "people"}${
+    agent?.present
+      ? `, ${agent.name} ${active.agentSpeaking ? "speaking" : "taking notes"}`
+      : ""
+  }`
+}
+
+/**
+ * The parley's controls, one dock wherever the call is open: the member's
+ * mic, camera and screen, recording, the agent, devices and Leave; then
+ * captions, the room (with what's new in it), the transcript, End for
+ * everyone, and moving between the stage and the full page.
+ */
+export function CallDock({
+  mode,
   active,
   view,
+  captions,
+  onCaptions,
+  side,
+  onSide,
+  choosing,
+  onChoosing,
 }: {
+  /** Where it is: the stage in the workspace, or the full page. */
+  mode: "stage" | "full"
   active: ActiveCall
   view: CallView | null
+  captions: boolean
+  onCaptions: (on: boolean) => void
+  /** The side pane, where the surface has one. */
+  side?: Side
+  onSide?: (side: Side) => void
+  choosing: boolean
+  onChoosing: (on: boolean) => void
 }) {
   const {
     setMic,
@@ -759,21 +862,185 @@ function CallFullPage({
     expand,
     leave,
     end,
+    roomUnread,
   } = useCall()
-  const [layout, setLayout] = useState<Layout>("gallery")
-  const [captions, setCaptions] = useState(true)
-  const [choosing, setChoosing] = useState(false)
-  // The side pane: what's been said, the room's conversation, or neither.
-  const [side, setSide] = useState<"transcript" | "room" | null>("transcript")
-  const transcript = side === "transcript"
-  const setTranscript = (toggle: (value: boolean) => boolean) =>
-    setSide((current) =>
-      toggle(current === "transcript") ? "transcript" : null
-    )
   const [busy, setBusy] = useState(false)
   const duration = useDuration(view?.startedAt)
+  const agent = view?.agent
+  const act = (work: () => Promise<void>) => {
+    setBusy(true)
+    void work()
+      .catch(() => undefined)
+      .finally(() => setBusy(false))
+  }
+  const unread = side === "room" ? 0 : (roomUnread ?? 0)
+
+  return (
+    <div className="call-dock" role="toolbar" aria-label="Parley controls">
+      <div className="call-dock-side">
+        <span className="call-live-dot" aria-hidden="true" />
+        {duration && <span className="call-time">{duration}</span>}
+        <span>·</span>
+        <span>{dockLine(active, view)}</span>
+      </div>
+      <div className="call-ctrls">
+        <Toggle
+          className="call-btn"
+          data-state={active.mic ? undefined : "off"}
+          pressed={!active.mic}
+          aria-label={active.mic ? "Mute" : "Unmute"}
+          onPressedChange={() => void setMic(!active.mic)}
+        >
+          {active.mic ? (
+            <Mic size={18} aria-hidden="true" />
+          ) : (
+            <MicOff size={18} aria-hidden="true" />
+          )}
+        </Toggle>
+        <Toggle
+          className="call-btn"
+          data-state={active.camera ? undefined : "off"}
+          pressed={active.camera}
+          aria-label={active.camera ? "Turn camera off" : "Turn camera on"}
+          onPressedChange={() => void setCamera(!active.camera)}
+        >
+          {active.camera ? (
+            <Video size={18} aria-hidden="true" />
+          ) : (
+            <VideoOff size={18} aria-hidden="true" />
+          )}
+        </Toggle>
+        <Toggle
+          className="call-btn"
+          data-state={active.screen ? "on" : undefined}
+          pressed={active.screen}
+          aria-label={active.screen ? "Stop sharing" : "Share screen"}
+          onPressedChange={() => void setScreen(!active.screen)}
+        >
+          <MonitorUp size={18} aria-hidden="true" />
+        </Toggle>
+        <Toggle
+          className="call-btn"
+          data-state={view?.recording.on ? "off" : undefined}
+          pressed={view?.recording.on ?? false}
+          aria-label={view?.recording.on ? "Stop recording" : "Record"}
+          disabled={busy}
+          onPressedChange={() => act(() => setRecording(!view?.recording.on))}
+        >
+          <Circle
+            size={16}
+            fill={view?.recording.on ? "currentColor" : "none"}
+            aria-hidden="true"
+          />
+        </Toggle>
+        <Toggle
+          className="call-btn"
+          data-state={agent?.present ? "on" : undefined}
+          pressed={agent?.present ?? false}
+          aria-label={
+            agent?.present
+              ? `Dismiss ${agent.name}`
+              : `Ask ${agent?.name ?? "the agent"} in`
+          }
+          disabled={busy}
+          onPressedChange={() => act(() => setAgent(!agent?.present))}
+        >
+          <Sparkles size={18} aria-hidden="true" />
+        </Toggle>
+        <Toggle
+          className="call-btn"
+          pressed={choosing}
+          aria-label="Devices"
+          onPressedChange={onChoosing}
+        >
+          <Settings2 size={16} aria-hidden="true" />
+        </Toggle>
+        <Button className="call-leave" onClick={() => void leave()}>
+          <PhoneOff size={16} aria-hidden="true" />
+          Leave
+        </Button>
+      </div>
+      <div className="call-dock-side">
+        <Toggle
+          className="call-btn"
+          data-state={captions ? "on" : undefined}
+          pressed={captions}
+          aria-label={captions ? "Hide captions" : "Show captions"}
+          onPressedChange={onCaptions}
+        >
+          <Captions size={16} aria-hidden="true" />
+        </Toggle>
+        {onSide && (
+          <Toggle
+            className="call-btn"
+            pressed={side === "room"}
+            aria-label={
+              side === "room"
+                ? "Hide the room"
+                : unread > 0
+                  ? `Show the room, ${unread} new`
+                  : "Show the room"
+            }
+            onPressedChange={(on) => onSide(on ? "room" : null)}
+          >
+            <MessageSquareText size={16} aria-hidden="true" />
+            {unread > 0 && (
+              <Badge className="call-badge" aria-hidden="true">
+                {unread > 9 ? "9+" : unread}
+              </Badge>
+            )}
+          </Toggle>
+        )}
+        {onSide && (
+          <Toggle
+            className="call-btn"
+            pressed={side === "transcript"}
+            aria-label={
+              side === "transcript"
+                ? "Hide the transcript"
+                : "Show the transcript"
+            }
+            onPressedChange={(on) => onSide(on ? "transcript" : null)}
+          >
+            <ScrollText size={16} aria-hidden="true" />
+          </Toggle>
+        )}
+        <Button className="call-quiet" disabled={busy} onClick={() => act(end)}>
+          <X size={14} aria-hidden="true" />
+          End for everyone
+        </Button>
+        <Button
+          className="call-btn"
+          aria-label={mode === "full" ? "Exit full page" : "Full page"}
+          onClick={() => expand(mode !== "full")}
+        >
+          {mode === "full" ? (
+            <Minimize2 size={16} aria-hidden="true" />
+          ) : (
+            <Maximize2 size={16} aria-hidden="true" />
+          )}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function CallFullPage({
+  active,
+  view,
+}: {
+  active: ActiveCall
+  view: CallView | null
+}) {
+  const { expand, markRoomSeen, roomUnread } = useCall()
+  const [chosen, setLayout] = useState<Layout>("gallery")
+  const [captions, setCaptions] = useState(true)
+  const [choosing, setChoosing] = useState(false)
+  const [side, setSide] = useState<Side>("transcript")
   const speaking = speakingMember(active)
   const share = active.tiles.find((tile) => tile.screenTrack)
+  // "Shared" needs something shared; without one it's the gallery.
+  const layout = chosen === "shared" && !share ? "gallery" : chosen
   const agent = view?.agent
   const count = active.tiles.length + (agent?.present ? 1 : 0) + (share ? 1 : 0)
   const cols = count <= 1 ? 1 : count <= 4 ? 2 : count <= 9 ? 3 : 4
@@ -789,22 +1056,20 @@ function CallFullPage({
     return () => window.removeEventListener("keydown", onKey)
   }, [expand])
 
-  const act = (work: () => Promise<void>) => {
-    setBusy(true)
-    void work()
-      .catch(() => undefined)
-      .finally(() => setBusy(false))
-  }
+  // While the room is open beside the call, what it says has been seen.
+  useEffect(() => {
+    if (side === "room") markRoomSeen()
+  }, [side, roomUnread, markRoomSeen])
 
-  const tiles = [
-    ...(share ? [<ShareCam key="share" tile={share} />] : []),
+  const size = layout === "shared" ? "small" : "big"
+  const cams = [
     ...active.tiles.map((tile) => (
       <CallCam
         key={tile.id}
         member={tile.member}
         name={tile.name}
         tile={tile}
-        size="big"
+        size={size}
         speaking={tile.member === speaking}
       />
     )),
@@ -814,11 +1079,12 @@ function CallFullPage({
             key="agent"
             name={agent.name}
             speaking={active.agentSpeaking}
-            size="big"
+            size={size}
           />,
         ]
       : []),
   ]
+  const shareTile = share ? <ShareCam key="share" tile={share} /> : null
 
   return (
     <div
@@ -840,64 +1106,74 @@ function CallFullPage({
         <div className="call-title">
           <TeamspaceAvatar name={active.roomName} />
           <strong>Parley</strong>
-          {recording && <span className="call-recording">{recording}</span>}
-        </div>
-        <div className="call-grow" />
-        <div className="call-seg" role="group" aria-label="Layout">
-          {(["gallery", "speaker"] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              aria-pressed={layout === option}
-              onClick={() => setLayout(option)}
-            >
-              {option === "gallery" ? "Gallery" : "Speaker"}
-            </button>
-          ))}
-        </div>
-      </header>
-      <div className="call-body">
-        <div
-          className="call-gallery"
-          aria-label="People in the parley"
-          data-layout={
-            layout === "speaker" && tiles.length > 1 ? "speaker" : "gallery"
-          }
-          style={
-            {
-              "--cols": cols,
-              "--rows": Math.max(tiles.length - 1, 1),
-            } as CSSProperties
-          }
-        >
-          {tiles}
-          {captions && active.caption && (
-            <div className="call-caption" role="status">
-              <b>{active.caption.name}</b>
-              {active.caption.text}
-            </div>
+          {recording ? (
+            <span className="call-recording">{recording}</span>
+          ) : (
+            active.subtitle && <small>{active.subtitle}</small>
           )}
         </div>
-        {transcript && (
-          <section className="call-transcript" aria-label="Transcript">
-            <h2>Transcript</h2>
-            {active.heard.length === 0 ? (
-              <p>What's said shows here as people speak.</p>
-            ) : (
-              <ol>
-                {active.heard.map((line) => (
-                  <li
-                    key={line.id}
-                    data-partial={line.partial ? "true" : undefined}
-                  >
-                    <b>{line.name}</b>
-                    {line.text}
-                  </li>
-                ))}
-              </ol>
+        <div className="call-grow" />
+        <ToggleGroup
+          className="call-seg"
+          aria-label="Layout"
+          value={[layout]}
+          onValueChange={(value: string[]) => {
+            const next = value[0]
+            if (next) setLayout(next as Layout)
+          }}
+        >
+          <ToggleGroupItem value="gallery">Gallery</ToggleGroupItem>
+          <ToggleGroupItem value="speaker">Speaker</ToggleGroupItem>
+          <ToggleGroupItem
+            value="shared"
+            disabled={!share}
+            title={share ? undefined : "Nobody is sharing a screen"}
+          >
+            Shared
+          </ToggleGroupItem>
+        </ToggleGroup>
+      </header>
+      <div className="call-body">
+        {layout === "shared" ? (
+          <div
+            className="call-gallery"
+            aria-label="People in the parley"
+            data-layout="shared"
+          >
+            {shareTile}
+            <div className="call-film">{cams}</div>
+            {captions && active.caption && (
+              <div className="call-caption" role="status">
+                <b>{active.caption.name}</b>
+                {active.caption.text}
+              </div>
             )}
-          </section>
+          </div>
+        ) : (
+          <div
+            className="call-gallery"
+            aria-label="People in the parley"
+            data-layout={
+              layout === "speaker" && count > 1 ? "speaker" : "gallery"
+            }
+            style={
+              {
+                "--cols": cols,
+                "--rows": Math.max(count - 1, 1),
+              } as CSSProperties
+            }
+          >
+            {shareTile}
+            {cams}
+            {captions && active.caption && (
+              <div className="call-caption" role="status">
+                <b>{active.caption.name}</b>
+                {active.caption.text}
+              </div>
+            )}
+          </div>
         )}
+        {side === "transcript" && <CallTranscript active={active} />}
         {choosing && <DevicePicker onClose={() => setChoosing(false)} />}
         {side === "room" && (
           <RoomChatPane
@@ -912,150 +1188,38 @@ function CallFullPage({
           </div>
         )}
       </div>
-      <div className="call-dock" role="toolbar" aria-label="Parley controls">
-        <div className="call-dock-side">
-          <span className="call-live-dot" aria-hidden="true" />
-          {duration && <span className="call-time">{duration}</span>}
-          <span>·</span>
-          <span>
-            {view?.participants.length ?? active.tiles.length}{" "}
-            {(view?.participants.length ?? active.tiles.length) === 1
-              ? "person"
-              : "people"}
-            {agent?.present ? `, ${agent.name} listening` : ""}
-          </span>
-        </div>
-        <div className="call-ctrls">
-          <button
-            className="call-btn"
-            type="button"
-            data-state={active.mic ? undefined : "off"}
-            aria-pressed={!active.mic}
-            aria-label={active.mic ? "Mute" : "Unmute"}
-            onClick={() => void setMic(!active.mic)}
-          >
-            {active.mic ? (
-              <Mic size={18} aria-hidden="true" />
-            ) : (
-              <MicOff size={18} aria-hidden="true" />
-            )}
-          </button>
-          <button
-            className="call-btn"
-            type="button"
-            data-state={active.camera ? undefined : "off"}
-            aria-pressed={active.camera}
-            aria-label={active.camera ? "Turn camera off" : "Turn camera on"}
-            onClick={() => void setCamera(!active.camera)}
-          >
-            {active.camera ? (
-              <Video size={18} aria-hidden="true" />
-            ) : (
-              <VideoOff size={18} aria-hidden="true" />
-            )}
-          </button>
-          <button
-            className="call-btn"
-            type="button"
-            data-state={active.screen ? "on" : undefined}
-            aria-pressed={active.screen}
-            aria-label={active.screen ? "Stop sharing" : "Share screen"}
-            onClick={() => void setScreen(!active.screen)}
-          >
-            <MonitorUp size={18} aria-hidden="true" />
-          </button>
-          <button
-            className="call-btn"
-            type="button"
-            data-state={view?.recording.on ? "off" : undefined}
-            aria-pressed={view?.recording.on ?? false}
-            aria-label={view?.recording.on ? "Stop recording" : "Record"}
-            disabled={busy}
-            onClick={() => act(() => setRecording(!view?.recording.on))}
-          >
-            <Circle
-              size={16}
-              fill={view?.recording.on ? "currentColor" : "none"}
-              aria-hidden="true"
-            />
-          </button>
-          <button
-            className="call-btn"
-            type="button"
-            data-state={agent?.present ? "on" : undefined}
-            aria-pressed={agent?.present ?? false}
-            aria-label={
-              agent?.present
-                ? `Dismiss ${agent.name}`
-                : `Ask ${agent?.name ?? "the agent"} in`
-            }
-            disabled={busy}
-            onClick={() => act(() => setAgent(!agent?.present))}
-          >
-            <Sparkles size={18} aria-hidden="true" />
-          </button>
-          <button
-            className="call-btn"
-            type="button"
-            aria-pressed={choosing}
-            aria-label="Devices"
-            onClick={() => setChoosing((value) => !value)}
-          >
-            <Settings2 size={16} aria-hidden="true" />
-          </button>
-          <button
-            className="call-leave"
-            type="button"
-            onClick={() => void leave()}
-          >
-            <PhoneOff size={16} aria-hidden="true" />
-            Leave
-          </button>
-        </div>
-        <div className="call-dock-side">
-          <button
-            className="call-btn"
-            type="button"
-            data-state={captions ? "on" : undefined}
-            aria-pressed={captions}
-            aria-label={captions ? "Hide captions" : "Show captions"}
-            onClick={() => setCaptions((value) => !value)}
-          >
-            <Captions size={16} aria-hidden="true" />
-          </button>
-          <button
-            className="call-btn"
-            type="button"
-            aria-pressed={side === "room"}
-            aria-label={side === "room" ? "Hide the room" : "Show the room"}
-            onClick={() =>
-              setSide((current) => (current === "room" ? null : "room"))
-            }
-          >
-            <MessageSquareText size={16} aria-hidden="true" />
-          </button>
-          <button
-            className="call-btn"
-            type="button"
-            aria-pressed={transcript}
-            aria-label={
-              transcript ? "Hide the transcript" : "Show the transcript"
-            }
-            onClick={() => setTranscript((value) => !value)}
-          >
-            <ScrollText size={16} aria-hidden="true" />
-          </button>
-          <button
-            className="call-quiet"
-            type="button"
-            disabled={busy}
-            onClick={() => act(end)}
-          >
-            <X size={14} aria-hidden="true" />
-            End for everyone
-          </button>
-        </div>
-      </div>
+      <CallDock
+        mode="full"
+        active={active}
+        view={view}
+        captions={captions}
+        onCaptions={setCaptions}
+        side={side}
+        onSide={setSide}
+        choosing={choosing}
+        onChoosing={setChoosing}
+      />
     </div>
+  )
+}
+
+/** What's been said in the call, as this page heard it. */
+function CallTranscript({ active }: { active: ActiveCall }) {
+  return (
+    <section className="call-transcript" aria-label="Transcript">
+      <h2>Transcript</h2>
+      {active.heard.length === 0 ? (
+        <p>What's said shows here as people speak.</p>
+      ) : (
+        <ol>
+          {active.heard.map((line) => (
+            <li key={line.id} data-partial={line.partial ? "true" : undefined}>
+              <b>{line.name}</b>
+              {line.text}
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
   )
 }
