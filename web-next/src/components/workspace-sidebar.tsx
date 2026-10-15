@@ -52,6 +52,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { ThemeMenuItem } from "./theme-menu-item"
+import { LiveDot, LiveNow, useLiveTeamspaces } from "./workspace-sidebar-live"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { PersonAvatar } from "./direct-message"
@@ -247,6 +248,7 @@ function ExpandedSidebar({
   onSearch,
 }: WorkspaceSidebarProps) {
   const counts = useSidebarCounts(organizationId, viewerId)
+  const live = useLiveTeamspaces(organizationId, teamspaces)
   const directMessages = sidebarDirectMessages(inbox.conversations)
   const named = people.status !== "loading"
   const listedPeer =
@@ -325,6 +327,8 @@ function ExpandedSidebar({
             </SidebarMenu>
           </SidebarGroup>
 
+          <LiveNow />
+
           <SidebarGroup
             className="workspace-sidebar-tile"
             role="group"
@@ -362,6 +366,7 @@ function ExpandedSidebar({
                     />
                   }
                   current={openTeamspaceId === space.id}
+                  live={live.has(space.id)}
                   onClick={() => onOpenTeamspace(space.id)}
                 />
               ))}
@@ -552,6 +557,7 @@ function CollapsedSidebar({
   onSearch,
 }: WorkspaceSidebarProps) {
   const counts = useSidebarCounts(organizationId, viewerId)
+  const live = useLiveTeamspaces(organizationId, teamspaces)
   const workspaceName =
     (selectedOrganization ?? organizations.at(0))?.name ?? "Workspace"
   // The rail lists only the DMs that wait on the member.
@@ -649,6 +655,7 @@ function CollapsedSidebar({
                       />
                     }
                     current={openTeamspaceId === space.id}
+                    live={live.has(space.id)}
                     collapsed
                     onClick={() => onOpenTeamspace(space.id)}
                   />
@@ -766,6 +773,7 @@ function NavItem({
   strong = false,
   quiet,
   collapsed = false,
+  live = false,
   onClick,
 }: {
   label: string
@@ -777,8 +785,11 @@ function NavItem({
   strong?: boolean
   quiet?: string
   collapsed?: boolean
+  /** A parley runs here: a green dot, and said in the name. */
+  live?: boolean
   onClick: () => void
 }) {
+  const name = live ? `${label}, parley live` : label
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
@@ -786,7 +797,7 @@ function NavItem({
         isActive={current}
         aria-current={current ? "page" : undefined}
         // The name alone: a planet or avatar icon names itself too.
-        aria-label={spokenCount ? `${label}, ${spokenCount}` : label}
+        aria-label={spokenCount ? `${name}, ${spokenCount}` : name}
         tooltip={collapsed ? label : undefined}
         onClick={onClick}
       >
@@ -809,6 +820,7 @@ function NavItem({
           {count}
         </SidebarMenuBadge>
       )}
+      {live && <LiveDot className={collapsed ? "is-badge" : undefined} />}
       {quiet && !collapsed && (
         <SidebarMenuBadge className="workspace-sidebar-quiet-count">
           {quiet}
