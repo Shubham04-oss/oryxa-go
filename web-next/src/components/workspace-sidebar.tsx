@@ -86,9 +86,8 @@ export type SidebarSection =
   | "requests"
 
 /**
- * Where a sidebar entry leads: a canvas page, or "chats", the member's chats
- * with their agent, which open in the agent panel's history until a Chats
- * page exists.
+ * Where a sidebar entry leads: a canvas page, or "chats", the Chats page (the
+ * agent session with the member's chats listed beside it).
  */
 export type SidebarPage = SidebarSection | "chats"
 
@@ -142,7 +141,7 @@ export type WorkspaceSidebarProps = {
   /** What the footer says under the member's name. */
   roleLabel: string
   /** The canvas page on screen, when no teamspace or DM in the list is. */
-  section: SidebarSection | null
+  section: SidebarPage | null
   /** The teamspace open as the page. */
   openTeamspaceId?: string | null
   /** The DM open in the canvas. */
@@ -321,6 +320,7 @@ function ExpandedSidebar({
               <NavItem
                 label="Chats with your agent"
                 icon={<MessageSquare />}
+                current={page === "chats"}
                 onClick={() => onNavigate("chats")}
               />
             </SidebarMenu>
@@ -585,6 +585,7 @@ function CollapsedSidebar({
               <NavItem
                 label="Chats with your agent"
                 icon={<MessageSquare />}
+                current={page === "chats"}
                 collapsed
                 onClick={() => onNavigate("chats")}
               />
