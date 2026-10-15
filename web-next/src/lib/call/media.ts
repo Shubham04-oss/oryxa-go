@@ -24,12 +24,30 @@ export type HeardSegment = {
   at: number
 }
 
+export type DeviceKind = "audioinput" | "videoinput" | "audiooutput"
+
+/** The devices the member can choose between, and the ones in use. */
+export type CallDevices = {
+  microphones: MediaDeviceInfo[]
+  cameras: MediaDeviceInfo[]
+  speakers: MediaDeviceInfo[]
+  current: Partial<Record<DeviceKind, string>>
+}
+
 export interface CallMedia {
   tiles: () => CallTile[]
   /** Called whenever anyone's tiles change; returns the unsubscribe. */
   onChange: (listener: () => void) => () => void
   /** Every speaker's live transcript, as RealtimeKit hears it. */
   onTranscript: (listener: (segment: HeardSegment) => void) => () => void
+  devices: () => Promise<CallDevices>
+  /**
+   * Switches to the device of `kind` with `deviceId`. Both are needed: a
+   * browser reuses ids like "default" across microphones and speakers.
+   */
+  setDevice: (kind: DeviceKind, deviceId: string) => Promise<void>
+  /** Called when a device is plugged in or out; returns the unsubscribe. */
+  onDevicesChange: (listener: () => void) => () => void
   setMic: (on: boolean) => Promise<void>
   setCamera: (on: boolean) => Promise<void>
   setScreen: (on: boolean) => Promise<void>
@@ -74,6 +92,10 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
   const meeting = await RealtimeKitClient.init({
     authToken: options.token,
     defaults: { audio: options.mic, video: options.camera },
+    // Without this the core SDK plays no one else's audio (meeting.audio is
+    // undefined and remote tracks go nowhere), and nothing here plays them:
+    // a parley had working mics and silent speakers in every browser.
+    modules: { experimentalAudioPlayback: true },
   })
   await meeting.join()
 
@@ -84,6 +106,19 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
   const mediaEvents = ["audioUpdate", "videoUpdate", "screenShareUpdate"]
   const self = meeting.self as unknown as Participant
   for (const event of mediaEvents) self.on?.(event, changed)
+
+  // Safari refuses audio that doesn't start in a click, and joining outlasts
+  // the click on Parley; on that refusal, play again at the member's next
+  // click or key.
+  const gestures = ["pointerdown", "keydown"] as const
+  const replay = () => {
+    for (const gesture of gestures)
+      document.removeEventListener(gesture, replay)
+    void meeting.audio.play().catch(() => undefined)
+  }
+  meeting.self.on("autoplayError", () => {
+    for (const gesture of gestures) document.addEventListener(gesture, replay)
+  })
   // The map passes on each participant's own events, so one listener each
   // covers everyone in the call.
   const joined = meeting.participants.joined as unknown as Map<
@@ -128,6 +163,58 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
       meeting.ai.on("transcript", heard)
       return () => meeting.ai.off("transcript", heard)
     },
+    async devices() {
+      const media = meeting.self as unknown as {
+        getAudioDevices: () => Promise<MediaDeviceInfo[]>
+        getVideoDevices: () => Promise<MediaDeviceInfo[]>
+        getSpeakerDevices: () => Promise<MediaDeviceInfo[]>
+        getCurrentDevices: () => Partial<{
+          audio: MediaDeviceInfo
+          video: MediaDeviceInfo
+          speaker: MediaDeviceInfo
+        }>
+      }
+      const [microphones, cameras, speakers] = await Promise.all([
+        media.getAudioDevices(),
+        media.getVideoDevices(),
+        media.getSpeakerDevices().catch(() => []),
+      ])
+      const current = media.getCurrentDevices()
+      return {
+        microphones,
+        cameras,
+        speakers,
+        current: {
+          audioinput: current.audio?.deviceId,
+          videoinput: current.video?.deviceId,
+          audiooutput: current.speaker?.deviceId,
+        },
+      }
+    },
+    async setDevice(kind, deviceId) {
+      const all = await (
+        meeting.self as unknown as {
+          getAllDevices: () => Promise<MediaDeviceInfo[]>
+        }
+      ).getAllDevices()
+      const device = all.find(
+        (item) => item.kind === kind && item.deviceId === deviceId
+      )
+      if (device) await meeting.self.setDevice(device)
+      changed()
+    },
+    onDevicesChange(listener) {
+      const events = meeting.self as unknown as {
+        on: (event: string, listener: () => void) => void
+        off: (event: string, listener: () => void) => void
+      }
+      events.on("deviceListUpdate", listener)
+      events.on("deviceUpdate", listener)
+      return () => {
+        events.off("deviceListUpdate", listener)
+        events.off("deviceUpdate", listener)
+      }
+    },
     async setMic(on) {
       if (on) await meeting.self.enableAudio()
       else await meeting.self.disableAudio()
@@ -145,6 +232,8 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
     },
     async leave() {
       listeners.clear()
+      for (const gesture of gestures)
+        document.removeEventListener(gesture, replay)
       await meeting.leave()
     },
   }

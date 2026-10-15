@@ -610,7 +610,10 @@ function ArtifactItem({
   )
   const download = openBeside && (
     <a
-      className="workspace-agent-artifact-download"
+      className={cn(
+        buttonVariants({ variant: "ghost", size: "icon-sm" }),
+        "workspace-agent-artifact-download"
+      )}
       href={url}
       download={fileName}
       aria-label={`Download ${fileName}`}
