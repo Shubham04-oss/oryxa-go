@@ -370,7 +370,8 @@ func TestSaveArtifactMovesTheFileWithoutTheModel(t *testing.T) {
 	}
 	if result["artifact_version"] != int64(3) && result["artifact_version"] != float64(3) {
 		t.Errorf("result = %v", result)
-	}	// Its bytes never reach the model, so it asks the edge for the artifact
+	}
+	// Its bytes never reach the model, so it asks the edge for the artifact
 	// budget rather than the model's 256 KiB.
 	if len(*seen) == 0 || (*seen)[len(*seen)-1].Body["maxBytes"] != float64(maxArtifactBytes) {
 		t.Errorf("read asked for %v, want maxBytes %d", *seen, maxArtifactBytes)
