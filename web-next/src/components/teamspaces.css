@@ -336,6 +336,10 @@
 }
 .workspace-teamspace-card[data-status="paused"] > :not(.workspace-teamspace-card-top),
 .workspace-teamspace-card[data-status="paused"] .workspace-teamspace-card-top > :not(.workspace-teamspace-card-more) { opacity: .62; }
+/* Opacity gives each dimmed row its own stacking context, painted above the
+   title's stretched ::after, so the rows below the title would swallow clicks.
+   Let them fall through so the whole paused card opens, like an active one. */
+.workspace-teamspace-card[data-status="paused"] > :not(.workspace-teamspace-card-top) { pointer-events: none; }
 .workspace-teamspace-card-top { display: flex; align-items: center; gap: 10px; }
 .workspace-teamspace-card-top > .workspace-avatar { width: 34px; height: 34px; }
 .workspace-teamspace-card-title { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }

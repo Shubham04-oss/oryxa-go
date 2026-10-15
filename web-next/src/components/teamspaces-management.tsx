@@ -364,9 +364,11 @@ export function TeamspacesManagement({
       <header className="workspace-teamspaces-hello">
         <div>
           <h2>Teamspaces</h2>
-          <p aria-label="Teamspace summary">
-            {loaded ? summaryLine(activeCount, liveIn) : "Loading…"}
-          </p>
+          {(loaded || spaces.isPending) && (
+            <p aria-label="Teamspace summary">
+              {loaded ? summaryLine(activeCount, liveIn) : "Loading…"}
+            </p>
+          )}
         </div>
         {canCreate && (
           <button
