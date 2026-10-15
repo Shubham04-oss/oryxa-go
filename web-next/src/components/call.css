@@ -3,6 +3,60 @@
    follows the theme. The strip joins from a teamspace, the mini player
    follows the member to other pages, and the full page is the parley. */
 
+/* A reaction rises briefly from its sender's tile. */
+.call-reaction {
+  position: absolute;
+  bottom: 36px;
+  left: 50%;
+  z-index: 1;
+  font-size: 28px;
+  line-height: 1;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.call-cam[data-size="small"] .call-reaction {
+  bottom: 24px;
+  font-size: 20px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .call-reaction {
+    animation: call-reaction 4s ease-out forwards;
+  }
+}
+@keyframes call-reaction {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.8);
+  }
+  12% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -16px);
+  }
+}
+/* The React menu opens over the parley's full page. */
+.call-menu {
+  z-index: 80;
+}
+.call-reactions {
+  display: flex;
+  width: auto;
+  min-width: 0;
+  gap: 4px;
+}
+.call-reactions [role="menuitem"] {
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  font-size: 20px;
+}
+
 /* A person in the call. */
 .call-cam {
   position: relative;
@@ -682,28 +736,25 @@
   }
 }
 
-/* "Parley" in a teamspace's header: starts one when none runs. */
+/* "Parley" in a teamspace's header (the library's outline button): starts
+   one, or, with the live dot, joins or opens the one running. */
 .workspace-teamspace-parley {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
   margin-left: auto;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--canvas);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
 }
-.workspace-teamspace-parley:hover:not(:disabled) {
-  background: var(--selected);
+
+/* The mini player over a share: the speaker's cam inset, bottom right. */
+.call-pip-speaker {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 92px;
+  height: 60px;
 }
-.workspace-teamspace-parley:disabled {
-  opacity: 0.5;
-  cursor: default;
+.call-pip-speaker .call-cam {
+  width: 100%;
+  height: 100%;
+  border-radius: 9px;
+  box-shadow: 0 0 0 2px var(--call-speaking);
 }
 /* In a teamspace the strip lines up with the room and the work column. */
 .workspace-teamspace-focus > .call-strip {
@@ -729,6 +780,19 @@
   margin-left: 0;
 }
 
+/* The room's conversation beside the call: the page's own, moved in here. */
+.call-room { width: 380px; }
+.call-room-slot {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 4px 4px;
+}
+.call-room-slot:empty { display: none; }
+.call-room-slot > * { flex: 1; min-height: 0; }
+.call-room-slot .workspace-conversation { border-radius: 12px; }
+
 /* In a side conversation (a narrow panel) the parley sits under its bar:
    the strip wraps, without the faces. */
 .workspace-side-parley {
@@ -749,4 +813,105 @@
 .workspace-side-parley .call-strip-acts {
   width: 100%;
   justify-content: flex-end;
+}
+
+/* Choosing the microphone, camera and speaker, over the stage. */
+.call-devices {
+  position: absolute;
+  right: 16px;
+  bottom: 0;
+  z-index: 2;
+  display: grid;
+  gap: 12px;
+  width: 300px;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--raised);
+  box-shadow: 0 0 0 1px var(--border-quiet), 0 8px 24px var(--shade-66);
+}
+.call-devices-head { display: flex; align-items: center; justify-content: space-between; }
+.call-devices-head strong { color: var(--text); font-size: 13px; }
+.call-devices-head .call-btn { width: 28px; height: 28px; }
+.call-device { display: grid; gap: 6px; color: var(--text-muted); font-size: 11.5px; font-weight: 600; }
+.call-device select {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-quiet);
+  border-radius: 10px;
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 12.5px;
+}
+.call-device small { color: var(--text-muted); font-size: 12px; font-weight: 500; }
+.call-devices-note { margin: 0; color: var(--text-muted); font-size: 12px; }
+.call-devices-note[role="alert"] { color: var(--tone-e4aaa6); }
+
+/* The shared dock's controls are the library's toggles and buttons, in the
+   call's round shapes. */
+.call-btn,
+.call-leave,
+.call-quiet {
+  padding-block: 0;
+}
+.call-btn {
+  padding-inline: 0;
+}
+/* The dock is its own context: round icon toggles, then Leave (destructive)
+   at the end of the controls; "End for everyone" is destructive too. */
+.call-dock .call-quiet {
+  color: var(--tone-f0a8a8);
+}
+/* What's new in the room while its pane is closed. */
+.call-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--call-leave);
+  color: var(--on-call-action);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* A small tile names its person too, in a smaller label. */
+.call-cam[data-size="small"] .call-name {
+  bottom: 5px;
+  left: 5px;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+.call-cam[data-size="small"] .call-flag {
+  top: 5px;
+  right: 5px;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 9.5px;
+}
+
+/* Shared: the screen fills the stage, the people a row of small tiles. */
+.call-gallery[data-layout="shared"] {
+  display: flex;
+  flex-direction: column;
+}
+.call-gallery[data-layout="shared"] > .call-cam[data-share="true"] {
+  flex: 1;
+}
+.call-film {
+  display: flex;
+  flex: none;
+  gap: 10px;
+  height: 112px;
+  overflow-x: auto;
+}
+.call-film .call-cam {
+  flex: none;
+  width: 176px;
+}
+.call-seg button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }

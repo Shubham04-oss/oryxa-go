@@ -229,6 +229,8 @@
   --scene-ships: url("/scenes/ships.jpg");
   --scene-harbour: url("/scenes/harbour.webp");
   --scene-ship-lines: url("/scenes/ship-lines.webp");
+  --scene-crows-nest: url("/scenes/crows-nest.webp");
+  --scene-deck: url("/scenes/deck.webp");
   --scene-soft-opacity: 0.24;
   --scene-band-opacity: 0.38;
   /* A file's kind badge (file-kind.tsx): the same in both themes. */
@@ -283,6 +285,12 @@
   /* A switch that is on, and its knob, in both themes. */
   --switch-on: #3f9d63;
   --switch-knob: #ffffff;
+  /* Settings → Appearance: each theme's swatch shows that theme's own base
+     and canvas, the same in both themes. */
+  --swatch-light-base: #f4f4f4;
+  --swatch-light-canvas: #ffffff;
+  --swatch-dark-base: #111111;
+  --swatch-dark-canvas: #1e1e1e;
   color-scheme: dark;
 }
 
@@ -509,6 +517,8 @@
   --scene-ships: url("/scenes/ships.jpg");
   --scene-harbour: url("/scenes/harbour.webp");
   --scene-ship-lines: url("/scenes/ship-lines.webp");
+  --scene-crows-nest: url("/scenes/crows-nest.webp");
+  --scene-deck: url("/scenes/deck.webp");
   --scene-soft-opacity: 0.38;
   --scene-band-opacity: 0.55;
   color-scheme: light;

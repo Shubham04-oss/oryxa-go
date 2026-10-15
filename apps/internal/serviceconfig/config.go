@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/nativeclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/slackbot"
 	"github.com/Shubham04-oss/oryxa-go/internal/pipedream"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
@@ -66,6 +67,13 @@ type Config struct {
 	// APPS_TOOLKIT_BROKERS, a comma list of toolkit=broker, such as
 	// github=composio,linear=pipedream. Existing connections keep theirs.
 	ToolkitBrokers map[string]string
+	// NativeToolkits are the toolkits new connects send to the integrations
+	// service: APPS_NATIVE_TOOLKITS, a comma list. Empty leaves every broker
+	// as it was. Needs IntegrationsURL.
+	NativeToolkits []string
+	// IntegrationsURL is where that service is: APPS_INTEGRATIONS_URL, https
+	// or loopback http, since a service token travels on it.
+	IntegrationsURL string
 	// PipedreamDenyActions are Pipedream action keys agents are never
 	// offered nor allowed to run, such as gmail-delete-email:
 	// APPS_PIPEDREAM_DENY_ACTIONS, a comma list.
@@ -191,6 +199,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("APPS_PIPEDREAM_MIN_POLL_SECONDS must be a positive whole number of seconds")
 		}
 		config.PipedreamMinPoll = time.Duration(seconds) * time.Second
+	}
+	if err := readNative(getenv, &config); err != nil {
+		return Config{}, err
 	}
 	if err := readOryxa(getenv, &config); err != nil {
 		return Config{}, err
@@ -343,6 +354,30 @@ func toolkitBrokers(raw string) (map[string]string, error) {
 		brokers[checkedToolkit] = checkedBroker
 	}
 	return brokers, nil
+}
+
+// readNative reads the native broker's configuration. Toolkits without a
+// service to send them to are refused rather than read as off.
+func readNative(getenv func(string) string, config *Config) error {
+	for _, toolkit := range splitList(getenv("APPS_NATIVE_TOOLKITS")) {
+		checked, err := domain.CheckToolkit(toolkit)
+		if err != nil {
+			return fmt.Errorf("APPS_NATIVE_TOOLKITS must list toolkits, such as github: %q is not one", toolkit)
+		}
+		if !slices.Contains(config.NativeToolkits, checked) {
+			config.NativeToolkits = append(config.NativeToolkits, checked)
+		}
+	}
+	config.IntegrationsURL = endpoint(getenv, "APPS_INTEGRATIONS_URL")
+	switch {
+	case len(config.NativeToolkits) > 0 && config.IntegrationsURL == "":
+		return errors.New("APPS_INTEGRATIONS_URL is required once APPS_NATIVE_TOOLKITS names a toolkit")
+	case config.IntegrationsURL != "":
+		if _, err := nativeclient.CheckURL(config.IntegrationsURL); err != nil {
+			return errors.New("APPS_INTEGRATIONS_URL must be https, or http on a loopback host")
+		}
+	}
+	return nil
 }
 
 // readOryxa reads Oryxa's own sign-in's configuration. None of its messages
