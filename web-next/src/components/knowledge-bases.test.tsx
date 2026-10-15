@@ -1811,3 +1811,129 @@ describe("asking a collection", () => {
     expect(screen.queryByRole("textbox", { name: "Ask Handbook" })).toBeNull()
   })
 })
+
+describe("the Library's sources", () => {
+  const appsCorpus = corpus({
+    id: "cor_apps",
+    name: "Knowledge from connected apps",
+    metadata: { origin: "knowledge" },
+    document_count: 3,
+  })
+  const appsPath = "/v1/organizations/org_1/corpora/cor_apps/documents"
+  const source = (overrides: Record<string, unknown> = {}) => ({
+    id: "src_1",
+    provider: "github",
+    target: { repository: "acme/api" },
+    scope: "member",
+    created_by: "user-1",
+    status: "active",
+    interval_seconds: 3600,
+    created_at: ago(day),
+    updated_at: ago(day),
+    ...overrides,
+  })
+  const appDocuments = [
+    document({
+      id: "doc_gh",
+      corpus_id: "cor_apps",
+      title: "PR 312: Runs pane",
+      source: { kind: "external", ref: "knowledge:kdoc_1" },
+      metadata: { provider: "github" },
+    }),
+    document({
+      id: "doc_notion",
+      corpus_id: "cor_apps",
+      title: "EU launch plan",
+      source: { kind: "external", ref: "knowledge:kdoc_2" },
+      metadata: { provider: "notion" },
+    }),
+  ]
+
+  function sourceRoutes(sources: unknown[]) {
+    return {
+      ...emptyRoutes,
+      "GET /v1/organizations/org_1/corpora": {
+        corpora: [corpus(), appsCorpus],
+      },
+      [`GET ${corpusPath}/documents`]: { documents: [] },
+      [`GET ${appsPath}`]: { documents: appDocuments },
+      "GET /v1/organizations/org_1/sources": { sources },
+    }
+  }
+
+  it("lists each connected app once, with a quiet word when it isn't running", async () => {
+    stubApi(
+      sourceRoutes([
+        source(),
+        source({ id: "src_2", target: { repository: "acme/web" } }),
+        source({
+          id: "src_3",
+          provider: "notion",
+          status: "paused",
+          reason: "needs_reconnect",
+        }),
+      ])
+    )
+    renderKnowledge()
+
+    const list = await screen.findByRole("list", { name: "Sources" })
+    const items = within(list).getAllByRole("button")
+    expect(items.map((item) => item.textContent)).toEqual([
+      "GitHub",
+      "Notion Reconnect",
+    ])
+    // Per-source counts have no route, so none is shown or guessed.
+    expect(within(list).queryByText(/\d/)).toBeNull()
+  })
+
+  it("filters the table to one app's files", async () => {
+    const onOpenTools = vi.fn()
+    stubApi(
+      sourceRoutes([source(), source({ id: "src_3", provider: "notion" })])
+    )
+    renderKnowledge({ onOpenTools })
+
+    const list = await screen.findByRole("list", { name: "Sources" })
+    fireEvent.click(within(list).getByRole("button", { name: "GitHub" }))
+    expect(await screen.findByRole("heading", { name: "GitHub" })).toBeTruthy()
+    await screen.findByText("PR 312: Runs pane")
+    expect(fileRows("Files from GitHub")).toHaveLength(1)
+    expect(screen.queryByText("EU launch plan")).toBeNull()
+    expect(
+      within(list)
+        .getByRole("button", { name: "GitHub" })
+        .getAttribute("aria-current")
+    ).toBe("page")
+    expect(railItem("All files").getAttribute("aria-current")).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Manage in Tools" }))
+    expect(onOpenTools).toHaveBeenCalled()
+
+    fireEvent.click(railItem("All files"))
+    expect(screen.queryByRole("heading", { name: "GitHub" })).toBeNull()
+  })
+
+  it("says plainly when nothing from an app is indexed", async () => {
+    stubApi({
+      ...sourceRoutes([source({ provider: "gmail" })]),
+      "GET /v1/organizations/org_1/corpora": { corpora: [corpus()] },
+    })
+    renderKnowledge()
+
+    const list = await screen.findByRole("list", { name: "Sources" })
+    fireEvent.click(within(list).getByRole("button", { name: "Gmail" }))
+    expect(
+      await screen.findByText("Nothing from Gmail is indexed yet")
+    ).toBeTruthy()
+  })
+
+  it("leaves the group out when sources can't be read", async () => {
+    stubApi({
+      ...sourceRoutes([]),
+      "GET /v1/organizations/org_1/sources": () => json({}, 404),
+    })
+    renderKnowledge()
+    await findRailItem("Handbook")
+    expect(screen.queryByRole("list", { name: "Sources" })).toBeNull()
+  })
+})

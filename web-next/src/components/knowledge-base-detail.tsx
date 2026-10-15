@@ -22,8 +22,6 @@ import {
   Trash2,
   X,
 } from "lucide-react"
-import { siGithub, siGmail, siGoogledrive, siNotion } from "simple-icons"
-import type { SimpleIcon } from "simple-icons"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -98,28 +96,8 @@ import {
   countLabel,
   documentTitle,
 } from "./knowledge-format"
+import { AppLogo } from "./app-logo"
 import { LibraryFileTable } from "./library-file-table"
-
-// simple-icons carries no Slack mark (removed for its trademark policy); a
-// Slack chip falls back to its initial, same as any other unmapped app.
-const appIcons: Partial<Record<string, SimpleIcon>> = {
-  github: siGithub,
-  gmail: siGmail,
-  googledrive: siGoogledrive,
-  notion: siNotion,
-}
-
-/** A connected app's brand mark, or its initial when this app has none. */
-function AppLogo({ provider, name }: { provider: string; name: string }) {
-  const icon = appIcons[provider.toLowerCase()]
-  return icon ? (
-    <svg viewBox="0 0 24 24" fill={`#${icon.hex}`}>
-      <path d={icon.path} />
-    </svg>
-  ) : (
-    <>{name.charAt(0)}</>
-  )
-}
 
 /** A citation's provenance (`knowledge-format.ts`'s `citationProvenance`), as
  * small muted chips one line under its title; nothing when there is none. */
