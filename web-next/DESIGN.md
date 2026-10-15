@@ -555,16 +555,34 @@ not permission to copy every incidental value into a new component.
   sees what their choice did. When nothing waits and none is open, the side
   says "Every ask answered." under a small scene. Below 1100px the card
   replaces the list while one is opened, with "Back to all requests".
+  - **To the RequestsNew / RequestsClear boards** (15 Oct 2026). The header
+    reads "Requests" over "N waiting for you" or "All clear", and the agent
+    panel collapses as Requests opens, so the open request takes the width
+    (the member may still open it). The list tile has a search (a `ui/button`
+    that opens a field, filtering what the lists hold, Escape to close), the
+    inbox's first heading "Waiting for you N" even at none, then "Earlier".
+    A row's time is the clock today and how long ago before; its tag says
+    what it waits on ("Expires in 1 h", "Wants your reply", "Answer held for
+    you") or who answered ("Answered by Krude", "Answered by you"). The card's
+    head carries the expiry as a quiet pill. The all-clear says "Nothing is
+    waiting for you. Krude will flag the next one." and today's numbers from
+    the inbox (asks today, by Krude, by you, average wait). Not shown until
+    Go serves them: the draft "If you share, Krude will say" with sources and
+    masked count, the Slack thread and channel name, a new/unread dot, and
+    the "Has an email address" warning.
   - **The request card** says who asked, the question, where it came from (in
     Slack, or in Oryxa), where it stands and, for the person it is theirs to
     answer, what to do, in one set of words wherever the request came from,
     the same as the buttons of Slack's notice. A request from Slack is answered
-    with one of three choices, "Share answer", "Allow for 1 hour" or "Deny",
-    and the card says in a line what each lets the agent do ("Allow for 1
-    hour": the agent may quote what it reads, and the asker's follow-ups in
-    that thread are answered for an hour). Any other request, one an agent
-    filed in Oryxa, is answered with "Share answer" or "Deny" and an optional
-    note. Sharing the answer allows the tools the request asked for, which the
+    with one of four choices in a 2×2 grid, "Share answer" (the primary),
+    "Allow for 1 hour", "Reply yourself" and "Deny" (destructive), each a
+    `ui/button` with its key, and the card says in a line what each lets the
+    agent do ("Allow for 1 hour": the agent may quote what it reads, and the
+    asker's follow-ups in that thread are answered for an hour). On the
+    Requests page S, A, R and D pick the open request's choices from
+    anywhere but a text field. Any other request, one an agent filed in
+    Oryxa, is answered with "Share answer", "Reply yourself" or "Deny" (S, R,
+    D) and an optional note. Sharing the answer allows the tools the request asked for, which the
     card says above the choices ("Krude may read team knowledge."), and it
     offers no approval without them. Each button is named to a screen reader by
     its words and whose request it is ("Share answer to Raya's request").
@@ -578,9 +596,9 @@ not permission to copy every incidental value into a new component.
   - **Reply yourself** lets the owner answer in their own words when an ask
     needs their own judgment (an approval, a plan) or when the agent can't find
     the answer. It is on the owner's card wherever they may decide a pending
-    request or review a held answer, and nowhere else. Under the choices it is
-    a quiet text button ("Reply yourself", named "Reply yourself to Raya's
-    request"); it opens an inline field in the composer's style, a pill at one
+    request or review a held answer, and nowhere else. It is the grid's R choice
+    (under a held answer, a quiet text button), named "Reply yourself to Raya's
+    request"; it opens an inline field in the composer's style, a pill at one
     line that softens as its text wraps and grows to eight lines (its border is
     the focus mark, as the composer's is), taking focus, with "Send reply" (the
     primary action) and "Cancel". It says what it does
