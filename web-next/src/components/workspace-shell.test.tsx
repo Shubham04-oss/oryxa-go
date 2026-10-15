@@ -702,6 +702,38 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
   })
 
+  it.each([
+    { viewport: "desktop", mobile: false },
+    { viewport: "phone", mobile: true },
+  ])(
+    "opens the member's agent beside a teamspace on $viewport, and keeps the room in front on a phone",
+    async ({ mobile }) => {
+      vi.stubGlobal("matchMedia", () => ({
+        matches: mobile,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }))
+      liveBackend()
+      const { container } = render(<SignedInShell />)
+      const shell = container.querySelector(".workspace-shell")
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Open Launch room" })
+      )
+
+      expect(shell?.getAttribute("data-right")).toBe(
+        mobile ? "collapsed" : "expanded"
+      )
+      expect(shell?.getAttribute("data-left")).toBe("collapsed")
+      if (mobile) return
+      const panel = screen.getByRole("complementary", { name: "Agent panel" })
+      expect(
+        await within(panel).findByText("Only you · in Launch room")
+      ).toBeTruthy()
+      expect(within(panel).getByText("Looking at Launch room")).toBeTruthy()
+    }
+  )
+
   it("keeps mobile panels closed until their header controls are used", () => {
     vi.stubGlobal("matchMedia", () => ({
       matches: true,

@@ -1855,13 +1855,15 @@ describe("On the teamspace page", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Open Launch room" })
     )
-    fireEvent.click(
-      screen.getByRole("button", { name: /^Open chat with (Leo|Your agent)$/ })
-    )
+    // The member's own agent opens beside the teamspace, privately, reading it.
     const panel = screen.getByRole("complementary", { name: "Agent panel" })
+    expect(
+      await within(panel).findByText("Only you · in Launch room")
+    ).toBeTruthy()
     expect(
       await within(panel).findByRole("button", { name: "Talk with Priya Shah" })
     ).toBeTruthy()
+    expect(within(panel).getByText("Looking at Launch room")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "Back to teamspaces" }))
     expect(

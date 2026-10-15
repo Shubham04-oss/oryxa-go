@@ -320,6 +320,16 @@ not permission to copy every incidental value into a new component.
     and **Parleys** have no API yet, so each is one honest line on the
     empty scene ("A shared plan is coming", "Past parleys will be listed
     here"). No launch date in the hero until the teamspace carries one.
+  - **The member's agent beside a teamspace** (TeamspaceHome, Teamspace3 and
+    TeamspaceGlance boards, 15 Oct 2026): opening a teamspace on a desktop
+    opens the agent panel (§2) beside it, so the sidebar folds to its
+    rail; a phone keeps the room in front. The panel is a private session
+    that reads the teamspace: "Only you · in {teamspace}", "Parley · Join"
+    while its parley runs without the member, "Needs you N", "Looking at
+    {teamspace}" on the composer, and the teamspace's teammates for side
+    conversations under the agent's chat. At a glance carries the needs
+    count. The quick toggles (reads room and files, suggests, web) wait for a
+    per-teamspace capability API.
   - **The teamspaces list** (TeamspacesNew, 15 Oct 2026) opens under the
     same faint band on a compact row, with no in-page title (the shell's
     header already says Teamspaces, §2): a subtitle that says how many are

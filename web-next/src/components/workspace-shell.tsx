@@ -564,11 +564,18 @@ function WorkspaceShellContent({
 
   function openTeamspace(id: string) {
     teamspaces.open(id)
-    // The sidebar stays, so it marks Teamspaces, where the crumbs lead back.
+    // The sidebar stays (folded to its rail beside the agent panel), so it
+    // marks Teamspaces, where the crumbs lead back.
     setActiveMode("team")
     setSectionsByMode((current) => ({ ...current, team: "teamspaces" }))
-    setRightExpanded(false)
-    if (isMobile) setLeftExpanded(false)
+    // The member's own agent opens beside the teamspace, privately ("Only
+    // you · in …", TeamspaceHome board); a phone keeps the room in front.
+    if (isMobile) {
+      setRightExpanded(false)
+      setLeftExpanded(false)
+    } else {
+      expandAgentPanel()
+    }
   }
 
   function closeDetail() {
