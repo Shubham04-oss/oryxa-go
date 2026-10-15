@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -51,21 +52,38 @@ func TestSchedulerEnqueuesDueStreamsOnce(t *testing.T) {
 		t.Errorf("next_run_at %v, want %v", next, now.Add(15*time.Minute))
 	}
 
-	// The jobs carry org, connection, stream and partition.
+	// The jobs carry org, connection, stream and partition. Both partitions
+	// share a stream, so they run one at a time.
 	partitions := map[string]bool{}
-	for j := claim(t, q, "w"); j != nil; j = claim(t, q, "w") {
+	for range 2 {
+		j := claim(t, q, "w")
+		if j == nil {
+			t.Fatal("job missing")
+		}
 		if j.Kind != Sync || j.Org != "o1" || j.Connection != "jt_due" || j.Stream != "issues" {
 			t.Fatalf("job %+v", j)
 		}
-		partitions[string(j.Payload)] = true
+		var p struct{ Partition string }
+		if err := json.Unmarshal(j.Payload, &p); err != nil {
+			t.Fatal(err)
+		}
+		partitions[p.Partition] = true
+		if err := q.Complete(ctx, j); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if !partitions[`{"partition":"repoA"}`] || !partitions[`{"partition":"repoB"}`] || len(partitions) != 2 {
-		t.Errorf("payloads %v", partitions)
+	if !partitions["repoA"] || !partitions["repoB"] {
+		t.Errorf("partitions %v", partitions)
 	}
 
-	// Due again, with a sync still running: not queued twice.
+	// Due again, with a sync for each partition queued again by this tick and
+	// then not twice by the next.
+	clk.Advance(20 * time.Minute)
+	if n, err := s.Tick(ctx); err != nil || n != 3 {
+		t.Fatalf("tick after the interval: %d, %v", n, err)
+	}
 	clk.Advance(20 * time.Minute)
 	if n, err := s.Tick(ctx); err != nil || n != 0 {
-		t.Fatalf("tick while a sync runs: %d, %v", n, err)
+		t.Fatalf("tick while syncs are still queued: %d, %v", n, err)
 	}
 }
