@@ -226,6 +226,29 @@ describe("Requests in the workspace shell", () => {
     ).toBe("page")
   })
 
+  it("gives the open request the width and says in the header how many wait", async () => {
+    const { container } = renderShell()
+    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
+    expect(
+      container.querySelector(".workspace-shell")?.getAttribute("data-right")
+    ).toBe("expanded")
+
+    const navigation = await screen.findByRole("navigation", {
+      name: "Agents navigation",
+    })
+    fireEvent.click(
+      within(navigation).getByRole("button", { name: "Requests" })
+    )
+
+    expect(
+      container.querySelector(".workspace-shell")?.getAttribute("data-right")
+    ).toBe("collapsed")
+    const header = container.querySelector(".workspace-header") as HTMLElement
+    expect(
+      await within(header).findByText(/^(\d+ waiting for you|All clear)$/)
+    ).toBeTruthy()
+  })
+
   it("is where the Agent overview's Requests waiting tile leads", async () => {
     renderShell()
 
