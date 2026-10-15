@@ -214,6 +214,13 @@ func attachRogue(t *testing.T, h *Host, r *rogue) {
 	done := make(chan struct{})
 	go func() { gosdk.Serve(ctx, r, sock); close(done) }()
 	t.Cleanup(func() { stop(); <-done })
+	// Serve chmods the socket once it listens, so mode 0600 means ready.
+	for range 500 {
+		if info, err := os.Stat(sock); err == nil && info.Mode().Perm() == 0o600 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	conn, err := grpc.NewClient("unix://"+sock, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)
