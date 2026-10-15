@@ -136,7 +136,7 @@ func TestANoteIsNeverShownToAModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(types(detail.Items), ","); got != "request,run_started,message,message,run_completed" {
+	if got := strings.Join(types(detail.Items), ","); got != "request,message,run_started,message,run_completed" {
 		t.Fatalf("history = %s", got)
 	}
 }

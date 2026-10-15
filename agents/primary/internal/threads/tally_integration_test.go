@@ -42,7 +42,7 @@ func TestARunsRecordSurvivesTheDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(types(detail.Items), ","); got != "run_started,message,message,run_completed,run_started,message,message,run_completed" {
+	if got := strings.Join(types(detail.Items), ","); got != "message,run_started,message,run_completed,message,run_started,message,run_completed" {
 		t.Fatalf("history = %s, want each run bracketed and nothing else of the record", got)
 	}
 	// Each bracket reads back as it was streamed: its id, and its time to the

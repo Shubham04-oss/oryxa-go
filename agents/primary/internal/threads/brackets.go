@@ -20,6 +20,13 @@ import (
 // event's id, and the streamed item's id as well, so a client that streamed a
 // run and then reads its history can tell the two copies apart by id alone. A
 // run that ended before brackets were stored has none in its history.
+//
+// A run_started can have no end after it. A run that lost its hold on its
+// thread records nothing more, since another run may be writing the thread
+// (FailureTakenOver is only ever streamed); a process can stop mid-run; and
+// the closing bracket's write can fail. Such a start means the run ended
+// without a record, not that it still runs: a client knows a run is still
+// answering from its stream, never from history.
 const (
 	// runBracketKey is the custom metadata a bracket is kept under.
 	runBracketKey = "oryxa_run"
@@ -29,8 +36,8 @@ const (
 	recordInvocation = "oryxa-run-record"
 )
 
-// The codes a failed run's bracket says it failed with, in ErrorCode, beside
-// the words for the member in Error.
+// The codes a failed run's bracket says it failed with, in Code, beside the
+// words for the member in Error.
 const (
 	// FailureInterrupted is a run Oryxa stopped as it restarted: worth
 	// starting again.
@@ -54,7 +61,7 @@ type runBracket struct {
 	RunID       string          `json:"run_id"`
 	Usage       *agentsv1.Usage `json:"usage,omitempty"`
 	Error       string          `json:"error,omitempty"`
-	ErrorCode   string          `json:"error_code,omitempty"`
+	Code        string          `json:"code,omitempty"`
 	Interrupted bool            `json:"interrupted,omitempty"`
 }
 
@@ -113,7 +120,7 @@ func (run *Run) record(ctx context.Context, bracket Item) {
 	event.Author = adkUserAuthor
 	event.CustomMetadata = map[string]any{runBracketKey: runBracket{
 		Type: bracket.Type, RunID: bracket.RunID, Usage: bracket.Usage,
-		Error: bracket.Error, ErrorCode: bracket.ErrorCode, Interrupted: bracket.Interrupted,
+		Error: bracket.Error, Code: bracket.Code, Interrupted: bracket.Interrupted,
 	}}
 	if bracket.Type != ItemRunStarted {
 		event.Actions.StateDelta = run.artifacts.changes(stored.State())
@@ -140,6 +147,6 @@ func bracketOf(event *session.Event) (Item, bool) {
 	}
 	return Item{
 		Type: bracket.Type, ID: event.ID, At: at(event), RunID: bracket.RunID, Usage: bracket.Usage,
-		Error: bracket.Error, ErrorCode: bracket.ErrorCode, Interrupted: bracket.Interrupted,
+		Error: bracket.Error, Code: bracket.Code, Interrupted: bracket.Interrupted,
 	}, true
 }

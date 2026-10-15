@@ -399,7 +399,7 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 		// interrupted, and whoever started it may start it again.
 		run.finish(ctx, counter, err)
 		send := func(item Item) { _ = emit(item) }
-		send(Item{Type: ItemRunFailed, RunID: run.id, At: time.Now().UTC(), Error: memberFacing(err, service.runTimeout), ErrorCode: failureCode(err), Interrupted: true})
+		send(Item{Type: ItemRunFailed, RunID: run.id, At: time.Now().UTC(), Error: memberFacing(err, service.runTimeout), Code: failureCode(err), Interrupted: true})
 		return
 	}
 	defer service.drain.end(run)
@@ -417,7 +417,9 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 		}
 	}
 	// The opening bracket is stored before the agent reads the thread, so
-	// it comes before everything the run adds to it.
+	// it comes before everything the run adds to it. The runner appends the
+	// run's input after it; history lists the bracket after that input, as
+	// the stream sends it (historyItems).
 	started := Item{Type: ItemRunStarted, ID: bracketID(run.id, ItemRunStarted), RunID: run.id, At: bracketAt()}
 	run.record(ctx, started)
 	send(started)
@@ -431,7 +433,7 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	total := counter.Total()
 	ended := Item{Type: ItemRunCompleted, ID: bracketID(run.id, ItemRunCompleted), RunID: run.id, At: bracketAt(), Usage: &total}
 	if failure != nil {
-		ended.Type, ended.Error, ended.ErrorCode, ended.Interrupted = ItemRunFailed, memberFacing(failure, service.runTimeout), failureCode(failure), Interrupted(failure)
+		ended.Type, ended.Error, ended.Code, ended.Interrupted = ItemRunFailed, memberFacing(failure, service.runTimeout), failureCode(failure), Interrupted(failure)
 		if total.TotalTokens == 0 {
 			ended.Usage = nil
 		}

@@ -269,9 +269,10 @@ func TestAWakeUpTellsKrudeInTheMembersUpdatesThread(t *testing.T) {
 	if chats, err := service.List(context.Background(), member); err != nil || len(chats) != 0 {
 		t.Fatalf("the member's chats = %+v, %v, want none of the updates thread", chats, err)
 	}
-	// The run's brackets open and close what it said.
-	if len(detail.Items) != 4 || detail.Items[0].Type != threads.ItemRunStarted || detail.Items[3].Type != threads.ItemRunCompleted ||
-		detail.Items[1].Author != threads.AuthorApps || !strings.Contains(detail.Items[1].Text, "GMAIL_NEW_MESSAGE") ||
+	// The run starts after the apps' batch that woke it, and its brackets
+	// close what it said.
+	if len(detail.Items) != 4 || detail.Items[1].Type != threads.ItemRunStarted || detail.Items[3].Type != threads.ItemRunCompleted ||
+		detail.Items[0].Author != threads.AuthorApps || !strings.Contains(detail.Items[0].Text, "GMAIL_NEW_MESSAGE") ||
 		detail.Items[2].Text != "You have a new email about the launch." {
 		t.Fatalf("items = %+v", detail.Items)
 	}

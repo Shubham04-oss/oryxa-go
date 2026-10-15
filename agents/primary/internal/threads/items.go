@@ -88,9 +88,11 @@ type Item struct {
 	Author string `json:"author,omitempty"`
 	Text   string `json:"text,omitempty"`
 	// Error says why a message, tool result or run went wrong. On a failed
-	// run, ErrorCode says it as one of the Failure codes.
-	Error     string `json:"error,omitempty"`
-	ErrorCode string `json:"error_code,omitempty"`
+	// run, Code says it as one of the Failure codes, under the name a chat
+	// Durable Object gives the codes it writes on a run_failed of its own
+	// (session_expired, or Go's refusal), which none of them shares.
+	Error string `json:"error,omitempty"`
+	Code  string `json:"code,omitempty"`
 	// CallID ties a tool result to its call. On a confirmation it is the ID
 	// the member's answer names, and ToolCallID the call it holds back, so a
 	// client can show that call as waiting rather than running.
@@ -138,16 +140,46 @@ func streamItems(event *session.Event) []Item {
 
 // historyItems is a thread's history: every stored event's items, each
 // confirmation with the answer the member gave it, if any.
+//
+// A run's start is stored before the runner appends what started it: the
+// member's message, an apps batch or the member's answers. A run's stream
+// sends that first and the start after it, so history lists the start where
+// the stream has it, after what started the run and before anything the run
+// added, which a client groups into the turn of the prompt before it. Its At
+// still says when it was stored.
 func historyItems(events []*session.Event) []Item {
 	answers := confirmationAnswers(events)
 	items := make([]Item, 0, len(events))
+	var started *Item
 	for _, event := range events {
 		if event == nil || event.Partial {
 			continue
 		}
+		if bracket, ok := bracketOf(event); ok && bracket.Type == ItemRunStarted {
+			if started != nil {
+				items = append(items, *started)
+			}
+			started = &bracket
+			continue
+		}
+		if started != nil && !startsRun(event) {
+			items = append(items, *started)
+			started = nil
+		}
 		items = append(items, eventItems(event, answers)...)
 	}
+	if started != nil {
+		items = append(items, *started)
+	}
 	return items
+}
+
+// startsRun reports whether an event is what the member, or their apps, sent
+// a run: content of ADK's user author, which only the runner appends from a
+// run's input. A bracket, a note or a rename is the user author's too, but
+// carries no content.
+func startsRun(event *session.Event) bool {
+	return event.Author == adkUserAuthor && event.Content != nil
 }
 
 // displayAgent replaces only the answering agent's immutable ADK name with
