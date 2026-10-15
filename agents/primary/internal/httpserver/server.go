@@ -86,6 +86,7 @@ type ManagedAgents interface {
 	ListThreads(context.Context, threads.Member, string) ([]threads.Thread, error)
 	GetThread(context.Context, threads.Member, string, string) (threads.Detail, error)
 	DeleteThread(context.Context, threads.Member, string, string) error
+	RenameThread(context.Context, threads.Member, string, string, string) (threads.Thread, error)
 	StartRun(context.Context, threads.Member, string, string, threads.RunInput) (managedagents.StartedRun, error)
 }
 
@@ -360,6 +361,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("DELETE /v1/organizations/{organizationID}/agents/{agentID}", server.deleteAgent)
 	server.handle("GET /v1/organizations/{organizationID}/agents/{agentID}/threads", server.listAgentThreads)
 	server.handle("GET /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}", server.getAgentThread)
+	server.handle("PATCH /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}", server.renameAgentThread)
 	server.handle("DELETE /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}", server.deleteAgentThread)
 	server.handle("POST /v1/organizations/{organizationID}/agents/{agentID}/runs", server.runAgent)
 	server.handle("GET /v1/organizations/{organizationID}/agent-teams", server.listAgentTeams)
@@ -836,6 +838,30 @@ func (server *Server) getAgentThread(writer http.ResponseWriter, request *http.R
 		return
 	}
 	writeJSON(writer, http.StatusOK, detail)
+}
+
+// renameAgentThread is renameThread for a conversation with a specialist.
+func (server *Server) renameAgentThread(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.agents == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agents_unavailable", "managed agents are not configured")
+		return
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if !server.decode(writer, request, &body) {
+		return
+	}
+	renamed, err := server.agents.RenameThread(request.Context(), member, request.PathValue("agentID"), request.PathValue("threadID"), body.Title)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, renamed)
 }
 
 func (server *Server) deleteAgentThread(writer http.ResponseWriter, request *http.Request) {

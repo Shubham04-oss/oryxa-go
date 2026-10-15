@@ -675,6 +675,14 @@ func (agents *fakeManagedAgents) DeleteThread(_ context.Context, member threads.
 	}
 	return nil
 }
+func (agents *fakeManagedAgents) RenameThread(_ context.Context, member threads.Member, agentID, threadID, title string) (threads.Thread, error) {
+	agents.members = append(agents.members, member)
+	agents.threadID = threadID
+	if agentID != "agt_sales" || threadID != "agent_thread_1" {
+		return threads.Thread{}, threads.ErrNotFound
+	}
+	return threads.Thread{ID: threadID, Title: title}, nil
+}
 func (agents *fakeManagedAgents) StartRun(_ context.Context, member threads.Member, _ string, threadID string, input threads.RunInput) (managedagents.StartedRun, error) {
 	agents.members = append(agents.members, member)
 	agents.lastInput = input
@@ -727,7 +735,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 78 {
+	if len(patterns) != 79 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -1449,6 +1457,22 @@ func TestDeleteAgentConversationUsesAuthenticatedOwnerAndExactIDs(t *testing.T) 
 	unauthenticated := serve(server, http.MethodDelete, "/v1/organizations/org_1/agents/agt_sales/threads/agent_thread_1", "", nil)
 	if unauthenticated.Code != http.StatusUnauthorized {
 		t.Fatalf("no auth = %d", unauthenticated.Code)
+	}
+}
+
+func TestRenameAgentConversationUsesAuthenticatedOwnerAndExactIDs(t *testing.T) {
+	managed := &fakeManagedAgents{}
+	server := New(member(), &fakeThreads{}, Config{AllowedOrigins: []string{"https://app.oryxa.test"}, Agents: managed}, nil)
+	renamed := serve(server, http.MethodPatch, "/v1/organizations/org_1/agents/agt_sales/threads/agent_thread_1", `{"title":"Q3 review"}`, bearer)
+	if renamed.Code != http.StatusOK || !strings.Contains(renamed.Body.String(), `"title":"Q3 review"`) {
+		t.Fatalf("rename = %d %s", renamed.Code, renamed.Body.String())
+	}
+	if len(managed.members) != 1 || managed.members[0].UserID != "user_1" || managed.members[0].OrganizationID != "org_1" || managed.threadID != "agent_thread_1" {
+		t.Fatalf("identity = %+v, thread = %s", managed.members, managed.threadID)
+	}
+	refused := serve(server, http.MethodPatch, "/v1/organizations/org_1/agents/agt_other/threads/agent_thread_1", `{"title":"x"}`, bearer)
+	if refused.Code != http.StatusNotFound {
+		t.Fatalf("other agent = %d %s", refused.Code, refused.Body.String())
 	}
 }
 
