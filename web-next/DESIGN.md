@@ -294,6 +294,13 @@ not permission to copy every incidental value into a new component.
     optional note, and "I couldn't do it" says so.
   - **The run log** shows who did what (you, your agent, a teammate),
     newest first, with how long it took.
+- **Settings → Slack is for every member** (with #199's linking): it starts
+  with "Your Slack account", where a member links theirs through Sign in with
+  Slack (so what they ask and decide in Slack counts as them), sees since
+  when, and unlinks it after a confirm. The organisation's connection and
+  high-priority channels below stay for owners and admins; anyone else is
+  told who manages them. Where the server runs no Slack app, the section
+  isn't shown.
 - **Library** (was Knowledge bases; founder's redesign, 14 Oct 2026). Each
   collection is a filled tile on the canvas, with no outline, and lifts to
   the raised tile on hover; search, the source list, an open document and an
