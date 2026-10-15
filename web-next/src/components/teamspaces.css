@@ -227,19 +227,14 @@
 }
 .workspace-teamspaces-hello {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-top: 34px;
+  min-height: 36px;
+  padding-top: 20px;
 }
-.workspace-teamspaces-hello h2 {
-  margin: 0;
-  color: var(--text);
-  font-size: 30px;
-  font-weight: 700;
-  letter-spacing: -.03em;
-}
-.workspace-teamspaces-hello p { margin: 6px 0 0; color: var(--text-muted); font-size: 13.5px; }
+.workspace-teamspaces-hello p { margin: 0; color: var(--text-muted); font-size: 13.5px; }
+.workspace-teamspaces-hello [data-slot="button"] { margin-left: auto; }
 .workspace-teamspaces-hello strong { color: var(--text); font-weight: 600; }
 
 .workspace-teamspace-filters {
@@ -457,7 +452,7 @@
 
 @media (max-width: 760px) {
   .workspace-teamspaces-page { padding: 0 16px 32px; }
-  .workspace-teamspaces-hello { flex-direction: column; align-items: flex-start; }
+  .workspace-teamspaces-hello { flex-wrap: wrap; }
   .workspace-teamspace-toolbar { flex-direction: column-reverse; align-items: stretch; }
   .workspace-teamspace-filters { align-self: flex-start; }
   /* On a phone an action row stacks full-width, the primary on top. */

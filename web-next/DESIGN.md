@@ -229,10 +229,12 @@ not permission to copy every incidental value into a new component.
     and **Parleys** have no API yet, so each is one honest line on the
     empty scene ("A shared plan is coming", "Past parleys will be listed
     here"). No launch date in the hero until the teamspace carries one.
-  - **The teamspaces list** (TeamspacesNew, 15 Oct 2026) is a title under
-    the same faint band, with a subtitle that says how many are active and,
-    when one is, that a parley is live there ("4 active, and a parley is
-    live in EU launch."). Below it, a search (`/` focuses it, unless the
+  - **The teamspaces list** (TeamspacesNew, 15 Oct 2026) opens under the
+    same faint band on a compact row, with no in-page title (the shell's
+    header already says Teamspaces, §2): a subtitle that says how many are
+    active and, when one is, that a parley is live there ("4 active, and a
+    parley is live in EU launch."), and New teamspace. Below it, a search
+    (`/` focuses it, unless the
     member is typing) and segmented status filters that carry their counts
     (All 5, Active 4, Paused 1). The teamspaces are a grid of cards: planet,
     name, "<Team> team · N people" (or "· paused"), purpose, a live row

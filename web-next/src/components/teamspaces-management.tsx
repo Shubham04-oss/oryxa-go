@@ -369,15 +369,14 @@ export function TeamspacesManagement({
   return (
     <div className="workspace-teamspaces-page">
       <div className="workspace-teamspaces-scene" aria-hidden="true" />
-      <header className="workspace-teamspaces-hello">
-        <div>
-          <h2>Teamspaces</h2>
-          {(loaded || spaces.isPending) && (
-            <p aria-label="Teamspace summary">
-              {loaded ? summaryLine(activeCount, liveIn) : "Loading…"}
-            </p>
-          )}
-        </div>
+      {/* The shell's header already names the page (DESIGN.md §2), so the
+          canvas opens on a compact row: the summary and New teamspace. */}
+      <div className="workspace-teamspaces-hello">
+        {(loaded || spaces.isPending) && (
+          <p aria-label="Teamspace summary">
+            {loaded ? summaryLine(activeCount, liveIn) : "Loading…"}
+          </p>
+        )}
         {canCreate && (
           <Button
             type="button"
@@ -389,7 +388,7 @@ export function TeamspacesManagement({
             New teamspace
           </Button>
         )}
-      </header>
+      </div>
 
       {canCreate && isCreating && (
         <CreateTeamspaceDialog

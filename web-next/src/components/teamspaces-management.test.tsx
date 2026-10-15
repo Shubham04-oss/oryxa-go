@@ -215,6 +215,8 @@ describe("TeamspacesManagement list", () => {
     expect(screen.getByLabelText("Teamspace summary").textContent).toBe(
       "1 active."
     )
+    // The shell's header names the page; the canvas doesn't say it again.
+    expect(screen.queryByRole("heading", { name: "Teamspaces" })).toBeNull()
     // Nothing from the board's example data.
     for (const example of ["Northwind", "Krude:", "Paused by", "editing"]) {
       expect(screen.queryByText(new RegExp(example))).toBeNull()
