@@ -98,6 +98,7 @@ import {
 } from "./knowledge-format"
 import { AppLogo } from "./app-logo"
 import { LibraryFileTable } from "./library-file-table"
+import type { LibraryFile } from "./library-file-table"
 
 /** A citation's provenance (`knowledge-format.ts`'s `citationProvenance`), as
  * small muted chips one line under its title; nothing when there is none. */
@@ -825,6 +826,7 @@ export function KnowledgeBaseDetail({
   onAdd,
   onClose,
   onOpenTools,
+  onOpen,
 }: {
   organizationId: string
   corpusId: string
@@ -841,6 +843,8 @@ export function KnowledgeBaseDetail({
   onAdd: () => void
   onClose: () => void
   onOpenTools?: () => void
+  /** Opens a file in the viewer. */
+  onOpen?: (file: LibraryFile) => void
 }) {
   const queryClient = useQueryClient()
   const corpusQuery = useQuery({
@@ -1049,6 +1053,7 @@ export function KnowledgeBaseDetail({
               label={`Files in ${corpus.name}`}
               files={files}
               members={members}
+              onOpen={onOpen}
               actions={({ document }) =>
                 canWrite ? (
                   <DropdownMenu>

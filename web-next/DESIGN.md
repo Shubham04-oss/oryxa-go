@@ -226,10 +226,21 @@ not permission to copy every incidental value into a new component.
   bubble is a raised tile in a 720px reading column, and a file made in a
   chat is a filled block, not an outline. The log keeps its rules below: the
   member on the right, nobody named.
-- **One frame for a file** (founder's redesign, 14 Oct 2026). An open file
-  is a bar (back, the file's kind, its name, Edit, open or download) over an
-  inset tile holding the file; page and sheet controls are pills, and the
-  chosen sheet is the raised tile. A file's kind is a small coloured tile with
+- **One frame for a file** (founder's redesign, 14–15 Oct 2026;
+  `file-viewer-frame.tsx`). Every open file, an agent's or the Library's, is
+  one bar over an inset tile holding the file. The bar has back, the crumbs
+  of where the file sits (Library / collection), the file's kind, its name
+  and a line of facts (owner · origin · size), the viewer's own tools, then
+  Edit where it applies, Download, Open original (the file at its app) and a
+  ⋯ More menu, each shown only when it does something. Its buttons are ghost
+  `icon-sm`. The frame is only the file's column: where a chat shares the
+  screen, the chat is on the left and the file on the right (AgentSession),
+  so opening a Library file folds the agent panel away. Show in parley is
+  not offered until a call can be handed a file. The page and sheet controls
+  are pills, and the chosen sheet is the raised tile. A Library file opens
+  over the whole Library page: an uploaded file from files, a connected
+  app's document as the text knowledge keeps. A note or a link says
+  plainly that its text isn't kept for reading, since rag gives none back. A file's kind is a small coloured tile with
   its extension (`file-kind.tsx`, `--file-*` tokens, the same in both
   themes), wherever a file is listed or open.
 - **A first-time empty page** (founder's redesign, 14 Oct 2026), such as an

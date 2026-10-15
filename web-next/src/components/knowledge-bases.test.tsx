@@ -939,9 +939,9 @@ describe("a collection's files", () => {
     expect(within(rows[0]).getByText("Note · 2 KB")).toBeTruthy()
     expect(within(rows[0]).getByText("5 minutes ago")).toBeTruthy()
 
-    const link = within(rows[1]).getByRole("link", { name: "example.com" })
-    expect(link.getAttribute("href")).toBe("https://example.com/pricing")
-    expect(link.getAttribute("target")).toBe("_blank")
+    expect(
+      within(rows[1]).getByRole("button", { name: "Open example.com" })
+    ).toBeTruthy()
     expect(within(rows[1]).getByText("Indexing…")).toBeTruthy()
 
     expect(within(rows[2]).getByText("Indexing…")).toBeTruthy()
@@ -1935,5 +1935,113 @@ describe("the Library's sources", () => {
     renderKnowledge()
     await findRailItem("Handbook")
     expect(screen.queryByRole("list", { name: "Sources" })).toBeNull()
+  })
+})
+
+describe("opening a Library file", () => {
+  const text = (body: string, type = "text/markdown") =>
+    new Response(body, { headers: { "Content-Type": type } })
+
+  it("opens an uploaded file in the shared frame, with where it sits and its facts", async () => {
+    const onOpenFileChange = vi.fn()
+    stubApi({
+      ...detailRoutes(corpus(), () => [
+        document({
+          id: "doc_3",
+          title: "launch-notes.md",
+          source: { kind: "file", ref: "file_1" },
+          content_type: "text/markdown",
+        }),
+      ]),
+      "GET /v1/organizations/org_1/files/file_1/content": () =>
+        text("# Launch\n\nShip on the 14th."),
+    })
+    const { onSelect } = renderKnowledge({ ...openHandbook, onOpenFileChange })
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open launch-notes.md" })
+    )
+    const crumbs = await screen.findByRole("navigation", {
+      name: "Where this file is",
+    })
+    expect(crumbs.textContent).toBe("LibraryHandbook")
+    expect(screen.getByText("launch-notes.md")).toBeTruthy()
+    await waitFor(() =>
+      expect(
+        screen.getByText("Ada Lovelace · File · Markdown · 2 KB")
+      ).toBeTruthy()
+    )
+    expect(
+      screen.getByRole("button", { name: "Download launch-notes.md" })
+    ).toBeTruthy()
+    expect(await screen.findByText("Ship on the 14th.")).toBeTruthy()
+    expect(onOpenFileChange).toHaveBeenLastCalledWith({
+      kind: "document",
+      id: "doc_3",
+      name: "launch-notes.md",
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to Handbook" }))
+    expect(
+      await screen.findByRole("table", { name: "Files in Handbook" })
+    ).toBeTruthy()
+    expect(onOpenFileChange).toHaveBeenLastCalledWith(null)
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open launch-notes.md" })
+    )
+    fireEvent.click(
+      within(
+        await screen.findByRole("navigation", { name: "Where this file is" })
+      ).getByRole("button", { name: "Library" })
+    )
+    expect(onSelect).toHaveBeenLastCalledWith(null)
+  })
+
+  it("reads a connected app's document from knowledge, with its original", async () => {
+    stubApi({
+      ...detailRoutes(corpus({ metadata: { origin: "knowledge" } }), () => [
+        document({
+          id: "doc_app",
+          title: "EU launch plan",
+          source: { kind: "external", ref: "knowledge:kdoc_1" },
+          content_type: "text/markdown",
+          metadata: { provider: "notion", knowledge_document_id: "kdoc_1" },
+        }),
+      ]),
+      "GET /v1/organizations/org_1/documents/kdoc_1": {
+        id: "kdoc_1",
+        title: "EU launch plan",
+        url: "https://notion.so/acme/eu-launch",
+        mime: "text/markdown",
+        body: "Live in five countries.",
+        byte_size: 24,
+      },
+    })
+    renderKnowledge(openHandbook)
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open EU launch plan" })
+    )
+    expect(await screen.findByText("Live in five countries.")).toBeTruthy()
+    const original = await screen.findByRole("link", { name: "Open original" })
+    expect(original.getAttribute("href")).toBe(
+      "https://notion.so/acme/eu-launch"
+    )
+    expect(
+      screen.queryByRole("button", { name: "Download EU launch plan" })
+    ).toBeNull()
+  })
+
+  it("says plainly that a note has no preview yet", async () => {
+    stubApi(detailRoutes(corpus(), () => [document()]))
+    renderKnowledge(openHandbook)
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Decision log" })
+    )
+    expect(
+      await screen.findByText("Preview isn’t available for notes yet.")
+    ).toBeTruthy()
   })
 })

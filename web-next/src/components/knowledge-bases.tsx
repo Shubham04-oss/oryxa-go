@@ -23,6 +23,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { ApiError } from "@/lib/api/client"
 import type { Role } from "@/lib/auth/client"
 import type { Member } from "@/lib/auth/invitations"
+import type { ScreenItem } from "@/lib/agents/screen-context"
 import { membersQueryOptions } from "@/lib/auth/queries"
 import { sourcesQueryOptions } from "@/lib/knowledge/client"
 import {
@@ -53,11 +54,14 @@ import {
 } from "./knowledge-base-detail"
 import type { ContentKind } from "./knowledge-base-detail"
 import {
+  documentTitle,
   libraryFileCount,
   librarySummary,
   parseUpdated,
 } from "./knowledge-format"
 import { LibraryFileTable } from "./library-file-table"
+import { LibraryFileViewer } from "./library-file-viewer"
+import type { OpenLibraryFile } from "./library-file-viewer"
 import type { LibraryFile } from "./library-file-table"
 import { LibraryRail, librarySources } from "./library-rail"
 import { LibrarySourceFiles } from "./library-source-files"
@@ -293,6 +297,7 @@ function AllFiles({
   filter,
   canCreate,
   onCreate,
+  onOpen,
 }: {
   organizationId: string
   corpora: readonly Corpus[]
@@ -300,6 +305,7 @@ function AllFiles({
   filter: string
   canCreate: boolean
   onCreate: () => void
+  onOpen: (file: LibraryFile) => void
 }) {
   const pages = useQueries({
     queries: corpora.map((corpus) => ({
@@ -383,6 +389,7 @@ function AllFiles({
               label="All files"
               files={files}
               members={members}
+              onOpen={onOpen}
             />
             {truncated && (
               <p className="workspace-knowledge-hint library-footnote">
@@ -428,6 +435,7 @@ function LibraryPage({
   onAdd,
   onCloseAdd,
   onOpenTools,
+  onOpenFileChange,
 }: {
   organizationId: string
   organizationName?: string
@@ -444,6 +452,7 @@ function LibraryPage({
   onAdd: (target: AddTarget) => void
   onCloseAdd: () => void
   onOpenTools?: () => void
+  onOpenFileChange?: (file: ScreenItem | null) => void
 }) {
   const queryClient = useQueryClient()
   const [filter, setFilter] = useState("")
@@ -451,6 +460,8 @@ function LibraryPage({
   // The connected app whose files are open, by provider; a collection or
   // All files clears it.
   const [sourceProvider, setSourceProvider] = useState<string | null>(null)
+  // The file open in the viewer, over the whole page.
+  const [openFile, setOpenFile] = useState<OpenLibraryFile | null>(null)
   const members = useQuery(membersQueryOptions(organizationId))
   const sourcesQuery = useQuery(sourcesQueryOptions(organizationId))
   const sources = librarySources(sourcesQuery.data ?? [])
@@ -468,6 +479,17 @@ function LibraryPage({
     setNotice("")
     if (selected) setSourceProvider(null)
   }, [selected?.id, sourceProvider])
+
+  // The shell tells the agent which file is open, and forgets it when the
+  // Library goes.
+  const openId = openFile?.document.id
+  const openName = openFile ? documentTitle(openFile.document) : ""
+  useEffect(() => {
+    onOpenFileChange?.(
+      openId ? { kind: "document", id: openId, name: openName } : null
+    )
+  }, [openId, openName, onOpenFileChange])
+  useEffect(() => () => onOpenFileChange?.(null), [onOpenFileChange])
 
   function openAdding() {
     setNotice("")
@@ -495,6 +517,30 @@ function LibraryPage({
         : kind === "note"
           ? "That note is already in this collection."
           : "That was already here. If its text changed, it’s being indexed again."
+    )
+  }
+
+  if (openFile) {
+    return (
+      <div className="library-viewer">
+        <LibraryFileViewer
+          key={openFile.document.id}
+          organizationId={organizationId}
+          file={openFile}
+          members={members.data ?? []}
+          onBack={() => setOpenFile(null)}
+          onOpenLibrary={() => {
+            setOpenFile(null)
+            setSourceProvider(null)
+            onSelect(null)
+          }}
+          onOpenCollection={(collection) => {
+            setOpenFile(null)
+            setSourceProvider(null)
+            onSelect({ id: collection.id, name: collection.name })
+          }}
+        />
+      </div>
     )
   }
 
@@ -564,6 +610,12 @@ function LibraryPage({
             }}
             onClose={() => onSelect(null)}
             onOpenTools={onOpenTools}
+            onOpen={(file) =>
+              setOpenFile({
+                document: file.document,
+                collection: { id: selected.id, name: selected.name },
+              })
+            }
           />
         ) : source ? (
           <LibrarySourceFiles
@@ -574,6 +626,7 @@ function LibraryPage({
             members={members.data ?? []}
             filter={filter}
             onOpenTools={onOpenTools}
+            onOpen={setOpenFile}
           />
         ) : (
           <AllFiles
@@ -583,6 +636,7 @@ function LibraryPage({
             filter={filter}
             canCreate
             onCreate={onCreate}
+            onOpen={setOpenFile}
           />
         )}
       </section>
@@ -618,6 +672,7 @@ export function KnowledgeBases({
   selected,
   onSelect,
   onOpenTools,
+  onOpenFileChange,
 }: {
   /** From the shell; without one there is nothing to read. */
   organizationId?: string
@@ -627,6 +682,8 @@ export function KnowledgeBases({
   selected: SelectedKnowledgeBase | null
   onSelect: (base: SelectedKnowledgeBase | null) => void
   onOpenTools?: () => void
+  /** Which file is open in the viewer, for the agent's screen context. */
+  onOpenFileChange?: (file: ScreenItem | null) => void
 }) {
   const viewer: RagViewer = { userId, role: organizationRole }
   const [creating, setCreating] = useState(false)
@@ -726,6 +783,7 @@ export function KnowledgeBases({
         onAdd={setAdding}
         onCloseAdd={() => setAdding(null)}
         onOpenTools={onOpenTools}
+        onOpenFileChange={onOpenFileChange}
       />
     </div>
   )

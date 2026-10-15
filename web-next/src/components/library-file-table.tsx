@@ -3,6 +3,7 @@
 import type { ReactNode } from "react"
 import { LoaderCircle, Lock } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Table,
   TableBody,
@@ -15,7 +16,6 @@ import type { Member } from "@/lib/auth/invitations"
 import { formatBytes } from "@/lib/files/client"
 import {
   documentOrigin,
-  externalSourceLink,
   isAdminsOnlyDocument,
   isIndexing,
 } from "@/lib/rag/client"
@@ -67,16 +67,17 @@ function FileRow({
   file,
   members,
   actions,
+  onOpen,
 }: {
   file: LibraryFile
   members: readonly Member[]
   actions?: ReactNode
+  onOpen?: () => void
 }) {
   const { document, collection } = file
   const title = documentTitle(document)
   const origin = documentOrigin(document)
   const owner = memberLabel(members, document.created_by)
-  const href = externalSourceLink(document.source)
   const retrying = document.status === "pending" && document.attempts > 0
   return (
     <TableRow
@@ -91,10 +92,15 @@ function FileRow({
       </TableCell>
       <TableCell className="library-cell-name">
         <span className="library-name">
-          {href ? (
-            <a href={href} target="_blank" rel="noreferrer noopener">
+          {onOpen ? (
+            <Button
+              variant="link"
+              className="library-open"
+              aria-label={`Open ${title}`}
+              onClick={onOpen}
+            >
               <strong>{title}</strong>
-            </a>
+            </Button>
           ) : (
             <strong>{title}</strong>
           )}
@@ -150,6 +156,7 @@ export function LibraryFileTable({
   members,
   label,
   actions,
+  onOpen,
 }: {
   files: readonly LibraryFile[]
   members: readonly Member[]
@@ -157,6 +164,8 @@ export function LibraryFileTable({
   label: string
   /** A row's own controls, such as its More menu. */
   actions?: (file: LibraryFile) => ReactNode
+  /** Opens a file in the viewer. */
+  onOpen?: (file: LibraryFile) => void
 }) {
   return (
     <Table className="library-table" aria-label={label}>
@@ -180,6 +189,7 @@ export function LibraryFileTable({
             file={file}
             members={members}
             actions={actions?.(file)}
+            onOpen={onOpen ? () => onOpen(file) : undefined}
           />
         ))}
       </TableBody>

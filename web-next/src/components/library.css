@@ -372,6 +372,31 @@
   margin-bottom: 4px;
 }
 
+/* A file's name opens it in the viewer. */
+.library-open {
+  height: auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  color: var(--text);
+}
+.library-open strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An open file takes the whole page, in the shared frame. */
+.library-page:has(> .library-viewer) {
+  display: flex;
+  padding: 8px;
+}
+.library-viewer {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* Dialogs: creating a collection, adding to one, and confirms. */
 .library-dialog {
   gap: 14px;
