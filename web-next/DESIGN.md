@@ -707,11 +707,27 @@ not permission to copy every incidental value into a new component.
   high-priority channels below stay for owners and admins; anyone else is
   told who manages them. Where the server runs no Slack app, the section
   isn't shown.
-- **Library** (was Knowledge bases; founder's redesign, 14 Oct 2026). Each
-  collection is a filled tile on the canvas, with no outline, and lifts to
-  the raised tile on hover; search, the source list, an open document and an
-  answer are tiles too. The code keeps the corpus names; only what a member
-  reads says Library.
+- **Library** (was Knowledge bases; founder's redesign, 14–15 Oct 2026). One
+  two-pane page (`knowledge-bases.tsx`, `library-rail.tsx`,
+  `library-file-table.tsx`, `library.css`). The header reads "Library" over
+  "N files from M sources" (the corpora's `document_count`s and the member's
+  knowledge sources). The left rail lists All files, then each collection (a
+  rag corpus) with a coloured dot (`--collection-1…6`, picked from its id;
+  rag stores no colour) and its count; the open one is the raised tile, and a
+  quiet "+" at Collections opens New collection in a dialog. The right pane
+  has a pill search that filters the loaded titles and the one primary, Add
+  files (in All files it first asks which collection, among those the member
+  may add to). A file table (kind badge, name with its tags and sub-line,
+  owner from the members list, updated) lists a collection's files, or in
+  All files the first page of every collection newest first, saying so when
+  a collection holds more. A collection's header names it with its facts,
+  then Add content (primary), Manage in Tools, and a ⋯ menu with Delete
+  collection; a row's ⋯ has Remove. Both confirm in an alert dialog. Ask
+  stays a composer under the header. Pinned, out-of-date notes, Cited and
+  Out-of-date tags and a Grid view are not shown: there is no data for them.
+  On a phone the rail is a sideways row of pills and the table drops kind
+  and owner. The code keeps the corpus names; only what a member reads says
+  Library or collection.
 - **The agent session: the chat is always on the left, the work always on
   the right.** Expanding the primary agent's chat, or opening a file from it,
   opens Agent overview as one two-column session (`AgentSession`): the
@@ -1111,13 +1127,14 @@ not permission to copy every incidental value into a new component.
   their last section in this browser, remembered per member and workspace.
   Unavailable or no longer permitted remembered sections fall back to Account.
   Explicit Billing and Slack entry points still open the requested section.
-- Knowledge Bases is a Home destination. Creating one asks for a short name,
-  with a concrete label example and a visible 2–60 character hint; facts and
-  notes belong in its content. After creation, open that base with Add content
-  already on Note, retaining the choices for a link or file. The member may
-  cancel adding; ordinary visits to an existing base keep the form closed.
-  Cancelling creation while its request is out never opens a base that arrives
-  later. Preserve the existing permissions and honest errors.
+- The Library is a Home destination. Creating a collection asks for a short
+  name, with a concrete label example and a visible 2–60 character hint;
+  facts and notes belong in its content. After creation, open that collection
+  with its Add dialog already on Note, retaining the choices for a link or
+  file. The member may cancel adding; ordinary visits to an existing
+  collection keep the dialog closed. Cancelling creation while its request is
+  out never opens a collection that arrives later. Preserve the existing
+  permissions and honest errors.
 - Tools is also under Home. Connected
   tools form one horizontal, logo-led row with expandable details. The browse
   catalog is categorized and uses two sleek cards per row at normal and small

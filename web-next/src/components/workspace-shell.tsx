@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { CSSProperties } from "react"
-import { ArrowLeft, BookOpenText } from "lucide-react"
+import { ArrowLeft } from "lucide-react"
 import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { FocusHeader } from "./agents-parts"
 import { PrimaryAgentFileViewer } from "./primary-agent-files"
@@ -17,7 +17,7 @@ import {
 } from "./workspace-command-palette"
 import type { SidebarPage } from "./workspace-sidebar"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
-import { KnowledgeBases } from "./knowledge-bases"
+import { KnowledgeBases, LibraryHeading } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
 import { RequestsCanvas } from "./requests-view"
 import { openRequest, useRequestsEntry } from "./requests-view-open"
@@ -332,18 +332,16 @@ function WorkspaceShellContent({
     section === "teamspaces" ? teamspaces.selected : undefined
   const detailTitle = canvasPeerId
     ? (canvasPeerName ?? "Direct message")
-    : selectedKnowledgeBase?.name || selectedTeamspace?.name
+    : selectedTeamspace?.name
   const detailKind = canvasPeerId
     ? canvasPeerName === undefined
       ? undefined
       : canvasPeerOnline
         ? "Online"
         : "Direct message"
-    : selectedKnowledgeBase
-      ? "Knowledge base"
-      : selectedTeamspace
-        ? `Teamspace · ${statusLabel(selectedTeamspace)}`
-        : undefined
+    : selectedTeamspace
+      ? `Teamspace · ${statusLabel(selectedTeamspace)}`
+      : undefined
 
   const screenView =
     primaryWork && primaryViewer === "file"
@@ -599,7 +597,6 @@ function WorkspaceShellContent({
 
   function closeDetail() {
     if (canvasPeerId) closeDirectMessage()
-    if (selectedKnowledgeBase) setKnowledgeBaseSelection(null)
     if (selectedTeamspace) teamspaces.select(null)
   }
 
@@ -862,11 +859,7 @@ function WorkspaceShellContent({
                     className="workspace-header-back"
                     type="button"
                     aria-label={
-                      canvasPeerId
-                        ? "Back to people"
-                        : selectedKnowledgeBase
-                          ? "All knowledge bases"
-                          : "All teamspaces"
+                      canvasPeerId ? "Back to people" : "All teamspaces"
                     }
                     onClick={closeDetail}
                   >
@@ -880,11 +873,6 @@ function WorkspaceShellContent({
                         online={canvasPeerOnline}
                       />
                     )}
-                    {selectedKnowledgeBase && (
-                      <span className="workspace-header-detail-icon">
-                        <BookOpenText size={17} strokeWidth={1.7} />
-                      </span>
-                    )}
                     {selectedTeamspace && (
                       <TeamspaceAvatar name={selectedTeamspace.name} />
                     )}
@@ -894,6 +882,8 @@ function WorkspaceShellContent({
                     </div>
                   </div>
                 </>
+              ) : section === "knowledge" ? (
+                <LibraryHeading organizationId={selectedOrganization?.id} />
               ) : (
                 <div className="workspace-header-detail">
                   <div>

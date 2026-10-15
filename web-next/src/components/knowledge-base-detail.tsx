@@ -14,6 +14,7 @@ import {
   Link2,
   LoaderCircle,
   Lock,
+  MoreHorizontal,
   Plus,
   Puzzle,
   RotateCw,
@@ -23,10 +24,35 @@ import {
 } from "lucide-react"
 import { siGithub, siGmail, siGoogledrive, siNotion } from "simple-icons"
 import type { SimpleIcon } from "simple-icons"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { ApiError } from "@/lib/api/client"
-import { formatBytes, uploadProblem } from "@/lib/files/client"
+import type { Member } from "@/lib/auth/invitations"
+import { uploadProblem } from "@/lib/files/client"
 import {
   addDocument,
   addFileDocument,
@@ -40,12 +66,10 @@ import {
   corpusQueryOptions,
   deleteCorpus,
   deleteDocument,
-  documentOrigin,
   documentsInfiniteQueryOptions,
   externalSourceLink,
   indexableContentType,
   indexableFileAccept,
-  isAdminsOnlyDocument,
   isFromConnectedApps,
   isIndexing,
   maxDocumentBytes,
@@ -61,7 +85,6 @@ import type {
   Corpus,
   CorpusDocument,
   DocumentAccess,
-  DocumentOrigin,
   DocumentPage,
   RagViewer,
   SearchResults,
@@ -69,13 +92,13 @@ import type {
 import {
   citationProvenance,
   citationSourceLabel,
+  collectionTone,
   corpusScopeLabel,
   corpusTimeLabel,
   countLabel,
   documentTitle,
-  originLabel,
-  relativeTime,
 } from "./knowledge-format"
+import { LibraryFileTable } from "./library-file-table"
 
 // simple-icons carries no Slack mark (removed for its trademark policy); a
 // Slack chip falls back to its initial, same as any other unmapped app.
@@ -95,30 +118,6 @@ function AppLogo({ provider, name }: { provider: string; name: string }) {
     </svg>
   ) : (
     <>{name.charAt(0)}</>
-  )
-}
-
-function OriginIcon({ origin }: { origin: DocumentOrigin }) {
-  if (origin.kind === "app") {
-    return (
-      <span
-        className="workspace-knowledge-source-icon workspace-knowledge-app-icon"
-        aria-hidden="true"
-      >
-        <AppLogo provider={origin.provider} name={origin.name} />
-      </span>
-    )
-  }
-  const Icon =
-    origin.kind === "link"
-      ? Link2
-      : origin.kind === "file"
-        ? FileText
-        : StickyNote
-  return (
-    <span className="workspace-knowledge-source-icon" aria-hidden="true">
-      <Icon size={17} strokeWidth={1.7} />
-    </span>
   )
 }
 
@@ -147,134 +146,7 @@ function CitationProvenance({
   )
 }
 
-const statusLabels: Record<CorpusDocument["status"], string> = {
-  pending: "Pending",
-  ingesting: "Indexing",
-  ready: "Ready",
-  failed: "Failed",
-}
-
-function DocumentRow({
-  document,
-  canRemove,
-  confirming,
-  removing,
-  removeError,
-  onAskRemove,
-  onCancelRemove,
-  onRemove,
-}: {
-  document: CorpusDocument
-  canRemove: boolean
-  confirming: boolean
-  removing: boolean
-  removeError?: string
-  onAskRemove: () => void
-  onCancelRemove: () => void
-  onRemove: () => void
-}) {
-  const origin = documentOrigin(document)
-  const title = documentTitle(document)
-  const href = externalSourceLink(document.source)
-  const retrying = document.status === "pending" && document.attempts > 0
-
-  return (
-    <li
-      className="workspace-knowledge-document"
-      data-status={document.status}
-      data-screen-context-kind="document"
-      data-screen-context-id={document.id}
-      data-screen-context-name={title}
-    >
-      <OriginIcon origin={origin} />
-      <span className="workspace-knowledge-source-name">
-        {href ? (
-          <a href={href} target="_blank" rel="noreferrer noopener">
-            <strong>{title}</strong>
-          </a>
-        ) : (
-          <strong>{title}</strong>
-        )}
-        <small>
-          {originLabel(origin, document)} · {formatBytes(document.byte_size)} ·
-          Added {relativeTime(document.created_at)}
-        </small>
-        {document.status === "failed" && (
-          <small className="workspace-knowledge-document-error">
-            {document.failure_reason || "Indexing gave up without a reason."}
-          </small>
-        )}
-        {retrying && (
-          <small>
-            {countLabel(document.attempts, "attempt")} didn’t finish. It will be
-            tried again.
-          </small>
-        )}
-      </span>
-      <span
-        className="workspace-knowledge-status"
-        data-status={document.status}
-      >
-        {isIndexing(document) ? (
-          <LoaderCircle
-            className="workspace-knowledge-spin"
-            size={12}
-            strokeWidth={2}
-            aria-hidden="true"
-          />
-        ) : (
-          <span className="workspace-knowledge-status-dot" aria-hidden="true" />
-        )}
-        {statusLabels[document.status]}
-      </span>
-      {isAdminsOnlyDocument(document) && (
-        <span className="workspace-knowledge-admins-badge">
-          <Lock size={11} strokeWidth={1.8} aria-hidden="true" />
-          Admins only
-        </span>
-      )}
-      {canRemove && !confirming && (
-        <button
-          className="workspace-knowledge-remove"
-          type="button"
-          aria-label={`Remove ${title}`}
-          title="Remove"
-          onClick={onAskRemove}
-        >
-          <X size={15} strokeWidth={1.8} />
-        </button>
-      )}
-      {confirming && (
-        <div className="workspace-knowledge-confirm">
-          <p>
-            Remove “{title}”? Answers stop drawing on it, and it can’t be
-            brought back.
-          </p>
-          {removeError && (
-            <p className="workspace-knowledge-error" role="alert">
-              {removeError}
-            </p>
-          )}
-          <div className="workspace-knowledge-form-actions">
-            <button type="button" onClick={onCancelRemove}>
-              Cancel
-            </button>
-            <button
-              className="is-danger"
-              type="button"
-              disabled={removing}
-              onClick={onRemove}
-            >
-              {removing ? "Removing…" : "Remove"}
-            </button>
-          </div>
-        </div>
-      )}
-    </li>
-  )
-}
-
-type ContentKind = "note" | "link" | "file"
+export type ContentKind = "note" | "link" | "file"
 
 const contentKinds: Array<{
   kind: ContentKind
@@ -326,13 +198,13 @@ function contentErrors(
       : (uploadProblem(file) ??
         (indexableContentType(file)
           ? undefined
-          : "Knowledge bases take text: a .txt, .md, .html, .csv or .json file. Convert PDFs and Office files to text first."))
+          : "The Library takes text: a .txt, .md, .html, .csv or .json file. Convert PDFs and Office files to text first."))
     if (problem) errors.file = problem
   }
   return errors
 }
 
-function AddContentForm({
+export function AddContentForm({
   organizationId,
   corpus,
   viewer,
@@ -421,12 +293,6 @@ function AddContentForm({
       onSubmit={submit}
       noValidate
     >
-      <div>
-        <h3>Add content</h3>
-        <p>
-          It becomes searchable once it’s indexed, usually within a few seconds.
-        </p>
-      </div>
       <fieldset className="workspace-knowledge-choice" disabled={add.isPending}>
         <legend>What to add</legend>
         {contentKinds.map((option) => {
@@ -492,7 +358,7 @@ function AddContentForm({
           {fieldError("file") || (
             <p className="workspace-knowledge-hint" id={`${id}-file-hint`}>
               Text, Markdown, HTML, CSV or JSON, up to 8 MB. It’s kept in your
-              files, visible to the same people as this knowledge base.
+              files, visible to the same people as this collection.
             </p>
           )}
         </>
@@ -585,7 +451,7 @@ function AddContentForm({
         <p className="workspace-knowledge-hint">
           {access === "admins"
             ? "Only workspace owners and admins can find this."
-            : "Everyone with access to this knowledge base can find it."}
+            : "Everyone with access to this collection can find it."}
         </p>
       )}
 
@@ -600,16 +466,16 @@ function AddContentForm({
               notFound:
                 kind === "file"
                   ? "The uploaded file couldn’t be read back. Try again."
-                  : "This knowledge base is no longer available.",
+                  : "This collection is no longer available.",
             }
           )}
         </p>
       )}
-      <div className="workspace-knowledge-form-actions">
-        <button type="button" onClick={onCancel}>
+      <div className="library-actions">
+        <Button variant="outline" onClick={onCancel}>
           Cancel
-        </button>
-        <button type="submit" disabled={add.isPending}>
+        </Button>
+        <Button type="submit" disabled={add.isPending}>
           {add.isPending
             ? kind === "file"
               ? "Uploading…"
@@ -619,7 +485,7 @@ function AddContentForm({
               : kind === "link"
                 ? "Add link"
                 : "Add note"}
-        </button>
+        </Button>
       </div>
     </form>
   )
@@ -683,15 +549,16 @@ function AskKnowledgeBase({
           <input
             aria-label={label}
             placeholder={
-              answering ? "Ask a question about this knowledge base" : label
+              answering ? "Ask a question about this collection" : label
             }
             value={question}
             maxLength={maxQueryLength}
             onChange={(event) => setQuestion(event.target.value)}
           />
-          <button
+          <Button
             className="workspace-composer-send"
             type="submit"
+            size="icon-sm"
             aria-label={answering ? "Ask" : "Search"}
             disabled={!canSend}
           >
@@ -704,7 +571,7 @@ function AskKnowledgeBase({
             ) : (
               <ArrowUp size={16} strokeWidth={2} />
             )}
-          </button>
+          </Button>
         </div>
       </form>
       <div className="workspace-knowledge-answer-region" aria-live="polite">
@@ -719,8 +586,8 @@ function AskKnowledgeBase({
               ask.error,
               answering
                 ? "Could not answer that. Try again."
-                : "Could not search this knowledge base. Try again.",
-              { notFound: "This knowledge base is no longer available." }
+                : "Could not search this collection. Try again.",
+              { notFound: "This collection is no longer available." }
             )}
           </p>
         )}
@@ -827,25 +694,173 @@ function AskKnowledgeBase({
   )
 }
 
+/** A destructive confirm: says what goes, and what failed when it did. */
+export function ConfirmDialog({
+  open,
+  title,
+  description,
+  error,
+  pending,
+  confirmLabel,
+  pendingLabel,
+  onConfirm,
+  onOpenChange,
+}: {
+  open: boolean
+  title: string
+  description: string
+  error?: string
+  pending: boolean
+  confirmLabel: string
+  pendingLabel: string
+  onConfirm: () => void
+  onOpenChange: (open: boolean) => void
+}) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent className="library-dialog">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        {error && (
+          <p className="workspace-knowledge-error" role="alert">
+            {error}
+          </p>
+        )}
+        <AlertDialogFooter className="library-dialog-footer">
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={pending}
+            onClick={onConfirm}
+          >
+            {pending ? pendingLabel : confirmLabel}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
+/**
+ * Adding to the Library: the Note, Link and File form for one collection. Opened
+ * from All files, it first asks which collection, among those the member may
+ * add to.
+ */
+export function AddFilesDialog({
+  organizationId,
+  collections,
+  collectionId,
+  viewer,
+  onChooseCollection,
+  onAdded,
+  onClose,
+}: {
+  organizationId: string
+  /** The collections the member may add to. */
+  collections: readonly Corpus[]
+  /** The collection being added to; undefined asks for one first. */
+  collectionId?: string
+  viewer: RagViewer
+  onChooseCollection: (collectionId: string) => void
+  onAdded: (document: CorpusDocument, kind: ContentKind, corpus: Corpus) => void
+  onClose: () => void
+}) {
+  const corpus = collections.find((item) => item.id === collectionId)
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="library-dialog library-add-dialog">
+        <DialogHeader>
+          <DialogTitle>
+            {corpus ? `Add to ${corpus.name}` : "Add files"}
+          </DialogTitle>
+          <DialogDescription>
+            {corpus
+              ? "It becomes searchable once it’s indexed, usually within a few seconds."
+              : "Choose the collection it belongs in."}
+          </DialogDescription>
+        </DialogHeader>
+        {corpus ? (
+          <AddContentForm
+            key={corpus.id}
+            organizationId={organizationId}
+            corpus={corpus}
+            viewer={viewer}
+            onAdded={(document, kind) => onAdded(document, kind, corpus)}
+            onCancel={onClose}
+          />
+        ) : (
+          <ul className="library-choose" aria-label="Collections">
+            {collections.map((item) => (
+              <li key={item.id}>
+                <Button
+                  variant="ghost"
+                  className="library-rail-item"
+                  onClick={() => onChooseCollection(item.id)}
+                >
+                  <span
+                    className="library-rail-dot"
+                    data-tone={collectionTone(item.id)}
+                    aria-hidden="true"
+                  />
+                  <span className="library-rail-label">{item.name}</span>
+                  <span className="library-rail-count">
+                    {corpusScopeLabel(item, viewer)}
+                  </span>
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Whether the member may add to or remove from this collection here. */
+export function canAddToCollection(corpus: Corpus, viewer: RagViewer): boolean {
+  return !isFromConnectedApps(corpus) && canWriteCorpus(corpus, viewer)
+}
+
+/** Rows whose title holds the filter, ignoring case. */
+export function filterFiles<T extends { document: CorpusDocument }>(
+  files: readonly T[],
+  filter: string
+): T[] {
+  const needle = filter.trim().toLocaleLowerCase()
+  if (!needle) return [...files]
+  return files.filter((file) =>
+    documentTitle(file.document).toLocaleLowerCase().includes(needle)
+  )
+}
+
+/** One collection in the Library's right pane: its header, Ask, and its files. */
 export function KnowledgeBaseDetail({
   organizationId,
   corpusId,
   name,
   viewer,
-  initiallyAdding = false,
+  members,
+  filter,
   answering = false,
+  onAdd,
   onClose,
   onOpenTools,
 }: {
   organizationId: string
   corpusId: string
-  /** The name the list showed, for the moments before the corpus loads. */
+  /** The name the rail showed, for the moments before the corpus loads. */
   name: string
   viewer: RagViewer
-  /** The just-created base starts with the existing Note form open. */
-  initiallyAdding?: boolean
+  /** The organization's members, to name who added each file. */
+  members: readonly Member[]
+  /** The Library's search, applied to the loaded titles. */
+  filter: string
   /** Whether this deployment can write answers (`capabilities.answering`). */
   answering?: boolean
+  /** Opens Add files on this collection. */
+  onAdd: () => void
   onClose: () => void
   onOpenTools?: () => void
 }) {
@@ -860,16 +875,13 @@ export function KnowledgeBaseDetail({
   const documentsQuery = useInfiniteQuery(
     documentsInfiniteQueryOptions(organizationId, corpusId)
   )
-  const [adding, setAdding] = useState(initiallyAdding)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [confirmingDocument, setConfirmingDocument] = useState<string | null>(
-    null
-  )
-  const [notice, setNotice] = useState("")
+  const [removing, setRemoving] = useState<CorpusDocument | null>(null)
 
   const removeCorpus = useMutation({
     mutationFn: () => deleteCorpus(organizationId, corpusId),
     onSuccess: () => {
+      setConfirmDelete(false)
       onClose()
       void afterDeleteCorpus(queryClient, organizationId, corpusId)
     },
@@ -878,7 +890,7 @@ export function KnowledgeBaseDetail({
     mutationFn: (documentId: string) =>
       deleteDocument(organizationId, corpusId, documentId),
     onSuccess: (_, documentId) => {
-      setConfirmingDocument(null)
+      setRemoving(null)
       queryClient.setQueryData<InfiniteData<DocumentPage, string | undefined>>(
         ragKeys.documents(organizationId, corpusId),
         (data) =>
@@ -910,23 +922,23 @@ export function KnowledgeBaseDetail({
           <BookOpenText size={23} strokeWidth={1.5} />
           <strong>
             {gone
-              ? "This knowledge base is no longer here"
-              : "Couldn’t open this knowledge base"}
+              ? "This collection is no longer here"
+              : "Couldn’t open this collection"}
           </strong>
           <p>
             {gone
               ? "It was deleted, or you no longer have access to it."
               : ragErrorMessage(corpusQuery.error, "Try again in a moment.")}
           </p>
-          <div className="workspace-knowledge-form-actions">
+          <div className="library-actions">
+            <Button variant="outline" onClick={onClose}>
+              All files
+            </Button>
             {!gone && (
-              <button type="button" onClick={() => void corpusQuery.refetch()}>
+              <Button onClick={() => void corpusQuery.refetch()}>
                 Try again
-              </button>
+              </Button>
             )}
-            <button type="button" onClick={onClose}>
-              All knowledge bases
-            </button>
           </div>
         </div>
       )
@@ -939,77 +951,77 @@ export function KnowledgeBaseDetail({
   }
 
   const fromApps = isFromConnectedApps(corpus)
-  const canWrite = !fromApps && canWriteCorpus(corpus, viewer)
+  const canWrite = canAddToCollection(corpus, viewer)
   const canDelete = !fromApps && canDeleteCorpus(corpus, viewer)
   const description = corpusDescription(corpus)
   const documentCount = Math.max(corpus.document_count, documents.length)
   const indexingCount = documents.filter(isIndexing).length
   const hasDocuments = documentCount > 0
-
-  function openAdding() {
-    setAdding(true)
-    setConfirmDelete(false)
-    setNotice("")
-  }
-
-  function added(document: CorpusDocument, kind: ContentKind) {
-    const known = documents.some((item) => item.id === document.id)
-    setAdding(false)
-    setNotice(
-      !known
-        ? ""
-        : kind === "note"
-          ? "That note is already in this knowledge base."
-          : "That was already here. If its text changed, it’s being indexed again."
-    )
-  }
+  const files = filterFiles(
+    documents.map((document) => ({ document })),
+    filter
+  )
 
   return (
-    <div className="workspace-knowledge-detail">
-      <div className="workspace-knowledge-detail-bar">
-        <div className="workspace-knowledge-detail-copy">
+    <div className="library-collection">
+      <div className="library-collection-head">
+        <div className="library-collection-copy">
+          <h2>
+            <span
+              className="library-rail-dot"
+              data-tone={collectionTone(corpus.id)}
+              aria-hidden="true"
+            />
+            {corpus.name}
+          </h2>
           {description && <p>{description}</p>}
           <small>
             {corpusScopeLabel(corpus, viewer)} ·{" "}
-            {countLabel(documentCount, "document")} · {corpusTimeLabel(corpus)}
+            {countLabel(documentCount, "file")}
+            {indexingCount > 0 && ` · ${indexingCount} indexing`} ·{" "}
+            {corpusTimeLabel(corpus)}
           </small>
         </div>
-        <div className="workspace-knowledge-detail-actions">
-          {fromApps && onOpenTools && (
-            <button
-              className="workspace-knowledge-quiet-button"
-              type="button"
-              onClick={onOpenTools}
-            >
-              <Puzzle size={15} strokeWidth={1.7} />
-              Manage in Tools
-            </button>
-          )}
+        <div className="library-collection-actions">
           {canWrite && (
-            <button
-              className="workspace-knowledge-create-button"
-              type="button"
-              aria-expanded={adding}
-              onClick={() => (adding ? setAdding(false) : openAdding())}
-            >
-              <Plus size={17} strokeWidth={1.8} />
+            <Button onClick={onAdd}>
+              <Plus strokeWidth={1.8} />
               Add content
-            </button>
+            </Button>
+          )}
+          {fromApps && onOpenTools && (
+            <Button variant="outline" onClick={onOpenTools}>
+              <Puzzle strokeWidth={1.7} />
+              Manage in Tools
+            </Button>
           )}
           {canDelete && (
-            <button
-              className="workspace-knowledge-icon-button"
-              type="button"
-              aria-label="Delete knowledge base"
-              title="Delete knowledge base"
-              aria-expanded={confirmDelete}
-              onClick={() => {
-                setConfirmDelete(true)
-                setAdding(false)
-              }}
-            >
-              <Trash2 size={16} strokeWidth={1.7} />
-            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="ml-auto"
+                    aria-label={`More for ${corpus.name}`}
+                  />
+                }
+              >
+                <MoreHorizontal strokeWidth={1.8} />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => {
+                    removeCorpus.reset()
+                    setConfirmDelete(true)
+                  }}
+                >
+                  <Trash2 />
+                  Delete collection
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
       </div>
@@ -1019,56 +1031,6 @@ export function KnowledgeBaseDetail({
           Filled from your connected apps as they sync. Choose what gets indexed
           in Tools.
         </p>
-      )}
-
-      {confirmDelete && (
-        <div className="workspace-knowledge-confirm workspace-knowledge-confirm-panel">
-          <p>
-            Delete “{corpus.name}”?{" "}
-            {hasDocuments
-              ? `Its ${countLabel(documentCount, "document")} and everything indexed from them go with it.`
-              : "It has nothing in it yet."}{" "}
-            This can’t be undone.
-          </p>
-          {removeCorpus.isError && (
-            <p className="workspace-knowledge-error" role="alert">
-              {ragErrorMessage(
-                removeCorpus.error,
-                "Could not delete this knowledge base. Try again.",
-                { notFound: "It was already deleted." }
-              )}
-            </p>
-          )}
-          <div className="workspace-knowledge-form-actions">
-            <button
-              type="button"
-              onClick={() => {
-                setConfirmDelete(false)
-                removeCorpus.reset()
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              className="is-danger"
-              type="button"
-              disabled={removeCorpus.isPending}
-              onClick={() => removeCorpus.mutate()}
-            >
-              {removeCorpus.isPending ? "Deleting…" : "Delete knowledge base"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {adding && canWrite && (
-        <AddContentForm
-          organizationId={organizationId}
-          corpus={corpus}
-          viewer={viewer}
-          onAdded={added}
-          onCancel={() => setAdding(false)}
-        />
       )}
 
       {hasDocuments && (
@@ -1081,87 +1043,81 @@ export function KnowledgeBaseDetail({
         />
       )}
 
-      <div className="workspace-knowledge-section-heading">
-        <div>
-          <h3>Documents</h3>
-          <p>
-            {fromApps
-              ? "What your connected apps have indexed here."
-              : "Notes, links and files this knowledge base answers from."}
-          </p>
-        </div>
-        <span>
-          {documentCount}
-          {indexingCount > 0 && ` · ${indexingCount} indexing`}
-        </span>
-      </div>
-
-      {notice && (
-        <p className="workspace-knowledge-status-line" role="status">
-          {notice}
-        </p>
-      )}
-
       {documentsQuery.isPending ? (
         <p className="workspace-knowledge-loading" role="status">
-          Loading documents…
+          Loading files…
         </p>
       ) : documentsQuery.isError && !documents.length ? (
         <div className="workspace-knowledge-alert" role="alert">
           <span>
             {ragErrorMessage(
               documentsQuery.error,
-              "Couldn’t load this knowledge base’s documents."
+              "Couldn’t load this collection’s files."
             )}
           </span>
-          <button type="button" onClick={() => void documentsQuery.refetch()}>
-            <RotateCw size={14} strokeWidth={1.8} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void documentsQuery.refetch()}
+          >
+            <RotateCw strokeWidth={1.8} />
             Try again
-          </button>
+          </Button>
         </div>
       ) : documents.length ? (
-        <>
-          <ul className="workspace-knowledge-source-list">
-            {documents.map((document) => (
-              <DocumentRow
-                key={document.id}
-                document={document}
-                canRemove={canWrite}
-                confirming={confirmingDocument === document.id}
-                removing={
-                  removeDocument.isPending &&
-                  removeDocument.variables === document.id
-                }
-                removeError={
-                  removeDocument.isError &&
-                  removeDocument.variables === document.id
-                    ? ragErrorMessage(
-                        removeDocument.error,
-                        "Could not remove it. Try again.",
-                        { notFound: "It was already removed." }
-                      )
-                    : undefined
-                }
-                onAskRemove={() => {
-                  removeDocument.reset()
-                  setConfirmingDocument(document.id)
-                }}
-                onCancelRemove={() => setConfirmingDocument(null)}
-                onRemove={() => removeDocument.mutate(document.id)}
-              />
-            ))}
-          </ul>
-          {documentsQuery.hasNextPage && (
-            <button
-              className="workspace-knowledge-more"
-              type="button"
-              disabled={documentsQuery.isFetchingNextPage}
-              onClick={() => void documentsQuery.fetchNextPage()}
-            >
-              {documentsQuery.isFetchingNextPage ? "Loading…" : "Load more"}
-            </button>
-          )}
-        </>
+        files.length ? (
+          <>
+            <LibraryFileTable
+              label={`Files in ${corpus.name}`}
+              files={files}
+              members={members}
+              actions={({ document }) =>
+                canWrite ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+
+                          aria-label={`More for ${documentTitle(document)}`}
+                        />
+                      }
+                    >
+                      <MoreHorizontal strokeWidth={1.8} />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={() => {
+                          removeDocument.reset()
+                          setRemoving(document)
+                        }}
+                      >
+                        <X />
+                        Remove
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null
+              }
+            />
+            {documentsQuery.hasNextPage && (
+              <Button
+                variant="outline"
+                className="library-more"
+                disabled={documentsQuery.isFetchingNextPage}
+                onClick={() => void documentsQuery.fetchNextPage()}
+              >
+                {documentsQuery.isFetchingNextPage ? "Loading…" : "Load more"}
+              </Button>
+            )}
+          </>
+        ) : (
+          <p className="workspace-knowledge-loading">
+            No files here match “{filter.trim()}”.
+          </p>
+        )
       ) : (
         <div className="workspace-knowledge-empty">
           {fromApps ? (
@@ -1169,28 +1125,69 @@ export function KnowledgeBaseDetail({
           ) : (
             <FileText size={23} strokeWidth={1.5} />
           )}
-          <strong>
-            {fromApps ? "Nothing indexed yet" : "No documents yet"}
-          </strong>
+          <strong>{fromApps ? "Nothing indexed yet" : "No files yet"}</strong>
           <p>
             {fromApps
-              ? "Documents show up here as your connected apps sync."
+              ? "Files show up here as your connected apps sync."
               : canWrite
                 ? "Add a note, a link or a text file, and your agents can search it."
                 : "Workspace admins decide what goes in here."}
           </p>
-          {canWrite && !adding && (
-            <button
-              className="workspace-knowledge-quiet-button"
-              type="button"
-              onClick={openAdding}
-            >
-              <Plus size={15} strokeWidth={1.8} />
+          {canWrite && (
+            <Button variant="outline" onClick={onAdd}>
+              <Plus strokeWidth={1.8} />
               Add content
-            </button>
+            </Button>
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title={`Delete “${corpus.name}”?`}
+        description={`${
+          hasDocuments
+            ? `Its ${countLabel(documentCount, "file")} and everything indexed from them go with it.`
+            : "It has nothing in it yet."
+        } This can’t be undone.`}
+        error={
+          removeCorpus.isError
+            ? ragErrorMessage(
+                removeCorpus.error,
+                "Could not delete this collection. Try again.",
+                { notFound: "It was already deleted." }
+              )
+            : undefined
+        }
+        pending={removeCorpus.isPending}
+        confirmLabel="Delete collection"
+        pendingLabel="Deleting…"
+        onConfirm={() => removeCorpus.mutate()}
+        onOpenChange={(open) => {
+          if (!open && !removeCorpus.isPending) setConfirmDelete(false)
+        }}
+      />
+      <ConfirmDialog
+        open={removing !== null}
+        title={`Remove “${removing ? documentTitle(removing) : ""}”?`}
+        description="Answers stop drawing on it, and it can’t be brought back."
+        error={
+          removeDocument.isError
+            ? ragErrorMessage(
+                removeDocument.error,
+                "Could not remove it. Try again.",
+                { notFound: "It was already removed." }
+              )
+            : undefined
+        }
+        pending={removeDocument.isPending}
+        confirmLabel="Remove"
+        pendingLabel="Removing…"
+        onConfirm={() => removing && removeDocument.mutate(removing.id)}
+        onOpenChange={(open) => {
+          if (!open && !removeDocument.isPending) setRemoving(null)
+        }}
+      />
     </div>
   )
 }

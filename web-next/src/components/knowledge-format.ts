@@ -176,3 +176,83 @@ export function citationProvenance(
   }
   return chips
 }
+
+// ---------------------------------------------------------------------------
+// The Library's two panes: collections in the rail, files in the table.
+
+/** How many collection colours there are (`--collection-1` … in theme.css). */
+export const collectionToneCount = 6
+
+/**
+ * A collection's colour, 1 to `collectionToneCount`, derived from its id so it
+ * stays the same wherever the collection shows. Rag stores no colour.
+ */
+export function collectionTone(id: string): number {
+  let hash = 0
+  for (let index = 0; index < id.length; index += 1) {
+    hash = (hash * 31 + id.charCodeAt(index)) >>> 0
+  }
+  return (hash % collectionToneCount) + 1
+}
+
+/** Every document across the collections, as their counts say. */
+export function libraryFileCount(
+  corpora: ReadonlyArray<Pick<Corpus, "document_count">>
+): number {
+  return corpora.reduce((total, corpus) => total + corpus.document_count, 0)
+}
+
+/** "128 files from 4 sources", or just the files when sources aren't known. */
+export function librarySummary(files: number, sources?: number): string {
+  const filesLabel = countLabel(files, "file")
+  return sources === undefined
+    ? filesLabel
+    : `${filesLabel} from ${countLabel(sources, "source")}`
+}
+
+const contentTypeExtensions: Record<string, string> = {
+  "application/json": "json",
+  "text/csv": "csv",
+  "text/html": "html",
+  "text/markdown": "md",
+  "text/plain": "txt",
+}
+
+/**
+ * A name whose extension says the document's kind, for its kind badge
+ * (`file-kind.tsx` reads the extension). A title that has one keeps it;
+ * otherwise the content type gives it.
+ */
+export function documentKindName(
+  document: Pick<
+    CorpusDocument,
+    "title" | "source" | "metadata" | "content_type"
+  >
+): string {
+  const title = documentTitle(document)
+  if (/\.[a-z0-9]{1,5}$/i.test(title)) return title
+  const extension = contentTypeExtensions[document.content_type]
+  return extension ? `${title}.${extension}` : title
+}
+
+/** When a document last changed, for sorting newest first; 0 when unknown. */
+export function parseUpdated(
+  document: Pick<CorpusDocument, "updated_at">
+): number {
+  const time = parseTimestamp(document.updated_at)
+  return Number.isNaN(time) ? 0 : time
+}
+
+/** Who a member is on screen: their display name, else their address. */
+export function memberLabel(
+  members: ReadonlyArray<{
+    user_id: string
+    display_name?: string
+    email: string
+  }>,
+  userId: string
+): string | undefined {
+  const member = members.find((item) => item.user_id === userId)
+  if (!member) return undefined
+  return member.display_name?.trim() || member.email
+}

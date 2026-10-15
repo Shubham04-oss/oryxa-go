@@ -1,0 +1,431 @@
+/* The Library (founder's redesign, 15 Oct 2026): one two-pane page, the
+   collections rail on the left and the files on the right. Colours are
+   tokens from theme.css only. */
+
+.library-page {
+  padding: 20px 24px 40px;
+}
+.library {
+  display: grid;
+  grid-template-columns: 216px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+/* The rail: All files, then each collection, the open one the raised tile. */
+.library-rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.library-rail ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.library-rail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 26px;
+  padding: 0 4px 0 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.library-rail-add {
+  color: var(--text-muted);
+}
+.library-rail-add:hover {
+  color: var(--text);
+}
+.library-rail-item {
+  justify-content: flex-start;
+  width: 100%;
+  height: 34px;
+  gap: 9px;
+  padding: 0 10px;
+  border-radius: 10px;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 500;
+}
+.library-rail-item:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.library-rail-item[aria-current="page"] {
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--border-quiet),
+    0 1px 3px var(--shade-66);
+  color: var(--text);
+}
+.library-rail-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+.library-rail-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.library-rail-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.library-rail-dot[data-tone="1"] { background: var(--collection-1); }
+.library-rail-dot[data-tone="2"] { background: var(--collection-2); }
+.library-rail-dot[data-tone="3"] { background: var(--collection-3); }
+.library-rail-dot[data-tone="4"] { background: var(--collection-4); }
+.library-rail-dot[data-tone="5"] { background: var(--collection-5); }
+.library-rail-dot[data-tone="6"] { background: var(--collection-6); }
+
+/* The right pane: search and Add files, then the collection or All files. */
+.library-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.library-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.library-search {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+}
+.library-search > svg {
+  position: absolute;
+  left: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.library-search [data-slot="input"] {
+  height: 32px;
+  padding-left: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--base);
+  color: var(--text);
+  font-size: 13px;
+}
+.library-search [data-slot="input"]::placeholder {
+  color: var(--text-muted);
+}
+/* A collection's header: its name and facts, then its actions. */
+.library-collection {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+/* The header's actions sit under its facts: the primary first, the More
+   menu at the far end (DESIGN.md, Buttons and action rows). */
+.library-collection-head {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.library-collection-copy {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.library-collection-copy h2 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.library-collection-copy p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.library-collection-copy small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.library-collection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.library-collection-actions:empty {
+  display: none;
+}
+/* A dialog's or a confirm's buttons: Cancel, then the confirm on the right. */
+.library-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+.library-more {
+  align-self: center;
+}
+.library-collection .workspace-knowledge-ask,
+.library-collection .workspace-knowledge-notice,
+.library-collection .workspace-knowledge-empty,
+.library-collection .workspace-knowledge-alert {
+  max-width: none;
+  margin: 0;
+}
+
+/* The file table: kind, name with its sub-line and tags, owner, updated. */
+.library-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+.library-row {
+  border: 0;
+}
+.library-row:hover {
+  background: var(--hover);
+}
+.library-row-head:hover {
+  background: none;
+}
+.library-row-head th {
+  height: 30px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.library-row td {
+  padding: 10px 8px;
+  border-top: 1px solid var(--border-quiet);
+  vertical-align: middle;
+}
+.library-row td:first-child {
+  border-radius: 12px 0 0 12px;
+}
+.library-row td:last-child {
+  border-radius: 0 12px 12px 0;
+}
+.library-row:hover td,
+.library-row:hover + .library-row td {
+  border-top-color: transparent;
+}
+.library-cell-kind {
+  width: 48px;
+}
+.library-cell-owner {
+  width: 24%;
+}
+.library-cell-updated {
+  width: 116px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.library-cell-actions {
+  width: 44px;
+  text-align: right;
+}
+.library-cell-name {
+  min-width: 0;
+  white-space: normal;
+}
+.library-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+.library-name strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-subline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-subline[data-tone="failed"] {
+  color: var(--tone-ff9d9d);
+  white-space: normal;
+}
+.library-owner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+.library-owner > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.library-owner .workspace-avatar {
+  width: 22px;
+  height: 22px;
+}
+.library-muted {
+  color: var(--text-muted);
+}
+.library-tag {
+  height: 20px;
+  border-radius: 999px;
+  background: var(--base);
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 600;
+}
+.library-tag[data-tone="failed"] {
+  background: var(--tone-3a2323);
+  color: var(--tone-f3b7b7);
+}
+.library-spin {
+  animation: library-spin 1s linear infinite;
+}
+@keyframes library-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.library-footnote {
+  padding: 0 8px;
+}
+.library-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.library-skeleton-row {
+  height: 44px;
+  border-radius: 12px;
+  background: var(--base);
+}
+.library-rail .library-skeleton-row {
+  height: 34px;
+  margin-bottom: 4px;
+}
+
+/* Dialogs: creating a collection, adding to one, and confirms. */
+.library-dialog {
+  gap: 14px;
+  border-radius: 16px;
+  background: var(--canvas);
+  color: var(--text);
+}
+.library-add-dialog {
+  max-width: min(560px, calc(100% - 2rem));
+}
+@media (min-width: 640px) {
+  .library-add-dialog {
+    max-width: 560px;
+  }
+}
+.library-dialog [data-slot="dialog-description"],
+.library-dialog [data-slot="alert-dialog-description"] {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.library-dialog-form,
+.library-dialog .workspace-knowledge-form {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.library-dialog-footer {
+  background: var(--base);
+}
+.library-choose {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (max-width: 800px) {
+  .library-page {
+    padding: 16px 14px 32px;
+  }
+  .library {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+  /* The rail becomes a row of pills that scrolls sideways. */
+  .library-rail {
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+  }
+  .library-rail ul {
+    flex-direction: row;
+  }
+  .library-rail-heading > span {
+    display: none;
+  }
+  .library-rail-item {
+    width: auto;
+    white-space: nowrap;
+  }
+  /* An action row stacks full width on a phone, the primary on top. */
+  .library-collection-actions,
+  .library-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .library-actions {
+    flex-direction: column-reverse;
+  }
+  .library-cell-owner,
+  .library-cell-kind {
+    display: none;
+  }
+  .library-cell-updated {
+    width: 84px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .library-spin {
+    animation: none;
+  }
+}
