@@ -9,14 +9,11 @@
 import { useId, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { Search, SquarePen } from "lucide-react"
+import { AskAgentDialog } from "./ask-agent-dialog"
+import type { AskAgentTarget } from "./ask-agent-dialog"
 import { DmRow, PickerRow, useMinuteClock } from "./direct-message-inbox"
 import { filterPeople, personContext } from "./direct-message-people"
-import type {
-  DmPeer,
-  DmPeople,
-  DmPerson,
-  DmPersonAgent,
-} from "./direct-message-people"
+import type { DmPeer, DmPeople } from "./direct-message-people"
 import { PersonCard } from "./person-card"
 import { Button } from "@/components/ui/button"
 import {
@@ -48,7 +45,6 @@ export function MessagesPage({
   people,
   peer,
   onOpen,
-  onAskAgent,
   children,
 }: {
   organizationId: string
@@ -59,11 +55,10 @@ export function MessagesPage({
   peer: DmPeer
   /** Opens the DM with someone, in place of this one. */
   onOpen: (peerId: string) => void
-  /** Ask one of the person's agents; without it the card offers no Ask. */
-  onAskAgent?: (person: DmPerson, agent: DmPersonAgent) => void
   /** The open DM. */
   children: ReactNode
 }) {
+  const [asking, setAsking] = useState<AskAgentTarget | null>(null)
   return (
     <div className="messages-page">
       <div className="messages-page-grid">
@@ -84,10 +79,17 @@ export function MessagesPage({
             viewerId={viewerId}
             peer={peer}
             person={people.find(peer.id)}
-            onAskAgent={onAskAgent}
+            onAskAgent={(person, agent) => setAsking({ person, agent })}
           />
         </aside>
       </div>
+      {asking && (
+        <AskAgentDialog
+          organizationId={organizationId}
+          target={asking}
+          onClose={() => setAsking(null)}
+        />
+      )}
     </div>
   )
 }

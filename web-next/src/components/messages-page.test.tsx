@@ -7,11 +7,17 @@ import {
   within,
 } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { DmPeople, DmPerson } from "./direct-message-people"
 import { MessagesPage, unreadDirectMessages } from "./messages-page"
 import type { Conversation, Inbox } from "@/lib/dms"
+import { OpenRequestProvider } from "@/lib/dms/request-navigation"
+import { json, mockApi } from "@/test/teamspaces"
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 const viewerId = "user-member"
 
@@ -88,18 +94,25 @@ const inbox: Inbox = {
   ],
 }
 
-function renderPage(onOpen = vi.fn()) {
+function renderPage(onOpen = vi.fn(), openRequest = vi.fn()) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
   render(
-    <MessagesPage
-      organizationId="org-1"
-      viewerId={viewerId}
-      inbox={inbox}
-      people={people}
-      peer={{ id: priya.id, name: priya.name, short: "Priya" }}
-      onOpen={onOpen}
-    >
-      <p>The conversation</p>
-    </MessagesPage>
+    <QueryClientProvider client={client}>
+      <OpenRequestProvider value={openRequest}>
+        <MessagesPage
+          organizationId="org-1"
+          viewerId={viewerId}
+          inbox={inbox}
+          people={people}
+          peer={{ id: priya.id, name: priya.name, short: "Priya" }}
+          onOpen={onOpen}
+        >
+          <p>The conversation</p>
+        </MessagesPage>
+      </OpenRequestProvider>
+    </QueryClientProvider>
   )
   return onOpen
 }
@@ -159,8 +172,7 @@ describe("Messages", () => {
     expect(within(card).getByText("Admin")).toBeTruthy()
     const agent = within(card).getByRole("region", { name: "Priya's agent" })
     expect(within(agent).getByText("Nia")).toBeTruthy()
-    // Asking is wired where the page passes a way to ask.
-    expect(within(card).queryByRole("button", { name: /^Ask/ })).toBeNull()
+    expect(within(agent).getByRole("button", { name: "Ask Nia" })).toBeTruthy()
     const spaces = within(card).getByRole("region", {
       name: "Shared teamspaces",
     })
@@ -169,5 +181,62 @@ describe("Messages", () => {
     // Nothing the API can't say: no local time, profile or shared files.
     expect(within(card).queryByText(/Shared files/)).toBeNull()
     expect(within(card).queryByRole("button", { name: "Profile" })).toBeNull()
+  })
+
+  it("asks their agent: files a request the owner approves, and opens it in Requests", async () => {
+    const { calls } = mockApi(({ method, url }) =>
+      method === "POST" &&
+      url.pathname === "/v1/organizations/org-1/agent-requests"
+        ? json({ id: "irq_9" }, 201)
+        : undefined
+    )
+    const openRequest = vi.fn()
+    renderPage(vi.fn(), openRequest)
+    fireEvent.click(screen.getByRole("button", { name: "Ask Nia" }))
+    const dialog = await screen.findByRole("dialog", { name: "Ask Nia" })
+    expect(
+      within(dialog).getByText(
+        /Priya approves your question before Nia answers/
+      )
+    ).toBeTruthy()
+    const send = within(dialog).getByRole("button", { name: "Send to Nia" })
+    expect(send.hasAttribute("disabled")).toBe(true)
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Your question" }),
+      {
+        target: { value: "Is VAT included?" },
+      }
+    )
+    fireEvent.click(send)
+    expect(await within(dialog).findByText(/^Sent\./)).toBeTruthy()
+    expect(calls).toEqual([
+      {
+        method: "POST",
+        path: "/v1/organizations/org-1/agent-requests",
+        body: {
+          target_agent_id: "agent-nia",
+          purpose: "A teammate asked Nia directly in Oryxa.",
+          task: "Is VAT included?",
+        },
+      },
+    ])
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Open in Requests" })
+    )
+    expect(openRequest).toHaveBeenCalledWith("irq_9")
+  })
+
+  it("says so when the request is refused, keeping the question", async () => {
+    mockApi(() => json({ error: { code: "forbidden", message: "no" } }, 403))
+    renderPage()
+    fireEvent.click(screen.getByRole("button", { name: "Ask Nia" }))
+    const dialog = await screen.findByRole("dialog", { name: "Ask Nia" })
+    const field = within(dialog).getByRole("textbox", { name: "Your question" })
+    fireEvent.change(field, { target: { value: "Is VAT included?" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Send to Nia" }))
+    expect(
+      await within(dialog).findByText("You can't ask Priya's agent from here.")
+    ).toBeTruthy()
+    expect((field as HTMLTextAreaElement).value).toBe("Is VAT included?")
   })
 })

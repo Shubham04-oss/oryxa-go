@@ -41,6 +41,7 @@ import type {
 } from "./workspace-agent-panel"
 import { MessagesPage } from "./messages-page"
 import { PeopleDirectory } from "./people-directory"
+import type { PeopleViewer } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
 import type { SettingsPage } from "./workspace-settings"
 import { useTeamspaces } from "@/hooks/use-teamspaces"
@@ -218,6 +219,17 @@ function WorkspaceShellContent({
   const [dmReturnTo, setDmReturnTo] = useState<string | null>(null)
   const [dmDrafts, setDmDrafts] = useState<Partial<Record<string, string>>>({})
   const [dmComposing, setDmComposing] = useState(false)
+  // People's own card: the member, and their primary agent once loaded.
+  const ownPrimary = primaryAgent(ownAgents.data ?? [])
+  const peopleViewer: PeopleViewer | undefined =
+    session && dmOrganizationId
+      ? {
+          id: session.user.id,
+          name: session.user.display_name || session.user.email,
+          role: organizationRole,
+          agent: ownPrimary && { id: ownPrimary.id, name: ownPrimary.name },
+        }
+      : undefined
 
   const currentIdentity: AvatarIdentity = session
     ? {
@@ -928,6 +940,22 @@ function WorkspaceShellContent({
                   </MessagesPage>
                 ) : (
                   <PeopleDirectory
+                    organizationId={dmOrganizationId}
+                    organizationName={selectedOrganization?.name}
+                    viewer={peopleViewer}
+                    onInvite={
+                      organizationRole === "owner" ||
+                      organizationRole === "admin"
+                        ? () => {
+                            setSettingsPage("people")
+                            setSettingsOpen(true)
+                          }
+                        : undefined
+                    }
+                    onOpenSettings={() => {
+                      setSettingsPage("account")
+                      setSettingsOpen(true)
+                    }}
                     people={dmPeople}
                     onMessage={openDirectMessage}
                     focusPersonId={dmReturnTo}
