@@ -3,7 +3,6 @@ import type { ComponentType, CSSProperties } from "react"
 import {
   ArrowLeft,
   ArrowRight,
-  BookOpenText,
   Bot,
   ChartNoAxesColumn,
   Folder,
@@ -27,7 +26,7 @@ import { BrandChip } from "./brand-chip"
 import { HomeOverview } from "./home-overview"
 import { ThemeMenuItem } from "./theme-menu-item"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
-import { KnowledgeBases } from "./knowledge-bases"
+import { KnowledgeBases, LibraryHeading } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
 import { RequestsCanvas } from "./requests-view"
 import { openRequest, useRequestsEntry } from "./requests-view-open"
@@ -361,18 +360,16 @@ function WorkspaceShellContent({
     section === "teamspaces" ? teamspaces.selected : undefined
   const detailTitle = canvasPeerId
     ? (canvasPeerName ?? "Direct message")
-    : selectedKnowledgeBase?.name || selectedTeamspace?.name
+    : selectedTeamspace?.name
   const detailKind = canvasPeerId
     ? canvasPeerName === undefined
       ? undefined
       : canvasPeerOnline
         ? "Online"
         : "Direct message"
-    : selectedKnowledgeBase
-      ? "Knowledge base"
-      : selectedTeamspace
-        ? `Teamspace · ${statusLabel(selectedTeamspace)}`
-        : undefined
+    : selectedTeamspace
+      ? `Teamspace · ${statusLabel(selectedTeamspace)}`
+      : undefined
 
   const screenView =
     primaryWork && primaryViewer === "file"
@@ -597,7 +594,6 @@ function WorkspaceShellContent({
 
   function closeDetail() {
     if (canvasPeerId) closeDirectMessage()
-    if (selectedKnowledgeBase) setKnowledgeBaseSelection(null)
     if (selectedTeamspace) teamspaces.select(null)
   }
 
@@ -930,11 +926,7 @@ function WorkspaceShellContent({
                     className="workspace-header-back"
                     type="button"
                     aria-label={
-                      canvasPeerId
-                        ? "Back to people"
-                        : selectedKnowledgeBase
-                          ? "All knowledge bases"
-                          : "All teamspaces"
+                      canvasPeerId ? "Back to people" : "All teamspaces"
                     }
                     onClick={closeDetail}
                   >
@@ -948,11 +940,6 @@ function WorkspaceShellContent({
                         online={canvasPeerOnline}
                       />
                     )}
-                    {selectedKnowledgeBase && (
-                      <span className="workspace-header-detail-icon">
-                        <BookOpenText size={17} strokeWidth={1.7} />
-                      </span>
-                    )}
                     {selectedTeamspace && (
                       <TeamspaceAvatar name={selectedTeamspace.name} />
                     )}
@@ -962,6 +949,8 @@ function WorkspaceShellContent({
                     </div>
                   </div>
                 </>
+              ) : section === "knowledge" ? (
+                <LibraryHeading organizationId={selectedOrganization?.id} />
               ) : (
                 <h1>{heading}</h1>
               )}

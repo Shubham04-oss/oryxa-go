@@ -241,6 +241,14 @@
   --file-code: #3d7fb8;
   --file-doc: #6b6b6b;
   --on-file: #ffffff;
+  /* A Library collection's dot (knowledge-format.ts collectionTone): picked
+     from the collection's id, the same in both themes. */
+  --collection-1: #5b8fd6;
+  --collection-2: #3f9d63;
+  --collection-3: #5b5bd6;
+  --collection-4: #b0487a;
+  --collection-5: #2f8f8a;
+  --collection-6: #c9a23f;
   /* A sandbox's terminal stays dark in both themes, as a shell does. */
   --terminal-bg: #0d0d0d;
   --terminal-fg: #e6e6e6;

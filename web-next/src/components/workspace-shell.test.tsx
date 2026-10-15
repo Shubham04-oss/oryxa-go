@@ -912,37 +912,42 @@ describe("WorkspaceShell navigation", () => {
     )
     fireEvent.click(screen.getByRole("button", { name: "Library" }))
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Open Product handbook" })
-    )
-    expect(
-      screen.getByRole("heading", { name: "Product handbook", level: 1 })
-    ).toBeTruthy()
-    expect(screen.getByText("Knowledge base")).toBeTruthy()
-    expect(
-      screen.queryByRole("heading", { name: "Library", level: 1 })
-    ).toBeNull()
-    expect(await screen.findByText("Design principles")).toBeTruthy()
-
-    fireEvent.click(screen.getByRole("button", { name: "All knowledge bases" }))
+    // The header keeps the Library's name and says what it holds.
     expect(
       screen.getByRole("heading", { name: "Library", level: 1 })
     ).toBeTruthy()
+    expect(await screen.findByText("1 file")).toBeTruthy()
+    const rail = await screen.findByRole("navigation", { name: "Collections" })
+    fireEvent.click(
+      within(rail).getByRole("button", { name: /^Product handbook 1/ })
+    )
     expect(
-      screen.getByRole("button", { name: "Open Product handbook" })
+      await screen.findByRole("heading", { name: "Product handbook", level: 2 })
     ).toBeTruthy()
+    expect(
+      screen.getByRole("heading", { name: "Library", level: 1 })
+    ).toBeTruthy()
+    expect(await screen.findByText("Design principles")).toBeTruthy()
+
+    fireEvent.click(within(rail).getByRole("button", { name: /^All files/ }))
+    expect(
+      screen.queryByRole("heading", { name: "Product handbook", level: 2 })
+    ).toBeNull()
+    expect(await screen.findByRole("table", { name: "All files" })).toBeTruthy()
   })
 
-  it("shows no example knowledge bases without a workspace", () => {
+  it("shows no example collections without a workspace", () => {
     render(<WorkspaceShell />)
     fireEvent.click(screen.getByRole("button", { name: "Library" }))
     expect(
-      screen.getByText(/Sign in to a workspace to see its knowledge bases/)
+      screen.getByText(/Sign in to a workspace to see its Library/)
     ).toBeTruthy()
     const canvas = screen.getByRole("main", { name: "Library canvas" })
-    expect(within(canvas).queryByRole("button", { name: /^Open / })).toBeNull()
     expect(
-      within(canvas).queryByRole("button", { name: "New knowledge base" })
+      within(canvas).queryByRole("navigation", { name: "Collections" })
+    ).toBeNull()
+    expect(
+      within(canvas).queryByRole("button", { name: "New collection" })
     ).toBeNull()
   })
 

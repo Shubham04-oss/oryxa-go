@@ -14,7 +14,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useState } from "react"
 import type { ComponentProps } from "react"
 import type { Corpus, CorpusDocument } from "@/lib/rag/client"
-import { KnowledgeBases } from "./knowledge-bases"
+import { KnowledgeBases, LibraryHeading } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
 
 type Handler = (request: {
@@ -138,9 +138,22 @@ const capabilities = (answering: boolean) => ({
   reranking: false,
 })
 
+const members = {
+  members: [
+    {
+      organization_id: "org_1",
+      user_id: "user-1",
+      email: "ada@example.com",
+      display_name: "Ada Lovelace",
+      role: "member",
+      joined_at: ago(30 * day),
+    },
+  ],
+}
+
 const corpusPath = "/v1/organizations/org_1/corpora/cor_1"
 
-/** Routes for one open knowledge base; `documents` may change between reads. */
+/** Routes for one open collection; `documents` may change between reads. */
 function detailRoutes(
   base: Corpus,
   documents: () => CorpusDocument[],
@@ -148,11 +161,20 @@ function detailRoutes(
 ) {
   return {
     "GET /v1/capabilities": capabilities(answering),
-    "GET /v1/organizations/org_1/corpora": { corpora: [base] },
+    "GET /v1/organizations/org_1/members": members,
+    "GET /v1/organizations/org_1/corpora": () =>
+      json({ corpora: [{ ...base, document_count: documents().length }] }),
     [`GET ${corpusPath}`]: () =>
       json({ ...base, document_count: documents().length }),
     [`GET ${corpusPath}/documents`]: () => json({ documents: documents() }),
   }
+}
+
+/** Routes for the Library with no collections at all. */
+const emptyRoutes = {
+  "GET /v1/capabilities": capabilities(true),
+  "GET /v1/organizations/org_1/members": members,
+  "GET /v1/organizations/org_1/corpora": { corpora: [] },
 }
 
 function renderKnowledge(
@@ -196,15 +218,45 @@ function renderKnowledge(
 
 const openHandbook = { selected: { id: "cor_1", name: "Handbook" } }
 
+/** The rail's entry for a collection, or for All files. */
+const railItem = (name: string) =>
+  within(screen.getByRole("navigation", { name: "Collections" })).getByRole(
+    "button",
+    { name: new RegExp(`^${name} \\d`) }
+  )
+const findRailItem = async (name: string) => {
+  await screen.findByRole("navigation", { name: "Collections" })
+  return waitFor(() => railItem(name))
+}
+
+/** Opens the New collection dialog from the rail's "+". */
+async function openNewCollection() {
+  const rail = await screen.findByRole("navigation", { name: "Collections" })
+  fireEvent.click(within(rail).getByRole("button", { name: "New collection" }))
+  return screen.findByRole("dialog")
+}
+
+/** Opens a More menu and picks one of its items. */
+async function chooseMenuItem(menu: string, item: string) {
+  fireEvent.click(screen.getByRole("button", { name: menu }))
+  fireEvent.click(await screen.findByRole("menuitem", { name: item }))
+}
+
+/** The rows of a file table, without its header. */
+function fileRows(name: string) {
+  const table = screen.getByRole("table", { name })
+  return within(table).getAllByRole("row").slice(1)
+}
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
 })
 
-describe("the knowledge bases list", () => {
-  it("shows the member's real knowledge bases, never examples", async () => {
+describe("the Library", () => {
+  it("lists the member's real collections in the rail, never examples", async () => {
     stubApi({
-      "GET /v1/capabilities": capabilities(true),
+      ...emptyRoutes,
       "GET /v1/organizations/org_1/corpora": {
         corpora: [
           corpus({ document_count: 3 }),
@@ -215,101 +267,163 @@ describe("the knowledge bases list", () => {
             member_id: undefined,
             metadata: undefined,
             document_count: 1,
-            created_at: ago(30_000),
-            updated_at: ago(30_000),
-          }),
-          corpus({
-            id: "cor_3",
-            name: "Knowledge from connected apps",
-            metadata: { origin: "knowledge" },
-            document_count: 12,
           }),
         ],
       },
+      [`GET ${corpusPath}/documents`]: { documents: [] },
+      "GET /v1/organizations/org_1/corpora/cor_2/documents": { documents: [] },
     })
     renderKnowledge()
 
-    const handbook = await screen.findByRole("button", {
-      name: "Open Handbook",
-    })
-    expect(within(handbook).getByText("How we build.")).toBeTruthy()
-    expect(within(handbook).getByText("3 documents")).toBeTruthy()
-    expect(within(handbook).getByText("Just you")).toBeTruthy()
-    expect(within(handbook).getByText("Created 2 days ago")).toBeTruthy()
-
-    const wiki = screen.getByRole("button", { name: "Open Company wiki" })
-    expect(within(wiki).getByText("1 document")).toBeTruthy()
-    expect(within(wiki).getByText("Whole workspace")).toBeTruthy()
-    expect(within(wiki).getByText("Created just now")).toBeTruthy()
-
-    const apps = screen.getByRole("button", {
-      name: "Open Knowledge from connected apps",
-    })
-    expect(
-      within(apps).getByText("Indexed from your connected apps.")
-    ).toBeTruthy()
-    expect(screen.getByText("3 bases")).toBeTruthy()
-    expect(screen.queryByText("Product handbook")).toBeNull()
+    expect((await findRailItem("All files")).textContent).toContain("4")
+    expect(railItem("All files").getAttribute("aria-current")).toBe("page")
+    expect(railItem("Handbook").textContent).toContain("3")
+    expect(railItem("Company wiki").textContent).toContain("1")
+    expect(screen.queryByText("Product docs")).toBeNull()
   })
 
-  it("searches names and descriptions", async () => {
+  it("shows every collection's files in one table, newest first, with who added them", async () => {
     stubApi({
-      "GET /v1/capabilities": capabilities(true),
+      ...emptyRoutes,
       "GET /v1/organizations/org_1/corpora": {
         corpora: [
-          corpus(),
-          corpus({
-            id: "cor_2",
-            name: "Customer insights",
-            metadata: { description: "Interview notes" },
+          corpus({ document_count: 1 }),
+          corpus({ id: "cor_2", name: "Company wiki", document_count: 1 }),
+        ],
+      },
+      [`GET ${corpusPath}/documents`]: {
+        documents: [document({ updated_at: ago(3 * 3_600_000) })],
+      },
+      "GET /v1/organizations/org_1/corpora/cor_2/documents": {
+        documents: [
+          document({
+            id: "doc_9",
+            corpus_id: "cor_2",
+            title: "pricing.md",
+            content_type: "text/markdown",
+            created_by: "user-gone",
+            updated_at: ago(60_000),
           }),
         ],
       },
     })
     renderKnowledge()
-    await screen.findByRole("button", { name: "Open Handbook" })
 
-    const search = screen.getByRole("searchbox", {
-      name: "Search knowledge bases",
-    })
-    fireEvent.change(search, { target: { value: "interview" } })
+    await screen.findByText("pricing.md")
+    const rows = fileRows("All files")
+    expect(rows).toHaveLength(2)
+    expect(within(rows[0]).getByText("pricing.md")).toBeTruthy()
+    expect(within(rows[0]).getByText(/Company wiki ·/)).toBeTruthy()
+    expect(within(rows[0]).getByText("MD")).toBeTruthy()
+    // An owner no longer in the workspace is not guessed at.
+    expect(within(rows[0]).getByText("—")).toBeTruthy()
+    expect(within(rows[1]).getByText("Decision log")).toBeTruthy()
+    expect(within(rows[1]).getByText(/Handbook · Note · 2 KB/)).toBeTruthy()
+    expect(within(rows[1]).getByText("TXT")).toBeTruthy()
+    await waitFor(() =>
+      expect(within(rows[1]).getByText("Ada Lovelace")).toBeTruthy()
+    )
+    expect(within(rows[1]).getByText("3 hours ago")).toBeTruthy()
     expect(
-      screen.getByRole("button", { name: "Open Customer insights" })
+      screen.queryByText(/Showing the latest from each collection/)
+    ).toBeNull()
+  })
+
+  it("says when All files shows only the latest of a collection", async () => {
+    stubApi({
+      ...emptyRoutes,
+      "GET /v1/organizations/org_1/corpora": {
+        corpora: [corpus({ document_count: 120 })],
+      },
+      [`GET ${corpusPath}/documents`]: {
+        documents: [document()],
+        next_cursor: "page-2",
+      },
+    })
+    renderKnowledge()
+
+    expect(
+      await screen.findByText(/Showing the latest from each collection/)
     ).toBeTruthy()
-    expect(screen.queryByRole("button", { name: "Open Handbook" })).toBeNull()
-    expect(screen.getByText("1 base")).toBeTruthy()
+  })
+
+  it("filters the loaded files by title", async () => {
+    stubApi({
+      ...emptyRoutes,
+      "GET /v1/organizations/org_1/corpora": {
+        corpora: [corpus({ document_count: 2 })],
+      },
+      [`GET ${corpusPath}/documents`]: {
+        documents: [
+          document(),
+          document({ id: "doc_2", title: "Interview notes" }),
+        ],
+      },
+    })
+    renderKnowledge()
+    await screen.findByText("Interview notes")
+
+    const search = screen.getByRole("searchbox", { name: "Search files" })
+    fireEvent.change(search, { target: { value: "interview" } })
+    expect(fileRows("All files")).toHaveLength(1)
+    expect(screen.queryByText("Decision log")).toBeNull()
 
     fireEvent.change(search, { target: { value: "nothing like this" } })
-    expect(screen.getByText("No knowledge bases found")).toBeTruthy()
+    expect(screen.getByText("No files match “nothing like this”.")).toBeTruthy()
+  })
+
+  it("opens a collection from the rail", async () => {
+    stubApi(detailRoutes(corpus(), () => [document()]))
+    const { onSelect } = renderKnowledge()
+
+    fireEvent.click(await findRailItem("Handbook"))
+    expect(onSelect).toHaveBeenCalledWith({ id: "cor_1", name: "Handbook" })
+    expect(
+      await screen.findByRole("heading", { name: "Handbook" })
+    ).toBeTruthy()
+    expect(railItem("Handbook").getAttribute("aria-current")).toBe("page")
+    await screen.findByText("Decision log")
+    expect(fileRows("Files in Handbook")).toHaveLength(1)
   })
 
   it("says so when there are none yet", async () => {
-    stubApi({
-      "GET /v1/capabilities": capabilities(true),
-      "GET /v1/organizations/org_1/corpora": { corpora: [] },
-    })
+    stubApi(emptyRoutes)
     renderKnowledge()
-    expect(await screen.findByText("No knowledge bases yet")).toBeTruthy()
-    expect(screen.queryByRole("searchbox")).toBeNull()
+    expect(await screen.findByText("Your Library is empty")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Add files" })).toBeNull()
   })
 
   it("shows a failed read with a retry", async () => {
     let reads = 0
     stubApi({
-      "GET /v1/capabilities": capabilities(true),
+      ...emptyRoutes,
       "GET /v1/organizations/org_1/corpora": () =>
         ++reads === 1
           ? json({ error: "something went wrong" }, 500)
           : json({ corpora: [corpus()] }),
+      [`GET ${corpusPath}/documents`]: { documents: [] },
     })
     renderKnowledge()
 
     const alert = await screen.findByRole("alert")
-    expect(alert.textContent).toContain("Couldn’t load your knowledge bases.")
+    expect(alert.textContent).toContain("Couldn’t load your Library.")
     fireEvent.click(within(alert).getByRole("button", { name: "Try again" }))
-    expect(
-      await screen.findByRole("button", { name: "Open Handbook" })
-    ).toBeTruthy()
+    expect(await findRailItem("Handbook")).toBeTruthy()
+  })
+
+  it("says which collection's files could not be read", async () => {
+    stubApi({
+      ...emptyRoutes,
+      "GET /v1/organizations/org_1/corpora": {
+        corpora: [corpus({ document_count: 1 })],
+      },
+      [`GET ${corpusPath}/documents`]: () => json({ error: "down" }, 500),
+    })
+    renderKnowledge()
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Couldn’t load the files in Handbook."
+    )
   })
 
   it("labels the page a preview when the knowledge service is missing", async () => {
@@ -327,9 +441,7 @@ describe("the knowledge bases list", () => {
     expect(
       await screen.findByText(/The knowledge service isn’t reachable here/)
     ).toBeTruthy()
-    expect(
-      screen.queryByRole("button", { name: "New knowledge base" })
-    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "New collection" })).toBeNull()
   })
 
   it("reads nothing without a workspace", () => {
@@ -342,7 +454,48 @@ describe("the knowledge bases list", () => {
   })
 })
 
-describe("creating a knowledge base", () => {
+describe("the Library's heading", () => {
+  function renderHeading() {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <LibraryHeading organizationId="org_1" />
+      </QueryClientProvider>
+    )
+  }
+
+  it("counts the files and the sources they come from", async () => {
+    stubApi({
+      "GET /v1/organizations/org_1/corpora": {
+        corpora: [
+          corpus({ document_count: 3 }),
+          corpus({ id: "cor_2", document_count: 125 }),
+        ],
+      },
+      "GET /v1/organizations/org_1/sources": {
+        sources: [{ id: "src_1" }, { id: "src_2" }],
+      },
+    })
+    renderHeading()
+    expect(screen.getByRole("heading", { name: "Library" })).toBeTruthy()
+    expect(await screen.findByText("128 files from 2 sources")).toBeTruthy()
+  })
+
+  it("counts only the files when sources can't be read", async () => {
+    stubApi({
+      "GET /v1/organizations/org_1/corpora": {
+        corpora: [corpus({ document_count: 1 })],
+      },
+      "GET /v1/organizations/org_1/sources": () => json({}, 404),
+    })
+    renderHeading()
+    expect(await screen.findByText("1 file")).toBeTruthy()
+  })
+})
+
+describe("creating a collection", () => {
   it("creates a real member corpus and goes straight to adding a note", async () => {
     const created = corpus({
       id: "cor_9",
@@ -351,10 +504,14 @@ describe("creating a knowledge base", () => {
       metadata: { description: "Technical decisions and guides." },
     })
     const documents: CorpusDocument[] = []
+    const list: Corpus[] = []
     const api = stubApi({
-      "GET /v1/capabilities": capabilities(true),
-      "GET /v1/organizations/org_1/corpora": { corpora: [] },
-      "POST /v1/organizations/org_1/corpora": () => json(created, 201),
+      ...emptyRoutes,
+      "GET /v1/organizations/org_1/corpora": () => json({ corpora: list }),
+      "POST /v1/organizations/org_1/corpora": () => {
+        list.push(created)
+        return json(created, 201)
+      },
       "GET /v1/organizations/org_1/corpora/cor_9": created,
       "GET /v1/organizations/org_1/corpora/cor_9/documents": () =>
         json({ documents }),
@@ -365,28 +522,36 @@ describe("creating a knowledge base", () => {
       },
     })
     const { onSelect } = renderKnowledge()
-    await screen.findByText("No knowledge bases yet")
+    await screen.findByText("Your Library is empty")
 
-    fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
+    const dialog = await openNewCollection()
     expect(
-      screen.queryByRole("radiogroup", { name: "Who can use it" })
+      within(dialog).queryByRole("radiogroup", { name: "Who can use it" })
     ).toBeNull()
     expect(
-      screen.getByText(
+      within(dialog).getByText(
         "Only you can see it, along with your workspace’s admins."
       )
     ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Create base" }))
-    expect(screen.getByText("Use at least 2 characters.")).toBeTruthy()
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Create collection" })
+    )
+    expect(within(dialog).getByText("Use at least 2 characters.")).toBeTruthy()
     expect(api.find("POST", "/v1/organizations/org_1/corpora")).toHaveLength(0)
 
-    fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
-      target: { value: "Engineering handbook" },
-    })
-    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
-      target: { value: "Technical decisions and guides." },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Create base" }))
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Short name" }),
+      {
+        target: { value: "Engineering handbook" },
+      }
+    )
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Description" }),
+      { target: { value: "Technical decisions and guides." } }
+    )
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Create collection" })
+    )
 
     await waitFor(() =>
       expect(onSelect).toHaveBeenCalledWith({
@@ -402,15 +567,19 @@ describe("creating a knowledge base", () => {
       scope: "member",
       metadata: { description: "Technical decisions and guides." },
     })
-    expect(await screen.findByText("No documents yet")).toBeTruthy()
-    expect(screen.getByText("Technical decisions and guides.")).toBeTruthy()
+    const adding = await screen.findByRole("dialog", {
+      name: "Add to Engineering handbook",
+    })
     expect(
-      screen.getByRole<HTMLInputElement>("radio", { name: "Note" }).checked
+      within(adding).getByRole<HTMLInputElement>("radio", { name: "Note" })
+        .checked
     ).toBe(true)
-    fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
+    expect(await screen.findByText("No files yet")).toBeTruthy()
+    expect(screen.getByText("Technical decisions and guides.")).toBeTruthy()
+    fireEvent.change(within(adding).getByRole("textbox", { name: "Text" }), {
       target: { value: "We chose pgvector for local runs." },
     })
-    fireEvent.click(screen.getByRole("button", { name: "Add note" }))
+    fireEvent.click(within(adding).getByRole("button", { name: "Add note" }))
     await waitFor(() =>
       expect(
         api.find("POST", "/v1/organizations/org_1/corpora/cor_9/documents")[0]
@@ -421,25 +590,26 @@ describe("creating a knowledge base", () => {
       })
     )
     expect(await screen.findByText("Decision log")).toBeTruthy()
-    expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
+    )
   })
 
   it("explains a short name and its existing length limit accessibly", async () => {
-    stubApi({
-      "GET /v1/capabilities": capabilities(true),
-      "GET /v1/organizations/org_1/corpora": { corpora: [] },
-    })
+    stubApi(emptyRoutes)
     renderKnowledge()
-    await screen.findByText("No knowledge bases yet")
-    fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
-    const name = screen.getByRole("textbox", { name: "Short name" })
+    await screen.findByText("Your Library is empty")
+    const dialog = await openNewCollection()
+    const name = within(dialog).getByRole("textbox", { name: "Short name" })
     expect(name.getAttribute("placeholder")).toBe("e.g. Engineering handbook")
     expect(name.getAttribute("maxlength")).toBe("60")
-    const hint = screen.getByText(
+    const hint = within(dialog).getByText(
       "Short label, 2–60 characters. Add facts and notes next."
     )
     expect(name.getAttribute("aria-describedby")).toBe(hint.id)
-    fireEvent.click(screen.getByRole("button", { name: "Create base" }))
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Create collection" })
+    )
     expect(name.getAttribute("aria-describedby")).toContain(hint.id)
     expect(name.getAttribute("aria-describedby")).toContain(
       "knowledge-base-name-error"
@@ -455,14 +625,15 @@ describe("creating a knowledge base", () => {
         "POST /v1/organizations/org_1/corpora": () => json(made, 201),
       })
       renderKnowledge()
-      await screen.findByRole("button", { name: `Open ${name}` })
-      fireEvent.click(
-        screen.getByRole("button", { name: "New knowledge base" })
+      await findRailItem(name)
+      const dialog = await openNewCollection()
+      fireEvent.change(
+        within(dialog).getByRole("textbox", { name: "Short name" }),
+        { target: { value: ` ${name} ` } }
       )
-      fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
-        target: { value: ` ${name} ` },
-      })
-      fireEvent.click(screen.getByRole("button", { name: "Create base" }))
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Create collection" })
+      )
       await screen.findByRole("button", { name: "Add note" })
       expect(
         api.find("POST", "/v1/organizations/org_1/corpora")[0]?.body
@@ -473,21 +644,19 @@ describe("creating a knowledge base", () => {
   it.each(["A", "A".repeat(61)])(
     "refuses a name outside the existing constraints before creating: %s",
     async (name) => {
-      const api = stubApi({
-        "GET /v1/capabilities": capabilities(true),
-        "GET /v1/organizations/org_1/corpora": { corpora: [] },
-      })
+      const api = stubApi(emptyRoutes)
       renderKnowledge()
-      await screen.findByText("No knowledge bases yet")
-      fireEvent.click(
-        screen.getByRole("button", { name: "New knowledge base" })
+      await screen.findByText("Your Library is empty")
+      const dialog = await openNewCollection()
+      fireEvent.change(
+        within(dialog).getByRole("textbox", { name: "Short name" }),
+        { target: { value: name } }
       )
-      fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
-        target: { value: name },
-      })
-      fireEvent.click(screen.getByRole("button", { name: "Create base" }))
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Create collection" })
+      )
       expect(
-        screen.getByText(
+        within(dialog).getByText(
           name.length < 2
             ? "Use at least 2 characters."
             : "Use at most 60 characters."
@@ -499,63 +668,81 @@ describe("creating a knowledge base", () => {
     }
   )
 
-  it("keeps an existing empty base closed and does not repeat the create handoff after Cancel or return", async () => {
+  it("keeps an existing empty collection closed and does not repeat the create handoff", async () => {
     const made = corpus()
     stubApi({
       ...detailRoutes(made, () => []),
       "POST /v1/organizations/org_1/corpora": () => json(made, 201),
     })
     const view = renderKnowledge()
-    const open = await screen.findByRole("button", { name: "Open Handbook" })
-    fireEvent.click(open)
-    await screen.findByText("No documents yet")
+    fireEvent.click(await findRailItem("Handbook"))
+    await screen.findByText("No files yet")
     expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
     view.select(null)
-    fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
-      target: { value: "Handbook" },
+    const dialog = await openNewCollection()
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Short name" }),
+      {
+        target: { value: "Handbook" },
+      }
+    )
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Create collection" })
+    )
+    const adding = await screen.findByRole("dialog", {
+      name: "Add to Handbook",
     })
-    fireEvent.click(screen.getByRole("button", { name: "Create base" }))
-    await screen.findByRole("textbox", { name: "Text" })
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
-    expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
+    fireEvent.click(within(adding).getByRole("button", { name: "Cancel" }))
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
+    )
     view.select(null)
     view.select({ id: made.id, name: made.name })
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
     expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
     view.select(null)
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Open Handbook" })
-    )
-    await screen.findByText("No documents yet")
+    fireEvent.click(await findRailItem("Handbook"))
+    await screen.findByText("No files yet")
     expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull()
   })
 
   it("lets an admin share one with the whole workspace", async () => {
     const created = corpus({ id: "cor_9", scope: "organization" })
+    let posted = false
     const api = stubApi({
-      "GET /v1/capabilities": capabilities(true),
-      "GET /v1/organizations/org_1/corpora": { corpora: [] },
-      "POST /v1/organizations/org_1/corpora": () => json(created, 201),
+      ...emptyRoutes,
+      "GET /v1/organizations/org_1/corpora": () =>
+        json({ corpora: posted ? [created] : [] }),
+      "POST /v1/organizations/org_1/corpora": () => {
+        posted = true
+        return json(created, 201)
+      },
       "GET /v1/organizations/org_1/corpora/cor_9": created,
       "GET /v1/organizations/org_1/corpora/cor_9/documents": {
         documents: [],
       },
     })
     renderKnowledge({ organizationRole: "admin", userId: "user-3" })
-    await screen.findByText("No knowledge bases yet")
+    await screen.findByText("Your Library is empty")
 
-    fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
-      target: { value: "Company wiki" },
-    })
-    fireEvent.click(screen.getByRole("radio", { name: "Everyone in Acme" }))
+    const dialog = await openNewCollection()
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Short name" }),
+      {
+        target: { value: "Company wiki" },
+      }
+    )
+    fireEvent.click(
+      within(dialog).getByRole("radio", { name: "Everyone in Acme" })
+    )
     expect(
-      screen.getByText(
+      within(dialog).getByText(
         "Everyone in the workspace can search it. Only admins can change what’s in it."
       )
     ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Create base" }))
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Create collection" })
+    )
 
     await waitFor(() =>
       expect(
@@ -572,27 +759,31 @@ describe("creating a knowledge base", () => {
 
   it("explains a refusal", async () => {
     stubApi({
-      "GET /v1/capabilities": capabilities(true),
-      "GET /v1/organizations/org_1/corpora": { corpora: [] },
+      ...emptyRoutes,
       "POST /v1/organizations/org_1/corpora": () =>
         json({ error: "you may not do that here" }, 403),
     })
     renderKnowledge()
-    await screen.findByText("No knowledge bases yet")
+    await screen.findByText("Your Library is empty")
 
-    fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
-      target: { value: "Wiki" },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Create base" }))
-    expect((await screen.findByRole("alert")).textContent).toBe(
+    const dialog = await openNewCollection()
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Short name" }),
+      {
+        target: { value: "Wiki" },
+      }
+    )
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Create collection" })
+    )
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
       "You don't have permission to do that here."
     )
   })
 
   describe("when Cancel is pressed after the request went out", () => {
-    const newBaseHeading = () =>
-      screen.queryByRole("heading", { name: "New knowledge base" })
+    const newCollectionDialog = () =>
+      screen.queryByRole("dialog", { name: "New collection" })
 
     /** Sends "First try" and cancels, its request still out. */
     async function sendThenCancel(
@@ -600,107 +791,111 @@ describe("creating a knowledge base", () => {
       list: Corpus[]
     ) {
       const api = stubApi({
-        "GET /v1/capabilities": capabilities(true),
+        ...emptyRoutes,
         "GET /v1/organizations/org_1/corpora": () => json({ corpora: list }),
         "POST /v1/organizations/org_1/corpora": () => request.pending,
+        "GET /v1/organizations/org_1/corpora/cor_9/documents": {
+          documents: [],
+        },
       })
       const view = renderKnowledge()
-      await screen.findByText("No knowledge bases yet")
+      await screen.findByText("Your Library is empty")
 
-      fireEvent.click(
-        screen.getByRole("button", { name: "New knowledge base" })
+      const dialog = await openNewCollection()
+      fireEvent.change(
+        within(dialog).getByRole("textbox", { name: "Short name" }),
+        { target: { value: "First try" } }
       )
-      fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
-        target: { value: "First try" },
-      })
-      fireEvent.click(screen.getByRole("button", { name: "Create base" }))
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Create collection" })
+      )
       await waitFor(() =>
         expect(
           api.find("POST", "/v1/organizations/org_1/corpora")
         ).toHaveLength(1)
       )
-      expect(screen.getByRole("button", { name: "Creating…" })).toBeTruthy()
-      fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
-      expect(newBaseHeading()).toBeNull()
+      expect(
+        within(dialog).getByRole("button", { name: "Creating…" })
+      ).toBeTruthy()
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+      await waitFor(() => expect(newCollectionDialog()).toBeNull())
       return view
     }
 
-    it("does not open the base it made anyway, but the list learns of it", async () => {
+    it("does not open the collection it made anyway, but the rail learns of it", async () => {
       const made = corpus({ id: "cor_9", name: "First try", slug: "first-try" })
       const list: Corpus[] = []
       const request = held()
       const { onSelect } = await sendThenCancel(request, list)
 
-      // A request that is out cannot be recalled: the base exists by now.
+      // A request that is out cannot be recalled: the collection exists by now.
       list.push(made)
       request.answer(json(made, 201))
 
-      expect(
-        await screen.findByRole("button", { name: "Open First try" })
-      ).toBeTruthy()
+      expect(await findRailItem("First try")).toBeTruthy()
       expect(onSelect).not.toHaveBeenCalled()
-      expect(newBaseHeading()).toBeNull()
+      expect(newCollectionDialog()).toBeNull()
     })
 
-    it("leaves a form opened since exactly as the member left it", async () => {
+    it("leaves a dialog opened since exactly as the member left it", async () => {
       const made = corpus({ id: "cor_9", name: "First try", slug: "first-try" })
       const list: Corpus[] = []
       const request = held()
       const { onSelect } = await sendThenCancel(request, list)
 
-      fireEvent.click(
-        screen.getByRole("button", { name: "New knowledge base" })
+      const dialog = await openNewCollection()
+      fireEvent.change(
+        within(dialog).getByRole("textbox", { name: "Short name" }),
+        { target: { value: "Second try" } }
       )
-      fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
-        target: { value: "Second try" },
-      })
       list.push(made)
       request.answer(json(made, 201))
-      await screen.findByRole("button", { name: "Open First try" })
+      // The open dialog hides the page from roles, so look for the words.
+      await screen.findByText("First try")
 
-      const name = screen.getByRole("textbox", { name: "Short name" })
+      const name = within(dialog).getByRole("textbox", { name: "Short name" })
       expect((name as HTMLInputElement).value).toBe("Second try")
-      expect(newBaseHeading()).toBeTruthy()
+      expect(newCollectionDialog()).toBeTruthy()
       expect(onSelect).not.toHaveBeenCalled()
     })
 
-    it("does not show its failure in a form opened since", async () => {
+    it("does not show its failure in a dialog opened since", async () => {
       const request = held()
       await sendThenCancel(request, [])
 
-      fireEvent.click(
-        screen.getByRole("button", { name: "New knowledge base" })
-      )
+      const dialog = await openNewCollection()
       request.answer(json({ error: "you may not do that here" }, 403))
       await settle()
 
-      expect(screen.queryByRole("alert")).toBeNull()
+      expect(within(dialog).queryByRole("alert")).toBeNull()
     })
   })
 
-  it("closes the form on Cancel when nothing was sent", async () => {
-    const api = stubApi({
-      "GET /v1/capabilities": capabilities(true),
-      "GET /v1/organizations/org_1/corpora": { corpora: [] },
-    })
+  it("closes the dialog on Cancel when nothing was sent", async () => {
+    const api = stubApi(emptyRoutes)
     renderKnowledge()
-    await screen.findByText("No knowledge bases yet")
+    await screen.findByText("Your Library is empty")
 
-    fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "Short name" }), {
-      target: { value: "Never sent" },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    const dialog = await openNewCollection()
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Short name" }),
+      {
+        target: { value: "Never sent" },
+      }
+    )
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
 
-    expect(
-      screen.queryByRole("heading", { name: "New knowledge base" })
-    ).toBeNull()
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "New collection" })
+      ).toBeNull()
+    )
     expect(api.find("POST", "/v1/organizations/org_1/corpora")).toHaveLength(0)
   })
 })
 
-describe("a knowledge base's documents", () => {
-  it("shows every document's real status and where it came from", async () => {
+describe("a collection's files", () => {
+  it("shows every file's real status and where it came from", async () => {
     const documents = [
       document(),
       document({
@@ -736,21 +931,20 @@ describe("a knowledge base's documents", () => {
     stubApi(detailRoutes(corpus(), () => documents))
     renderKnowledge(openHandbook)
 
-    const list = await screen.findByRole("list")
-    const rows = within(list).getAllByRole("listitem")
+    await screen.findByText("Q3 plan")
+    const rows = fileRows("Files in Handbook")
     expect(rows).toHaveLength(5)
 
-    expect(within(rows[0]).getByText("Ready")).toBeTruthy()
-    expect(
-      within(rows[0]).getByText(/^Note · 2 KB · Added 5 minutes ago$/)
-    ).toBeTruthy()
+    expect(within(rows[0]).queryByText("Indexing…")).toBeNull()
+    expect(within(rows[0]).getByText("Note · 2 KB")).toBeTruthy()
+    expect(within(rows[0]).getByText("5 minutes ago")).toBeTruthy()
 
     const link = within(rows[1]).getByRole("link", { name: "example.com" })
     expect(link.getAttribute("href")).toBe("https://example.com/pricing")
     expect(link.getAttribute("target")).toBe("_blank")
-    expect(within(rows[1]).getByText("Pending")).toBeTruthy()
+    expect(within(rows[1]).getByText("Indexing…")).toBeTruthy()
 
-    expect(within(rows[2]).getByText("Indexing")).toBeTruthy()
+    expect(within(rows[2]).getByText("Indexing…")).toBeTruthy()
     expect(within(rows[2]).getByText(/^File · Markdown/)).toBeTruthy()
 
     expect(within(rows[3]).getByText("Failed")).toBeTruthy()
@@ -762,10 +956,12 @@ describe("a knowledge base's documents", () => {
         "2 attempts didn’t finish. It will be tried again."
       )
     ).toBeTruthy()
-    expect(screen.getByText("5 · 3 indexing")).toBeTruthy()
+    expect(
+      screen.getByText(/^Just you · 5 files · 3 indexing · Created 2 days ago$/)
+    ).toBeTruthy()
   })
 
-  it("shows a quiet Admins only badge on a restricted document", async () => {
+  it("shows a quiet Admins only tag on a restricted file", async () => {
     stubApi(
       detailRoutes(corpus(), () => [
         document({ access: "admins" }),
@@ -774,9 +970,9 @@ describe("a knowledge base's documents", () => {
     )
     renderKnowledge(openHandbook)
 
-    const restricted = (await screen.findByText("Decision log")).closest("li")!
+    const restricted = (await screen.findByText("Decision log")).closest("tr")!
     expect(within(restricted).getByText("Admins only")).toBeTruthy()
-    const open = screen.getByText("Roadmap").closest("li")!
+    const open = screen.getByText("Roadmap").closest("tr")!
     expect(within(open).queryByText("Admins only")).toBeNull()
   })
 
@@ -803,20 +999,54 @@ describe("a knowledge base's documents", () => {
     expect(screen.queryByRole("button", { name: "Load more" })).toBeNull()
   })
 
-  it("says when the knowledge base is gone", async () => {
+  it("says when the collection is gone", async () => {
     stubApi({
-      "GET /v1/capabilities": capabilities(true),
-      "GET /v1/organizations/org_1/corpora": { corpora: [] },
+      ...emptyRoutes,
       [`GET ${corpusPath}`]: () => json({ error: "not found" }, 404),
       [`GET ${corpusPath}/documents`]: () => json({ error: "not found" }, 404),
     })
     const { onSelect } = renderKnowledge(openHandbook)
 
     expect(
-      await screen.findByText("This knowledge base is no longer here")
+      await screen.findByText("This collection is no longer here")
     ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "All knowledge bases" }))
+    fireEvent.click(screen.getByRole("button", { name: "All files" }))
     expect(onSelect).toHaveBeenCalledWith(null)
+  })
+})
+
+describe("Add files", () => {
+  it("asks which collection first in All files, among those the member may add to", async () => {
+    stubApi({
+      ...emptyRoutes,
+      "GET /v1/organizations/org_1/corpora": {
+        corpora: [
+          corpus(),
+          corpus({ id: "cor_2", name: "Notes", member_id: "user-1" }),
+          corpus({
+            id: "cor_3",
+            name: "Company wiki",
+            scope: "organization",
+            member_id: undefined,
+          }),
+        ],
+      },
+      [`GET ${corpusPath}/documents`]: { documents: [] },
+      "GET /v1/organizations/org_1/corpora/cor_2/documents": { documents: [] },
+      "GET /v1/organizations/org_1/corpora/cor_3/documents": { documents: [] },
+    })
+    renderKnowledge()
+    await findRailItem("Handbook")
+
+    fireEvent.click(screen.getByRole("button", { name: "Add files" }))
+    const dialog = await screen.findByRole("dialog", { name: "Add files" })
+    const choices = within(dialog).getByRole("list", { name: "Collections" })
+    expect(within(choices).getAllByRole("button")).toHaveLength(2)
+    expect(within(choices).queryByText("Company wiki")).toBeNull()
+    fireEvent.click(within(choices).getByRole("button", { name: /^Notes/ }))
+    expect(
+      await screen.findByRole("dialog", { name: "Add to Notes" })
+    ).toBeTruthy()
   })
 })
 
@@ -833,7 +1063,7 @@ describe("adding content", () => {
       )
     )
     renderKnowledge({ ...openHandbook, organizationRole: "admin" })
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
     const group = screen.getByRole("group", { name: "Who can find it" })
@@ -848,7 +1078,7 @@ describe("adding content", () => {
   it("hides admins-only access on a 'Just you' base, even for an admin", async () => {
     stubApi(detailRoutes(corpus(), () => []))
     renderKnowledge({ ...openHandbook, organizationRole: "admin" })
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
     expect(screen.queryByRole("group", { name: "Who can find it" })).toBeNull()
@@ -877,7 +1107,7 @@ describe("adding content", () => {
       },
     })
     renderKnowledge(openHandbook)
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
     fireEvent.click(screen.getByRole("button", { name: "Add note" }))
@@ -898,8 +1128,8 @@ describe("adding content", () => {
         text: "We chose pgvector for local runs.",
       })
     )
-    const row = (await screen.findByText("Decision log")).closest("li")!
-    expect(within(row).getByText("Pending")).toBeTruthy()
+    const row = (await screen.findByText("Decision log")).closest("tr")!
+    expect(within(row).getByText("Indexing…")).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Add note" })).toBeNull()
   })
 
@@ -910,7 +1140,7 @@ describe("adding content", () => {
         json(document({ id: "doc_new", status: "pending" }), 202),
     })
     renderKnowledge(openHandbook)
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
     fireEvent.click(screen.getByRole("radio", { name: "Link" }))
@@ -965,7 +1195,7 @@ describe("adding content", () => {
         ),
     })
     renderKnowledge(openHandbook)
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
     fireEvent.click(screen.getByRole("radio", { name: "File" }))
@@ -990,7 +1220,7 @@ describe("adding content", () => {
   it("refuses a file rag can't index before uploading it", async () => {
     const api = stubApi(addingRoutes([]))
     renderKnowledge(openHandbook)
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
     fireEvent.click(screen.getByRole("radio", { name: "File" }))
@@ -1003,7 +1233,7 @@ describe("adding content", () => {
       }
     )
     fireEvent.click(screen.getByRole("button", { name: "Upload file" }))
-    expect(screen.getByText(/Knowledge bases take text/)).toBeTruthy()
+    expect(screen.getByText(/The Library takes text/)).toBeTruthy()
     expect(api.find("POST", "/v1/organizations/org_1/files")).toHaveLength(0)
   })
 
@@ -1021,7 +1251,7 @@ describe("adding content", () => {
         json(document({ id: "doc_new", access: "admins" }), 202),
     })
     renderKnowledge({ ...openHandbook, organizationRole: "admin" })
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
     fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
@@ -1070,7 +1300,7 @@ describe("adding content", () => {
         ),
     })
     renderKnowledge({ ...openHandbook, organizationRole: "admin" })
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
     fireEvent.click(screen.getByRole("radio", { name: "File" }))
@@ -1100,7 +1330,7 @@ describe("adding content", () => {
         json({ error: "you may not do that here" }, 403),
     })
     renderKnowledge({ ...openHandbook, organizationRole: "admin" })
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
     fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
@@ -1140,7 +1370,7 @@ describe("adding content", () => {
         new Response(null, { status: 204 }),
     })
     renderKnowledge({ ...openHandbook, organizationRole: "admin" })
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
     fireEvent.click(screen.getByRole("radio", { name: "File" }))
@@ -1173,7 +1403,7 @@ describe("adding content", () => {
       })
       renderKnowledge(openHandbook)
       await screen.findByText(
-        documents.length ? "Decision log" : "No documents yet"
+        documents.length ? "Decision log" : "No files yet"
       )
 
       fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
@@ -1251,7 +1481,7 @@ describe("adding content", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add note" }))
 
     expect(
-      await screen.findByText("That note is already in this knowledge base.")
+      await screen.findByText("That note is already in this collection.")
     ).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Add note" })).toBeNull()
     // The lists are read again, as for any document added.
@@ -1276,19 +1506,25 @@ describe("removing and deleting", () => {
     renderKnowledge(openHandbook)
     await screen.findByText("Decision log")
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove Decision log" }))
-    expect(screen.getByText(/Remove “Decision log”\?/)).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    await chooseMenuItem("More for Decision log", "Remove")
+    const confirm = await screen.findByRole("alertdialog")
+    expect(within(confirm).getByText("Remove “Decision log”?")).toBeTruthy()
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
     expect(api.find("DELETE", `${corpusPath}/documents/doc_1`)).toHaveLength(0)
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove Decision log" }))
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }))
+    await chooseMenuItem("More for Decision log", "Remove")
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Remove",
+      })
+    )
     await waitFor(() => expect(screen.queryByText("Decision log")).toBeNull())
     expect(api.find("DELETE", `${corpusPath}/documents/doc_1`)).toHaveLength(1)
     expect(screen.getByText("Roadmap")).toBeTruthy()
   })
 
-  it("deletes the knowledge base only after confirming", async () => {
+  it("deletes the collection only after confirming", async () => {
     let deleted = false
     const api = stubApi({
       ...detailRoutes(corpus(), () => [document()]),
@@ -1302,28 +1538,25 @@ describe("removing and deleting", () => {
     const { onSelect } = renderKnowledge(openHandbook)
     await screen.findByText("Decision log")
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Delete knowledge base" })
-    )
+    await chooseMenuItem("More for Handbook", "Delete collection")
+    const confirm = await screen.findByRole("alertdialog")
     expect(
-      screen.getByText(
-        /Delete “Handbook”\? Its 1 document and everything indexed from them go with it\./
+      within(confirm).getByText(
+        "Its 1 file and everything indexed from them go with it. This can’t be undone."
       )
     ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
     expect(api.find("DELETE", corpusPath)).toHaveLength(0)
 
+    await chooseMenuItem("More for Handbook", "Delete collection")
     fireEvent.click(
-      screen.getByRole("button", { name: "Delete knowledge base" })
-    )
-    fireEvent.click(
-      within(screen.getByText(/Delete “Handbook”\?/).parentElement!).getByRole(
-        "button",
-        { name: "Delete knowledge base" }
-      )
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Delete collection",
+      })
     )
     await waitFor(() => expect(onSelect).toHaveBeenCalledWith(null))
-    expect(await screen.findByText("No knowledge bases yet")).toBeTruthy()
+    expect(await screen.findByText("Your Library is empty")).toBeTruthy()
   })
 
   it("offers no changes a member can't make", async () => {
@@ -1337,13 +1570,14 @@ describe("removing and deleting", () => {
     await screen.findByText("Decision log")
 
     expect(screen.queryByRole("button", { name: "Add content" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Add files" })).toBeNull()
     expect(
-      screen.queryByRole("button", { name: "Delete knowledge base" })
+      screen.queryByRole("button", { name: "More for Handbook" })
     ).toBeNull()
     expect(
-      screen.queryByRole("button", { name: "Remove Decision log" })
+      screen.queryByRole("button", { name: "More for Decision log" })
     ).toBeNull()
-    expect(screen.getByText(/^Whole workspace ·/)).toBeTruthy()
+    expect(screen.getByText(/^Whole workspace · 1 file/)).toBeTruthy()
   })
 
   it("leaves connected-app content to Tools", async () => {
@@ -1361,18 +1595,19 @@ describe("removing and deleting", () => {
 
     expect(screen.getByText(/^Gmail ·/)).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Add content" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Add files" })).toBeNull()
     expect(
-      screen.queryByRole("button", { name: "Delete knowledge base" })
+      screen.queryByRole("button", { name: "More for Handbook" })
     ).toBeNull()
     expect(
-      screen.queryByRole("button", { name: "Remove Decision log" })
+      screen.queryByRole("button", { name: "More for Decision log" })
     ).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "Manage in Tools" }))
     expect(onOpenTools).toHaveBeenCalled()
   })
 })
 
-describe("asking a knowledge base", () => {
+describe("asking a collection", () => {
   it("answers with citations to its documents", async () => {
     const api = stubApi({
       ...detailRoutes(corpus(), () => [document()]),
@@ -1572,7 +1807,7 @@ describe("asking a knowledge base", () => {
   it("is not offered before there is anything to ask", async () => {
     stubApi(detailRoutes(corpus(), () => []))
     renderKnowledge(openHandbook)
-    await screen.findByText("No documents yet")
+    await screen.findByText("No files yet")
     expect(screen.queryByRole("textbox", { name: "Ask Handbook" })).toBeNull()
   })
 })

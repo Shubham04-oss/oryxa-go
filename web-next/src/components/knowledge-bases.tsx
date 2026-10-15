@@ -1,44 +1,68 @@
 import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { UseQueryResult } from "@tanstack/react-query"
 import {
-  ArrowUpRight,
-  BookOpenText,
-  Plus,
-  Puzzle,
-  RotateCw,
-  Search,
-} from "lucide-react"
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
+import type { InfiniteData, UseQueryResult } from "@tanstack/react-query"
+import { BookOpenText, Plus, RotateCw, Search } from "lucide-react"
 import { z } from "zod"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { ApiError } from "@/lib/api/client"
 import type { Role } from "@/lib/auth/client"
+import type { Member } from "@/lib/auth/invitations"
+import { membersQueryOptions } from "@/lib/auth/queries"
+import { sourcesQueryOptions } from "@/lib/knowledge/client"
 import {
   afterCreateCorpus,
   canCreateOrganizationCorpus,
   capabilitiesQueryOptions,
   corporaQueryOptions,
-  corpusDescription,
   createCorpus,
-  isFromConnectedApps,
+  documentsPageSize,
+  documentsPollInterval,
+  listDocuments,
   ragErrorMessage,
+  ragKeys,
 } from "@/lib/rag/client"
 import type {
   Corpus,
+  CorpusDocument,
   CorpusScope,
   CreateCorpusInput,
+  DocumentPage,
   RagViewer,
 } from "@/lib/rag/client"
-import { KnowledgeBaseDetail } from "./knowledge-base-detail"
 import {
-  corpusScopeLabel,
-  corpusTimeLabel,
-  countLabel,
+  AddFilesDialog,
+  canAddToCollection,
+  filterFiles,
+  KnowledgeBaseDetail,
+} from "./knowledge-base-detail"
+import type { ContentKind } from "./knowledge-base-detail"
+import {
+  libraryFileCount,
+  librarySummary,
+  parseUpdated,
 } from "./knowledge-format"
+import { LibraryFileTable } from "./library-file-table"
+import type { LibraryFile } from "./library-file-table"
+import { LibraryRail } from "./library-rail"
+import "./library.css"
 
-/** The knowledge base open in the canvas; the shell titles its header with it. */
+/** The collection open in the Library; null is All files. */
 export type SelectedKnowledgeBase = { id: string; name: string }
 
 const newBaseSchema = z.object({
@@ -52,34 +76,60 @@ const newBaseSchema = z.object({
 
 function createError(error: unknown): string {
   if (error instanceof ApiError && error.status === 409) {
-    return "A knowledge base with a very similar name already exists here. Try another name."
+    return "A collection with a very similar name already exists here. Try another name."
   }
-  return ragErrorMessage(
-    error,
-    "Could not create this knowledge base. Try again."
+  return ragErrorMessage(error, "Could not create this collection. Try again.")
+}
+
+/**
+ * The header's title for the Library: its name, and how many files it holds
+ * from how many sources once both are known.
+ */
+export function LibraryHeading({
+  organizationId,
+}: {
+  organizationId?: string
+}) {
+  const corpora = useQuery({
+    ...corporaQueryOptions(organizationId ?? ""),
+    enabled: Boolean(organizationId),
+  })
+  const sources = useQuery({
+    ...sourcesQueryOptions(organizationId ?? ""),
+    enabled: Boolean(organizationId),
+  })
+  return (
+    <div className="workspace-header-detail library-heading">
+      <div>
+        <h1>Library</h1>
+        {corpora.data && (
+          <small>
+            {librarySummary(
+              libraryFileCount(corpora.data),
+              sources.data?.length
+            )}
+          </small>
+        )}
+      </div>
+    </div>
   )
 }
 
-function KnowledgeBaseList({
+/** A new collection: a short name, a description and who can use it. */
+function CreateCollectionDialog({
   organizationId,
   organizationName,
   viewer,
-  corpora,
-  unavailable,
-  onSelect,
   onCreated,
+  onClose,
 }: {
-  organizationId?: string
+  organizationId: string
   organizationName?: string
   viewer: RagViewer
-  corpora: UseQueryResult<Corpus[]>
-  unavailable: boolean
-  onSelect: (base: SelectedKnowledgeBase) => void
-  onCreated: (base: SelectedKnowledgeBase) => void
+  onCreated: (corpus: Corpus) => void
+  onClose: () => void
 }) {
   const queryClient = useQueryClient()
-  const [query, setQuery] = useState("")
-  const [isCreating, setIsCreating] = useState(false)
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [scope, setScope] = useState<CorpusScope>("member")
@@ -88,28 +138,17 @@ function KnowledgeBaseList({
   const canShare = canCreateOrganizationCorpus(viewer)
 
   const create = useMutation({
-    mutationFn: (input: CreateCorpusInput) => {
-      if (!organizationId) throw new Error("No workspace is selected.")
-      return createCorpus(organizationId, input)
-    },
-    // A request that is out cannot be recalled, so the base exists once it
-    // lands whether or not the form still waits for it, and the list has to
-    // know. What the form does with it (`createBase`) is another matter.
+    mutationFn: (input: CreateCorpusInput) =>
+      createCorpus(organizationId, input),
+    // A request that is out cannot be recalled, so the collection exists once
+    // it lands whether or not the dialog still waits for it, and the rail has
+    // to know. What the dialog does with it (`submit`) is another matter.
     onSuccess: (created) => {
-      if (organizationId) {
-        void afterCreateCorpus(queryClient, organizationId, created)
-      }
+      void afterCreateCorpus(queryClient, organizationId, created)
     },
   })
 
-  const bases = corpora.data ?? []
-  const filteredBases = bases.filter((base) =>
-    `${base.name} ${corpusDescription(base)}`
-      .toLocaleLowerCase()
-      .includes(query.trim().toLocaleLowerCase())
-  )
-
-  function createBase(event: FormEvent<HTMLFormElement>) {
+  function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const result = newBaseSchema.safeParse({ name, description })
     if (!result.success) {
@@ -120,10 +159,9 @@ function KnowledgeBaseList({
       return
     }
     setFormError("")
-    // These two run only while the form still waits for this request. Cancel
-    // resets the mutation (`cancelCreate`) and leaving the page unmounts it,
-    // which drops them: a base made after that is not opened, and its
-    // failure is not shown over whatever the form holds by then.
+    // These run only while the dialog still waits for this request. Cancel
+    // closes it, which drops them: a collection made after that is not
+    // opened, and its failure is not shown in a dialog opened since.
     create.mutate(
       {
         name: result.data.name,
@@ -131,58 +169,26 @@ function KnowledgeBaseList({
         scope: canShare ? scope : "member",
       },
       {
-        onSuccess: (created) => {
-          setIsCreating(false)
-          setName("")
-          setDescription("")
-          setScope("member")
-          setQuery("")
-          onCreated({ id: created.id, name: created.name })
-        },
+        onSuccess: onCreated,
         onError: (error) => setFormError(createError(error)),
       }
     )
   }
 
-  function cancelCreate() {
-    setIsCreating(false)
-    setNameError("")
-    setFormError("")
-    create.reset()
-  }
-
   return (
-    <div className="workspace-knowledge-page">
-      {unavailable ? (
-        <div className="workspace-knowledge-notice" role="status">
-          {organizationId
-            ? "Layout preview · The knowledge service isn’t reachable here, so there are no knowledge bases to show."
-            : "Layout preview · Sign in to a workspace to see its knowledge bases."}
-        </div>
-      ) : (
-        <div className="workspace-knowledge-intro">
-          <button
-            className="workspace-knowledge-create-button"
-            type="button"
-            aria-expanded={isCreating}
-            onClick={() => (isCreating ? cancelCreate() : setIsCreating(true))}
-          >
-            <Plus size={17} strokeWidth={1.8} />
-            New knowledge base
-          </button>
-        </div>
-      )}
-
-      {isCreating && !unavailable && (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="library-dialog">
+        <DialogHeader>
+          <DialogTitle>New collection</DialogTitle>
+          <DialogDescription>
+            Name the collection, then add what your agents should know.
+          </DialogDescription>
+        </DialogHeader>
         <form
-          className="workspace-knowledge-form"
-          onSubmit={createBase}
+          className="workspace-knowledge-form library-dialog-form"
+          onSubmit={submit}
           noValidate
         >
-          <div>
-            <h3>New knowledge base</h3>
-            <p>Name the collection, then add what your agents should know.</p>
-          </div>
           <label htmlFor="knowledge-base-name">Short name</label>
           <Input
             id="knowledge-base-name"
@@ -260,123 +266,316 @@ function KnowledgeBaseList({
               {formError}
             </p>
           )}
-          <div className="workspace-knowledge-form-actions">
-            <button type="button" onClick={cancelCreate}>
+          <div className="library-actions">
+            <Button variant="outline" onClick={onClose}>
               Cancel
-            </button>
-            <button type="submit" disabled={create.isPending}>
-              {create.isPending ? "Creating…" : "Create base"}
-            </button>
+            </Button>
+            <Button type="submit" disabled={create.isPending}>
+              {create.isPending ? "Creating…" : "Create collection"}
+            </Button>
           </div>
         </form>
-      )}
+      </DialogContent>
+    </Dialog>
+  )
+}
 
-      {unavailable ? null : corpora.isPending ? (
-        <>
-          <p className="sr-only" role="status">
-            Loading knowledge bases…
-          </p>
-          <div
-            className="workspace-knowledge-grid workspace-knowledge-toolbar-gap"
-            aria-hidden="true"
-          >
-            {[0, 1, 2].map((item) => (
-              <div
-                className="workspace-knowledge-card workspace-knowledge-card-skeleton"
-                key={item}
-              />
-            ))}
-          </div>
-        </>
-      ) : corpora.isError ? (
+/**
+ * Every collection's files in one table. There is no route that lists an
+ * organization's documents, so this reads the first page of each collection
+ * and says so when a collection holds more than that page.
+ */
+function AllFiles({
+  organizationId,
+  corpora,
+  members,
+  filter,
+  canCreate,
+  onCreate,
+}: {
+  organizationId: string
+  corpora: readonly Corpus[]
+  members: readonly Member[]
+  filter: string
+  canCreate: boolean
+  onCreate: () => void
+}) {
+  const pages = useQueries({
+    queries: corpora.map((corpus) => ({
+      queryKey: [...ragKeys.documents(organizationId, corpus.id), "first"],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        listDocuments(organizationId, corpus.id, {
+          limit: documentsPageSize,
+          signal,
+        }),
+      refetchInterval: (query: { state: { data?: DocumentPage } }) =>
+        documentsPollInterval(query.state.data ? [query.state.data] : []),
+      refetchIntervalInBackground: false,
+    })),
+  })
+
+  if (!corpora.length) {
+    return (
+      <div className="workspace-knowledge-empty workspace-empty-scene">
+        <BookOpenText size={23} strokeWidth={1.5} />
+        <strong>Your Library is empty</strong>
+        <p>
+          Make a collection, then add notes, links or text files for your agents
+          to search.
+        </p>
+        {canCreate && (
+          <Button variant="outline" onClick={onCreate}>
+            <Plus strokeWidth={1.8} />
+            New collection
+          </Button>
+        )}
+      </div>
+    )
+  }
+
+  const loaded: LibraryFile[] = []
+  const failed: Corpus[] = []
+  for (const [index, page] of pages.entries()) {
+    const corpus = corpora[index]
+    if (page.data) {
+      for (const document of page.data.documents) {
+        loaded.push({ document, collection: corpus })
+      }
+    } else if (page.isError) failed.push(corpus)
+  }
+  const pending = pages.some((page) => page.isPending)
+  const truncated = pages.some((page) => Boolean(page.data?.next_cursor))
+  loaded.sort((a, b) => parseUpdated(b.document) - parseUpdated(a.document))
+  const files = filterFiles(loaded, filter)
+
+  return (
+    <div className="library-collection">
+      {failed.length > 0 && (
         <div className="workspace-knowledge-alert" role="alert">
           <span>
-            {ragErrorMessage(
-              corpora.error,
-              "Couldn’t load your knowledge bases."
-            )}
+            Couldn’t load the files in{" "}
+            {failed.map((item) => item.name).join(", ")}.
           </span>
-          <button type="button" onClick={() => void corpora.refetch()}>
-            <RotateCw size={14} strokeWidth={1.8} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              pages.forEach((page) => page.isError && void page.refetch())
+            }
+          >
+            <RotateCw strokeWidth={1.8} />
             Try again
-          </button>
+          </Button>
         </div>
-      ) : bases.length === 0 ? (
-        <div className="workspace-knowledge-empty workspace-knowledge-toolbar-gap workspace-empty-scene">
+      )}
+      {pending && !loaded.length ? (
+        <div className="library-skeleton" role="status">
+          <span className="sr-only">Loading files…</span>
+          {[0, 1, 2, 3].map((item) => (
+            <Skeleton key={item} className="library-skeleton-row" />
+          ))}
+        </div>
+      ) : loaded.length ? (
+        files.length ? (
+          <>
+            <LibraryFileTable
+              label="All files"
+              files={files}
+              members={members}
+            />
+            {truncated && (
+              <p className="workspace-knowledge-hint library-footnote">
+                Showing the latest from each collection. Open a collection to
+                see all of its files.
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="workspace-knowledge-loading">
+            No files match “{filter.trim()}”.
+          </p>
+        )
+      ) : failed.length ? null : (
+        <div className="workspace-knowledge-empty">
           <BookOpenText size={23} strokeWidth={1.5} />
-          <strong>No knowledge bases yet</strong>
+          <strong>No files yet</strong>
           <p>
-            Create one, then add notes, links or text files for your agents to
-            search.
+            Open a collection and add notes, links or text files for your agents
+            to search.
           </p>
         </div>
-      ) : (
-        <>
-          <div className="workspace-knowledge-toolbar">
-            <label className="workspace-knowledge-search">
-              <Search size={17} strokeWidth={1.7} aria-hidden="true" />
-              <span className="sr-only">Search knowledge bases</span>
-              <Input
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search knowledge bases"
-              />
-            </label>
-            <span>{countLabel(filteredBases.length, "base")}</span>
-          </div>
+      )}
+    </div>
+  )
+}
 
-          {filteredBases.length ? (
-            <div className="workspace-knowledge-grid">
-              {filteredBases.map((base) => {
-                const fromApps = isFromConnectedApps(base)
-                const baseDescription = corpusDescription(base)
-                return (
-                  <button
-                    className="workspace-knowledge-card"
-                    type="button"
-                    key={base.id}
-                    data-screen-context-kind="knowledge_base"
-                    data-screen-context-id={base.id}
-                    data-screen-context-name={base.name}
-                    aria-label={`Open ${base.name}`}
-                    onClick={() => onSelect({ id: base.id, name: base.name })}
-                  >
-                    <span className="workspace-knowledge-card-top">
-                      <span className="workspace-knowledge-icon">
-                        {fromApps ? (
-                          <Puzzle size={20} strokeWidth={1.6} />
-                        ) : (
-                          <BookOpenText size={20} strokeWidth={1.6} />
-                        )}
-                      </span>
-                      <ArrowUpRight size={17} strokeWidth={1.7} />
-                    </span>
-                    <strong>{base.name}</strong>
-                    {(baseDescription || fromApps) && (
-                      <span className="workspace-knowledge-card-description">
-                        {baseDescription || "Indexed from your connected apps."}
-                      </span>
-                    )}
-                    <span className="workspace-knowledge-card-meta">
-                      <span>{corpusScopeLabel(base, viewer)}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{countLabel(base.document_count, "document")}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{corpusTimeLabel(base)}</span>
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="workspace-knowledge-empty">
-              <Search size={23} strokeWidth={1.5} />
-              <strong>No knowledge bases found</strong>
-              <p>Try a different search.</p>
-            </div>
+type AddTarget = { collectionId?: string }
+
+function LibraryPage({
+  organizationId,
+  organizationName,
+  viewer,
+  corpora,
+  answering,
+  selected,
+  creating,
+  adding,
+  onSelect,
+  onCreate,
+  onCreated,
+  onCloseCreate,
+  onAdd,
+  onCloseAdd,
+  onOpenTools,
+}: {
+  organizationId: string
+  organizationName?: string
+  viewer: RagViewer
+  corpora: Corpus[]
+  answering?: boolean
+  selected: SelectedKnowledgeBase | null
+  creating: boolean
+  adding: AddTarget | null
+  onSelect: (base: SelectedKnowledgeBase | null) => void
+  onCreate: () => void
+  onCreated: (corpus: Corpus) => void
+  onCloseCreate: () => void
+  onAdd: (target: AddTarget) => void
+  onCloseAdd: () => void
+  onOpenTools?: () => void
+}) {
+  const queryClient = useQueryClient()
+  const [filter, setFilter] = useState("")
+  const [notice, setNotice] = useState("")
+  const members = useQuery(membersQueryOptions(organizationId))
+  const writable = corpora.filter((corpus) =>
+    canAddToCollection(corpus, viewer)
+  )
+  const fileCount = libraryFileCount(corpora)
+
+  // A new place to look starts with no filter and no notice from the last.
+  useEffect(() => {
+    setFilter("")
+    setNotice("")
+  }, [selected?.id])
+
+  function openAdding() {
+    setNotice("")
+    const current = selected
+      ? writable.find((corpus) => corpus.id === selected.id)
+      : undefined
+    onAdd({
+      collectionId:
+        current?.id ?? (writable.length === 1 ? writable[0].id : undefined),
+    })
+  }
+
+  function added(document: CorpusDocument, kind: ContentKind, corpus: Corpus) {
+    const known = queryClient
+      .getQueryData<InfiniteData<DocumentPage>>(
+        ragKeys.documents(organizationId, corpus.id)
+      )
+      ?.pages.some((page) =>
+        page.documents.some((item) => item.id === document.id)
+      )
+    onCloseAdd()
+    setNotice(
+      !known
+        ? ""
+        : kind === "note"
+          ? "That note is already in this collection."
+          : "That was already here. If its text changed, it’s being indexed again."
+    )
+  }
+
+  return (
+    <div className="library">
+      <LibraryRail
+        corpora={corpora}
+        selectedId={selected?.id ?? null}
+        onSelect={(corpus) =>
+          onSelect(corpus ? { id: corpus.id, name: corpus.name } : null)
+        }
+        onCreate={onCreate}
+      />
+      <section
+        className="library-main"
+        aria-label={selected ? selected.name : "All files"}
+      >
+        <div className="library-bar">
+          <label className="library-search">
+            <Search size={16} strokeWidth={1.7} aria-hidden="true" />
+            <span className="sr-only">Search files</span>
+            <Input
+              type="search"
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              placeholder={
+                selected
+                  ? `Search ${selected.name}`
+                  : `Search ${librarySummary(fileCount)}`
+              }
+            />
+          </label>
+          {writable.length > 0 && (
+            <Button onClick={openAdding}>
+              <Plus strokeWidth={1.8} />
+              Add files
+            </Button>
           )}
-        </>
+        </div>
+        {notice && (
+          <p className="workspace-knowledge-status-line" role="status">
+            {notice}
+          </p>
+        )}
+        {selected ? (
+          <KnowledgeBaseDetail
+            key={selected.id}
+            organizationId={organizationId}
+            corpusId={selected.id}
+            name={selected.name}
+            viewer={viewer}
+            members={members.data ?? []}
+            filter={filter}
+            answering={answering}
+            onAdd={() => {
+              setNotice("")
+              onAdd({ collectionId: selected.id })
+            }}
+            onClose={() => onSelect(null)}
+            onOpenTools={onOpenTools}
+          />
+        ) : (
+          <AllFiles
+            organizationId={organizationId}
+            corpora={corpora}
+            members={members.data ?? []}
+            filter={filter}
+            canCreate
+            onCreate={onCreate}
+          />
+        )}
+      </section>
+      {creating && (
+        <CreateCollectionDialog
+          organizationId={organizationId}
+          organizationName={organizationName}
+          viewer={viewer}
+          onCreated={onCreated}
+          onClose={onCloseCreate}
+        />
+      )}
+      {adding && (
+        <AddFilesDialog
+          organizationId={organizationId}
+          collections={writable}
+          collectionId={adding.collectionId}
+          viewer={viewer}
+          onChooseCollection={(collectionId) => onAdd({ collectionId })}
+          onAdded={added}
+          onClose={onCloseAdd}
+        />
       )}
     </div>
   )
@@ -400,15 +599,14 @@ export function KnowledgeBases({
   onSelect: (base: SelectedKnowledgeBase | null) => void
   onOpenTools?: () => void
 }) {
-  // Only the completed create action opens adding automatically. A history
-  // pick, a return to the list, or a later visit uses the normal detail view.
-  const [createdBaseId, setCreatedBaseId] = useState<string | null>(null)
   const viewer: RagViewer = { userId, role: organizationRole }
+  const [creating, setCreating] = useState(false)
+  const [adding, setAdding] = useState<AddTarget | null>(null)
   const capabilities = useQuery({
     ...capabilitiesQueryOptions(),
     enabled: Boolean(organizationId),
   })
-  const corpora = useQuery({
+  const corpora: UseQueryResult<Corpus[]> = useQuery({
     ...corporaQueryOptions(organizationId ?? ""),
     enabled: Boolean(organizationId),
   })
@@ -417,50 +615,89 @@ export function KnowledgeBases({
   const unavailable =
     !organizationId || (corpora.isError && capabilities.isError)
 
-  useEffect(() => {
-    if (!unavailable && selected?.id === createdBaseId) {
-      // Detail has taken its initial state. Consume the handoff even when
-      // navigation later changes `selected` through the shell's Back button.
-      setCreatedBaseId(null)
-    }
-  }, [unavailable, selected?.id, createdBaseId])
-
-  if (organizationId && selected && !unavailable) {
+  if (unavailable) {
     return (
       <div className="workspace-knowledge-page">
-        <KnowledgeBaseDetail
-          key={selected.id}
-          organizationId={organizationId}
-          corpusId={selected.id}
-          name={selected.name}
-          viewer={viewer}
-          initiallyAdding={createdBaseId === selected.id}
-          answering={capabilities.data?.answering}
-          onClose={() => {
-            setCreatedBaseId(null)
-            onSelect(null)
-          }}
-          onOpenTools={onOpenTools}
-        />
+        <div className="workspace-knowledge-notice" role="status">
+          {organizationId
+            ? "Layout preview · The knowledge service isn’t reachable here, so there is no Library to show."
+            : "Layout preview · Sign in to a workspace to see its Library."}
+        </div>
+      </div>
+    )
+  }
+
+  if (corpora.isPending) {
+    return (
+      <div className="workspace-knowledge-page">
+        <p className="sr-only" role="status">
+          Loading the Library…
+        </p>
+        <div className="library" aria-hidden="true">
+          <div className="library-rail">
+            {[0, 1, 2].map((item) => (
+              <Skeleton key={item} className="library-skeleton-row" />
+            ))}
+          </div>
+          <div className="library-main">
+            {[0, 1, 2].map((item) => (
+              <Skeleton key={item} className="library-skeleton-row" />
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (corpora.isError) {
+    return (
+      <div className="workspace-knowledge-page">
+        <div className="workspace-knowledge-alert" role="alert">
+          <span>
+            {ragErrorMessage(corpora.error, "Couldn’t load your Library.")}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void corpora.refetch()}
+          >
+            <RotateCw strokeWidth={1.8} />
+            Try again
+          </Button>
+        </div>
       </div>
     )
   }
 
   return (
-    <KnowledgeBaseList
-      organizationId={organizationId}
-      organizationName={organizationName}
-      viewer={viewer}
-      corpora={corpora}
-      unavailable={unavailable}
-      onSelect={(base) => {
-        setCreatedBaseId(null)
-        onSelect(base)
-      }}
-      onCreated={(base) => {
-        setCreatedBaseId(base.id)
-        onSelect(base)
-      }}
-    />
+    <div className="workspace-knowledge-page library-page">
+      <LibraryPage
+        organizationId={organizationId}
+        organizationName={organizationName}
+        viewer={viewer}
+        corpora={corpora.data}
+        answering={capabilities.data?.answering}
+        selected={selected}
+        creating={creating}
+        adding={adding}
+        onSelect={(base) => {
+          setAdding(null)
+          onSelect(base)
+        }}
+        onCreate={() => setCreating(true)}
+        onCreated={(created) => {
+          setCreating(false)
+          onSelect({ id: created.id, name: created.name })
+          // Only the completed create opens adding by itself, on Note.
+          if (canAddToCollection(created, viewer)) {
+            setAdding({ collectionId: created.id })
+          }
+        }}
+        onCloseCreate={() => setCreating(false)}
+        onAdd={setAdding}
+        onCloseAdd={() => setAdding(null)}
+        onOpenTools={onOpenTools}
+      />
+    </div>
   )
 }
