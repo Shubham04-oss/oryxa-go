@@ -1,0 +1,343 @@
+/* The agent conversation as a working session (DESIGN.md §3): a task line,
+   then one run card for the work that answered it. A people chat keeps its
+   bubbles; nothing here is shared with it. */
+
+.workspace-agent-conversation[data-variant="session"] {
+  gap: 18px;
+}
+
+/* The conversation's bar: its title, who sees it, and its ⋯ menu. */
+.workspace-agent-thread-heading {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.workspace-agent-thread-privacy {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+/* The member's task: left-aligned, no bubble, who and when above it. The
+   same goes for a first message still being sent, and one that was not. */
+.agent-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.agent-task {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.agent-task-meta {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.workspace-agent-conversation[data-variant="session"]
+  .workspace-agent-message[data-from="member"] {
+  align-self: stretch;
+  max-width: 100%;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 560;
+  line-height: 1.45;
+}
+.workspace-agent-conversation[data-variant="session"]
+  .workspace-agent-message[data-status="not-sent"] {
+  padding: 6px 10px;
+  border-radius: 10px;
+}
+
+/* The run card: a filled tile, the canvas's colour on the base and the
+   base's on the canvas, so it reads as one block wherever the chat is. */
+.agent-run {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px 12px;
+  border-radius: 14px;
+  background: var(--base);
+}
+.agent-session-chat .agent-run {
+  background: var(--canvas);
+}
+.agent-run-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+.agent-run-head canvas {
+  flex: none;
+}
+.agent-run-mark {
+  flex: none;
+  color: var(--text-muted);
+}
+.agent-run[data-status="failed"] .agent-run-mark {
+  color: var(--tone-d8a6a2);
+}
+.agent-run-status {
+  height: 22px;
+  border-color: var(--border-quiet);
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 560;
+}
+.agent-run[data-status="waiting"] .agent-run-status {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.agent-run[data-status="failed"] .agent-run-status {
+  border-color: var(--tone-6b3b39);
+  color: var(--tone-e4aaa6);
+}
+.agent-run[data-result="needs_input"] .agent-run-status,
+.agent-run[data-result="blocked"] .agent-run-status {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+/* A hand-off a specialist suggests: a suggestion only, nothing ran. */
+.agent-run-handoff {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.agent-run-handoff svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-muted);
+}
+.agent-run-handoff strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.agent-run-meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-run-stop {
+  margin-left: auto;
+  color: var(--text-soft);
+}
+.agent-run-stop:hover {
+  color: var(--text);
+}
+
+/* Steps: one summary line that opens the list of calls. */
+.agent-run-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+/* The toggle is a ghost ui/button; only its colour and place are set here. */
+.agent-run-steps-toggle {
+  align-self: flex-start;
+  max-width: 100%;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.agent-run-steps-toggle:hover {
+  color: var(--text);
+}
+.agent-run-chevron {
+  flex: none;
+  transition: transform 0.15s ease;
+}
+.agent-run-steps-toggle[data-panel-open] .agent-run-chevron {
+  transform: rotate(90deg);
+}
+.agent-run-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 0 4px;
+  list-style: none;
+}
+.agent-run-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.agent-run-step-icon {
+  display: grid;
+  flex: none;
+  width: 20px;
+  height: 18px;
+  place-items: center;
+  color: var(--text-muted);
+}
+.agent-run-step-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.agent-run-step-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-run-step-detail {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-run-step-error {
+  color: var(--tone-e4aaa6);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.agent-run-step-state {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.agent-run-step[data-state="failed"] .agent-run-step-state {
+  color: var(--tone-d8a6a2);
+}
+.agent-run-opened {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 2px 0 0 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.agent-run-opened a {
+  color: var(--text-soft);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+.agent-run-opened a:hover {
+  color: var(--text);
+}
+
+/* Approvals, outputs and the answer. */
+.agent-run-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.agent-run-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.agent-run-file {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.agent-run-file-preview {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  max-height: 180px;
+  border-radius: 10px;
+  object-fit: contain;
+}
+.agent-run-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 8px 8px 10px;
+  border-radius: 12px;
+  background: var(--hover);
+}
+.agent-session-chat .agent-run-file-row {
+  background: var(--base);
+}
+.agent-run-file-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.agent-run-file-text strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-run-file-text small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.agent-run-file-open {
+  border-color: var(--border-quiet);
+  background: transparent;
+  color: var(--text);
+}
+.agent-run-file-download {
+  color: var(--text-muted);
+}
+
+/* The task bar: what the agent will be told the member is looking at. */
+.workspace-agent-composer-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 4px;
+}
+.agent-looking-at {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.agent-looking-at span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-run-chevron {
+    transition: none;
+  }
+}

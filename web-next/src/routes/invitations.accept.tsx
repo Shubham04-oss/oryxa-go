@@ -6,6 +6,11 @@ export const Route = createFileRoute("/invitations/accept")({
   validateSearch: (search: Record<string, unknown>) => ({
     token: searchToken(search.token),
   }),
-  component: () => <InvitationAcceptPage token={Route.useSearch().token} />,
+  component: InvitationAcceptRoute,
   head: () => ({ meta: [{ title: "Accept invitation · Oryxa" }] }),
 })
+
+function InvitationAcceptRoute() {
+  const { token } = Route.useSearch()
+  return <InvitationAcceptPage token={token} />
+}

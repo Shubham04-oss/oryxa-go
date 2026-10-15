@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  act,
   cleanup,
   fireEvent,
   render as renderBase,
@@ -12,6 +13,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { AvatarIdentity } from "./workspace-avatar"
 import type * as AvatarModule from "./workspace-avatar"
+import type * as LiveWorkModule from "./live-work"
 import { TeamspaceFocus } from "./teamspace-focus"
 import { withMention } from "./teamspace-room"
 import type { RoomMessage } from "@/lib/rooms/client"
@@ -53,26 +55,69 @@ vi.mock("./workspace-avatar", async (importOriginal) => {
   }
 })
 
+// The Live card's own content is live-work.test.tsx's; here only whether
+// the card shows.
+vi.mock("./live-work", async (importOriginal) => ({
+  ...(await importOriginal<typeof LiveWorkModule>()),
+  RoomLive: () => <p>The room's live work</p>,
+}))
+
 const spacePath = `${orgPath}/teamspaces/tsp_launch`
+const childrenPath = "/live/org_sim/rooms/teamspace/tsp_launch/children"
+const teamPath = `${orgPath}/teams/team_launch`
 
 type Options = {
   space?: Teamspace
   entries?: unknown[]
   files?: unknown[]
+  children?: unknown[]
 }
 
 function backend({
   space = teamspace({ contributions: [contribution()] }),
   entries = [],
   files = [],
+  children,
 }: Options = {}) {
   const seats = seatsFor(space, [viewerId, "user-ada"])
-  const api = mockApi(({ url }) => {
+  const api = mockApi(({ url, method, body }) => {
     const path = url.pathname
     if (path === spacePath) return json(space)
     if (path === `${spacePath}/entries`) return json({ entries })
     if (path === `${orgPath}/files`) return json({ files })
     if (path.startsWith(`${orgPath}/files/`)) return json(files[0])
+    if (path === childrenPath && children) return json({ children })
+    if (path === `${orgPath}/members`) {
+      return json({
+        members: [
+          { user_id: viewerId, email: "member@example.test", role: "owner" },
+          {
+            user_id: "user-ada",
+            email: "ada@example.test",
+            display_name: "Ada",
+            role: "member",
+          },
+          {
+            user_id: "user-kenji",
+            email: "kenji@example.test",
+            display_name: "Kenji",
+            role: "member",
+          },
+        ],
+      })
+    }
+    if (path === `${teamPath}/members` && method === "GET") {
+      return json({
+        members: [viewerId, "user-ada"].map((user_id) => ({
+          team_id: "team_launch",
+          user_id,
+          role: "member",
+        })),
+      })
+    }
+    if (path === `${teamPath}/members` && method === "POST") {
+      return json({ team_id: "team_launch", ...(body as object) })
+    }
     return undefined
   })
   return { ...api, seats, space }
@@ -152,7 +197,11 @@ describe("TeamspaceFocus", () => {
       roomMessage(3, member, "Thanks, Juno."),
       roomMessage(4, pricing, "Pricing looks right."),
     ])
-    expect(screen.getByText("Teamspace · Active")).toBeTruthy()
+    // The crumbs lead back to Teamspaces; the hero says who is in.
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" })
+    expect(crumbs.textContent).toBe("TeamspacesLaunch room")
+    expect(screen.getByText("Launch team · 2 people and 3 agents")).toBeTruthy()
+    expect(screen.getByRole("img", { name: "Member, Ada" })).toBeTruthy()
 
     const conversation = screen.getByRole("region", {
       name: "Launch room conversation",
@@ -319,7 +368,9 @@ describe("TeamspaceFocus", () => {
         "This teamspace is paused. Its room opens again when a team admin resumes it."
       )
     ).toBeTruthy()
-    expect(screen.getByText("Teamspace · Paused")).toBeTruthy()
+    expect(
+      screen.getByText("Paused · Launch team · 2 people and 2 agents")
+    ).toBeTruthy()
     expect(
       screen
         .getByRole("textbox", { name: "Message Launch room" })
@@ -337,7 +388,7 @@ describe("TeamspaceFocus", () => {
         "Only members of the Launch team can join this room."
       )
     ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Activity" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }))
     expect(
       screen.getByText(
         "Only members of the Launch team can read its shared work."
@@ -376,7 +427,7 @@ describe("TeamspaceFocus", () => {
     expect(onBack).toHaveBeenCalled()
   })
 
-  it("maps the work tabs to real data and says plainly what doesn't exist yet", async () => {
+  it("maps the tabs to real data and says plainly what doesn't exist yet", async () => {
     const api = backend({
       entries: [
         entry({
@@ -405,37 +456,79 @@ describe("TeamspaceFocus", () => {
       ],
     })
     render()
-    const panel = await screen.findByRole("region", {
-      name: "Launch room work panel",
+    const views = await screen.findByRole("tablist", {
+      name: "Launch room views",
     })
-    const views = screen.getByRole("group", { name: "Work views" })
-    expect(panel.contains(views)).toBe(false)
-
-    // Overview: the description, the status and the contributed agents.
     expect(
-      within(panel).getByText("Plans, owners and updates for the next release.")
+      within(views)
+        .getAllByRole("tab")
+        .map((tab) => tab.textContent)
+    ).toEqual([
+      "Room",
+      "Plan",
+      expect.stringMatching(/^Files/),
+      "Parleys",
+      "Activity",
+    ])
+    // Files carries its count once the team's files are read.
+    expect(
+      await within(views).findByRole("tab", { name: "Files 1" })
     ).toBeTruthy()
-    expect(within(panel).getByText("Active")).toBeTruthy()
-    expect(within(panel).getByText("Pricing")).toBeTruthy()
-    expect(within(panel).getByText("Checks the launch pricing")).toBeTruthy()
-    expect(within(panel).getByText("Asks its owner first")).toBeTruthy()
 
-    fireEvent.click(within(views).getByRole("button", { name: "Tasks" }))
+    // Room: beside the room, what the teamspace is for and who is in it.
+    const side = screen.getByRole("complementary", {
+      name: "About Launch room",
+    })
     expect(
-      within(panel).getByText("Teamspaces don't track tasks yet.")
+      within(side).getByText("Plans, owners and updates for the next release.")
+    ).toBeTruthy()
+    expect(within(side).getByText("Pricing")).toBeTruthy()
+    expect(within(side).getByText("Checks the launch pricing")).toBeTruthy()
+    expect(within(side).getByText("Asks its owner first")).toBeTruthy()
+    // Nothing runs in the room, so there is no Live card.
+    expect(within(side).queryByText("Live")).toBeNull()
+    // The newest team files, with their kind; the card opens the Files tab.
+    expect(within(side).getByText("launch-checklist.md")).toBeTruthy()
+    expect(within(side).getByText("MD")).toBeTruthy()
+    expect(within(side).getByText(/^added /)).toBeTruthy()
+    fireEvent.click(
+      within(side).getByRole("button", {
+        name: "Files 1, open the Files tab",
+      })
+    )
+    expect(within(views).getByRole("tab", { name: "Files 1" })).toHaveProperty(
+      "ariaSelected",
+      "true"
+    )
+    fireEvent.click(within(views).getByRole("tab", { name: "Room" }))
+
+    fireEvent.click(within(views).getByRole("tab", { name: "Plan" }))
+    expect(
+      screen.getByRole("tabpanel", { name: "Plan" }).textContent
+    ).toContain("A shared plan is coming")
+    // The room stays mounted behind another tab.
+    expect(
+      screen.getByRole("textbox", { name: "Message Launch room", hidden: true })
     ).toBeTruthy()
 
-    fireEvent.click(within(views).getByRole("button", { name: "Files" }))
-    expect(await within(panel).findByText("launch-checklist.md")).toBeTruthy()
-    expect(within(panel).getByText(/^2 KB · added/)).toBeTruthy()
+    fireEvent.click(within(views).getByRole("tab", { name: "Parleys" }))
     expect(
-      api.calls.some(
+      screen.getByRole("tabpanel", { name: "Parleys" }).textContent
+    ).toContain("Past parleys will be listed here")
+
+    fireEvent.click(within(views).getByRole("tab", { name: "Files 1" }))
+    const files = screen.getByRole("tabpanel", { name: "Files 1" })
+    expect(within(files).getByText("launch-checklist.md")).toBeTruthy()
+    expect(within(files).getByText(/^2 KB · added/)).toBeTruthy()
+    expect(
+      api.calls.filter(
         (call) =>
           call.path === `${orgPath}/files?scope=team&team_id=team_launch`
       )
-    ).toBe(true)
+    ).toHaveLength(1)
 
-    fireEvent.click(within(views).getByRole("button", { name: "Activity" }))
+    fireEvent.click(within(views).getByRole("tab", { name: "Activity" }))
+    const panel = screen.getByRole("tabpanel", { name: "Activity" })
     const ledger = await within(panel).findByRole("list", {
       name: "Shared work",
     })
@@ -451,26 +544,128 @@ describe("TeamspaceFocus", () => {
     // An address an agent wrote is untrusted: an unsafe one stays text.
     expect(within(ledger).queryByRole("link", { name: "Sneaky" })).toBeNull()
     expect(within(ledger).getByText("Sneaky")).toBeTruthy()
+
+    // Arrow keys move between the tabs, from the focused one (a real click
+    // focuses it; fireEvent.click doesn't). The library moves focus, and so
+    // the selection, a frame later.
+    const activity = within(views).getByRole("tab", { name: "Activity" })
+    act(() => activity.focus())
+    fireEvent.keyDown(activity, { key: "ArrowRight" })
+    await waitFor(() =>
+      expect(
+        within(views)
+          .getByRole("tab", { name: "Room" })
+          .getAttribute("aria-selected")
+      ).toBe("true")
+    )
   })
 
   it("says so when nothing has been shared or filed yet", async () => {
     backend()
     render()
-    const panel = await screen.findByRole("region", {
-      name: "Launch room work panel",
+    const views = await screen.findByRole("tablist", {
+      name: "Launch room views",
     })
-    const views = screen.getByRole("group", { name: "Work views" })
-    fireEvent.click(within(views).getByRole("button", { name: "Activity" }))
+    fireEvent.click(within(views).getByRole("tab", { name: "Activity" }))
     expect(
-      await within(panel).findByText(
+      await screen.findByText(
         "Nothing has been shared yet. When the room decides something, it lands here."
       )
     ).toBeTruthy()
-    fireEvent.click(within(views).getByRole("button", { name: "Files" }))
+    fireEvent.click(await within(views).findByRole("tab", { name: "Files 0" }))
     expect(
-      await within(panel).findByText(
-        "No files have been shared with Launch yet."
-      )
+      await screen.findByText("No files have been shared with Launch yet.")
     ).toBeTruthy()
+  })
+
+  it("shows the Live card only while something runs in the room", async () => {
+    backend({
+      children: [
+        {
+          kind: "sandbox",
+          name: "shared",
+          status: "running",
+          createdAt: "2026-10-15T08:00:00Z",
+          lastUsedAt: "2026-10-15T08:05:00Z",
+        },
+      ],
+    })
+    render()
+    const side = await screen.findByRole("complementary", {
+      name: "About Launch room",
+    })
+    expect(await within(side).findByText("The room's live work")).toBeTruthy()
+    expect(within(side).getByRole("heading", { name: "Live" })).toBeTruthy()
+  })
+
+  it("leaves the Live card out once everything in the room has stopped", async () => {
+    const api = backend({
+      children: [
+        {
+          kind: "sandbox",
+          name: "shared",
+          status: "stopped",
+          createdAt: "2026-10-15T08:00:00Z",
+          lastUsedAt: "2026-10-15T08:05:00Z",
+        },
+      ],
+    })
+    render()
+    const side = await screen.findByRole("complementary", {
+      name: "About Launch room",
+    })
+    const views = screen.getByRole("tablist", { name: "Launch room views" })
+    // Once the children and the (empty) files are read, neither card shows.
+    await within(views).findByRole("tab", { name: "Files 0" })
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.path === childrenPath)).toBe(true)
+    )
+    // Let the children's answer land before looking for the card.
+    await act(async () => {})
+    expect(within(side).queryByRole("heading", { name: "Live" })).toBeNull()
+    expect(within(side).queryByText("The room's live work")).toBeNull()
+    expect(within(side).queryByRole("heading", { name: /^Files/ })).toBeNull()
+  })
+
+  it("offers Invite only to whoever manages the team, and adds a teammate", async () => {
+    const api = backend()
+    render()
+    fireEvent.click(await screen.findByRole("button", { name: "Invite" }))
+    const dialog = await screen.findByRole("dialog", {
+      name: "Invite to Launch room",
+    })
+    // Only people not yet on the team are offered.
+    const people = await within(dialog).findByRole("list", {
+      name: "People to add",
+    })
+    expect(
+      within(people)
+        .getAllByRole("listitem")
+        .map((item) => item.querySelector("strong")?.textContent)
+    ).toEqual(["Kenji"])
+    fireEvent.click(within(people).getByRole("button", { name: "Add Kenji" }))
+    expect(
+      await within(people).findByRole("button", { name: "Kenji added" })
+    ).toBeTruthy()
+    expect(
+      api.calls.filter(
+        (call) => call.method === "POST" && call.path === `${teamPath}/members`
+      )
+    ).toEqual([
+      {
+        method: "POST",
+        path: `${teamPath}/members`,
+        body: { user_id: "user-kenji", role: "member" },
+      },
+    ])
+  })
+
+  it("hides Invite from a member who doesn't manage the team", async () => {
+    backend({ space: teamspace({ can_manage: false }) })
+    render()
+    expect(
+      await screen.findByRole("heading", { name: "Launch room", level: 1 })
+    ).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Invite" })).toBeNull()
   })
 })

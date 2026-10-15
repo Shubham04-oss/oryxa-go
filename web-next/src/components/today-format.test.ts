@@ -6,6 +6,9 @@ import {
   batchToolkits,
   briefsOf,
   firstSentence,
+  handledToday,
+  helloLine,
+  pickupItems,
   scheduleWords,
 } from "./today-format"
 
@@ -276,5 +279,64 @@ describe("scheduleWords", () => {
     )
     expect(scheduleWords("rate(1 week)", "UTC")).toBe("rate(1 week)")
     expect(scheduleWords("whenever", "UTC")).toBe("whenever")
+  })
+})
+
+describe("My workspace's hello line", () => {
+  it("says what needs the member, then what Krude handled today", () => {
+    expect(helloLine(0, 0)).toBe("")
+    expect(helloLine(1, 0)).toBe("1 thing needs you.")
+    expect(helloLine(3, 6)).toBe(
+      "3 things need you. Krude handled 6 more today."
+    )
+    expect(helloLine(0, 1)).toBe("Krude handled 1 ask for you today.")
+  })
+
+  it("counts only today's agent decisions on asks put to this member", () => {
+    const decided = (at: string, kind = "agent", user = "me") => ({
+      target: { user_id: user },
+      decision: { decided_at: at, decided_by: { kind } },
+    })
+    const today = new Date(NOW - 60_000).toISOString()
+    expect(
+      handledToday(
+        [
+          decided(today),
+          decided(today, "member"),
+          decided(today, "agent", "someone"),
+          decided(new Date(NOW - 3 * 86_400_000).toISOString()),
+          { target: { user_id: "me" } },
+        ],
+        "me",
+        NOW
+      )
+    ).toBe(1)
+  })
+})
+
+describe("Pick up where you left off", () => {
+  it("leads with a starting chat, then newest first, four at most", () => {
+    const at = (minutes: number) =>
+      new Date(NOW - minutes * 60_000).toISOString()
+    const items = pickupItems(
+      {
+        files: [{ key: "t/a.pdf", name: "a.pdf", threadId: "t", at: at(50) }],
+        chats: [
+          { id: "t", title: "Plan", updated_at: at(10) },
+          { id: "u", title: " ", updated_at: at(1) },
+        ],
+        knowledge: [
+          { id: "k", name: "Handbook", document_count: 2, updated_at: at(20) },
+        ],
+        starting: true,
+      },
+      NOW
+    )
+    expect(items.map((item) => item.title)).toEqual([
+      "Starting conversation",
+      "Plan",
+      "Handbook",
+      "a.pdf",
+    ])
   })
 })
