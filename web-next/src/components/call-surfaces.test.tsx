@@ -564,18 +564,23 @@ describe("a parley in a teamspace", () => {
       utteranceId: "u1",
       reason: "call_ended",
     })
-    const ended = await screen.findByRole("dialog", { name: "Parley ended" })
-    expect(within(ended).getByText(/EU launch · 1 min · 2 people/)).toBeTruthy()
+    const ended = await screen.findByRole("dialog", {
+      name: "What's kept from EU launch",
+    })
     expect(
-      within(ended).getByText(/transcript is kept with EU launch/)
+      within(ended).getByText("Parley ended · 1 min · 2 people")
     ).toBeTruthy()
-    // Focus is on Done, and Tab keeps it inside the dialog.
+    expect(
+      within(ended).getByText("The transcript, kept with EU launch.")
+    ).toBeTruthy()
+    // The library's dialog traps focus; it starts on Done.
     const done = within(ended).getByRole("button", { name: "Done" })
-    expect(document.activeElement).toBe(done)
-    fireEvent.keyDown(window, { key: "Tab" })
-    expect(document.activeElement).toBe(done)
+    await waitFor(() => expect(document.activeElement).toBe(done))
+    expect(within(ended).getByRole("button", { name: "Close" })).toBeTruthy()
     fireEvent.click(done)
-    expect(screen.queryByRole("dialog", { name: "Parley ended" })).toBeNull()
+    expect(
+      screen.queryByRole("dialog", { name: "What's kept from EU launch" })
+    ).toBeNull()
   })
 
   it("says so after ending it for everyone, but not after just leaving", async () => {
@@ -590,7 +595,7 @@ describe("a parley in a teamspace", () => {
       within(page).getByRole("button", { name: /End for everyone/ })
     )
     expect(
-      await screen.findByRole("dialog", { name: "Parley ended" })
+      await screen.findByRole("dialog", { name: "What's kept from EU launch" })
     ).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Done" }))
 
@@ -600,7 +605,9 @@ describe("a parley in a teamspace", () => {
     fireEvent.click(within(again).getByRole("button", { name: "Join" }))
     fireEvent.click(await screen.findByRole("button", { name: "Leave" }))
     await waitFor(() => expect(requests("/call/leave", "POST")).toHaveLength(1))
-    expect(screen.queryByRole("dialog", { name: "Parley ended" })).toBeNull()
+    expect(
+      screen.queryByRole("dialog", { name: "What's kept from EU launch" })
+    ).toBeNull()
   })
   it("lets the member choose their microphone, camera and speaker", async () => {
     const media = fakeMedia()

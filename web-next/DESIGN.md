@@ -536,6 +536,27 @@ not permission to copy every incidental value into a new component.
   empty Library or no teamspaces yet, is one tile of the brand's ship lines
   on deep sea (`.workspace-empty-scene`). "Nothing matches", errors and
   warnings stay plain; a destructive confirm never gets a scene.
+- **Pop-ups** (founder's redesign, 15 Oct 2026; `popup.tsx`, `popup.css`).
+  Every pop-up is the library's dialog (`ui/dialog`, Base UI's focus trap,
+  Escape and focus return), themed: a raised 420px tile (480px wide
+  variant), 18px corners, a close X at the top right, then an icon on a
+  raised tile, a green kicker, a 17px title, the text, optional lines on a
+  quiet tile (with a Decision tag), and a foot that follows the dialog
+  footer rule: a quiet note on the left, then `ui/button` buttons at the
+  default size, right-aligned 8px apart, Cancel (`outline`) before the
+  confirm. The close X is a ghost `icon-sm` button (on the deep-sea shade
+  over a scene). Spacing inside is 16 between blocks and 24 padding. On a
+  phone the actions stack full width, the confirm on top.
+  - **The brand rule:** a pop-up that opens something (a welcome, an invite,
+    a parley's notes, a plan) opens with a slight band of its own brand
+    scene, 112px, dimmed and fading into the surface; the icon and title
+    ride up over its foot. Sea of bottles for what a parley left, the
+    harbour for people coming aboard, the crow's nest for the welcome (the
+    one place the wordmark may sit on the painting), the deck for plans.
+  - **Plain:** warnings and destructive confirms (`PopupConfirm`, the
+    library's alert dialog) never get a scene: an icon, what will happen,
+    Cancel (`outline`) and the action (`destructive` when it deletes,
+    removes, revokes, disconnects or leaves).
 - **Parleys** (live calls; founder's redesign, 14 Oct 2026). A parley is a
   room's call (live layer B6, `call-provider.tsx`, `call-surfaces.tsx`,
   `call.css`).
@@ -561,10 +582,11 @@ not permission to copy every incidental value into a new component.
   - **Recording:** while it is on, everyone in the call sees who turned it
     on, and when.
   - **Parley ended:** when the call the member is in ends (someone ended it,
-    or they ended it for everyone), a pop-up with a slight sea scene says
-    how long it ran, how many were in it, and what was kept (the recording
-    and transcript, or the transcript). Just leaving shows nothing. The
-    agent's notes join it once there's an API for them.
+    or they ended it for everyone), the pop-up with the sea of bottles: the
+    kicker "Parley ended · 35 min · 5 people", what was kept (the recording
+    and transcript, or the transcript) and Done. Just leaving shows nothing.
+    The agent's notes, the save-recording switch, "Edit first" and "Post
+    notes to the room" join it once there's an API for the notes.
   - **In a DM:** the same strip, or a "Parley" button when none runs, sits
     above the conversation in its reading column. The call is the DM's own
     room on the edge. A DM whose ids the edge can't name offers no parley.
