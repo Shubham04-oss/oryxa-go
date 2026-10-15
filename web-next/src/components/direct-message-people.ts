@@ -15,6 +15,20 @@ export type DmPerson = {
   role: Role
   /** The teamspaces the viewer and this person both have a seat in. */
   spaces: string[]
+  /**
+   * Their agents, as far as the viewer can know them: the agent seated for
+   * them in a teamspace they share (its whisperer), once each. Empty when
+   * they share no teamspace: the members list names no one's agent.
+   */
+  agents: DmPersonAgent[]
+}
+
+/** Someone's agent, as a shared teamspace seats it. */
+export type DmPersonAgent = {
+  id: string
+  name: string
+  /** A teamspace they share where it sits: where a request to it is filed. */
+  teamspaceId: string
 }
 
 /** The other person in a DM, as its views name them: in full, and in a sentence ("Say hello to Priya"). */
@@ -62,19 +76,34 @@ export function useDmPeople(
     if (!data || !viewerId) return []
     return data
       .filter((member) => member.user_id !== viewerId)
-      .map((member) => ({
-        id: member.user_id,
-        name: member.display_name?.trim() || member.email,
-        email: member.email,
-        role: member.role,
-        spaces: spaces
-          .filter(
-            (space) =>
-              space.whisperers.some((seat) => seat.user_id === viewerId) &&
-              space.whisperers.some((seat) => seat.user_id === member.user_id)
-          )
-          .map((space) => space.name),
-      }))
+      .map((member) => {
+        const shared = spaces.filter(
+          (space) =>
+            space.whisperers.some((seat) => seat.user_id === viewerId) &&
+            space.whisperers.some((seat) => seat.user_id === member.user_id)
+        )
+        const agents = new Map<string, DmPersonAgent>()
+        for (const space of shared) {
+          for (const seat of space.whisperers) {
+            if (seat.user_id !== member.user_id || agents.has(seat.agent_id)) {
+              continue
+            }
+            agents.set(seat.agent_id, {
+              id: seat.agent_id,
+              name: seat.agent_name,
+              teamspaceId: space.id,
+            })
+          }
+        }
+        return {
+          id: member.user_id,
+          name: member.display_name?.trim() || member.email,
+          email: member.email,
+          role: member.role,
+          spaces: shared.map((space) => space.name),
+          agents: [...agents.values()],
+        }
+      })
       .sort((left, right) => left.name.localeCompare(right.name))
   }, [data, spaces, viewerId])
 

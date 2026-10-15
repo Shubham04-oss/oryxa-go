@@ -126,7 +126,14 @@ const roster: SideRoster = {
 }
 
 function person(id: string, name: string): DmPerson {
-  return { id, name, email: `${id}@sim.oryxa`, role: "member", spaces: [] }
+  return {
+    id,
+    name,
+    email: `${id}@sim.oryxa`,
+    role: "member",
+    spaces: [],
+    agents: [],
+  }
 }
 
 /** Whom the panel can name, as useDmPeople hands it over once loaded. */
@@ -1846,9 +1853,8 @@ describe("On the teamspace page", () => {
       </QueryClientProvider>
     )
     fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
+      await screen.findByRole("button", { name: "Open Launch room" })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Open teamspace" }))
     // The member's own agent opens beside the teamspace, privately, reading it.
     const panel = screen.getByRole("complementary", { name: "Agent panel" })
     expect(

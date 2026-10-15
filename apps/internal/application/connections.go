@@ -60,6 +60,13 @@ var userSuppliedSchemes = []string{"API_KEY", "BEARER_TOKEN", "BASIC"}
 // has an auth config for the app, asks Composio for a link, and records the
 // pending connection. The member finishes in their browser, at RedirectURL.
 func (s *Service) Connect(ctx context.Context, credentials authclient.Credentials, organizationID string, input ConnectInput) (domain.Connection, string, error) {
+	// ponytail: a native connect records no apps connection yet, so it
+	// answers an empty one with the redirect; the integrations service owns
+	// the connection until it reports them (#372).
+	if toolkit, err := domain.CheckToolkit(input.Toolkit); err == nil && s.nativeServes(toolkit) {
+		redirect, err := s.connectNative(ctx, credentials, organizationID, input)
+		return domain.Connection{}, redirect, err
+	}
 	start, err := s.startConnect(ctx, credentials, organizationID, input)
 	if err != nil {
 		return domain.Connection{}, "", err

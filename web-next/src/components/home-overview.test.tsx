@@ -295,6 +295,7 @@ it("lays At a glance out as the board's cards, from real reads only", async () =
           email: "kenji@example.com",
           role: "member",
           spaces: [],
+          agents: [],
         },
         {
           id: ASKER,
@@ -302,6 +303,7 @@ it("lays At a glance out as the board's cards, from real reads only", async () =
           email: "raya@example.com",
           role: "member",
           spaces: ["Launch"],
+          agents: [],
         },
       ],
       find: () => undefined,

@@ -17,6 +17,7 @@ import { AgentComposer, AgentComposerLookingAt } from "./agent-composer"
 import { AgentPanelChips } from "./agent-panel-chips"
 import { AgentConversation } from "./agent-conversation"
 import { AgentSwitcher, FALLBACK_AGENT_NAME } from "./agent-switcher"
+import { OpenArtifactContext } from "./agent-timeline"
 import type { AgentSwitcherEntry } from "./agent-switcher"
 import { countLabel, firstName } from "./direct-message-format"
 import { DirectMessagesTab, dmPanelList } from "./direct-message-inbox"
@@ -28,8 +29,10 @@ import type { Teammate } from "./side-conversation-format"
 import { TeamspaceTeammates } from "./side-conversation-teammates"
 import { SpecialistChat } from "./specialist-chat"
 import type { ChatSpecialist } from "./specialist-chat"
+import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import { IdentityAvatar } from "./workspace-avatar"
 import type { AvatarIdentity } from "./workspace-avatar"
+import { useAgentChatHost } from "@/hooks/use-agent-chat-host"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
 import type { ManagedAgent } from "@/lib/agents/managed-agents"
 import { primaryAgent, specialistAgents } from "@/lib/agents/policy"
@@ -160,6 +163,8 @@ export function WorkspaceAgentPanel({
   onPrimaryThreadChange,
   onPrimaryFileCreated,
   onPrimaryComposingChange,
+  onOpenPrimaryFile,
+  primaryChatSlot,
   getScreenContext,
   glance,
   place,
@@ -196,6 +201,16 @@ export function WorkspaceAgentPanel({
     version?: number
   }) => void
   onPrimaryComposingChange?: (composing: boolean) => void
+  /**
+   * Opens a file from the primary chat in the agent session's work column,
+   * beside the chat, rather than in a new browser tab.
+   */
+  onOpenPrimaryFile?: (file: PrimaryAgentFileTarget) => void
+  /**
+   * The agent session's conversation column while the session is open: the
+   * Agents tab's mounted chat moves into it (useAgentChatHost).
+   */
+  primaryChatSlot?: HTMLElement | null
   getScreenContext?: () => ScreenContext
   /** Where the member is ("EU launch", "My workspace"): the header's "Only you · in …". */
   place?: string
@@ -205,6 +220,7 @@ export function WorkspaceAgentPanel({
   onOpenRequests?: () => void
 }) {
   const [tab, setTab] = useState<AgentPanelTab>("agents")
+  const chatHost = useAgentChatHost(primaryChatSlot)
   // The primary chat's history list, opened from the header's History.
   const [historyOpen, setHistoryOpen] = useState(false)
   const visibleTabs = primaryWork
@@ -634,149 +650,142 @@ export function WorkspaceAgentPanel({
         panelTabs.map((item) => (
           <div
             className="workspace-agent-view"
-            role={primaryWork && item.key === "agents" ? "region" : "tabpanel"}
+            role="tabpanel"
             key={item.key}
+            ref={item.key === "agents" ? chatHost.pageRef : undefined}
             id={`workspace-agent-view-${item.key}`}
-            aria-labelledby={
-              primaryWork && item.key === "agents"
-                ? undefined
-                : `workspace-agent-tab-${item.key}`
-            }
-            aria-label={
-              primaryWork && item.key === "agents"
-                ? `Conversation with ${agentName ?? "primary agent"}`
-                : undefined
-            }
-            data-primary-chat={
-              primaryWork && item.key === "agents" ? "true" : undefined
-            }
+            aria-labelledby={`workspace-agent-tab-${item.key}`}
             tabIndex={0}
-            hidden={
-              item.key === "agents" && primaryWork
-                ? false
-                : !expanded || activeTab !== item.key
-            }
+            hidden={!expanded || activeTab !== item.key}
           >
             {item.key === "agents" ? (
-              <>
-                {/* Mounted only while it shows, as a DM is: an open
+              // One conversation, in this tab or in the agent session's
+              // chat column: moved there, never mounted twice.
+              chatHost.render(
+                <OpenArtifactContext.Provider value={onOpenPrimaryFile ?? null}>
+                  {/* Mounted only while it shows, as a DM is: an open
                     conversation is what makes the member online in it. */}
-                {agentsSide &&
-                  organizationId &&
-                  directMessages &&
-                  tab === "agents" &&
-                  expanded && (
-                    <AgentsTabSide
-                      key={`${agentsSide.teamspaceId}~${agentsSide.peerId}`}
-                      organizationId={organizationId}
-                      directMessages={directMessages}
-                      open={agentsSide}
-                      name={sideName(agentsSide.teamspaceId, agentsSide.peerId)}
-                      teamspaceName={
-                        space.data?.id === agentsSide.teamspaceId
-                          ? space.data.name
-                          : agentsSide.teamspaceName
-                      }
-                      drafts={sideDrafts}
-                      onDraftChange={changeSideDraft}
-                      onComposingChange={setComposing}
-                      autoFocus={sidePicked}
-                      onBack={() => {
-                        setSidePicked(false)
-                        setAgentsSide(null)
-                        // Back to the teammate it was with, or, away from
-                        // their teamspace now, to the tab.
-                        if (offersTeammates) setSideReturnTo(agentsSide.peerId)
-                        else tabRefs.current.agents?.focus()
-                      }}
-                    />
-                  )}
-                <div
-                  className="workspace-agents-home"
-                  hidden={Boolean(agentsSide)}
-                >
-                  {!primaryWork && organizationId && (
-                    <AgentPanelChips
-                      organizationId={organizationId}
-                      viewerId={viewerId}
-                      teamspace={
-                        teamspaceId
-                          ? {
-                              id: teamspaceId,
-                              name:
+                  {agentsSide &&
+                    organizationId &&
+                    directMessages &&
+                    tab === "agents" &&
+                    expanded && (
+                      <AgentsTabSide
+                        key={`${agentsSide.teamspaceId}~${agentsSide.peerId}`}
+                        organizationId={organizationId}
+                        directMessages={directMessages}
+                        open={agentsSide}
+                        name={sideName(
+                          agentsSide.teamspaceId,
+                          agentsSide.peerId
+                        )}
+                        teamspaceName={
+                          space.data?.id === agentsSide.teamspaceId
+                            ? space.data.name
+                            : agentsSide.teamspaceName
+                        }
+                        drafts={sideDrafts}
+                        onDraftChange={changeSideDraft}
+                        onComposingChange={setComposing}
+                        autoFocus={sidePicked}
+                        onBack={() => {
+                          setSidePicked(false)
+                          setAgentsSide(null)
+                          // Back to the teammate it was with, or, away from
+                          // their teamspace now, to the tab.
+                          if (offersTeammates)
+                            setSideReturnTo(agentsSide.peerId)
+                          else tabRefs.current.agents?.focus()
+                        }}
+                      />
+                    )}
+                  <div
+                    className="workspace-agents-home"
+                    hidden={Boolean(agentsSide)}
+                  >
+                    {!primaryWork && organizationId && (
+                      <AgentPanelChips
+                        organizationId={organizationId}
+                        viewerId={viewerId}
+                        teamspace={
+                          teamspaceId
+                            ? {
+                                id: teamspaceId,
+                                name:
+                                  space.data?.id === teamspaceId
+                                    ? space.data.name
+                                    : (place ?? ""),
+                              }
+                            : undefined
+                        }
+                        needs={needs}
+                        onOpenRequests={onOpenRequests}
+                      />
+                    )}
+                    <AgentComposerLookingAt value={lookingAt}>
+                      <AgentsView
+                        historyOpen={primaryWork ? undefined : historyOpen}
+                        onHistoryOpenChange={setHistoryOpen}
+                        openHistoryRequest={historyRequest}
+                        onHistoryOpened={() => setHistoryRequest(null)}
+                        organizationId={organizationId}
+                        visible={agentsVisible}
+                        scope={scope}
+                        owner={owner}
+                        chatAgent={chatAgent}
+                        agents={agents.data}
+                        agentId={agentId}
+                        onSelectAgent={setAgentId}
+                        chat={chat}
+                        dispatch={dispatch}
+                        agentName={agentName}
+                        agentSeed={agentSeed}
+                        onComposingChange={(value) => {
+                          setComposing(value)
+                          if (primaryWork) onPrimaryComposingChange?.(value)
+                        }}
+                        inAgentOverview={primaryWork}
+                        onOpenAgentOverview={onOpenAgentOverview}
+                        onPrimaryFileCreated={
+                          agentsVisible && !agentId
+                            ? onPrimaryFileCreated
+                            : undefined
+                        }
+                        getScreenContext={getScreenContext}
+                        teammates={
+                          offersTeammates && directMessages ? (
+                            <TeamspaceTeammates
+                              space={
                                 space.data?.id === teamspaceId
-                                  ? space.data.name
-                                  : (place ?? ""),
-                            }
-                          : undefined
-                      }
-                      needs={needs}
-                      onOpenRequests={onOpenRequests}
-                    />
-                  )}
-                  <AgentComposerLookingAt value={lookingAt}>
-                    <AgentsView
-                      historyOpen={primaryWork ? undefined : historyOpen}
-                      onHistoryOpenChange={setHistoryOpen}
-                      openHistoryRequest={historyRequest}
-                      onHistoryOpened={() => setHistoryRequest(null)}
-                      organizationId={organizationId}
-                      visible={agentsVisible}
-                      scope={scope}
-                      owner={owner}
-                      chatAgent={chatAgent}
-                      agents={agents.data}
-                      agentId={agentId}
-                      onSelectAgent={setAgentId}
-                      chat={chat}
-                      dispatch={dispatch}
-                      agentName={agentName}
-                      agentSeed={agentSeed}
-                      onComposingChange={(value) => {
-                        setComposing(value)
-                        if (primaryWork) onPrimaryComposingChange?.(value)
-                      }}
-                      inAgentOverview={primaryWork}
-                      onOpenAgentOverview={onOpenAgentOverview}
-                      onPrimaryFileCreated={
-                        agentsVisible && !agentId
-                          ? onPrimaryFileCreated
-                          : undefined
-                      }
-                      getScreenContext={getScreenContext}
-                      teammates={
-                        offersTeammates && directMessages ? (
-                          <TeamspaceTeammates
-                            space={
-                              space.data?.id === teamspaceId
-                                ? space.data
-                                : undefined
-                            }
-                            failed={space.isError}
-                            viewerId={directMessages.viewerId}
-                            nameOf={(userId) =>
-                              directMessages.people.find(userId)?.name
-                            }
-                            unreadOf={(peerId) => {
-                              const name = teamspaceId
-                                ? sideName(teamspaceId, peerId)
-                                : undefined
-                              return (
-                                directMessages.inbox.conversations.find(
-                                  (conversation) => conversation.name === name
-                                )?.unread ?? 0
-                              )
-                            }}
-                            onOpen={openTeammate}
-                            focusPeerId={agentsSide ? null : sideReturnTo}
-                            onFocused={() => setSideReturnTo(null)}
-                          />
-                        ) : undefined
-                      }
-                    />
-                  </AgentComposerLookingAt>
-                </div>
-              </>
+                                  ? space.data
+                                  : undefined
+                              }
+                              failed={space.isError}
+                              viewerId={directMessages.viewerId}
+                              nameOf={(userId) =>
+                                directMessages.people.find(userId)?.name
+                              }
+                              unreadOf={(peerId) => {
+                                const name = teamspaceId
+                                  ? sideName(teamspaceId, peerId)
+                                  : undefined
+                                return (
+                                  directMessages.inbox.conversations.find(
+                                    (conversation) => conversation.name === name
+                                  )?.unread ?? 0
+                                )
+                              }}
+                              onOpen={openTeammate}
+                              focusPeerId={agentsSide ? null : sideReturnTo}
+                              onFocused={() => setSideReturnTo(null)}
+                            />
+                          ) : undefined
+                        }
+                      />
+                    </AgentComposerLookingAt>
+                  </div>
+                </OpenArtifactContext.Provider>
+              )
             ) : item.key === "glance" && organizationId && glance ? (
               activeTab === "glance" && expanded && glance
             ) : item.key === "dms" && organizationId && directMessages ? (
