@@ -319,7 +319,7 @@ describe("WorkspaceTools", () => {
     expect(screen.queryByText("Connects through Pipedream")).toBeNull()
   })
 
-  it("offers a Pipedream connection's events, and not yet its indexing", async () => {
+  it("offers a Pipedream connection's events and runs, and not its indexing", async () => {
     const state = {
       connections: [connection({ id: "apc_pd", broker: "pipedream" })],
     }
@@ -351,9 +351,90 @@ describe("WorkspaceTools", () => {
       )
     ).toBeTruthy()
     expect(
-      screen.getByText(/Indexing and runs for this app are not available yet/)
+      screen.getByText(/Indexing for this app isn't available yet/)
     ).toBeTruthy()
     expect(screen.queryByRole("tab", { name: "Indexing" })).toBeNull()
+    expect(screen.getByRole("tab", { name: "Runs" })).toBeTruthy()
+  })
+
+  it("shows a Pipedream connection's tool runs, newest first, and never their answers", async () => {
+    const state = {
+      connections: [connection({ id: "apc_pd", broker: "pipedream" })],
+    }
+    fakeFetch(catalog(), connections(state), ({ method, path }) => {
+      if (method === "GET" && path === `${org}/apps/connections/apc_pd/actions`)
+        return json({
+          actions: [
+            {
+              id: "act_2",
+              tool: "github-create-issue",
+              read_only: false,
+              agent: true,
+              agent_id: "agt_0",
+              agent_role: "primary",
+              status: "failed",
+              error: "Repository not found",
+              created_at: "2026-10-15T09:00:00Z",
+              finished_at: "2026-10-15T09:00:01.200Z",
+            },
+            {
+              id: "act_1",
+              tool: "github-list-issues",
+              read_only: true,
+              agent: true,
+              agent_id: "agt_9",
+              agent_role: "specialist",
+              status: "succeeded",
+              created_at: "2026-10-15T08:00:00Z",
+              finished_at: "2026-10-15T08:00:00.300Z",
+            },
+          ],
+        })
+      if (method === "GET" && path === `${org}/apps/triggers`)
+        return json({ triggers: [] })
+      if (method === "GET" && path === "/v1/apps/catalog/github/triggers")
+        return json({ triggers: [], next_cursor: null })
+      return undefined
+    })
+    render(<WorkspaceTools organizationId="org-1" />)
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Expand GitHub connection" })
+    )
+    fireEvent.click(await screen.findByRole("tab", { name: "Runs" }))
+    const runs = await screen.findByRole("list", { name: "Tool runs" })
+    const rows = within(runs).getAllByRole("listitem")
+    expect(rows).toHaveLength(2)
+    expect(within(rows[0]).getByText("Create issue")).toBeTruthy()
+    expect(
+      within(rows[0]).getByText(/Your agent · Changed something/)
+    ).toBeTruthy()
+    expect(within(rows[0]).getByText("Repository not found.")).toBeTruthy()
+    expect(within(rows[1]).getByText("List issues")).toBeTruthy()
+    expect(within(rows[1]).getByText(/A specialist · Read only/)).toBeTruthy()
+  })
+
+  it("says plainly when the server has no run history yet", async () => {
+    const state = {
+      connections: [connection({ id: "apc_pd", broker: "pipedream" })],
+    }
+    fakeFetch(catalog(), connections(state), ({ method, path }) => {
+      if (method === "GET" && path === `${org}/apps/connections/apc_pd/actions`)
+        return apiError("not_found", "not found", 404)
+      if (method === "GET" && path === `${org}/apps/triggers`)
+        return json({ triggers: [] })
+      if (method === "GET" && path === "/v1/apps/catalog/github/triggers")
+        return json({ triggers: [], next_cursor: null })
+      return undefined
+    })
+    render(<WorkspaceTools organizationId="org-1" />)
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Expand GitHub connection" })
+    )
+    fireEvent.click(await screen.findByRole("tab", { name: "Runs" }))
+    expect(
+      await screen.findByText("Run history for this app isn't available yet.")
+    ).toBeTruthy()
+    expect(screen.queryByRole("alert")).toBeNull()
   })
 
   it("withdraws connection actions when refreshing a cached offer fails", async () => {

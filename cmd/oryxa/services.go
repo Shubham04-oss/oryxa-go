@@ -8,6 +8,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/billing"
 	"github.com/Shubham04-oss/oryxa-go/email"
 	"github.com/Shubham04-oss/oryxa-go/files"
+	"github.com/Shubham04-oss/oryxa-go/integrations"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/workspace"
 	"github.com/Shubham04-oss/oryxa-go/knowledge"
@@ -32,4 +33,5 @@ var definitions = []host.Definition{
 	primary.Definition,
 	workspace.Definition,
 	realtime.Definition,
+	integrations.Definition,
 }

@@ -19,6 +19,7 @@ import type { SlackChannel, SlackInstall } from "@/lib/apps/slack"
 
 const installPath = `/v1/organizations/${ORG}/apps/slack/install`
 const channelsPath = `/v1/organizations/${ORG}/apps/slack/channels`
+const linkPath = `/v1/organizations/${ORG}/apps/slack/link`
 const organization = { id: ORG, name: "Simulated Org", slug: "sim" }
 const consentPage = "https://slack.com/oauth/v2/authorize?state=abc"
 
@@ -116,13 +117,13 @@ describe("who sees Slack's settings", () => {
     expect(go.calls).toHaveLength(0)
   })
 
-  it("tells a member who manages it, and reads nothing", () => {
+  it("tells a member who manages it, and reads only their own link", () => {
     const go = renderSettings({}, { role: "member" })
 
     expect(
       screen.getByText("Organisation owners and admins manage Slack.")
     ).toBeTruthy()
-    expect(go.calls).toHaveLength(0)
+    expect(go.sent()).toEqual([`GET ${linkPath}`])
   })
 
   it("says plainly where the server runs no Slack app, for a 404 and for a 503", async () => {
@@ -177,7 +178,7 @@ describe("connecting Slack", () => {
     const assign = stubLocation("?org=org-1")
     const go = renderSettings({ [`GET ${installPath}`]: () => notInstalled })
 
-    expect(screen.getByRole("status").textContent).toBe("Loading Slack…")
+    expect(screen.getByText("Loading Slack…")).toBeTruthy()
     await screen.findByText("Slack isn't connected")
     expect(screen.queryByText("High-priority channels")).toBeNull()
     expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull()
@@ -623,5 +624,153 @@ describe("high-priority channels", () => {
     expect(
       screen.getByText(/Invite the Oryxa app to a channel in Slack first/)
     ).toBeTruthy()
+  })
+})
+
+describe("linking a member's own Slack account", () => {
+  it("is hidden where the server runs no Slack app", async () => {
+    renderSettings({}, { role: "member" })
+    await waitFor(() =>
+      expect(screen.queryByText("Checking your Slack account…")).toBeNull()
+    )
+    expect(
+      screen.queryByRole("region", { name: "Your Slack account" })
+    ).toBeNull()
+  })
+
+  it("sends a member to Sign in with Slack, with this page to come back to", async () => {
+    const assign = stubLocation("?org=org-1")
+    const go = renderSettings(
+      {
+        [`GET ${linkPath}`]: () => ({ linked: false }),
+        [`POST ${linkPath}`]: () => ({
+          sign_in_url: "https://slack.com/openid/connect/authorize?state=s",
+          expires_at: "2026-09-29T12:40:00Z",
+        }),
+      },
+      { role: "member" }
+    )
+    const section = await screen.findByRole("region", {
+      name: "Your Slack account",
+    })
+    expect(await within(section).findByText(/Not linked/)).toBeTruthy()
+    fireEvent.click(
+      await within(section).findByRole("button", {
+        name: "Link your Slack account",
+      })
+    )
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith(
+        "https://slack.com/openid/connect/authorize?state=s"
+      )
+    )
+    const sent = go.calls.find(
+      (call) => call.method === "POST" && call.path === linkPath
+    )
+    expect(sent?.body).toEqual({
+      return_to: "https://app.oryxa.in/?org=org-1&view=slack",
+    })
+  })
+
+  it("opens only Slack's own page", async () => {
+    const assign = stubLocation()
+    renderSettings(
+      {
+        [`GET ${linkPath}`]: () => ({ linked: false }),
+        [`POST ${linkPath}`]: () => ({
+          sign_in_url: "https://evil.example/slack",
+          expires_at: "2026-09-29T12:40:00Z",
+        }),
+      },
+      { role: "member" }
+    )
+    const section = await screen.findByRole("region", {
+      name: "Your Slack account",
+    })
+    fireEvent.click(
+      await within(section).findByRole("button", {
+        name: "Link your Slack account",
+      })
+    )
+    expect(
+      await within(section).findByText(/That isn't a link to Slack/)
+    ).toBeTruthy()
+    expect(assign).not.toHaveBeenCalled()
+  })
+
+  it("says when the organisation hasn't connected Slack yet", async () => {
+    stubLocation()
+    renderSettings(
+      {
+        [`GET ${linkPath}`]: () => ({ linked: false }),
+        [`POST ${linkPath}`]: () =>
+          failure(409, "not_connected", "slack is not connected"),
+      },
+      { role: "member" }
+    )
+    const section = await screen.findByRole("region", {
+      name: "Your Slack account",
+    })
+    fireEvent.click(
+      await within(section).findByRole("button", {
+        name: "Link your Slack account",
+      })
+    )
+    expect(
+      await within(section).findByText(/An owner or admin connects it first/)
+    ).toBeTruthy()
+  })
+
+  it("says how the link went when Slack sends the browser back, in words", async () => {
+    stubLocation(
+      "?org=org-1&view=slack&slack_link=error&slack_link_error=wrong_team"
+    )
+    renderSettings(
+      { [`GET ${linkPath}`]: () => ({ linked: false }) },
+      { role: "member" }
+    )
+    expect(
+      await screen.findByText(/You signed in to a different Slack workspace/)
+    ).toBeTruthy()
+    expect(screen.queryByText("wrong_team")).toBeNull()
+  })
+
+  it("shows a linked account, and unlinks it only after a confirm", async () => {
+    stubLocation()
+    let linked = true
+    const go = renderSettings(
+      {
+        [`GET ${linkPath}`]: () =>
+          linked
+            ? {
+                linked: true,
+                team_id: "T01",
+                slack_user_id: "U9",
+                linked_at: "2026-09-20T10:00:00Z",
+              }
+            : { linked: false },
+        [`DELETE ${linkPath}`]: () => {
+          linked = false
+          return new Response(null, { status: 204 })
+        },
+      },
+      { role: "member" }
+    )
+    const section = await screen.findByRole("region", {
+      name: "Your Slack account",
+    })
+    expect(await within(section).findByText(/^Linked since/)).toBeTruthy()
+    fireEvent.click(within(section).getByRole("button", { name: "Unlink" }))
+    expect(go.count("DELETE", linkPath)).toBe(0)
+    fireEvent.click(
+      within(section)
+        .getAllByRole("button", { name: "Unlink" })
+        .at(-1) as HTMLElement
+    )
+    expect(
+      await within(section).findByText("Your Slack account is unlinked.")
+    ).toBeTruthy()
+    expect(go.count("DELETE", linkPath)).toBe(1)
+    expect(await within(section).findByText(/Not linked/)).toBeTruthy()
   })
 })

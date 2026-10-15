@@ -86,13 +86,10 @@ export function WorkspaceSettings({
     role: organizationRole,
     preview,
   })
-  const admin = organizationRole === "owner" || organizationRole === "admin"
   // A remembered section must still be offered to this member. Explicit
   // returns keep their page and its own permission/service explanation.
   const page =
-    !initialPage &&
-    ((selectedPage === "slack" && !admin) ||
-      (selectedPage === "signin" && !signinApps))
+    !initialPage && selectedPage === "signin" && !signinApps
       ? "account"
       : selectedPage
   const organizationId = scope?.organizationId
@@ -190,16 +187,15 @@ export function WorkspaceSettings({
                 <KeyRound size={18} strokeWidth={1.7} /> Sign-in apps
               </button>
             )}
-            {/* Owners and admins manage the organisation's Slack connection. */}
-            {(organizationRole === "owner" || organizationRole === "admin") && (
-              <button
-                type="button"
-                className={cn(page === "slack" && "is-active")}
-                onClick={() => setPage("slack")}
-              >
-                <SlackMark size={18} /> Slack
-              </button>
-            )}
+            {/* Every member links their own Slack account; owners and admins
+                also manage the organisation's connection there. */}
+            <button
+              type="button"
+              className={cn(page === "slack" && "is-active")}
+              onClick={() => setPage("slack")}
+            >
+              <SlackMark size={18} /> Slack
+            </button>
             <button
               type="button"
               className={cn(page === "email" && "is-active")}

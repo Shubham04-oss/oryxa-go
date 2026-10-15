@@ -5,6 +5,10 @@
 // messages, request cards and quiet lines between people's messages, and a
 // composer that can also ask either person's agents. Each view opens its
 // own socket on the conversation's one object (useSideConversation).
+import { useHasCalls } from "./call-provider"
+import { ParleyButton, ParleyStrip } from "./call-surfaces"
+import { sideRoom } from "@/lib/live/rooms"
+import type { LiveRoom } from "@/lib/live/client"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
 import type { KeyboardEvent } from "react"
 import {
@@ -129,7 +133,16 @@ export function SideConversationView({
     teamspaceId,
     props.peer.id
   )
-  return <SideConversationPanel side={side} {...props} />
+  // A parley between the two of them is the side conversation's own room on
+  // the edge; none is offered for ids the edge can't name.
+  const room = sideRoom(teamspaceId, props.viewerId, props.peer.id)
+  return (
+    <SideConversationPanel
+      side={side}
+      parley={room ? { organizationId, room } : undefined}
+      {...props}
+    />
+  )
 }
 
 /** The key a view keeps for an item across its confirmation: the page's id while it has one. */
@@ -156,9 +169,13 @@ export function SideConversationPanel({
   active = true,
   backLabel,
   onBack,
+  parley,
 }: Omit<ViewProps, "organizationId" | "teamspaceId"> & {
   side: SideConversation
+  /** The room a parley between the two of them runs in, where there is one. */
+  parley?: { organizationId: string; room: LiveRoom }
 }) {
+  const hasCalls = useHasCalls()
   const { items, status, agents } = side
   const reader: SideReader = useMemo(
     () => ({
@@ -335,6 +352,22 @@ export function SideConversationPanel({
         </div>
         <AgentsHere agents={agents} reader={reader} />
       </div>
+      {hasCalls && parley && !refused && (
+        <div className="workspace-side-parley">
+          <ParleyButton
+            organizationId={parley.organizationId}
+            room={parley.room}
+            roomName={peer.name}
+            member={viewerId}
+          />
+          <ParleyStrip
+            organizationId={parley.organizationId}
+            room={parley.room}
+            roomName={peer.name}
+            member={viewerId}
+          />
+        </div>
+      )}
       <div className="workspace-dm-log-wrap">
         <div
           className="workspace-dm-log workspace-side-log"

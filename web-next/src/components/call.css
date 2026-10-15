@@ -758,3 +758,25 @@
 .call-ended-body p { margin: 0; color: var(--text-soft); font-size: 13px; line-height: 1.55; }
 .call-ended-facts { color: var(--text-muted); font-size: 12.5px; }
 .call-ended-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+
+/* In a side conversation (a narrow panel) the parley sits under its bar:
+   the strip wraps, without the faces. */
+.workspace-side-parley {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 0 0;
+}
+.workspace-side-parley .workspace-teamspace-parley { margin-left: 0; }
+.workspace-side-parley .call-strip {
+  align-self: stretch;
+  flex-wrap: wrap;
+  margin: 0;
+}
+.workspace-side-parley .call-strip-cams { display: none; }
+.workspace-side-parley .call-strip-acts {
+  width: 100%;
+  justify-content: flex-end;
+}

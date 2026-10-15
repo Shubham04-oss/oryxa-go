@@ -140,6 +140,8 @@ export const slackKeys = {
     [...slackKeys.all(organizationId), "install"] as const,
   channels: (organizationId: string) =>
     [...slackKeys.all(organizationId), "channels"] as const,
+  link: (organizationId: string) =>
+    [...slackKeys.all(organizationId), "link"] as const,
 }
 
 /**
@@ -258,5 +260,98 @@ export function slackInstallFailureMessage(reason: string): string {
       return "Slack refused the install. Try again."
     default:
       return "Slack wasn't connected. Try again."
+  }
+}
+
+// ---------------------------------------------------------------------------
+// A member's own Slack account (apps/internal/slackbot/link.go): linking it
+// lets what they ask and decide in Slack count as them. Every member, not
+// only admins, links their own; an agent's session is refused.
+// ---------------------------------------------------------------------------
+
+/** `slackbot.LinkView`: whether the caller's Slack account is linked. */
+export type SlackLink = {
+  linked: boolean
+  team_id?: string
+  slack_user_id?: string
+  linked_at?: string
+}
+
+/** `slackbot.LinkStart`: where Sign in with Slack starts, good once. */
+export type SlackLinkStart = { sign_in_url: string; expires_at: string }
+
+/** `GET …/apps/slack/link`: the caller's own link. */
+export function getSlackLink(
+  organizationId: string,
+  { signal }: { signal?: AbortSignal } = {}
+): Promise<SlackLink> {
+  return apiRequest<SlackLink>(slackPath(organizationId, "link"), { signal })
+}
+
+/**
+ * `POST …/apps/slack/link`: a Sign in with Slack link for the workspace this
+ * organization installed. With `returnTo`, the browser comes back there with
+ * `slack_link=linked`, or `slack_link=error` and `slack_link_error`
+ * (`slackLinkReturnOf`). 409 `not_connected` without an active install.
+ */
+export function startSlackLink(
+  organizationId: string,
+  returnTo?: string
+): Promise<SlackLinkStart> {
+  return apiRequest<SlackLinkStart>(slackPath(organizationId, "link"), {
+    method: "POST",
+    body: returnTo ? { return_to: returnTo } : {},
+  })
+}
+
+/** `DELETE …/apps/slack/link`: unlinks the caller's Slack account (204). */
+export function unlinkSlack(organizationId: string): Promise<void> {
+  return apiRequest(slackPath(organizationId, "link"), { method: "DELETE" })
+}
+
+export function slackLinkQueryOptions(organizationId: string) {
+  return queryOptions({
+    queryKey: slackKeys.link(organizationId),
+    queryFn: ({ signal }) => getSlackLink(organizationId, { signal }),
+    retry: (count, error) => !isSlackUnavailable(error) && count < 2,
+  })
+}
+
+/** What the browser came back from Sign in with Slack with. */
+export type SlackLinkReturn =
+  { status: "linked" } | { status: "error"; reason: string }
+
+/** `?slack_link=linked`, or `?slack_link=error&slack_link_error=<reason>`. */
+export function slackLinkReturnOf(search: string): SlackLinkReturn | undefined {
+  const params = new URLSearchParams(search)
+  switch (params.get("slack_link")) {
+    case "linked":
+      return { status: "linked" }
+    case "error":
+      return { status: "error", reason: params.get("slack_link_error") ?? "" }
+    default:
+      return undefined
+  }
+}
+
+/** Why a link didn't finish (`slackbot.Failure*`), in words a member can act on. */
+export function slackLinkFailureMessage(reason: string): string {
+  switch (reason) {
+    case "state":
+      return "That link had expired or was already used. Link again."
+    case "denied":
+      return "Slack wasn't given permission, so nothing was linked."
+    case "wrong_team":
+      return "You signed in to a different Slack workspace from the one connected here. Link again and choose that one."
+    case "taken":
+      return "That Slack account is already linked to someone else in Oryxa."
+    case "session":
+      return "Your Oryxa session had ended. Sign in again, then link again."
+    case "unavailable":
+      return "Slack or Oryxa didn't answer. Try again in a minute."
+    case "slack_refused":
+      return "Slack refused the sign-in. Try again."
+    default:
+      return "Your Slack account wasn't linked. Try again."
   }
 }

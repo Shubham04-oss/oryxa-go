@@ -25,7 +25,12 @@ import {
   slackInstallFailureMessage,
   slackInstallQueryOptions,
   slackKeys,
+  slackLinkFailureMessage,
+  slackLinkQueryOptions,
+  slackLinkReturnOf,
   slackReturnOf,
+  startSlackLink,
+  unlinkSlack,
 } from "@/lib/apps/slack"
 import type { SlackChannel, SlackInstall } from "@/lib/apps/slack"
 
@@ -100,9 +105,10 @@ function slackError(error: unknown, fallback: string): string {
 }
 
 /**
- * Settings → Slack. Owners and admins only: anyone else is told who manages
- * it, and nothing is read for them. Signed out, in the dev-only layout
- * preview, there is nothing to read either.
+ * Settings → Slack. Every member links their own Slack account here; owners
+ * and admins also manage the organisation's connection, and anyone else is
+ * told who does (nothing of the install is read for them). Signed out, in
+ * the dev-only layout preview, there is nothing to read.
  */
 export function WorkspaceSlackSettings({
   organization,
@@ -127,16 +133,205 @@ export function WorkspaceSlackSettings({
             Select an organisation first.
           </p>
         </SlackSection>
-      ) : !canManageSlack(role) ? (
-        <SlackSection>
-          <p className="workspace-settings-hint">
-            Organisation owners and admins manage Slack.
-          </p>
-        </SlackSection>
       ) : (
-        <SlackSettings key={organization.id} organizationId={organization.id} />
+        <>
+          <SlackAccountLink
+            key={`link-${organization.id}`}
+            organizationId={organization.id}
+          />
+          {canManageSlack(role) ? (
+            <SlackSettings
+              key={organization.id}
+              organizationId={organization.id}
+            />
+          ) : (
+            <SlackSection>
+              <p className="workspace-settings-hint">
+                Organisation owners and admins manage Slack.
+              </p>
+            </SlackSection>
+          )}
+        </>
       )}
     </div>
+  )
+}
+
+/**
+ * The member's own Slack account. Linked, what they ask and decide in Slack
+ * counts as them; unlinked, Slack can't tell who they are. Hidden where the
+ * deployment runs no Slack app (404) or apps can't answer (503).
+ */
+function SlackAccountLink({ organizationId }: { organizationId: string }) {
+  const queryClient = useQueryClient()
+  // How the browser came back from Sign in with Slack, read once; the
+  // address is cleaned of it after, so a reload doesn't say it again.
+  const [returned] = useState(() => slackLinkReturnOf(window.location.search))
+  const [problem, setProblem] = useState("")
+  const [notice, setNotice] = useState("")
+  const [opening, setOpening] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const link = useQuery(slackLinkQueryOptions(organizationId))
+
+  useEffect(() => {
+    if (!returned) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete("slack_link")
+    url.searchParams.delete("slack_link_error")
+    try {
+      window.history.replaceState(window.history.state, "", url)
+    } catch {
+      // The address keeps what Slack added to it: nothing depends on it going.
+    }
+  }, [returned])
+
+  const unlink = useMutation({
+    mutationFn: () => unlinkSlack(organizationId),
+    onSuccess: async () => {
+      setConfirming(false)
+      setProblem("")
+      setNotice("Your Slack account is unlinked.")
+      await queryClient.invalidateQueries({
+        queryKey: slackKeys.link(organizationId),
+      })
+    },
+    onError: (error) => {
+      setConfirming(false)
+      setNotice("")
+      setProblem(slackError(error, "Could not unlink it. Try again."))
+    },
+  })
+
+  async function startLink() {
+    if (opening) return
+    setOpening(true)
+    setProblem("")
+    setNotice("")
+    try {
+      const start = await startSlackLink(
+        organizationId,
+        slackReturnUrl(organizationId)
+      )
+      if (!isSlackAuthorizeUrl(start.sign_in_url)) {
+        setProblem(
+          "That isn't a link to Slack, so it wasn't opened. Try again."
+        )
+        return
+      }
+      window.location.assign(start.sign_in_url)
+    } catch (error) {
+      setProblem(
+        error instanceof ApiError && error.code === "not_connected"
+          ? "Slack isn't connected to this organisation yet. An owner or admin connects it first."
+          : slackError(error, "Could not start linking. Try again.")
+      )
+    } finally {
+      setOpening(false)
+    }
+  }
+
+  if (link.isError && isSlackUnavailable(link.error)) return null
+  const about =
+    "Link your Slack account so Oryxa knows the messages are yours: what you ask, approve or answer in Slack counts as you."
+  return (
+    <SlackSection
+      label="Your Slack account"
+      title="Your Slack account"
+      about={about}
+    >
+      {returned?.status === "linked" && (
+        <p className="workspace-settings-notice" role="status">
+          Your Slack account is linked.
+        </p>
+      )}
+      {returned?.status === "error" && (
+        <p className="workspace-settings-error" role="alert">
+          {slackLinkFailureMessage(returned.reason)}
+        </p>
+      )}
+      {link.isPending ? (
+        <p className="workspace-settings-hint" role="status">
+          Checking your Slack account…
+        </p>
+      ) : link.isError ? (
+        <p className="workspace-settings-error" role="alert">
+          {slackError(link.error, "Could not check your Slack account.")}{" "}
+          <button
+            type="button"
+            className="underline"
+            onClick={() => void link.refetch()}
+          >
+            Try again
+          </button>
+        </p>
+      ) : (
+        <>
+          <p className="workspace-settings-hint">
+            {link.data.linked
+              ? `Linked${link.data.linked_at ? ` since ${new Date(link.data.linked_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}` : ""}.`
+              : "Not linked. Slack can't tell your messages apart from anyone else's."}
+          </p>
+          {notice && (
+            <p className="workspace-settings-notice" role="status">
+              {notice}
+            </p>
+          )}
+          {problem && (
+            <p className="workspace-settings-error" role="alert">
+              {problem}
+            </p>
+          )}
+          {confirming ? (
+            <div className="workspace-settings-confirm">
+              <p>
+                Unlink your Slack account? What you ask or approve in Slack
+                stops counting as you until you link it again.
+              </p>
+              <button
+                type="button"
+                disabled={unlink.isPending}
+                onClick={() => setConfirming(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={unlink.isPending}
+                onClick={() => unlink.mutate()}
+              >
+                {unlink.isPending ? "Unlinking…" : "Unlink"}
+              </button>
+            </div>
+          ) : (
+            <div className="workspace-slack-actions">
+              {link.data.linked ? (
+                <button
+                  type="button"
+                  className="workspace-settings-action"
+                  onClick={() => {
+                    setNotice("")
+                    setProblem("")
+                    setConfirming(true)
+                  }}
+                >
+                  Unlink
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="workspace-settings-action workspace-slack-add"
+                  disabled={opening}
+                  onClick={() => void startLink()}
+                >
+                  <SlackMark size={16} />
+                  {opening ? "Opening Slack…" : "Link your Slack account"}
+                </button>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </SlackSection>
   )
 }
 
