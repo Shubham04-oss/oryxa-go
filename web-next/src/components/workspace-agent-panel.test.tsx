@@ -1156,7 +1156,7 @@ describe("a file the agent saves", () => {
 
     view.rerender(panel({ expanded: true, onPrimaryFileCreated: onFile }))
     expect(onFile).not.toHaveBeenCalled()
-    expect(screen.getByRole("link", { name: "report.pdf" })).toBeTruthy()
+    expect(screen.getByRole("link", { name: "Open report.pdf" })).toBeTruthy()
   })
 
   it("leaves only the chip when the panel is on another tab", async () => {
@@ -1240,7 +1240,7 @@ describe("the agent session", () => {
     await withFile()
     const box = leoBox()
     type(box, "And a summary slide")
-    const chip = screen.getByRole("link", { name: "report.pdf" })
+    const chip = screen.getByRole("link", { name: "Open report.pdf" })
     chip.focus()
     fireEvent.click(chip)
 
@@ -1266,7 +1266,7 @@ describe("the agent session", () => {
     await withFile()
     const box = leoBox()
     type(box, "Still writing")
-    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }))
+    fireEvent.click(screen.getByRole("link", { name: "Open report.pdf" }))
     await screen.findByRole("region", { name: "Work" })
 
     fireEvent.click(
@@ -1285,7 +1285,7 @@ describe("the agent session", () => {
   it("keeps the composer's focus when the session closes from inside the chat", async () => {
     await withFile()
     const box = leoBox()
-    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }))
+    fireEvent.click(screen.getByRole("link", { name: "Open report.pdf" }))
     const column = await screen.findByRole("region", {
       name: "Conversation with Leo",
     })
@@ -1307,7 +1307,7 @@ describe("the agent session", () => {
     expect(
       screen.getByRole("link", { name: "Download report.pdf" })
     ).toBeTruthy()
-    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }))
+    fireEvent.click(screen.getByRole("link", { name: "Open report.pdf" }))
     await screen.findByRole("region", { name: "Work" })
     expect(opened).not.toHaveBeenCalled()
   })
@@ -1339,7 +1339,7 @@ describe("the agent session", () => {
       saves.push(this.download)
     })
     const go = await withFile()
-    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }), {
+    fireEvent.click(screen.getByRole("link", { name: "Open report.pdf" }), {
       metaKey: true,
     })
 
@@ -1352,14 +1352,14 @@ describe("the agent session", () => {
     expect(screen.queryByRole("region", { name: "Work" })).toBe(null)
   })
 
-  it("opens an image from its thumbnail beside the chat, its Download in the caption", async () => {
+  it("opens an image from its card beside the chat, its Download beside Open", async () => {
     const opened = vi.spyOn(window, "open").mockReturnValue(null)
     await withFile([
       { type: "message", id: "ev_1", author: "member", text: "Chart it" },
       { type: "artifact", id: "ev_c", artifact: "chart.png", version: 1 },
     ])
     const thumbnail = screen.getByRole("link", { name: "Open chart.png" })
-    const caption = thumbnail.closest("figure")?.querySelector("figcaption")
+    const caption = thumbnail.closest<HTMLElement>(".agent-run-file")
     expect(
       caption &&
         within(caption).getByRole("link", {

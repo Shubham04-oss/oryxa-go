@@ -980,7 +980,7 @@
 .workspace-agent-confirmation summary { width: fit-content; cursor: pointer; }
 .workspace-agent-confirmation pre { max-height: 180px; margin: 6px 0 0; padding: 8px; overflow: auto; border-radius: 8px; background: var(--tone-141414); color: var(--tone-c9c9c9); font-size: 11px; white-space: pre-wrap; }
 .workspace-agent-confirmation-actions,
-.workspace-agent-answers { display: flex; justify-content: flex-end; gap: 6px; }
+.workspace-agent-answers { display: flex; justify-content: flex-end; gap: 8px; }
 .workspace-agent-confirmation-status { align-self: flex-end; margin: 0; color: var(--tone-8d8d8d); font-size: 11px; }
 .workspace-agent-pill { min-height: 28px; padding: 0 12px; border: 1px solid var(--tone-3a3a3a); border-radius: 999px; background: transparent; color: var(--tone-d6d6d6); font-size: 12px; }
 .workspace-agent-pill:hover:not(:disabled) { background: var(--selected); color: var(--tone-ffffff); }
