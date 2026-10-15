@@ -106,35 +106,68 @@
 }
 .workspace-request-lost strong { color: var(--text); font-weight: 600; }
 
-/* The owner's three choices, each with what it lets their agent do. */
+/* The owner's choices in one 2×2 grid (RequestsNew board, 15 Oct 2026), each
+   a ui/button with its key and what it lets their agent do. The variants
+   carry the meaning (Share answer the primary, Deny destructive); these
+   rules only lay the content out and keep it in the role tokens. */
 .workspace-request-choices {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
-.workspace-request-choice {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 5px;
+.workspace-request-choices[data-count="3"] > :first-child { grid-column: 1 / -1; }
+.workspace-request-choice.workspace-request-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  justify-items: start;
+  gap: 4px 8px;
+  height: auto;
   min-width: 0;
-  padding: 11px 13px;
-  border: 1px solid var(--tone-424242);
+  padding: 12px;
   border-radius: 12px;
-  background: var(--tone-2a2a2a);
-  color: var(--tone-eeeeee);
   text-align: left;
+  white-space: normal;
 }
-.workspace-request-choice strong { font-size: 12.5px; font-weight: 600; line-height: 1.3; }
-.workspace-request-choice span { color: var(--tone-a3a3a3); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.workspace-request-choice:hover:not(:disabled) { border-color: var(--tone-6d6d6d); background: var(--tone-323232); }
-.workspace-request-choice:focus-visible { outline: 2px solid var(--tone-d6d6d6); outline-offset: 2px; }
-.workspace-request-choice:disabled { cursor: default; opacity: 0.55; }
-.workspace-request-choice[data-choice="deny"]:hover:not(:disabled) { border-color: var(--tone-6d3b3b); background: var(--tone-2f2525); }
+.workspace-request-choice kbd {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  opacity: .7;
+}
+.workspace-request-choice strong { font-size: 13px; font-weight: 600; line-height: 1.3; }
+.workspace-request-choice span {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+  opacity: .8;
+  overflow-wrap: anywhere;
+}
+.workspace-request-choice:not(:has(kbd)) strong { grid-column: 1 / -1; }
+@media (max-width: 560px) {
+  .workspace-request-choices { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* The expiry, as a quiet pill in the card's head. */
+.workspace-request-expiry.workspace-request-expiry {
+  flex: none;
+  border-color: var(--border-quiet);
+  color: var(--text-soft);
+  font-size: 11px;
+}
+/* A destructive action at the end of a row of the card's actions. */
+.workspace-request-deny-end { margin-left: auto; }
 
 /* Approve or decline a request that asks for nothing more. */
 .workspace-request-decide { display: flex; flex-direction: column; gap: 8px; }
-.workspace-request-decide > .workspace-agent-text-button { align-self: flex-start; }
+.workspace-request-decide > .workspace-request-note-toggle { align-self: flex-start; padding: 0; }
 .workspace-request-note { display: block; }
 .workspace-request-note input,
 .workspace-request-secret-form input[type="password"],
@@ -158,7 +191,7 @@
 .workspace-request-secret-lifetime select:focus-visible { border-color: var(--tone-8a8a8a); outline: none; }
 .workspace-request-note input:disabled,
 .workspace-request-secret-form input:disabled { opacity: 0.6; }
-.workspace-request-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+.workspace-request-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .workspace-request-actions[data-align="start"] { justify-content: flex-start; }
 
 /* Reply yourself (request-card-reply.tsx): the owner's own words. The quieter
@@ -308,8 +341,9 @@
   .workspace-request-choice { min-height: 48px; }
   /* Reply yourself: the field takes the width, the buttons stack with the
      action that matters on top (Send reply, then the others in their order). */
-  .workspace-request-quiet .workspace-agent-text-button { min-height: 40px; font-size: 12px; }
+  .workspace-request-quiet .workspace-request-quiet-button { min-height: 40px; font-size: 12px; }
   .workspace-request-reply .workspace-request-actions { flex-direction: column-reverse; align-items: stretch; }
   .workspace-request-reply .workspace-request-actions[data-first="true"] { flex-direction: column; }
-  .workspace-request-reply .workspace-agent-pill { min-height: 44px; }
+  .workspace-request-reply .workspace-request-actions > button { min-height: 44px; }
+  .workspace-request-deny-end { margin-left: 0; }
 }

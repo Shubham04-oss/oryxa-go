@@ -7,10 +7,12 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react"
+import { createPortal } from "react-dom"
 import type { ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ApiError } from "@/lib/api/client"
@@ -26,10 +28,15 @@ import {
   setAgentPresent,
   setRecording,
 } from "@/lib/call/client"
-import type { TranscriptSegment } from "@/lib/call/client"
+import type { CallView, TranscriptSegment } from "@/lib/call/client"
 import { joinMedia } from "@/lib/call/media"
 import { CALL_REFRESH_MS } from "@/lib/call/use-room-call"
-import type { CallMedia, CallTile } from "@/lib/call/media"
+import type {
+  CallDevices,
+  CallMedia,
+  CallTile,
+  DeviceKind,
+} from "@/lib/call/media"
 import { livePath, liveSocketUrl } from "@/lib/live/client"
 import type { LiveRoom } from "@/lib/live/client"
 
@@ -108,15 +115,39 @@ type CallActions = {
   setRecording: (on: boolean) => Promise<void>
   setAgent: (present: boolean) => Promise<void>
   expand: (expanded: boolean) => void
+  /** The devices the member can choose between; none outside a call. */
+  devices: () => Promise<CallDevices | undefined>
+  setDevice: (kind: DeviceKind, deviceId: string) => Promise<void>
+  onDevicesChange: (listener: () => void) => () => void
   dismiss: () => void
+}
+
+/** A parley that just ended, as the member saw it. */
+export type EndedCall = {
+  roomName: string
+  startedAt?: string
+  endedAt: string
+  /** How many people were in it at the end. */
+  people: number
+  /** It was being recorded: the recording and transcript are kept. */
+  recorded: boolean
 }
 
 type CallContextValue = {
   active: ActiveCall | null
+  /** The parley that just ended, until the member dismisses it. */
+  ended: EndedCall | null
+  dismissEnded: () => void
   /** The room whose own page is on screen, which shows the call itself. */
   roomOnScreen: string | null
   showingRoom: (room: string | null) => void
+  /** Where the full page shows its room's conversation, while it does. */
+  roomChat: RoomChatSlot | null
+  setRoomChat: (slot: RoomChatSlot | null) => void
 } & CallActions
+
+/** The full page's place for the room's conversation, and whose room it is. */
+export type RoomChatSlot = { room: string; element: HTMLElement }
 
 /** A room's key, for telling whether a page shows the member's call. */
 export function roomKey(organizationId: string, room: LiveRoom): string {
@@ -130,6 +161,52 @@ export function useCall(): CallContextValue {
   const value = useContext(CallContext)
   if (!value) throw new Error("useCall outside CallProvider")
   return value
+}
+
+/**
+ * Where a room's page puts its conversation while the member's parley in
+ * that room is open full page: the call's Room pane, or nowhere (it stays on
+ * the page). One conversation, moved, so the room is never open twice.
+ */
+export function useRoomChatSlot(
+  organizationId: string,
+  room: LiveRoom
+): HTMLElement | null {
+  const value = useContext(CallContext)
+  const slot = value?.roomChat
+  return slot && slot.room === roomKey(organizationId, room)
+    ? slot.element
+    : null
+}
+
+/**
+ * A room page's conversation, kept in one host element that sits in the page
+ * (at `pageRef`) or, while the member's parley in that room shows its Room
+ * pane, in that pane. Moving the host moves the conversation without
+ * remounting it: its draft, scroll and socket carry over.
+ */
+export function useRoomChatHost(organizationId: string, room: LiveRoom) {
+  const slot = useRoomChatSlot(organizationId, room)
+  const [host, setHost] = useState<HTMLDivElement | null>(null)
+  const pageRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const element = document.createElement("div")
+    element.className = "workspace-chat-host"
+    setHost(element)
+    return () => {
+      element.remove()
+    }
+  }, [])
+  useLayoutEffect(() => {
+    const target = slot ?? pageRef.current
+    if (host && target && host.parentElement !== target)
+      target.appendChild(host)
+  })
+  return {
+    pageRef,
+    render: (conversation: ReactNode) =>
+      host ? createPortal(conversation, host) : null,
+  }
 }
 
 /** Whether parleys are offered here: inside the workspace's CallProvider. */
@@ -181,6 +258,10 @@ export function CallProvider({
   const queryClient = useQueryClient()
   const [active, setActive] = useState<ActiveCall | null>(null)
   const [roomOnScreen, showingRoom] = useState<string | null>(null)
+  const [roomChat, setRoomChat] = useState<RoomChatSlot | null>(null)
+  const [ended, setEnded] = useState<EndedCall | null>(null)
+  /** The last view of the member's call, for the summary once it ends. */
+  const lastView = useRef<CallView | null>(null)
   const media = useRef<CallMedia | null>(null)
   const cleanups = useRef<(() => void)[]>([])
   const activeRef = useRef<ActiveCall | null>(null)
@@ -230,6 +311,7 @@ export function CallProvider({
   const join = useCallback(
     async (options: JoinOptions) => {
       if (activeRef.current?.phase === "in") await teardownAndLeave()
+      setEnded(null)
       setActive({
         organizationId: options.organizationId,
         room: options.room,
@@ -382,14 +464,28 @@ export function CallProvider({
    * Someone else ended the call: there is no seat to give back, only the
    * media and the page's own state to clear.
    */
+  const remember = useCallback(() => {
+    const current = activeRef.current
+    if (current?.phase !== "in") return
+    const seen = lastView.current
+    setEnded({
+      roomName: current.roomName,
+      startedAt: seen?.startedAt,
+      endedAt: new Date().toISOString(),
+      people: Math.max(seen?.participants.length ?? 0, current.tiles.length),
+      recorded: seen?.recording.on ?? false,
+    })
+  }, [])
+
   const endedElsewhere = useCallback(
     async (id: number) => {
       if (attempt.current !== id) return
       attempt.current += 1
+      remember()
       await teardown()
       setActive(null)
     },
-    [teardown]
+    [remember, teardown]
   )
 
   // The edge's view of the call the member is in: once a view read after
@@ -410,6 +506,11 @@ export function CallProvider({
     refetchInterval: CALL_REFRESH_MS,
   })
   useEffect(() => {
+    if (inCall && view.data && view.data.callId === inCall.callId) {
+      lastView.current = view.data
+    }
+  }, [inCall, view.data])
+  useEffect(() => {
     if (!inCall || !view.isSuccess) return
     if (view.dataUpdatedAt <= joinedAt.current) return
     if (view.data && view.data.callId === inCall.callId) return
@@ -420,11 +521,12 @@ export function CallProvider({
     const current = activeRef.current
     if (!current) return
     attempt.current += 1
+    remember()
     await endCall(current.organizationId, current.room).catch(() => undefined)
     await teardown()
     setActive(null)
     refreshCall(current.organizationId, current.room)
-  }, [refreshCall, teardown])
+  }, [refreshCall, remember, teardown])
 
   const toggle = useCallback(
     (key: "mic" | "camera" | "screen") => async (on: boolean) => {
@@ -480,11 +582,27 @@ export function CallProvider({
     }
   }, [teardown])
 
+  // The media is a ref, so these never change: a picker that reads devices
+  // isn't re-run by every caption or tile update.
+  const devices = useCallback(async () => media.current?.devices(), [])
+  const setDevice = useCallback(async (kind: DeviceKind, deviceId: string) => {
+    await media.current?.setDevice(kind, deviceId)
+  }, [])
+  const onDevicesChange = useCallback(
+    (listener: () => void) =>
+      media.current?.onDevicesChange(listener) ?? (() => undefined),
+    []
+  )
+
   const value = useMemo<CallContextValue>(
     () => ({
       active,
+      ended,
+      dismissEnded: () => setEnded(null),
       roomOnScreen,
       showingRoom,
+      roomChat,
+      setRoomChat,
       join,
       leave: teardownAndLeave,
       end,
@@ -494,16 +612,24 @@ export function CallProvider({
       setRecording: record,
       setAgent: agent,
       expand: (expanded) => update({ expanded }),
+      devices,
+      setDevice,
+      onDevicesChange,
       dismiss: () =>
         setActive((current) => (current?.phase === "in" ? current : null)),
     }),
     [
       active,
       agent,
+      devices,
       end,
+      ended,
       join,
+      onDevicesChange,
       record,
+      roomChat,
       roomOnScreen,
+      setDevice,
       teardownAndLeave,
       toggle,
       update,
