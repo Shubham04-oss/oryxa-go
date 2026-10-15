@@ -27,6 +27,7 @@ import type {
   HeardSegment,
 } from "@/lib/call/media"
 import { readSignal } from "@/lib/call/media"
+import { Toaster } from "@/components/ui/sonner"
 
 const room = { kind: "teamspace", id: "tsp_1" } as const
 const base = "/live/org_1/rooms/teamspace/tsp_1"
@@ -1005,5 +1006,45 @@ describe("raised hands and reactions", () => {
     expect(
       within(dock).queryByRole("button", { name: "Raise hand" })
     ).toBeNull()
+  })
+})
+
+describe("a parley starting in the room the member has open", () => {
+  it("says who started it, with Join", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: false,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }))
+    )
+    current = null
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CallProvider joinMediaWith={async () => fakeMedia()}>
+          <Parley onRoomPage />
+        </CallProvider>
+        <Toaster />
+      </QueryClientProvider>
+    )
+    await screen.findByRole("button", { name: "Parley" })
+    // The first read (no parley yet) has landed.
+    await waitFor(() =>
+      expect(
+        client.getQueryState(["call", "org_1", "teamspace", "tsp_1"])?.status
+      ).toBe("success")
+    )
+    current = view()
+    await act(() => client.invalidateQueries())
+    const toast = (
+      await screen.findByText("Raya Patel started a parley")
+    ).closest<HTMLElement>("[data-sonner-toast]")
+    expect(toast).toBeTruthy()
+    fireEvent.click(within(toast!).getByRole("button", { name: "Join" }))
+    await waitFor(() => expect(requests("/call/join", "POST")).toHaveLength(1))
   })
 })

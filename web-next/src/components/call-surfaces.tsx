@@ -38,6 +38,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { ActiveCall, EndedCall } from "./call-provider"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { Popup, PopupFoot, PopupHead, PopupIcon } from "./popup"
+import { notifyParleyStarted } from "./workspace-toasts"
 import { agentIdentity, personIdentity } from "./teamspace-format"
 import { callDuration, whoIsIn } from "@/lib/call/client"
 import type { CallView } from "@/lib/call/client"
@@ -383,7 +384,7 @@ export function ParleyStrip({
   name?: string
 }) {
   const { active, join, show, leave, showingRoom } = useCall()
-  const { call } = useRoomCall(organizationId, room)
+  const { call, loading } = useRoomCall(organizationId, room)
   const key = roomKey(organizationId, room)
   // While the room's own page is on screen, its strip is the call's control
   // and the mini player stands aside.
@@ -395,6 +396,39 @@ export function ParleyStrip({
   const [camera, setCamera] = useState(false)
   const duration = useDuration(call?.startedAt)
   const here = isThisRoom(active, organizationId, room)
+
+  // Someone else starting a parley while the member has the room open says
+  // so, with Join (the first view read only sets what was already running).
+  const seenCall = useRef<string | null | undefined>(undefined)
+  const callId = call?.callId ?? null
+  useEffect(() => {
+    if (loading) return
+    const before = seenCall.current
+    seenCall.current = callId
+    if (before === undefined || !call || callId === before) return
+    if (call.startedBy === member) return
+    const starter = call.participants.find(
+      (person) => person.member === call.startedBy
+    )
+    if (!starter) return
+    notifyParleyStarted({
+      member: starter.member,
+      name: starter.name,
+      roomName,
+      onJoin: () =>
+        void join({
+          organizationId,
+          room,
+          roomName,
+          subtitle,
+          member,
+          name,
+          mic: true,
+          camera: false,
+        }),
+    })
+    // Only a new call matters; the rest is read when it arrives.
+  }, [callId, loading])
 
   if (here && active?.phase === "failed") {
     return (

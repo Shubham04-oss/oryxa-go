@@ -253,6 +253,25 @@ not permission to copy every incidental value into a new component.
     ride up over its foot. Sea of bottles for what a parley left, the
     harbour for people coming aboard, the crow's nest for the welcome (the
     one place the wordmark may sit on the painting), the deck for plans.
+  - **Welcome** (`welcome-dialog.tsx`): the crow's nest, taller, with the
+    wordmark on it; "Welcome aboard, Ada"; three first steps (connect your
+    apps, invite your team, ask your agent) ticked from real reads (app
+    connections, the members list, the member's conversations); "N of 3
+    done", Skip for now, and the next step as the primary. It is for
+    someone new (joined the workspace in the last 14 days), shows once per
+    member and workspace (remembered in this browser), and only while a
+    step is left.
+  - **Toasts** (the library's sonner Toaster, themed in `ui/sonner.tsx`;
+    `workspace-toasts.tsx`): raised tiles in the theme's roles. Plain for a
+    confirmation ("Link copied", when a link is copied); with the person's
+    avatar on a thin strip of sea and an action when someone does something
+    the member can join ("Raya started a parley", Join, while the member
+    has that room's page open).
+  - **Hover card** (`teamspace-hover-card.tsx`, the library's hover card):
+    a teamspace from the sidebar, as a small pop-up with a 72px band of the
+    harbour: its name and description, "5 people · 3 agents" (its members;
+    its own agent and the specialists brought to it) with faces, and
+    "Parley live" from the room's own call view, read when the card opens.
   - **Plain:** warnings and destructive confirms (`PopupConfirm`, the
     library's alert dialog) never get a scene: an icon, what will happen,
     Cancel (`outline`) and the action (`destructive` when it deletes,

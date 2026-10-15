@@ -7,6 +7,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query"
 import { Check, Copy } from "lucide-react"
+import { notifyCopied } from "./workspace-toasts"
 import { Input } from "@/components/ui/input"
 import type { Organization, Role } from "@/lib/auth/client"
 import {
@@ -1038,6 +1039,7 @@ function CopyField({
     try {
       await navigator.clipboard.writeText(value)
       setCopied(true)
+      notifyCopied(/^https?:\/\//.test(value) ? "Link" : label)
       window.setTimeout(() => setCopied(false), 2000)
     } catch {
       // No clipboard here (plain http, a denied permission): the value is
