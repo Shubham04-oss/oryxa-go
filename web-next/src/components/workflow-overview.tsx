@@ -28,6 +28,7 @@ import {
   workflowExecutionsQueryOptions,
 } from "@/lib/agents/queries"
 import "./workflow-overview.css"
+import { Button } from "@/components/ui/button"
 import { ApiError } from "@/lib/api/client"
 
 function workflowRefusal(error: unknown) {
@@ -41,6 +42,25 @@ function scheduleLabel(workflow: AgentWorkflow) {
   if (!workflow.schedule) return "Runs when started"
   const when = `${workflow.schedule.expression}, ${workflow.schedule.timezone}`
   return workflow.schedule.state === "enabled" ? when : `Schedule off (${when})`
+}
+
+/** Why a workflow can't run now, as the server would refuse it. */
+function runBlocker(
+  workflow: AgentWorkflow,
+  team: AgentTeam | undefined
+): string | undefined {
+  const pausedAgent = team?.members.find(
+    (member) =>
+      member.status !== "active" &&
+      workflow.assignments.some((entry) => entry.agent_id === member.agent_id)
+  )
+  return workflow.status !== "active"
+    ? "This workflow is paused. Edit it to make it active before running."
+    : team?.status === "disabled"
+      ? "The team is paused. Resume it in Multi-agent teams before running."
+      : pausedAgent
+        ? `${pausedAgent.name} is paused. Resume it in Specialists before running.`
+        : undefined
 }
 
 function WorkflowDetail({
@@ -130,19 +150,7 @@ function WorkflowDetail({
     )
   if (!workflow) return null
   const team = teams.find((entry) => entry.id === workflow.team_id)
-  const pausedAgent = team?.members.find(
-    (member) =>
-      member.status !== "active" &&
-      workflow.assignments.some((entry) => entry.agent_id === member.agent_id)
-  )
-  const blocked =
-    workflow.status !== "active"
-      ? "This workflow is paused. Edit it to make it active before running."
-      : team?.status === "disabled"
-        ? "The team is paused. Resume it in Multi-agent teams before running."
-        : pausedAgent
-          ? `${pausedAgent.name} is paused. Resume it in Specialists before running.`
-          : undefined
+  const blocked = runBlocker(workflow, team)
   const refreshWarning = workflowQuery.isError && (
     <WorkflowQueryNotice
       error={workflowQuery.error}
@@ -452,6 +460,32 @@ function WorkflowEntry({
   )
   const latest = executions.data?.[0]
   const team = teams.find((entry) => entry.id === workflow.team_id)
+  const client = useQueryClient()
+  const runLock = useRef(false)
+  // The row's own Run now (Start, for one that runs only when started), as
+  // the board has it; its execution shows once the row opens.
+  const run = useMutation({
+    mutationFn: () => startAgentWorkflow(organizationId, workflow.id),
+    onSuccess: async (execution) => {
+      await afterStartAgentWorkflow(client, organizationId, execution)
+      setOpen(true)
+    },
+    onError: () => {
+      void executions.refetch()
+    },
+    onSettled: () => {
+      runLock.current = false
+    },
+  })
+  const blocked = runBlocker(workflow, team)
+  const cannotRun =
+    busy ||
+    run.isPending ||
+    refreshBlocked ||
+    Boolean(blocked) ||
+    !executions.data ||
+    hasExecutionInFlight(executions.data)
+  const runLabel = workflow.schedule ? "Run now" : "Start"
   return (
     <li
       className="workflow-entry"
@@ -499,6 +533,27 @@ function WorkflowEntry({
           aria-hidden="true"
         />
       </button>
+      <Button
+        className="workflow-entry-run"
+        variant="outline"
+        size="sm"
+        aria-label={`${runLabel} ${workflow.name}`}
+        title={blocked}
+        disabled={cannotRun}
+        onClick={() => {
+          if (runLock.current || cannotRun) return
+          runLock.current = true
+          run.mutate()
+        }}
+      >
+        <Play aria-hidden="true" />
+        {run.isPending ? "Starting…" : runLabel}
+      </Button>
+      {run.isError && (
+        <p className="workspace-agents-error workflow-entry-error" role="alert">
+          {agentsErrorMessage(run.error, "Could not start it.")}
+        </p>
+      )}
       {open && (
         <div id={id} className="workflow-entry-body">
           <WorkflowDetail
@@ -534,12 +589,13 @@ export function WorkflowOverview({
       aria-labelledby="agents-overview-workflows"
     >
       <div className="workflow-overview-toolbar">
-        <p className="workspace-eyebrow" id="agents-overview-workflows">
+        <h2 id="agents-overview-workflows">
           Workflows
-        </p>
-        <button
-          className="workspace-agents-button"
-          type="button"
+          {visibleWorkflows?.length ? ` · ${visibleWorkflows.length}` : ""}
+        </h2>
+        <Button
+          variant="outline"
+          size="sm"
           aria-expanded={creating}
           disabled={
             creating ||
@@ -550,8 +606,8 @@ export function WorkflowOverview({
           }
           onClick={() => setCreating(true)}
         >
-          <Plus size={15} /> New workflow
-        </button>
+          <Plus aria-hidden="true" /> New workflow
+        </Button>
       </div>
       {creating && teams.data && !fatalWorkflows && (
         <WorkflowForm

@@ -6,6 +6,11 @@ export const Route = createFileRoute("/auth/verify-email")({
   validateSearch: (search: Record<string, unknown>) => ({
     token: searchToken(search.token),
   }),
-  component: () => <VerifyEmailPage token={Route.useSearch().token} />,
+  component: VerifyEmailRoute,
   head: () => ({ meta: [{ title: "Verify email · Oryxa" }] }),
 })
+
+function VerifyEmailRoute() {
+  const { token } = Route.useSearch()
+  return <VerifyEmailPage token={token} />
+}
