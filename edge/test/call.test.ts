@@ -651,6 +651,19 @@ describe("the real clients, in workerd", () => {
     }
   });
 
+  it("say why RealtimeKit refused, whatever shape its error takes", async () => {
+    for (const [body, reason] of [
+      [{ success: false, error: { message: "Preset group_call_host not found" } }, "Preset group_call_host not found"],
+      [{ success: false, error: "Invalid meeting id" }, "Invalid meeting id"],
+      [{ success: false, errors: [{ message: "Authentication error" }] }, "Authentication error"],
+    ] as const) {
+      const client = new RealtimeKit("acct", "app", "token", async () => new Response(JSON.stringify(body), { status: 400 }));
+      await expect(client.createMeeting("oryxa:test")).rejects.toThrow(reason);
+    }
+    const plain = new RealtimeKit("acct", "app", "token", async () => new Response("bad gateway", { status: 400 }));
+    await expect(plain.createMeeting("oryxa:test")).rejects.toThrow("bad gateway");
+  });
+
   it("send RealtimeKit requests to REALTIMEKIT_API_URL when it is set", async () => {
     const client = RealtimeKit.fromEnv({
       REALTIMEKIT_ACCOUNT_ID: "acct",

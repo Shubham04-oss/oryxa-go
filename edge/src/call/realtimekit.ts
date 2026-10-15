@@ -56,6 +56,9 @@ interface Envelope<T> {
   success?: boolean;
   data?: T;
   errors?: { message?: string }[];
+  // RealtimeKit's own API answers errors as { error: { message } } or
+  // { error: "…" } rather than Cloudflare's errors[].
+  error?: { message?: string } | string;
 }
 
 export class RealtimeKit implements CallProvider {
@@ -140,19 +143,32 @@ export class RealtimeKit implements CallProvider {
     }
     if (tolerated.includes(response.status)) return {} as T;
     let envelope: Envelope<T> = {};
+    const text = await response.text().catch(() => "");
     try {
-      envelope = (await response.json()) as Envelope<T>;
+      envelope = JSON.parse(text) as Envelope<T>;
     } catch {
-      // An answer that isn't JSON is judged by its status alone.
+      // An answer that isn't JSON is judged by its status, and its text.
     }
     if (!response.ok || envelope.success === false) {
-      const message = envelope.errors?.[0]?.message ?? `status ${response.status}`;
+      const message = refusal(envelope, text, response.status);
       const retryable = response.status === 429 || response.status >= 500;
-      console.warn(JSON.stringify({ msg: "realtimekit refused", method, status: response.status, message }));
+      console.warn(JSON.stringify({ msg: "realtimekit refused", method, route: route(path), status: response.status, message }));
       throw new EdgeError("unavailable", `RealtimeKit refused ${method}: ${message}`, retryable);
     }
     return (envelope.data ?? {}) as T;
   }
+}
+
+// refusal is RealtimeKit's reason for refusing, in whichever shape it came.
+function refusal(envelope: Envelope<unknown>, text: string, status: number): string {
+  const error = envelope.error;
+  const reason = envelope.errors?.[0]?.message ?? (typeof error === "string" ? error : error?.message) ?? text.trim().slice(0, 300);
+  return reason || `status ${status}`;
+}
+
+// route is a request's path with its ids left out, for the log.
+function route(path: string): string {
+  return path.replace(/\/meetings\/[^/]+/, "/meetings/{id}").replace(/\/(participants|recordings)\/[^/]+/, "/$1/{id}");
 }
 
 function requireString(value: unknown, what: string): string {
