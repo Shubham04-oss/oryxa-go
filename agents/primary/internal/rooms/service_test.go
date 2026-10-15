@@ -2,6 +2,7 @@ package rooms
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -280,6 +281,31 @@ func TestReadingARoomSaysWhoIsInIt(t *testing.T) {
 	}
 	if specialist.Handle != "ledger" || specialist.Role != "keeps the pricing sheet" {
 		t.Errorf("the contributed specialist is not addressable from a read: %+v", specialist)
+	}
+}
+
+// A paused teamspace's room stays the team's to read, its brief included,
+// and nobody can say anything new in it.
+func TestAPausedRoomIsReadOnly(t *testing.T) {
+	store := newServiceFakeStore()
+	service := aService(t, store, &serviceFakeDecider{}, nil)
+	actor := Actor{OrganizationID: "org_1", UserID: "user-ada"}
+	if _, err := service.Post(context.Background(), actor, "tsp_room", "before the pause"); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	paused := aRoom()
+	paused.Status = teamspaces.StatusDisabled
+	service.spaces = &serviceFakeSpaces{space: paused}
+
+	if _, err := service.Post(context.Background(), actor, "tsp_room", "after the pause"); !errors.Is(err, ErrPaused) {
+		t.Fatalf("post in a paused room: %v, want ErrPaused", err)
+	}
+	said, _, err := service.Read(context.Background(), actor, "tsp_room", 0, 50)
+	if err != nil || len(said) != 1 || said[0].Body != "before the pause" {
+		t.Fatalf("read a paused room = %+v, %v; want what was said before it", said, err)
+	}
+	if _, missed, err := service.Catchup(context.Background(), actor, "tsp_room", 0); err != nil || len(missed) != 1 {
+		t.Fatalf("catch up on a paused room = %+v, %v", missed, err)
 	}
 }
 

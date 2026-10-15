@@ -18,6 +18,9 @@ var (
 	ErrNotFound  = errors.New("room not found")
 	ErrForbidden = errors.New("room is not available to this member")
 	ErrInvalid   = errors.New("invalid room request")
+	// ErrPaused refuses saying anything in a room whose teamspace is paused.
+	// What was said there stays readable to the team.
+	ErrPaused = errors.New("this room is paused")
 )
 
 // presentWithin is how recently somebody must have read a room to count as
@@ -125,6 +128,9 @@ func (service *Service) Post(ctx context.Context, actor Actor, roomID, body stri
 	if err != nil {
 		return nil, err
 	}
+	if space.Status != teamspaces.StatusActive {
+		return nil, ErrPaused
+	}
 	// Saying something is the plainest evidence there is that somebody is in
 	// the room, and it is recorded before the seating is read so the author is
 	// present in their own message's situation: an agent must never answer
@@ -226,7 +232,9 @@ func (service *Service) Catchup(ctx context.Context, actor Actor, roomID string,
 // space resolves the teamspace and refuses anybody the team does not include.
 // An organization admin who is not on the team may manage its teamspace, and
 // teamspaces.Service lets them read it to do so, but what the team says in
-// its room is the team's: they read none of it and say nothing there.
+// its room is the team's: they read none of it and say nothing there. A
+// paused teamspace's room is still resolved, for its team to read; Post is
+// what refuses it.
 func (service *Service) space(ctx context.Context, actor Actor, roomID string) (teamspaces.Space, error) {
 	space, err := service.spaces.Get(ctx, teamspaces.Actor{
 		OrganizationID: actor.OrganizationID, UserID: actor.UserID, AccessToken: actor.AccessToken,
@@ -240,8 +248,6 @@ func (service *Service) space(ctx context.Context, actor Actor, roomID string) (
 		return teamspaces.Space{}, err
 	case !space.IsMember:
 		return teamspaces.Space{}, fmt.Errorf("%w: only a member of its team is in a room", ErrForbidden)
-	case space.Status != teamspaces.StatusActive:
-		return teamspaces.Space{}, fmt.Errorf("%w: this room is paused", ErrInvalid)
 	}
 	return space, nil
 }
