@@ -121,9 +121,9 @@ describe("the PDF viewer", () => {
     expect(thumbs[0].getAttribute("aria-current")).toBe("page")
     expect(within(tools).getByText("1 / 3")).toBeTruthy()
     expect(
-      within(tools).getByRole("button", {
-        name: "Previous page",
-      }).disabled
+      within(tools)
+        .getByRole("button", { name: "Previous page" })
+        .hasAttribute("disabled")
     ).toBe(true)
 
     fireEvent.click(within(tools).getByRole("button", { name: "Next page" }))
