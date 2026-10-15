@@ -436,6 +436,12 @@ describe("a request's line in a DM", () => {
   })
 
   it("starts a day of its own when it is the first thing said that day", async () => {
+    // At noon, so "five minutes ago" is today whenever the suite runs (just
+    // after midnight it was yesterday, and the test failed).
+    vi.useFakeTimers({ toFake: ["Date"] })
+    const noon = new Date()
+    noon.setHours(12, 0, 0, 0)
+    vi.setSystemTime(noon)
     goSays({ irq_1: "pending" })
     renderConversation()
     opened(
