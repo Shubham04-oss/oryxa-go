@@ -238,6 +238,17 @@ not permission to copy every incidental value into a new component.
   confirm on the right, `destructive` when it removes; a destructive action
   never sits beside Save but in the page's last group, Danger zone, whose row
   title is red.
+  - **Account:** the profile row (no Edit until a profile route exists),
+    sign-in (password reset, sign out) and the theme as three swatches
+    (Light, Dark, System) on the library's radio group.
+  - **Your agent:** the primary agent with the apps it reads and Rename
+    (an inline form, Cancel then Save); "Works while you're away" (the agent
+    grant: on goes through its sign-in, off asks first) and "Keeps updates
+    from your apps" as switches; what it hides when it answers (what the
+    level hides for people who ask, as chips, then the two levels); and,
+    while access is on, Danger zone → Revoke background access.
+  - **Notifications:** where each notice goes and quiet hours are one honest
+    line until Go serves them; parley emails by team are switches.
 - **Chats and DMs as tiles** (founder's redesign, 14 Oct 2026). The open
   chat in the chat list is the raised tile and the others lift on hover; DM
   rows are rounded the same way, with unread as a filled count. The member's
