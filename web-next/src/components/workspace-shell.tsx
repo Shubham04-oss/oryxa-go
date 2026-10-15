@@ -49,6 +49,7 @@ import { agentsQueryOptions } from "@/lib/agents/queries"
 import { primaryAgent } from "@/lib/agents/policy"
 import { useAgentsMode } from "@/hooks/use-agents-mode"
 import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
+import { useNeedsYouCount } from "@/hooks/use-needs-you"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
 import { signOut } from "@/lib/auth/client"
 import type { Organization, Role, Session } from "@/lib/auth/client"
@@ -587,15 +588,20 @@ function WorkspaceShellContent({
     setRequestFocus(requestId ?? null)
     setActiveMode("agents")
     setSectionsByMode((current) => ({ ...current, agents: "requests" }))
-    if (isMobile) {
-      setLeftExpanded(false)
-      setRightExpanded(false)
-    }
+    // The open request takes the width: no agent panel on Requests.
+    setRightExpanded(false)
+    if (isMobile) setLeftExpanded(false)
   }
   useEffect(() => {
     if (section !== "requests") setRequestFocus(null)
   }, [section])
   useRequestsEntry(openRequestsSection)
+  // Requests' header says how many wait on the member (the same read the
+  // agent panel counts).
+  const requestsWaiting = useNeedsYouCount(
+    session && section === "requests" ? selectedOrganization?.id : undefined,
+    viewerId
+  )
 
   // Today's widgets, on the page and in the agent panel's At a glance tab.
   const homeOverviewKey = JSON.stringify([selectedOrganization?.id, viewerId])
@@ -833,7 +839,19 @@ function WorkspaceShellContent({
                   </div>
                 </>
               ) : (
-                <h1>{heading}</h1>
+                <div className="workspace-header-detail">
+                  <div>
+                    <h1>{heading}</h1>
+                    {section === "requests" &&
+                      requestsWaiting !== undefined && (
+                        <small>
+                          {requestsWaiting > 0
+                            ? `${requestsWaiting} waiting for you`
+                            : "All clear"}
+                        </small>
+                      )}
+                  </div>
+                </div>
               )}
             </header>
             <main
