@@ -484,6 +484,12 @@ not permission to copy every incidental value into a new component.
     members with an Admin/Member menu, Add a member, Danger zone → Delete
     team). New team is a small dialog (name, inside which team), Cancel then
     Create.
+  - **Billing:** the plan is one card (Current plan, its name, when it
+    renews, seats used against the limit as a bar, and Change plan, which
+    opens the billing portal, or Choose a plan, which lists the plans to
+    check out), the harbour scene fading in at its right. Payment is one row
+    pointing to the portal. No price, card, contact or invoices until the
+    billing routes carry them.
 - **Chats** (ChatsNew; `chats-page.tsx`): the member's chats with their
   agent as a page. It is the agent session (a focused view, the header
   "Chats · Only you see these") with a 280px list tile before the chat:
