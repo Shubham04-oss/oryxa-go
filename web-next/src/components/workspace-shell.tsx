@@ -1112,6 +1112,13 @@ function WorkspaceShellContent({
             key={homeOverviewKey}
             {...homeOverviewProps}
             variant="glance"
+            teammates={directMessages ? dmPeople : undefined}
+            onOpenPeople={() => navigateFromHome("team", "people")}
+            onMessage={openDirectMessage}
+            onOpenWorkflows={() => navigateFromHome("agents", "agents")}
+            agentName={
+              ownAgents.data?.find((agent) => agent.kind === "primary")?.name
+            }
           />
         }
       />

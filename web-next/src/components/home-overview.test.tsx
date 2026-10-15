@@ -235,11 +235,130 @@ it("shows the same chats at a glance in the agent panel, without its own compose
     },
   })
   const view = renderHome({ variant: "glance" })
-  expect(view.container.querySelector(".home-glance")).toBeTruthy()
+  expect(view.container.querySelector(".home-glance-cards")).toBeTruthy()
   expect(screen.queryByRole("region", { name: "Your agent" })).toBeNull()
   expect(screen.queryByRole("textbox")).toBeNull()
   fireEvent.click(await screen.findByRole("button", { name: /First/ }))
   expect(view.onOpenConversation).toHaveBeenCalledWith("one")
+})
+
+it("lays At a glance out as the board's cards, from real reads only", async () => {
+  stubApi({
+    [`${path}/threads`]: {
+      threads: [chat("wake", "Updates", "wakeup"), chat("one", "First")],
+    },
+    [`${path}/threads/wake`]: wakeDetail([
+      appsBatch("b1", minutesAgo(12), "slack"),
+      said("s1", minutesAgo(11), "Raya mentioned you in #eu-launch."),
+    ]),
+    [`${path}/threads/one`]: {
+      ...chat("one", "First"),
+      items: [
+        {
+          type: "artifact",
+          id: "a1",
+          at: minutesAgo(5),
+          artifact: "EU launch plan.docx",
+          version: 1,
+        },
+      ],
+      pending_confirmations: [],
+    },
+    [`${path}/apps/connections`]: {
+      connections: [connection("slack"), connection("github")],
+    },
+    [`${path}/agent-workflows`]: {
+      workflows: [
+        workflow("Weekday digest"),
+        workflow("Monday metrics"),
+        workflow("Someone else's", { owner_user_id: ASKER }),
+      ],
+    },
+    // Needs you is the panel's chip now, not a card here.
+    [`${path}/agent-requests/inbox`]: { requests: [request()] },
+  })
+  const onOpenPeople = vi.fn()
+  const onMessage = vi.fn()
+  const onOpenWorkflows = vi.fn()
+  const view = renderHome({
+    variant: "glance",
+    agentName: "Krude",
+    onOpenPeople,
+    onMessage,
+    onOpenWorkflows,
+    teammates: {
+      status: "ready",
+      people: [
+        {
+          id: "user-kenji",
+          name: "Kenji Sato",
+          email: "kenji@example.com",
+          role: "member",
+          spaces: [],
+        },
+        {
+          id: ASKER,
+          name: "Raya Patel",
+          email: "raya@example.com",
+          role: "member",
+          spaces: ["Launch"],
+        },
+      ],
+      find: () => undefined,
+      nameOf: () => undefined,
+      peer: () => undefined,
+      refetch: vi.fn(),
+    },
+  })
+
+  const apps = screen.getByRole("region", { name: "From your apps" })
+  expect(
+    await within(apps).findByRole("list", { name: "Your connected apps" })
+  ).toBeTruthy()
+  expect(
+    await within(apps).findByText("Raya mentioned you in #eu-launch.")
+  ).toBeTruthy()
+  fireEvent.click(within(apps).getByRole("button", { name: /Manage/ }))
+  expect(view.onOpenTools).toHaveBeenCalled()
+
+  // Teammates who share a teamspace come first; a tap messages them.
+  const mates = screen.getByRole("region", { name: "Teammates" })
+  const buttons = within(mates).getAllByRole("button", { name: /^Message/ })
+  expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+    "Message Raya Patel",
+    "Message Kenji Sato",
+  ])
+  fireEvent.click(buttons[0])
+  expect(onMessage).toHaveBeenCalledWith(ASKER)
+  fireEvent.click(within(mates).getByRole("button", { name: /All/ }))
+  expect(onOpenPeople).toHaveBeenCalled()
+
+  const knowledge = screen.getByRole("region", { name: "Knowledge" })
+  expect(
+    within(knowledge).getByRole("button", { name: "Knowledge, 1 document" })
+  ).toBeTruthy()
+  fireEvent.click(within(knowledge).getByRole("button", { name: /Library/ }))
+  expect(view.onOpenKnowledge).toHaveBeenCalled()
+
+  const files = screen.getByRole("region", { name: "Files Krude made" })
+  expect(
+    await within(files).findByRole("button", {
+      name: "EU launch plan.docx, from First",
+    })
+  ).toBeTruthy()
+
+  const recurring = screen.getByRole("region", { name: "Recurring work" })
+  await within(recurring).findByText("Weekday digest")
+  expect(within(recurring).queryByText("Someone else's")).toBeNull()
+  fireEvent.click(
+    within(recurring).getByRole("button", {
+      name: "All 2 recurring workflows",
+    })
+  )
+  expect(onOpenWorkflows).toHaveBeenCalled()
+
+  expect(screen.queryByText(/Waiting for your OK/)).toBeNull()
+  expect(screen.queryByRole("list", { name: "Needs you" })).toBeNull()
 })
 
 it("keeps the composer under Your agent and three titled recent chats under Conversations, opening exact chats and history", async () => {
