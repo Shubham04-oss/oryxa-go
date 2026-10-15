@@ -805,6 +805,11 @@
 .call-btn {
   padding-inline: 0;
 }
+/* The dock is its own context: round icon toggles, then Leave (destructive)
+   at the end of the controls; "End for everyone" is destructive too. */
+.call-dock .call-quiet {
+  color: var(--tone-f0a8a8);
+}
 /* What's new in the room while its pane is closed. */
 .call-badge {
   position: absolute;

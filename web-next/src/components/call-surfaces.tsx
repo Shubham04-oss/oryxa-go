@@ -30,7 +30,6 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { ActiveCall, EndedCall } from "./call-provider"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { Popup, PopupFoot, PopupHead, PopupIcon } from "./popup"
-import { Button } from "@/components/ui/button"
 import { agentIdentity, personIdentity } from "./teamspace-format"
 import { callDuration, whoIsIn } from "@/lib/call/client"
 import type { CallView } from "@/lib/call/client"
@@ -955,7 +954,11 @@ export function CallDock({
         >
           <Settings2 size={16} aria-hidden="true" />
         </Toggle>
-        <Button className="call-leave" onClick={() => void leave()}>
+        <Button
+          variant="destructive"
+          className="call-leave"
+          onClick={() => void leave()}
+        >
           <PhoneOff size={16} aria-hidden="true" />
           Leave
         </Button>
@@ -1005,11 +1008,17 @@ export function CallDock({
             <ScrollText size={16} aria-hidden="true" />
           </Toggle>
         )}
-        <Button className="call-quiet" disabled={busy} onClick={() => act(end)}>
+        <Button
+          variant="destructive"
+          className="call-quiet"
+          disabled={busy}
+          onClick={() => act(end)}
+        >
           <X size={14} aria-hidden="true" />
           End for everyone
         </Button>
         <Button
+          variant="ghost"
           className="call-btn"
           aria-label={mode === "full" ? "Exit full page" : "Full page"}
           onClick={() => expand(mode !== "full")}

@@ -279,6 +279,9 @@ not permission to copy every incidental value into a new component.
     (with a count of what others said there since its pane was last open,
     from the room page's messages; no count while no page reports them),
     the transcript, "End for everyone", and Full page / Exit full page.
+    The dock is its own button context (#332): round `ui/toggle` icon
+    controls of one size, Leave a `destructive` button at the end of the
+    controls, "End for everyone" `destructive` too.
     Devices opens a small panel over the stage to choose the microphone,
     camera and speaker, and follows devices plugged in or out. Beside the
     call is the Transcript or the **Room**: the room's own conversation,
