@@ -165,6 +165,9 @@ func TestSaveArtifactToolMovesBinaryContentWithoutTheModel(t *testing.T) {
 	if result["artifact_name"] != "report.pptx" || result["artifact_version"] != float64(4) || result["size_bytes"] != float64(len(raw)) {
 		t.Fatalf("result = %#v", result)
 	}
+	if executor.request.MaxOutputBytes != maxArtifactBytes {
+		t.Fatalf("read budget = %d, want the artifact budget: the bytes never reach the model", executor.request.MaxOutputBytes)
+	}
 	if executor.request.Action != ReadFiles || !slices.Equal(executor.request.Paths, []string{"/tmp/report.pptx"}) {
 		t.Fatalf("request = %+v", executor.request)
 	}
@@ -234,6 +237,18 @@ func TestSaveArtifactToolRequiresAnArtifactService(t *testing.T) {
 	}
 	if _, err := sandboxTool.(runnableTool).Run(fakeToolContext{}, map[string]any{"path": "notes.txt"}); err == nil {
 		t.Fatal("expected an error with no artifact service configured")
+	}
+}
+
+func TestSaveArtifactToolNeverReturnsAnEmptyError(t *testing.T) {
+	executor := &fakeExecutor{resultSet: true, result: Result{IsError: true}}
+	sandboxTool, err := saveArtifactTool(executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sandboxTool.(runnableTool).Run(fakeToolContext{artifacts: &fakeArtifacts{}}, map[string]any{"path": "deck.pptx"})
+	if err == nil || !strings.Contains(err.Error(), "deck.pptx") || !strings.Contains(err.Error(), "sandbox_list_files") {
+		t.Fatalf("error = %v, want the path and something to try", err)
 	}
 }
 
