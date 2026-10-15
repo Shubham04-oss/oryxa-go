@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Approved direction, 2026-10-15. Built daily by the integrations loop agent ([loop-agent.md](loop-agent.md)), reviewed and merged by macbookpro. |
+| Status | Approved direction, 2026-10-15. Built around the clock (every two hours) by the integrations loop agent ([loop-agent.md](loop-agent.md)), reviewed and merged by macbookpro, both as Claude Code cloud routines ([operations.md](operations.md)). |
 | Owner | Shubham (decisions) · macbookpro (review, merge, infrastructure) · the integrations loop agent (build) |
 | Code | `integrations/` (a service in the root Go module, run as its own ECS service) and `integrations/connectors/<app>/` |
 | Queue | GitHub issues labelled `loop`, in phase order (§18) |
@@ -84,6 +84,10 @@ Oryxa gets its own **integrations service**: one Go service that connects member
 - the scheduler loop;
 - N workers;
 - the connector host, which spawns one child process per connector binary, supervises it and restarts it on a crash.
+
+**Built so far (#283).** The skeleton: `integrations.Definition`, registered after `realtime`, reads `INTEGRATIONS_ENABLED=true` (off otherwise: no mount, no migration, no workers, no configuration). On, it migrates `integrations/migrations/` (schema `integrations`) and serves `GET /healthz`; internal routes are registered with `Server.Internal`, which refuses any call without a verified serviceauth token, and the callers come from `INTEGRATIONS_SERVICE_CALLERS`. A process whose `ORYXA_SERVICES` names `integrations` while it is off refuses to start.
+
+**Built so far (#284).** Migration `002_vault.sql` creates `org_apps`, `connections`, `credentials` and `oauth_states`. `integrations/internal/vault` seals secrets with `internal/secrets`: the envelope's resource type is the table and its resource id is `<org>/<row>` (empty org for Oryxa's own app), so the KMS encryption context is `{service, table, org/row}`. A value copied to another org, table or row does not open. `oauth_states` holds only the hash of `state`; `credentials` is keyed by `(connection_id, kind)`.
 
 Roles can later split across tasks with flags (`--api`, `--workers`). Like the core binary, it starts with one task.
 

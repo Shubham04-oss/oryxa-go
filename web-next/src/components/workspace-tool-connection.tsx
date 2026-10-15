@@ -15,6 +15,7 @@ import {
   appsQueryKey,
   canReplaceCredential,
   catalogTriggerTypesQueryOptions,
+  connectionActionsQueryOptions,
   connectionTargetsQueryOptions,
   connectionsQueryOptions,
   createTrigger,
@@ -25,7 +26,13 @@ import {
   signinManifestQueryOptions,
   triggersQueryOptions,
 } from "@/lib/apps/client"
-import type { Connection, Toolkit, TriggerType } from "@/lib/apps/client"
+import type {
+  Connection,
+  ConnectionAction,
+  Toolkit,
+  TriggerType,
+} from "@/lib/apps/client"
+import { ApiError } from "@/lib/api/client"
 import {
   defaultSourceIntervalSeconds,
   effectiveKinds,
@@ -119,22 +126,7 @@ export function ConnectionWorkspace(props: {
     )
   }
   if (!props.preview && props.connection.broker === "pipedream") {
-    // Apps serves a Pipedream connection's events, but not yet its indexing
-    // or runs, so only the events pane is offered.
-    return (
-      <div className="workspace-tool-workspace">
-        <p className="workspace-tool-preview-note">
-          Connected through Pipedream. Indexing and runs for this app are not
-          available yet.
-        </p>
-        <EventsPane
-          connection={props.connection}
-          toolkit={props.toolkit}
-          organizationId={props.organizationId}
-          preview={false}
-        />
-      </div>
-    )
+    return <PipedreamWorkspace {...props} />
   }
   return <ComposioWorkspace {...props} />
 }
@@ -236,6 +228,183 @@ function OryxaSignin({
           onSubmit={replace}
           onClose={() => setReplacing(false)}
         />
+      )}
+    </div>
+  )
+}
+
+/**
+ * A Pipedream connection: the events it wakes agents for, and the tool runs
+ * made through it. Indexing doesn't go through Pipedream (the owner's
+ * decision), so it has no indexing or sync runs.
+ */
+function PipedreamWorkspace({
+  connection,
+  toolkit,
+  organizationId,
+}: {
+  connection: Connection
+  toolkit: Toolkit
+  organizationId: string
+}) {
+  const [pane, setPane] = useState<"events" | "runs">("events")
+  const tabs: Array<{ key: "events" | "runs"; label: string }> = [
+    { key: "events", label: "Events" },
+    { key: "runs", label: "Runs" },
+  ]
+  return (
+    <div className="workspace-tool-workspace">
+      <div
+        className="workspace-tool-workspace-tabs"
+        role="tablist"
+        aria-label={`${toolkit.name} tools`}
+      >
+        {tabs.map((tab) => (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={pane === tab.key}
+            className={pane === tab.key ? "is-active" : ""}
+            key={tab.key}
+            onClick={() => setPane(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      <p className="workspace-tool-preview-note">
+        Connected through Pipedream. Indexing for this app isn't available yet.
+      </p>
+      {pane === "events" && (
+        <EventsPane
+          connection={connection}
+          toolkit={toolkit}
+          organizationId={organizationId}
+          preview={false}
+        />
+      )}
+      {pane === "runs" && (
+        <ToolRunsPane
+          connection={connection}
+          toolkit={toolkit}
+          organizationId={organizationId}
+        />
+      )}
+    </div>
+  )
+}
+
+/** A tool's id as a member reads it: "slack-send-message" → "Send message". */
+export function toolLabel(tool: string, toolkit: string): string {
+  const prefix = new RegExp(
+    `^${toolkit.replace(/[^a-z0-9]/gi, "[-_]?")}[-_]`,
+    "i"
+  )
+  const words = tool
+    .replace(prefix, "")
+    .replace(/[-_]+/g, " ")
+    .trim()
+    .toLowerCase()
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : tool
+}
+
+function whoRan(action: ConnectionAction): string {
+  if (!action.agent) return "You"
+  return action.agent_role === "primary" ? "Your agent" : "A specialist"
+}
+
+function runTime(action: ConnectionAction): string | undefined {
+  if (!action.finished_at) return undefined
+  const ms = Date.parse(action.finished_at) - Date.parse(action.created_at)
+  if (!Number.isFinite(ms) || ms < 0) return undefined
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`
+}
+
+/**
+ * The tool runs made through a connection, newest first: who ran which tool,
+ * whether it only read or changed something, and how it ended. What the app
+ * answered is never shown here.
+ */
+function ToolRunsPane({
+  connection,
+  toolkit,
+  organizationId,
+}: {
+  connection: Connection
+  toolkit: Toolkit
+  organizationId: string
+}) {
+  const runs = useQuery(
+    connectionActionsQueryOptions(organizationId, connection.id)
+  )
+  const missing = runs.error instanceof ApiError && runs.error.status === 404
+  return (
+    <div className="workspace-tool-pane" role="tabpanel">
+      <div className="workspace-tool-pane-head">
+        <div>
+          <h4>Recent tool runs</h4>
+          <p>What your agents and you did through {toolkit.name}.</p>
+        </div>
+      </div>
+      {runs.isPending ? (
+        <p className="workspace-tool-muted">Loading runs…</p>
+      ) : missing ? (
+        <p className="workspace-tool-muted">
+          Run history for this app isn't available yet.
+        </p>
+      ) : runs.isError ? (
+        <p className="workspace-tool-inline-error" role="alert">
+          {appsErrorMessage(runs.error, "Runs could not be loaded.")}{" "}
+          <button
+            type="button"
+            className="workspace-tool-text-button"
+            onClick={() => void runs.refetch()}
+          >
+            Retry
+          </button>
+        </p>
+      ) : runs.data.length === 0 ? (
+        <p className="workspace-tool-muted">
+          No runs yet. They show up here when an agent uses {toolkit.name}.
+        </p>
+      ) : (
+        <ul className="workspace-tool-runs" aria-label="Tool runs">
+          {runs.data.map((action) => (
+            <li className="workspace-tool-row" key={action.id}>
+              <span
+                className={`workspace-tool-dot ${action.status === "succeeded" ? "is-live" : action.status === "failed" ? "is-error" : ""}`}
+              />
+              <div className="workspace-tool-row-copy">
+                <strong>{toolLabel(action.tool, connection.toolkit)}</strong>
+                <small>
+                  {whoRan(action)} ·{" "}
+                  {action.read_only ? "Read only" : "Changed something"} ·{" "}
+                  {prettyTime(action.created_at)}
+                  {runTime(action) ? ` · ${runTime(action)}` : ""}
+                </small>
+                {action.status === "failed" && action.error && (
+                  <small className="workspace-tool-run-error">
+                    {sentence(action.error)}
+                  </small>
+                )}
+              </div>
+              <span className="sr-only">
+                {action.status === "succeeded"
+                  ? "Succeeded"
+                  : action.status === "failed"
+                    ? "Failed"
+                    : "Running"}
+              </span>
+              {action.status === "running" ? (
+                <Clock3 size={16} aria-hidden="true" />
+              ) : action.status === "succeeded" ? (
+                <Check size={16} aria-hidden="true" />
+              ) : (
+                <CircleAlert size={16} aria-hidden="true" />
+              )}
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )

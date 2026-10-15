@@ -729,6 +729,28 @@
   margin-left: 0;
 }
 
+/* In a side conversation (a narrow panel) the parley sits under its bar:
+   the strip wraps, without the faces. */
+.workspace-side-parley {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 0 0;
+}
+.workspace-side-parley .workspace-teamspace-parley { margin-left: 0; }
+.workspace-side-parley .call-strip {
+  align-self: stretch;
+  flex-wrap: wrap;
+  margin: 0;
+}
+.workspace-side-parley .call-strip-cams { display: none; }
+.workspace-side-parley .call-strip-acts {
+  width: 100%;
+  justify-content: flex-end;
+}
+
 /* Choosing the microphone, camera and speaker, over the stage. */
 .call-devices {
   position: absolute;

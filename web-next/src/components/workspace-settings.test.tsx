@@ -101,13 +101,14 @@ describe("WorkspaceSettings", () => {
     expect(rememberedSettingsPage(scope)).toBe("people")
   })
 
-  it("falls back to Account if an admin's remembered Slack section is no longer permitted", () => {
+  it("keeps a member's remembered Slack section, where they link their own account", () => {
     rememberSettingsPage(scope, "slack")
+    fakeGo({})
     showSettings(undefined, { live: true })
     expect(
-      screen.getByRole("heading", { level: 2, name: "Account" })
+      screen.getByRole("heading", { level: 2, name: "Slack" })
     ).toBeTruthy()
-    expect(screen.queryByRole("button", { name: "Slack" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Slack" })).toBeTruthy()
   })
 
   it("preserves the guarded explicit Slack return for a member", () => {
@@ -120,7 +121,10 @@ describe("WorkspaceSettings", () => {
     expect(
       screen.getByText("Organisation owners and admins manage Slack.")
     ).toBeTruthy()
-    expect(go.sent()).toEqual([])
+    // Only the member's own link is read; nothing of the install.
+    expect(go.sent().every((sent) => sent.endsWith("/apps/slack/link"))).toBe(
+      true
+    )
   })
 
   it("falls back to Account for an unavailable remembered Sign-in apps section", async () => {
