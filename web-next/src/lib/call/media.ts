@@ -74,6 +74,10 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
   const meeting = await RealtimeKitClient.init({
     authToken: options.token,
     defaults: { audio: options.mic, video: options.camera },
+    // Without this the core SDK plays no one else's audio (meeting.audio is
+    // undefined and remote tracks go nowhere), and nothing here plays them:
+    // a parley had working mics and silent speakers in every browser.
+    modules: { experimentalAudioPlayback: true },
   })
   await meeting.join()
 
@@ -85,10 +89,9 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
   const self = meeting.self as unknown as Participant
   for (const event of mediaEvents) self.on?.(event, changed)
 
-  // The SDK plays everyone else's audio itself, but a browser (Safari above
-  // all) refuses audio that doesn't start in a click, and joining outlasts
-  // the click on Parley: the member hears nothing while their mic works.
-  // On a refusal, play again at their next click or key.
+  // Safari refuses audio that doesn't start in a click, and joining outlasts
+  // the click on Parley; on that refusal, play again at the member's next
+  // click or key.
   const gestures = ["pointerdown", "keydown"] as const
   const replay = () => {
     for (const gesture of gestures)

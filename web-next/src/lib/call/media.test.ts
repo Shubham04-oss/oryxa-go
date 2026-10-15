@@ -23,11 +23,14 @@ const sdk = vi.hoisted(() => {
     participants: { joined: Object.assign(new Map(), { on: () => {} }) },
     ai: { on: () => {}, off: () => {} },
   }
-  return { handlers, play, meeting }
+  const init = vi.fn(
+    async (_options: { modules?: Record<string, unknown> }) => meeting
+  )
+  return { handlers, play, meeting, init }
 })
 
 vi.mock("@cloudflare/realtimekit", () => ({
-  default: { init: async () => sdk.meeting },
+  default: { init: sdk.init },
 }))
 
 afterEach(() => {
@@ -36,6 +39,13 @@ afterEach(() => {
 })
 
 describe("joinMedia's audio", () => {
+  it("asks the SDK to play everyone else's audio, which it doesn't by default", async () => {
+    await joinMedia({ token: "t", mic: true, camera: false })
+    expect(sdk.init.mock.calls[0]?.[0].modules).toEqual({
+      experimentalAudioPlayback: true,
+    })
+  })
+
   it("plays the call again at the member's next click once the browser refused it", async () => {
     await joinMedia({ token: "t", mic: true, camera: false })
     document.dispatchEvent(new Event("pointerdown"))
