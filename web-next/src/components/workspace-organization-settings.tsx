@@ -1,17 +1,46 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import type { FormEvent } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Building2 } from "lucide-react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Input } from "@/components/ui/input"
 import type { Organization, Role, Session } from "@/lib/auth/client"
 import { authErrorMessage } from "@/lib/auth/client"
-import { removeOrganizationMember } from "@/lib/auth/invitations"
+import { getMembers, removeOrganizationMember } from "@/lib/auth/invitations"
 import {
   deleteOrganization,
   organizationProfileSchema,
   updateOrganization,
 } from "@/lib/auth/settings"
+import {
+  SettingsActions,
+  SettingsButton,
+  SettingsGroup,
+  SettingsMessage,
+  SettingsNote,
+  SettingsRow,
+  SettingsValue,
+} from "./settings-kit"
 
+const createdDate = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+})
+
+/** "a.io, b.de" → ["a.io", "b.de"]; Go checks each is a DNS name. */
+function parseDomains(value: string): string[] {
+  return value
+    .split(/[\s,]+/)
+    .map((item) => item.trim().toLowerCase().replace(/^@/, ""))
+    .filter(Boolean)
+}
+
+/**
+ * Settings → Organisation: the workspace's name, its address (the slug) and
+ * its email domains, then leaving or deleting it. Owners change them.
+ *
+ * Changing the mark, the data region, recording retention and export have no
+ * route yet, so they are not offered.
+ */
 export function WorkspaceOrganizationSettings({
   organization,
   role,
@@ -24,32 +53,35 @@ export function WorkspaceOrganizationSettings({
   session?: Session
 }) {
   const queryClient = useQueryClient()
-  const visibleOrganization =
+  const shown =
     organization ||
     (preview
       ? { id: "preview-organization", name: "Oryxa", slug: "oryxa" }
       : undefined)
   const editable = !preview && role === "owner" && Boolean(organization)
-  const [name, setName] = useState(visibleOrganization?.name || "")
-  const [slug, setSlug] = useState(visibleOrganization?.slug || "")
-  const [errors, setErrors] = useState<{ name?: string; slug?: string }>({})
+  const [editing, setEditing] = useState<"name" | "domains" | null>(null)
+  const [name, setName] = useState("")
+  const [domains, setDomains] = useState("")
+  const [error, setError] = useState("")
   const [saved, setSaved] = useState(false)
   const [dangerAction, setDangerAction] = useState<"leave" | "delete" | null>(
     null
   )
   const [confirmation, setConfirmation] = useState("")
 
-  useEffect(() => {
-    setName(visibleOrganization?.name || "")
-    setSlug(visibleOrganization?.slug || "")
-  }, [
-    visibleOrganization?.id,
-    visibleOrganization?.name,
-    visibleOrganization?.slug,
-  ])
+  // Who created it, by name, when the members list can say.
+  const members = useQuery({
+    queryKey: ["settings", "members", organization?.id],
+    queryFn: () => getMembers(organization!.id),
+    enabled: !preview && Boolean(organization?.created_by),
+    retry: false,
+  })
+  const creator = members.data?.find(
+    (member) => member.user_id === organization?.created_by
+  )
 
   const save = useMutation({
-    mutationFn: (input: { name: string; slug: string }) =>
+    mutationFn: (input: { name: string; slug: string; domains?: string[] }) =>
       updateOrganization(organization!.id, input),
     onSuccess: async (updated) => {
       queryClient.setQueryData<Session>(["auth", "session"], (current) =>
@@ -57,13 +89,12 @@ export function WorkspaceOrganizationSettings({
           ? {
               ...current,
               organizations: current.organizations.map((item) =>
-                item.id === updated.id ? updated : item
+                item.id === updated.id ? { ...item, ...updated } : item
               ),
             }
           : current
       )
-      setName(updated.name)
-      setSlug(updated.slug)
+      setEditing(null)
       setSaved(true)
       await queryClient.invalidateQueries({ queryKey: ["auth", "session"] })
     },
@@ -85,146 +116,211 @@ export function WorkspaceOrganizationSettings({
   const leaving =
     leave.isPending || leave.isSuccess || remove.isPending || remove.isSuccess
 
+  if (!shown) {
+    return <SettingsNote>No organisation is selected.</SettingsNote>
+  }
+  const current = shown
+
+  function startEditing(field: "name" | "domains") {
+    setName(current.name)
+    setDomains((organization?.domains ?? []).join(", "))
+    setError("")
+    setSaved(false)
+    save.reset()
+    setEditing(field)
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!editable) return
-    setSaved(false)
-    const result = organizationProfileSchema.safeParse({ name, slug })
+    const result = organizationProfileSchema.safeParse({
+      name: editing === "name" ? name : current.name,
+      slug: current.slug,
+    })
     if (!result.success) {
-      setErrors({
-        name: result.error.issues.find((issue) => issue.path[0] === "name")
-          ?.message,
-        slug: result.error.issues.find((issue) => issue.path[0] === "slug")
-          ?.message,
-      })
+      setError(result.error.issues[0]?.message ?? "Check the name.")
       return
     }
-    setErrors({})
-    save.mutate(result.data)
-  }
-
-  if (!visibleOrganization) {
-    return (
-      <div className="workspace-settings-account">
-        <p>No organisation is selected.</p>
-      </div>
+    setError("")
+    save.mutate(
+      editing === "domains"
+        ? { ...result.data, domains: parseDomains(domains) }
+        : result.data
     )
   }
 
-  const changed =
-    name.trim() !== visibleOrganization.name ||
-    slug.trim() !== visibleOrganization.slug
+  const created = organization?.created_at
+    ? [
+        `Created ${createdDate.format(new Date(organization.created_at))}`,
+        creator ? `by ${creator.display_name || creator.email}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : undefined
+  const roleLine = editable
+    ? undefined
+    : preview
+      ? "Preview only. Sign in to make changes."
+      : "Only owners can change these details."
+  const ownDomains = organization?.domains ?? []
 
-  return (
-    <div className="workspace-settings-account workspace-settings-organization">
-      <div className="workspace-settings-account-card">
-        <span className="workspace-settings-org-mark">
-          <Building2 size={22} />
-        </span>
-        <div>
-          <strong>{visibleOrganization.name}</strong>
-          <small>
-            /{visibleOrganization.slug} ·{" "}
-            {role || (preview ? "Owner · preview" : "Checking role")}
-          </small>
-        </div>
-      </div>
-      <form className="workspace-settings-form" onSubmit={submit} noValidate>
-        <div className="workspace-settings-section-title">
-          <h3>Organisation profile</h3>
-          <p>The identity shown across your workspace.</p>
-        </div>
-        <label htmlFor="settings-organization-name">Name</label>
+  const editForm = (field: "name" | "domains") => (
+    <form
+      onSubmit={submit}
+      noValidate
+      aria-label={field === "name" ? "Rename organisation" : "Email domains"}
+    >
+      <SettingsRow
+        title={field === "name" ? "Name" : "Email domains"}
+        description={
+          field === "name"
+            ? "Shown across the workspace, in invitations and links."
+            : "Separate several with commas, such as northstar.io."
+        }
+      >
         <Input
-          id="settings-organization-name"
-          value={name}
-          disabled={!editable}
-          aria-invalid={Boolean(errors.name)}
-          onChange={(event) => {
-            setName(event.target.value)
-            setSaved(false)
-          }}
+          className="settings-input"
+          aria-label={field === "name" ? "Name" : "Email domains"}
+          aria-invalid={Boolean(error)}
+          value={field === "name" ? name : domains}
+          autoFocus
+          onChange={(event) =>
+            field === "name"
+              ? setName(event.target.value)
+              : setDomains(event.target.value)
+          }
         />
-        {errors.name && (
-          <p className="workspace-settings-error" role="alert">
-            {errors.name}
-          </p>
-        )}
-        <label htmlFor="settings-organization-slug">Handle</label>
-        <Input
-          id="settings-organization-slug"
-          value={slug}
-          disabled={!editable}
-          aria-invalid={Boolean(errors.slug)}
-          onChange={(event) => {
-            setSlug(event.target.value)
-            setSaved(false)
-          }}
-        />
-        {errors.slug && (
-          <p className="workspace-settings-error" role="alert">
-            {errors.slug}
-          </p>
-        )}
-        <p className="workspace-settings-hint">
-          Used in navigation, invitations, and links.
-        </p>
-        {save.isError && (
-          <p className="workspace-settings-error" role="alert">
-            {authErrorMessage(
+      </SettingsRow>
+      {(error || save.isError) && (
+        <SettingsMessage tone="error">
+          {error ||
+            authErrorMessage(
               save.error,
               "Could not save the organisation. Try again."
             )}
-          </p>
-        )}
-        <div className="workspace-settings-form-footer">
-          <span role={saved ? "status" : undefined}>
-            {saved
-              ? "Saved."
-              : preview
-                ? "Preview only. Sign in to make changes."
-                : editable
-                  ? "Visible to every organisation member."
-                  : "Only owners can change these details."}
-          </span>
-          {editable && (
-            <button type="submit" disabled={!changed || save.isPending}>
-              {save.isPending ? "Saving…" : "Save changes"}
-            </button>
-          )}
-        </div>
-      </form>
-      {!preview && session && role && (
-        <section
-          className="workspace-settings-section"
-          aria-label="Organisation access"
+        </SettingsMessage>
+      )}
+      <SettingsActions>
+        <SettingsButton size="default" onClick={() => setEditing(null)}>
+          Cancel
+        </SettingsButton>
+        <SettingsButton
+          type="submit"
+          size="default"
+          tone="primary"
+          disabled={save.isPending}
         >
-          <div className="workspace-settings-section-title">
-            <h3>
-              {role === "owner" ? "Delete organisation" : "Leave organisation"}
-            </h3>
-            <p>
-              {role === "owner"
-                ? "Deletes this organisation for everyone, including its teams, files, connections, and subscription."
-                : "Leaving removes your access and your personal files and connections here."}
-            </p>
-          </div>
-          {dangerAction ? (
-            <div className="workspace-settings-confirm">
-              <p>
-                {dangerAction === "delete"
-                  ? `Type ${organization?.name} to confirm permanent deletion.`
-                  : `Leave ${organization?.name}? Someone would need to invite you back.`}
-              </p>
-              {dangerAction === "delete" && (
-                <input
-                  aria-label="Type organisation name to confirm"
-                  value={confirmation}
-                  onChange={(event) => setConfirmation(event.target.value)}
-                />
+          {save.isPending ? "Saving…" : "Save changes"}
+        </SettingsButton>
+      </SettingsActions>
+    </form>
+  )
+
+  return (
+    <>
+      <SettingsGroup label="Workspace">
+        {editing === "name" ? (
+          editForm("name")
+        ) : (
+          <SettingsRow
+            media={
+              <span className="settings-org-mark" aria-hidden="true">
+                {current.name.charAt(0).toUpperCase()}
+              </span>
+            }
+            title={current.name}
+            description={created ?? roleLine}
+          >
+            {editable && (
+              <SettingsButton onClick={() => startEditing("name")}>
+                Rename
+              </SettingsButton>
+            )}
+          </SettingsRow>
+        )}
+        <SettingsRow
+          title="Address"
+          description="The workspace's handle, used in links and invitations."
+        >
+          <SettingsValue mono>{current.slug}</SettingsValue>
+        </SettingsRow>
+        {organization &&
+          (editing === "domains" ? (
+            editForm("domains")
+          ) : (
+            <SettingsRow
+              title="Email domains"
+              description={`The email domains that belong to ${current.name}.`}
+            >
+              {ownDomains.length > 0 ? (
+                <SettingsValue mono>{ownDomains.join(", ")}</SettingsValue>
+              ) : (
+                <SettingsValue>None yet</SettingsValue>
               )}
-              <button
-                type="button"
+              {editable && (
+                <SettingsButton onClick={() => startEditing("domains")}>
+                  Edit
+                </SettingsButton>
+              )}
+            </SettingsRow>
+          ))}
+        {saved && !editing && (
+          <SettingsMessage tone="notice">Saved.</SettingsMessage>
+        )}
+        {created && roleLine && <SettingsNote>{roleLine}</SettingsNote>}
+      </SettingsGroup>
+
+      {!preview && session && role && (
+        <SettingsGroup label="Danger zone">
+          <SettingsRow
+            tone="danger"
+            title={
+              role === "owner"
+                ? `Delete ${current.name}`
+                : `Leave ${current.name}`
+            }
+            description={
+              role === "owner"
+                ? "Deletes it for everyone, with its teams, files, connections and subscription. Only owners can do this."
+                : "Removes your access, and your personal files and connections here."
+            }
+          >
+            {!dangerAction && (
+              <SettingsButton
+                onClick={() =>
+                  setDangerAction(role === "owner" ? "delete" : "leave")
+                }
+              >
+                {role === "owner"
+                  ? "Delete organisation"
+                  : "Leave organisation"}
+              </SettingsButton>
+            )}
+          </SettingsRow>
+          {dangerAction === "delete" && (
+            <SettingsRow
+              title="Confirm"
+              description={`Type ${current.name} to confirm permanent deletion.`}
+            >
+              <Input
+                className="settings-input"
+                aria-label="Type organisation name to confirm"
+                value={confirmation}
+                disabled={leaving}
+                onChange={(event) => setConfirmation(event.target.value)}
+              />
+            </SettingsRow>
+          )}
+          {dangerAction && (
+            <SettingsActions
+              start={
+                dangerAction === "leave"
+                  ? `Leave ${current.name}? Someone would need to invite you back.`
+                  : undefined
+              }
+            >
+              <SettingsButton
+                size="default"
                 disabled={leaving}
                 onClick={() => {
                   setDangerAction(null)
@@ -232,9 +328,10 @@ export function WorkspaceOrganizationSettings({
                 }}
               >
                 Cancel
-              </button>
-              <button
-                type="button"
+              </SettingsButton>
+              <SettingsButton
+                size="default"
+                tone="danger"
                 disabled={
                   (dangerAction === "delete" &&
                     confirmation !== organization?.name) ||
@@ -247,29 +344,19 @@ export function WorkspaceOrganizationSettings({
                 {dangerAction === "delete"
                   ? "Delete organisation"
                   : "Leave organisation"}
-              </button>
-            </div>
-          ) : (
-            <button
-              className="workspace-settings-action"
-              type="button"
-              onClick={() =>
-                setDangerAction(role === "owner" ? "delete" : "leave")
-              }
-            >
-              {role === "owner" ? "Delete organisation" : "Leave organisation"}
-            </button>
+              </SettingsButton>
+            </SettingsActions>
           )}
           {(leave.isError || remove.isError) && (
-            <p className="workspace-settings-error" role="alert">
+            <SettingsMessage tone="error">
               {authErrorMessage(
                 leave.error || remove.error,
                 "Could not update organisation access."
               )}
-            </p>
+            </SettingsMessage>
           )}
-        </section>
+        </SettingsGroup>
       )}
-    </div>
+    </>
   )
 }

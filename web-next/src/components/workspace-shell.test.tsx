@@ -484,9 +484,7 @@ describe("WorkspaceShell navigation", () => {
       screen.getByText("Sign in to a workspace to message its people.")
     ).toBeTruthy()
     expect(screen.queryByRole("button", { name: /^Message / })).toBeNull()
-    expect(
-      screen.queryByRole("heading", { name: "Make room for someone new." })
-    ).toBeNull()
+    expect(screen.queryByRole("form", { name: "Invite people" })).toBeNull()
 
     fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
     fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
@@ -495,9 +493,7 @@ describe("WorkspaceShell navigation", () => {
       screen.getByRole("heading", { name: "Account", level: 2 })
     ).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "People" }))
-    expect(
-      screen.getByRole("heading", { name: "Make room for someone new." })
-    ).toBeTruthy()
+    expect(screen.getByRole("form", { name: "Invite people" })).toBeTruthy()
     expect(
       screen
         .getByRole("button", { name: "Send invite" })
@@ -513,12 +509,11 @@ describe("WorkspaceShell navigation", () => {
     ).toBe(true)
     fireEvent.click(screen.getByRole("button", { name: "Organisation" }))
     expect(screen.getByRole("heading", { name: "Organisation" })).toBeTruthy()
+    // The preview offers no Rename: only owners of a real workspace may.
+    expect(screen.queryByRole("button", { name: "Rename" })).toBeNull()
     expect(
-      screen.getByRole("textbox", { name: "Name" }).hasAttribute("disabled")
-    ).toBe(true)
-    expect(
-      screen.getByRole("textbox", { name: "Handle" }).hasAttribute("disabled")
-    ).toBe(true)
+      screen.getByText("Preview only. Sign in to make changes.")
+    ).toBeTruthy()
     for (const section of ["Teams", "Tool access", "Email", "Billing"]) {
       fireEvent.click(screen.getByRole("button", { name: section }))
       expect(
