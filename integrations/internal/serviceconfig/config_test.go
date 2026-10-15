@@ -1,6 +1,9 @@
 package serviceconfig
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func env(values map[string]string) func(string) string {
 	return func(name string) string { return values[name] }
@@ -31,5 +34,25 @@ func TestOnReadsCallersAndRefusesMalformedOnes(t *testing.T) {
 	}
 	if _, err := FromEnv(env(map[string]string{"INTEGRATIONS_ENABLED": "true", "INTEGRATIONS_SERVICE_CALLERS": "not json"})); err == nil {
 		t.Fatal("malformed callers were accepted")
+	}
+}
+
+func TestOnReadsTheKeyAndOryxasAppsAndNeverEchoesTheirSecrets(t *testing.T) {
+	on := map[string]string{
+		"INTEGRATIONS_ENABLED":    "true",
+		"INTEGRATIONS_KMS_KEY_ID": " alias/integrations ",
+		"INTEGRATIONS_ORYXA_APPS": `[{"app":"github","client_id":"Iv1.abc","secret":"s3cret-value","extra":{"app_id":"7"}}]`,
+	}
+	config, err := FromEnv(env(on))
+	if err != nil || config.KMSKeyID != "alias/integrations" || len(config.OryxaApps) != 1 ||
+		config.OryxaApps[0].Secret.Reveal() != "s3cret-value" || config.OryxaApps[0].Extra["app_id"] != "7" {
+		t.Fatalf("config = %+v, err = %v", config, err)
+	}
+	for _, bad := range []string{`not json`, `[{"app":"github","secret":"s3cret-value","surprise":1}]`} {
+		on["INTEGRATIONS_ORYXA_APPS"] = bad
+		_, err := FromEnv(env(on))
+		if err == nil || strings.Contains(err.Error(), "s3cret-value") {
+			t.Fatalf("apps %q: err = %v; want a refusal that does not quote the value", bad, err)
+		}
 	}
 }

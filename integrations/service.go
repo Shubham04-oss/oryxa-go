@@ -17,8 +17,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/httpserver"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/orgapps"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/serviceconfig"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/vault"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
@@ -53,7 +56,7 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 // Mount assembles the service on what the host shares. Off, it says so once
 // and serves nothing, unless ORYXA_SERVICES names it: asked for by name and
 // not switched on, it refuses to start rather than quietly run without it.
-func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
+func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if !serviceconfig.Enabled(platform.Getenv) {
 		if namedIn(platform.Getenv("ORYXA_SERVICES")) {
 			return host.Service{}, fmt.Errorf("ORYXA_SERVICES names %s, but INTEGRATIONS_ENABLED is not true; set it, or leave %s out of ORYXA_SERVICES", Name, Name)
@@ -78,11 +81,38 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		platform.Logger.Warn("INTEGRATIONS_SERVICE_CALLERS is not set: every internal call is refused")
 	}
 	server := httpserver.New(verifier, platform.Logger)
+	if err := mountOrgApps(ctx, server, platform, config); err != nil {
+		return host.Service{}, err
+	}
 	return host.Service{
 		Handler:  server,
 		Routes:   server.Patterns(),
 		Timeouts: host.Timeouts{Read: 15 * time.Second, Write: 30 * time.Second},
 	}, nil
+}
+
+// mountOrgApps serves the org apps API and loads Oryxa's own apps. Without a
+// KMS key nothing can be sealed, so it serves nothing and says so; apps that
+// were configured but cannot be loaded stop the start.
+func mountOrgApps(ctx context.Context, server *httpserver.Server, platform host.Platform, config serviceconfig.Config) error {
+	if config.KMSKeyID == "" {
+		platform.Logger.Warn("INTEGRATIONS_KMS_KEY_ID is not set: the org apps API is off")
+		return nil
+	}
+	sealer, err := vault.New(secrets.KMSDataKeys{Client: kms.NewFromConfig(platform.AWS), KeyID: config.KMSKeyID}, config.KMSKeyID)
+	if err != nil {
+		return err
+	}
+	apps := orgapps.New(platform.Database.Pool, sealer)
+	for _, app := range config.OryxaApps {
+		if _, _, err := apps.Load(ctx, app.App, orgapps.Input{
+			ClientID: app.ClientID, Secret: app.Secret, WebhookSecret: app.WebhookSecret, Extra: app.Extra,
+		}); err != nil {
+			return fmt.Errorf("load Oryxa's %s app: %w", app.App, err)
+		}
+	}
+	orgapps.Routes(server, apps, platform.Logger)
+	return nil
 }
 
 // namedIn reports whether services, ORYXA_SERVICES's value, names this
