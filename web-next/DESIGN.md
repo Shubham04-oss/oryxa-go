@@ -80,11 +80,21 @@ not permission to copy every incidental value into a new component.
 - Expanding the right panel collapses the left. Collapsing the right expands
   the center; it must **not** automatically expand the left. A manually
   collapsed left sidebar stays collapsed until the user opens it.
-- **One sidebar** (founder, 14 Oct 2026): every page is listed at once, in
-  three tiles headed Home, Team and Agents, so nothing is a mode switch away.
-  Picking a page opens it and its area; the page you are on is the raised
-  tile. The sidebar's top row names the workspace. Collapsed, the rail shows
-  the same three tiles as icons. (The Home/Team/Agents mode pills are gone.)
+- **One sidebar** (founder, 14 Oct 2026; boards Sidebar and Rail, 15 Oct):
+  every page is listed at once, so nothing is a mode switch away. It is the
+  library's sidebar (`components/ui/sidebar.tsx`) in
+  `workspace-sidebar.tsx`, its colour roles pointed at the theme's tokens in
+  `workspace-sidebar.css`. Picking a page opens it; the page you are on is
+  the raised tile. The top row is the workspace switcher (its initial on a
+  white tile, the name, and a menu of the member's workspaces when they have
+  more than one; it replaced the header's select) beside the collapse
+  toggle; "Search or jump to ⌘K" sits under it once the palette answers it.
+  The footer is the member (avatar, name, role), which opens the profile
+  menu (theme, Settings, Sign out), and a Settings gear beside it. Every
+  count is a real read, left out until it has loaded or when it fails. Its
+  rows and Library tiles are the library's menu buttons; its toggles, search
+  and gear are `ui/button` (outline `icon` for the toggles, as round edge
+  controls; ghost `icon-sm` for the gear), never a CSS button recipe.
 - The right agent panel holds the member's agent and team conversations. Its
   tabs, Agents (the default), DMs, Teams and **At a glance**, use the same
   icon-first pills. At a glance keeps Today's widgets (from your apps,
@@ -102,13 +112,20 @@ not permission to copy every incidental value into a new component.
   one icon per tab, and each opens the panel on that tab. A tab without a
   live service shows a one-line empty state, never example people, rooms or
   messages.
-- The sidebar's tiles, in order (Team's recent conversations follow them):
+- The sidebar's tiles, in order (each heading in quiet capitals, with its
+  + where it has one):
 
-  | Tile | Pages |
+  | Tile | Rows |
   | --- | --- |
-  | Home | My workspace, Library, Tools |
-  | Team | Teamspaces, People, then up to three visible recent conversations |
-  | Agents | Agent overview, Requests, Multi-agent teams, Specialists |
+  | (no heading) | My workspace; Requests, with how many wait on the member as a strong count; Chats with your agent (the agent panel's history until a Chats page exists) |
+  | Teamspaces (the heading opens the list; + leads there to add one) | Each of the member's teamspaces by its planet, opening it; "No teamspaces yet." when there are none |
+  | Messages (+ opens People to pick someone) | The three latest DMs, plus any older one with unread messages (six at most), each with its unread count; People, with how many |
+  | Agents (+ leads to Specialists) | The primary agent by name and voxel avatar, "Your agent" (Agent overview); Specialists, Agent teams and Workflows, each with how many (Workflows opens Agent overview, where they live) |
+  | Library | Two tiles, Knowledge and Tools. The board's Files tile waits for a Files page. |
+
+  Collapsed, the rail keeps the way back out, the first tile's pages, the
+  agent and the Library as icons (names as tooltips, the Requests count as a
+  badge), and the member's avatar with the profile menu.
 
 - The shared workspace header is compact (56px at normal desktop/mobile
   widths), with its title centered. It contains the **current context**:
@@ -405,12 +422,12 @@ not permission to copy every incidental value into a new component.
   Switching agents keeps each one's conversation and unsent message. What the panel holds belongs to the member:
   another member taking over the page inherits none of it.
 - People is a DM area, not teammate administration or a combined “People &
-  teams” directory. Recent/started conversations belong in Team's left
-  sidebar, with at most three visible there. A DM uses the same dynamic header
+  teams” directory. Recent conversations belong in the sidebar's Messages
+  tile (above). A DM uses the same dynamic header
   principle and keeps the conversation/composer as the main content.
 - **Direct messages.** A DM is one conversation (`direct-message.tsx`) in two
   layouts, each its own view of the same live object (REALTIME.md): the main
-  canvas, opened from People or Team's recent conversations, under the header
+  canvas, opened from People or the sidebar's Messages, under the header
   that names the person; and the agent panel's DMs tab, under a compact row
   with a back arrow to the list.
   - It reads as a quiet log (a centered column in the canvas): the member's
@@ -429,8 +446,8 @@ not permission to copy every incidental value into a new component.
     messages raise a "N new messages" pill and are announced. The page before
     loads at the top without moving what the reader is looking at, and the
     start of the conversation says so.
-  - Unread is a count on a DMs row, a dot on a recent conversation in Team's
-    navigation, and a badge on the DMs tab and its rail icon ("9+" past
+  - Unread is a count on a DMs row and on a DM in the sidebar's Messages,
+    and a badge on the DMs tab and its rail icon ("9+" past
     nine); a phone, which has no rail, puts a dot on the panel's edge
     control. A DM counts as read while it is on screen, at its end, in a
     visible tab.
@@ -439,9 +456,9 @@ not permission to copy every incidental value into a new component.
     reach this conversation" with Try again, while the composer keeps taking
     messages that send once it is back.
   - People lists everyone in the organization but the member, with role and
-    shared teamspaces as context, search, and a Message action. Team's
-    navigation shows the three latest DMs, and "All" opens the DMs tab, where
-    "New message" picks anyone in the organization. The canvas DM is in the
+    shared teamspaces as context, search, and a Message action. The
+    sidebar's Messages shows the latest DMs; the agent panel's DMs tab lists
+    them all, where "New message" picks anyone in the organization. The canvas DM is in the
     page's address (`?dm=`), so a refresh returns to it.
   - Opening a DM moves focus to its composer, or to the log on a phone so the
     keyboard stays down; going back returns focus to the person or row it

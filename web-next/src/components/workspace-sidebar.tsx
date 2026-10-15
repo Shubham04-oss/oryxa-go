@@ -26,6 +26,7 @@ import {
   UsersRound,
   Workflow,
 } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import {
   Sidebar,
   SidebarContent,
@@ -268,38 +269,31 @@ function ExpandedSidebar({
             organizations={organizations}
             selected={selectedOrganization}
           />
-          <button
-            className="workspace-icon-button workspace-left-toggle"
-            type="button"
+          <Button
+            className="workspace-sidebar-toggle"
+            variant="outline"
+            size="icon"
             aria-label="Collapse left sidebar"
             aria-controls="workspace-navigation"
             aria-expanded
             onClick={() => onExpandedChange(false)}
           >
-            <PanelLeftClose
-              className="workspace-panel-toggle-desktop"
-              size={18}
-              strokeWidth={1.7}
-            />
-            <ArrowLeft
-              className="workspace-panel-toggle-mobile"
-              size={17}
-              strokeWidth={1.7}
-            />
-          </button>
+            <PanelLeftClose className="workspace-panel-toggle-desktop" />
+            <ArrowLeft className="workspace-panel-toggle-mobile" />
+          </Button>
         </div>
         {onSearch && (
-          <button
+          <Button
             className="workspace-sidebar-search"
-            type="button"
+            variant="secondary"
             aria-label="Search or jump to"
             aria-keyshortcuts="Meta+K Control+K"
             onClick={onSearch}
           >
-            <Search size={15} strokeWidth={1.8} aria-hidden="true" />
+            <Search aria-hidden="true" />
             <span>Search or jump to</span>
             <kbd>⌘K</kbd>
-          </button>
+          </Button>
         )}
       </SidebarHeader>
 
@@ -515,15 +509,15 @@ function ExpandedSidebar({
           onSignOut={onSignOut}
           signingOut={signingOut}
         />
-        <button
-          className="workspace-sidebar-gear"
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-sm"
           aria-label="Settings"
           title="Settings"
           onClick={onOpenSettings}
         >
-          <Settings size={17} strokeWidth={1.7} />
-        </button>
+          <Settings />
+        </Button>
       </SidebarFooter>
     </>
   )
@@ -552,25 +546,18 @@ function CollapsedSidebar({
   return (
     <>
       <SidebarHeader className="workspace-sidebar-header">
-        <button
-          className="workspace-mark workspace-mark-button"
-          type="button"
+        <Button
+          className="workspace-sidebar-toggle"
+          variant="outline"
+          size="icon"
           aria-label="Expand left sidebar"
           aria-controls="workspace-navigation"
           aria-expanded={false}
           onClick={() => onExpandedChange(true)}
         >
-          <PanelLeftOpen
-            className="workspace-panel-toggle-desktop"
-            size={18}
-            strokeWidth={1.7}
-          />
-          <ArrowRight
-            className="workspace-panel-toggle-mobile"
-            size={17}
-            strokeWidth={1.7}
-          />
-        </button>
+          <PanelLeftOpen className="workspace-panel-toggle-desktop" />
+          <ArrowRight className="workspace-panel-toggle-mobile" />
+        </Button>
       </SidebarHeader>
       <SidebarContent className="workspace-sidebar-content">
         <nav className="workspace-sidebar-nav" aria-label="Workspace">
@@ -779,15 +766,15 @@ function LibraryTile({
   onClick: () => void
 }) {
   return (
-    <button
-      className={cn("workspace-sidebar-mini", current && "is-active")}
-      type="button"
+    <SidebarMenuButton
+      className="workspace-sidebar-mini"
+      isActive={current}
       aria-current={current ? "page" : undefined}
       onClick={onClick}
     >
       {icon}
       <span>{label}</span>
-    </button>
+    </SidebarMenuButton>
   )
 }
 

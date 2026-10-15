@@ -21,7 +21,10 @@
 }
 
 /* The header's 56px row, as the right panel's top is: both toggles sit level
-   with the page title. */
+   with the page title. The toggle is ui/button (outline, icon), round as the
+   shell's edge controls are. */
+.workspace-sidebar-toggle { flex: none; margin-left: auto; border-radius: 999px; }
+.workspace-shell[data-left="collapsed"] .workspace-sidebar-toggle { margin: 0 auto; }
 .workspace-sidebar-header { gap: 4px; padding: 0; }
 .workspace-sidebar-top {
   display: flex;
@@ -69,22 +72,15 @@ button.workspace-sidebar-org[data-popup-open] { background: var(--tone-222222); 
   white-space: nowrap;
 }
 
+/* ui/button (secondary), laid out as a field: full width, words left. */
 .workspace-sidebar-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 34px;
-  margin: 0 0 2px;
-  padding: 0 8px 0 10px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--canvas);
+  justify-content: flex-start;
+  width: 100%;
+  margin-bottom: 2px;
   color: var(--text-muted);
-  font-size: 13px;
-  text-align: left;
+  font-weight: 400;
 }
-.workspace-sidebar-search:hover { color: var(--text); }
-.workspace-sidebar-search > span { flex: 1; }
+.workspace-sidebar-search > span { flex: 1; text-align: left; }
 .workspace-sidebar-search kbd {
   display: inline-flex;
   align-items: center;
@@ -185,24 +181,21 @@ button.workspace-sidebar-heading[aria-current="page"] { color: var(--text); }
   gap: 6px;
   padding: 2px;
 }
+/* Library tiles: the sidebar's own menu button, laid out as a tile. */
 .workspace-sidebar-mini {
-  display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   height: 64px;
-  padding: 9px 10px;
-  border: 0;
+  padding: 8px 12px;
   border-radius: 10px;
   background: var(--tone-252525);
   color: var(--tone-cccccc);
   font-size: 12px;
   font-weight: 600;
 }
-.workspace-sidebar-mini > svg { color: var(--tone-aaaaaa); }
-.workspace-sidebar-mini:hover { background: var(--tone-2e2e2e); color: var(--text); }
-.workspace-sidebar-mini.is-active {
+.workspace-sidebar-mini[data-active] {
   background: var(--raised);
   box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66);
   color: var(--text);
@@ -238,19 +231,6 @@ button.workspace-sidebar-heading[aria-current="page"] { color: var(--text); }
 .workspace-sidebar-profile-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; line-height: 1.3; }
 .workspace-sidebar-profile-copy strong { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-sidebar-profile-copy small { color: var(--tone-898989); font-size: 11px; }
-.workspace-sidebar-gear {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--tone-aaaaaa);
-}
-.workspace-sidebar-gear:hover { background: var(--tone-2a2a2a); color: var(--text); }
-
 /* The workspace and profile menus. */
 .workspace-sidebar-menu {
   min-width: 200px;
