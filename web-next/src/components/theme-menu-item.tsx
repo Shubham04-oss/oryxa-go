@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { Monitor, Moon, Sun } from "lucide-react"
 import { useTheme } from "next-themes"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 
 type Theme = "system" | "light" | "dark"
 
@@ -18,7 +19,8 @@ function isTheme(value: string | undefined): value is Theme {
 
 /**
  * The profile menu's theme choice, as in oryxa-platform: each press moves on
- * from System to Light to Dark and back. next-themes keeps it in this browser.
+ * from System to Light to Dark and back, and the menu stays open so the
+ * member sees the change. next-themes keeps it in this browser.
  */
 export function ThemeMenuItem() {
   const { theme, setTheme } = useTheme()
@@ -30,13 +32,12 @@ export function ThemeMenuItem() {
   const Icon = icons[current]
 
   return (
-    <button
-      type="button"
-      role="menuitem"
+    <DropdownMenuItem
+      closeOnClick={false}
       aria-label={`Theme: ${labels[current]}. Switch to ${labels[next]}`}
       onClick={() => setTheme(next)}
     >
       <Icon size={17} strokeWidth={1.7} /> Theme: {labels[current]}
-    </button>
+    </DropdownMenuItem>
   )
 }
