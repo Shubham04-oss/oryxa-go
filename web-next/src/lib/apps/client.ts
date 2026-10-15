@@ -234,6 +234,49 @@ function connectionPath(organizationId: string, connectionId: string): string {
   return `${connectionsPath(organizationId)}/${encodeURIComponent(connectionId)}`
 }
 
+/** How a tool run went (apps_actions; `domain.ActionStatus`). */
+export type ActionStatus = "running" | "succeeded" | "failed"
+
+/**
+ * One tool run through a connection: an agent's, or the member's own. What
+ * the app answered is never sent, since it can hold the app's data.
+ */
+export type ConnectionAction = {
+  id: string
+  tool: string
+  read_only: boolean
+  /** An agent ran it, not the member. */
+  agent: boolean
+  agent_id?: string
+  agent_role?: string
+  status: ActionStatus
+  error?: string
+  created_at: string
+  /** Unset while the run is in flight. */
+  finished_at?: string
+}
+
+/** The most runs one read asks for. */
+export const CONNECTION_ACTIONS_LIMIT = 50
+
+/**
+ * `GET …/apps/connections/{id}/actions`: the tool runs through one of the
+ * member's connections, newest first. A server without the route answers
+ * 404, which the runs pane says plainly.
+ */
+export async function listConnectionActions(
+  organizationId: string,
+  connectionId: string,
+  limit = CONNECTION_ACTIONS_LIMIT
+): Promise<ConnectionAction[]> {
+  const { actions } = await apiRequest<{ actions: ConnectionAction[] }>(
+    withQuery(`${connectionPath(organizationId, connectionId)}/actions`, {
+      limit,
+    })
+  )
+  return actions
+}
+
 /**
  * Starts connecting `input.toolkit`; the member finishes at the returned
  * `redirect_url`. 409s (`conflict`) when the member already has a pending or
@@ -548,6 +591,23 @@ export function connectionsQueryOptions(
       filter.toolkit ?? "",
     ] as const,
     queryFn: () => listConnections(organizationId, filter),
+  })
+}
+
+export function connectionActionsQueryOptions(
+  organizationId: string,
+  connectionId: string
+) {
+  return queryOptions({
+    queryKey: [
+      ...appsQueryKey(organizationId),
+      "connection",
+      connectionId,
+      "actions",
+    ] as const,
+    queryFn: () => listConnectionActions(organizationId, connectionId),
+    retry: (count, error) =>
+      !(error instanceof ApiError && error.status === 404) && count < 2,
   })
 }
 

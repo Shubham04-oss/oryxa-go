@@ -14,7 +14,9 @@
   justify-content: space-between;
   gap: 20px;
 }
-.workspace-tools-intro { justify-content: flex-end; }
+.workspace-tools-intro {
+  justify-content: flex-end;
+}
 .workspace-tools-page .workspace-eyebrow {
   display: block;
   margin-bottom: 8px;
@@ -955,4 +957,13 @@
   .workspace-tools-footnote {
     flex-wrap: wrap;
   }
+}
+
+/* A Pipedream connection's tool runs: the same rows as sync runs. */
+.workspace-tool-runs {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
