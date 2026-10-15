@@ -10,6 +10,16 @@ import { Card } from "@/components/ui/card"
 import { FileKindBadge } from "./file-kind"
 import type { PickupItem } from "./today-format"
 
+/** "Open Product docs": a card's button names the work it opens. */
+export function openName(item: PickupItem): string {
+  if (item.title) return `Open ${item.title}`
+  return item.kind === "knowledge"
+    ? "Open Library collection"
+    : item.kind === "file"
+      ? "Open file"
+      : "Open chat"
+}
+
 export function HomePickup({
   items,
   ready,
@@ -64,6 +74,7 @@ export function HomePickup({
                 : item.threadId && onOpenConversation
                   ? () => onOpenConversation(item.threadId!)
                   : undefined
+            const detailId = `home-pickup-${item.key}`
             const body = (
               <>
                 <span className="home-pickup-thumb" aria-hidden="true">
@@ -81,7 +92,7 @@ export function HomePickup({
                 </span>
                 <span className="home-pickup-meta">
                   <b>{item.title}</b>
-                  <small>{item.detail}</small>
+                  <small id={detailId}>{item.detail}</small>
                 </span>
               </>
             )
@@ -89,11 +100,19 @@ export function HomePickup({
               <li key={item.key}>
                 <Card className="home-pickup-card" size="sm">
                   {item.threadId || item.kind === "knowledge" ? (
-                    <button type="button" disabled={!open} onClick={open}>
+                    // The card's one control: named for what it opens, with
+                    // the quiet line as its description.
+                    <button
+                      type="button"
+                      aria-label={openName(item)}
+                      aria-describedby={detailId}
+                      disabled={!open}
+                      onClick={open}
+                    >
                       {body}
                     </button>
                   ) : (
-                    <div role="status">{body}</div>
+                    <div>{body}</div>
                   )}
                 </Card>
               </li>

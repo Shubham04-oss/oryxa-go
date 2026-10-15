@@ -483,9 +483,32 @@ it("orders Pick up where you left off by what was touched last, four at most", a
     "HandbookLibrary · 1 document",
     "Old chatChat · 15 h ago",
   ])
-  fireEvent.click(within(row).getByRole("button", { name: /deck\.pptx/ }))
+  // Each card is one button, named for what it opens, its quiet line its
+  // description; the thumbnail is decoration.
+  const cards = within(row).getAllByRole("listitem")
+  expect(
+    cards.map((card) => {
+      const buttons = within(card).getAllByRole("button")
+      expect(buttons).toHaveLength(1)
+      return [
+        buttons[0].getAttribute("aria-label"),
+        document.getElementById(buttons[0].getAttribute("aria-describedby")!)
+          ?.textContent,
+      ]
+    })
+  ).toEqual([
+    ["Open deck.pptx", "Launch plan · 5 min ago"],
+    ["Open Launch plan", "Chat · 30 min ago"],
+    ["Open Handbook", "Library · 1 document"],
+    ["Open Old chat", "Chat · 15 h ago"],
+  ])
+  for (const card of cards)
+    expect(
+      card.querySelector(".home-pickup-thumb")?.getAttribute("aria-hidden")
+    ).toBe("true")
+  fireEvent.click(within(row).getByRole("button", { name: "Open deck.pptx" }))
   expect(view.onOpenConversation).toHaveBeenLastCalledWith("one")
-  fireEvent.click(within(row).getByRole("button", { name: /Handbook/ }))
+  fireEvent.click(within(row).getByRole("button", { name: "Open Handbook" }))
   expect(view.onOpenKnowledge).toHaveBeenCalledOnce()
   fireEvent.click(within(row).getByRole("button", { name: "Open Library" }))
   expect(view.onOpenKnowledge).toHaveBeenCalledTimes(2)
@@ -775,7 +798,57 @@ it("reads briefs from the wake-up thread with their apps, newest first, and open
   view.onOpenConversation.mockClear()
   fireEvent.click(within(apps).getByRole("button", { name: "All updates" }))
   expect(view.onOpenConversation).toHaveBeenCalledExactlyOnceWith("wake")
-  expect(screen.queryByText("No updates from your apps yet.")).toBeNull()
+  expect(screen.queryByText("Nothing new from your apps.")).toBeNull()
+})
+
+it("never leaves While you were away as a bare title", async () => {
+  const gone = () =>
+    json({ error: { code: "not_found", message: "private diagnostic" } }, 404)
+  // Chats this server can't list leave the briefs unknown: one sentence that
+  // names the area, and nothing to retry.
+  stubApi({
+    [`${path}/threads`]: gone,
+    [`${path}/apps/connections`]: { connections: [connection("github")] },
+  })
+  const first = renderHome()
+  const apps = screen.getByRole("region", { name: "While you were away" })
+  expect(
+    await within(apps).findByText(
+      "Updates from your apps can’t be loaded right now."
+    )
+  ).toBeTruthy()
+  expect(within(apps).queryByRole("button", { name: "Try again" })).toBeNull()
+  expect(
+    await screen.findByText("Recent chats can’t be loaded right now.")
+  ).toBeTruthy()
+  expect(screen.queryByText(/is not available here|private diagnostic/)).toBe(
+    null
+  )
+  first.unmount()
+
+  // With no app connected, it says what would fill it, and where to start.
+  stubApi({ [`${path}/threads`]: gone })
+  const second = renderHome()
+  const empty = screen.getByRole("region", { name: "While you were away" })
+  await within(empty).findByText(
+    "Connect an app to see what happened while you were away."
+  )
+  expect(within(empty).queryByText(/can’t be loaded/)).toBeNull()
+  fireEvent.click(
+    within(empty).getByRole("button", { name: "Connect your tools" })
+  )
+  expect(second.onOpenTools).toHaveBeenCalledOnce()
+  second.unmount()
+
+  // Apps connected, chats read, no wake-up thread yet: nothing new.
+  stubApi({
+    [`${path}/apps/connections`]: { connections: [connection("github")] },
+  })
+  renderHome()
+  const quiet = screen.getByRole("region", { name: "While you were away" })
+  expect(
+    await within(quiet).findByText("Nothing new from your apps.")
+  ).toBeTruthy()
 })
 
 it("says what lands under From your apps before there are briefs", async () => {
@@ -783,7 +856,9 @@ it("says what lands under From your apps before there are briefs", async () => {
   const first = renderHome({ variant: "glance" })
   const apps = screen.getByRole("region", { name: "From your apps" })
   expect(
-    await within(apps).findByText("Connect a tool and its news lands here.")
+    await within(apps).findByText(
+      "Connect an app to see what happened while you were away."
+    )
   ).toBeTruthy()
   expect(within(apps).queryByRole("button", { name: "All updates" })).toBeNull()
   first.unmount()
@@ -799,7 +874,7 @@ it("says what lands under From your apps before there are briefs", async () => {
   const view = renderHome({ variant: "glance" })
   const updates = screen.getByRole("region", { name: "From your apps" })
   expect(
-    await within(updates).findByText("No updates from your apps yet.")
+    await within(updates).findByText("Nothing new from your apps.")
   ).toBeTruthy()
   fireEvent.click(within(updates).getByRole("button", { name: "All updates" }))
   expect(view.onOpenConversation).toHaveBeenCalledWith("wake")
@@ -1164,7 +1239,7 @@ it("never claims all clear when history coverage is partial, loading, or refused
     [`${path}/threads/1`]: refused,
   })
   renderHome()
-  await screen.findByText("Couldn’t load tool confirmations.")
+  await screen.findByText("Tool confirmations can’t be loaded right now.")
   expect(screen.queryByText("Nothing needs you right now.")).toBeNull()
   expect(screen.getByText(/Older chats may still need you/)).toBeTruthy()
 })
@@ -1393,6 +1468,7 @@ it("leaves unsupported conversation callbacks visibly disabled and drafts editab
 it.each([
   {
     name: "requests",
+    failed: "Requests can’t be loaded right now.",
     route: `${path}/agent-requests/inbox`,
     seed: { requests: [request({ task: "Private pending task" })] },
     privateText: "Private pending task",
@@ -1401,6 +1477,7 @@ it.each([
   },
   {
     name: "conversations",
+    failed: "Recent chats can’t be loaded right now.",
     route: `${path}/threads`,
     seed: { threads: [chat("private", "Private recent title")] },
     privateText: "Private recent title",
@@ -1409,6 +1486,7 @@ it.each([
   },
   {
     name: "open access",
+    failed: "Open access windows can’t be loaded right now.",
     route: `${path}/agent-leases`,
     seed: page([activeLease()]),
     privateText: /can ask your agent/,
@@ -1417,6 +1495,7 @@ it.each([
   },
   {
     name: "updates",
+    failed: "Updates from your apps can’t be loaded right now.",
     route: `${path}/threads/wake`,
     seed: wakeDetail([
       appsBatch("batch", minutesAgo(3), "github"),
@@ -1435,10 +1514,10 @@ it.each([
     // Tools only feed a suggestion on the page: it goes, without a notice.
     privateText: "Catch me up on GitHub",
     key: appsQueryKey(ORG),
-    notice: false,
   },
   {
     name: "knowledge bases",
+    failed: "Library collections can’t be loaded right now.",
     route: `${path}/corpora`,
     seed: { corpora: [{ ...base, name: "Private base" }] },
     privateText: "Private base",
@@ -1446,6 +1525,7 @@ it.each([
   },
   {
     name: "recurring work",
+    failed: "Recurring work can’t be loaded right now.",
     route: `${path}/agent-workflows`,
     seed: { workflows: [workflow("Private weekly digest")] },
     privateText: "Private weekly digest",
@@ -1456,14 +1536,13 @@ it.each([
 ])(
   "removes private $name after a refused refresh, preserving the unsent composer",
   async ({
-    name,
     route,
     seed,
     privateText,
     key,
     needsCheck,
     extra,
-    notice = true,
+    failed,
     glance = false,
   }) => {
     let deny = false
@@ -1480,7 +1559,7 @@ it.each([
     await act(async () => {
       await view.client.invalidateQueries({ queryKey: key })
     })
-    if (notice) await screen.findByText(`Couldn’t load ${name}.`)
+    if (failed) await screen.findByText(failed)
     await waitFor(() => expect(screen.queryByText(privateText)).toBeNull())
     if (field) expect(field.value).toBe("Keep this draft")
     // A read that decides whether anything needs the member never lets a
@@ -1522,7 +1601,7 @@ it.each([
       expect(screen.queryByRole("button", { name: step })).toBeNull()
     )
     expect(screen.queryByLabelText("Finish setup")).toBeNull()
-    expect(screen.queryByText(/Couldn’t load|not available here/)).toBeNull()
+    expect(screen.queryByText(/can’t be loaded/)).toBeNull()
     expect(screen.queryByText("private diagnostic")).toBeNull()
   }
 )

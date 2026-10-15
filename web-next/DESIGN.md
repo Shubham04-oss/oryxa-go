@@ -171,8 +171,16 @@ not permission to copy every incidental value into a new component.
     app events; its mark is the first app's logo on the white logo tile and
     its quiet line names the apps (as the batch's `1. github · …` lines do)
     and how long ago. A row and **All updates** open that thread. Krude's
-    words are the source; Today never rewrites or invents a brief. With no
-    tool connected it says so, with Connect your tools.
+    words are the source; Today never rewrites or invents a brief. It is
+    never a bare title: with no app connected it says "Connect an app to see
+    what happened while you were away." with Connect your tools; with apps
+    and no briefs, "Nothing new from your apps."; and when the chats or the
+    wake-up thread can't be read, "Updates from your apps can't be loaded
+    right now." Every read's loading and error line on Home is its own
+    sentence naming the area ("Requests can't be loaded right now."), never
+    a resource name dropped into a template.
+  - A Pick up card is one button named for what it opens ("Open Product
+    docs"), its quiet line the description; the thumbnail is decoration.
   - **Needs you** (was Teammates), with a count beside the heading on the
     page: who needs the member, one row each. An Inbox
     decision or held answer that waits on them shows the asker's avatar,
