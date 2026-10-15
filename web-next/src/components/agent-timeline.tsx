@@ -1,11 +1,18 @@
-import { isValidElement, useRef, useState } from "react"
+import {
+  Fragment,
+  createContext,
+  isValidElement,
+  useContext,
+  useRef,
+  useState,
+} from "react"
 import type { MouseEvent, ReactNode } from "react"
 import Markdown from "react-markdown"
 import type { Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { ThinkingOrb } from "thinking-orbs"
 import type { OrbState } from "thinking-orbs"
-import { FileText, Inbox, ShieldQuestion } from "lucide-react"
+import { Download, FileText, Inbox, ShieldQuestion } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { ApiError } from "@/lib/api/client"
 import { agentRequestQueryOptions } from "@/lib/agents/queries"
@@ -17,21 +24,34 @@ import {
   requestCardPollInterval,
   requestCardState,
 } from "@/lib/threads/requests"
-import { toolkitName } from "@/lib/apps/client"
 import type {
   SpecialistResult,
   SpecialistResultStatus,
 } from "@/lib/specialists/result"
 import { artifactContentUrl, fetchArtifactLink } from "@/lib/threads/client"
-import type { ConfirmationAnswer } from "@/lib/threads/client"
+import type { ConfirmationAnswer, Item } from "@/lib/threads/client"
 import {
   artifactFileName,
   confirmationHint,
+  groupTurns,
   humanizeToolName,
   isImageArtifact,
+  turnStatus,
+  turnTimes,
 } from "@/lib/threads/timeline"
+import { cn } from "cn"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { RunCard, TaskLine } from "./agent-run"
+import { FileKindBadge } from "./file-kind"
 import { firstName } from "./people-format"
-import { featuredSlugs, toolkitIcon } from "./workspace-tools-data"
+import {
+  AppCallIcon,
+  calledApp,
+  settledCalls,
+  toolCallLabel,
+  toolOrbState,
+  toolStateWords,
+} from "./agent-tool-calls"
 import type {
   ArtifactEntry,
   ConfirmationEntry,
@@ -96,118 +116,9 @@ export function toolGroupState(tools: readonly ToolEntry[]): ToolState {
   return tools.every((tool) => tool.state === "declined") ? "declined" : "done"
 }
 
-/**
- * A call still running once its run has definitely ended was left behind by
- * a run that was stopped or broke off (its end marker never came), so it
- * reads as interrupted, as a draft does. While the run may still be alive,
- * just not streaming here, it stays as it was.
- */
-function settledCalls(
-  tools: readonly ToolEntry[],
-  ended: boolean
-): ToolEntry[] {
-  if (!ended) return [...tools]
-  return tools.map((tool) =>
-    tool.state === "running" ? { ...tool, state: "interrupted" } : tool
-  )
-}
-
-const toolStateWords: Record<ToolState, string> = {
-  running: "Running",
-  waiting_approval: "Waiting for you",
-  declined: "Declined",
-  failed: "Failed",
-  interrupted: "Interrupted",
-  done: "Done",
-}
-
-function toolOrbState(tool: string): OrbState {
-  const name = tool.toLowerCase()
-  if (/search|knowledge|read|list|source|snapshot/.test(name))
-    return "searching"
-  if (/connect|browser|navigate/.test(name)) return "connecting"
-  if (/create|write|artifact|workflow|update/.test(name)) return "shaping"
-  if (/code|sandbox|execute|run/.test(name)) return "solving"
-  return "working"
-}
-
-const appToolPrefixes = [
-  ...featuredSlugs,
-  "slack",
-  "hubspot",
-  "salesforce",
-  "apollo",
-  "clay",
-  "luma",
-  "outlook",
-  "microsoftteams",
-]
-const appActionPrefixes = (
-  [
-    ...appToolPrefixes.map((slug): [string, string] => [slug, slug]),
-    ["google_drive", "googledrive"],
-    ["google_calendar", "googlecalendar"],
-    ["microsoft_teams", "microsoftteams"],
-  ] as [string, string][]
-).sort(([a], [b]) => b.length - a.length)
-
-/** The app slug is explicit on discovery calls and prefixes Composio's action slugs. */
-function calledApp(tool: ToolEntry): string | undefined {
-  const name = tool.tool.toLowerCase()
-  const arguments_ = tool.arguments
-  if (name.startsWith("apps_")) {
-    const toolkit = arguments_?.toolkit
-    if (typeof toolkit === "string" && /^[\w-]{1,64}$/.test(toolkit))
-      return toolkit.toLowerCase()
-    if (!/^apps_run_(read|write)_tool$/.test(name)) return undefined
-  }
-  const action = name.startsWith("apps_")
-    ? typeof arguments_?.tool === "string"
-      ? arguments_.tool.toLowerCase()
-      : undefined
-    : name
-  if (!action) return undefined
-  const normalized = action.replace(/-/g, "_")
-  for (const [prefix, slug] of appActionPrefixes) {
-    if (normalized.startsWith(`${prefix}_`)) return slug
-  }
-  if (name.startsWith("apps_") && /^[a-z][a-z0-9]*_/.test(action))
-    return action.split("_")[0]
-  return undefined
-}
-
-function AppCallIcon({ slug }: { slug: string }) {
-  const icon = toolkitIcon(slug)
-  const name = icon?.title || toolkitName(slug)
-  return (
-    <span
-      className="workspace-agent-tool-app"
-      role="img"
-      aria-label={name}
-      title={name}
-    >
-      {icon ? (
-        <svg viewBox="0 0 24 24" fill={`#${icon.hex}`} aria-hidden="true">
-          <path d={icon.path} />
-        </svg>
-      ) : (
-        name.charAt(0).toUpperCase()
-      )}
-    </span>
-  )
-}
-
 function toolGroupLabel(tools: ToolEntry[]): string {
   if (tools.length > 1) return `${tools.length} tool calls`
-  const tool = tools[0]
-  const app = calledApp(tool)
-  if (!app) return humanizeToolName(tool.tool) || "Tool call"
-  const name = toolkitIcon(app)?.title || toolkitName(app)
-  if (tool.tool === "apps_search_tools") return `Find ${name} tools`
-  if (tool.tool === "apps_connections") return `Check ${name} connection`
-  if (tool.tool === "apps_run_read_tool") return `${name} · Read data`
-  if (tool.tool === "apps_run_write_tool") return `${name} · Make change`
-  return humanizeToolName(tool.tool) || name
+  return toolCallLabel(tools[0])
 }
 
 function ToolGroup({
@@ -402,21 +313,32 @@ const resultStatusWords: Record<SpecialistResultStatus, string | undefined> = {
  * and the hand-offs it suggests (suggestions only: nothing ran). The
  * answer itself is the result's summary, shown above it.
  */
-function WorkResult({ result }: { result: SpecialistResult }) {
+function WorkResult({
+  result,
+  session = false,
+}: {
+  result: SpecialistResult
+  /** In a run card, which shows the status, files and hand-offs itself. */
+  session?: boolean
+}) {
   const tools = [
     ...new Set(result.tools_used.map(humanizeToolName).filter(Boolean)),
   ]
   const files = [
     ...new Set(result.artifacts.map(artifactFileName).filter(Boolean)),
   ]
-  const words = [
-    resultStatusWords[result.status],
-    tools.length > 0 ? `Used ${tools.join(", ")}` : undefined,
-    files.length > 0 ? `Saved ${files.join(", ")}` : undefined,
-    ...result.handoffs.map(
-      (handoff) => `Suggests ${handoff.target}: ${handoff.request}`
-    ),
-  ].filter((part): part is string => Boolean(part))
+  const words = (
+    session
+      ? [tools.length > 0 ? `Used ${tools.join(", ")}` : undefined]
+      : [
+          resultStatusWords[result.status],
+          tools.length > 0 ? `Used ${tools.join(", ")}` : undefined,
+          files.length > 0 ? `Saved ${files.join(", ")}` : undefined,
+          ...result.handoffs.map(
+            (handoff) => `Suggests ${handoff.target}: ${handoff.request}`
+          ),
+        ]
+  ).filter((part): part is string => Boolean(part))
   if (words.length === 0) return null
   return (
     <p className="workspace-agent-result" data-status={result.status}>
@@ -429,11 +351,14 @@ function MessageBlock({
   entry,
   ended,
   agentName,
+  session = false,
 }: {
   entry: MessageEntry
   /** Whether the run is definitely over (see `AgentTimeline`). */
   ended: boolean
   agentName?: string
+  /** Inside a run card (see `WorkResult`). */
+  session?: boolean
 }) {
   if (entry.role === "member") {
     return (
@@ -477,7 +402,7 @@ function MessageBlock({
     >
       {labelled && <p className="workspace-agent-author">{entry.author}</p>}
       <AgentMarkdown text={entry.text} />
-      {entry.result && <WorkResult result={entry.result} />}
+      {entry.result && <WorkResult result={entry.result} session={session} />}
       {entry.error && <p className="workspace-agent-note">{entry.error}</p>}
       {interrupted && <p className="workspace-agent-note">Interrupted</p>}
     </div>
@@ -563,25 +488,27 @@ export function ConfirmationCard({
       )}
       {actionable ? (
         <div className="workspace-agent-confirmation-actions">
-          <button
-            className="workspace-agent-pill"
-            type="button"
+          {/* The action-row convention (DESIGN.md §1): the same size, Decline
+              as outline on the left (destructive once chosen), Approve as
+              the default on the right. */}
+          <Button
+            variant={multiple && choice === false ? "destructive" : "outline"}
+            size="sm"
             aria-pressed={multiple ? choice === false : undefined}
             disabled={disabled}
             onClick={() => answer(false)}
           >
             Decline
-          </button>
-          <button
-            className="workspace-agent-pill"
-            type="button"
-            data-primary={multiple ? undefined : "true"}
+          </Button>
+          <Button
+            variant={multiple && choice !== true ? "outline" : "default"}
+            size="sm"
             aria-pressed={multiple ? choice === true : undefined}
             disabled={disabled}
             onClick={() => answer(true)}
           >
             Approve
-          </button>
+          </Button>
         </div>
       ) : (
         status !== "pending" && (
@@ -594,15 +521,35 @@ export function ConfirmationCard({
   )
 }
 
+/** A file the primary chat holds: its thread, name and version. */
+export type ArtifactTarget = {
+  threadId: string
+  name: string
+  version?: number
+}
+
+/**
+ * Opens a file from the primary chat beside the chat, in the agent session's
+ * work column. Without it (nothing provides one), a file opens in a new tab
+ * or downloads.
+ */
+export const OpenArtifactContext = createContext<
+  ((file: ArtifactTarget) => void) | null
+>(null)
+
 function ArtifactItem({
   entry,
   organizationId,
   threadId,
+  card = false,
 }: {
   entry: ArtifactEntry
   organizationId: string
   threadId: string
+  /** As a run card's output rather than a chip in a log. */
+  card?: boolean
 }) {
+  const openBeside = useContext(OpenArtifactContext)
   const [error, setError] = useState("")
   const [opening, setOpening] = useState(false)
   const url = artifactContentUrl(
@@ -613,11 +560,20 @@ function ArtifactItem({
   )
   const fileName = artifactFileName(entry.name)
 
-  // The plain URL relies on the session cookie, which may have expired since
-  // the conversation loaded: read the file's headers first (that refreshes
-  // it, and reports a file that is gone), then open or download it.
-  async function open(event: MouseEvent<HTMLAnchorElement>) {
+  // Where the session offers it, a plain click opens the file in the in-app
+  // viewer beside the chat, and downloading is the second way; a click that
+  // asks for a new tab or window still gets one. Otherwise the plain URL
+  // relies on the session cookie, which may have expired since the
+  // conversation loaded: read the file's headers first (that refreshes it,
+  // and reports a file that is gone), then open or download it.
+  async function open(event: MouseEvent<HTMLElement>, download = false) {
     event.preventDefault()
+    const plainClick =
+      event.button === 0 && !(event.metaKey || event.ctrlKey || event.shiftKey)
+    if (openBeside && !download && plainClick) {
+      openBeside({ threadId, name: entry.name, version: entry.version })
+      return
+    }
     if (opening) return
     setOpening(true)
     setError("")
@@ -626,7 +582,7 @@ function ArtifactItem({
         name: entry.name,
         version: entry.version,
       })
-      if (link.inline) {
+      if (link.inline && !download) {
         window.open(link.url, "_blank", "noopener,noreferrer")
       } else {
         const anchor = document.createElement("a")
@@ -652,6 +608,73 @@ function ArtifactItem({
       {error}
     </p>
   )
+  const download = openBeside && (
+    <a
+      className={cn(
+        buttonVariants({ variant: "ghost", size: "icon-sm" }),
+        "workspace-agent-artifact-download"
+      )}
+      href={url}
+      download={fileName}
+      aria-label={`Download ${fileName}`}
+      aria-busy={opening || undefined}
+      onClick={(event) => void open(event, true)}
+    >
+      <Download size={14} strokeWidth={1.7} aria-hidden="true" />
+    </a>
+  )
+  if (card) {
+    // A run card's output: the file's kind, its name and version, and Open
+    // (beside the chat, where the session offers it) and Download.
+    // Links, not buttons, so a click that asks for a new tab still gets one.
+    return (
+      <div className="agent-run-file">
+        {isImageArtifact(entry.name) && (
+          <img
+            className="agent-run-file-preview"
+            src={url}
+            alt=""
+            loading="lazy"
+          />
+        )}
+        <div className="agent-run-file-row">
+          <FileKindBadge name={fileName} />
+          <span className="agent-run-file-text">
+            <strong>{fileName}</strong>
+            <small>
+              {entry.version ? `Version ${entry.version} · ` : ""}Made in this
+              chat
+            </small>
+          </span>
+          <a
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              "agent-run-file-open"
+            )}
+            href={url}
+            aria-label={`Open ${fileName}`}
+            aria-busy={opening || undefined}
+            onClick={(event) => void open(event)}
+          >
+            Open
+          </a>
+          <a
+            className={cn(
+              buttonVariants({ variant: "ghost", size: "icon-sm" }),
+              "agent-run-file-download"
+            )}
+            href={url}
+            download={fileName}
+            aria-label={`Download ${fileName}`}
+            onClick={(event) => void open(event, true)}
+          >
+            <Download strokeWidth={1.7} aria-hidden="true" />
+          </a>
+        </div>
+        {failure}
+      </div>
+    )
+  }
   if (isImageArtifact(entry.name)) {
     return (
       <figure className="workspace-agent-artifact">
@@ -659,28 +682,34 @@ function ArtifactItem({
           className="workspace-agent-artifact-image"
           href={url}
           aria-label={`Open ${fileName}`}
-          aria-busy={opening || undefined}
+          aria-busy={(!openBeside && opening) || undefined}
           onClick={(event) => void open(event)}
         >
           <img src={url} alt={fileName} loading="lazy" />
         </a>
-        <figcaption>{fileName}</figcaption>
+        <figcaption>
+          {fileName}
+          {download}
+        </figcaption>
         {failure}
       </figure>
     )
   }
   return (
     <div className="workspace-agent-artifact">
-      <a
-        className="workspace-agent-artifact-file"
-        href={url}
-        download={fileName}
-        aria-busy={opening || undefined}
-        onClick={(event) => void open(event)}
-      >
-        <FileText size={15} strokeWidth={1.7} aria-hidden="true" />
-        <span>{fileName}</span>
-      </a>
+      <div className="workspace-agent-artifact-row">
+        <a
+          className="workspace-agent-artifact-file"
+          href={url}
+          download={openBeside ? undefined : fileName}
+          aria-busy={(!openBeside && opening) || undefined}
+          onClick={(event) => void open(event)}
+        >
+          <FileText size={15} strokeWidth={1.7} aria-hidden="true" />
+          <span>{fileName}</span>
+        </a>
+        {download}
+      </div>
       {failure}
     </div>
   )
@@ -690,12 +719,31 @@ function ArtifactItem({
  * A file a run kept, where Go offers no route to read it (a specialist's
  * conversation): its name only, never a link that could not open.
  */
-function ArtifactName({ entry }: { entry: ArtifactEntry }) {
+function ArtifactName({
+  entry,
+  card = false,
+}: {
+  entry: ArtifactEntry
+  card?: boolean
+}) {
+  const fileName = artifactFileName(entry.name)
+  if (card)
+    return (
+      <div className="agent-run-file">
+        <div className="agent-run-file-row">
+          <FileKindBadge name={fileName} />
+          <span className="agent-run-file-text">
+            <strong>{fileName}</strong>
+            <small>Saved by this run · can't be opened here yet</small>
+          </span>
+        </div>
+      </div>
+    )
   return (
     <div className="workspace-agent-artifact">
       <span className="workspace-agent-artifact-file" data-link="false">
         <FileText size={15} strokeWidth={1.7} aria-hidden="true" />
-        <span>{artifactFileName(entry.name)}</span>
+        <span>{fileName}</span>
       </span>
     </div>
   )
@@ -777,13 +825,20 @@ export function AgentRequestCard({
 /**
  * A conversation's entries, as `buildTimeline` makes them: the member's
  * messages, the agent's answers in Markdown (a growing draft while one
- * streams), tool calls folded into quiet rows, confirmations to answer,
- * the files runs kept, and runs that failed.
+ * streams), tool calls, confirmations to answer, the files runs kept, and
+ * runs that failed.
+ *
+ * As a `session` (an agent's working session), each task the member gave is
+ * a task line with one run card under it (`agent-run.tsx`). As a `log`, the
+ * messenger layout: bubbles, and tool calls folded into quiet rows.
  */
 export function AgentTimeline({
   entries,
+  items,
+  variant = "log",
   running,
   ended = !running,
+  onStop,
   agentName,
   actionable,
   submitted,
@@ -793,6 +848,12 @@ export function AgentTimeline({
   threadId,
 }: {
   entries: readonly TimelineEntry[]
+  /**
+   * The items `entries` were built from, so a session can place each run's
+   * start, end and usage in its card (`groupTurns`).
+   */
+  items?: readonly Item[]
+  variant?: "session" | "log"
   /** Whether a run is streaming now. */
   running: boolean
   /**
@@ -803,6 +864,8 @@ export function AgentTimeline({
    * so here, and those rows keep their state meanwhile.
    */
   ended?: boolean
+  /** Stops the run that streams now; a session's working card offers it. */
+  onStop?: () => void
   /** The primary agent's display name; anyone else's messages are labelled. */
   agentName?: string
   /** The confirmations the member can answer now, by call id. */
@@ -822,7 +885,7 @@ export function AgentTimeline({
   threadId?: string
 }) {
   const [choices, setChoices] = useState<Record<string, boolean>>({})
-  const display = groupToolActivity(entries)
+  const session = variant === "session"
   const open = entries.filter(
     (entry): entry is ConfirmationEntry =>
       entry.kind === "confirmation" &&
@@ -842,31 +905,26 @@ export function AgentTimeline({
     setChoices({})
   }
 
-  const blocks: ReactNode[] = []
-  for (const entry of display) {
+  function renderEntry(entry: DisplayEntry): ReactNode {
     switch (entry.kind) {
       case "message":
-        blocks.push(
+        return (
           <MessageBlock
             key={entry.key}
             entry={entry}
             ended={ended}
             agentName={agentName}
+            session={session}
           />
         )
-        break
       case "tools":
-        blocks.push(
-          <ToolGroup key={entry.key} tools={entry.tools} ended={ended} />
-        )
-        break
+        return <ToolGroup key={entry.key} tools={entry.tools} ended={ended} />
       case "confirmation": {
-        const isOpen = open.includes(entry)
-        blocks.push(
+        const card = (
           <ConfirmationCard
             key={entry.key}
             entry={entry}
-            actionable={isOpen}
+            actionable={open.includes(entry)}
             submitted={submitted[entry.callId]}
             multiple={multiple}
             choice={choices[entry.callId]}
@@ -882,56 +940,79 @@ export function AgentTimeline({
             }
           />
         )
-        if (multiple && entry.key === lastOpenKey) {
-          blocks.push(
-            <div className="workspace-agent-answers" key="answers">
-              <button
-                className="workspace-agent-pill"
-                type="button"
-                data-primary="true"
+        if (!multiple || entry.key !== lastOpenKey) return card
+        return (
+          <Fragment key={entry.key}>
+            {card}
+            <div className="workspace-agent-answers">
+              <Button
+                size="sm"
                 disabled={
                   answering || open.some((item) => !(item.callId in choices))
                 }
                 onClick={answerAll}
               >
                 Send answers
-              </button>
+              </Button>
             </div>
-          )
-        }
-        break
+          </Fragment>
+        )
       }
       case "artifact":
-        blocks.push(
-          threadId ? (
-            <ArtifactItem
-              key={entry.key}
-              entry={entry}
-              organizationId={organizationId}
-              threadId={threadId}
-            />
-          ) : (
-            <ArtifactName key={entry.key} entry={entry} />
-          )
+        return threadId ? (
+          <ArtifactItem
+            key={entry.key}
+            entry={entry}
+            organizationId={organizationId}
+            threadId={threadId}
+            card={session}
+          />
+        ) : (
+          <ArtifactName key={entry.key} entry={entry} card={session} />
         )
-        break
       case "request":
-        blocks.push(
+        return (
           <AgentRequestCard
             key={entry.key}
             entry={entry}
             organizationId={organizationId}
           />
         )
-        break
       case "run_failed":
-        blocks.push(
+        return (
           <p className="workspace-agent-error" key={entry.key}>
             {entry.error || "Your agent couldn't answer. Try again."}
           </p>
         )
-        break
     }
   }
-  return <>{blocks}</>
+
+  if (!session) return <>{groupToolActivity(entries).map(renderEntry)}</>
+
+  const turns = groupTurns(entries, items)
+  const waiting = new Set(open.map((entry) => entry.callId))
+  return (
+    <>
+      {turns.map((turn, index) => {
+        const live = index === turns.length - 1 && (running || !ended)
+        const { start } = turnTimes(turn, { finished: false })
+        return (
+          <section className="agent-turn" key={turn.key}>
+            {turn.prompt?.role === "member" ? (
+              <TaskLine entry={turn.prompt} at={start} />
+            ) : (
+              turn.prompt && <AppsUpdate entry={turn.prompt} />
+            )}
+            <RunCard
+              turn={turn}
+              status={turnStatus(turn, { live, waiting })}
+              ended={ended}
+              onStop={running ? onStop : undefined}
+              renderEntry={renderEntry}
+            />
+          </section>
+        )
+      })}
+    </>
+  )
 }

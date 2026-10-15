@@ -385,11 +385,14 @@ describe("A team's conversation", () => {
     fireEvent.change(composer, { target: { value: "@scout find the deal" } })
     fireEvent.click(screen.getByRole("button", { name: "Send message" }))
 
-    expect(await within(log).findByText("Sending…")).toBeTruthy()
+    // The post is a task, and the team's work a run card under it.
+    expect(
+      await within(log).findByRole("article", { name: "Run: Working" })
+    ).toBeTruthy()
     expect(within(log).getByText("@scout find the deal")).toBeTruthy()
     expect(
-      within(log).getByText(
-        "The team is replying. This can take up to a minute and a half."
+      screen.getByText(
+        "The team is working; this can take up to a minute and a half. You can send again once it has answered."
       )
     ).toBeTruthy()
     expect(composer.hasAttribute("disabled")).toBe(true)
@@ -403,8 +406,9 @@ describe("A team's conversation", () => {
       })
     ).toBeTruthy()
     await waitFor(() => expect(composer.hasAttribute("disabled")).toBe(false))
-    expect(within(log).queryByText("Sending…")).toBeNull()
-    expect(within(log).getByRole("article", { name: /^Leo/ })).toBeTruthy()
+    const card = within(log).getByRole("article", { name: "Run: Done" })
+    // Each agent's answer is named for who wrote it.
+    expect(within(card).getByText("Leo")).toBeTruthy()
     expect(backend.writes()).toEqual([
       {
         method: "POST",
