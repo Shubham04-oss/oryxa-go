@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  act,
   cleanup,
   fireEvent,
   render as renderBase,
@@ -486,6 +487,20 @@ describe("TeamspaceFocus", () => {
     expect(within(side).getByText("Asks its owner first")).toBeTruthy()
     // Nothing runs in the room, so there is no Live card.
     expect(within(side).queryByText("Live")).toBeNull()
+    // The newest team files, with their kind; the card opens the Files tab.
+    expect(within(side).getByText("launch-checklist.md")).toBeTruthy()
+    expect(within(side).getByText("MD")).toBeTruthy()
+    expect(within(side).getByText(/^added /)).toBeTruthy()
+    fireEvent.click(
+      within(side).getByRole("button", {
+        name: "Files 1, open the Files tab",
+      })
+    )
+    expect(within(views).getByRole("tab", { name: "Files 1" })).toHaveProperty(
+      "ariaSelected",
+      "true"
+    )
+    fireEvent.click(within(views).getByRole("tab", { name: "Room" }))
 
     fireEvent.click(within(views).getByRole("tab", { name: "Plan" }))
     expect(
@@ -577,6 +592,35 @@ describe("TeamspaceFocus", () => {
     })
     expect(await within(side).findByText("The room's live work")).toBeTruthy()
     expect(within(side).getByRole("heading", { name: "Live" })).toBeTruthy()
+  })
+
+  it("leaves the Live card out once everything in the room has stopped", async () => {
+    const api = backend({
+      children: [
+        {
+          kind: "sandbox",
+          name: "shared",
+          status: "stopped",
+          createdAt: "2026-10-15T08:00:00Z",
+          lastUsedAt: "2026-10-15T08:05:00Z",
+        },
+      ],
+    })
+    render()
+    const side = await screen.findByRole("complementary", {
+      name: "About Launch room",
+    })
+    const views = screen.getByRole("tablist", { name: "Launch room views" })
+    // Once the children and the (empty) files are read, neither card shows.
+    await within(views).findByRole("tab", { name: "Files 0" })
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.path === childrenPath)).toBe(true)
+    )
+    // Let the children's answer land before looking for the card.
+    await act(async () => {})
+    expect(within(side).queryByRole("heading", { name: "Live" })).toBeNull()
+    expect(within(side).queryByText("The room's live work")).toBeNull()
+    expect(within(side).queryByRole("heading", { name: /^Files/ })).toBeNull()
   })
 
   it("offers Invite only to whoever manages the team, and adds a teammate", async () => {

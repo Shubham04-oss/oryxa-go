@@ -606,6 +606,11 @@
 .workspace-teamspace-side { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
 .workspace-teamspace-side .workspace-work-card { padding: 16px; border: 0; background: var(--base); }
 .workspace-teamspace-live .live-room { margin-top: 12px; }
+.workspace-teamspace-side-files h3 button { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.workspace-teamspace-side-files h3 button:hover { text-decoration: underline; text-underline-offset: 3px; }
+.workspace-teamspace-side-file-list { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.workspace-teamspace-side-file-list li { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.workspace-teamspace-file-kind { flex: none; width: 34px; padding: 3px 0; border-radius: 6px; background: var(--canvas); color: var(--text-muted); font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-align: center; }
 
 .workspace-teamspace-panel { flex: 1; margin: 0 20px 20px; border-radius: 16px; background: var(--base); }
 .workspace-teamspace-panel .workspace-work-card { border: 0; background: var(--canvas); }

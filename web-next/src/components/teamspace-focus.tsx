@@ -67,6 +67,9 @@ const tabLabels: Record<Tab, string> = {
 // whether anything started running here.
 const liveRefreshMs = 30_000
 
+// How many of the newest team files the side column lists.
+const maxSideFiles = 4
+
 function count(value: number, one: string, many: string) {
   return `${value} ${value === 1 ? one : many}`
 }
@@ -296,6 +299,11 @@ export function TeamspaceFocus({
             space={space}
             room={liveRoom}
             viewerId={viewerId}
+            files={canSeeFiles ? files : undefined}
+            onOpenFiles={() => {
+              setTab("files")
+              tabRefs.current.files?.focus()
+            }}
           />
         </main>
         {tab !== "room" && (
@@ -371,23 +379,29 @@ function TeamspaceCrumbs({
 }
 
 /**
- * Beside the room: live work while something runs, the team summary, and
- * what the teamspace is for, with its agents and people.
+ * Beside the room: live work while something runs, the latest team files,
+ * the team summary, and what the teamspace is for, with its agents and
+ * people.
  */
 function TeamspaceSide({
   organizationId,
   space,
   room,
   viewerId,
+  files,
+  onOpenFiles,
 }: {
   organizationId: string
   space: Teamspace
   room: LiveRoom
   viewerId?: string
+  /** The frame's team files read, when the viewer may see them. */
+  files?: UseQueryResult<StoredFile[]>
+  onOpenFiles: () => void
 }) {
   // The same key RoomLive reads, without opening the room's log: the card
-  // shows only while the room has a sandbox or browser, and RoomLive then
-  // follows the log itself.
+  // shows only while a sandbox or browser runs in the room (the list keeps
+  // stopped ones too), and RoomLive then follows the log itself.
   const live = useQuery({
     queryKey: childKey(organizationId, room),
     queryFn: ({ signal }) => listChildren(organizationId, room, signal),
@@ -395,8 +409,16 @@ function TeamspaceSide({
     refetchInterval: liveRefreshMs,
     retry: false,
   })
-  const running = live.isSuccess && live.data.length > 0
+  const running =
+    live.isSuccess && live.data.some((child) => child.status === "running")
   const contributions = space.contributions
+  // The newest few files; the card shows only once there are some.
+  const recentFiles =
+    files?.isSuccess && files.data.length
+      ? [...files.data]
+          .sort((a, b) => b.created_at.localeCompare(a.created_at))
+          .slice(0, maxSideFiles)
+      : []
   return (
     <aside
       className="workspace-teamspace-side"
@@ -410,6 +432,40 @@ function TeamspaceSide({
             room={room}
             viewerId={viewerId}
           />
+        </div>
+      )}
+      {files?.isSuccess && recentFiles.length > 0 && (
+        <div className="workspace-work-card workspace-teamspace-side-files">
+          <h3>
+            <button
+              type="button"
+              aria-label={`Files ${files.data.length}, open the Files tab`}
+              onClick={onOpenFiles}
+            >
+              Files{" "}
+              <span className="workspace-teamspace-tab-count">
+                {files.data.length}
+              </span>
+            </button>
+          </h3>
+          <ul className="workspace-teamspace-side-file-list">
+            {recentFiles.map((file) => (
+              <li
+                key={file.id}
+                data-screen-context-kind="team_file"
+                data-screen-context-id={file.id}
+                data-screen-context-name={file.filename}
+              >
+                <span className="workspace-teamspace-file-kind">
+                  {fileKind(file)}
+                </span>
+                <span className="workspace-teamspace-file">
+                  <strong>{file.filename}</strong>
+                  <small>added {timeAgo(file.created_at)}</small>
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       <TeamSynthesis organizationId={organizationId} teamspaceId={space.id} />
@@ -484,6 +540,14 @@ function TeamspaceSide({
       </div>
     </aside>
   )
+}
+
+/** A file's kind as a short tag: its extension, else its media subtype. */
+function fileKind(file: StoredFile) {
+  const dot = file.filename.lastIndexOf(".")
+  const extension = dot > 0 ? file.filename.slice(dot + 1) : ""
+  const kind = extension || file.content_type.split("/")[1] || "file"
+  return kind.slice(0, 4).toUpperCase()
 }
 
 /** A tab whose data has no API yet: one honest line, on the empty scene. */

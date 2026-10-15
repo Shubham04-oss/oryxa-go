@@ -215,8 +215,15 @@ not permission to copy every incidental value into a new component.
     the selected tab the raised tile, then a quieter Activity tab set a
     little apart (the ledger has no place on the board; owner to confirm).
   - **Room:** the room is the main tile, with a side column beside it: a
-    Live card only while the room has a sandbox or browser (RoomLive), the
-    team summary, the purpose, the contributed agents and the people. The
+    Live card only while a sandbox or browser is running in the room
+    (RoomLive), a **Files N** card with the newest four team files (a kind
+    tag from the extension, the name, "added …"; its heading opens the
+    Files tab, and it shows only once there are files to list), the team
+    summary, then the purpose, the contributed agents and the people. The
+    board has a Plan card and a Last parley card too, left out until
+    their APIs exist. Purpose, agents and People aren't on the board; they
+    are kept on purpose, below the board's cards, as Overview's content
+    with nowhere else to go (owner to confirm). The
     room stays mounted behind the other tabs, so its draft, scroll and
     socket carry over. **Files** is the team's files, full width. **Plan**
     and **Parleys** have no API yet, so each is one honest line on the
@@ -323,8 +330,9 @@ not permission to copy every incidental value into a new component.
   private ones).
   - **Where:** beside the primary agent's chat, Agent overview shows the
     conversation's own as tiles, and one opens in the work panel like a
-    file. A teamspace shows a Live card beside its room, only while it has
-    a sandbox or browser, with its tiles, the open one, and the run log.
+    file. A teamspace shows a Live card beside its room, only while a
+    sandbox or browser is running there (stopped ones don't count), with
+    its tiles, the open one, and the run log.
   - **A sandbox** has Files (folders and a reader) and Preview (a port it
     serves, in a frame without its own origin). A member gets a Terminal
     (xterm, loaded when opened) only in their own private sandbox (owner's
