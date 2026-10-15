@@ -41,8 +41,11 @@ export interface CallMedia {
   /** Every speaker's live transcript, as RealtimeKit hears it. */
   onTranscript: (listener: (segment: HeardSegment) => void) => () => void
   devices: () => Promise<CallDevices>
-  /** Switches to the device with `deviceId`, of its kind. */
-  setDevice: (deviceId: string) => Promise<void>
+  /**
+   * Switches to the device of `kind` with `deviceId`. Both are needed: a
+   * browser reuses ids like "default" across microphones and speakers.
+   */
+  setDevice: (kind: DeviceKind, deviceId: string) => Promise<void>
   /** Called when a device is plugged in or out; returns the unsubscribe. */
   onDevicesChange: (listener: () => void) => () => void
   setMic: (on: boolean) => Promise<void>
@@ -171,13 +174,15 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
         },
       }
     },
-    async setDevice(deviceId) {
+    async setDevice(kind, deviceId) {
       const all = await (
         meeting.self as unknown as {
           getAllDevices: () => Promise<MediaDeviceInfo[]>
         }
       ).getAllDevices()
-      const device = all.find((item) => item.deviceId === deviceId)
+      const device = all.find(
+        (item) => item.kind === kind && item.deviceId === deviceId
+      )
       if (device) await meeting.self.setDevice(device)
       changed()
     },

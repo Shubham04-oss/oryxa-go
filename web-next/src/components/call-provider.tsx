@@ -29,7 +29,12 @@ import {
 import type { TranscriptSegment } from "@/lib/call/client"
 import { joinMedia } from "@/lib/call/media"
 import { CALL_REFRESH_MS } from "@/lib/call/use-room-call"
-import type { CallDevices, CallMedia, CallTile } from "@/lib/call/media"
+import type {
+  CallDevices,
+  CallMedia,
+  CallTile,
+  DeviceKind,
+} from "@/lib/call/media"
 import { livePath, liveSocketUrl } from "@/lib/live/client"
 import type { LiveRoom } from "@/lib/live/client"
 
@@ -110,7 +115,7 @@ type CallActions = {
   expand: (expanded: boolean) => void
   /** The devices the member can choose between; none outside a call. */
   devices: () => Promise<CallDevices | undefined>
-  setDevice: (deviceId: string) => Promise<void>
+  setDevice: (kind: DeviceKind, deviceId: string) => Promise<void>
   onDevicesChange: (listener: () => void) => () => void
   dismiss: () => void
 }
@@ -484,6 +489,18 @@ export function CallProvider({
     }
   }, [teardown])
 
+  // The media is a ref, so these never change: a picker that reads devices
+  // isn't re-run by every caption or tile update.
+  const devices = useCallback(async () => media.current?.devices(), [])
+  const setDevice = useCallback(async (kind: DeviceKind, deviceId: string) => {
+    await media.current?.setDevice(kind, deviceId)
+  }, [])
+  const onDevicesChange = useCallback(
+    (listener: () => void) =>
+      media.current?.onDevicesChange(listener) ?? (() => undefined),
+    []
+  )
+
   const value = useMemo<CallContextValue>(
     () => ({
       active,
@@ -498,22 +515,22 @@ export function CallProvider({
       setRecording: record,
       setAgent: agent,
       expand: (expanded) => update({ expanded }),
-      devices: async () => media.current?.devices(),
-      setDevice: async (deviceId) => {
-        await media.current?.setDevice(deviceId)
-      },
-      onDevicesChange: (listener) =>
-        media.current?.onDevicesChange(listener) ?? (() => undefined),
+      devices,
+      setDevice,
+      onDevicesChange,
       dismiss: () =>
         setActive((current) => (current?.phase === "in" ? current : null)),
     }),
     [
       active,
       agent,
+      devices,
       end,
       join,
+      onDevicesChange,
       record,
       roomOnScreen,
+      setDevice,
       teardownAndLeave,
       toggle,
       update,

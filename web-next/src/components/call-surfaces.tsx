@@ -571,9 +571,9 @@ function DevicePicker({ onClose }: { onClose: () => void }) {
     }
   }, [devices, onDevicesChange])
 
-  const choose = (deviceId: string) => {
+  const choose = (kind: DeviceKind, deviceId: string) => {
     setProblem("")
-    void setDevice(deviceId)
+    void setDevice(kind, deviceId)
       .then(() => devices().then(setList))
       .catch(() => setProblem("Couldn't switch to that device."))
   }
@@ -618,7 +618,7 @@ function DevicePicker({ onClose }: { onClose: () => void }) {
           ) : (
             <select
               value={list?.current[group.kind] ?? ""}
-              onChange={(event) => choose(event.target.value)}
+              onChange={(event) => choose(group.kind, event.target.value)}
             >
               {group.items.map((item, index) => (
                 <option key={item.deviceId || index} value={item.deviceId}>

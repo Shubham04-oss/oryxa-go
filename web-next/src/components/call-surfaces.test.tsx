@@ -117,7 +117,10 @@ function fakeMedia() {
         device("mic-2", "audioinput", "AirPods"),
       ],
       cameras: [device("cam-1", "videoinput", "FaceTime camera")],
-      speakers: [device("spk-1", "audiooutput", "MacBook speakers")],
+      speakers: [
+        device("spk-1", "audiooutput", "MacBook speakers"),
+        device("default", "audiooutput", "Default speaker"),
+      ],
       current: {
         audioinput: "mic-1",
         videoinput: "cam-1",
@@ -567,6 +570,40 @@ describe("a parley in a teamspace", () => {
     ).toBeTruthy()
 
     fireEvent.change(microphone, { target: { value: "mic-2" } })
-    await waitFor(() => expect(media.setDevice).toHaveBeenCalledWith("mic-2"))
+    await waitFor(() =>
+      expect(media.setDevice).toHaveBeenCalledWith("audioinput", "mic-2")
+    )
+
+    // The speaker called "default" is chosen as a speaker, never as a mic.
+    fireEvent.change(
+      within(picker).getByRole("combobox", { name: "Speaker" }),
+      {
+        target: { value: "default" },
+      }
+    )
+    await waitFor(() =>
+      expect(media.setDevice).toHaveBeenCalledWith("audiooutput", "default")
+    )
+
+    // Captions arriving don't make the picker read the devices again.
+    const reads = vi.mocked(media.devices).mock.calls.length
+    media.say({
+      id: "c1",
+      member: "usr_raya",
+      name: "Raya Patel",
+      text: "Hi",
+      partial: false,
+      at: 1,
+    })
+    media.say({
+      id: "c2",
+      member: "usr_raya",
+      name: "Raya Patel",
+      text: "Hi all",
+      partial: false,
+      at: 2,
+    })
+    await screen.findAllByText("Hi all")
+    expect(vi.mocked(media.devices).mock.calls.length).toBe(reads)
   })
 })
