@@ -248,12 +248,19 @@ not permission to copy every incidental value into a new component.
     parley, and leave.
   - **The full page:** a gallery or speaker layout, live captions, the
     transcript as this page heard it, and a dock (mic, camera, screen,
-    record, ask the agent in, leave), plus "End for everyone".
+    record, ask the agent in, devices, leave), plus "End for everyone".
+    Devices opens a small panel over the stage to choose the microphone,
+    camera and speaker, and follows devices plugged in or out.
   - **Tiles:** camera tiles stay dark in both themes, as video does
     (`--call-*` tokens). A person keeps their tile colour everywhere. The
     agent is a tile with no camera, marked Listening or Speaking.
   - **Recording:** while it is on, everyone in the call sees who turned it
     on, and when.
+  - **Parley ended:** when the call the member is in ends (someone ended it,
+    or they ended it for everyone), a pop-up with a slight sea scene says
+    how long it ran, how many were in it, and what was kept (the recording
+    and transcript, or the transcript). Just leaving shows nothing. The
+    agent's notes join it once there's an API for them.
   - **In a DM:** the same strip, or a "Parley" button when none runs, sits
     above the conversation in its reading column. The call is the DM's own
     room on the edge. A DM whose ids the edge can't name offers no parley.
