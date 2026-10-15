@@ -103,6 +103,30 @@
   border-color: var(--tone-6b3b39);
   color: var(--tone-e4aaa6);
 }
+.agent-run[data-result="needs_input"] .agent-run-status,
+.agent-run[data-result="blocked"] .agent-run-status {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+/* A hand-off a specialist suggests: a suggestion only, nothing ran. */
+.agent-run-handoff {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.agent-run-handoff svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-muted);
+}
+.agent-run-handoff strong {
+  color: var(--text);
+  font-weight: 600;
+}
 .agent-run-meta {
   min-width: 0;
   overflow: hidden;

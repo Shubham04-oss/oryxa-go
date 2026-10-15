@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { ThinkingOrb } from "thinking-orbs"
 import {
+  ArrowRightLeft,
   ChevronRight,
   CircleAlert,
   CircleCheck,
@@ -21,6 +22,7 @@ import {
 import type { ItemUsage } from "@/lib/threads/client"
 import type { ScreenContext } from "@/lib/agents/screen-context"
 import {
+  artifactFileName,
   openedLinks,
   toolKeyArgument,
   turnTimes,
@@ -41,6 +43,7 @@ import {
   toolOrbState,
   toolStateWords,
 } from "./agent-tool-calls"
+import { FileKindBadge } from "./file-kind"
 import "./agent-run.css"
 
 // The agent conversation as a working session (founder, 15 Oct 2026): each
@@ -319,6 +322,29 @@ export function RunCard({
   const outputs = of(["artifact", "request"])
   const answers = of(["message"])
   const failures = of(["run_failed"])
+  // A specialist's work result says more than its run did: whether it needs
+  // the member or is blocked, the files it saved (by name; Go serves no
+  // specialist files yet), and the hand-offs it suggests.
+  const result = answers
+    .flatMap((entry) =>
+      entry.kind === "message" && entry.result ? [entry.result] : []
+    )
+    .at(-1)
+  const label =
+    status === "done" && result?.status === "needs_input"
+      ? "Needs your input"
+      : status === "done" && result?.status === "blocked"
+        ? "Blocked"
+        : statusWords[status]
+  const kept = new Set(
+    outputs.flatMap((entry) =>
+      entry.kind === "artifact" ? [artifactFileName(entry.name)] : []
+    )
+  )
+  const savedFiles = [
+    ...new Set((result?.artifacts ?? []).map(artifactFileName)),
+  ].filter((name) => name && !kept.has(name))
+  const handoffs = result?.handoffs ?? []
   const meta = [
     elapsed !== undefined && elapsed >= 1000
       ? formatElapsed(elapsed)
@@ -330,7 +356,8 @@ export function RunCard({
     <article
       className="agent-run"
       data-status={status}
-      aria-label={`Run: ${statusWords[status]}`}
+      aria-label={`Run: ${label}`}
+      data-result={result?.status}
       aria-busy={status === "working" || undefined}
     >
       <header className="agent-run-head">
@@ -339,7 +366,7 @@ export function RunCard({
           {status === "waiting" && (
             <Hand data-icon="inline-start" aria-hidden="true" />
           )}
-          {statusWords[status]}
+          {label}
         </Badge>
         {meta.length > 0 && (
           <span className="agent-run-meta">{meta.join(" · ")}</span>
@@ -362,9 +389,28 @@ export function RunCard({
       {approvals.length > 0 && (
         <div className="agent-run-section">{approvals.map(renderEntry)}</div>
       )}
-      {outputs.length > 0 && (
+      {(outputs.length > 0 || savedFiles.length > 0 || handoffs.length > 0) && (
         <div className="agent-run-section agent-run-outputs">
           {outputs.map(renderEntry)}
+          {savedFiles.map((name) => (
+            <div className="agent-run-file" key={`saved:${name}`}>
+              <div className="agent-run-file-row">
+                <FileKindBadge name={name} />
+                <span className="agent-run-file-text">
+                  <strong>{name}</strong>
+                  <small>Saved by this run · can't be opened here yet</small>
+                </span>
+              </div>
+            </div>
+          ))}
+          {handoffs.map((handoff, index) => (
+            <p className="agent-run-handoff" key={`handoff:${index}`}>
+              <ArrowRightLeft size={13} strokeWidth={1.8} aria-hidden="true" />
+              <span>
+                Suggests <strong>{handoff.target}</strong>: {handoff.request}
+              </span>
+            </p>
+          ))}
         </div>
       )}
       {answers.length > 0 && (
