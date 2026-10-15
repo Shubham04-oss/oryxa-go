@@ -29,6 +29,13 @@ type Config struct {
 	// it the service cannot seal, so the routes that store secrets are not
 	// mounted.
 	KMSKeyID string
+	// PublicURL is where browsers reach this service (no trailing slash); the
+	// OAuth callback is registered with each app under it. Without it sign-ins
+	// are not mounted.
+	PublicURL string
+	// ReturnOrigins are the origins (scheme and host) a sign-in may send the
+	// browser back to, comma separated in INTEGRATIONS_RETURN_ORIGINS.
+	ReturnOrigins []string
 	// OryxaApps are Oryxa's own apps, loaded into org_apps at start. ECS
 	// injects the JSON from AWS Secrets Manager; it is never in the repo.
 	OryxaApps []OryxaApp
@@ -55,6 +62,12 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf("INTEGRATIONS_SERVICE_CALLERS: %w", err)
 	}
 	config.KMSKeyID = strings.TrimSpace(getenv("INTEGRATIONS_KMS_KEY_ID"))
+	config.PublicURL = strings.TrimRight(strings.TrimSpace(getenv("INTEGRATIONS_PUBLIC_URL")), "/")
+	for _, origin := range strings.Split(getenv("INTEGRATIONS_RETURN_ORIGINS"), ",") {
+		if origin = strings.TrimRight(strings.TrimSpace(origin), "/"); origin != "" {
+			config.ReturnOrigins = append(config.ReturnOrigins, origin)
+		}
+	}
 	if raw := strings.TrimSpace(getenv("INTEGRATIONS_ORYXA_APPS")); raw != "" {
 		decoder := json.NewDecoder(bytes.NewReader([]byte(raw)))
 		decoder.DisallowUnknownFields()

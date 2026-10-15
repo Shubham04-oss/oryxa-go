@@ -16,10 +16,12 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/connect"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/orgapps"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/vault"
+	"github.com/Shubham04-oss/oryxa-go/integrations/manifest"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
@@ -112,8 +114,22 @@ func mountOrgApps(ctx context.Context, server *httpserver.Server, platform host.
 		}
 	}
 	orgapps.Routes(server, apps, platform.Logger)
+	if config.PublicURL == "" {
+		platform.Logger.Warn("INTEGRATIONS_PUBLIC_URL is not set: connecting apps is off")
+		return nil
+	}
+	connections := connect.New(platform.Database.Pool, sealer, apps, connect.Config{
+		RedirectURI: config.PublicURL + connect.CallbackPath, ReturnOrigins: config.ReturnOrigins,
+		Manifest: manifestOf, Logger: platform.Logger,
+	})
+	connect.Routes(server, connections, platform.Logger)
 	return nil
 }
+
+// manifestOf answers an app's manifest. ponytail: no connector is registered
+// with the service yet, so every connect answers "not found"; the host
+// (#291) fills this in from the connectors it runs.
+func manifestOf(string) (*manifest.Manifest, bool) { return nil, false }
 
 // namedIn reports whether services, ORYXA_SERVICES's value, names this
 // service itself rather than leaving the process to run every service.
