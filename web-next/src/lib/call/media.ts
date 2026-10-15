@@ -84,6 +84,20 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
   const mediaEvents = ["audioUpdate", "videoUpdate", "screenShareUpdate"]
   const self = meeting.self as unknown as Participant
   for (const event of mediaEvents) self.on?.(event, changed)
+
+  // The SDK plays everyone else's audio itself, but a browser (Safari above
+  // all) refuses audio that doesn't start in a click, and joining outlasts
+  // the click on Parley: the member hears nothing while their mic works.
+  // On a refusal, play again at their next click or key.
+  const gestures = ["pointerdown", "keydown"] as const
+  const replay = () => {
+    for (const gesture of gestures)
+      document.removeEventListener(gesture, replay)
+    void meeting.audio.play().catch(() => undefined)
+  }
+  meeting.self.on("autoplayError", () => {
+    for (const gesture of gestures) document.addEventListener(gesture, replay)
+  })
   // The map passes on each participant's own events, so one listener each
   // covers everyone in the call.
   const joined = meeting.participants.joined as unknown as Map<
@@ -145,6 +159,8 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
     },
     async leave() {
       listeners.clear()
+      for (const gesture of gestures)
+        document.removeEventListener(gesture, replay)
       await meeting.leave()
     },
   }
