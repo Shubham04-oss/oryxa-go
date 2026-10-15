@@ -153,3 +153,165 @@ export function scheduleWords(expression: string, timezone: string): string {
   if (at) return `Once, ${at[1].replace("T", " ")} ${timezone}`
   return expression
 }
+
+/** "Good morning, Ada": by the member's own clock. */
+export function greeting(now: number, name?: string): string {
+  const hour = new Date(now).getHours()
+  const part =
+    hour < 5
+      ? "evening"
+      : hour < 12
+        ? "morning"
+        : hour < 18
+          ? "afternoon"
+          : "evening"
+  // An email address is not a name to greet someone by.
+  const first = name?.includes("@") ? undefined : name?.trim().split(/\s+/)[0]
+  return first ? `Good ${part}, ${first}` : `Good ${part}`
+}
+
+/** Whether two instants fall on the same day by the member's own clock. */
+function sameDay(left: number, right: number): boolean {
+  const a = new Date(left)
+  const b = new Date(right)
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  )
+}
+
+/**
+ * How many asks put to this member their agent decided today, by the
+ * decision the server recorded (`decided_by.kind === "agent"`).
+ */
+export function handledToday(
+  requests: ReadonlyArray<{
+    target: { user_id: string }
+    decision?: { decided_at: string; decided_by?: { kind: string } }
+  }>,
+  viewerId: string,
+  now: number
+): number {
+  return requests.filter((request) => {
+    const decision = request.decision
+    if (request.target.user_id !== viewerId || !decision) return false
+    if (decision.decided_by?.kind !== "agent") return false
+    const at = Date.parse(decision.decided_at)
+    return Number.isFinite(at) && sameDay(at, now)
+  }).length
+}
+
+/**
+ * The line under the greeting: what needs the member, then what their agent
+ * handled today. Empty when there is nothing true to say.
+ */
+export function helloLine(needs: number, handled: number, agent = "Krude") {
+  const waiting =
+    needs > 0
+      ? `${needs} ${needs === 1 ? "thing needs" : "things need"} you.`
+      : ""
+  const done =
+    handled > 0
+      ? needs > 0
+        ? `${agent} handled ${handled} more today.`
+        : `${agent} handled ${handled} ${handled === 1 ? "ask" : "asks"} for you today.`
+      : ""
+  return [waiting, done].filter(Boolean).join(" ")
+}
+
+export type PickupItem = {
+  key: string
+  kind: "file" | "chat" | "knowledge"
+  title: string
+  /** The quiet line: where it lives and how long ago. */
+  detail: string
+  at?: string
+  /** The chat a file or a conversation opens. */
+  threadId?: string
+  running?: boolean
+}
+
+/**
+ * "Pick up where you left off": the member's most recent work across the
+ * files their agent saved, their titled conversations and their knowledge,
+ * newest first. A running conversation leads.
+ */
+export function pickupItems(
+  {
+    files,
+    chats,
+    knowledge,
+    runningThreadId,
+    starting = false,
+  }: {
+    files: ReadonlyArray<AgentFile & { chatTitle?: string }>
+    chats: ReadonlyArray<{ id: string; title?: string; updated_at: string }>
+    knowledge: ReadonlyArray<{
+      id: string
+      name: string
+      document_count: number
+      updated_at: string
+    }>
+    runningThreadId?: string | null
+    /** A new chat is running and has no id yet: it leads, and opens nothing. */
+    starting?: boolean
+  },
+  now: number,
+  max = 4
+): PickupItem[] {
+  const items: PickupItem[] = [
+    ...(starting
+      ? [
+          {
+            key: "chat:starting",
+            kind: "chat" as const,
+            title: "Starting conversation",
+            detail: "Working",
+            running: true,
+          },
+        ]
+      : []),
+    ...files.map((file) => ({
+      key: `file:${file.key}`,
+      kind: "file" as const,
+      title: file.name,
+      detail: [file.chatTitle, agoPhrase(file.at, now)]
+        .filter(Boolean)
+        .join(" · "),
+      at: file.at,
+      threadId: file.threadId,
+      running: false,
+    })),
+    ...chats
+      .filter((chat) => (chat.title ?? "").trim().length > 0)
+      .map((chat) => {
+        const running = chat.id === runningThreadId
+        return {
+          key: `chat:${chat.id}`,
+          kind: "chat" as const,
+          title: (chat.title ?? "").trim(),
+          detail: running
+            ? "Working"
+            : `Chat · ${agoPhrase(chat.updated_at, now)}`,
+          at: chat.updated_at,
+          threadId: chat.id,
+          running,
+        }
+      }),
+    ...knowledge.map((base) => ({
+      key: `knowledge:${base.id}`,
+      kind: "knowledge" as const,
+      title: base.name,
+      detail: `Library · ${base.document_count} document${base.document_count === 1 ? "" : "s"}`,
+      at: base.updated_at,
+      running: false,
+    })),
+  ]
+  return items
+    .sort((left, right) => {
+      if (left.running !== right.running) return left.running ? -1 : 1
+      return (right.at ?? "").localeCompare(left.at ?? "")
+    })
+    .slice(0, max)
+}

@@ -15,7 +15,14 @@ import type {
 } from "@/lib/answer-guard/client"
 import { authErrorMessage } from "@/lib/auth/client"
 import type { Organization } from "@/lib/auth/client"
-import { cn } from "@/lib/utils"
+import {
+  SettingsButton,
+  SettingsChips,
+  SettingsGroup,
+  SettingsMessage,
+  SettingsRow,
+  SettingsRowBody,
+} from "./settings-kit"
 
 /** What a row can be set to: a level, or the default, which Go keeps as no choice at all. */
 type Choice = GuardLevel | "default"
@@ -48,6 +55,22 @@ const levels: ReadonlyArray<{
 const levelPhrase: Record<GuardLevel, string> = {
   secrets: "secrets only",
   strict: "all personal details",
+}
+
+const intro =
+  "When your agent answers someone, oryxa checks the answer first and hides these. You see them; the person asking doesn't."
+
+/** What each level hides, in the words a member reads (the guard's own lists). */
+const hidden: Record<GuardLevel, readonly string[]> = {
+  secrets: ["Passwords", "Keys", "Card, bank and ID numbers"],
+  strict: [
+    "Passwords",
+    "Keys",
+    "Card, bank and ID numbers",
+    "Email addresses",
+    "Phone numbers",
+    "Addresses",
+  ],
 }
 
 const sessionKey = ["auth", "session"] as const
@@ -85,7 +108,6 @@ export function WorkspaceAnswerCheckSettings({
 
 function AnswerCheckSection({ organizationId }: { organizationId: string }) {
   const queryClient = useQueryClient()
-  const headingId = useId()
   const groupName = useId()
   const options = answerGuardPreferencesQueryOptions(organizationId)
   const query = useQuery(options)
@@ -135,38 +157,28 @@ function AnswerCheckSection({ organizationId }: { organizationId: string }) {
     save.mutate(next)
   }
 
-  const title = (
-    <div className="workspace-settings-section-title">
-      <h3 id={headingId}>What your agents share</h3>
-      <p>
-        When your agent answers someone, Oryxa checks the answer first. Choose
-        what it hides.
-      </p>
-    </div>
-  )
+  const label = "What it hides when it answers"
 
   if (!query.data) {
     // Still asking: the section may turn out not to be served, so it does not
     // appear only to go again.
     if (!query.isError) return null
     return (
-      <section
-        className="workspace-settings-section"
-        aria-labelledby={headingId}
-      >
-        {title}
-        <p className="workspace-settings-error" role="alert">
+      <SettingsGroup label={label}>
+        <SettingsRow
+          title="Checked before anything is shared"
+          description={intro}
+        />
+        <SettingsMessage tone="error">
           {authErrorMessage(query.error, "Could not load these settings.")}{" "}
-          <button
-            type="button"
-            className="underline"
+          <SettingsButton
             disabled={query.isFetching}
             onClick={() => void query.refetch()}
           >
             {query.isFetching ? "Retrying…" : "Retry"}
-          </button>
-        </p>
-      </section>
+          </SettingsButton>
+        </SettingsMessage>
+      </SettingsGroup>
     )
   }
   if (!query.data.available) return null
@@ -178,41 +190,40 @@ function AnswerCheckSection({ organizationId }: { organizationId: string }) {
   const failedRow = save.isError ? save.variables.origin : undefined
 
   return (
-    <section className="workspace-settings-section" aria-labelledby={headingId}>
-      {title}
-      <div>
-        {rows.map(({ origin, title: rowTitle }) => (
-          <AnswerCheckRow
-            key={origin}
-            title={rowTitle}
-            name={`${groupName}-${origin}`}
-            value={shown[origin]}
-            busy={saving !== null}
-            error={
-              failedRow === origin
-                ? authErrorMessage(save.error, "Could not save your choice.")
-                : undefined
-            }
-            onChoose={(choice) => choose(origin, choice)}
+    <SettingsGroup label={label}>
+      <SettingsRow
+        title="Checked before anything is shared"
+        description={intro}
+      >
+        <SettingsRowBody>
+          <SettingsChips
+            label="Hidden from people who ask"
+            items={hidden[shown.peer.effective]}
           />
-        ))}
-      </div>
-      {(preferences.regulated || preferences.relevance === "hold") && (
-        <div className="mt-4 grid gap-1 border-t border-[var(--tone-383838)] pt-4">
-          {preferences.regulated && (
-            <p className="workspace-settings-hint">
-              Your organization is regulated: health, HR and pay details wait
-              for you before anyone else sees them.
-            </p>
-          )}
-          {preferences.relevance === "hold" && (
-            <p className="workspace-settings-hint">
-              Answers that don't match what was asked are held for you first.
-            </p>
-          )}
-        </div>
+        </SettingsRowBody>
+      </SettingsRow>
+      {rows.map(({ origin, title: rowTitle }) => (
+        <AnswerCheckRow
+          key={origin}
+          title={rowTitle}
+          name={`${groupName}-${origin}`}
+          value={shown[origin]}
+          busy={saving !== null}
+          error={
+            failedRow === origin
+              ? authErrorMessage(save.error, "Could not save your choice.")
+              : undefined
+          }
+          onChoose={(choice) => choose(origin, choice)}
+        />
+      ))}
+      {preferences.regulated && (
+        <SettingsRow description="Your organization is regulated: health, HR and pay details wait for you before anyone else sees them." />
       )}
-    </section>
+      {preferences.relevance === "hold" && (
+        <SettingsRow description="Answers that don't match what was asked are held for you first." />
+      )}
+    </SettingsGroup>
   )
 }
 
@@ -264,30 +275,23 @@ function AnswerCheckRow({
   ]
 
   return (
-    <div className="border-t border-[var(--tone-383838)] py-4 first:border-t-0 first:pt-0 last:pb-0">
+    <div className="settings-row settings-choices-row">
       <fieldset
         role="radiogroup"
         aria-labelledby={`${id}-title`}
         aria-describedby={floored ? `${id}-floor` : undefined}
         aria-busy={busy}
-        className="m-0 min-w-0 border-0 p-0 transition-opacity aria-busy:opacity-60"
+        className="settings-choices"
       >
-        <legend
-          id={`${id}-title`}
-          className="mb-2 p-0 text-[13px] font-[590] text-[var(--tone-eeeeee)]"
-        >
+        <legend id={`${id}-title`} className="settings-choices-title">
           {title}
         </legend>
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-2">
+        <div className="settings-choices-grid">
           {choices.map((option) => (
             <label
               key={option.choice}
-              className={cn(
-                "flex items-start gap-2.5 rounded-lg border border-[var(--tone-454545)] px-3 py-2.5 has-[:checked]:border-[var(--tone-8a8a8a)] has-[:checked]:bg-[var(--tone-2f2f2f)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-[var(--tone-8a8a8a)]",
-                option.disabled
-                  ? "cursor-not-allowed opacity-50"
-                  : "cursor-pointer hover:bg-[var(--tone-2b2b2b)]"
-              )}
+              className="settings-choice"
+              data-disabled={option.disabled ? "true" : undefined}
             >
               <input
                 type="radio"
@@ -300,22 +304,13 @@ function AnswerCheckRow({
                 aria-describedby={
                   option.detail ? `${id}-${option.choice}-detail` : undefined
                 }
-                className="mt-0.5 accent-[var(--tone-b5b5b5)]"
               />
-              <span className="grid min-w-0 gap-0.5">
-                <span
-                  id={`${id}-${option.choice}-label`}
-                  className="text-[13px] text-[var(--tone-eeeeee)]"
-                >
-                  {option.label}
-                </span>
+              <span className="settings-choice-text">
+                <span id={`${id}-${option.choice}-label`}>{option.label}</span>
                 {option.detail && (
-                  <span
-                    id={`${id}-${option.choice}-detail`}
-                    className="text-xs leading-snug text-[var(--text-muted)]"
-                  >
+                  <small id={`${id}-${option.choice}-detail`}>
                     {option.detail}
-                  </span>
+                  </small>
                 )}
               </span>
             </label>
@@ -323,15 +318,11 @@ function AnswerCheckRow({
         </div>
       </fieldset>
       {floored && (
-        <p id={`${id}-floor`} className="workspace-settings-hint">
+        <p id={`${id}-floor`} className="settings-note">
           Your organization requires all personal details to be hidden here.
         </p>
       )}
-      {error && (
-        <p className="workspace-settings-error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <SettingsMessage tone="error">{error}</SettingsMessage>}
     </div>
   )
 }

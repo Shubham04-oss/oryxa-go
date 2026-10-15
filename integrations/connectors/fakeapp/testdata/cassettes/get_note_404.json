@@ -1,0 +1,11 @@
+[
+  {
+    "method": "GET",
+    "host": "api.fakeapp.example.com",
+    "path": "/notes/9",
+    "status": 404,
+    "body": {
+      "error": "not found"
+    }
+  }
+]

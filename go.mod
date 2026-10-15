@@ -38,7 +38,6 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/safehtml v0.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -78,8 +77,6 @@ require (
 	google.golang.org/genproto v0.0.0-20260715232425-e75dac1f907d // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260825221802-da73d73af1c5 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260825221802-da73d73af1c5 // indirect
-	google.golang.org/grpc v1.83.2 // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 	rsc.io/omap v1.2.0 // indirect
 	rsc.io/ordered v1.1.1 // indirect
 )
@@ -110,6 +107,7 @@ require (
 	github.com/dodopayments/dodopayments-go v1.116.0
 	github.com/exaring/otelpgx v0.12.0
 	github.com/felixge/httpsnoop v1.1.0
+	github.com/google/jsonschema-go v0.4.3
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/jmoiron/sqlx v1.4.0
@@ -134,6 +132,8 @@ require (
 	google.golang.org/adk/v2 v2.4.0
 	google.golang.org/api v0.295.0
 	google.golang.org/genai v1.70.0
+	google.golang.org/grpc v1.83.2
+	google.golang.org/protobuf v1.36.12
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.2
 )

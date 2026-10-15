@@ -75,6 +75,10 @@ type ListFilesResponse struct {
 // ReadFilesRequest is POST …/files/read.
 type ReadFilesRequest struct {
 	Paths []string `json:"paths"`
+	// MaxBytes raises the read's budget for a caller that never shows the
+	// bytes to a model (sandbox_save_artifact), up to the artifact cap. Zero
+	// keeps the model's budget.
+	MaxBytes int `json:"maxBytes,omitempty"`
 }
 
 // File encodings on the wire.
