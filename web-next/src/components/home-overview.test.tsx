@@ -235,11 +235,132 @@ it("shows the same chats at a glance in the agent panel, without its own compose
     },
   })
   const view = renderHome({ variant: "glance" })
-  expect(view.container.querySelector(".home-glance")).toBeTruthy()
+  expect(view.container.querySelector(".home-glance-cards")).toBeTruthy()
   expect(screen.queryByRole("region", { name: "Your agent" })).toBeNull()
   expect(screen.queryByRole("textbox")).toBeNull()
   fireEvent.click(await screen.findByRole("button", { name: /First/ }))
   expect(view.onOpenConversation).toHaveBeenCalledWith("one")
+})
+
+it("lays At a glance out as the board's cards, from real reads only", async () => {
+  stubApi({
+    [`${path}/threads`]: {
+      threads: [chat("wake", "Updates", "wakeup"), chat("one", "First")],
+    },
+    [`${path}/threads/wake`]: wakeDetail([
+      appsBatch("b1", minutesAgo(12), "slack"),
+      said("s1", minutesAgo(11), "Raya mentioned you in #eu-launch."),
+    ]),
+    [`${path}/threads/one`]: {
+      ...chat("one", "First"),
+      items: [
+        {
+          type: "artifact",
+          id: "a1",
+          at: minutesAgo(5),
+          artifact: "EU launch plan.docx",
+          version: 1,
+        },
+      ],
+      pending_confirmations: [],
+    },
+    [`${path}/apps/connections`]: {
+      connections: [connection("slack"), connection("github")],
+    },
+    [`${path}/agent-workflows`]: {
+      workflows: [
+        workflow("Weekday digest"),
+        workflow("Monday metrics"),
+        workflow("Someone else's", { owner_user_id: ASKER }),
+      ],
+    },
+    // Needs you is the panel's chip now, not a card here.
+    [`${path}/agent-requests/inbox`]: { requests: [request()] },
+  })
+  const onOpenPeople = vi.fn()
+  const onMessage = vi.fn()
+  const onOpenWorkflows = vi.fn()
+  const view = renderHome({
+    variant: "glance",
+    agentName: "Krude",
+    onOpenPeople,
+    onMessage,
+    onOpenWorkflows,
+    teammates: {
+      status: "ready",
+      people: [
+        {
+          id: "user-kenji",
+          name: "Kenji Sato",
+          email: "kenji@example.com",
+          role: "member",
+          spaces: [],
+          agents: [],
+        },
+        {
+          id: ASKER,
+          name: "Raya Patel",
+          email: "raya@example.com",
+          role: "member",
+          spaces: ["Launch"],
+          agents: [],
+        },
+      ],
+      find: () => undefined,
+      nameOf: () => undefined,
+      peer: () => undefined,
+      refetch: vi.fn(),
+    },
+  })
+
+  const apps = screen.getByRole("region", { name: "From your apps" })
+  expect(
+    await within(apps).findByRole("list", { name: "Your connected apps" })
+  ).toBeTruthy()
+  expect(
+    await within(apps).findByText("Raya mentioned you in #eu-launch.")
+  ).toBeTruthy()
+  fireEvent.click(within(apps).getByRole("button", { name: /Manage/ }))
+  expect(view.onOpenTools).toHaveBeenCalled()
+
+  // Teammates who share a teamspace come first; a tap messages them.
+  const mates = screen.getByRole("region", { name: "Teammates" })
+  const buttons = within(mates).getAllByRole("button", { name: /^Message/ })
+  expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+    "Message Raya Patel",
+    "Message Kenji Sato",
+  ])
+  fireEvent.click(buttons[0])
+  expect(onMessage).toHaveBeenCalledWith(ASKER)
+  fireEvent.click(within(mates).getByRole("button", { name: /All/ }))
+  expect(onOpenPeople).toHaveBeenCalled()
+
+  const knowledge = screen.getByRole("region", { name: "Knowledge" })
+  expect(
+    within(knowledge).getByRole("button", { name: "Knowledge, 1 document" })
+  ).toBeTruthy()
+  fireEvent.click(within(knowledge).getByRole("button", { name: /Library/ }))
+  expect(view.onOpenKnowledge).toHaveBeenCalled()
+
+  const files = screen.getByRole("region", { name: "Files Krude made" })
+  expect(
+    await within(files).findByRole("button", {
+      name: "EU launch plan.docx, from First",
+    })
+  ).toBeTruthy()
+
+  const recurring = screen.getByRole("region", { name: "Recurring work" })
+  await within(recurring).findByText("Weekday digest")
+  expect(within(recurring).queryByText("Someone else's")).toBeNull()
+  fireEvent.click(
+    within(recurring).getByRole("button", {
+      name: "All 2 recurring workflows",
+    })
+  )
+  expect(onOpenWorkflows).toHaveBeenCalled()
+
+  expect(screen.queryByText(/Waiting for your OK/)).toBeNull()
+  expect(screen.queryByRole("list", { name: "Needs you" })).toBeNull()
 })
 
 it("keeps three titled recent chats under Conversations at a glance, opening exact chats and history", async () => {
@@ -271,12 +392,7 @@ it("keeps three titled recent chats under Conversations at a glance, opening exa
     })
   )
   expect(view.onOpenConversation).toHaveBeenCalledWith("two")
-  fireEvent.click(
-    within(conversations).getByRole<HTMLButtonElement>("button", {
-      name: "All conversations",
-    })
-  )
-  expect(view.onOpenAgent).toHaveBeenCalledOnce()
+  // All conversations is on the page's Pick up header, not at a glance.
   fireEvent.click(
     within(conversations).getByRole<HTMLButtonElement>("button", {
       name: "New chat",
@@ -356,15 +472,20 @@ it("pins a running open chat once and keeps starting chat truthful until an ID e
   expect(
     within(recents)
       .getByText("Working")
-      .querySelector("[data-orb-state=working]")
+      .closest("button")
+      ?.querySelector("[data-orb-state=working]")
   ).toBeTruthy()
   view.rerenderHome({
     primaryChatActivity: { state: "running", threadId: null },
   })
   await screen.findByText("Starting conversation")
+  // Until it has an ID there is nothing to open.
   expect(
-    screen.queryByRole("button", { name: /Starting conversation/ })
-  ).toBeNull()
+    screen
+      .getByText("Starting conversation")
+      .closest("button")
+      ?.hasAttribute("disabled")
+  ).toBe(true)
 })
 
 it("greets by the member's clock and first name", () => {
@@ -856,9 +977,7 @@ it("says what lands under From your apps before there are briefs", async () => {
   const first = renderHome({ variant: "glance" })
   const apps = screen.getByRole("region", { name: "From your apps" })
   expect(
-    await within(apps).findByText(
-      "Connect an app to see what happened while you were away."
-    )
+    await within(apps).findByText("Connect a tool and its news lands here.")
   ).toBeTruthy()
   expect(within(apps).queryByRole("button", { name: "All updates" })).toBeNull()
   first.unmount()
@@ -871,13 +990,15 @@ it("says what lands under From your apps before there are briefs", async () => {
       said("a1", minutesAgo(4), "Hi there."),
     ]),
   })
-  const view = renderHome({ variant: "glance" })
+  renderHome({ variant: "glance" })
   const updates = screen.getByRole("region", { name: "From your apps" })
   expect(
-    await within(updates).findByText("Nothing new from your apps.")
+    await within(updates).findByText("No updates from your apps yet.")
   ).toBeTruthy()
-  fireEvent.click(within(updates).getByRole("button", { name: "All updates" }))
-  expect(view.onOpenConversation).toHaveBeenCalledWith("wake")
+  // At a glance has no All updates; the latest brief is the row that opens it.
+  expect(
+    within(updates).queryByRole("button", { name: "All updates" })
+  ).toBeNull()
 })
 
 it("shows the three most recently updated knowledge bases, and All opens Knowledge", async () => {
@@ -904,17 +1025,13 @@ it("shows the three most recently updated knowledge bases, and All opens Knowled
   })
   const view = renderHome({ variant: "glance" })
   const knowledge = screen.getByRole("region", { name: "Knowledge" })
-  await within(knowledge).findByText("Newest")
+  await within(knowledge).findByText("Newest · 3")
   expect(
     within(knowledge)
       .getAllByRole("listitem")
-      .map((row) => row.textContent)
-  ).toEqual([
-    "Newest3 documents · Updated 5 min ago",
-    "Middle1 document · Updated 2 h ago",
-    "Oldest1 document · Updated 10 h ago",
-  ])
-  fireEvent.click(within(knowledge).getByRole("button", { name: "All" }))
+      .map((row) => within(row).getByRole("button").getAttribute("aria-label"))
+  ).toEqual(["Newest, 3 documents", "Middle, 1 document", "Oldest, 1 document"])
+  fireEvent.click(within(knowledge).getByRole("button", { name: /^Library/ }))
   expect(view.onOpenKnowledge).toHaveBeenCalledOnce()
   fireEvent.click(within(knowledge).getByRole("button", { name: /Middle/ }))
   expect(view.onOpenKnowledge).toHaveBeenCalledTimes(2)
@@ -925,9 +1042,7 @@ it("invites knowledge when there is none to look up", async () => {
   const view = renderHome({ variant: "glance" })
   const knowledge = screen.getByRole("region", { name: "Knowledge" })
   await within(knowledge).findByText(/Nothing to look up yet\./)
-  fireEvent.click(
-    within(knowledge).getByRole("button", { name: "Add knowledge" })
-  )
+  fireEvent.click(within(knowledge).getByRole("button", { name: /^Library/ }))
   expect(view.onOpenKnowledge).toHaveBeenCalledOnce()
 })
 
@@ -958,13 +1073,13 @@ it("lists the files the agent saved in recent chats, latest version once, newest
     },
   })
   const view = renderHome({ variant: "glance" })
-  const files = screen.getByRole("region", { name: "Files" })
+  const files = screen.getByRole("region", { name: "Files your agent made" })
   await within(files).findByText("notes.md")
   expect(
     within(files)
       .getAllByRole("listitem")
-      .map((row) => row.textContent)
-  ).toEqual(["report.pdfOne · 10 min ago", "notes.mdTwo · 20 min ago"])
+      .map((row) => within(row).getByRole("button").getAttribute("aria-label"))
+  ).toEqual(["report.pdf, from One", "notes.md, from Two"])
   fireEvent.click(within(files).getByRole("button", { name: /notes\.md/ }))
   expect(view.onOpenConversation).toHaveBeenCalledWith("two")
   // Files come from the chat details Today already reads, not a read of their own.
@@ -1055,7 +1170,6 @@ it("lists every unfinished setup step on one Finish setup line, each opening its
 it("reads apps, tools and recurring work, and never sent requests or shared activity", async () => {
   const go = stubApi()
   renderHome({ variant: "glance" })
-  await screen.findByText("Nothing needs you right now.")
   await screen.findByText("Nothing runs on a schedule yet.")
   const paths = go.calls.map((call) => call.url.pathname)
   expect(paths).toContain(`${path}/apps/connections`)
@@ -1251,11 +1365,11 @@ it("gives quiet complete empty Home exactly once, with only unfinished setup", a
     "/v1/agent-grant": { granted: false },
   })
   renderHome({ variant: "glance" })
-  expect(
-    await screen.findAllByText("Nothing needs you right now.")
-  ).toHaveLength(1)
   // Slack is not this member's to connect, so the line leaves it out.
-  const setup = screen.getByLabelText("Finish setup")
+  const setup = await screen.findByLabelText("Finish setup")
+  await within(setup).findByRole("button", {
+    name: "Turn on background access",
+  })
   expect(
     within(setup)
       .getAllByRole("button")
@@ -1525,7 +1639,8 @@ it.each([
   },
   {
     name: "recurring work",
-    failed: "Recurring work can’t be loaded right now.",
+    // At a glance's card says it in its own words.
+    failed: "Couldn’t load recurring work.",
     route: `${path}/agent-workflows`,
     seed: { workflows: [workflow("Private weekly digest")] },
     privateText: "Private weekly digest",

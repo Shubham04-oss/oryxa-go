@@ -23,7 +23,6 @@ import {
   handledToday,
   helloLine as helloWords,
   pickupItems,
-  scheduleWords,
 } from "./today-format"
 import { HomeAsk } from "./home-ask"
 import type { HomeSuggestion } from "./home-ask"
@@ -36,6 +35,8 @@ import {
   useTeamspaceStep,
 } from "./home-first-run"
 import { ToolkitLogo } from "./workspace-tool-logo"
+import { HomeGlance } from "./home-glance"
+import type { DmPeople } from "./direct-message-people"
 import { toolkitIcon } from "./workspace-tools-data"
 import { IdentityAvatar } from "./workspace-avatar"
 import { ApiError } from "@/lib/api/client"
@@ -200,6 +201,13 @@ type HomeProps = {
   variant?: "page" | "glance"
   /** The member's name, for the page's greeting. */
   viewerName?: string
+  /** At a glance: the member's teammates, whom a tap messages. */
+  teammates?: DmPeople
+  onMessage?: (peerId: string) => void
+  /** At a glance: Recurring work's All, to the agent's workflows. */
+  onOpenWorkflows?: () => void
+  /** The member's primary agent's name, for "Files Krude made". */
+  agentName?: string
 }
 
 /** A different signed-in member must never inherit drafts or local decisions. */
@@ -231,6 +239,10 @@ function HomeDesk({
   onFirstRunDone,
   variant = "page",
   viewerName,
+  teammates,
+  onMessage,
+  onOpenWorkflows,
+  agentName,
 }: HomeProps) {
   const hydrated = useHydrated()
   const enabled = hydrated && Boolean(organizationId && viewerId)
@@ -451,9 +463,9 @@ function HomeDesk({
     ),
   ]
   const noApps = connections.isSuccess && tools.length === 0
-  const workflowRows = (authorizedData(workflows) ?? [])
-    .filter((workflow) => workflow.owner_user_id === viewer)
-    .slice(0, 3)
+  const ownWorkflows = (authorizedData(workflows) ?? []).filter(
+    (workflow) => workflow.owner_user_id === viewer
+  )
   const corpusRows = authorizedData(corpora)
   const knowledgeRows = [...(corpusRows ?? [])]
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
@@ -933,221 +945,50 @@ function HomeDesk({
     )
   }
 
+  // At a glance (AgentPanelGlance board): the widgets as compact library
+  // cards, then the Finish setup line.
+  if (!enabled)
+    return (
+      <p className="workspace-agent-empty">
+        Your apps, teammates and conversations will appear here.
+      </p>
+    )
   return (
-    <div className="home-overview home-today home-glance">
-      {enabled && (
-        <div className="home-top">
-          {appsSection}
-          {needsSection}
-        </div>
-      )}
-      {enabled && (
-        <div className="home-stack">
-          <section className="home-column" aria-labelledby="home-conversations">
-            <header className="home-column-head">
-              <h2 id="home-conversations">Conversations</h2>
-              <div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={!onNewChat}
-                  onClick={() => onNewChat?.()}
-                >
-                  New chat
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={onOpenAgent}
-                  aria-label="All conversations"
-                >
-                  All
-                </Button>
-              </div>
-            </header>
-            <ReadNotice {...notices.chats} query={threads} />
-            {agentWork.length > 0 ? (
-              <ul className="home-list" aria-label="Recent conversations">
-                {agentWork.map((work) => (
-                  <li key={work.threadId ?? "starting"}>
-                    {work.threadId === null ? (
-                      <div className="home-item" role="status">
-                        <span className="home-item-copy">
-                          <span>{work.title}</span>
-                          <small className="home-work-status">
-                            <ThinkingOrb
-                              size={20}
-                              state="working"
-                              aria-hidden="true"
-                            />
-                            {work.detail}
-                          </small>
-                        </span>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        className="home-item"
-                        disabled={!onOpenConversation}
-                        onClick={() => {
-                          if (work.threadId) onOpenConversation?.(work.threadId)
-                        }}
-                      >
-                        <span className="home-item-copy">
-                          <span>{work.title}</span>
-                          <small
-                            className={
-                              work.running ? "home-work-status" : undefined
-                            }
-                          >
-                            {work.running && (
-                              <ThinkingOrb
-                                size={20}
-                                state="working"
-                                aria-hidden="true"
-                              />
-                            )}
-                            {work.detail}
-                          </small>
-                        </span>
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              threads.isSuccess && (
-                <p className="home-quiet">Your conversations land here.</p>
-              )
-            )}
-          </section>
-
-          <section className="home-column" aria-labelledby="home-knowledge">
-            <header className="home-column-head">
-              <h2 id="home-knowledge">Knowledge</h2>
-              <Button variant="ghost" size="sm" onClick={onOpenKnowledge}>
-                All
-              </Button>
-            </header>
-            <ReadNotice {...notices.collections} query={corpora} />
-            {knowledgeRows.length > 0 ? (
-              <ul className="home-list">
-                {knowledgeRows.map((base) => (
-                  <li key={base.id}>
-                    <button
-                      type="button"
-                      className="home-item"
-                      onClick={onOpenKnowledge}
-                    >
-                      <span className="home-item-copy">
-                        <span>{base.name}</span>
-                        <small>
-                          {base.document_count} document
-                          {base.document_count === 1 ? "" : "s"} · Updated{" "}
-                          {agoPhrase(base.updated_at, now).replace(
-                            /^(Just|Yesterday)/,
-                            (word) => word.toLowerCase()
-                          )}
-                        </small>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              corpora.isSuccess && (
-                <p className="home-quiet">
-                  Nothing to look up yet.{" "}
-                  <Button variant="link" size="sm" onClick={onOpenKnowledge}>
-                    Add knowledge
-                  </Button>
-                </p>
-              )
-            )}
-          </section>
-
-          <section className="home-column" aria-labelledby="home-files">
-            <header className="home-column-head">
-              <h2 id="home-files">Files</h2>
-            </header>
-            {agentFiles.length > 0 ? (
-              <ul className="home-list">
-                {agentFiles.map((file) => (
-                  <li key={file.key}>
-                    <button
-                      type="button"
-                      className="home-item"
-                      disabled={!onOpenConversation}
-                      onClick={() => onOpenConversation?.(file.threadId)}
-                    >
-                      <span className="home-item-copy">
-                        <span>{file.name}</span>
-                        <small>
-                          {[
-                            conversationTitle(
-                              conversations.find(
-                                (chat) => chat.id === file.threadId
-                              )?.title
-                            ),
-                            agoPhrase(file.at, now),
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </small>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              confirmations.every((query) => query.isSuccess) && (
-                <p className="home-quiet">
-                  Files your agent makes in recent conversations land here.
-                </p>
-              )
-            )}
-          </section>
-
-          <section className="home-column" aria-labelledby="home-workflows">
-            <header className="home-column-head">
-              <h2 id="home-workflows">Recurring work</h2>
-            </header>
-            <ReadNotice {...notices.workflows} query={workflows} />
-            {workflowRows.length > 0 ? (
-              <ul className="home-list">
-                {workflowRows.map((workflow) => (
-                  <li key={workflow.id}>
-                    <div className="home-item">
-                      <span className="home-item-copy">
-                        <span>{workflow.name}</span>
-                        <small>
-                          {workflow.status === "disabled"
-                            ? "Paused"
-                            : workflow.schedule &&
-                                workflow.schedule.state === "enabled"
-                              ? scheduleWords(
-                                  workflow.schedule.expression,
-                                  workflow.schedule.timezone
-                                )
-                              : "Runs when you start it"}
-                        </small>
-                      </span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              workflows.isSuccess && (
-                <p className="home-quiet">Nothing runs on a schedule yet.</p>
-              )
-            )}
-          </section>
-        </div>
-      )}
+    <div className="home-glance">
+      <HomeGlance
+        now={now}
+        agentName={agentName}
+        updatesThreadId={updatesThreadId}
+        updates={updates}
+        briefs={briefs}
+        tools={tools}
+        connections={connections}
+        people={teammates}
+        conversations={agentWork}
+        threads={threads}
+        knowledge={knowledgeRows}
+        corpora={corpora}
+        files={agentFiles}
+        filesRead={confirmations.every((query) => query.isSuccess)}
+        conversationTitle={(threadId) =>
+          conversationTitle(
+            conversations.find((chat) => chat.id === threadId)?.title
+          )
+        }
+        workflows={ownWorkflows}
+        workflowsRead={workflows}
+        onOpenConversation={onOpenConversation}
+        onNewChat={onNewChat ? () => onNewChat() : undefined}
+        onOpenTools={onOpenTools}
+        onOpenKnowledge={onOpenKnowledge}
+        onOpenPeople={onOpenPeople}
+        onMessage={onMessage}
+        onOpenWorkflows={onOpenWorkflows}
+      />
 
       {/* Slack and background access only feed the setup line: a read that
           failed or is not served here leaves its step out, quietly. */}
-      {enabled && setup.length > 0 && (
+      {setup.length > 0 && (
         <p className="home-setup-line" aria-label="Finish setup">
           <span>Finish setup:</span>
           {setup.map((item, index) => (
