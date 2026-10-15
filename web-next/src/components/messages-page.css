@@ -1,0 +1,247 @@
+/* Messages (messages-page.tsx, DESIGN.md §3): the DM list, the open DM and
+   the person card across the canvas. The page is its own container, so the
+   columns answer the canvas's width (the agent panel open or not) rather than
+   the window's: a narrow canvas drops the card first, then the list. */
+.messages-page {
+  container: messages-page / inline-size;
+  height: 100%;
+}
+.messages-page-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+.messages-list,
+.messages-page-person {
+  display: none;
+}
+.messages-page-conversation {
+  min-width: 0;
+  min-height: 0;
+}
+
+@container messages-page (min-width: 620px) {
+  .messages-page-grid {
+    grid-template-columns: 260px minmax(0, 1fr);
+    padding: 12px 0 0 12px;
+  }
+  .messages-list {
+    display: flex;
+  }
+}
+@container messages-page (min-width: 980px) {
+  .messages-page-grid {
+    grid-template-columns: 280px minmax(0, 1fr) 280px;
+    padding: 12px 12px 0;
+  }
+  .messages-page-person {
+    display: block;
+  }
+  /* The card holds Parley; the DM keeps only a running parley's strip. */
+  .messages-page-conversation
+    .workspace-dm-parley
+    > .workspace-teamspace-parley {
+    display: none;
+  }
+}
+
+/* The list: a filled tile, the open conversation the raised row. */
+.messages-list {
+  --workspace-base: var(--base);
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 14px 8px 8px;
+  border-radius: 14px;
+  background: var(--base);
+}
+.messages-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px 0 8px;
+}
+.messages-list-head h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+}
+.messages-list-unread {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.messages-list-head [data-slot="button"] {
+  color: var(--text-muted);
+}
+.messages-list-search {
+  flex: none;
+  width: auto;
+  margin: 0 4px;
+  border-color: var(--border-quiet);
+  border-radius: 999px;
+  background: var(--canvas);
+}
+.messages-list-search input {
+  color: var(--text);
+  font-size: 13px;
+}
+.messages-list-search [data-slot="input-group-addon"] {
+  color: var(--text-muted);
+}
+.messages-list-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.messages-list .workspace-dm-row.is-active {
+  --presence-ring: var(--raised);
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--border-quiet),
+    0 1px 3px var(--shade-66);
+}
+.messages-list-group {
+  margin: 14px 10px 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.messages-list-note {
+  margin: 8px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* The person card: a filled tile, read top to bottom. */
+.messages-page-person {
+  min-height: 0;
+  overflow-y: auto;
+}
+.person-card {
+  --workspace-base: var(--base);
+  --presence-ring: var(--base);
+  border-radius: 14px;
+  background: var(--base);
+  color: var(--text);
+  box-shadow: none;
+}
+.person-card-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+.person-card-avatar .workspace-avatar {
+  width: 64px;
+  height: 64px;
+}
+.person-card-who h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+.person-card-who p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.person-card-who .person-card-online {
+  color: var(--text-soft);
+}
+.person-card-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+.person-card-actions .workspace-teamspace-parley {
+  margin-left: 0;
+}
+.person-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.person-card-body [data-slot="separator"] {
+  background: var(--border-quiet);
+}
+.person-card-body h3 {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.person-card-agents,
+.person-card-spaces {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.person-card-agents li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--canvas);
+}
+.person-card-agents li + li {
+  margin-top: 8px;
+}
+.person-card-agents .workspace-avatar {
+  width: 30px;
+  height: 30px;
+}
+.person-card-agents li > span {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.person-card-agents strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.person-card-agents small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.person-card-ask[data-slot="button"] {
+  width: 100%;
+  border-color: var(--border-quiet);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+}
+.person-card-ask[data-slot="button"]:hover {
+  background: var(--hover);
+}
+.person-card-spaces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.person-card-space[data-slot="badge"] {
+  height: 24px;
+  padding: 0 9px 0 4px;
+  background: var(--canvas);
+  color: var(--text-soft);
+  font-weight: 500;
+}
+.person-card-space .workspace-avatar {
+  width: 16px;
+  height: 16px;
+}
+.person-card-quiet {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}

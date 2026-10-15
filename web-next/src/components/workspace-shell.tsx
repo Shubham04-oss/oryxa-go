@@ -4,10 +4,14 @@ import { ArrowLeft, BookOpenText } from "lucide-react"
 import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { FocusHeader } from "./agents-parts"
 import { PrimaryAgentFileViewer } from "./primary-agent-files"
+import { AgentSession } from "./agent-session"
+import { SessionWorkTabs } from "./agent-session-work"
+import { ChatsList } from "./chats-page"
+import type { SessionWorkTab } from "./agent-session-work"
 import { BrandChip } from "./brand-chip"
 import { HomeOverview } from "./home-overview"
 import { WorkspaceSidebar, sectionArea } from "./workspace-sidebar"
-import type { SidebarPage, SidebarSection } from "./workspace-sidebar"
+import type { SidebarPage } from "./workspace-sidebar"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import { KnowledgeBases } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
@@ -31,12 +35,14 @@ import type {
   AgentPanelChatRequest,
   AgentPanelTabRequest,
 } from "./workspace-agent-panel"
+import { MessagesPage } from "./messages-page"
 import { PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
 import type { SettingsPage } from "./workspace-settings"
 import { useTeamspaces } from "@/hooks/use-teamspaces"
 import { useQuery } from "@tanstack/react-query"
 import { agentsQueryOptions } from "@/lib/agents/queries"
+import { primaryAgent } from "@/lib/agents/policy"
 import { useAgentsMode } from "@/hooks/use-agents-mode"
 import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
@@ -55,8 +61,9 @@ import {
 import type { PrimaryChatTarget } from "@/lib/threads/chat-choice"
 
 // The sidebar (workspace-sidebar.tsx) names every page; each still belongs to
-// an area, which remembers its last page.
-type Section = SidebarSection
+// an area, which remembers its last page. "chats" is the Chats page, the
+// agent session with the member's chats listed beside it.
+type Section = SidebarPage
 type PrimaryMode = "home" | "team" | "agents"
 
 const defaultSections: Record<PrimaryMode, Section> = {
@@ -69,6 +76,7 @@ const headings: Record<Section, string> = {
   overview: "My workspace",
   teamspaces: "Teamspaces",
   agents: "Agent overview",
+  chats: "Chats",
   "multi-agents": "Multi-agent teams",
   specialists: "Specialists",
   requests: "Requests",
@@ -154,11 +162,19 @@ function WorkspaceShellContent({
   const [requestFocus, setRequestFocus] = useState<string | null>(null)
   const agentsMode = useAgentsMode()
   const [primaryWork, setPrimaryWork] = useState(false)
+  // The session opened as the Chats page: the list beside the chat.
+  const [primaryChats, setPrimaryChats] = useState(false)
+  // The agent session's conversation column, which the agent panel moves its
+  // mounted chat into while the session is open.
+  const [primaryChatSlot, setPrimaryChatSlot] = useState<HTMLElement | null>(
+    null
+  )
   const [primaryComposing, setPrimaryComposing] = useState(false)
   const [primaryViewer, setPrimaryViewer] = useState<
     "overview" | "file" | "live"
   >("overview")
   const [primaryLive, setPrimaryLive] = useState<LiveTarget | null>(null)
+  const [primaryTab, setPrimaryTab] = useState<SessionWorkTab>("overview")
   const [primaryFile, setPrimaryFile] = useState<PrimaryAgentFileTarget | null>(
     null
   )
@@ -265,9 +281,9 @@ function WorkspaceShellContent({
   // Agents mode's focused work belongs to that mode and its workspace.
   const agentWork =
     activeMode === "agents" && selectedOrganization ? agentsMode.focus : null
-  const isFocused = Boolean(
-    primaryWork || agentWork || (teamspaces.openId && selectedOrganization)
-  )
+  // An open teamspace keeps the sidebar (TeamspaceHome board): its page
+  // carries its own "Teamspaces / <name>" crumbs.
+  const isFocused = Boolean(primaryWork || agentWork)
   // The teamspace on the page: the agent panel offers its teammates.
   const pageTeamspaceId =
     !primaryWork && !agentWork && selectedOrganization && teamspaces.openId
@@ -364,10 +380,10 @@ function WorkspaceShellContent({
     onDirectMessageChange?.(canvasPeerId)
   }, [canvasPeerId, onDirectMessageChange])
 
-  /** A sidebar entry: a page and its area, or the member's chats in the panel. */
+  /** A sidebar entry: a page and its area, or the Chats page. */
   function openSidebarPage(page: SidebarPage) {
     if (page === "chats") {
-      openHomeHistory()
+      openChats()
       return
     }
     selectNav(sectionArea(page), page)
@@ -375,6 +391,10 @@ function WorkspaceShellContent({
 
   /** The one sidebar: each page belongs to a mode, and picking it opens both. */
   function selectNav(mode: PrimaryMode, next: Section) {
+    if (next === "chats") {
+      openChats()
+      return
+    }
     if (next === "requests") {
       openRequestsSection()
       if (isMobile) setLeftExpanded(false)
@@ -439,7 +459,16 @@ function WorkspaceShellContent({
     setRightExpanded(false)
   }
 
+  /** The Chats page: the agent session with the member's chats listed beside it. */
+  function openChats() {
+    setPrimaryViewer("overview")
+    setPrimaryFile(null)
+    setPrimaryChats(true)
+    openPrimaryWork()
+  }
+
   function openAgentOverview() {
+    setPrimaryChats(false)
     setPrimaryViewer("overview")
     setPrimaryFile(null)
     openPrimaryWork()
@@ -491,6 +520,7 @@ function WorkspaceShellContent({
 
   function closePrimaryWork() {
     setPrimaryWork(false)
+    setPrimaryChats(false)
     setPrimaryComposing(false)
   }
 
@@ -515,6 +545,9 @@ function WorkspaceShellContent({
 
   function openTeamspace(id: string) {
     teamspaces.open(id)
+    // The sidebar stays, so it marks Teamspaces, where the crumbs lead back.
+    setActiveMode("team")
+    setSectionsByMode((current) => ({ ...current, team: "teamspaces" }))
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
   }
@@ -609,7 +642,15 @@ function WorkspaceShellContent({
                 : "Member"
               : "Preview admin"
           }
-          section={primaryWork || agentWork ? null : section}
+          section={
+            primaryWork
+              ? primaryChats
+                ? "chats"
+                : null
+              : agentWork
+                ? null
+                : section
+          }
           openTeamspaceId={teamspaces.openId}
           activePeerId={canvasPeerId}
           teamspaces={teamspaces.spaces}
@@ -637,50 +678,82 @@ function WorkspaceShellContent({
         {primaryWork && selectedOrganization ? (
           <div className="workspace-focus workspace-primary-focus">
             <FocusHeader
-              title="Agent overview"
-              kind="Primary agent"
+              title={primaryChats ? "Chats" : "Agent overview"}
+              kind={primaryChats ? "Only you see these" : "Primary agent"}
               onBack={closePrimaryWork}
             />
-            <main className="workspace-focus-layout workspace-primary-focus-layout">
-              <div
-                className="workspace-conversation workspace-primary-conversation-slot"
-                aria-hidden="true"
-              />
-              <div className="workspace-work-column">
-                <section
-                  className="workspace-work-panel"
-                  aria-label="Agent overview work panel"
-                >
-                  {primaryViewer === "live" && primaryLive ? (
-                    <LivePane
-                      organizationId={selectedOrganization.id}
-                      room={primaryLive.room}
-                      child={primaryLive.child}
-                      viewerId={session?.user.id}
-                      onBack={() => setPrimaryViewer("overview")}
-                    />
-                  ) : primaryViewer === "file" ? (
-                    <PrimaryAgentFileViewer
-                      organizationId={selectedOrganization.id}
-                      threadId={primaryFile?.threadId ?? primaryThreadId}
-                      file={primaryFile ?? undefined}
-                      onBack={() => setPrimaryViewer("overview")}
-                    />
-                  ) : (
+            <AgentSession
+              chatSlotRef={setPrimaryChatSlot}
+              chatLabel={`Conversation with ${
+                (ownAgents.data && primaryAgent(ownAgents.data)?.name) ??
+                "primary agent"
+              }`}
+              workLabel="Agent overview work panel"
+              work={primaryViewer === "overview" ? "tabs" : "viewer"}
+              list={
+                primaryChats && directMessages ? (
+                  <ChatsList
+                    organizationId={selectedOrganization.id}
+                    viewerId={directMessages.viewerId}
+                    agentName={
+                      ownAgents.data && primaryAgent(ownAgents.data)?.name
+                    }
+                    selected={primaryThreadId}
+                    waitingThread={
+                      primaryChatActivity?.state === "waiting"
+                        ? primaryChatActivity.threadId
+                        : null
+                    }
+                    busy={primaryChatActivity?.state === "running"}
+                    onOpen={(target) =>
+                      requestPrimaryChat(
+                        {
+                          organizationId: selectedOrganization.id,
+                          userId: directMessages.viewerId,
+                        },
+                        target
+                      )
+                    }
+                  />
+                ) : undefined
+              }
+            >
+              {primaryViewer === "live" && primaryLive ? (
+                <LivePane
+                  organizationId={selectedOrganization.id}
+                  room={primaryLive.room}
+                  child={primaryLive.child}
+                  viewerId={session?.user.id}
+                  onBack={() => setPrimaryViewer("overview")}
+                />
+              ) : primaryViewer === "file" ? (
+                <PrimaryAgentFileViewer
+                  organizationId={selectedOrganization.id}
+                  threadId={primaryFile?.threadId ?? primaryThreadId}
+                  file={primaryFile ?? undefined}
+                  onBack={() => setPrimaryViewer("overview")}
+                />
+              ) : (
+                <SessionWorkTabs
+                  organizationId={selectedOrganization.id}
+                  threadId={primaryThreadId}
+                  viewerId={session?.user.id}
+                  tab={primaryTab}
+                  onTabChange={setPrimaryTab}
+                  onOpenFile={openPrimaryFile}
+                  onOpenLive={openPrimaryLive}
+                  overview={
                     <AgentsCanvas
                       section="agents"
-                      primaryThreadId={primaryThreadId}
                       organizationId={selectedOrganization.id}
                       viewerId={session?.user.id}
                       onOpen={openWork}
                       onNavigate={navigatePrimarySection}
-                      onOpenFile={openPrimaryFile}
-                      onOpenLive={openPrimaryLive}
                     />
-                  )}
-                </section>
-              </div>
-            </main>
+                  }
+                />
+              )}
+            </AgentSession>
           </div>
         ) : agentWork && selectedOrganization ? (
           <AgentsFocus
@@ -771,22 +844,31 @@ function WorkspaceShellContent({
                     Loading the conversation…
                   </p>
                 ) : canvasPeer && dmOrganizationId && viewerId ? (
-                  <DirectMessageView
-                    key={canvasPeer.id}
+                  <MessagesPage
                     organizationId={dmOrganizationId}
                     viewerId={viewerId}
+                    inbox={inbox}
+                    people={dmPeople}
                     peer={canvasPeer}
-                    layout="canvas"
-                    draft={dmDrafts[canvasPeer.id] ?? ""}
-                    onDraftChange={(draft) =>
-                      setDmDrafts((current) => ({
-                        ...current,
-                        [canvasPeer.id]: draft,
-                      }))
-                    }
-                    onComposingChange={setDmComposing}
-                    autoFocus={dmOpenedByMember}
-                  />
+                    onOpen={openDirectMessage}
+                  >
+                    <DirectMessageView
+                      key={canvasPeer.id}
+                      organizationId={dmOrganizationId}
+                      viewerId={viewerId}
+                      peer={canvasPeer}
+                      layout="canvas"
+                      draft={dmDrafts[canvasPeer.id] ?? ""}
+                      onDraftChange={(draft) =>
+                        setDmDrafts((current) => ({
+                          ...current,
+                          [canvasPeer.id]: draft,
+                        }))
+                      }
+                      onComposingChange={setDmComposing}
+                      autoFocus={dmOpenedByMember}
+                    />
+                  </MessagesPage>
                 ) : (
                   <PeopleDirectory
                     people={dmPeople}
@@ -807,14 +889,12 @@ function WorkspaceShellContent({
               {isAgentsSection(section) && (
                 <AgentsCanvas
                   section={section}
-                  primaryThreadId={primaryThreadId}
                   organizationId={
                     session ? selectedOrganization?.id : undefined
                   }
                   viewerId={session?.user.id}
                   onOpen={openWork}
                   onNavigate={selectSection}
-                  onOpenFile={openPrimaryFile}
                 />
               )}
               {section === "requests" && (
@@ -843,6 +923,8 @@ function WorkspaceShellContent({
         onOpenAgentOverview={openAgentOverview}
         onPrimaryThreadChange={setPrimaryThreadId}
         onPrimaryFileCreated={openPrimaryFile}
+        onOpenPrimaryFile={openPrimaryFile}
+        primaryChatSlot={primaryWork ? primaryChatSlot : null}
         onPrimaryComposingChange={setPrimaryComposing}
         getScreenContext={getScreenContext}
         chatRequest={chatRequest}

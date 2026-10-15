@@ -23,6 +23,7 @@ export function AgentComposer({
   onStop,
   status,
   leading,
+  context,
   onFocus,
   onBlur,
 }: {
@@ -39,6 +40,8 @@ export function AgentComposer({
   status?: ReactNode
   /** A control inside the pill, before the field: a side conversation's "who this goes to". */
   leading?: ReactNode
+  /** A quiet line above the field: what an agent's task bar says it sees (`LookingAt`). */
+  context?: ReactNode
   onFocus?: () => void
   onBlur?: () => void
 }) {
@@ -105,6 +108,9 @@ export function AgentComposer({
 
   return (
     <form className="workspace-agent-composer" onSubmit={submit}>
+      {context && (
+        <div className="workspace-agent-composer-context">{context}</div>
+      )}
       <div
         className="workspace-composer workspace-agent-composer-field"
         data-multiline={multiline ? "true" : "false"}

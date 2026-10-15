@@ -55,6 +55,9 @@ type Config struct {
 	// is deployed with, since every poll costs credits:
 	// APPS_PIPEDREAM_MIN_POLL_SECONDS. Zero is the default, fifteen minutes.
 	PipedreamMinPoll time.Duration
+	// NativeToolkits are the toolkits new connects send to the integrations
+	// service: APPS_NATIVE_TOOLKITS. Empty leaves every broker as it was.
+	NativeToolkits []string
 }
 
 type Dependencies struct {
@@ -67,6 +70,9 @@ type Dependencies struct {
 	// connection cannot subscribe to its app's events.
 	Sealer Sealer
 	Policy PolicySource
+	// Native is the integrations service, required when Config.NativeToolkits
+	// names a toolkit.
+	Native Native
 	// Oryxa is Oryxa's own sign-in, when this deployment has one: signin,
 	// hooks and the integrations. Without it every Oryxa request is refused.
 	Oryxa  *Oryxa
@@ -85,6 +91,10 @@ type Service struct {
 	policy    PolicySource
 	// toolkitBrokers are the deployment's per-toolkit broker overrides.
 	toolkitBrokers map[string]string
+	// native is the integrations service, and nativeToolkits the toolkits it
+	// serves.
+	native         Native
+	nativeToolkits []string
 	logger         *slog.Logger
 	now            func() time.Time
 	publicBaseURL  string
@@ -155,6 +165,11 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		pipedreamMinPoll:  config.PipedreamMinPoll,
 		sealer:            dependencies.Sealer,
 	}
+	var err error
+	if service.nativeToolkits, err = checkNativeToolkits(config.NativeToolkits, dependencies.Native); err != nil {
+		return nil, err
+	}
+	service.native = dependencies.Native
 	if service.pipedreamMinPoll <= 0 {
 		service.pipedreamMinPoll = DefaultPipedreamMinPoll
 	}
