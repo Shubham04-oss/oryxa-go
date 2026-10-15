@@ -194,25 +194,26 @@ describe("Requests in the workspace shell", () => {
     }
   )
 
-  it("is the last item of Agents' navigation, and opens the page", async () => {
+  it("is in the sidebar's first tile, with what waits, and opens the page", async () => {
     renderShell()
 
     const navigation = await screen.findByRole("navigation", {
-      name: "Agents navigation",
+      name: "Workspace",
     })
     expect(
       within(navigation)
         .getAllByRole("button")
+        .slice(0, 3)
         .map((button) => button.textContent)
-    ).toEqual([
-      "Agent overview",
-      "Chats",
-      "Multi-agent teams",
-      "Specialists",
-      "Requests",
-    ])
+    ).toEqual(["My workspace", "Requests", "Chats with your agent"])
+    // How many wait on the member, from the inbox.
+    expect(
+      await within(navigation).findByRole("button", {
+        name: /^Requests, \d+ waiting$/,
+      })
+    ).toBeTruthy()
     fireEvent.click(
-      within(navigation).getByRole("button", { name: "Requests" })
+      within(navigation).getByRole("button", { name: /^Requests/ })
     )
 
     expect(
@@ -222,7 +223,7 @@ describe("Requests in the workspace shell", () => {
     await screen.findAllByText("Share the pipeline total.")
     expect(
       within(navigation)
-        .getByRole("button", { name: "Requests" })
+        .getByRole("button", { name: /^Requests/ })
         .getAttribute("aria-current")
     ).toBe("page")
   })
@@ -251,9 +252,7 @@ describe("Requests in the workspace shell", () => {
     ).toBeTruthy()
     const opened = await screen.findByRole("region", { name: "Opened request" })
     await within(opened).findByText("A linked ask.")
-    expect(
-      screen.getByRole("navigation", { name: "Agents navigation" })
-    ).toBeTruthy()
+    expect(screen.getByRole("navigation", { name: "Workspace" })).toBeTruthy()
   })
 
   it("opens the request an address names, as the page opens", async () => {
@@ -279,7 +278,7 @@ describe("Requests in the workspace shell", () => {
     await screen.findByRole("region", { name: "Opened request" })
 
     const navigation = screen.getByRole("navigation", {
-      name: "Agents navigation",
+      name: "Workspace",
     })
     fireEvent.click(
       within(navigation).getByRole("button", { name: "Specialists" })
@@ -290,7 +289,7 @@ describe("Requests in the workspace shell", () => {
       ).toBeTruthy()
     )
     fireEvent.click(
-      within(navigation).getByRole("button", { name: "Requests" })
+      within(navigation).getByRole("button", { name: /^Requests/ })
     )
 
     await screen.findByRole("tab", { name: /Inbox/ })
@@ -349,11 +348,11 @@ describe("Requests in the workspace shell", () => {
         )
       }
       const navigation = screen.getByRole("navigation", {
-        name: "Agents navigation",
+        name: "Workspace",
       })
       expect(
         within(navigation)
-          .getByRole("button", { name: "Requests" })
+          .getByRole("button", { name: /^Requests/ })
           .getAttribute("aria-current")
       ).toBe("page")
       if (linked) {
