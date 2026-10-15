@@ -487,6 +487,44 @@ describe("relayRun", () => {
     expect(go.state.cancelled).toBe(true)
   })
 
+  it("stops the run in Go when the turn is aborted, since a run outlives its stream", async () => {
+    const controller = new AbortController()
+    const go = goStream([started, delta], {
+      headers: { "X-Oryxa-Run": "run_1" },
+    })
+    fetchMock.mockResolvedValueOnce(go.response)
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const { items, done } = relay({ signal: controller.signal })
+    await vi.waitFor(() => expect(items).toEqual([started, delta]))
+    controller.abort()
+    await within(done)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    const [url, init] = fetchMock.mock.calls[1] as [URL, RequestInit]
+    expect(url.pathname).toMatch(
+      /^\/v1\/organizations\/[^/]+\/runs\/run_1\/stop$/
+    )
+    expect(url.pathname.split("/")[3]).toBe(
+      (fetchMock.mock.calls[0][0] as URL).pathname.split("/")[3]
+    )
+    expect(init.method).toBe("POST")
+    expect(init.headers).toEqual(
+      expect.objectContaining({ Cookie: expect.any(String) })
+    )
+  })
+
+  it("does not stop a run that ended on its own", async () => {
+    fetchMock.mockResolvedValue(
+      goStream([started, delta, { type: "run_completed", run_id: "run_1" }], {
+        headers: { "X-Oryxa-Run": "run_1" },
+      }).response
+    )
+    const controller = new AbortController()
+    const { done } = relay({ signal: controller.signal })
+    await within(done)
+    controller.abort()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it("writes nothing when the turn is aborted before Go answers", async () => {
     const controller = new AbortController()
     fetchMock.mockImplementation(
