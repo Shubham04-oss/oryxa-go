@@ -148,24 +148,44 @@ describe("Agent overview", () => {
       screen.getByRole("heading", { name: "Agent overview", level: 1 })
     ).toBeTruthy()
 
-    await waitFor(() =>
-      expect(stat("Multi-agent teams").getByText("1")).toBeTruthy()
-    )
-    expect(stat("Specialists").getByText("2")).toBeTruthy()
-    expect(stat("Specialists").getByText("1 paused")).toBeTruthy()
-    await waitFor(() => expect(stat("Workflows").getByText("1")).toBeTruthy())
+    // The hero's numbers: what Go can count, inline.
+    await waitFor(() => expect(stat("team").getByText("1")).toBeTruthy())
+    expect(stat("specialists").getByText("2")).toBeTruthy()
     // Only the unexpired pending request waits on the member.
     await waitFor(() =>
-      expect(stat("Requests waiting").getByText("1")).toBeTruthy()
+      expect(stat("waiting for you").getByText("1")).toBeTruthy()
     )
+    // No count Go can't give: answered today, files made, usage.
+    expect(
+      screen.queryByText(/answered today|files made|times this week/)
+    ).toBeNull()
+
+    // The board's sections, each with its count and a way to make another.
+    for (const heading of [
+      "Multi-agent teams · 1",
+      "Specialists · 2",
+      "Workflows · 1",
+    ]) {
+      expect(
+        await screen.findByRole("heading", { name: heading, level: 2 })
+      ).toBeTruthy()
+    }
+    for (const action of ["New team", "New specialist", "New workflow"]) {
+      expect(screen.getByRole("button", { name: action })).toBeTruthy()
+    }
 
     for (const name of ["Pipeline crew", "Scout", "Quill"]) {
       expect(screen.getByRole("button", { name: `Open ${name}` })).toBeTruthy()
     }
-    const quillCard = screen.getByRole("button", { name: "Open Quill" })
-    expect(within(quillCard).getByText("Paused")).toBeTruthy()
+    const quillCard = screen.getByRole("article", { name: "Quill" })
+    expect(within(quillCard).getByText("Specialist · Paused")).toBeTruthy()
+    expect(within(quillCard).getByText(/^Paused · updated /)).toBeTruthy()
     const crewCard = screen.getByRole("button", { name: "Open Pipeline crew" })
-    expect(within(crewCard).getByText(/1 specialist · Led by Leo/)).toBeTruthy()
+    expect(
+      within(crewCard).getByText(
+        "Keeps the pipeline honest · led by Leo, 1 specialist"
+      )
+    ).toBeTruthy()
 
     const workflow = screen.getByText("Weekly review").closest("li")!
     expect(
@@ -185,17 +205,22 @@ describe("Agent overview", () => {
   it("says plainly when there is nothing yet", async () => {
     renderShell(fakeAgentsBackend())
 
-    expect(await screen.findByText("No specialists or teams yet.")).toBeTruthy()
+    expect(await screen.findByText(/^No specialists yet\./)).toBeTruthy()
+    expect(await screen.findByText(/^No teams yet\./)).toBeTruthy()
     expect(await screen.findByText(/^No workflows yet\./)).toBeTruthy()
-    expect(stat("Specialists").getByText("0")).toBeTruthy()
+    expect(stat("specialists").getByText("0")).toBeTruthy()
     await waitFor(() =>
-      expect(stat("Requests waiting").getByText("0")).toBeTruthy()
+      expect(stat("waiting for you").getByText("0")).toBeTruthy()
     )
-
-    fireEvent.click(screen.getByRole("button", { name: "Create a specialist" }))
+    // A team needs a specialist first, and says so.
     expect(
-      screen.getByRole("heading", { name: "Specialists", level: 1 })
-    ).toBeTruthy()
+      screen.getByRole<HTMLButtonElement>("button", { name: "New team" })
+        .disabled
+    ).toBe(true)
+
+    // New specialist opens its form right here.
+    fireEvent.click(screen.getByRole("button", { name: "New specialist" }))
+    expect(screen.getByRole("form", { name: "New specialist" })).toBeTruthy()
   })
 
   it("names what this server doesn't run instead of failing", async () => {
@@ -212,11 +237,30 @@ describe("Agent overview", () => {
       await screen.findByText("Workflows aren't set up on this server.")
     ).toBeTruthy()
     await waitFor(() =>
-      expect(
-        stat("Requests waiting").getByText("Not set up on this server")
-      ).toBeTruthy()
+      expect(stat("waiting for you").getByText("–")).toBeTruthy()
     )
     expect(screen.getByRole("button", { name: "Open Scout" })).toBeTruthy()
+  })
+
+  it("pauses a specialist from its card's menu", async () => {
+    const backend = fakeAgentsBackend({ agents: [primary, scout] })
+    renderShell(backend)
+
+    const card = await screen.findByRole("article", { name: "Scout" })
+    fireEvent.click(
+      within(card).getByRole("button", { name: "More for Scout" })
+    )
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Pause" }))
+    await waitFor(() =>
+      expect(within(card).getByText("Specialist · Paused")).toBeTruthy()
+    )
+    expect(backend.writes()).toEqual([
+      {
+        method: "PATCH",
+        path: `/v1/organizations/${ORG}/agents/${scout.id}`,
+        body: { status: "disabled" },
+      },
+    ])
   })
 
   it("offers to resume a paused primary agent", async () => {

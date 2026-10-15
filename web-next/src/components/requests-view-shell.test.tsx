@@ -251,11 +251,11 @@ describe("Requests in the workspace shell", () => {
     ).toBeTruthy()
   })
 
-  it("is where the Agent overview's Requests waiting tile leads", async () => {
+  it("is where the Agent overview's waiting-for-you number leads", async () => {
     renderShell()
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "View requests" })
+      await screen.findByRole("button", { name: / waiting for you$/ })
     )
 
     expect(
