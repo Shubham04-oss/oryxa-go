@@ -23,6 +23,8 @@ import {
 import { ToolkitLogo } from "./workspace-tool-logo"
 import { toolkitIcon } from "./workspace-tools-data"
 import { IdentityAvatar } from "./workspace-avatar"
+import { HomeGlance } from "./home-glance"
+import type { DmPeople } from "./direct-message-people"
 import { ApiError } from "@/lib/api/client"
 import {
   AGENT_REQUESTS_POLL_MS,
@@ -140,6 +142,14 @@ type HomeProps = {
   variant?: "page" | "glance"
   /** The member's name, for the page's greeting. */
   viewerName?: string
+  /** At a glance: the member's teammates, whom a tap messages. */
+  teammates?: DmPeople
+  onOpenPeople?: () => void
+  onMessage?: (peerId: string) => void
+  /** At a glance: Recurring work's All, to the agent's workflows. */
+  onOpenWorkflows?: () => void
+  /** The member's primary agent's name, for "Files Krude made". */
+  agentName?: string
 }
 
 /** A different signed-in member must never inherit drafts or local decisions. */
@@ -166,6 +176,11 @@ function HomeDesk({
   onOpenAccount,
   variant = "page",
   viewerName,
+  teammates,
+  onOpenPeople,
+  onMessage,
+  onOpenWorkflows,
+  agentName,
 }: HomeProps) {
   const hydrated = useHydrated()
   const enabled = hydrated && Boolean(organizationId && viewerId)
@@ -382,9 +397,10 @@ function HomeDesk({
         .map((connection) => connection.toolkit)
     ),
   ]
-  const workflowRows = (authorizedData(workflows) ?? [])
-    .filter((workflow) => workflow.owner_user_id === viewer)
-    .slice(0, 3)
+  const ownWorkflows = (authorizedData(workflows) ?? []).filter(
+    (workflow) => workflow.owner_user_id === viewer
+  )
+  const workflowRows = ownWorkflows.slice(0, 3)
   const corpusRows = authorizedData(corpora)
   const knowledgeRows = [...(corpusRows ?? [])]
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
@@ -499,27 +515,56 @@ function HomeDesk({
     </section>
   )
 
+  if (variant === "glance") {
+    if (!enabled)
+      return (
+        <p className="workspace-agent-empty">
+          Your apps, teammates and conversations will appear here.
+        </p>
+      )
+    return (
+      <HomeGlance
+        now={now}
+        agentName={agentName}
+        updatesThreadId={updatesThreadId}
+        updates={updates}
+        briefs={briefs}
+        tools={tools}
+        connections={connections}
+        people={teammates}
+        conversations={agentWork}
+        threads={threads}
+        knowledge={knowledgeRows}
+        corpora={corpora}
+        files={agentFiles}
+        filesRead={confirmations.every((query) => query.isSuccess)}
+        conversationTitle={(threadId) =>
+          conversationTitle(
+            conversations.find((chat) => chat.id === threadId)?.title
+          )
+        }
+        workflows={ownWorkflows}
+        workflowsRead={workflows}
+        onOpenConversation={onOpenConversation}
+        onNewChat={onNewChat ? () => onNewChat() : undefined}
+        onOpenTools={onOpenTools}
+        onOpenKnowledge={onOpenKnowledge}
+        onOpenPeople={onOpenPeople}
+        onMessage={onMessage}
+        onOpenWorkflows={onOpenWorkflows}
+      />
+    )
+  }
+
   return (
-    <div
-      className={
-        variant === "glance"
-          ? "home-overview home-today home-glance"
-          : "home-overview home-today"
-      }
-    >
-      {variant === "page" && (
-        <>
-          <div className="home-scene" aria-hidden="true" />
-          <header className="home-hello">
-            <h2>{greeting(now, viewerName)}</h2>
-            {enabled && helloLine && <p>{helloLine}</p>}
-          </header>
-        </>
-      )}
+    <div className="home-overview home-today">
+      <div className="home-scene" aria-hidden="true" />
+      <header className="home-hello">
+        <h2>{greeting(now, viewerName)}</h2>
+        {enabled && helloLine && <p>{helloLine}</p>}
+      </header>
       {enabled && (
         <div className="home-top">
-          {variant === "glance" && appsSection}
-
           <section className="home-column" aria-labelledby="home-teammates">
             <header className="home-column-head">
               <h2 id="home-teammates">Teammates</h2>
@@ -736,55 +781,53 @@ function HomeDesk({
         </div>
       )}
 
-      {variant === "page" && (
-        <section className="home-compose" aria-label="Your agent">
-          <AgentComposer
-            label="Start a new conversation"
-            placeholder="Ask your agent…"
-            value={draft}
-            onChange={setDraft}
-            sendDisabled={!enabled || !onNewChat}
-            status={
-              !enabled
-                ? "Sign in to start a conversation."
-                : !onNewChat
-                  ? "Conversation shortcuts are unavailable."
-                  : undefined
-            }
-            onSubmit={(message) => {
-              onNewChat?.(message)
-              setDraft("")
-            }}
-          />
-          {enabled && (
-            <div className="home-tools" aria-label="Your tools">
-              {tools.map((toolkit) => (
-                <button
-                  key={toolkit}
-                  type="button"
-                  className="home-tool"
-                  onClick={onOpenTools}
-                >
-                  <ToolkitLogo toolkit={{ toolkit, name: appName(toolkit) }} />
-                  <span>{appName(toolkit)}</span>
-                </button>
-              ))}
-              {connections.isSuccess && (
-                <button
-                  type="button"
-                  className="home-tool home-tool-connect"
-                  onClick={onOpenTools}
-                >
-                  {tools.length > 0 ? "+ Connect" : "Connect your tools"}
-                </button>
-              )}
-              <ReadNotice name="your tools" query={connections} />
-            </div>
-          )}
-        </section>
-      )}
+      <section className="home-compose" aria-label="Your agent">
+        <AgentComposer
+          label="Start a new conversation"
+          placeholder="Ask your agent…"
+          value={draft}
+          onChange={setDraft}
+          sendDisabled={!enabled || !onNewChat}
+          status={
+            !enabled
+              ? "Sign in to start a conversation."
+              : !onNewChat
+                ? "Conversation shortcuts are unavailable."
+                : undefined
+          }
+          onSubmit={(message) => {
+            onNewChat?.(message)
+            setDraft("")
+          }}
+        />
+        {enabled && (
+          <div className="home-tools" aria-label="Your tools">
+            {tools.map((toolkit) => (
+              <button
+                key={toolkit}
+                type="button"
+                className="home-tool"
+                onClick={onOpenTools}
+              >
+                <ToolkitLogo toolkit={{ toolkit, name: appName(toolkit) }} />
+                <span>{appName(toolkit)}</span>
+              </button>
+            ))}
+            {connections.isSuccess && (
+              <button
+                type="button"
+                className="home-tool home-tool-connect"
+                onClick={onOpenTools}
+              >
+                {tools.length > 0 ? "+ Connect" : "Connect your tools"}
+              </button>
+            )}
+            <ReadNotice name="your tools" query={connections} />
+          </div>
+        )}
+      </section>
 
-      {enabled && variant === "page" && (
+      {enabled && (
         <h2 className="home-row-title" id="home-row">
           Pick up where you left off
         </h2>
@@ -792,10 +835,10 @@ function HomeDesk({
       {enabled && (
         <div
           className="home-stack"
-          role={variant === "page" ? "region" : undefined}
-          aria-labelledby={variant === "page" ? "home-row" : undefined}
+          role={"region"}
+          aria-labelledby={"home-row"}
         >
-          {variant === "page" && appsSection}
+          {appsSection}
           <section className="home-column" aria-labelledby="home-conversations">
             <header className="home-column-head">
               <h2 id="home-conversations">Conversations</h2>
