@@ -38,6 +38,7 @@ import { LivePane } from "./live-work"
 import type { LiveTarget } from "@/lib/live/children"
 import { CallProvider } from "./call-provider"
 import { CallSurface } from "./call-surfaces"
+import { CallStageHost } from "./call-stage"
 import { statusLabel } from "./teamspace-format"
 import { DirectMessageView, PersonAvatar } from "./direct-message"
 import {
@@ -856,6 +857,15 @@ function WorkspaceShellContent({
         data-composing={middleHeight ? "true" : undefined}
         style={middleHeight ? { height: middleHeight } : undefined}
       >
+        <CallStageHost
+          place={[
+            section,
+            teamspaces.openId,
+            canvasPeerId,
+            primaryWork ? "primary" : "",
+            agentWork ? "agent" : "",
+          ].join("/")}
+        />
         {primaryWork && selectedOrganization ? (
           <div className="workspace-focus workspace-primary-focus">
             <FocusHeader

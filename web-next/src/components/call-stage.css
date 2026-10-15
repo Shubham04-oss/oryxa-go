@@ -1,0 +1,153 @@
+/* The parley's stage (founder's redesign, 15 Oct 2026, HuddleShare): the
+   call over the workspace's main column, which stays mounted beneath it. */
+
+/* The stage's place in the column: nothing until the stage opens. */
+.call-stage-slot {
+  display: contents;
+}
+
+.call-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: 17px 17px 0 0;
+  background: var(--workspace-canvas);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.call-stage-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 16px;
+}
+.call-stage-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.call-stage-crumbs strong {
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 650;
+  text-overflow: ellipsis;
+}
+.call-stage-crumbs .workspace-avatar {
+  width: 22px;
+  height: 22px;
+}
+.call-stage-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--tone-b9e6c6);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.call-stage-faces {
+  display: inline-flex;
+  align-items: center;
+}
+.call-stage-faces .workspace-avatar {
+  width: 26px;
+  height: 26px;
+  margin-left: -8px;
+  box-shadow: 0 0 0 2px var(--workspace-canvas);
+}
+.call-stage-faces .workspace-avatar:first-child {
+  margin-left: 0;
+}
+.call-stage-faces small {
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.call-stage-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  gap: 12px;
+  min-height: 0;
+  padding: 0 16px 12px;
+}
+.call-stage-body > .call-gallery {
+  grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
+}
+
+/* A share: the screen focused, a column of named cams beside it. */
+.call-split {
+  display: flex;
+  flex: 1;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+.call-show {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--base);
+}
+.call-show-label {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 16px;
+  font-size: 12.5px;
+}
+.call-show > .call-cam {
+  flex: 1;
+  border-radius: 0;
+  background: var(--call-cam-edge);
+}
+.call-show > .call-cam video {
+  object-fit: contain;
+}
+.call-col {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  width: 184px;
+  min-height: 0;
+  overflow-y: auto;
+}
+.call-col .call-cam {
+  flex: none;
+  height: 112px;
+}
+
+@media (max-width: 800px) {
+  .call-stage-crumbs .call-recording,
+  .call-stage-faces {
+    display: none;
+  }
+  .call-split {
+    flex-direction: column;
+  }
+  .call-col {
+    flex-direction: row;
+    width: auto;
+    overflow-x: auto;
+  }
+  .call-col .call-cam {
+    width: 132px;
+    height: 88px;
+  }
+}

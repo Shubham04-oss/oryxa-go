@@ -48,7 +48,7 @@ export function tintOf(id: string): string {
 }
 
 /** The time since `startedAt`, ticking each second. */
-function useDuration(startedAt: string | undefined): string | undefined {
+export function useDuration(startedAt: string | undefined): string | undefined {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!startedAt) return
@@ -180,7 +180,7 @@ export function CallCam({
 }
 
 /** The agent in the call: it never has a camera, only its voice. */
-function AgentCam({
+export function AgentCam({
   name,
   speaking,
   size = "default",
@@ -218,7 +218,14 @@ function AgentCam({
 }
 
 /** A screen someone is sharing, as its own tile. */
-function ShareCam({ tile }: { tile: CallTile }) {
+export function ShareCam({
+  tile,
+  named = true,
+}: {
+  tile: CallTile
+  /** Its own label; a share under a label bar goes without. */
+  named?: boolean
+}) {
   if (!tile.screenTrack) return null
   const owner = tile.self ? "Your" : `${tile.name}'s`
   return (
@@ -229,15 +236,17 @@ function ShareCam({ tile }: { tile: CallTile }) {
       data-share="true"
     >
       <CallVideo track={tile.screenTrack} label={`${owner} screen`} />
-      <span className="call-name">
-        <MonitorUp size={12} aria-hidden="true" />
-        {owner} screen
-      </span>
+      {named && (
+        <span className="call-name">
+          <MonitorUp size={12} aria-hidden="true" />
+          {owner} screen
+        </span>
+      )}
     </div>
   )
 }
 
-function recordingLine(call: CallView | null): string | undefined {
+export function recordingLine(call: CallView | null): string | undefined {
   if (!call?.recording.on) return undefined
   const by = call.participants.find(
     (person) => person.member === call.recording.by
@@ -284,7 +293,7 @@ export function ParleyButton({
   member: string
   name?: string
 }) {
-  const { active, join, expand } = useCall()
+  const { active, join, show } = useCall()
   const { call, unavailable } = useRoomCall(organizationId, room)
   const here = isThisRoom(active, organizationId, room)
   const inIt = here && active?.phase === "in"
@@ -305,7 +314,7 @@ export function ParleyButton({
       }
       onClick={() => {
         if (inIt) {
-          expand(true)
+          show("stage")
           return
         }
         void join({
@@ -347,7 +356,7 @@ export function ParleyStrip({
   member: string
   name?: string
 }) {
-  const { active, join, expand, leave, showingRoom } = useCall()
+  const { active, join, show, leave, showingRoom } = useCall()
   const { call } = useRoomCall(organizationId, room)
   const key = roomKey(organizationId, room)
   // While the room's own page is on screen, its strip is the call's control
@@ -398,7 +407,7 @@ export function ParleyStrip({
           <button
             className="call-quiet"
             type="button"
-            onClick={() => expand(true)}
+            onClick={() => show("stage")}
           >
             Open
           </button>
@@ -525,9 +534,12 @@ export function CallSurface() {
   }
   if (!active) return null
   if (active.phase === "failed") return null
-  if (active.expanded && active.phase === "in") {
+  if (active.surface === "full" && active.phase === "in") {
     return <CallFullPage active={active} view={view} />
   }
+  // The stage is the workspace's own (CallStageHost).
+  if (active.surface === "stage" && active.phase === "in" && call.stageHosted)
+    return null
   if (call.roomOnScreen === roomKey(active.organizationId, active.room))
     return null
   return <CallMiniPlayer active={active} view={view} />
@@ -591,7 +603,7 @@ function CallEnded({
   )
 }
 
-function speakingMember(active: ActiveCall): string | undefined {
+export function speakingMember(active: ActiveCall): string | undefined {
   return active.caption && !active.caption.agent
     ? active.caption.member
     : undefined
@@ -604,7 +616,7 @@ function CallMiniPlayer({
   active: ActiveCall
   view: CallView | null
 }) {
-  const { setMic, expand, leave } = useCall()
+  const { setMic, show, leave } = useCall()
   const duration = useDuration(view?.startedAt)
   const speaking = speakingMember(active)
   const share = active.tiles.find((tile) => tile.screenTrack)
@@ -689,7 +701,7 @@ function CallMiniPlayer({
           type="button"
           aria-label="Back to the parley"
           disabled={active.phase !== "in"}
-          onClick={() => expand(true)}
+          onClick={() => show("stage")}
         >
           <Maximize2 size={15} aria-hidden="true" />
         </button>
@@ -712,7 +724,7 @@ function CallMiniPlayer({
 }
 
 /** The member's microphone, camera and speaker, while they're in the call. */
-function DevicePicker({ onClose }: { onClose: () => void }) {
+export function DevicePicker({ onClose }: { onClose: () => void }) {
   const { devices, setDevice, onDevicesChange } = useCall()
   const [list, setList] = useState<CallDevices | undefined>()
   const [problem, setProblem] = useState("")
@@ -807,7 +819,13 @@ function DevicePicker({ onClose }: { onClose: () => void }) {
  * conversation in here while it's open (useRoomChatSlot), so there's only
  * ever one; from any other page the pane says where to find it.
  */
-function RoomChatPane({ room, roomName }: { room: string; roomName: string }) {
+export function RoomChatPane({
+  room,
+  roomName,
+}: {
+  room: string
+  roomName: string
+}) {
   const { setRoomChat } = useCall()
   const [element, setElement] = useState<HTMLDivElement | null>(null)
   const [claimed, setClaimed] = useState(false)
@@ -843,7 +861,7 @@ function RoomChatPane({ room, roomName }: { room: string; roomName: string }) {
 type Layout = "gallery" | "speaker" | "shared"
 
 /** What sits beside the call: what's been said, the room's conversation, or neither. */
-type Side = "transcript" | "room" | null
+export type Side = "transcript" | "room" | null
 
 /** "5 people, Krude taking notes": who the call has, for the dock. */
 function dockLine(active: ActiveCall, view: CallView | null): string {
@@ -891,7 +909,8 @@ export function CallDock({
     setScreen,
     setRecording,
     setAgent,
-    expand,
+    show,
+    stageHosted,
     leave,
     end,
     roomUnread,
@@ -1054,7 +1073,9 @@ export function CallDock({
           variant="ghost"
           className="call-btn"
           aria-label={mode === "full" ? "Exit full page" : "Full page"}
-          onClick={() => expand(mode !== "full")}
+          onClick={() =>
+            show(mode === "full" ? (stageHosted ? "stage" : "pip") : "full")
+          }
         >
           {mode === "full" ? (
             <Minimize2 size={16} aria-hidden="true" />
@@ -1074,7 +1095,9 @@ function CallFullPage({
   active: ActiveCall
   view: CallView | null
 }) {
-  const { expand, markRoomSeen, roomUnread } = useCall()
+  const { show, stageHosted, markRoomSeen, roomUnread } = useCall()
+  // Out of the full page is the stage, where the workspace has one.
+  const back = stageHosted ? "stage" : "pip"
   const [chosen, setLayout] = useState<Layout>("gallery")
   const [captions, setCaptions] = useState(true)
   const [choosing, setChoosing] = useState(false)
@@ -1087,16 +1110,18 @@ function CallFullPage({
   const count = active.tiles.length + (agent?.present ? 1 : 0) + (share ? 1 : 0)
   const cols = count <= 1 ? 1 : count <= 4 ? 2 : count <= 9 ? 3 : 4
   const recording = recordingLine(view)
-  const back = useRef<HTMLButtonElement>(null)
+  const backButton = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    back.current?.focus()
+    backButton.current?.focus()
+  }, [])
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") expand(false)
+      if (event.key === "Escape") show(back)
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [expand])
+  }, [show, back])
 
   // While the room is open beside the call, what it says has been seen.
   useEffect(() => {
@@ -1137,10 +1162,10 @@ function CallFullPage({
     >
       <header className="call-top">
         <button
-          ref={back}
+          ref={backButton}
           className="call-back"
           type="button"
-          onClick={() => expand(false)}
+          onClick={() => show(back)}
         >
           <ArrowLeft size={15} aria-hidden="true" />
           {active.roomName}
@@ -1246,7 +1271,7 @@ function CallFullPage({
 }
 
 /** What's been said in the call, as this page heard it. */
-function CallTranscript({ active }: { active: ActiveCall }) {
+export function CallTranscript({ active }: { active: ActiveCall }) {
   return (
     <section className="call-transcript" aria-label="Transcript">
       <h2>Transcript</h2>
