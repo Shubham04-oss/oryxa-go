@@ -49,7 +49,21 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  width: 100%;
+}
+.workspace-requests-filter-item.workspace-requests-filter-item { border-radius: 999px; }
+.workspace-requests-filter-item[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+/* Search, at the bar's end, opens a field over the lists. */
+.workspace-requests-search-toggle.workspace-requests-search-toggle { margin-left: auto; color: var(--text-soft); }
+.workspace-requests-search.workspace-requests-search {
+  flex: 1 1 100%;
+  border-color: var(--border-quiet);
+  color: var(--text);
+}
+.workspace-requests-heading-count {
+  color: var(--text);
+  font-weight: 700;
 }
 
 .workspace-requests-groups {
@@ -300,6 +314,17 @@
   letter-spacing: -.02em;
 }
 .requests-clear p { margin: 0; color: var(--text-muted); font-size: 13px; }
+/* Today's numbers, from the inbox the page holds. */
+.requests-clear-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 24px;
+  margin: 16px 0 0;
+}
+.requests-clear-stats > div { display: flex; flex-direction: column-reverse; align-items: center; gap: 2px; }
+.requests-clear-stats dt { color: var(--text-muted); font-size: 11px; }
+.requests-clear-stats dd { margin: 0; color: var(--text); font-size: 18px; font-weight: 700; }
 
 @media (max-width: 1100px) {
   .requests-split { grid-template-columns: minmax(0, 1fr); }

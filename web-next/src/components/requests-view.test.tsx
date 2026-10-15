@@ -95,6 +95,15 @@ function listRoute(
 }
 
 /** Each item of a list: a row's request, or a heading. */
+/** The inbox's first heading, with how many wait ("Waiting for you 1"). */
+function waitingHeading(count: number, scope: HTMLElement) {
+  return within(scope).getByText(
+    (_, element) =>
+      element?.tagName === "P" &&
+      element.textContent === `Waiting for you ${count}`
+  )
+}
+
 function listed(list: HTMLElement): string[] {
   return within(list)
     .getAllByRole("listitem")
@@ -133,7 +142,7 @@ describe("Inbox", () => {
     await within(list).findByText("What is the plan for the EU launch?")
     // A heading, what waits, a heading, what came before.
     expect(listed(list)).toEqual([
-      "Waiting for you",
+      "Waiting for you 1",
       "What is the plan for the EU launch?",
       "Earlier",
       "Explain the service boundary.",
@@ -170,11 +179,15 @@ describe("Inbox", () => {
     expect(screen.queryByRole("region", { name: "All clear" })).toBeNull()
   })
 
-  it("has no headings when nothing waits", async () => {
+  it("says none wait under its heading when nothing waits", async () => {
     renderView({ [`GET ${inboxPath}`]: listRoute(() => [earlier]) })
 
     await screen.findByText("Explain the service boundary.")
-    expect(screen.queryByText("Waiting for you")).toBeNull()
+    expect(listed(screen.getByRole("list", { name: "Inbox" }))).toEqual([
+      "Waiting for you 0",
+      "Earlier",
+      "Explain the service boundary.",
+    ])
     expect(screen.getByRole("tab", { name: "Inbox" })).toBeTruthy()
   })
 
@@ -353,7 +366,7 @@ describe("a request decided elsewhere", () => {
     expect(
       screen.queryByRole("group", { name: /Choose what Krude/ })
     ).toBeNull()
-    expect(screen.queryByText("Waiting for you")).toBeNull()
+    expect(waitingHeading(0, document.body)).toBeTruthy()
     expect(screen.getByRole("tab", { name: "Inbox" })).toBeTruthy()
   })
 
@@ -372,7 +385,7 @@ describe("a list that keeps each request where it was", () => {
     let served: AgentRequest[] = [slackRequest(), earlier]
     renderView({ [`GET ${inboxPath}`]: listRoute(() => served) })
     const before = await screen.findByRole("article", { name: /asked you/ })
-    expect(screen.getByText("Waiting for you")).toBeTruthy()
+    expect(waitingHeading(1, document.body)).toBeTruthy()
 
     // Answered in Slack: Go lists it first now, among the requests that
     // no longer wait.
@@ -383,11 +396,11 @@ describe("a list that keeps each request where it was", () => {
     await screen.findByText(/Approved in Slack by you/)
     // The same card stays open, not made again, and its row keeps its place.
     expect(screen.getByRole("article", { name: /asked you/ })).toBe(before)
-    // Nothing waits any more, so no heading says so.
-    expect(screen.queryByText("Waiting for you")).toBeNull()
-    expect(screen.queryByText("Earlier")).toBeNull()
+    // Nothing waits any more, and the heading says so.
     expect(listed(screen.getByRole("list", { name: "Inbox" }))).toEqual([
+      "Waiting for you 0",
       "What is the plan for the EU launch?",
+      "Earlier",
       "Explain the service boundary.",
     ])
   })
@@ -397,7 +410,7 @@ describe("a list that keeps each request where it was", () => {
     let served: AgentRequest[] = [answered, earlier]
     renderView({ [`GET ${inboxPath}`]: listRoute(() => served) })
     await screen.findAllByText("Explain the service boundary.")
-    expect(screen.queryByText("Waiting for you")).toBeNull()
+    expect(waitingHeading(0, document.body)).toBeTruthy()
 
     // Its answer was held for review, and a new ask came in besides.
     served = [
@@ -428,7 +441,7 @@ describe("a list that keeps each request where it was", () => {
     // Both go above what was there; the answer that came back held is the
     // later change, so it is first.
     expect(listed(list)).toEqual([
-      "Waiting for you",
+      "Waiting for you 2",
       "What is the plan for the EU launch?",
       "A brand new ask.",
       "Earlier",
@@ -528,7 +541,7 @@ describe("a request a link or a note named", () => {
     expect(onFocusDone).toHaveBeenCalledTimes(1)
     const list = await screen.findByRole("list", { name: "Inbox" })
     await within(list).findByText("What is the plan for the EU launch?")
-    expect(within(list).getByText("Waiting for you")).toBeTruthy()
+    expect(waitingHeading(1, list)).toBeTruthy()
   })
 
   it("says plainly when it cannot be found", async () => {
@@ -650,5 +663,131 @@ describe("the page as the shell shows it", () => {
     )
 
     await screen.findByText("What is the plan for the EU launch?")
+  })
+})
+
+describe("the board's Requests", () => {
+  it("tags each row with what it waits on, or who answered it", async () => {
+    renderView({
+      [`GET ${inboxPath}`]: listRoute(() => [
+        slackRequest({ expires_at: new Date(NOW + 3600_000).toISOString() }),
+        slackRequest({
+          id: "irq_reply",
+          answer_by: "owner",
+          task: "Can we move the launch?",
+        }),
+        earlier,
+      ]),
+    })
+
+    const list = await screen.findByRole("list", { name: "Inbox" })
+    await within(list).findByText("What is the plan for the EU launch?")
+    const tags = Array.from(list.querySelectorAll(".requests-row-tag")).map(
+      (tag) => tag.textContent
+    )
+    expect(tags).toEqual([
+      "Expires in 1 h",
+      "Wants your reply",
+      "Answered by Krude",
+    ])
+    // The time is the clock, today.
+    expect(
+      within(list).getAllByText(clockTime("2026-09-29T12:00:00Z"))
+    ).toHaveLength(2)
+  })
+
+  it("searches the list it shows, and says when nothing matches", async () => {
+    renderView({
+      [`GET ${inboxPath}`]: listRoute(() => [slackRequest(), earlier]),
+    })
+    const list = await screen.findByRole("list", { name: "Inbox" })
+    await within(list).findByText("What is the plan for the EU launch?")
+
+    fireEvent.click(screen.getByRole("button", { name: "Search requests" }))
+    const field = screen.getByRole("searchbox", { name: "Search requests" })
+    expect(document.activeElement).toBe(field)
+    fireEvent.change(field, { target: { value: "boundary" } })
+    expect(
+      listed(screen.getByRole("list", { name: "Inbox" })).filter(
+        (item) => !item.startsWith("Waiting") && item !== "Earlier"
+      )
+    ).toEqual(["Explain the service boundary."])
+    fireEvent.change(field, { target: { value: "pricing" } })
+    expect(screen.getByText("Nothing matches “pricing”.")).toBeTruthy()
+
+    // Escape closes it, and the list is whole again.
+    fireEvent.keyDown(field, { key: "Escape" })
+    expect(screen.queryByRole("searchbox")).toBeNull()
+    expect(
+      await screen.findByText("What is the plan for the EU launch?", {
+        selector: ".requests-row-what",
+      })
+    ).toBeTruthy()
+  })
+
+  it("says what today held when every ask is answered", async () => {
+    renderView({
+      [`GET ${inboxPath}`]: listRoute(() => [
+        approvedRequest("summary", {
+          status: "completed",
+          created_at: new Date(NOW - 10 * 60_000).toISOString(),
+          decision: {
+            decision: "approved",
+            message: "",
+            allowed_tools: [],
+            granted_permissions: [],
+            decided_at: new Date(NOW - 6 * 60_000).toISOString(),
+            decided_by: { kind: "member", user_id: OWNER, surface: "web" },
+            consent: "summary",
+          },
+        }),
+      ]),
+    })
+
+    const clear = await screen.findByRole("region", { name: "All clear" })
+    expect(
+      within(clear).getByText(
+        "Nothing is waiting for you. The next one opens here."
+      )
+    ).toBeTruthy()
+    const today = within(clear).getByLabelText("Today")
+    expect(
+      Array.from(today.querySelectorAll("div")).map((stat) => stat.textContent)
+    ).toEqual(["asks today1", "by your agent1", "by you0", "average wait4 min"])
+  })
+
+  it("picks the open request's choices with S, A, R and D, and never while typing", async () => {
+    const go = renderView({
+      [`GET ${inboxPath}`]: listRoute(() => [slackRequest()]),
+      [`POST ${requestPath("irq_slack")}/consent`]: () => ({
+        request: approvedRequest("access"),
+      }),
+    })
+
+    const group = await screen.findByRole("group", {
+      name: /Choose what Krude/,
+    })
+    expect(
+      within(group)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-keyshortcuts"))
+    ).toEqual(["S", "A", "R", "D"])
+
+    // R opens the field; typing an "a" there is a letter, not a choice.
+    fireEvent.keyDown(document.body, { key: "r" })
+    const field = await screen.findByRole("textbox", {
+      name: "Reply yourself to Raya's request",
+    })
+    fireEvent.keyDown(field, { key: "a" })
+    expect(go.count("POST", `${requestPath("irq_slack")}/consent`)).toBe(0)
+
+    // A from the page allows for an hour.
+    fireEvent.keyDown(document.body, { key: "a" })
+    await waitFor(() =>
+      expect(go.count("POST", `${requestPath("irq_slack")}/consent`)).toBe(1)
+    )
+    expect(
+      go.calls.find((call) => call.path.endsWith("/consent"))?.body
+    ).toEqual({ choice: "access" })
   })
 })

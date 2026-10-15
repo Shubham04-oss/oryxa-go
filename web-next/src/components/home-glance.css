@@ -1,0 +1,81 @@
+/* At a glance (AgentPanelGlance board, 15 Oct 2026): My workspace's widgets
+   as compact library cards (ui/card) in one column on the panel's tile. The
+   rules only restyle the library parts through the role tokens. */
+.home-glance-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.home-glance-card.home-glance-card {
+  flex: none;
+  gap: 8px;
+  border-radius: 14px;
+  background: var(--base);
+  box-shadow: none;
+  color: var(--text);
+  --tw-ring-color: transparent;
+}
+.home-glance-card-head.home-glance-card-head { align-items: center; }
+.home-glance-card-title h2 {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.home-glance-head-action.home-glance-head-action { color: var(--text-muted); }
+.home-glance-head-action.home-glance-head-action:hover { color: var(--text); }
+
+.home-glance-list,
+.home-glance-apps,
+.home-glance-mates {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.home-glance-list { display: flex; flex-direction: column; margin: 0 -8px; }
+
+/* A row: a small mark, one line, a quiet time. */
+.home-glance-row.home-glance-row {
+  width: 100%;
+  height: auto;
+  min-height: 32px;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+}
+.home-glance-row.home-glance-row:hover { background: var(--raised); }
+.home-glance-mark { display: grid; flex: none; width: 22px; height: 22px; place-items: center; }
+.home-glance-mark .workspace-tool-logo { width: 22px; height: 22px; }
+.home-glance-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-glance-row small { flex: none; color: var(--text-muted); font-size: 11px; }
+
+/* From your apps: the connected apps' marks in a row. */
+.home-glance-apps { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.home-glance-apps li { display: grid; width: 26px; height: 26px; place-items: center; }
+
+/* Teammates: avatars with a first name under each. */
+.home-glance-mates { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 -4px; }
+.home-glance-mate.home-glance-mate {
+  height: auto;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 400;
+}
+.home-glance-mate.home-glance-mate:hover { background: var(--raised); color: var(--text); }
+.home-glance-mate .workspace-avatar { width: 32px; height: 32px; }
+.home-glance-mate span:last-child { max-width: 56px; overflow: hidden; text-overflow: ellipsis; }
+
+.home-glance-quiet { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.home-glance-retry.home-glance-retry { height: auto; padding: 0; color: var(--text-soft); font-size: 12px; }

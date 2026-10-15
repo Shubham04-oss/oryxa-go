@@ -310,3 +310,22 @@
     gap: 6px;
   }
 }
+
+/* A workflow row keeps Run now (or Start) beside it, as the board has it. */
+.workflow-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-color: transparent;
+  background: var(--base);
+}
+.workflow-entry-run[data-slot="button"] {
+  margin-right: 16px;
+}
+.workflow-entry-error,
+.workflow-entry-body {
+  grid-column: 1 / -1;
+}
+.workflow-entry-error {
+  margin: 0 16px 12px;
+}
