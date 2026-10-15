@@ -79,6 +79,8 @@ export type ActiveCall = {
   organizationId: string
   room: LiveRoom
   roomName: string
+  /** A line under "Parley" on the full page: the teamspace's description. */
+  subtitle?: string
   member: string
   phase: "joining" | "in" | "failed"
   callId?: string
@@ -99,6 +101,8 @@ export type JoinOptions = {
   organizationId: string
   room: LiveRoom
   roomName: string
+  /** A line under "Parley" on the full page: the teamspace's description. */
+  subtitle?: string
   member: string
   name?: string
   mic: boolean
@@ -144,7 +148,18 @@ type CallContextValue = {
   /** Where the full page shows its room's conversation, while it does. */
   roomChat: RoomChatSlot | null
   setRoomChat: (slot: RoomChatSlot | null) => void
+  /**
+   * New messages from others in the member's call's room since its Room pane
+   * was last open; undefined while no page reports the room's messages.
+   */
+  roomUnread: number | undefined
+  /** The Room pane is open: what the room says now has been seen. */
+  markRoomSeen: () => void
+  reportRoomActivity: (activity: RoomActivity | null) => void
 } & CallActions
+
+/** The messages a room's page holds from others, by their seq. */
+export type RoomActivity = { room: string; seqs: number[] }
 
 /** The full page's place for the room's conversation, and whose room it is. */
 export type RoomChatSlot = { room: string; element: HTMLElement }
@@ -209,6 +224,28 @@ export function useRoomChatHost(organizationId: string, room: LiveRoom) {
   }
 }
 
+/**
+ * A room's page tells the call which messages others have sent, so the
+ * parley's Room button can count the new ones. Nothing outside a CallProvider.
+ */
+export function useReportRoomActivity(
+  organizationId: string | undefined,
+  room: LiveRoom,
+  seqs: number[]
+) {
+  const report = useContext(CallContext)?.reportRoomActivity
+  const key = organizationId ? roomKey(organizationId, room) : undefined
+  const joined = seqs.join(",")
+  useEffect(() => {
+    if (!report || !key) return
+    report({ room: key, seqs: joined ? joined.split(",").map(Number) : [] })
+  }, [joined, key, report])
+  useEffect(() => {
+    if (!report || !key) return
+    return () => report(null)
+  }, [key, report])
+}
+
 /** Whether parleys are offered here: inside the workspace's CallProvider. */
 export function useHasCalls(): boolean {
   return useContext(CallContext) !== null
@@ -260,6 +297,9 @@ export function CallProvider({
   const [roomOnScreen, showingRoom] = useState<string | null>(null)
   const [roomChat, setRoomChat] = useState<RoomChatSlot | null>(null)
   const [ended, setEnded] = useState<EndedCall | null>(null)
+  const [activity, setActivity] = useState<RoomActivity | null>(null)
+  /** The last message seen in each room, by seq. */
+  const [seenIn, setSeen] = useState<Record<string, number>>({})
   /** The last view of the member's call, for the summary once it ends. */
   const lastView = useRef<CallView | null>(null)
   const media = useRef<CallMedia | null>(null)
@@ -316,6 +356,7 @@ export function CallProvider({
         organizationId: options.organizationId,
         room: options.room,
         roomName: options.roomName,
+        subtitle: options.subtitle,
         member: options.member,
         phase: "joining",
         mic: options.mic,
@@ -594,6 +635,29 @@ export function CallProvider({
     []
   )
 
+  const activeRoom = active ? roomKey(active.organizationId, active.room) : null
+  const roomActivity =
+    activity && activity.room === activeRoom ? activity : undefined
+  const latest = roomActivity ? Math.max(0, ...roomActivity.seqs) : 0
+  const seenUpTo = activeRoom ? seenIn[activeRoom] : undefined
+  // A room first reported counts nothing that came before it.
+  useEffect(() => {
+    if (activeRoom && roomActivity && seenUpTo === undefined)
+      setSeen((current) => ({ ...current, [activeRoom]: latest }))
+  }, [activeRoom, latest, roomActivity, seenUpTo])
+  const roomUnread =
+    roomActivity && seenUpTo !== undefined
+      ? roomActivity.seqs.filter((seq) => seq > seenUpTo).length
+      : undefined
+  const markRoomSeen = useCallback(() => {
+    if (!activeRoom || !roomActivity) return
+    setSeen((current) =>
+      current[activeRoom] === latest
+        ? current
+        : { ...current, [activeRoom]: latest }
+    )
+  }, [activeRoom, latest, roomActivity])
+
   const value = useMemo<CallContextValue>(
     () => ({
       active,
@@ -603,6 +667,9 @@ export function CallProvider({
       showingRoom,
       roomChat,
       setRoomChat,
+      roomUnread,
+      markRoomSeen,
+      reportRoomActivity: setActivity,
       join,
       leave: teardownAndLeave,
       end,
@@ -625,9 +692,11 @@ export function CallProvider({
       end,
       ended,
       join,
+      markRoomSeen,
       onDevicesChange,
       record,
       roomChat,
+      roomUnread,
       roomOnScreen,
       setDevice,
       teardownAndLeave,

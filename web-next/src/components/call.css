@@ -794,3 +794,73 @@
 .call-device small { color: var(--text-muted); font-size: 12px; font-weight: 500; }
 .call-devices-note { margin: 0; color: var(--text-muted); font-size: 12px; }
 .call-devices-note[role="alert"] { color: var(--tone-e4aaa6); }
+
+/* The shared dock's controls are the library's toggles and buttons, in the
+   call's round shapes. */
+.call-btn,
+.call-leave,
+.call-quiet {
+  padding-block: 0;
+}
+.call-btn {
+  padding-inline: 0;
+}
+/* The dock is its own context: round icon toggles, then Leave (destructive)
+   at the end of the controls; "End for everyone" is destructive too. */
+.call-dock .call-quiet {
+  color: var(--tone-f0a8a8);
+}
+/* What's new in the room while its pane is closed. */
+.call-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--call-leave);
+  color: var(--on-call-action);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* A small tile names its person too, in a smaller label. */
+.call-cam[data-size="small"] .call-name {
+  bottom: 5px;
+  left: 5px;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+.call-cam[data-size="small"] .call-flag {
+  top: 5px;
+  right: 5px;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 9.5px;
+}
+
+/* Shared: the screen fills the stage, the people a row of small tiles. */
+.call-gallery[data-layout="shared"] {
+  display: flex;
+  flex-direction: column;
+}
+.call-gallery[data-layout="shared"] > .call-cam[data-share="true"] {
+  flex: 1;
+}
+.call-film {
+  display: flex;
+  flex: none;
+  gap: 10px;
+  height: 112px;
+  overflow-x: auto;
+}
+.call-film .call-cam {
+  flex: none;
+  width: 176px;
+}
+.call-seg button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

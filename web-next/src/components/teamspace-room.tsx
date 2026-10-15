@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react"
 import { AgentComposer } from "./agent-composer"
 import { IdentityAvatar } from "./workspace-avatar"
+import { useReportRoomActivity } from "./call-provider"
 import {
   agentIdentity,
   fullTime,
@@ -41,6 +42,17 @@ export function TeamspaceConversation({
   // moment they scroll back to read something.
   const following = useRef(true)
   const { messages, presence, status } = room
+  // The parley's Room button counts what others said while it was closed.
+  useReportRoomActivity(
+    space.organization_id,
+    { kind: "teamspace", id: space.id },
+    messages
+      .filter(
+        (message) =>
+          message.author_user_id !== viewerId || message.author_agent_id
+      )
+      .map((message) => message.seq)
+  )
   const lastId = messages.at(-1)?.id
   const outgoingCount = status.outgoing.length
 

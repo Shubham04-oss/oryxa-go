@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -12,7 +13,11 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { AgentPanelChips } from "./agent-panel-chips"
-import { CallProvider, useRoomChatHost } from "./call-provider"
+import {
+  CallProvider,
+  useReportRoomActivity,
+  useRoomChatHost,
+} from "./call-provider"
 import { CallSurface, ParleyButton, ParleyStrip, tintOf } from "./call-surfaces"
 import type { CallView } from "@/lib/call/client"
 import { callDuration, parseVoiceFrame, whoIsIn } from "@/lib/call/client"
@@ -152,6 +157,7 @@ function Parley({ onRoomPage }: { onRoomPage: boolean }) {
             organizationId="org_1"
             room={room}
             roomName="EU launch"
+            subtitle="Launch on 4 November"
             member="usr_ada"
             name="Ada"
           />
@@ -748,6 +754,120 @@ describe("a parley in a teamspace", () => {
     await waitFor(() => expect(within(page).queryByRole("textbox")).toBeNull())
     expect(screen.getByRole("textbox", { name: "Room draft" })).toBe(draft)
     expect(mounts).toBe(1)
+  })
+})
+
+describe("the shared dock and tiles", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "MediaStream",
+      class {
+        constructor(readonly tracks: unknown[]) {}
+      }
+    )
+  })
+
+  async function openFullPage(media = fakeMedia()) {
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    return screen.getByRole("dialog", { name: "EU launch parley" })
+  }
+
+  it("flags who's sharing, whose camera is off and the agent taking notes", async () => {
+    const media = fakeMedia()
+    const tiles = media.tiles()
+    media.tiles = () => [
+      tiles[0],
+      { ...tiles[1], screenTrack: {} as MediaStreamTrack },
+    ]
+    const page = await openFullPage(media)
+    // The teamspace's description sits under "Parley".
+    expect(within(page).getByText("Launch on 4 November")).toBeTruthy()
+    const raya = within(page).getByRole("group", {
+      name: "Raya Patel, sharing",
+    })
+    expect(within(raya).getByText("Sharing")).toBeTruthy()
+    const me = within(page).getByRole("group", { name: "You" })
+    expect(within(me).getByText("Camera off")).toBeTruthy()
+    const agent = await within(page).findByRole("group", {
+      name: "Krude, the agent",
+    })
+    expect(within(agent).getByText("Taking notes")).toBeTruthy()
+    expect(within(page).getByText("2 people, Krude taking notes")).toBeTruthy()
+
+    // A share makes the Shared layout available: the screen big, the people a row.
+    const layout = within(page).getByRole("group", { name: "Layout" })
+    fireEvent.click(within(layout).getByRole("button", { name: "Shared" }))
+    const gallery = within(page).getByLabelText("People in the parley")
+    expect(gallery.getAttribute("data-layout")).toBe("shared")
+    expect(
+      within(layout)
+        .getByRole("button", { name: "Shared" })
+        .getAttribute("aria-pressed")
+    ).toBe("true")
+  })
+
+  it("offers Shared only while someone shares", async () => {
+    const page = await openFullPage()
+    const layout = within(page).getByRole("group", { name: "Layout" })
+    expect(
+      within(layout).getByRole("button", { name: "Shared" })
+    ).toHaveProperty("disabled", true)
+  })
+
+  it("goes back from the full page with Exit full page", async () => {
+    const page = await openFullPage()
+    const dock = within(page).getByRole("toolbar", { name: "Parley controls" })
+    fireEvent.click(
+      within(dock).getByRole("button", { name: "Exit full page" })
+    )
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(screen.getByText(/^You're in the parley/)).toBeTruthy()
+  })
+
+  it("counts what others said in the room until its pane opens", async () => {
+    let say: (seqs: number[]) => void = () => undefined
+    function RoomPage() {
+      const [seqs, setSeqs] = useState([1, 2])
+      say = setSeqs
+      useReportRoomActivity("org_1", room, seqs)
+      return null
+    }
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CallProvider joinMediaWith={async () => fakeMedia()}>
+          <RoomPage />
+          <Parley onRoomPage />
+        </CallProvider>
+      </QueryClientProvider>
+    )
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    // What was said before counts for nothing.
+    expect(
+      within(page).getByRole("button", { name: "Show the room" })
+    ).toBeTruthy()
+    act(() => say([1, 2, 3, 4]))
+    fireEvent.click(
+      await within(page).findByRole("button", {
+        name: "Show the room, 2 new",
+      })
+    )
+    fireEvent.click(within(page).getByRole("button", { name: "Hide the room" }))
+    expect(
+      within(page).getByRole("button", { name: "Show the room" })
+    ).toBeTruthy()
   })
 })
 
