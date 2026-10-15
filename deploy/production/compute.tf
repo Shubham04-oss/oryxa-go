@@ -169,12 +169,15 @@ locals {
       AGENTS_PRIMARY_MODEL_LITE     = var.model
       AGENTS_PRIMARY_SERVICE_KEY_ID = aws_kms_alias.service["agents-primary"].name
       # Admits members to the edge's rooms (DMs, side conversations,
-      # teamspaces); the edge trusts the key above. The sandbox and browser
-      # stay on AgentCore until AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS is set.
-      AGENTS_PRIMARY_EDGE_URL            = "https://edge.oryxa.in"
-      AGENTS_PRIMARY_ARTIFACT_BUCKET     = local.artifacts_bucket
-      AGENTS_PRIMARY_MEMORY_AGENT_ENGINE = var.memory_agent_engine
-      AGENTS_PRIMARY_MEMORY_LOCATION     = var.gcp_region
+      # teamspaces); the edge trusts the key above.
+      AGENTS_PRIMARY_EDGE_URL = "https://edge.oryxa.in"
+      # These organizations' sandbox and browser run on the edge (Cloudflare
+      # Sandbox and Browser Run); everyone else's stay on AgentCore. Once this
+      # holds, AGENTS_PRIMARY_LIVE_BACKEND=cloudflare moves everyone.
+      AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS = "org__80adSFLC_LAUD90"
+      AGENTS_PRIMARY_ARTIFACT_BUCKET      = local.artifacts_bucket
+      AGENTS_PRIMARY_MEMORY_AGENT_ENGINE  = var.memory_agent_engine
+      AGENTS_PRIMARY_MEMORY_LOCATION      = var.gcp_region
       # Every answer one member's agent gives another is read by this
       # guardrail before they read it (answer_guard.tf).
       AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID      = aws_bedrock_guardrail.agent_answers.guardrail_id
