@@ -305,7 +305,7 @@ func TestAMessageStreamsKrudesAnswerAndRecordsWhatItCost(t *testing.T) {
 	if thread.Title != "Say hello" {
 		t.Fatalf("title = %q, want the first line of the first message", thread.Title)
 	}
-	if strings.Join(types(thread.Items), ",") != "message,message" || len(thread.Pending) != 0 {
+	if strings.Join(types(thread.Items), ",") != "run_started,message,message,run_completed" || len(thread.Pending) != 0 {
 		t.Fatalf("history = %+v", thread)
 	}
 }
@@ -1603,7 +1603,7 @@ func TestAMemberRenamesTheirThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.Title != "Launch plan" || strings.Join(types(detail.Items), ",") != "message,message" {
+	if detail.Title != "Launch plan" || strings.Join(types(detail.Items), ",") != "run_started,message,message,run_completed" {
 		t.Fatalf("detail = %+v, want the new title and the history unchanged", detail)
 	}
 	listed, err := h.service.List(ctx, asha)

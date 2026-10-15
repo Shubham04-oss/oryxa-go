@@ -93,7 +93,8 @@ func TestRequesterReportContinuesTheRealPrimaryChatNamespace(t *testing.T) {
 	}
 	started.Run.Execute(context.Background(), func(threads.Item) error { return nil })
 	detail, err := primary.Get(context.Background(), member, threadID)
-	if err != nil || len(detail.Items) != 2 || !strings.Contains(detail.Items[1].Text, "14 October") {
+	// The report's run is bracketed around the request and its answer.
+	if err != nil || len(detail.Items) != 4 || !strings.Contains(detail.Items[2].Text, "14 October") {
 		t.Fatalf("original primary chat=%+v err=%v", detail, err)
 	}
 	if runs.last.SessionID != threadID || runs.last.OrganizationID != member.OrganizationID || runs.last.UserID != member.UserID {

@@ -17,9 +17,9 @@ import (
 )
 
 // The kinds of item a thread's history and a run's stream are made of. A
-// thread's history holds messages, tool calls, tool results and
-// confirmations; a run's stream carries the same items as they happen, plus
-// deltas and the run's own start and end.
+// thread's history holds messages, tool calls, tool results, confirmations
+// and each run's start and end; a run's stream carries the same items as they
+// happen, plus deltas.
 const (
 	// ItemMessage is text from the member or from Krude.
 	ItemMessage = "message"
@@ -79,15 +79,18 @@ const (
 type Item struct {
 	Type string `json:"type"`
 	// ID is the stored event the item came from, so a client can match what
-	// it streamed against the history it reads later. Deltas and the run's
-	// own items have none.
+	// it streamed against the history it reads later. Deltas have none; a
+	// run's brackets have their run's id with ".started" or ".ended", streamed
+	// and stored alike (brackets.go).
 	ID string    `json:"id,omitempty"`
 	At time.Time `json:"at,omitzero"`
 	// Author is AuthorMember or the agent's name.
 	Author string `json:"author,omitempty"`
 	Text   string `json:"text,omitempty"`
-	// Error says why a message, tool result or run went wrong.
-	Error string `json:"error,omitempty"`
+	// Error says why a message, tool result or run went wrong. On a failed
+	// run, ErrorCode says it as one of the Failure codes.
+	Error     string `json:"error,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
 	// CallID ties a tool result to its call. On a confirmation it is the ID
 	// the member's answer names, and ToolCallID the call it holds back, so a
 	// client can show that call as waiting rather than running.
@@ -165,6 +168,9 @@ func displayAgent(items []Item, machineName, displayName string) []Item {
 // came in. Confirmations take their status from answers; a confirmation
 // answers does not hold is pending.
 func eventItems(event *session.Event, answers map[string]bool) []Item {
+	if bracket, ok := bracketOf(event); ok {
+		return []Item{bracket}
+	}
 	// A note is an event of metadata alone. It is read before anything else,
 	// and a message a model or a member wrote never carries one.
 	if note, ok := noteOf(event); ok && event.Content == nil {
