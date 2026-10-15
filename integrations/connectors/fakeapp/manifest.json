@@ -1,0 +1,25 @@
+{
+  "id": "fakeapp", "version": 1, "display_name": "Fake app",
+  "description": "A connector with no real app behind it, for the host's and the gate's tests.",
+  "connection_levels": ["personal"],
+  "auth": {
+    "credential_modes": ["user_key"],
+    "user_key": {
+      "fields": { "type": "object", "properties": { "key": { "type": "string" } }, "required": ["key"] },
+      "inject": { "header": "Authorization", "value": "Bearer {key}" }
+    }
+  },
+  "base_url": "https://api.fakeapp.example.com",
+  "egress_allowlist": ["api.fakeapp.example.com"],
+  "tools": [{
+    "name": "fakeapp.echo", "effect": "read",
+    "description": "Echo a short text back. Use when a test needs a tool call that always succeeds.",
+    "input_schema": { "type": "object", "properties": { "text": { "type": "string", "maxLength": 200 } }, "required": ["text"], "additionalProperties": false },
+    "output_schema": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"], "additionalProperties": false }
+  }],
+  "streams": [{
+    "name": "notes", "modes": ["full", "incremental"], "schedule": "rate(15 minutes)", "deletes": "feed",
+    "document": { "title": "/title", "body": "/body" }
+  }],
+  "reauth_on": [401]
+}
