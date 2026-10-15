@@ -741,3 +741,25 @@
 .call-room-slot:empty { display: none; }
 .call-room-slot > * { flex: 1; min-height: 0; }
 .call-room-slot .workspace-conversation { border-radius: 12px; }
+
+/* In a side conversation (a narrow panel) the parley sits under its bar:
+   the strip wraps, without the faces. */
+.workspace-side-parley {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 0 0;
+}
+.workspace-side-parley .workspace-teamspace-parley { margin-left: 0; }
+.workspace-side-parley .call-strip {
+  align-self: stretch;
+  flex-wrap: wrap;
+  margin: 0;
+}
+.workspace-side-parley .call-strip-cams { display: none; }
+.workspace-side-parley .call-strip-acts {
+  width: 100%;
+  justify-content: flex-end;
+}
