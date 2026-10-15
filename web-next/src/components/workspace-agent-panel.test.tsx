@@ -12,7 +12,7 @@ import {
   within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { StrictMode } from "react"
+import { StrictMode, useState } from "react"
 import type { ComponentProps, ReactElement } from "react"
 import {
   ORG,
@@ -23,6 +23,8 @@ import {
 } from "./agents-fake-backend"
 import type { DmPeople } from "./direct-message-people"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
+import { AgentSession } from "./agent-session"
+import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import type { Inbox } from "@/lib/dms"
 import {
   MAX_WAITING_MESSAGES,
@@ -1170,5 +1172,106 @@ describe("a file the agent saves", () => {
     await screen.findByRole("textbox", { name: "Message Scout" })
     finish()
     expect(onFile).not.toHaveBeenCalled()
+  })
+})
+
+describe("the agent session", () => {
+  const saved: Item[] = [
+    { type: "message", id: "ev_1", author: "member", text: "Write it up" },
+    { type: "artifact", id: "ev_f", artifact: "report.pdf", version: 2 },
+  ]
+
+  /**
+   * The session as the shell lays it out: opening a file from the chat
+   * opens the session, the chat column first and the file beside it, and
+   * the panel collapses meanwhile.
+   */
+  function Session() {
+    const [file, setFile] = useState<PrimaryAgentFileTarget | null>(null)
+    const [slot, setSlot] = useState<HTMLElement | null>(null)
+    return (
+      <>
+        {file && (
+          <AgentSession chatSlotRef={setSlot} workLabel="Work">
+            <button type="button" onClick={() => setFile(null)}>
+              Back to Agent overview
+            </button>
+            <p>Viewing {file.name}</p>
+          </AgentSession>
+        )}
+        {panel({
+          expanded: !file,
+          primaryWork: Boolean(file),
+          primaryChatSlot: file ? slot : null,
+          onOpenPrimaryFile: setFile,
+        })}
+      </>
+    )
+  }
+
+  async function withFile() {
+    stubGo({ threads: [thread("th_1", "Write it up")] })
+    const view = withQueries(<Session />)
+    ;(await socketOn(chatName("th_1"))).open()
+    const chat = agentChats.named(chatName("th_1"))
+    chat.update({ messages: itemsToChatMessages(saved) })
+    return view
+  }
+
+  it("opens a file from the chat beside it: the chat on the left, the file on the right", async () => {
+    await withFile()
+    const box = leoBox()
+    type(box, "And a summary slide")
+    const chip = screen.getByRole("link", { name: "report.pdf" })
+    chip.focus()
+    fireEvent.click(chip)
+
+    const work = await screen.findByRole("region", { name: "Work" })
+    expect(within(work).getByText("Viewing report.pdf")).toBeTruthy()
+    const column = screen.getByRole("region", { name: "Agent conversation" })
+    // The same conversation, moved and not mounted again: the draft and the
+    // focus come with it.
+    expect(leoBox()).toBe(box)
+    expect(column.contains(box)).toBe(true)
+    expect(box.value).toBe("And a summary slide")
+    expect(document.activeElement).toBe(chip)
+    // The chat comes first, the file after it.
+    expect(
+      column.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      box.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+
+  it("keeps the draft when the session closes and the chat goes back to the panel", async () => {
+    await withFile()
+    const box = leoBox()
+    type(box, "Still writing")
+    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }))
+    await screen.findByRole("region", { name: "Work" })
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to Agent overview" })
+    )
+    expect(screen.queryByRole("region", { name: "Agent conversation" })).toBe(
+      null
+    )
+    expect(leoBox()).toBe(box)
+    expect(box.value).toBe("Still writing")
+    expect(
+      document.getElementById("workspace-agent-view-agents")?.contains(box)
+    ).toBe(true)
+  })
+
+  it("offers the file's download beside it, and opens nothing in a new tab", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null)
+    await withFile()
+    expect(
+      screen.getByRole("link", { name: "Download report.pdf" })
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }))
+    await screen.findByRole("region", { name: "Work" })
+    expect(opened).not.toHaveBeenCalled()
   })
 })

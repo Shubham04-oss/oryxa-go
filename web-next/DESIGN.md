@@ -309,16 +309,27 @@ not permission to copy every incidental value into a new component.
   the raised tile on hover; search, the source list, an open document and an
   answer are tiles too. The code keeps the corpus names; only what a member
   reads says Library.
-- Expanding the primary agent's chat uses Agent overview as focused work:
-  the same mounted conversation sits on the left, and the overview occupies
-  the work panel. The right rail offers only DMs and Teams in this state.
+- **The agent session: the chat is always on the left, the work always on
+  the right.** Expanding the primary agent's chat, or opening a file from it,
+  opens Agent overview as one two-column session (`AgentSession`): the
+  conversation column (30%, 300px at least) and the work panel beside it,
+  which holds the overview, a file viewer or a live pane. The conversation is
+  the panel's own mounted chat, moved into the column by a host element
+  (`useAgentChatHost`, the pattern a room's chat uses to move into a parley)
+  and moved back when the session closes, so its draft, scroll, socket and
+  keyboard focus carry over. Nothing is laid over the page. On a phone the
+  two stack, the chat above; with the keyboard up the chat takes the screen
+  below the header. The Viewer boards' right-docked agent panel is
+  superseded by this. The right rail offers only DMs and Teams in this state.
   Files from the current conversation appear in the overview, following the
   conversation the chat is on: a new chat has none, and neither does a chat
-  that has not opened yet. Selecting a file, or a newly saved file while the
+  that has not opened yet. Selecting a file in the overview or a file chip in
+  the chat (in the panel or in the session), or a newly saved file while the
   chat is in view (the expanded panel's Agents tab, or this view), turns the
-  work panel into a clean, compact viewer while the mounted chat remains on
-  the left, even if the agent panel was never opened. A file saved while the
-  chat is out of view stays a chip in the chat. Markdown uses the same
+  work panel into a clean, compact viewer while the chat stays on the left,
+  even if the agent panel was never opened. A chip never opens a new browser
+  tab there; a small Download control beside it is the second way. A file
+  saved while the chat is out of view stays a chip in the chat. Markdown uses the same
   rendering as chat, and PDF, DOCX,
   PPTX, XLSX, CSV, text and images use small in-app rendering libraries, with
   only page or sheet navigation when needed. A Word document is drawn in a
@@ -359,7 +370,8 @@ not permission to copy every incidental value into a new component.
   wrote says "Ada replied" in place of "Answered" and shows their words as
   they wrote them (plain text, never Markdown). Confirmations are small
   cards with Decline and Approve pills (several waiting are answered together);
-  files as a thumbnail or a file chip; a failed run as one muted error line,
+  files as a thumbnail or a file chip (opening in the session's viewer, with
+  Download beside it); a failed run as one muted error line,
   and an answer cut short marked "Interrupted". A specialist's answer is its
   work result's summary, with one muted line under it for the rest (needs
   your input or blocked, the tools it used, the files it saved, the hand-offs
