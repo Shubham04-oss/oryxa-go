@@ -77,7 +77,7 @@ function needsButton({ needs, onOpenRequests }: ChipsProps): ReactNode {
  */
 function ChipsWithParley(props: ChipsProps & { viewerId: string }) {
   const { organizationId, viewerId, teamspace } = props
-  const { active, join, expand } = useCall()
+  const { active, join, show } = useCall()
   const room: LiveRoom | undefined = teamspace
     ? { kind: "teamspace", id: teamspace.id }
     : undefined
@@ -92,7 +92,7 @@ function ChipsWithParley(props: ChipsProps & { viewerId: string }) {
         size="sm"
         className="workspace-agent-chip"
         data-live="true"
-        onClick={() => expand(true)}
+        onClick={() => show("stage")}
       >
         <span className="call-live-dot" aria-hidden="true" />
         In the parley · Open

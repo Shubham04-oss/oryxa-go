@@ -94,8 +94,14 @@ export type ActiveCall = {
   heard: HeardLine[]
   /** An answer the agent found with the member's own access, for them only. */
   privateAnswer?: string
-  expanded: boolean
+  /**
+   * Where the call is open: the mini player (or the strip on its room's
+   * page), the stage in the workspace's main column, or the full page.
+   */
+  surface: CallSurfaceKind
 }
+
+export type CallSurfaceKind = "pip" | "stage" | "full"
 
 export type JoinOptions = {
   organizationId: string
@@ -118,7 +124,11 @@ type CallActions = {
   setScreen: (on: boolean) => Promise<void>
   setRecording: (on: boolean) => Promise<void>
   setAgent: (present: boolean) => Promise<void>
-  expand: (expanded: boolean) => void
+  /**
+   * Opens the call as `surface`. The stage needs a host in the workspace
+   * (CallStageHost); without one the call opens full page instead.
+   */
+  show: (surface: CallSurfaceKind) => void
   /** The devices the member can choose between; none outside a call. */
   devices: () => Promise<CallDevices | undefined>
   setDevice: (kind: DeviceKind, deviceId: string) => Promise<void>
@@ -156,6 +166,9 @@ type CallContextValue = {
   /** The Room pane is open: what the room says now has been seen. */
   markRoomSeen: () => void
   reportRoomActivity: (activity: RoomActivity | null) => void
+  /** A CallStageHost is mounted: the stage has a place to open. */
+  stageHosted: boolean
+  setStageHosted: (hosted: boolean) => void
 } & CallActions
 
 /** The messages a room's page holds from others, by their seq. */
@@ -298,6 +311,7 @@ export function CallProvider({
   const [roomChat, setRoomChat] = useState<RoomChatSlot | null>(null)
   const [ended, setEnded] = useState<EndedCall | null>(null)
   const [activity, setActivity] = useState<RoomActivity | null>(null)
+  const [stageHosted, setStageHosted] = useState(false)
   /** The last message seen in each room, by seq. */
   const [seenIn, setSeen] = useState<Record<string, number>>({})
   /** The last view of the member's call, for the summary once it ends. */
@@ -365,7 +379,7 @@ export function CallProvider({
         tiles: [],
         heard: [],
         agentSpeaking: false,
-        expanded: false,
+        surface: "pip",
       })
       const id = (attempt.current += 1)
       const stale = () => attempt.current !== id
@@ -658,6 +672,14 @@ export function CallProvider({
     )
   }, [activeRoom, latest, roomActivity])
 
+  const show = useCallback(
+    (surface: CallSurfaceKind) =>
+      update({
+        surface: surface === "stage" && !stageHosted ? "full" : surface,
+      }),
+    [stageHosted, update]
+  )
+
   const value = useMemo<CallContextValue>(
     () => ({
       active,
@@ -678,7 +700,9 @@ export function CallProvider({
       setScreen: toggle("screen"),
       setRecording: record,
       setAgent: agent,
-      expand: (expanded) => update({ expanded }),
+      show,
+      stageHosted,
+      setStageHosted,
       devices,
       setDevice,
       onDevicesChange,
@@ -699,6 +723,8 @@ export function CallProvider({
       roomUnread,
       roomOnScreen,
       setDevice,
+      show,
+      stageHosted,
       teardownAndLeave,
       toggle,
       update,

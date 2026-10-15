@@ -77,7 +77,7 @@ function useElapsed(startedAt: string | undefined): string | undefined {
  * how long it has run (opening it), and mute, camera and leave.
  */
 export function LiveNow() {
-  const { active, setMic, setCamera, leave, expand } = useCall()
+  const { active, setMic, setCamera, leave, show } = useCall()
   const live = active && active.phase !== "failed" ? active : null
   const { call } = useRoomCall(live?.organizationId, live?.room, {
     enabled: Boolean(live),
@@ -91,7 +91,7 @@ export function LiveNow() {
         className="workspace-sidebar-live-row"
         variant="ghost"
         aria-label={`Open the parley in ${live.roomName}`}
-        onClick={() => expand(true)}
+        onClick={() => show("stage")}
       >
         <LiveDot />
         <span className="workspace-sidebar-label">

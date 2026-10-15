@@ -571,6 +571,19 @@ not permission to copy every incidental value into a new component.
     page a mini player follows you (bottom left) with mute, back to the
     parley, and leave. Over a shared screen it keeps the speaker's cam
     inset at the bottom right (the sharer's when nobody speaks).
+  - **The stage** (`call-stage.tsx`; HuddleShare): the parley in the
+    workspace's main column, with both sidebars still beside it. "Open" on
+    the strip, the header pill and the mini player's back open it. The page
+    under it stays mounted and inert (so the room's conversation can move
+    into the Room pane and back); going elsewhere in the workspace, Escape
+    or the header's mini-player button leave it for the mini player. The
+    header has the crumbs (the teamspace, "Parley · 18:42"), the faces and
+    a Full page pill. A shared screen is the focused tile under a label
+    bar ("Raya's screen", Fill), with a column of named small cams beside
+    it (a row on a phone); Fill gives the screen the whole stage. With no
+    share, a grid of cams. The dock is the full page's. Exit full page
+    comes back to the stage; where no stage is hosted, Open goes straight
+    to the full page and out of it is the mini player.
   - **The full page:** "Parley" with the teamspace's description under it
     (or the recording line), a Gallery / Speaker / Shared layout (Shared,
     while someone shares: the screen fills the stage and the people are a

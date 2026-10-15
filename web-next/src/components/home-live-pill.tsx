@@ -60,7 +60,7 @@ function OwnParley(props: Props) {
         className="home-live-action"
         size="sm"
         variant="secondary"
-        onClick={() => call.expand(true)}
+        onClick={() => call.show("stage")}
       >
         Open
       </Button>
