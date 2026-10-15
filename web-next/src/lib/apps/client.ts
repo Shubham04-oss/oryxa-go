@@ -269,12 +269,13 @@ export async function listConnectionActions(
   connectionId: string,
   limit = CONNECTION_ACTIONS_LIMIT
 ): Promise<ConnectionAction[]> {
-  const { actions } = await apiRequest<{ actions: ConnectionAction[] }>(
+  // Go sends a nil slice as null.
+  const { actions } = await apiRequest<{ actions: ConnectionAction[] | null }>(
     withQuery(`${connectionPath(organizationId, connectionId)}/actions`, {
       limit,
     })
   )
-  return actions
+  return actions ?? []
 }
 
 /**
