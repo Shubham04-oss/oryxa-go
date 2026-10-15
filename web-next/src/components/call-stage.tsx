@@ -6,7 +6,7 @@
 // room's conversation can move into the Room pane and back.
 import { useEffect, useRef, useState } from "react"
 import type { CSSProperties } from "react"
-import { Maximize2, PictureInPicture2 } from "lucide-react"
+import { Globe, Hand, Maximize2, PictureInPicture2 } from "lucide-react"
 import { roomKey, useCall } from "./call-provider"
 import type { ActiveCall } from "./call-provider"
 import {
@@ -26,7 +26,12 @@ import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { personIdentity } from "./teamspace-format"
 import { Button } from "@/components/ui/button"
 import { Toggle } from "@/components/ui/toggle"
+import { BrowserPane } from "./browser-pane"
+import { BrowserSteps, useRoomChildren } from "./live-work"
 import { useRoomCall } from "@/lib/call/use-room-call"
+import { askedForHand, childLabel } from "@/lib/live/children"
+import type { LiveChild } from "@/lib/live/children"
+import type { LiveEvent, LiveRoom } from "@/lib/live/client"
 import "./call.css"
 import "./call-stage.css"
 
@@ -75,6 +80,58 @@ export function CallStageHost({ place }: { place: string }) {
   )
 }
 
+/**
+ * An agent's browser in the parley (HuddleBrowse): its live page, whether
+ * it's working or asking for a hand (take over and hand back are the
+ * browser pane's), and its last steps from the room's log.
+ */
+function ParleyBrowser({
+  organizationId,
+  room,
+  child,
+  events,
+  viewerId,
+  agentName,
+}: {
+  organizationId: string
+  room: LiveRoom
+  child: LiveChild
+  events: readonly LiveEvent[]
+  viewerId: string
+  agentName?: string
+}) {
+  const label = childLabel(child, viewerId)
+  const asked = askedForHand(events, child.name)
+  return (
+    <section className="call-show call-browser" aria-label={label}>
+      <div className="call-show-label">
+        <Globe size={14} aria-hidden="true" />
+        <strong>{label}</strong>
+        <span className="call-browser-status" data-asked={asked || undefined}>
+          {asked ? (
+            <>
+              <Hand size={11} aria-hidden="true" /> Needs a hand
+            </>
+          ) : (
+            <>
+              <span className="call-live-dot" aria-hidden="true" /> Working
+            </>
+          )}
+        </span>
+      </div>
+      <BrowserPane
+        organizationId={organizationId}
+        room={room}
+        child={child}
+        events={events}
+        agentName={agentName}
+        compact
+      />
+      <BrowserSteps events={events} browser={child.name} running />
+    </section>
+  )
+}
+
 export function CallStage({ active }: { active: ActiveCall }) {
   const { show, markRoomSeen, roomUnread } = useCall()
   const { call: view } = useRoomCall(active.organizationId, active.room)
@@ -89,6 +146,11 @@ export function CallStage({ active }: { active: ActiveCall }) {
   const recording = recordingLine(view)
   const people = view?.participants ?? []
   const title = useRef<HTMLButtonElement>(null)
+  // The room's running browsers join the stage as tiles.
+  const { children, log } = useRoomChildren(active.organizationId, active.room)
+  const browsers = (children.data ?? []).filter(
+    (child) => child.kind === "browser" && child.status === "running"
+  )
 
   useEffect(() => {
     title.current?.focus()
@@ -104,7 +166,7 @@ export function CallStage({ active }: { active: ActiveCall }) {
     if (side === "room") markRoomSeen()
   }, [side, roomUnread, markRoomSeen])
 
-  const size = share ? "small" : "default"
+  const size = share || browsers.length > 0 ? "small" : "default"
   const cams = [
     ...active.tiles.map((tile) => (
       <CallCam
@@ -180,7 +242,38 @@ export function CallStage({ active }: { active: ActiveCall }) {
         </Button>
       </header>
       <div className="call-stage-body">
-        {share ? (
+        {browsers.length > 0 ? (
+          <div className="call-browse">
+            <div
+              className="call-film"
+              role="group"
+              aria-label="People in the parley"
+            >
+              {cams}
+            </div>
+            <div className="call-works">
+              {share && (
+                <div className="call-show">
+                  <div className="call-show-label">
+                    <strong>{owner} screen</strong>
+                  </div>
+                  <ShareCam tile={share} named={false} />
+                </div>
+              )}
+              {browsers.map((child) => (
+                <ParleyBrowser
+                  key={child.name}
+                  organizationId={active.organizationId}
+                  room={active.room}
+                  child={child}
+                  events={log.events}
+                  viewerId={active.member}
+                  agentName={agent?.name}
+                />
+              ))}
+            </div>
+          </div>
+        ) : share ? (
           <div className="call-split">
             <div className="call-show">
               <div className="call-show-label">

@@ -15,6 +15,8 @@ import { CallStageHost } from "./call-stage"
 import { CallSurface, ParleyStrip } from "./call-surfaces"
 import type { CallView } from "@/lib/call/client"
 import type { CallMedia, CallTile } from "@/lib/call/media"
+import type { LiveChild } from "@/lib/live/children"
+import type { LiveEvent } from "@/lib/live/client"
 
 const room = { kind: "teamspace", id: "tsp_1" } as const
 const base = "/live/org_1/rooms/teamspace/tsp_1"
@@ -138,8 +140,28 @@ async function openStage() {
 }
 
 const fetchMock = vi.fn<typeof fetch>()
+let roomChildren: LiveChild[] = []
+let roomEvents: LiveEvent[] = []
+
+function browserEvent(seq: number, type: string, summary: string): LiveEvent {
+  return {
+    seq,
+    at: new Date(Date.now() - (10 - seq) * 60_000).toISOString(),
+    org: "org_1",
+    room,
+    actor: { type: "agent", id: "agt_krude" },
+    run: null,
+    type,
+    summary,
+    data: { child: "brw_1" },
+    durationMs: 0,
+    private: false,
+  }
+}
 
 beforeEach(() => {
+  roomChildren = []
+  roomEvents = []
   vi.stubGlobal("WebSocket", QuietSocket)
   vi.stubGlobal("fetch", fetchMock)
   vi.stubGlobal(
@@ -154,7 +176,16 @@ beforeEach(() => {
     if (target.endsWith(`${base}/call`) && method === "GET")
       return json({ call: view })
     if (target.includes(`${base}/log`))
-      return json({ events: [], next: 0, more: false })
+      return json({ events: roomEvents, next: roomEvents.length, more: false })
+    if (target.endsWith(`${base}/children`))
+      return json({ children: roomChildren })
+    if (target.endsWith(`${base}/browser/brw_1/live`))
+      return json({
+        url: "https://live.example/brw_1",
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      })
+    if (target.endsWith(`${base}/browser/brw_1/handoff`))
+      return json({ active: false })
     if (target.endsWith("/call/join"))
       return json({
         callId: "call_1",
@@ -175,6 +206,50 @@ afterEach(() => {
 })
 
 describe("the parley's stage", () => {
+  it("shows the room's running browsers as tiles, the people as a filmstrip above", async () => {
+    roomChildren = [
+      {
+        kind: "browser",
+        name: "brw_1",
+        status: "running",
+        createdAt: "2026-10-15T09:00:00Z",
+        lastUsedAt: "2026-10-15T09:10:00Z",
+      },
+      {
+        kind: "browser",
+        name: "brw_old",
+        status: "stopped",
+        createdAt: "2026-10-15T08:00:00Z",
+        lastUsedAt: "2026-10-15T08:10:00Z",
+      },
+    ]
+    roomEvents = [
+      browserEvent(1, "browser.navigate", "Opened the Stripe pricing page"),
+      browserEvent(2, "browser.extract", "Read the EU prices"),
+    ]
+    renderWorkspace()
+    const stage = await openStage()
+    const browser = await within(stage).findByRole("region", {
+      name: "Browser",
+    })
+    expect(within(browser).getByText("Working")).toBeTruthy()
+    expect(
+      await within(browser).findByTitle("The agent's browser, live")
+    ).toBeTruthy()
+    const steps = within(browser).getByRole("list", { name: "Steps" })
+    expect(within(steps).getAllByRole("listitem")).toHaveLength(2)
+    expect(within(steps).getByText("now")).toBeTruthy()
+    // Only running browsers join the stage.
+    expect(
+      within(stage).getAllByRole("region", { name: "Browser" })
+    ).toHaveLength(1)
+    const film = within(stage).getByRole("group", {
+      name: "People in the parley",
+    })
+    expect(film.className).toContain("call-film")
+    expect(within(film).getByRole("group", { name: "Raya Patel" })).toBeTruthy()
+  })
+
   it("opens in the main column over the page, which stays mounted and inert", async () => {
     renderWorkspace()
     const stage = await openStage()
