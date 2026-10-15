@@ -165,9 +165,13 @@ locals {
       GOOGLE_WORKLOAD_IDENTITY_PROVIDER = local.gcp_workload_identity_audience
       GOOGLE_SERVICE_ACCOUNT            = google_service_account.runtime.email
 
-      AGENTS_PRIMARY_MODEL               = var.model
-      AGENTS_PRIMARY_MODEL_LITE          = var.model
-      AGENTS_PRIMARY_SERVICE_KEY_ID      = aws_kms_alias.service["agents-primary"].name
+      AGENTS_PRIMARY_MODEL          = var.model
+      AGENTS_PRIMARY_MODEL_LITE     = var.model
+      AGENTS_PRIMARY_SERVICE_KEY_ID = aws_kms_alias.service["agents-primary"].name
+      # Admits members to the edge's rooms (DMs, side conversations,
+      # teamspaces); the edge trusts the key above. The sandbox and browser
+      # stay on AgentCore until AGENTS_PRIMARY_LIVE_CLOUDFLARE_ORGS is set.
+      AGENTS_PRIMARY_EDGE_URL            = "https://edge.oryxa.in"
       AGENTS_PRIMARY_ARTIFACT_BUCKET     = local.artifacts_bucket
       AGENTS_PRIMARY_MEMORY_AGENT_ENGINE = var.memory_agent_engine
       AGENTS_PRIMARY_MEMORY_LOCATION     = var.gcp_region
