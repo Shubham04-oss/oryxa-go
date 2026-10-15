@@ -144,7 +144,7 @@ describe("WorkspaceShell navigation", () => {
         })
       ).toBeTruthy()
       fireEvent.click(screen.getByRole("button", { name: "Tool access" }))
-      fireEvent.click(screen.getByRole("button", { name: "Open my tools →" }))
+      fireEvent.click(screen.getByRole("button", { name: "All tools" }))
       expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
       fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
       fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
