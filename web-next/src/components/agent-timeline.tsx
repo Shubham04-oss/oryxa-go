@@ -1,11 +1,17 @@
-import { isValidElement, useRef, useState } from "react"
+import {
+  createContext,
+  isValidElement,
+  useContext,
+  useRef,
+  useState,
+} from "react"
 import type { MouseEvent, ReactNode } from "react"
 import Markdown from "react-markdown"
 import type { Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { ThinkingOrb } from "thinking-orbs"
 import type { OrbState } from "thinking-orbs"
-import { FileText, Inbox, ShieldQuestion } from "lucide-react"
+import { Download, FileText, Inbox, ShieldQuestion } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { ApiError } from "@/lib/api/client"
 import { agentRequestQueryOptions } from "@/lib/agents/queries"
@@ -594,6 +600,22 @@ export function ConfirmationCard({
   )
 }
 
+/** A file the primary chat holds: its thread, name and version. */
+export type ArtifactTarget = {
+  threadId: string
+  name: string
+  version?: number
+}
+
+/**
+ * Opens a file from the primary chat beside the chat, in the agent session's
+ * work column. Without it (nothing provides one), a file opens in a new tab
+ * or downloads.
+ */
+export const OpenArtifactContext = createContext<
+  ((file: ArtifactTarget) => void) | null
+>(null)
+
 function ArtifactItem({
   entry,
   organizationId,
@@ -603,6 +625,7 @@ function ArtifactItem({
   organizationId: string
   threadId: string
 }) {
+  const openBeside = useContext(OpenArtifactContext)
   const [error, setError] = useState("")
   const [opening, setOpening] = useState(false)
   const url = artifactContentUrl(
@@ -613,11 +636,17 @@ function ArtifactItem({
   )
   const fileName = artifactFileName(entry.name)
 
-  // The plain URL relies on the session cookie, which may have expired since
-  // the conversation loaded: read the file's headers first (that refreshes
-  // it, and reports a file that is gone), then open or download it.
-  async function open(event: MouseEvent<HTMLAnchorElement>) {
+  // Where the session offers it, a file opens in the in-app viewer beside
+  // the chat, and downloading is the second way. Otherwise the plain URL
+  // relies on the session cookie, which may have expired since the
+  // conversation loaded: read the file's headers first (that refreshes it,
+  // and reports a file that is gone), then open or download it.
+  async function open(event: MouseEvent<HTMLAnchorElement>, download = false) {
     event.preventDefault()
+    if (openBeside && !download) {
+      openBeside({ threadId, name: entry.name, version: entry.version })
+      return
+    }
     if (opening) return
     setOpening(true)
     setError("")
@@ -626,7 +655,7 @@ function ArtifactItem({
         name: entry.name,
         version: entry.version,
       })
-      if (link.inline) {
+      if (link.inline && !download) {
         window.open(link.url, "_blank", "noopener,noreferrer")
       } else {
         const anchor = document.createElement("a")
@@ -652,6 +681,18 @@ function ArtifactItem({
       {error}
     </p>
   )
+  const download = openBeside && (
+    <a
+      className="workspace-agent-artifact-download"
+      href={url}
+      download={fileName}
+      aria-label={`Download ${fileName}`}
+      aria-busy={opening || undefined}
+      onClick={(event) => void open(event, true)}
+    >
+      <Download size={14} strokeWidth={1.7} aria-hidden="true" />
+    </a>
+  )
   if (isImageArtifact(entry.name)) {
     return (
       <figure className="workspace-agent-artifact">
@@ -659,28 +700,34 @@ function ArtifactItem({
           className="workspace-agent-artifact-image"
           href={url}
           aria-label={`Open ${fileName}`}
-          aria-busy={opening || undefined}
+          aria-busy={(!openBeside && opening) || undefined}
           onClick={(event) => void open(event)}
         >
           <img src={url} alt={fileName} loading="lazy" />
         </a>
-        <figcaption>{fileName}</figcaption>
+        <figcaption>
+          {fileName}
+          {download}
+        </figcaption>
         {failure}
       </figure>
     )
   }
   return (
     <div className="workspace-agent-artifact">
-      <a
-        className="workspace-agent-artifact-file"
-        href={url}
-        download={fileName}
-        aria-busy={opening || undefined}
-        onClick={(event) => void open(event)}
-      >
-        <FileText size={15} strokeWidth={1.7} aria-hidden="true" />
-        <span>{fileName}</span>
-      </a>
+      <div className="workspace-agent-artifact-row">
+        <a
+          className="workspace-agent-artifact-file"
+          href={url}
+          download={openBeside ? undefined : fileName}
+          aria-busy={(!openBeside && opening) || undefined}
+          onClick={(event) => void open(event)}
+        >
+          <FileText size={15} strokeWidth={1.7} aria-hidden="true" />
+          <span>{fileName}</span>
+        </a>
+        {download}
+      </div>
       {failure}
     </div>
   )

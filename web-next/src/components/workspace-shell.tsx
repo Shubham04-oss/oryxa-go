@@ -23,6 +23,7 @@ import {
 import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { FocusHeader } from "./agents-parts"
 import { PrimaryAgentFileViewer } from "./primary-agent-files"
+import { AgentSession } from "./agent-session"
 import { BrandChip } from "./brand-chip"
 import { HomeOverview } from "./home-overview"
 import { ThemeMenuItem } from "./theme-menu-item"
@@ -220,6 +221,11 @@ function WorkspaceShellContent({
   const [requestFocus, setRequestFocus] = useState<string | null>(null)
   const agentsMode = useAgentsMode()
   const [primaryWork, setPrimaryWork] = useState(false)
+  // The agent session's conversation column, which the agent panel moves its
+  // mounted chat into while the session is open.
+  const [primaryChatSlot, setPrimaryChatSlot] = useState<HTMLElement | null>(
+    null
+  )
   const [primaryComposing, setPrimaryComposing] = useState(false)
   const [primaryViewer, setPrimaryViewer] = useState<
     "overview" | "file" | "live"
@@ -863,46 +869,38 @@ function WorkspaceShellContent({
               kind="Primary agent"
               onBack={closePrimaryWork}
             />
-            <main className="workspace-focus-layout workspace-primary-focus-layout">
-              <div
-                className="workspace-conversation workspace-primary-conversation-slot"
-                aria-hidden="true"
-              />
-              <div className="workspace-work-column">
-                <section
-                  className="workspace-work-panel"
-                  aria-label="Agent overview work panel"
-                >
-                  {primaryViewer === "live" && primaryLive ? (
-                    <LivePane
-                      organizationId={selectedOrganization.id}
-                      room={primaryLive.room}
-                      child={primaryLive.child}
-                      viewerId={session?.user.id}
-                      onBack={() => setPrimaryViewer("overview")}
-                    />
-                  ) : primaryViewer === "file" ? (
-                    <PrimaryAgentFileViewer
-                      organizationId={selectedOrganization.id}
-                      threadId={primaryFile?.threadId ?? primaryThreadId}
-                      file={primaryFile ?? undefined}
-                      onBack={() => setPrimaryViewer("overview")}
-                    />
-                  ) : (
-                    <AgentsCanvas
-                      section="agents"
-                      primaryThreadId={primaryThreadId}
-                      organizationId={selectedOrganization.id}
-                      viewerId={session?.user.id}
-                      onOpen={openWork}
-                      onNavigate={navigatePrimarySection}
-                      onOpenFile={openPrimaryFile}
-                      onOpenLive={openPrimaryLive}
-                    />
-                  )}
-                </section>
-              </div>
-            </main>
+            <AgentSession
+              chatSlotRef={setPrimaryChatSlot}
+              workLabel="Agent overview work panel"
+            >
+              {primaryViewer === "live" && primaryLive ? (
+                <LivePane
+                  organizationId={selectedOrganization.id}
+                  room={primaryLive.room}
+                  child={primaryLive.child}
+                  viewerId={session?.user.id}
+                  onBack={() => setPrimaryViewer("overview")}
+                />
+              ) : primaryViewer === "file" ? (
+                <PrimaryAgentFileViewer
+                  organizationId={selectedOrganization.id}
+                  threadId={primaryFile?.threadId ?? primaryThreadId}
+                  file={primaryFile ?? undefined}
+                  onBack={() => setPrimaryViewer("overview")}
+                />
+              ) : (
+                <AgentsCanvas
+                  section="agents"
+                  primaryThreadId={primaryThreadId}
+                  organizationId={selectedOrganization.id}
+                  viewerId={session?.user.id}
+                  onOpen={openWork}
+                  onNavigate={navigatePrimarySection}
+                  onOpenFile={openPrimaryFile}
+                  onOpenLive={openPrimaryLive}
+                />
+              )}
+            </AgentSession>
           </div>
         ) : agentWork && selectedOrganization ? (
           <AgentsFocus
@@ -1086,6 +1084,8 @@ function WorkspaceShellContent({
         onOpenAgentOverview={openAgentOverview}
         onPrimaryThreadChange={setPrimaryThreadId}
         onPrimaryFileCreated={openPrimaryFile}
+        onOpenPrimaryFile={openPrimaryFile}
+        primaryChatSlot={primaryWork ? primaryChatSlot : null}
         onPrimaryComposingChange={setPrimaryComposing}
         getScreenContext={getScreenContext}
         chatRequest={chatRequest}

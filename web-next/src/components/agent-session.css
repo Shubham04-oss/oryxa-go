@@ -1,0 +1,47 @@
+/* The agent session: the conversation on the left, the work on the right.
+   The columns are the focus layout's (a 30% chat column, 300px at least);
+   the chat column receives the agent panel's mounted chat in its host. */
+.agent-session-chat {
+  padding-right: 4px;
+}
+.agent-chat-host {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* The session names its agent in the header; the panel's switcher row
+   stays in the panel. */
+.agent-session-chat .workspace-agent-identity {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  /* A phone stacks them: the chat above, the work below. */
+  .agent-session .agent-session-chat {
+    flex: none;
+    height: min(38dvh, 360px);
+    min-height: 0;
+    padding: 0;
+  }
+  /* With the keyboard up, the chat takes the height it leaves. */
+  .workspace-shell[data-primary-composing="true"] .workspace-primary-focus {
+    flex: none;
+    height: var(--primary-visible-height, 100dvh);
+    overflow: hidden;
+  }
+  .workspace-shell[data-primary-composing="true"]
+    .agent-session
+    .agent-session-chat {
+    flex: 1;
+    height: auto;
+    min-height: 0;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .workspace-shell[data-primary-composing="true"]
+    .agent-session
+    .workspace-work-column {
+    display: none;
+  }
+}
