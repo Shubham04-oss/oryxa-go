@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Search } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -148,15 +149,16 @@ export function TeamspaceInviteDialog({
                     <strong>{name}</strong>
                     {member.display_name && <small>{member.email}</small>}
                   </span>
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
                     className="workspace-teamspace-pill"
                     disabled={done || add.isPending}
                     aria-label={done ? `${name} added` : `Add ${name}`}
                     onClick={() => add.mutate(member.user_id)}
                   >
                     {done ? "Added" : adding ? "Adding…" : "Add"}
-                  </button>
+                  </Button>
                 </li>
               )
             })}

@@ -545,15 +545,19 @@ describe("TeamspaceFocus", () => {
     expect(within(ledger).queryByRole("link", { name: "Sneaky" })).toBeNull()
     expect(within(ledger).getByText("Sneaky")).toBeTruthy()
 
-    // Arrow keys move between the tabs.
-    fireEvent.keyDown(within(views).getByRole("tab", { name: "Activity" }), {
-      key: "ArrowRight",
-    })
-    expect(
-      within(views)
-        .getByRole("tab", { name: "Room" })
-        .getAttribute("aria-selected")
-    ).toBe("true")
+    // Arrow keys move between the tabs, from the focused one (a real click
+    // focuses it; fireEvent.click doesn't). The library moves focus, and so
+    // the selection, a frame later.
+    const activity = within(views).getByRole("tab", { name: "Activity" })
+    act(() => activity.focus())
+    fireEvent.keyDown(activity, { key: "ArrowRight" })
+    await waitFor(() =>
+      expect(
+        within(views)
+          .getByRole("tab", { name: "Room" })
+          .getAttribute("aria-selected")
+      ).toBe("true")
+    )
   })
 
   it("says so when nothing has been shared or filed yet", async () => {

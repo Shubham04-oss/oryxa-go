@@ -525,15 +525,17 @@
    harbour band, the hero, the Room / Plan / Files / Parleys tabs, then the
    room as the main tile with a side column of cards beside it. */
 .workspace-teamspace-crumbs { padding: 8px 24px 8px 22px; }
-.workspace-teamspace-crumbs ol { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; padding: 0; list-style: none; color: var(--text-muted); font-size: 13px; }
+.workspace-teamspace-crumbs ol { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; min-width: 0; margin: 0; padding: 0; list-style: none; color: var(--text-muted); font-size: 13px; }
 .workspace-teamspace-crumbs li { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.workspace-teamspace-crumbs li + li::before { color: var(--tone-575757); content: "/"; }
-.workspace-teamspace-crumbs li[aria-current="page"] { display: block; overflow: hidden; color: var(--text); font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-teamspace-crumbs li[aria-current="page"]::before { margin-right: 8px; font-size: 13px; font-weight: 400; }
+.workspace-teamspace-crumbs [data-slot="breadcrumb-separator"] { flex: none; color: var(--tone-575757); }
+.workspace-teamspace-crumbs [data-slot="breadcrumb-separator"] svg { width: 13px; height: 13px; }
+.workspace-teamspace-crumbs [data-slot="breadcrumb-page"] { display: block; overflow: hidden; color: var(--text); font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-teamspace-crumbs button { margin: -2px -4px; padding: 2px 4px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; }
 .workspace-teamspace-crumbs button:hover { color: var(--text); }
 
-.workspace-teamspace-canvas { position: relative; display: flex; flex-direction: column; overflow: hidden; }
+.workspace-teamspace-canvas { position: relative; display: flex; flex-direction: column; gap: 0; overflow: hidden; }
+/* The tab panels inherit the canvas's type, as the plain elements did. */
+.workspace-teamspace-canvas [data-slot="tabs-content"] { font-size: inherit; line-height: inherit; }
 .workspace-teamspace-canvas > :not(.workspace-teamspace-scene) { position: relative; }
 .workspace-teamspace-scene {
   position: absolute;
@@ -583,6 +585,7 @@
   flex: none;
   align-self: flex-start;
   gap: 2px;
+  height: auto;
   margin: 0 28px 14px;
   padding: 3px;
   border-radius: 999px;
@@ -603,7 +606,7 @@
   font-weight: 600;
 }
 .workspace-teamspace-tabs button:hover { color: var(--text); }
-.workspace-teamspace-tabs button.is-active {
+.workspace-teamspace-tabs button[data-active] {
   background: var(--raised);
   box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66);
   color: var(--text);
@@ -625,11 +628,11 @@
 .workspace-teamspace-side { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
 .workspace-teamspace-side .workspace-work-card { padding: 16px; border: 0; background: var(--base); }
 .workspace-teamspace-live .live-room { margin-top: 12px; }
-.workspace-teamspace-side-files h3 button { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.workspace-teamspace-side-files h3 button { height: auto; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
 .workspace-teamspace-side-files h3 button:hover { text-decoration: underline; text-underline-offset: 3px; }
 .workspace-teamspace-side-file-list { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 0; padding: 0; list-style: none; font-size: 12px; }
 .workspace-teamspace-side-file-list li { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.workspace-teamspace-file-kind { flex: none; width: 34px; padding: 3px 0; border-radius: 6px; background: var(--canvas); color: var(--text-muted); font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-align: center; }
+.workspace-teamspace-file-kind { flex: none; width: 34px; height: auto; padding: 3px 0; border: 0; border-radius: 6px; background: var(--canvas); color: var(--text-muted); font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-align: center; }
 
 .workspace-teamspace-panel { flex: 1; margin: 0 20px 20px; border-radius: 16px; background: var(--base); }
 .workspace-teamspace-panel .workspace-work-card { border: 0; background: var(--canvas); }

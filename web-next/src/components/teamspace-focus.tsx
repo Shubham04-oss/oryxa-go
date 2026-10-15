@@ -1,5 +1,4 @@
 import { useRef, useState } from "react"
-import type { KeyboardEvent } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { UseQueryResult } from "@tanstack/react-query"
 import {
@@ -9,9 +8,21 @@ import {
   FileStack,
   FileText,
   MessageSquareText,
+  Slash,
   Sparkles,
   UserPlus,
 } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
+import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { TeamspaceConversation } from "./teamspace-room"
 import { TeamspaceFaces } from "./teamspaces-management"
@@ -119,7 +130,7 @@ export function TeamspaceFocus({
   const [isComposing, setIsComposing] = useState(false)
   const visibleHeight = useVisibleHeight(isComposing)
   const hasCalls = useHasCalls()
-  const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({})
+  const tabRefs = useRef<Partial<Record<Tab, HTMLElement | null>>>({})
   // The room's conversation can move to the parley's Room pane and back
   // without remounting (useRoomChatHost).
   const chat = useRoomChatHost(organizationId, {
@@ -139,16 +150,6 @@ export function TeamspaceFocus({
     retry: false,
   })
 
-  function onTabKey(event: KeyboardEvent<HTMLDivElement>) {
-    const step =
-      event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0
-    if (!step) return
-    event.preventDefault()
-    const next = tabs[(tabs.indexOf(tab) + step + tabs.length) % tabs.length]
-    setTab(next)
-    tabRefs.current[next]?.focus()
-  }
-
   if (!space) {
     return (
       <div className="workspace-focus">
@@ -164,13 +165,14 @@ export function TeamspaceFocus({
                   : "Couldn't open the teamspace."}
           </p>
           {!detail.isPending && !gone && !isUnavailableHere(detail.error) && (
-            <button
+            <Button
               className="workspace-teamspace-secondary-button"
+              variant="secondary"
               type="button"
               onClick={() => void detail.refetch()}
             >
               Try again
-            </button>
+            </Button>
           )}
         </main>
       </div>
@@ -189,7 +191,11 @@ export function TeamspaceFocus({
       }
     >
       <TeamspaceCrumbs name={space.name} onBack={onBack} />
-      <div className="workspace-canvas workspace-teamspace-canvas">
+      <Tabs
+        className="workspace-canvas workspace-teamspace-canvas"
+        value={tab}
+        onValueChange={(value) => setTab(value as Tab)}
+      >
         <div className="workspace-teamspace-scene" aria-hidden="true" />
         <div className="workspace-teamspace-hero">
           <TeamspaceAvatar
@@ -215,14 +221,15 @@ export function TeamspaceFocus({
               />
             )}
             {space.can_manage && (
-              <button
+              <Button
                 type="button"
+                variant="outline"
                 className="workspace-teamspace-pill"
                 onClick={() => setInviting(true)}
               >
                 <UserPlus size={13} strokeWidth={2} aria-hidden="true" />
                 Invite
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -235,29 +242,19 @@ export function TeamspaceFocus({
             name={memberName(space, viewerId)}
           />
         )}
-        <div
+        <TabsList
           className="workspace-teamspace-tabs"
-          role="tablist"
           aria-label={`${space.name} views`}
-          onKeyDown={onTabKey}
+          activateOnFocus
         >
           {tabs.map((item) => (
-            <button
+            <TabsTrigger
               key={item}
+              value={item}
               ref={(element) => {
                 tabRefs.current[item] = element
               }}
-              id={`teamspace-tab-${item}`}
-              type="button"
-              role="tab"
-              aria-selected={tab === item}
-              aria-controls={`teamspace-panel-${item}`}
-              tabIndex={tab === item ? 0 : -1}
-              className={cn(
-                tab === item && "is-active",
-                item === "activity" && "is-quiet"
-              )}
-              onClick={() => setTab(item)}
+              className={cn(item === "activity" && "is-quiet")}
             >
               {tabLabels[item]}
               {item === "files" && files.isSuccess && (
@@ -268,18 +265,17 @@ export function TeamspaceFocus({
                   </span>
                 </>
               )}
-            </button>
+            </TabsTrigger>
           ))}
-        </div>
+        </TabsList>
 
         {/* The room stays mounted behind the other tabs, so its draft, scroll
           and socket carry over when the member comes back to it. */}
-        <main
-          id="teamspace-panel-room"
-          role="tabpanel"
-          aria-labelledby="teamspace-tab-room"
+        <TabsContent
+          value="room"
+          keepMounted
+          render={<main />}
           className="workspace-focus-layout workspace-teamspace-room"
-          hidden={tab !== "room"}
         >
           {/* The room's conversation always renders into one host, which
             sits here or, while the parley's Room pane is open, in that pane:
@@ -305,40 +301,47 @@ export function TeamspaceFocus({
               tabRefs.current.files?.focus()
             }}
           />
-        </main>
-        {tab !== "room" && (
-          <section
-            id={`teamspace-panel-${tab}`}
-            role="tabpanel"
-            aria-labelledby={`teamspace-tab-${tab}`}
-            className="workspace-work-panel workspace-teamspace-panel"
-          >
-            {tab === "plan" && (
-              <ComingPanel
-                title="A shared plan is coming"
-                text={`A plan the ${space.team_name} team writes together, beside the room. Until then, the room and its team summary carry what's decided.`}
-              />
-            )}
-            {tab === "files" && (
-              <FilesPanel
-                organizationId={organizationId}
-                space={space}
-                canSee={canSeeFiles}
-                files={files}
-              />
-            )}
-            {tab === "parleys" && (
-              <ComingPanel
-                title="Past parleys will be listed here"
-                text="With how long each ran, who was in it and what was kept. For now, start one with Parley above."
-              />
-            )}
-            {tab === "activity" && (
-              <ActivityPanel organizationId={organizationId} space={space} />
-            )}
-          </section>
-        )}
-      </div>
+        </TabsContent>
+        <TabsContent
+          value="plan"
+          render={<section />}
+          className="workspace-work-panel workspace-teamspace-panel"
+        >
+          <ComingPanel
+            title="A shared plan is coming"
+            text={`A plan the ${space.team_name} team writes together, beside the room. Until then, the room and its team summary carry what's decided.`}
+          />
+        </TabsContent>
+        <TabsContent
+          value="files"
+          render={<section />}
+          className="workspace-work-panel workspace-teamspace-panel"
+        >
+          <FilesPanel
+            organizationId={organizationId}
+            space={space}
+            canSee={canSeeFiles}
+            files={files}
+          />
+        </TabsContent>
+        <TabsContent
+          value="parleys"
+          render={<section />}
+          className="workspace-work-panel workspace-teamspace-panel"
+        >
+          <ComingPanel
+            title="Past parleys will be listed here"
+            text="With how long each ran, who was in it and what was kept. For now, start one with Parley above."
+          />
+        </TabsContent>
+        <TabsContent
+          value="activity"
+          render={<section />}
+          className="workspace-work-panel workspace-teamspace-panel"
+        >
+          <ActivityPanel organizationId={organizationId} space={space} />
+        </TabsContent>
+      </Tabs>
       {inviting && (
         <TeamspaceInviteDialog
           organizationId={organizationId}
@@ -360,20 +363,25 @@ function TeamspaceCrumbs({
 }) {
   return (
     <header className="workspace-focus-header workspace-teamspace-crumbs">
-      <nav aria-label="Breadcrumb">
-        <ol>
-          <li>
-            <button
-              type="button"
+      <Breadcrumb aria-label="Breadcrumb">
+        <BreadcrumbList>
+          <BreadcrumbItem>
+            <BreadcrumbLink
+              render={<button type="button" />}
               aria-label="Back to teamspaces"
               onClick={onBack}
             >
               Teamspaces
-            </button>
-          </li>
-          <li aria-current="page">{name ?? "Teamspace"}</li>
-        </ol>
-      </nav>
+            </BreadcrumbLink>
+          </BreadcrumbItem>
+          <BreadcrumbSeparator>
+            <Slash />
+          </BreadcrumbSeparator>
+          <BreadcrumbItem>
+            <BreadcrumbPage>{name ?? "Teamspace"}</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
     </header>
   )
 }
@@ -437,8 +445,9 @@ function TeamspaceSide({
       {files?.isSuccess && recentFiles.length > 0 && (
         <div className="workspace-work-card workspace-teamspace-side-files">
           <h3>
-            <button
+            <Button
               type="button"
+              variant="link"
               aria-label={`Files ${files.data.length}, open the Files tab`}
               onClick={onOpenFiles}
             >
@@ -446,7 +455,7 @@ function TeamspaceSide({
               <span className="workspace-teamspace-tab-count">
                 {files.data.length}
               </span>
-            </button>
+            </Button>
           </h3>
           <ul className="workspace-teamspace-side-file-list">
             {recentFiles.map((file) => (
@@ -456,9 +465,12 @@ function TeamspaceSide({
                 data-screen-context-id={file.id}
                 data-screen-context-name={file.filename}
               >
-                <span className="workspace-teamspace-file-kind">
+                <Badge
+                  variant="secondary"
+                  className="workspace-teamspace-file-kind"
+                >
                   {fileKind(file)}
-                </span>
+                </Badge>
                 <span className="workspace-teamspace-file">
                   <strong>{file.filename}</strong>
                   <small>added {timeAgo(file.created_at)}</small>
@@ -648,15 +660,17 @@ function FilesPanel({
                       {timeAgo(file.created_at)}
                     </small>
                   </span>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon"
                     className="workspace-teamspace-icon-button"
                     aria-label={`Download ${file.filename}`}
                     disabled={downloading === file.id}
                     onClick={() => void download(file.id)}
                   >
                     <Download size={15} strokeWidth={1.7} />
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
@@ -718,13 +732,14 @@ function ActivityPanel({
         ) : entries.isError ? (
           <div className="workspace-work-card">
             <p role="alert">Couldn't load the shared work.</p>
-            <button
+            <Button
               className="workspace-teamspace-secondary-button"
+              variant="secondary"
               type="button"
               onClick={() => void entries.refetch()}
             >
               Try again
-            </button>
+            </Button>
           </div>
         ) : entries.data.length === 0 ? (
           <div className="workspace-work-card">
