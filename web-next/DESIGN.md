@@ -560,13 +560,17 @@ not permission to copy every incidental value into a new component.
 - **Parleys** (live calls; founder's redesign, 14 Oct 2026). A parley is a
   room's call (live layer B6, `call-provider.tsx`, `call-surfaces.tsx`,
   `call.css`).
-  - **Starting and joining:** "Parley" in a teamspace's header starts one.
-    While one runs, a strip under the header shows who's in, how long it
-    has run and any recording, with the mic and camera set before you join,
-    "Listen in" (muted, camera off) and Join.
+  - **Starting and joining:** "Parley" in a teamspace's header (an outline
+    button) starts one. While one runs it stays, with the live dot, and
+    joins it (or opens it once you're in). A strip under the header shows
+    the faces with their names, who's in, how long it has run and any
+    recording, with the mic and camera set before you join, "Listen in"
+    (muted, camera off) and Join. Who is talking and what is shared (with a
+    thumbnail) join the strip once the edge's call view carries them.
   - **Once you're in:** the strip says so, with Open and Leave. On any other
     page a mini player follows you (bottom left) with mute, back to the
-    parley, and leave.
+    parley, and leave. Over a shared screen it keeps the speaker's cam
+    inset at the bottom right (the sharer's when nobody speaks).
   - **The full page:** "Parley" with the teamspace's description under it
     (or the recording line), a Gallery / Speaker / Shared layout (Shared,
     while someone shares: the screen fills the stage and the people are a
