@@ -214,7 +214,20 @@ not permission to copy every incidental value into a new component.
     lines on deep sea.
 - **People, Agents and Settings as tiles** (founder's redesign, 14 Oct
   2026). People is a grid of cards (the person, their presence, what you
-  share, Message). On the Agents pages the primary agent, the stats, teams,
+  share, Message), or a plain list of the same people, one toggle away
+  (founder, 15 Oct 2026: people may be a plain list). The page names the
+  workspace and counts its people and the agents the member can reach, with
+  Invite (Settings → People, for owners and admins), a search that also
+  finds an agent's name ("/" moves to it), and a segmented teamspace filter
+  over the teamspaces the member shares with someone. The member's own card
+  leads, with their agent and Settings. Each card shows, under the person,
+  their agent where a shared teamspace seats one ("Nia · Priya's agent"),
+  then Message and **Ask Nia**: a small dialog files an agent request in the
+  member's own session, with no teamspace, so the owner always approves it
+  first; it says so, and that the answer arrives in Requests, with "Open in
+  Requests" once sent (`ask-agent-dialog.tsx`). Someone who shares no
+  teamspace with the member shows no agent and no Ask until the members API
+  names everyone's agent (#322). On the Agents pages the primary agent, the stats, teams,
   specialists and workflows are filled tiles on the canvas, with no
   outlines. Settings' menu is three groups, You (Account), Workspace
   (Organisation, People & invitations, Teams, Billing) and Connections (Tool
@@ -426,7 +439,7 @@ not permission to copy every incidental value into a new component.
     their name, role and "Online" only while the page knows it, Parley (the
     DM's own room; while the card shows, the DM keeps only a running
     parley's strip), their agent where a shared teamspace seats one, and the
-    teamspaces you share. Local time, a profile and shared files wait for
+    teamspaces you share, each agent with Ask as on People. Local time, a profile and shared files wait for
     the API (#322), so nothing stands in for them. The header still names
     the person.
   - It reads as a quiet log (a centered column in the canvas): the member's
@@ -454,8 +467,9 @@ not permission to copy every incidental value into a new component.
     person" once they have left; session ended, with Sign in; and "Can't
     reach this conversation" with Try again, while the composer keeps taking
     messages that send once it is back.
-  - People lists everyone in the organization but the member, with role and
-    shared teamspaces as context, search, and a Message action. Team's
+  - People lists everyone in the organization, the member's own card first,
+    with role and shared teamspaces as context, search, and a Message
+    action. Team's
     navigation shows the three latest DMs, and "All" opens the DMs tab, where
     "New message" picks anyone in the organization. The canvas DM is in the
     page's address (`?dm=`), so a refresh returns to it.

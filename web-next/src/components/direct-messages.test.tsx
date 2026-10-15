@@ -320,34 +320,62 @@ describe("Team → People", () => {
     renderShell()
 
     const list = await screen.findByRole("list", { name: "People" })
-    const rows = within(list).getAllByRole("button")
-    expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual([
+    const named = () =>
+      within(list)
+        .getAllByRole("button")
+        .map((row) => row.getAttribute("aria-label") ?? row.textContent)
+    // The member's own card leads, with Settings; Ada's agent sits in a
+    // teamspace they share, so she can be asked through it.
+    expect(named()).toEqual([
+      "Settings",
       "Message Ada Lovelace",
+      "Ask Juno",
       "Message Owen Park",
       "Message Priya Shah",
       "Message sam@sim.oryxa",
     ])
-    const ada = within(list).getByRole("button", {
-      name: "Message Ada Lovelace",
-    })
-    expect(ada.getAttribute("aria-describedby")).toBeTruthy()
+    const ada = within(list).getByRole("article", { name: "Ada Lovelace" })
     expect(within(ada).getByText("Member · Launch room")).toBeTruthy()
+    expect(within(ada).getByText("Juno")).toBeTruthy()
+    expect(within(ada).getByText("Ada's agent")).toBeTruthy()
     expect(within(list).getByText("Admin")).toBeTruthy()
     expect(within(list).getByText("Owner")).toBeTruthy()
+    expect(within(list).getByText("Member · You")).toBeTruthy()
+    expect(
+      screen.getByRole("heading", {
+        name: `${session.organizations[0].name} · 5 people, 1 agent you can reach`,
+      })
+    ).toBeTruthy()
 
     const search = screen.getByRole("searchbox", { name: "Search people" })
     fireEvent.change(search, { target: { value: "PRI" } })
-    expect(
-      within(list)
-        .getAllByRole("button")
-        .map((row) => row.getAttribute("aria-label"))
-    ).toEqual(["Message Priya Shah"])
+    expect(named()).toEqual(["Message Priya Shah"])
+    // An agent's name finds whose it is.
+    fireEvent.change(search, { target: { value: "juno" } })
+    expect(named()).toEqual(["Message Ada Lovelace", "Ask Juno"])
     fireEvent.change(search, { target: { value: "sam@" } })
     expect(
       within(screen.getByRole("list", { name: "People" })).getByRole("button", {
         name: "Message sam@sim.oryxa",
       })
     ).toBeTruthy()
+    fireEvent.change(search, { target: { value: "" } })
+
+    // A teamspace narrows it to who shares it; the list view is plain rows.
+    fireEvent.click(screen.getByRole("button", { name: "Launch room" }))
+    expect(named()).toEqual(["Message Ada Lovelace", "Ask Juno"])
+    fireEvent.click(screen.getByRole("button", { name: "Everyone" }))
+    fireEvent.click(screen.getByRole("button", { name: "List" }))
+    expect(
+      within(screen.getByRole("list", { name: "People" })).queryAllByRole(
+        "article"
+      )
+    ).toHaveLength(0)
+    expect(named()).toContain("Message Priya Shah")
+
+    // "/" finds someone.
+    fireEvent.keyDown(document.body, { key: "/" })
+    expect(document.activeElement).toBe(search)
     fireEvent.change(search, { target: { value: "nobody" } })
     expect(screen.getByText("No people match your search.")).toBeTruthy()
   })

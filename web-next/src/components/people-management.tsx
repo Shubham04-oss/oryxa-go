@@ -9,6 +9,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Button } from "@/components/ui/button"
 import { ApiError } from "@/lib/api/client"
 import type { Role } from "@/lib/auth/client"
 import {
@@ -128,14 +129,15 @@ function MemberRow({
         <span className="workspace-person-role">{member.role}</span>
       )}
       {canRemove && (
-        <button
+        <Button
           className="workspace-invite-revoke"
-          type="button"
+          variant="ghost"
+          size="icon-sm"
           aria-label={`Remove ${name}`}
           onClick={() => setConfirmRemove(true)}
         >
-          <X size={15} />
-        </button>
+          <X />
+        </Button>
       )}
       {confirmRemove && (
         <div className="workspace-person-confirm">
@@ -143,16 +145,18 @@ function MemberRow({
             Remove {name} from this organisation? They lose access to its teams
             and connections.
           </p>
-          <button type="button" onClick={() => setConfirmRemove(false)}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={remove.isPending}
-            onClick={() => remove.mutate()}
-          >
-            {remove.isPending ? "Removing…" : "Remove"}
-          </button>
+          <div className="workspace-person-confirm-actions">
+            <Button variant="outline" onClick={() => setConfirmRemove(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate()}
+            >
+              {remove.isPending ? "Removing…" : "Remove"}
+            </Button>
+          </div>
         </div>
       )}
       {(changeRole.isError || remove.isError) && (
@@ -348,16 +352,15 @@ export function PeopleManagement({
                       <strong>{invitation.organization_name}</strong>
                       <small>Join as {invitation.role}</small>
                     </span>
-                    <button
+                    <Button
                       className="workspace-invite-join"
-                      type="button"
                       disabled={join.isPending}
                       onClick={() => join.mutate(invitation.id)}
                     >
                       {join.isPending && join.variables === invitation.id
                         ? "Joining…"
                         : "Join"}
-                    </button>
+                    </Button>
                   </li>
                 ))}
               </ul>
@@ -411,10 +414,10 @@ export function PeopleManagement({
                     {role === "owner" && <option value="admin">Admin</option>}
                   </select>
                 </label>
-                <button type="submit" disabled={preview || send.isPending}>
-                  <Mail size={16} />{" "}
+                <Button type="submit" disabled={preview || send.isPending}>
+                  <Mail aria-hidden="true" />
                   {send.isPending ? "Sending…" : "Send invite"}
-                </button>
+                </Button>
               </form>
               {formError && (
                 <p className="workspace-people-error" role="alert">
@@ -511,16 +514,17 @@ export function PeopleManagement({
                         </small>
                       </span>
                       {(role === "owner" || invitation.role === "member") && (
-                        <button
+                        <Button
                           className="workspace-invite-revoke"
-                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
                           aria-label={`Revoke invitation for ${invitation.email}`}
                           title="Revoke invitation"
                           disabled={preview || revoke.isPending}
                           onClick={() => revoke.mutate(invitation.id)}
                         >
-                          <X size={16} />
-                        </button>
+                          <X />
+                        </Button>
                       )}
                     </li>
                   ))}
