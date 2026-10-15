@@ -380,13 +380,12 @@ export function TeamspacesManagement({
         </div>
         {canCreate && (
           <Button
-            className="workspace-teamspace-primary-button"
             type="button"
             aria-haspopup="dialog"
             aria-expanded={isCreating}
             onClick={() => setIsCreating(true)}
           >
-            <Plus size={16} strokeWidth={1.8} />
+            <Plus data-icon="inline-start" />
             New teamspace
           </Button>
         )}
@@ -472,8 +471,7 @@ export function TeamspacesManagement({
           </strong>
           {!isUnavailableHere(spaces.error) && (
             <Button
-              className="workspace-teamspace-secondary-button"
-              variant="secondary"
+              variant="outline"
               type="button"
               onClick={() => void spaces.refetch()}
             >
@@ -592,7 +590,7 @@ function TeamspaceCard({
               <Button
                 className="workspace-teamspace-card-more"
                 variant="ghost"
-                size="icon"
+                size="icon-sm"
               />
             }
             aria-label={`More for ${space.name}`}
@@ -896,7 +894,7 @@ function CreateTeamspaceForm({
         </p>
       )}
       <div className="workspace-teamspace-form-actions">
-        <Button type="button" variant="secondary" onClick={onCancel}>
+        <Button type="button" variant="outline" onClick={onCancel}>
           Cancel
         </Button>
         <Button type="submit" disabled={create.isPending || teams.length === 0}>
@@ -991,48 +989,43 @@ function TeamspaceDetail({
     <>
       <div className="workspace-teamspace-detail-actions">
         {active && (
-          <Button
-            className="workspace-teamspace-primary-button"
-            type="button"
-            onClick={onOpen}
-          >
+          <Button type="button" onClick={onOpen}>
             Open teamspace
-            <ArrowRight size={16} strokeWidth={1.7} />
+            <ArrowRight data-icon="inline-end" />
           </Button>
         )}
         {space.can_manage && confirming === null && (
           <>
             {active ? (
               <Button
-                className="workspace-teamspace-secondary-button"
-                variant="secondary"
+                variant="outline"
                 type="button"
                 disabled={busy}
                 onClick={() => setConfirming("pause")}
               >
-                <Pause size={15} strokeWidth={1.8} />
+                <Pause data-icon="inline-start" />
                 Pause teamspace
               </Button>
             ) : (
               <Button
-                className="workspace-teamspace-secondary-button"
-                variant="secondary"
+                variant="outline"
                 type="button"
                 disabled={busy}
                 onClick={() => changeStatus.mutate("active")}
               >
-                <Play size={15} strokeWidth={1.8} />
+                <Play data-icon="inline-start" />
                 {changeStatus.isPending ? "Resuming…" : "Resume teamspace"}
               </Button>
             )}
+            {/* Destructive, so pushed to the far end of the row. */}
             <Button
-              className="workspace-teamspace-secondary-button"
-              variant="secondary"
+              className="ml-auto"
+              variant="destructive"
               type="button"
               disabled={busy}
               onClick={() => setConfirming("delete")}
             >
-              <Trash2 size={15} strokeWidth={1.8} />
+              <Trash2 data-icon="inline-start" />
               Delete teamspace
             </Button>
           </>
@@ -1049,20 +1042,22 @@ function TeamspaceDetail({
             Pause {space.name}? Its room closes for everyone until it is
             resumed. Its shared work stays.
           </p>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => setConfirming(null)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            disabled={busy}
-            onClick={() => changeStatus.mutate("disabled")}
-          >
-            {changeStatus.isPending ? "Pausing…" : "Pause teamspace"}
-          </Button>
+          <div className="workspace-teamspace-confirm-actions">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirming(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={busy}
+              onClick={() => changeStatus.mutate("disabled")}
+            >
+              {changeStatus.isPending ? "Pausing…" : "Pause teamspace"}
+            </Button>
+          </div>
         </div>
       )}
       {confirming === "delete" && (
@@ -1076,21 +1071,23 @@ function TeamspaceDetail({
             Specialists contributed to it stay with their owners. This can't be
             undone.
           </p>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => setConfirming(null)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            disabled={busy}
-            onClick={() => remove.mutate()}
-          >
-            {remove.isPending ? "Deleting…" : "Delete teamspace"}
-          </Button>
+          <div className="workspace-teamspace-confirm-actions">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirming(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={busy}
+              onClick={() => remove.mutate()}
+            >
+              {remove.isPending ? "Deleting…" : "Delete teamspace"}
+            </Button>
+          </div>
         </div>
       )}
       {(changeStatus.isError || remove.isError) && (
