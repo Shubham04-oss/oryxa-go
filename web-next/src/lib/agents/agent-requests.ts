@@ -329,6 +329,40 @@ export async function listAgentRequests(
     : result.requests
 }
 
+/** What a member asks someone's agent directly (agents.InteractionCreateInput). */
+export type CreateAgentRequestInput = {
+  target_agent_id: string
+  /**
+   * The shared teamspace the request belongs to: who approves it then follows
+   * the owner's choice there. Left out, the agent's owner always approves it
+   * first, and the request is a line in the DM between the two of them.
+   */
+  teamspace_id?: string
+  /** Why this agent: at most 500 characters. */
+  purpose: string
+  /** The question: at most 10,000 characters. */
+  task: string
+}
+
+/** The most a request's task may hold (interactions.maxTaskRunes). */
+export const AGENT_REQUEST_TASK_MAX = 10_000
+
+/**
+ * `POST …/agent-requests` (server.createInteraction), in the member's own
+ * session: files a request to another member's agent. It waits for that
+ * member's approval (see `teamspace_id`), and its answer lands in Requests →
+ * Sent.
+ */
+export function createAgentRequest(
+  organizationId: string,
+  input: CreateAgentRequestInput
+): Promise<AgentRequest> {
+  return apiRequest<AgentRequest>(requestsPath(organizationId), {
+    method: "POST",
+    body: pick(input, ["target_agent_id", "teamspace_id", "purpose", "task"]),
+  })
+}
+
 /** `GET …/agent-requests/{requestID}` (server.getInteraction); 404 unless the caller sent or received it. */
 export function getAgentRequest(
   organizationId: string,

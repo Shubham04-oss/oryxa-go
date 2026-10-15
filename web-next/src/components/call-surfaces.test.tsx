@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
+import { useEffect, useState } from "react"
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,11 +12,23 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { CallProvider } from "./call-provider"
+import { AgentPanelChips } from "./agent-panel-chips"
+import {
+  CallProvider,
+  useReportRoomActivity,
+  useRoomChatHost,
+} from "./call-provider"
 import { CallSurface, ParleyButton, ParleyStrip, tintOf } from "./call-surfaces"
 import type { CallView } from "@/lib/call/client"
 import { callDuration, parseVoiceFrame, whoIsIn } from "@/lib/call/client"
-import type { CallMedia, CallTile, HeardSegment } from "@/lib/call/media"
+import type {
+  CallMedia,
+  CallSignal,
+  CallTile,
+  HeardSegment,
+} from "@/lib/call/media"
+import { readSignal } from "@/lib/call/media"
+import { Toaster } from "@/components/ui/sonner"
 
 const room = { kind: "teamspace", id: "tsp_1" } as const
 const base = "/live/org_1/rooms/teamspace/tsp_1"
@@ -70,6 +84,14 @@ function view(overrides: Partial<CallView> = {}): CallView {
   }
 }
 
+function device(
+  deviceId: string,
+  kind: MediaDeviceKind,
+  label: string
+): MediaDeviceInfo {
+  return { deviceId, kind, label, groupId: "g", toJSON: () => ({}) }
+}
+
 function fakeMedia() {
   const tiles: CallTile[] = [
     {
@@ -103,6 +125,24 @@ function fakeMedia() {
     setCamera: vi.fn(async () => undefined),
     setScreen: vi.fn(async () => undefined),
     leave: vi.fn(async () => undefined),
+    devices: vi.fn(async () => ({
+      microphones: [
+        device("mic-1", "audioinput", "MacBook mic"),
+        device("mic-2", "audioinput", "AirPods"),
+      ],
+      cameras: [device("cam-1", "videoinput", "FaceTime camera")],
+      speakers: [
+        device("spk-1", "audiooutput", "MacBook speakers"),
+        device("default", "audiooutput", "Default speaker"),
+      ],
+      current: {
+        audioinput: "mic-1",
+        videoinput: "cam-1",
+        audiooutput: "spk-1",
+      },
+    })),
+    setDevice: vi.fn(async () => undefined),
+    onDevicesChange: () => () => undefined,
     say: (segment) => heard?.(segment),
   }
   return media
@@ -124,6 +164,7 @@ function Parley({ onRoomPage }: { onRoomPage: boolean }) {
             organizationId="org_1"
             room={room}
             roomName="EU launch"
+            subtitle="Launch on 4 November"
             member="usr_ada"
             name="Ada"
           />
@@ -229,14 +270,25 @@ describe("the call's words", () => {
 })
 
 describe("a parley in a teamspace", () => {
-  it("shows a running parley and who is in it, and hides Start", async () => {
+  it("shows a running parley and who is in it, and keeps the header pill to join it", async () => {
     renderParley()
     const strip = await screen.findByRole("region", {
       name: "Parley in progress",
     })
     expect(within(strip).getByText(/^Parley · 1:0\d$/)).toBeTruthy()
     expect(within(strip).getByText("Raya, Rohan and Krude are in")).toBeTruthy()
+    // The strip's faces carry their names, as on the board.
+    expect(within(strip).getByText("Raya Patel")).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Parley" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Join the parley" }))
+    await waitFor(() => expect(requests("/call/join", "POST")).toHaveLength(1))
+    // In it, the pill opens it.
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open the parley" })
+    )
+    expect(
+      screen.getByRole("dialog", { name: "EU launch parley" })
+    ).toBeTruthy()
   })
 
   it("offers to start one when none runs", async () => {
@@ -518,5 +570,525 @@ describe("a parley in a teamspace", () => {
     await waitFor(() => expect(requests("/call/join", "POST")).toHaveLength(1))
     const [, init] = requests("/call/join", "POST")[0] ?? []
     expect(JSON.parse(String(init?.body))).toEqual({ name: "Ada Brennan" })
+  })
+
+  it("says the parley ended, how long and who was in it, when someone else ends it", async () => {
+    const media = fakeMedia()
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    await screen.findByText(/^You're in the parley/)
+    // The view after joining is the one the summary remembers.
+    await waitFor(() => expect(requests(`${base}/call`)).not.toHaveLength(0))
+
+    socketFor("/voice/live")?.frame({
+      type: "voice.stop",
+      utteranceId: "u1",
+      reason: "call_ended",
+    })
+    const ended = await screen.findByRole("dialog", {
+      name: "What's kept from EU launch",
+    })
+    expect(
+      within(ended).getByText("Parley ended · 1 min · 2 people")
+    ).toBeTruthy()
+    expect(
+      within(ended).getByText("The transcript, kept with EU launch.")
+    ).toBeTruthy()
+    // The library's dialog traps focus; it starts on Done.
+    const done = within(ended).getByRole("button", { name: "Done" })
+    await waitFor(() => expect(document.activeElement).toBe(done))
+    expect(within(ended).getByRole("button", { name: "Close" })).toBeTruthy()
+    fireEvent.click(done)
+    expect(
+      screen.queryByRole("dialog", { name: "What's kept from EU launch" })
+    ).toBeNull()
+  })
+
+  it("says so after ending it for everyone, but not after just leaving", async () => {
+    renderParley()
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    fireEvent.click(
+      within(page).getByRole("button", { name: /End for everyone/ })
+    )
+    expect(
+      await screen.findByRole("dialog", { name: "What's kept from EU launch" })
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Done" }))
+
+    const again = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(again).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Leave" }))
+    await waitFor(() => expect(requests("/call/leave", "POST")).toHaveLength(1))
+    expect(
+      screen.queryByRole("dialog", { name: "What's kept from EU launch" })
+    ).toBeNull()
+  })
+  it("lets the member choose their microphone, camera and speaker", async () => {
+    const media = fakeMedia()
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    fireEvent.click(within(page).getByRole("button", { name: "Devices" }))
+
+    const picker = await within(page).findByRole("dialog", { name: "Devices" })
+    const microphone = await within(picker).findByRole("combobox", {
+      name: "Microphone",
+    })
+    expect(within(picker).getByDisplayValue("MacBook mic")).toBe(microphone)
+    expect(
+      within(picker).getByRole("combobox", { name: "Camera" })
+    ).toBeTruthy()
+    expect(
+      within(picker).getByRole("combobox", { name: "Speaker" })
+    ).toBeTruthy()
+
+    fireEvent.change(microphone, { target: { value: "mic-2" } })
+    await waitFor(() =>
+      expect(media.setDevice).toHaveBeenCalledWith("audioinput", "mic-2")
+    )
+
+    // The speaker called "default" is chosen as a speaker, never as a mic.
+    fireEvent.change(
+      within(picker).getByRole("combobox", { name: "Speaker" }),
+      {
+        target: { value: "default" },
+      }
+    )
+    await waitFor(() =>
+      expect(media.setDevice).toHaveBeenCalledWith("audiooutput", "default")
+    )
+
+    // Captions arriving don't make the picker read the devices again.
+    const reads = vi.mocked(media.devices).mock.calls.length
+    media.say({
+      id: "c1",
+      member: "usr_raya",
+      name: "Raya Patel",
+      text: "Hi",
+      partial: false,
+      at: 1,
+    })
+    media.say({
+      id: "c2",
+      member: "usr_raya",
+      name: "Raya Patel",
+      text: "Hi all",
+      partial: false,
+      at: 2,
+    })
+    await screen.findAllByText("Hi all")
+    expect(vi.mocked(media.devices).mock.calls.length).toBe(reads)
+  })
+  it("shows the room's conversation beside the call, moved from the room's page", async () => {
+    renderParley()
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    fireEvent.click(within(page).getByRole("button", { name: "Show the room" }))
+    const pane = within(page).getByRole("region", { name: "EU launch room" })
+    // No room page here has moved its conversation in, so the pane says where it is.
+    expect(
+      within(pane).getByText(/Open EU launch's page to talk in its room/)
+    ).toBeTruthy()
+    expect(
+      within(page).queryByRole("region", { name: "Transcript" })
+    ).toBeNull()
+    fireEvent.click(
+      within(page).getByRole("button", { name: "Show the transcript" })
+    )
+    expect(
+      within(page).getByRole("region", { name: "Transcript" })
+    ).toBeTruthy()
+    expect(
+      within(page).queryByRole("region", { name: "EU launch room" })
+    ).toBeNull()
+  })
+
+  it("moves the room page's own conversation into the pane, and back, without remounting it", async () => {
+    let mounts = 0
+    function Conversation() {
+      useEffect(() => {
+        mounts += 1
+      }, [])
+      return <input aria-label="Room draft" defaultValue="" />
+    }
+    function RoomPage() {
+      const chat = useRoomChatHost("org_1", room)
+      return (
+        <>
+          <div ref={chat.pageRef} />
+          {chat.render(<Conversation />)}
+        </>
+      )
+    }
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CallProvider joinMediaWith={async () => fakeMedia()}>
+          <RoomPage />
+          <Parley onRoomPage />
+        </CallProvider>
+      </QueryClientProvider>
+    )
+    const draft = await screen.findByRole("textbox", { name: "Room draft" })
+    fireEvent.change(draft, { target: { value: "Half a thought" } })
+
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    fireEvent.click(within(page).getByRole("button", { name: "Show the room" }))
+    const pane = within(page).getByRole("region", { name: "EU launch room" })
+    await waitFor(() =>
+      expect(within(pane).getByRole("textbox", { name: "Room draft" })).toBe(
+        draft
+      )
+    )
+    expect((draft as HTMLInputElement).value).toBe("Half a thought")
+    expect(within(pane).queryByText(/Open EU launch's page/)).toBeNull()
+
+    fireEvent.click(within(page).getByRole("button", { name: "Hide the room" }))
+    await waitFor(() => expect(within(page).queryByRole("textbox")).toBeNull())
+    expect(screen.getByRole("textbox", { name: "Room draft" })).toBe(draft)
+    expect(mounts).toBe(1)
+  })
+})
+
+describe("the shared dock and tiles", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "MediaStream",
+      class {
+        constructor(readonly tracks: unknown[]) {}
+      }
+    )
+  })
+
+  async function openFullPage(media = fakeMedia()) {
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    return screen.getByRole("dialog", { name: "EU launch parley" })
+  }
+
+  it("flags who's sharing, whose camera is off and the agent taking notes", async () => {
+    const media = fakeMedia()
+    const tiles = media.tiles()
+    media.tiles = () => [
+      tiles[0],
+      { ...tiles[1], screenTrack: {} as MediaStreamTrack },
+    ]
+    const page = await openFullPage(media)
+    // The teamspace's description sits under "Parley".
+    expect(within(page).getByText("Launch on 4 November")).toBeTruthy()
+    const raya = within(page).getByRole("group", {
+      name: "Raya Patel, sharing",
+    })
+    expect(within(raya).getByText("Sharing")).toBeTruthy()
+    const me = within(page).getByRole("group", { name: "You" })
+    expect(within(me).getByText("Camera off")).toBeTruthy()
+    const agent = await within(page).findByRole("group", {
+      name: "Krude, the agent",
+    })
+    expect(within(agent).getByText("Taking notes")).toBeTruthy()
+    expect(within(page).getByText("2 people, Krude taking notes")).toBeTruthy()
+
+    // A share makes the Shared layout available: the screen big, the people a row.
+    const layout = within(page).getByRole("group", { name: "Layout" })
+    fireEvent.click(within(layout).getByRole("button", { name: "Shared" }))
+    const gallery = within(page).getByLabelText("People in the parley")
+    expect(gallery.getAttribute("data-layout")).toBe("shared")
+    expect(
+      within(layout)
+        .getByRole("button", { name: "Shared" })
+        .getAttribute("aria-pressed")
+    ).toBe("true")
+  })
+
+  it("keeps the speaker's cam inset over a share in the mini player", async () => {
+    const media = fakeMedia()
+    const tiles = media.tiles()
+    media.tiles = () => [
+      tiles[0],
+      { ...tiles[1], screenTrack: {} as MediaStreamTrack },
+    ]
+    const { leaveRoomPage } = renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    await screen.findByText(/^You're in the parley/)
+    leaveRoomPage()
+    const pip = screen.getByRole("region", {
+      name: "EU launch parley, mini player",
+    })
+    expect(
+      within(pip).getByRole("group", { name: "Raya Patel's screen" })
+    ).toBeTruthy()
+    // Nobody is speaking: the sharer's own cam is the inset.
+    expect(
+      within(pip).getByRole("group", { name: "Raya Patel, sharing" })
+    ).toBeTruthy()
+    expect(
+      within(pip).getByText("Raya Patel is sharing · 2 people")
+    ).toBeTruthy()
+  })
+
+  it("offers Shared only while someone shares", async () => {
+    const page = await openFullPage()
+    const layout = within(page).getByRole("group", { name: "Layout" })
+    expect(
+      within(layout).getByRole("button", { name: "Shared" })
+    ).toHaveProperty("disabled", true)
+  })
+
+  it("goes back from the full page with Exit full page", async () => {
+    const page = await openFullPage()
+    const dock = within(page).getByRole("toolbar", { name: "Parley controls" })
+    fireEvent.click(
+      within(dock).getByRole("button", { name: "Exit full page" })
+    )
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(screen.getByText(/^You're in the parley/)).toBeTruthy()
+  })
+
+  it("counts what others said in the room until its pane opens", async () => {
+    let say: (seqs: number[]) => void = () => undefined
+    function RoomPage() {
+      const [seqs, setSeqs] = useState([1, 2])
+      say = setSeqs
+      useReportRoomActivity("org_1", room, seqs)
+      return null
+    }
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CallProvider joinMediaWith={async () => fakeMedia()}>
+          <RoomPage />
+          <Parley onRoomPage />
+        </CallProvider>
+      </QueryClientProvider>
+    )
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    // What was said before counts for nothing.
+    expect(
+      within(page).getByRole("button", { name: "Show the room" })
+    ).toBeTruthy()
+    act(() => say([1, 2, 3, 4]))
+    fireEvent.click(
+      await within(page).findByRole("button", {
+        name: "Show the room, 2 new",
+      })
+    )
+    fireEvent.click(within(page).getByRole("button", { name: "Hide the room" }))
+    expect(
+      within(page).getByRole("button", { name: "Show the room" })
+    ).toBeTruthy()
+  })
+})
+
+describe("raised hands and reactions", () => {
+  function signalling(fails = false) {
+    const media = fakeMedia()
+    let heard: ((member: string, signal: CallSignal) => void) | undefined
+    const signal = vi.fn(async () => {
+      if (fails) throw new Error("not allowed")
+    })
+    return Object.assign(media, {
+      signal,
+      onSignal(listener: (member: string, signal: CallSignal) => void) {
+        heard = listener
+        return () => undefined
+      },
+      from: (member: string, sent: CallSignal) => heard?.(member, sent),
+    })
+  }
+
+  async function openFullPage(media: CallMedia) {
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    return screen.getByRole("dialog", { name: "EU launch parley" })
+  }
+
+  it("reads only well-formed signals", () => {
+    expect(readSignal("oryxa.hand", { member: "usr_raya", up: true })).toEqual({
+      member: "usr_raya",
+      signal: { kind: "hand", up: true },
+    })
+    expect(
+      readSignal("oryxa.reaction", { member: "usr_raya", emoji: "🎉" })
+    ).toEqual({ member: "usr_raya", signal: { kind: "reaction", emoji: "🎉" } })
+    expect(readSignal("oryxa.hand", { up: true })).toBeUndefined()
+    expect(readSignal("chat", { member: "usr_raya" })).toBeUndefined()
+  })
+
+  it("raises the member's hand for everyone, and shows others' hands and reactions", async () => {
+    const media = signalling()
+    const page = await openFullPage(media)
+    const dock = within(page).getByRole("toolbar", { name: "Parley controls" })
+    fireEvent.click(within(dock).getByRole("button", { name: "Raise hand" }))
+    expect(media.signal).toHaveBeenCalledWith({ kind: "hand", up: true })
+    const me = within(page).getByRole("group", { name: "You, hand raised" })
+    expect(within(me).getByText("Raised hand")).toBeTruthy()
+    expect(
+      within(dock).getByRole("button", { name: "Lower hand" })
+    ).toBeTruthy()
+
+    act(() => {
+      media.from("usr_raya", { kind: "hand", up: true })
+      media.from("usr_raya", { kind: "reaction", emoji: "🎉" })
+    })
+    const raya = within(page).getByRole("group", {
+      name: "Raya Patel, hand raised",
+    })
+    expect(within(raya).getByRole("img", { name: "Reacted 🎉" })).toBeTruthy()
+    act(() => media.from("usr_raya", { kind: "hand", up: false }))
+    expect(within(page).getByRole("group", { name: "Raya Patel" })).toBeTruthy()
+
+    fireEvent.click(within(dock).getByRole("button", { name: "React" }))
+    fireEvent.click(await screen.findByRole("menuitem", { name: "React 👍" }))
+    expect(media.signal).toHaveBeenCalledWith({
+      kind: "reaction",
+      emoji: "👍",
+    })
+  })
+
+  it("hides hands and reactions when the call can't carry them", async () => {
+    const media = signalling(true)
+    const page = await openFullPage(media)
+    const dock = within(page).getByRole("toolbar", { name: "Parley controls" })
+    fireEvent.click(within(dock).getByRole("button", { name: "Raise hand" }))
+    await waitFor(() =>
+      expect(within(dock).queryByRole("button", { name: /hand/ })).toBeNull()
+    )
+    expect(within(dock).queryByRole("button", { name: "React" })).toBeNull()
+    // The hand went back down.
+    expect(within(page).getByRole("group", { name: "You" })).toBeTruthy()
+  })
+
+  it("offers neither without a way to send them", async () => {
+    const page = await openFullPage(fakeMedia())
+    const dock = within(page).getByRole("toolbar", { name: "Parley controls" })
+    expect(
+      within(dock).queryByRole("button", { name: "Raise hand" })
+    ).toBeNull()
+  })
+})
+
+describe("a parley starting in the room the member has open", () => {
+  it("says who started it, with Join", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: false,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }))
+    )
+    current = null
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CallProvider joinMediaWith={async () => fakeMedia()}>
+          <Parley onRoomPage />
+        </CallProvider>
+        <Toaster />
+      </QueryClientProvider>
+    )
+    await screen.findByRole("button", { name: "Parley" })
+    // The first read (no parley yet) has landed.
+    await waitFor(() =>
+      expect(
+        client.getQueryState(["call", "org_1", "teamspace", "tsp_1"])?.status
+      ).toBe("success")
+    )
+    current = view()
+    await act(() => client.invalidateQueries())
+    const toast = (
+      await screen.findByText("Raya Patel started a parley")
+    ).closest<HTMLElement>("[data-sonner-toast]")
+    expect(toast).toBeTruthy()
+    fireEvent.click(within(toast!).getByRole("button", { name: "Join" }))
+    await waitFor(() => expect(requests("/call/join", "POST")).toHaveLength(1))
+  })
+})
+
+describe("the agent panel's parley chip", () => {
+  function renderChips(teamspace?: { id: string; name: string }) {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CallProvider joinMediaWith={vi.fn(async () => fakeMedia())}>
+          <AgentPanelChips
+            organizationId="org_1"
+            viewerId="usr_ada"
+            teamspace={teamspace}
+          />
+        </CallProvider>
+      </QueryClientProvider>
+    )
+  }
+
+  it("offers to join the teamspace's parley, then says the member is in it", async () => {
+    renderChips({ id: "tsp_1", name: "EU launch" })
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Join the parley in EU launch",
+      })
+    )
+    expect(
+      await screen.findByRole("button", { name: /In the parley · Open/ })
+    ).toBeTruthy()
+    expect(requests("/call/join", "POST")).toHaveLength(1)
+  })
+
+  it("shows nothing where no parley runs, or off a teamspace", async () => {
+    current = null
+    renderChips({ id: "tsp_1", name: "EU launch" })
+    await waitFor(() => expect(requests(`${base}/call`)).not.toHaveLength(0))
+    expect(screen.queryByRole("group", { name: "For you now" })).toBeNull()
+    cleanup()
+    current = view()
+    renderChips()
+    expect(screen.queryByRole("group", { name: "For you now" })).toBeNull()
   })
 })

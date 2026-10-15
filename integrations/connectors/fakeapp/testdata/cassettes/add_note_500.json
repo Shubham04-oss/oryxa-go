@@ -1,0 +1,11 @@
+[
+  {
+    "method": "POST",
+    "host": "api.fakeapp.example.com",
+    "path": "/notes",
+    "status": 500,
+    "body": {
+      "error": "boom"
+    }
+  }
+]

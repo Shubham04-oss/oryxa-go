@@ -1,7 +1,15 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, ChevronDown, Plus, UsersRound } from "lucide-react"
+import { ArrowLeft, ChevronDown, ChevronRight, X } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,6 +17,15 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { ApiError } from "@/lib/api/client"
 import type { Organization, Role } from "@/lib/auth/client"
 import { authErrorMessage } from "@/lib/auth/client"
@@ -18,13 +35,61 @@ import {
   changeTeamMemberRole,
   createTeam,
   deleteTeam,
+  getDirectory,
   getTeam,
   listTeamMembers,
   listTeams,
   removeTeamMember,
   renameTeam,
 } from "@/lib/settings/client"
+import type { DirectoryPerson, Team } from "@/lib/settings/client"
+import { teamspacesQueryOptions } from "@/lib/teamspaces/queries"
+import { IdentityAvatar } from "./workspace-avatar"
+import {
+  SettingsActions,
+  SettingsButton,
+  SettingsCard,
+  SettingsGroup,
+  SettingsMessage,
+  SettingsNote,
+  SettingsRow,
+  SettingsSelect,
+} from "./settings-kit"
 
+function personName(person: { display_name?: string; email: string }) {
+  return person.display_name || person.email
+}
+
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join("")
+}
+
+function PersonAvatar({ person }: { person: DirectoryPerson }) {
+  const name = personName(person)
+  return (
+    <IdentityAvatar
+      identity={{
+        id: person.user_id,
+        name,
+        initials: initials(name),
+        kind: "user",
+      }}
+    />
+  )
+}
+
+/**
+ * Settings → Teams: the organisation's teams as a table (who is in each, who
+ * leads it, and its teamspaces), New team in a dialog, and each team's own
+ * page for its name, members and deletion.
+ *
+ * Who is in each team comes from the directory in one call; a lead is a team
+ * admin.
+ */
 export function WorkspaceTeamsSettings({
   organization,
   role,
@@ -38,6 +103,7 @@ export function WorkspaceTeamsSettings({
   const orgId = organization?.id
   const canCreate = role === "owner" || role === "admin"
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState("")
   const [parentId, setParentId] = useState("")
   const [editingName, setEditingName] = useState("")
@@ -46,30 +112,41 @@ export function WorkspaceTeamsSettings({
   const [confirmRemoveMemberId, setConfirmRemoveMemberId] = useState<
     string | null
   >(null)
+  const live = !preview && Boolean(orgId)
   const teams = useQuery({
     queryKey: ["settings", "teams", orgId],
     queryFn: () => listTeams(orgId!),
-    enabled: !preview && Boolean(orgId),
+    enabled: live,
+    retry: false,
+  })
+  const directory = useQuery({
+    queryKey: ["settings", "directory", orgId],
+    queryFn: () => getDirectory(orgId!),
+    enabled: live && !selectedId,
+    retry: false,
+  })
+  const teamspaces = useQuery({
+    ...teamspacesQueryOptions(orgId ?? ""),
+    enabled: live && !selectedId,
     retry: false,
   })
   const selected = teams.data?.find((team) => team.id === selectedId)
   const detail = useQuery({
     queryKey: ["settings", "teams", orgId, selectedId, "detail"],
     queryFn: () => getTeam(orgId!, selectedId!),
-    enabled: !preview && Boolean(orgId && selectedId),
+    enabled: live && Boolean(selectedId),
     retry: false,
   })
   const teamMembers = useQuery({
     queryKey: ["settings", "teams", orgId, selectedId, "members"],
     queryFn: () => listTeamMembers(orgId!, selectedId!),
-    enabled: !preview && Boolean(orgId && selectedId),
+    enabled: live && Boolean(selectedId),
     retry: false,
   })
   const orgMembers = useQuery({
     queryKey: ["organizations", orgId, "members"],
     queryFn: () => getMembers(orgId!),
-    enabled:
-      !preview && Boolean(orgId && selectedId && detail.data?.can_manage),
+    enabled: live && Boolean(selectedId && detail.data?.can_manage),
     retry: false,
   })
   const refreshTeams = () =>
@@ -99,6 +176,7 @@ export function WorkspaceTeamsSettings({
     onSuccess: async (team) => {
       setNewName("")
       setParentId("")
+      setCreating(false)
       await refreshTeams()
       openTeam(team)
     },
@@ -167,132 +245,119 @@ export function WorkspaceTeamsSettings({
     if (value && value.length <= 120 && canCreate) create.mutate(value)
   }
 
-  if (preview || !organization)
+  if (preview || !organization) {
     return (
-      <div className="workspace-settings-account">
-        <div className="workspace-settings-section">
-          <div className="workspace-settings-section-title">
-            <h3>Organisation teams</h3>
-            <p>Layout preview · Sign in to load and manage real teams.</p>
-          </div>
-          {["Product", "Design"].map((name) => (
-            <div className="workspace-settings-team-row" key={name}>
-              <UsersRound size={17} />
-              <span>
-                <strong>{name}</strong>
-                <small>Example team</small>
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
+      <SettingsGroup label="Teams">
+        <SettingsNote>
+          Layout preview. Sign in to load and manage real teams.
+        </SettingsNote>
+      </SettingsGroup>
     )
+  }
 
-  return (
-    <div className="workspace-settings-account">
-      {selectedId ? (
-        <>
-          <button
-            className="workspace-settings-back-inline"
-            type="button"
+  if (selectedId) {
+    const canManage = detail.data?.can_manage === true
+    const addable =
+      orgMembers.data?.filter(
+        (member) =>
+          !teamMembers.data?.some(
+            (present) => present.user_id === member.user_id
+          )
+      ) ?? []
+    return (
+      <>
+        <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="settings-back"
             onClick={() => openTeam()}
           >
-            <ArrowLeft size={15} /> All teams
-          </button>
-          <section
-            className="workspace-settings-section"
-            aria-label="Team details"
-          >
-            <div className="workspace-settings-section-title">
-              <h3>{selected?.name || "Team"}</h3>
-              <p>
-                {detail.data?.can_manage
-                  ? "Manage this team and its members."
-                  : "Your place in this team."}
-              </p>
-            </div>
-            {detail.isPending && <p role="status">Loading team…</p>}
-            {detail.isError && (
-              <p className="workspace-settings-error" role="alert">
-                {authErrorMessage(detail.error, "Could not load the team.")}
-              </p>
-            )}
-            {detail.data?.can_manage && (
-              <>
-                <form
-                  className="workspace-settings-inline-form"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    if (editingName.trim()) rename.mutate()
-                  }}
+            <ArrowLeft /> All teams
+          </Button>
+        </div>
+        <SettingsGroup label={selected?.name || "Team"}>
+          <SettingsRow
+            title={selected?.name || "Team"}
+            description={
+              canManage
+                ? "Manage this team and its members."
+                : "Your place in this team."
+            }
+          />
+          {detail.isPending && <SettingsNote>Loading team…</SettingsNote>}
+          {detail.isError && (
+            <SettingsMessage tone="error">
+              {authErrorMessage(detail.error, "Could not load the team.")}
+            </SettingsMessage>
+          )}
+          {canManage && (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                if (editingName.trim()) rename.mutate()
+              }}
+            >
+              <SettingsRow title="Team name">
+                <Input
+                  className="settings-input"
+                  aria-label="Team name"
+                  value={editingName}
+                  maxLength={120}
+                  onChange={(event) => setEditingName(event.target.value)}
+                />
+              </SettingsRow>
+              {rename.isError && (
+                <SettingsMessage tone="error">
+                  {authErrorMessage(rename.error, "Could not rename the team.")}
+                </SettingsMessage>
+              )}
+              <SettingsActions>
+                <SettingsButton
+                  type="submit"
+                  size="default"
+                  tone="primary"
+                  disabled={
+                    !editingName.trim() ||
+                    editingName.trim() === selected?.name ||
+                    rename.isPending
+                  }
                 >
-                  <label>
-                    Team name{" "}
-                    <input
-                      value={editingName}
-                      maxLength={120}
-                      onChange={(event) => setEditingName(event.target.value)}
-                    />
-                  </label>
-                  <button
-                    type="submit"
-                    disabled={
-                      !editingName.trim() ||
-                      editingName.trim() === selected?.name ||
-                      rename.isPending
-                    }
-                  >
-                    Save name
-                  </button>
-                </form>
-                {rename.isError && (
-                  <p className="workspace-settings-error" role="alert">
-                    {authErrorMessage(
-                      rename.error,
-                      "Could not rename the team."
-                    )}
-                  </p>
-                )}
-              </>
-            )}
-          </section>
-          <section
-            className="workspace-settings-section"
-            aria-label="Team members"
-          >
-            <div className="workspace-settings-section-title">
-              <h3>Members</h3>
-              <p>People who can work with this team.</p>
-            </div>
-            {teamMembers.isPending && <p role="status">Loading members…</p>}
-            {teamMembers.isError && (
-              <p className="workspace-settings-error" role="alert">
-                {authErrorMessage(teamMembers.error, "Could not load members.")}
-              </p>
-            )}
-            {teamMembers.data?.map((member) => (
+                  Save name
+                </SettingsButton>
+              </SettingsActions>
+            </form>
+          )}
+        </SettingsGroup>
+
+        <SettingsGroup label="Members">
+          {teamMembers.isPending && (
+            <SettingsNote>Loading members…</SettingsNote>
+          )}
+          {teamMembers.isError && (
+            <SettingsMessage tone="error">
+              {authErrorMessage(teamMembers.error, "Could not load members.")}
+            </SettingsMessage>
+          )}
+          {teamMembers.data?.map((member) => {
+            const name = personName(member)
+            return (
               <div key={member.user_id}>
-                <div className="workspace-settings-row">
-                  <div>
-                    <strong>{member.display_name || member.email}</strong>
-                    <small>{member.email}</small>
-                  </div>
-                  {detail.data?.can_manage ? (
-                    <div className="workspace-settings-member-actions">
+                <SettingsRow title={name} description={member.email}>
+                  {canManage ? (
+                    <>
                       <DropdownMenu>
                         <DropdownMenuTrigger
-                          className="workspace-settings-tag workspace-settings-role-trigger"
-                          aria-label={`Role for ${member.display_name || member.email}`}
+                          className="settings-role-trigger"
+                          aria-label={`Role for ${name}`}
                           disabled={changeRole.isPending}
                         >
-                          {member.role}
-                          <ChevronDown size={11} aria-hidden="true" />
+                          {member.role === "admin" ? "Admin" : "Member"}
+                          <ChevronDown size={14} aria-hidden="true" />
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent>
-                          {/* A native select fires `change` on every
-                              arrow-key press while closed on some platforms,
-                              which used to send a role change per keypress.
-                              A menu only commits on an explicit choice. */}
+                        <DropdownMenuContent className="settings-popup">
+                          {/* A menu only commits on an explicit choice, so
+                              browsing it with the keyboard sends nothing. */}
                           <DropdownMenuRadioGroup
                             value={member.role}
                             onValueChange={(value) => {
@@ -313,208 +378,340 @@ export function WorkspaceTeamsSettings({
                           </DropdownMenuRadioGroup>
                         </DropdownMenuContent>
                       </DropdownMenu>
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="settings-icon-danger"
+                        aria-label={`Remove ${name} from the team`}
                         disabled={removeMember.isPending}
                         onClick={() => setConfirmRemoveMemberId(member.user_id)}
                       >
-                        Remove
-                      </button>
-                    </div>
+                        <X />
+                      </Button>
+                    </>
                   ) : (
-                    <span className="workspace-settings-tag">
-                      {member.role}
+                    <span className="settings-value">
+                      {member.role === "admin" ? "Admin" : "Member"}
                     </span>
                   )}
-                </div>
+                </SettingsRow>
                 {confirmRemoveMemberId === member.user_id && (
-                  <div className="workspace-settings-confirm">
-                    <p>
-                      Remove {member.display_name || member.email} from this
-                      team?
-                    </p>
-                    <button
-                      type="button"
+                  <SettingsActions start={`Remove ${name} from this team?`}>
+                    <SettingsButton
+                      size="default"
                       onClick={() => setConfirmRemoveMemberId(null)}
                     >
                       Cancel
-                    </button>
-                    <button
-                      type="button"
+                    </SettingsButton>
+                    <SettingsButton
+                      size="default"
+                      tone="danger"
                       disabled={removeMember.isPending}
                       onClick={() => removeMember.mutate(member.user_id)}
                     >
                       {removeMember.isPending ? "Removing…" : "Remove member"}
-                    </button>
-                  </div>
+                    </SettingsButton>
+                  </SettingsActions>
                 )}
               </div>
-            ))}
-            {detail.data?.can_manage && (
-              <div className="workspace-settings-inline-form">
-                <label>
-                  Add a member{" "}
-                  <select
-                    aria-label="Add a member"
-                    value={addId}
-                    onChange={(event) => setAddId(event.target.value)}
-                  >
-                    <option value="">Select a person</option>
-                    {orgMembers.data
-                      ?.filter(
-                        (member) =>
-                          !teamMembers.data?.some(
-                            (present) => present.user_id === member.user_id
-                          )
-                      )
-                      .map((member) => (
-                        <option value={member.user_id} key={member.user_id}>
-                          {member.display_name || member.email}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  disabled={!addId || add.isPending}
-                  onClick={() => add.mutate()}
-                >
-                  Add
-                </button>
-              </div>
-            )}
-            {(add.isError || changeRole.isError || removeMember.isError) && (
-              <p className="workspace-settings-error" role="alert">
-                {authErrorMessage(
-                  add.error || changeRole.error || removeMember.error,
-                  "Could not update team members."
-                )}
-              </p>
-            )}
-          </section>
-          {detail.data?.can_manage && (
-            <section
-              className="workspace-settings-section"
-              aria-label="Delete team"
-            >
-              <div className="workspace-settings-section-title">
-                <h3>Delete team</h3>
-                <p>Deleting a team also removes teams nested under it.</p>
-              </div>
-              {confirmDelete ? (
-                <div className="workspace-settings-confirm">
-                  <p>Delete {selected?.name}? This cannot be undone.</p>
-                  <button type="button" onClick={() => setConfirmDelete(false)}>
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    disabled={remove.isPending}
-                    onClick={() => remove.mutate()}
-                  >
-                    {remove.isPending ? "Deleting…" : "Delete team"}
-                  </button>
-                </div>
-              ) : (
-                <button
-                  className="workspace-settings-action"
-                  type="button"
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  Delete team
-                </button>
-              )}
-              {remove.isError && (
-                <p className="workspace-settings-error" role="alert">
-                  {authErrorMessage(remove.error, "Could not delete the team.")}
-                </p>
-              )}
-            </section>
-          )}
-        </>
-      ) : (
-        <section
-          className="workspace-settings-section"
-          aria-label="Organisation teams"
-        >
-          <div className="workspace-settings-section-title">
-            <h3>Organisation teams</h3>
-            <p>Teams bring people together for shared work.</p>
-          </div>
-          {canCreate && (
-            <form
-              className="workspace-settings-inline-form"
-              onSubmit={submitNew}
-            >
-              <label>
-                New team{" "}
-                <input
-                  value={newName}
-                  maxLength={120}
-                  onChange={(event) => setNewName(event.target.value)}
-                  placeholder="Team name"
-                />
-              </label>
-              <label>
-                Inside
-                <select
-                  value={parentId}
-                  onChange={(event) => setParentId(event.target.value)}
-                >
-                  <option value="">Organisation</option>
-                  {teams.data?.map((team) => (
-                    <option value={team.id} key={team.id}>
-                      {team.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="submit"
-                disabled={!newName.trim() || create.isPending}
+            )
+          })}
+          {canManage && (
+            <SettingsRow title="Add a member">
+              <SettingsSelect
+                label="Add a member"
+                value={addId}
+                options={[
+                  { value: "", label: "Select a person" },
+                  ...addable.map((member) => ({
+                    value: member.user_id,
+                    label: personName(member),
+                  })),
+                ]}
+                onValueChange={setAddId}
+              />
+              <SettingsButton
+                disabled={!addId || add.isPending}
+                onClick={() => add.mutate()}
               >
-                <Plus size={14} /> Create
-              </button>
-            </form>
+                Add
+              </SettingsButton>
+            </SettingsRow>
           )}
-          {create.isError && (
-            <p className="workspace-settings-error" role="alert">
-              {authErrorMessage(create.error, "Could not create the team.")}
-            </p>
+          {(add.isError || changeRole.isError || removeMember.isError) && (
+            <SettingsMessage tone="error">
+              {authErrorMessage(
+                add.error || changeRole.error || removeMember.error,
+                "Could not update team members."
+              )}
+            </SettingsMessage>
           )}
-          {teams.isPending && <p role="status">Loading teams…</p>}
-          {teams.isError && (
-            <p className="workspace-settings-error" role="alert">
+        </SettingsGroup>
+
+        {canManage && (
+          <SettingsGroup label="Danger zone">
+            <SettingsRow
+              tone="danger"
+              title="Delete team"
+              description="Deleting a team also removes teams nested under it."
+            >
+              {!confirmDelete && (
+                <SettingsButton onClick={() => setConfirmDelete(true)}>
+                  Delete team
+                </SettingsButton>
+              )}
+            </SettingsRow>
+            {confirmDelete && (
+              <SettingsActions
+                start={`Delete ${selected?.name}? This cannot be undone.`}
+              >
+                <SettingsButton
+                  size="default"
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  Cancel
+                </SettingsButton>
+                <SettingsButton
+                  size="default"
+                  tone="danger"
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate()}
+                >
+                  {remove.isPending ? "Deleting…" : "Delete team"}
+                </SettingsButton>
+              </SettingsActions>
+            )}
+            {remove.isError && (
+              <SettingsMessage tone="error">
+                {authErrorMessage(remove.error, "Could not delete the team.")}
+              </SettingsMessage>
+            )}
+          </SettingsGroup>
+        )}
+      </>
+    )
+  }
+
+  // Who is in each team, and who leads it, from the directory.
+  const people = directory.data?.members ?? []
+  function inTeam(team: Team) {
+    return people.filter((person) =>
+      (person.teams ?? []).some((ref) => ref.id === team.id)
+    )
+  }
+  function leads(team: Team) {
+    return people.filter((person) =>
+      (person.teams ?? []).some(
+        (ref) => ref.id === team.id && ref.role === "admin" && !ref.member_path
+      )
+    )
+  }
+  const spacesOf = (team: Team) =>
+    (teamspaces.data ?? []).filter((space) => space.team_id === team.id)
+  const known = directory.isSuccess
+
+  return (
+    <>
+      <SettingsGroup
+        label={`Teams${teams.data ? ` · ${teams.data.length}` : ""}`}
+        bare
+      >
+        <SettingsCard>
+          {teams.isPending ? (
+            <SettingsNote>Loading teams…</SettingsNote>
+          ) : teams.isError ? (
+            <SettingsMessage tone="error">
               {teams.error instanceof ApiError && teams.error.status === 404
                 ? "Teams are not available in this environment."
                 : authErrorMessage(teams.error, "Could not load teams.")}{" "}
-              <button type="button" onClick={() => void teams.refetch()}>
+              <SettingsButton onClick={() => void teams.refetch()}>
                 Retry
-              </button>
-            </p>
+              </SettingsButton>
+            </SettingsMessage>
+          ) : teams.data.length === 0 ? (
+            <SettingsNote>No teams yet.</SettingsNote>
+          ) : (
+            <Table className="settings-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Team</TableHead>
+                  <TableHead>Lead</TableHead>
+                  <TableHead>Members</TableHead>
+                  <TableHead>Teamspace</TableHead>
+                  <TableHead>
+                    <span className="sr-only">Open</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {teams.data.map((team) => {
+                  const members = inTeam(team)
+                  const lead = leads(team).at(0)
+                  const spaces = spacesOf(team)
+                  return (
+                    <TableRow
+                      key={team.id}
+                      className="settings-tr-link"
+                      onClick={() => openTeam(team)}
+                    >
+                      <TableCell>
+                        <span className="settings-person">
+                          <span>
+                            <strong>{team.name}</strong>
+                            <small>
+                              {known
+                                ? `${members.length} ${members.length === 1 ? "person" : "people"}`
+                                : team.role
+                                  ? `You are ${team.role === "admin" ? "a lead" : "a member"}`
+                                  : "Not a member"}
+                            </small>
+                          </span>
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        {lead ? (
+                          <span className="settings-agent">
+                            <PersonAvatar person={lead} />
+                            {personName(lead).split(/\s+/)[0]}
+                          </span>
+                        ) : (
+                          <span className="settings-value">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {members.length > 0 ? (
+                          <span
+                            className="settings-faces"
+                            aria-label={members.map(personName).join(", ")}
+                          >
+                            {members.slice(0, 4).map((person) => (
+                              <PersonAvatar
+                                key={person.user_id}
+                                person={person}
+                              />
+                            ))}
+                            {members.length > 4 && (
+                              <small>+{members.length - 4}</small>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="settings-value">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {spaces.length > 0 ? (
+                          <span className="settings-badges">
+                            {spaces.slice(0, 2).map((space) => (
+                              <Badge
+                                key={space.id}
+                                variant="outline"
+                                className="settings-chip"
+                              >
+                                {space.name}
+                              </Badge>
+                            ))}
+                            {spaces.length > 2 && (
+                              <small>+{spaces.length - 2}</small>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="settings-value">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="settings-td-action">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Open ${team.name}`}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            openTeam(team)
+                          }}
+                        >
+                          <ChevronRight />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
           )}
-          {teams.data?.length === 0 && (
-            <p className="workspace-settings-hint">No teams yet.</p>
-          )}
-          {teams.data?.map((team) => (
-            <button
-              className="workspace-settings-team-row"
-              type="button"
-              key={team.id}
-              onClick={() => openTeam(team)}
-            >
-              <UsersRound size={17} />
-              <span>
-                <strong>{team.name}</strong>
-                <small>
-                  {team.role ? `You are a ${team.role}` : "Not a member"}
-                </small>
-              </span>
-              <span aria-hidden="true">→</span>
-            </button>
-          ))}
-        </section>
+        </SettingsCard>
+      </SettingsGroup>
+
+      {canCreate && (
+        <div className="settings-page-actions">
+          <SettingsButton
+            size="default"
+            tone="primary"
+            onClick={() => {
+              create.reset()
+              setCreating(true)
+            }}
+          >
+            New team
+          </SettingsButton>
+        </div>
       )}
-    </div>
+
+      <Dialog open={creating} onOpenChange={setCreating}>
+        <DialogContent
+          className="settings-popup settings-form-dialog"
+          showCloseButton={false}
+        >
+          <DialogTitle>New team</DialogTitle>
+          <DialogDescription>
+            Teams group people. A team can own teamspaces and get parley emails.
+          </DialogDescription>
+          <form className="settings-form-dialog-body" onSubmit={submitNew}>
+            <label className="settings-field">
+              <span>Name</span>
+              <Input
+                className="settings-input"
+                value={newName}
+                maxLength={120}
+                placeholder="Team name"
+                autoFocus
+                onChange={(event) => setNewName(event.target.value)}
+              />
+            </label>
+            <div className="settings-field">
+              <span>Inside</span>
+              <SettingsSelect
+                label="Inside"
+                value={parentId}
+                options={[
+                  { value: "", label: "The organisation" },
+                  ...(teams.data ?? []).map((team) => ({
+                    value: team.id,
+                    label: team.name,
+                  })),
+                ]}
+                onValueChange={setParentId}
+              />
+            </div>
+            {create.isError && (
+              <SettingsMessage tone="error">
+                {authErrorMessage(create.error, "Could not create the team.")}
+              </SettingsMessage>
+            )}
+            <div className="settings-dialog-footer">
+              <SettingsButton size="default" onClick={() => setCreating(false)}>
+                Cancel
+              </SettingsButton>
+              <SettingsButton
+                type="submit"
+                size="default"
+                tone="primary"
+                disabled={!newName.trim() || create.isPending}
+              >
+                {create.isPending ? "Creating…" : "Create"}
+              </SettingsButton>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

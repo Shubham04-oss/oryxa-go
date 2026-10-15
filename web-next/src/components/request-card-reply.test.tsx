@@ -82,11 +82,14 @@ function write(text: string) {
   fireEvent.change(field(), { target: { value: text } })
 }
 
-/** The words on the buttons in `scope`, in order. */
+/** The words on the buttons in `scope`, in order: a choice's by its label. */
 function buttons(scope: HTMLElement = document.body) {
   return within(scope)
     .getAllByRole("button")
-    .map((button) => button.textContent)
+    .map(
+      (button) =>
+        button.querySelector("strong")?.textContent ?? button.textContent
+    )
 }
 
 beforeEach(() => {
@@ -102,23 +105,28 @@ afterEach(() => {
 })
 
 describe("Reply yourself, under a request's own choices", () => {
-  it("is a quiet text button after a Slack ask's three choices, and not one of them", async () => {
+  it("is the third of a Slack ask's four choices, before Deny", async () => {
     renderCard(slackRequest())
 
     const group = await screen.findByRole("group", {
       name: "Choose what Krude may share with Raya",
     })
-    const quiet = screen.getByRole("button", {
+    const reply = screen.getByRole("button", {
       name: "Reply yourself to Raya's request",
     })
-    expect(quiet.textContent).toBe("Reply yourself")
-    expect(quiet.className).toBe("workspace-agent-text-button")
-    // The three choices are still exactly three, and the field is closed.
-    expect(within(group).getAllByRole("button")).toHaveLength(3)
-    expect(group.contains(quiet)).toBe(false)
+    expect(group.contains(reply)).toBe(true)
+    expect(buttons(group)).toEqual([
+      "Share answer",
+      "Allow for 1 hour",
+      "Reply yourself",
+      "Deny",
+    ])
+    expect(reply.getAttribute("aria-expanded")).toBe("false")
+    // It says what it does, and the field is closed.
     expect(
-      group.compareDocumentPosition(quiet) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
+      document.getElementById(reply.getAttribute("aria-describedby") ?? "")
+        ?.textContent
+    ).toBe("Raya gets your words as you write them. Krude stays out.")
     expect(screen.queryByRole("textbox")).toBeNull()
   })
 
@@ -144,10 +152,12 @@ describe("Reply yourself, under a request's own choices", () => {
     expect(
       screen.getByRole("button", { name: "Deny Raya's request" })
     ).toBeTruthy()
-    // The quiet button gave way to the field.
+    // The choice that opened it says so.
     expect(
-      screen.queryByRole("button", { name: "Reply yourself to Raya's request" })
-    ).toBeNull()
+      screen
+        .getByRole("button", { name: "Reply yourself to Raya's request" })
+        .getAttribute("aria-expanded")
+    ).toBe("true")
     // It is on the field by name, and the field is told what it says.
     expect(field().getAttribute("aria-describedby")).toBeTruthy()
   })
@@ -167,6 +177,7 @@ describe("Reply yourself, under a request's own choices", () => {
       name: "Reply yourself to Raya's request",
     })
     expect(screen.queryByRole("textbox")).toBeNull()
+    // Focus goes back to the choice that opened it.
     expect(document.activeElement).toBe(quiet)
     // Opened again, it starts empty.
     fireEvent.click(quiet)
@@ -224,7 +235,7 @@ describe("Reply yourself, under a request's own choices", () => {
     expect(go.count("POST", replyPath)).toBe(1)
   })
 
-  it("is offered under a request an agent filed, after Share answer and Deny", async () => {
+  it("is offered under a request an agent filed, between Share answer and Deny", async () => {
     const answered = {
       ...repliedRequest("Not before Friday."),
       id: "irq_agent",
@@ -238,9 +249,9 @@ describe("Reply yourself, under a request's own choices", () => {
     expect(await screen.findByText("Waiting for you to approve.")).toBeTruthy()
     expect(buttons()).toEqual([
       "Add a note",
-      "Deny",
       "Share answer",
       "Reply yourself",
+      "Deny",
     ])
     fireEvent.click(
       screen.getByRole("button", { name: "Reply yourself to Raya's request" })
@@ -544,7 +555,7 @@ describe("an ask that needs the owner's own reply", () => {
     expect(screen.queryByRole("button")).toBeNull()
   })
 
-  it("keeps today's choices, with Reply yourself quieter, when the agent answers or nothing is said", async () => {
+  it("keeps the four keyed choices when the agent answers or nothing is said", async () => {
     for (const answer_by of ["agent", undefined] as const) {
       const { unmount } = renderCard(slackRequest({ answer_by }))
 
@@ -556,7 +567,7 @@ describe("an ask that needs the owner's own reply", () => {
         within(group)
           .getAllByRole("button")
           .map((button) => button.querySelector("strong")?.textContent)
-      ).toEqual(["Share answer", "Allow for 1 hour", "Deny"])
+      ).toEqual(["Share answer", "Allow for 1 hour", "Reply yourself", "Deny"])
       expect(screen.queryByRole("textbox")).toBeNull()
       expect(
         screen.getByRole("button", { name: "Reply yourself to Raya's request" })
@@ -572,9 +583,9 @@ describe("an ask that needs the owner's own reply", () => {
     expect(await screen.findByText("Waiting for you to approve.")).toBeTruthy()
     expect(buttons()).toEqual([
       "Add a note",
-      "Deny",
       "Share answer",
       "Reply yourself",
+      "Deny",
     ])
   })
 

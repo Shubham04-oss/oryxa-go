@@ -15,6 +15,7 @@ export function AgentConversation({
   error,
   onRetry,
   follow,
+  variant,
   children,
 }: {
   agentName?: string
@@ -24,6 +25,8 @@ export function AgentConversation({
   error?: string
   onRetry?: () => void
   follow?: unknown
+  /** `session` for an agent's working session, whose tasks are lines and whose work is run cards (`agent-run.tsx`). */
+  variant?: "session"
   children?: ReactNode
 }) {
   const logRef = useRef<HTMLDivElement>(null)
@@ -54,6 +57,7 @@ export function AgentConversation({
   return (
     <div
       className="workspace-agent-conversation"
+      data-variant={variant}
       role="log"
       aria-label={
         agentName
