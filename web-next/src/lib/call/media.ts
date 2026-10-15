@@ -187,15 +187,15 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
       changed()
     },
     onDevicesChange(listener) {
-      const self = meeting.self as unknown as {
+      const events = meeting.self as unknown as {
         on: (event: string, listener: () => void) => void
         off: (event: string, listener: () => void) => void
       }
-      self.on("deviceListUpdate", listener)
-      self.on("deviceUpdate", listener)
+      events.on("deviceListUpdate", listener)
+      events.on("deviceUpdate", listener)
       return () => {
-        self.off("deviceListUpdate", listener)
-        self.off("deviceUpdate", listener)
+        events.off("deviceListUpdate", listener)
+        events.off("deviceUpdate", listener)
       }
     },
     async setMic(on) {

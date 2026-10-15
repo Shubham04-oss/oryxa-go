@@ -567,7 +567,12 @@ describe("a parley in a teamspace", () => {
     expect(
       within(ended).getByText(/transcript is kept with EU launch/)
     ).toBeTruthy()
-    fireEvent.click(within(ended).getByRole("button", { name: "Done" }))
+    // Focus is on Done, and Tab keeps it inside the dialog.
+    const done = within(ended).getByRole("button", { name: "Done" })
+    expect(document.activeElement).toBe(done)
+    fireEvent.keyDown(window, { key: "Tab" })
+    expect(document.activeElement).toBe(done)
+    fireEvent.click(done)
     expect(screen.queryByRole("dialog", { name: "Parley ended" })).toBeNull()
   })
 

@@ -431,11 +431,13 @@ export function ParleyStrip({
 export function CallSurface() {
   const call = useCall()
   const { active, ended } = call
-  if (!active && ended)
-    return <CallEnded ended={ended} onDone={call.dismissEnded} />
+  // Every hook runs on every render; only then does the surface choose.
   const { call: view } = useRoomCall(active?.organizationId, active?.room, {
     enabled: active?.phase === "in",
   })
+  if (!active && ended) {
+    return <CallEnded ended={ended} onDone={call.dismissEnded} />
+  }
   if (!active) return null
   if (active.phase === "failed") return null
   if (active.expanded && active.phase === "in") {
@@ -469,13 +471,41 @@ function CallEnded({
   onDone: () => void
 }) {
   const done = useRef<HTMLButtonElement>(null)
+  const dialog = useRef<HTMLDivElement>(null)
   useEffect(() => {
+    // Focus moves into the dialog, stays there, and goes back where it was.
+    const before =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null
     done.current?.focus()
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onDone()
+      if (event.key === "Escape") {
+        onDone()
+        return
+      }
+      if (event.key !== "Tab" || !dialog.current) return
+      const focusable = [
+        ...dialog.current.querySelectorAll<HTMLElement>(
+          "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
+        ),
+      ].filter((element) => !element.hasAttribute("disabled"))
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (!first || !last) return
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
+    return () => {
+      window.removeEventListener("keydown", onKey)
+      if (before?.isConnected) before.focus()
+    }
   }, [onDone])
   const length = minutesBetween(ended.startedAt, ended.endedAt)
   const facts = [
@@ -485,6 +515,7 @@ function CallEnded({
   return (
     <div className="call-ended-backdrop">
       <div
+        ref={dialog}
         className="call-ended"
         role="dialog"
         aria-modal="true"
