@@ -284,6 +284,77 @@
 .settings-choice-text { display: grid; gap: 2px; min-width: 0; color: var(--text); font-size: 13px; }
 .settings-choice-text small { color: var(--text-muted); font-size: 12px; line-height: 1.4; }
 
+/* Organisation: the workspace's mark, its first letter on a tile. */
+.settings-org-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--tone-1c3350);
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+}
+/* A pending invitation's or an invited address's mark. */
+.settings-pending-mark {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--hover);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* People → Invite: the addresses and the role on one line. */
+.settings-invite { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 16px; }
+.settings-invite .settings-input[data-slot="input"] { flex: 1; width: auto; }
+
+/* A table in a card (the library's Table): People, Teams, invoices. */
+.settings-table[data-slot="table"] { font-size: 12.5px; }
+.settings-table [data-slot="table-row"] { border-color: var(--border-quiet); }
+.settings-table [data-slot="table-row"]:hover { background: transparent; }
+.settings-table [data-slot="table-head"] {
+  height: 36px;
+  padding: 0 16px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.settings-table [data-slot="table-cell"] { height: 56px; padding: 8px 16px; color: var(--text-soft); }
+.settings-table .settings-td-action { width: 48px; text-align: right; }
+.settings-table .settings-tr-detail [data-slot="table-cell"] { height: auto; padding: 0; white-space: normal; }
+.settings-person { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.settings-person .workspace-avatar { width: 32px; height: 32px; }
+.settings-person > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.settings-person strong { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 600; text-overflow: ellipsis; }
+.settings-person small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; }
+
+/* A role picker in a table: the library's menu, its trigger dressed as a select. */
+.settings-role-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px 0 12px;
+  border: 1px solid var(--border-quiet);
+  border-radius: 9px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.settings-role-trigger:hover,
+.settings-role-trigger[data-popup-open] { background: var(--selected); }
+.settings-role-trigger:focus-visible { outline: 2px solid var(--border-strong); outline-offset: 1px; }
+.settings-role-trigger:disabled { opacity: .5; }
+/* An inline remove icon: quiet until hovered. */
+.settings-icon-danger[data-slot="button"] { color: var(--text-muted); }
+.settings-icon-danger[data-slot="button"]:hover { background: var(--hover); color: var(--tone-e58b8b); }
+
 /* Older page blocks, until each page moves onto the kit. */
 .workspace-settings-account { padding: 0; }
 .workspace-settings-account > * {
@@ -600,16 +671,6 @@
 .workspace-settings-tool-icon svg[fill="#FFFFFF"],
 .workspace-settings-tool-icon svg[fill="#ffffff"] {
   filter: invert(1);
-}
-.workspace-settings-org-mark {
-  display: grid;
-  flex: none;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--border-quiet);
-  color: var(--tone-dddddd);
 }
 .workspace-settings-form {
   display: flex;

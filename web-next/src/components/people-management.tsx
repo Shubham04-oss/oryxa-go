@@ -1,7 +1,8 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, Mail, UserRoundPlus, UsersRound, X } from "lucide-react"
+import { ChevronDown, Mail, X } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,7 +10,15 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { ApiError } from "@/lib/api/client"
 import type { Role } from "@/lib/auth/client"
 import {
@@ -24,7 +33,24 @@ import {
 } from "@/lib/auth/invitations"
 import type { Invitation, Member } from "@/lib/auth/invitations"
 import { invitationSchema } from "@/lib/auth/schemas"
+import { getBillingSummary } from "@/lib/settings/client"
 import { IdentityAvatar } from "./workspace-avatar"
+import {
+  SettingsActions,
+  SettingsButton,
+  SettingsCard,
+  SettingsGroup,
+  SettingsMessage,
+  SettingsNote,
+  SettingsRow,
+  SettingsSelect,
+} from "./settings-kit"
+
+const roleNames: Record<Role, string> = {
+  owner: "Owner",
+  admin: "Admin",
+  member: "Member",
+}
 
 function initials(name: string) {
   return name
@@ -32,6 +58,24 @@ function initials(name: string) {
     .slice(0, 2)
     .map((part) => part.charAt(0).toUpperCase())
     .join("")
+}
+
+/** "a@x.io, b@x.io" or one per line → each address once. */
+function parseAddresses(value: string): string[] {
+  return [
+    ...new Set(
+      value
+        .split(/[\s,;]+/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+    ),
+  ]
+}
+
+function expiresIn(value: string): string {
+  const days = Math.ceil((new Date(value).getTime() - Date.now()) / 86_400_000)
+  if (Number.isNaN(days)) return ""
+  return days <= 1 ? "expires today" : `expires in ${days} days`
 }
 
 function MemberRow({
@@ -76,110 +120,112 @@ function MemberRow({
     (viewerRole === "owner" ||
       (viewerRole === "admin" && member.role === "member"))
   return (
-    <li className="workspace-person-row">
-      <IdentityAvatar
-        identity={{
-          id: member.user_id,
-          name,
-          initials: initials(name),
-          kind: "user",
-        }}
-      />
-      <span className="workspace-person-main">
-        <strong>{name}</strong>
-        {member.display_name && <small>{member.email}</small>}
-      </span>
-      {/* Unlike Remove (below), the old app lets an owner change their own
-          role from this same picker, so this stays open on the viewer's
-          own row too. */}
-      {viewerRole === "owner" && !preview ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            className="workspace-person-role workspace-person-role-trigger"
-            aria-label={`Role for ${name}`}
-            disabled={changeRole.isPending}
-          >
-            {member.role}
-            <ChevronDown size={11} aria-hidden="true" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent>
-            {/* A native select fires `change` on every arrow-key press while
-                closed on some platforms, which used to send a request per
-                key. A menu only commits on an explicit click or activation,
-                so browsing the roles with the keyboard is free. */}
-            <DropdownMenuRadioGroup
-              value={member.role}
-              onValueChange={(value) => {
-                if (value !== member.role) changeRole.mutate(value as Role)
+    <>
+      <TableRow className="settings-tr">
+        <TableCell>
+          <span className="settings-person">
+            <IdentityAvatar
+              identity={{
+                id: member.user_id,
+                name,
+                initials: initials(name),
+                kind: "user",
               }}
-            >
-              <DropdownMenuRadioItem value="owner" closeOnClick>
-                Owner
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="admin" closeOnClick>
-                Admin
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="member" closeOnClick>
-                Member
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : (
-        <span className="workspace-person-role">{member.role}</span>
-      )}
-      {canRemove && (
-        <Button
-          className="workspace-invite-revoke"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`Remove ${name}`}
-          onClick={() => setConfirmRemove(true)}
-        >
-          <X />
-        </Button>
-      )}
-      {confirmRemove && (
-        <div className="workspace-person-confirm">
-          <p>
-            Remove {name} from this organisation? They lose access to its teams
-            and connections.
-          </p>
-          <div className="workspace-person-confirm-actions">
-            <Button variant="outline" onClick={() => setConfirmRemove(false)}>
-              Cancel
-            </Button>
+            />
+            <span>
+              <strong>{name}</strong>
+              {member.display_name && <small>{member.email}</small>}
+            </span>
+          </span>
+        </TableCell>
+        <TableCell>
+          {/* Unlike Remove, an owner may change their own role here too, as
+              the old app allowed. */}
+          {viewerRole === "owner" && !preview ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className="settings-role-trigger"
+                aria-label={`Role for ${name}`}
+                disabled={changeRole.isPending}
+              >
+                {roleNames[member.role]}
+                <ChevronDown size={14} aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="settings-popup">
+                {/* A menu only commits on an explicit click or activation,
+                    so browsing the roles with the keyboard sends nothing. */}
+                <DropdownMenuRadioGroup
+                  value={member.role}
+                  onValueChange={(value) => {
+                    if (value !== member.role) changeRole.mutate(value as Role)
+                  }}
+                >
+                  <DropdownMenuRadioItem value="owner" closeOnClick>
+                    Owner
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="admin" closeOnClick>
+                    Admin
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="member" closeOnClick>
+                    Member
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <span className="settings-value">{roleNames[member.role]}</span>
+          )}
+        </TableCell>
+        <TableCell className="settings-td-action">
+          {canRemove && !confirmRemove && (
             <Button
-              variant="destructive"
-              disabled={remove.isPending}
-              onClick={() => remove.mutate()}
+              variant="ghost"
+              size="icon-sm"
+              className="settings-icon-danger"
+              aria-label={`Remove ${name}`}
+              onClick={() => setConfirmRemove(true)}
             >
-              {remove.isPending ? "Removing…" : "Remove"}
+              <X />
             </Button>
-          </div>
-        </div>
+          )}
+        </TableCell>
+      </TableRow>
+      {(confirmRemove || changeRole.isError || remove.isError) && (
+        <TableRow className="settings-tr-detail">
+          <TableCell colSpan={3}>
+            {confirmRemove && (
+              <SettingsActions
+                start={`Remove ${name} from this organisation? They lose access to its teams and connections.`}
+              >
+                <SettingsButton
+                  size="default"
+                  onClick={() => setConfirmRemove(false)}
+                >
+                  Cancel
+                </SettingsButton>
+                <SettingsButton
+                  size="default"
+                  tone="danger"
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate()}
+                >
+                  {remove.isPending ? "Removing…" : "Remove"}
+                </SettingsButton>
+              </SettingsActions>
+            )}
+            {(changeRole.isError || remove.isError) && (
+              <SettingsMessage tone="error">
+                {changeRole.error instanceof ApiError &&
+                changeRole.error.status === 409
+                  ? "An organisation needs an owner. Make someone else an owner first."
+                  : "Could not update this member."}
+              </SettingsMessage>
+            )}
+          </TableCell>
+        </TableRow>
       )}
-      {(changeRole.isError || remove.isError) && (
-        <p className="workspace-people-error" role="alert">
-          {changeRole.error instanceof ApiError &&
-          changeRole.error.status === 409
-            ? "An organisation needs an owner. Make someone else an owner first."
-            : "Could not update this member."}
-        </p>
-      )}
-    </li>
+    </>
   )
-}
-
-function dateLabel(value: string) {
-  const date = new Date(value)
-  return Number.isNaN(date.valueOf())
-    ? ""
-    : new Intl.DateTimeFormat(undefined, {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      }).format(date)
 }
 
 const previewMembers: Member[] = [
@@ -221,6 +267,13 @@ const previewInvitations: Invitation[] = [
   },
 ]
 
+/**
+ * Settings → People: invite by email (several at once, separated by commas),
+ * the members as a table with their role, and the invitations on their way.
+ *
+ * Each member's agent is not listed yet: the members route does not say
+ * which agent is theirs. Resending an invitation has no route either.
+ */
 export function PeopleManagement({
   organizationId,
   role,
@@ -234,7 +287,7 @@ export function PeopleManagement({
 }) {
   const queryClient = useQueryClient()
   const canManage = role === "owner" || role === "admin"
-  const [email, setEmail] = useState("")
+  const [emails, setEmails] = useState("")
   const [inviteRole, setInviteRole] = useState<"admin" | "member">("member")
   const [formError, setFormError] = useState("")
   const [notice, setNotice] = useState("")
@@ -259,48 +312,97 @@ export function PeopleManagement({
     enabled: Boolean(organizationId) && !preview,
     retry: false,
   })
+  // Seats: the plan's member limit, when billing says there is one.
+  const billing = useQuery({
+    queryKey: ["settings", "billing", organizationId],
+    queryFn: () => getBillingSummary(organizationId!),
+    enabled: Boolean(organizationId) && !preview,
+    retry: false,
+  })
+  const memberLimit = billing.data?.entitlements.member_limit
   const pendingInvitations =
     invitations.data?.filter(
       (invitation) =>
         invitation.status === "pending" &&
         new Date(invitation.expires_at).getTime() > Date.now()
     ) || []
+  const nameOf = (userId?: string) => {
+    const member = members.data?.find((item) => item.user_id === userId)
+    return member ? (member.display_name || member.email).split(/\s+/)[0] : ""
+  }
 
   const send = useMutation({
-    mutationFn: ({
-      address,
+    // One invitation per address, in order; what was sent stays sent.
+    mutationFn: async ({
+      addresses,
       nextRole,
     }: {
-      address: string
+      addresses: string[]
       nextRole: "admin" | "member"
-    }) => sendInvitation(organizationId!, address, nextRole),
-    onSuccess: async (invitation) => {
-      setEmail("")
+    }) => {
+      const sent: string[] = []
+      for (const address of addresses) {
+        try {
+          const invitation = await sendInvitation(
+            organizationId!,
+            address,
+            nextRole
+          )
+          sent.push(invitation.email)
+        } catch (error) {
+          throw Object.assign(
+            error instanceof Error ? error : new Error(String(error)),
+            { sent, address }
+          )
+        }
+      }
+      return sent
+    },
+    onSuccess: async (sent) => {
+      setEmails("")
       setFormError("")
-      setNotice(`Invitation created for ${invitation.email}.`)
+      setNotice(
+        sent.length === 1
+          ? `Invitation created for ${sent[0]}.`
+          : `Invitations created for ${sent.join(", ")}.`
+      )
       await queryClient.invalidateQueries({
         queryKey: ["organizations", organizationId, "invitations"],
       })
     },
-    onError: (error) => {
-      setNotice("")
-      setFormError(
+    onError: async (error) => {
+      const { sent = [], address = "" } = error as Error & {
+        sent?: string[]
+        address?: string
+      }
+      setNotice(
+        sent.length ? `Invitations created for ${sent.join(", ")}.` : ""
+      )
+      setEmails((current) =>
+        parseAddresses(current)
+          .filter((item) => !sent.includes(item))
+          .join(", ")
+      )
+      const reason =
         error instanceof ApiError && error.status < 500
           ? error.message
           : "Could not create the invitation. Try again."
-      )
+      setFormError(address ? `${address}: ${reason}` : reason)
+      await queryClient.invalidateQueries({
+        queryKey: ["organizations", organizationId, "invitations"],
+      })
     },
   })
   const revoke = useMutation({
     mutationFn: (invitationId: string) =>
       revokeInvitation(organizationId!, invitationId),
     onSuccess: async () => {
-      setNotice("Invitation revoked.")
+      setNotice("Invitation cancelled.")
       await queryClient.invalidateQueries({
         queryKey: ["organizations", organizationId, "invitations"],
       })
     },
-    onError: () => setFormError("Could not revoke the invitation. Try again."),
+    onError: () => setFormError("Could not cancel the invitation. Try again."),
   })
   const join = useMutation({
     mutationFn: acceptReceivedInvitation,
@@ -316,228 +418,219 @@ export function PeopleManagement({
     event.preventDefault()
     if (preview) return
     setNotice("")
-    const parsed = invitationSchema.safeParse({ email, role: inviteRole })
-    if (!parsed.success) {
-      setFormError(parsed.error.issues[0]?.message || "Check the invitation.")
+    const addresses = parseAddresses(emails)
+    if (addresses.length === 0) {
+      setFormError("Enter an email address.")
       return
+    }
+    for (const address of addresses) {
+      const parsed = invitationSchema.safeParse({
+        email: address,
+        role: inviteRole,
+      })
+      if (!parsed.success) {
+        setFormError(
+          `${address}: ${parsed.error.issues[0]?.message || "Check the address."}`
+        )
+        return
+      }
     }
     if (!organizationId || !canManage) return
     setFormError("")
-    send.mutate({ address: parsed.data.email, nextRole: parsed.data.role })
+    send.mutate({ addresses, nextRole: inviteRole })
   }
 
+  if (!organizationId) {
+    return (
+      <SettingsNote>
+        Connect a workspace to manage its people. Members and invitations will
+        appear here.
+      </SettingsNote>
+    )
+  }
+
+  const seats =
+    members.data && memberLimit
+      ? ` · ${members.data.length} of ${memberLimit} seats`
+      : ""
+
   return (
-    <div className="workspace-people-page">
-      {!organizationId ? (
-        <section className="workspace-people-card">
-          <h3>Connect a workspace to manage its people</h3>
-          <p>Members and invitations will appear here.</p>
-        </section>
-      ) : (
-        <>
-          {Boolean(received.data?.length) && (
-            <section
-              className="workspace-people-card workspace-people-received"
-              aria-label="Your invitations"
-            >
-              <p className="workspace-eyebrow">WAITING FOR YOU</p>
-              <h3>Another team has made room.</h3>
-              <ul className="workspace-person-list">
-                {received.data?.map((invitation) => (
-                  <li className="workspace-person-row" key={invitation.id}>
-                    <span className="workspace-pending-avatar">
-                      <Mail size={16} />
-                    </span>
-                    <span className="workspace-person-main">
-                      <strong>{invitation.organization_name}</strong>
-                      <small>Join as {invitation.role}</small>
-                    </span>
-                    <Button
-                      className="workspace-invite-join"
-                      disabled={join.isPending}
-                      onClick={() => join.mutate(invitation.id)}
-                    >
-                      {join.isPending && join.variables === invitation.id
-                        ? "Joining…"
-                        : "Join"}
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-              {join.isError && (
-                <p className="workspace-people-error" role="alert">
-                  {join.error instanceof ApiError && join.error.status === 402
-                    ? "That workspace has reached its member limit. Ask an owner to raise it."
-                    : "Could not join that workspace. Ask for a fresh invitation."}
-                </p>
-              )}
-            </section>
-          )}
-          {canManage && (
-            <section
-              className="workspace-people-card"
-              aria-label="Invite a teammate"
-            >
-              <div className="workspace-people-card-head">
-                <span className="workspace-people-icon">
-                  <UserRoundPlus size={19} />
+    <>
+      {Boolean(received.data?.length) && (
+        <SettingsGroup label="Waiting for you">
+          {received.data?.map((invitation) => (
+            <SettingsRow
+              key={invitation.id}
+              media={
+                <span className="settings-pending-mark" aria-hidden="true">
+                  <Mail size={16} />
                 </span>
-                <div>
-                  <p className="workspace-eyebrow">INVITE</p>
-                  <h3>Make room for someone new.</h3>
-                </div>
-              </div>
-              <form
-                className="workspace-invite-form"
-                onSubmit={submit}
-                noValidate
+              }
+              title={invitation.organization_name}
+              description={`Join as ${roleNames[invitation.role].toLowerCase()}`}
+            >
+              <SettingsButton
+                disabled={join.isPending}
+                onClick={() => join.mutate(invitation.id)}
               >
-                <label>
-                  <span>Email address</span>
-                  <input
-                    type="email"
-                    autoComplete="email"
-                    placeholder="teammate@company.com"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                  />
-                </label>
-                <label>
-                  <span>Role</span>
-                  <select
-                    value={inviteRole}
-                    onChange={(event) =>
-                      setInviteRole(event.target.value as "admin" | "member")
-                    }
-                  >
-                    <option value="member">Member</option>
-                    {role === "owner" && <option value="admin">Admin</option>}
-                  </select>
-                </label>
-                <Button type="submit" disabled={preview || send.isPending}>
-                  <Mail aria-hidden="true" />
-                  {send.isPending ? "Sending…" : "Send invite"}
-                </Button>
-              </form>
-              {formError && (
-                <p className="workspace-people-error" role="alert">
-                  {formError}
-                </p>
-              )}
-              {notice && (
-                <p className="workspace-people-notice" role="status">
-                  {notice}
-                </p>
-              )}
-              <p className="workspace-people-footnote">
-                {preview
-                  ? "Preview data only. Sign in to manage real invitations."
-                  : "Invitations expire after seven days. Only the invited email can accept."}
-              </p>
-            </section>
+                {join.isPending && join.variables === invitation.id
+                  ? "Joining…"
+                  : "Join"}
+              </SettingsButton>
+            </SettingsRow>
+          ))}
+          {join.isError && (
+            <SettingsMessage tone="error">
+              {join.error instanceof ApiError && join.error.status === 402
+                ? "That workspace has reached its member limit. Ask an owner to raise it."
+                : "Could not join that workspace. Ask for a fresh invitation."}
+            </SettingsMessage>
           )}
-
-          <div className="workspace-people-columns">
-            <section
-              className="workspace-people-card"
-              aria-label="Workspace members"
-            >
-              <div className="workspace-people-list-head">
-                <div>
-                  <p className="workspace-eyebrow">02 / PEOPLE</p>
-                  <h3>
-                    Members <span>{members.data?.length ?? "—"}</span>
-                  </h3>
-                </div>
-                <UsersRound size={19} strokeWidth={1.7} />
-              </div>
-              {members.isPending ? (
-                <p className="workspace-people-empty">Loading members…</p>
-              ) : members.error ? (
-                <p className="workspace-people-error" role="alert">
-                  Could not load members.
-                </p>
-              ) : members.data.length ? (
-                <ul className="workspace-person-list">
-                  {members.data.map((member) => (
-                    <MemberRow
-                      key={member.user_id}
-                      member={member}
-                      organizationId={organizationId}
-                      viewerRole={role}
-                      viewerId={viewerId}
-                      preview={preview}
-                    />
-                  ))}
-                </ul>
-              ) : (
-                <p className="workspace-people-empty">No members yet.</p>
-              )}
-            </section>
-
-            <section
-              className="workspace-people-card"
-              aria-label="Pending invitations"
-            >
-              <div className="workspace-people-list-head">
-                <div>
-                  <p className="workspace-eyebrow">03 / INVITATIONS</p>
-                  <h3>
-                    On their way{" "}
-                    <span>{canManage ? pendingInvitations.length : "—"}</span>
-                  </h3>
-                </div>
-                <Mail size={19} strokeWidth={1.7} />
-              </div>
-              {!canManage ? (
-                <p className="workspace-people-empty">
-                  Workspace admins manage invitations.
-                </p>
-              ) : invitations.isPending ? (
-                <p className="workspace-people-empty">Loading invitations…</p>
-              ) : invitations.error ? (
-                <p className="workspace-people-error" role="alert">
-                  Could not load invitations.
-                </p>
-              ) : pendingInvitations.length ? (
-                <ul className="workspace-person-list">
-                  {pendingInvitations.map((invitation) => (
-                    <li className="workspace-person-row" key={invitation.id}>
-                      <span className="workspace-pending-avatar">
-                        <Mail size={16} />
-                      </span>
-                      <span className="workspace-person-main">
-                        <strong>{invitation.email}</strong>
-                        <small>
-                          {invitation.role} · Expires{" "}
-                          {dateLabel(invitation.expires_at)}
-                        </small>
-                      </span>
-                      {(role === "owner" || invitation.role === "member") && (
-                        <Button
-                          className="workspace-invite-revoke"
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`Revoke invitation for ${invitation.email}`}
-                          title="Revoke invitation"
-                          disabled={preview || revoke.isPending}
-                          onClick={() => revoke.mutate(invitation.id)}
-                        >
-                          <X />
-                        </Button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="workspace-people-empty">
-                  No pending invitations.
-                </p>
-              )}
-            </section>
-          </div>
-        </>
+        </SettingsGroup>
       )}
-    </div>
+
+      {canManage && (
+        <SettingsGroup label="Invite">
+          <form onSubmit={submit} noValidate aria-label="Invite people">
+            <div className="settings-invite">
+              <Input
+                className="settings-input"
+                type="text"
+                inputMode="email"
+                autoComplete="email"
+                aria-label="Email addresses"
+                placeholder="Email addresses, separated by commas"
+                value={emails}
+                onChange={(event) => setEmails(event.target.value)}
+              />
+              <SettingsSelect
+                label="Role"
+                value={inviteRole}
+                options={
+                  role === "owner"
+                    ? [
+                        { value: "member", label: "Member" },
+                        { value: "admin", label: "Admin" },
+                      ]
+                    : [{ value: "member", label: "Member" }]
+                }
+                onValueChange={setInviteRole}
+              />
+            </div>
+            {formError && (
+              <SettingsMessage tone="error">{formError}</SettingsMessage>
+            )}
+            {notice && (
+              <SettingsMessage tone="notice">{notice}</SettingsMessage>
+            )}
+            <SettingsActions
+              start={
+                preview
+                  ? "Preview data only. Sign in to manage real invitations."
+                  : "Invitations expire after seven days. Only the invited email can accept."
+              }
+            >
+              <SettingsButton
+                type="submit"
+                size="default"
+                tone="primary"
+                disabled={preview || send.isPending}
+              >
+                {send.isPending ? "Sending…" : "Send invite"}
+              </SettingsButton>
+            </SettingsActions>
+          </form>
+        </SettingsGroup>
+      )}
+
+      <SettingsGroup
+        label={`Members${members.data ? ` · ${members.data.length}` : ""}${seats}`}
+        bare
+      >
+        <SettingsCard>
+          {members.isPending ? (
+            <SettingsNote>Loading members…</SettingsNote>
+          ) : members.error ? (
+            <SettingsMessage tone="error">
+              Could not load members.
+            </SettingsMessage>
+          ) : members.data.length ? (
+            <Table className="settings-table">
+              <TableHeader>
+                <TableRow className="settings-tr">
+                  <TableHead>Person</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {members.data.map((member) => (
+                  <MemberRow
+                    key={member.user_id}
+                    member={member}
+                    organizationId={organizationId}
+                    viewerRole={role}
+                    viewerId={viewerId}
+                    preview={preview}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <SettingsNote>No members yet.</SettingsNote>
+          )}
+        </SettingsCard>
+      </SettingsGroup>
+
+      <SettingsGroup
+        label={`On their way${canManage ? ` · ${pendingInvitations.length}` : ""}`}
+      >
+        {!canManage ? (
+          <SettingsNote>Workspace admins manage invitations.</SettingsNote>
+        ) : invitations.isPending ? (
+          <SettingsNote>Loading invitations…</SettingsNote>
+        ) : invitations.error ? (
+          <SettingsMessage tone="error">
+            Could not load invitations.
+          </SettingsMessage>
+        ) : pendingInvitations.length ? (
+          pendingInvitations.map((invitation) => {
+            const by = nameOf(invitation.invited_by)
+            return (
+              <SettingsRow
+                key={invitation.id}
+                media={
+                  <span className="settings-pending-mark" aria-hidden="true">
+                    {invitation.email.charAt(0).toUpperCase()}
+                  </span>
+                }
+                title={invitation.email}
+                description={[
+                  roleNames[invitation.role],
+                  by ? `Invited by ${by}` : undefined,
+                  expiresIn(invitation.expires_at),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              >
+                {(role === "owner" || invitation.role === "member") && (
+                  <SettingsButton
+                    aria-label={`Revoke invitation for ${invitation.email}`}
+                    disabled={preview || revoke.isPending}
+                    onClick={() => revoke.mutate(invitation.id)}
+                  >
+                    Cancel
+                  </SettingsButton>
+                )}
+              </SettingsRow>
+            )
+          })
+        ) : (
+          <SettingsNote>No pending invitations.</SettingsNote>
+        )}
+      </SettingsGroup>
+    </>
   )
 }

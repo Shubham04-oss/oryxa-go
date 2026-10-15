@@ -467,6 +467,17 @@ not permission to copy every incidental value into a new component.
     while access is on, Danger zone → Revoke background access.
   - **Notifications:** where each notice goes and quiet hours are one honest
     line until Go serves them; parley emails by team are switches.
+  - **Organisation:** the workspace row (its first letter as the mark,
+    "Created … by …", Rename), the address (the slug, read-only) and its
+    email domains (Edit), each edit an inline form; Danger zone holds Delete
+    (owners, typing the name) or Leave. No data region, retention or export
+    until Go has them, and no promise of a grace period.
+  - **People:** Invite is one line, several addresses separated by commas
+    and a role, then Send invite at the right (one invitation per address);
+    Members is the library's table (person, role menu for owners, a quiet ✕
+    that asks before removing), its label counting seats when the plan has
+    a limit; On their way lists invitations with who sent them, when they
+    expire, and Cancel.
 - **Chats** (ChatsNew; `chats-page.tsx`): the member's chats with their
   agent as a page. It is the agent session (a focused view, the header
   "Chats · Only you see these") with a 280px list tile before the chat:

@@ -16,6 +16,8 @@ export type Invitation = {
   email: string
   role: "admin" | "member"
   status: "pending" | "accepted" | "revoked" | "expired"
+  /** The user id of whoever sent it. */
+  invited_by?: string
   created_at: string
   expires_at: string
 }
