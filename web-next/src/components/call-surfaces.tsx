@@ -490,7 +490,7 @@ function CallEnded({
           "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
         ),
       ].filter((element) => !element.hasAttribute("disabled"))
-      const first = focusable[0]
+      const first = focusable.at(0)
       const last = focusable.at(-1)
       if (!first || !last) return
       if (event.shiftKey && document.activeElement === first) {
