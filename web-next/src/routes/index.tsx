@@ -24,7 +24,14 @@ import {
   getReceivedInvitations,
 } from "@/lib/auth/invitations"
 import { isNameId } from "@/lib/dms/names"
-import { Onboarding, isSetupStep } from "@/components/onboarding"
+import {
+  ContinueButton,
+  Onboarding,
+  StepNav,
+  isSetupStep,
+} from "@/components/onboarding"
+import { OnboardingFrame, StepIntro } from "@/components/onboarding-frame"
+import { Button } from "@/components/ui/button"
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -35,12 +42,16 @@ export const Route = createFileRoute("/")({
     dm: isNameId(search.dm) ? search.dm : undefined,
     // A step of setting up a new workspace (components/onboarding.tsx).
     ...(isSetupStep(search.setup) ? { setup: search.setup } : {}),
+    // Setup just finished: My workspace opens as its first run.
+    ...(search.welcome === "1" || search.welcome === 1
+      ? { welcome: "1" as const }
+      : {}),
   }),
   component: Home,
 })
 
 function Home() {
-  const { org, dm, setup } = Route.useSearch()
+  const { org, dm, setup, welcome } = Route.useSearch()
   const navigate = Route.useNavigate()
   const queryClient = useQueryClient()
   const sessionEnded = useSyncExternalStore(
@@ -135,6 +146,7 @@ function Home() {
       <Onboarding
         organizationId={selectedOrganization.id}
         organizationName={selectedOrganization.name}
+        viewerName={session.data.user.display_name || undefined}
         step={setup}
         onStep={(step) =>
           void navigate({
@@ -154,6 +166,7 @@ function Home() {
               org: selectedOrganization.id,
               view: undefined,
               dm: undefined,
+              welcome: "1",
             },
             replace: true,
           })
@@ -171,6 +184,14 @@ function Home() {
       organizationRole={role.data}
       selectedOrganization={selectedOrganization}
       initialDirectMessage={dm}
+      firstRun={welcome === "1"}
+      onFirstRunDone={() =>
+        void navigate({
+          to: "/",
+          search: (previous) => ({ ...previous, welcome: undefined }),
+          replace: true,
+        })
+      }
       onDirectMessageChange={(peerId) =>
         void navigate({
           to: "/",
@@ -188,6 +209,7 @@ function NewWorkspace({ session }: { session: Session }) {
   const [nameError, setNameError] = useState("")
   const [formError, setFormError] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [draftName, setDraftName] = useState("")
   const invitations = useQuery({
     queryKey: ["auth", "received-invitations"],
     queryFn: getReceivedInvitations,
@@ -256,17 +278,34 @@ function NewWorkspace({ session }: { session: Session }) {
   }
 
   return (
-    <AuthShell
+    <OnboardingFrame
+      step={1}
+      stepName="Workspace"
       scene="harbour"
       caption={{
-        line: "Every crew needs a harbour.",
-        sub: "Yours is ready in a few seconds.",
+        line: "A ship needs a name.",
+        sub: "Everything else is built around it.",
       }}
+      sketch={{
+        workspaceName: draftName,
+        firstName: session.user.display_name?.includes("@")
+          ? undefined
+          : session.user.display_name?.trim().split(/\s+/)[0],
+        agent: false,
+        tools: [],
+        invited: [],
+      }}
+      onEnter={() =>
+        (
+          document.getElementById("setup-workspace") as HTMLFormElement | null
+        )?.requestSubmit()
+      }
     >
-      <h1>Make room for your work.</h1>
-      <p className="auth-subtitle">
-        Name your workspace to bring your people and agents together.
-      </p>
+      <StepIntro
+        eyebrow="Let’s set up your workspace"
+        title="What’s your company called?"
+        lede="This names your workspace. Your crew sees it when they join, and you can change it later."
+      />
       {formError && <AuthNotice>{formError}</AuthNotice>}
       {Boolean(invitations.data?.length) && (
         <div className="auth-received-invitations">
@@ -277,21 +316,32 @@ function NewWorkspace({ session }: { session: Session }) {
                 <strong>{invitation.organization_name}</strong>
                 <small>Join as {invitation.role}</small>
               </span>
-              <button
-                type="button"
+              <Button
+                variant="outline"
+                size="sm"
                 disabled={accept.isPending}
                 onClick={() => accept.mutate(invitation.id)}
               >
                 {accept.isPending && accept.variables === invitation.id
                   ? "Joining…"
                   : "Join"}
-              </button>
+              </Button>
             </div>
           ))}
           <p className="auth-received-separator">or create a new workspace</p>
         </div>
       )}
-      <form className="auth-form" onSubmit={submit} noValidate>
+      <form
+        className="auth-form"
+        id="setup-workspace"
+        onSubmit={submit}
+        onChange={(event) =>
+          setDraftName(
+            String(new FormData(event.currentTarget).get("organization") ?? "")
+          )
+        }
+        noValidate
+      >
         <AuthField
           autoComplete="organization"
           error={nameError}
@@ -299,19 +349,20 @@ function NewWorkspace({ session }: { session: Session }) {
           name="organization"
           placeholder="Your team or company"
         />
-        <button className="auth-submit" type="submit" disabled={submitting}>
-          {submitting ? "Creating…" : "Create workspace"}
-        </button>
       </form>
-      <p className="auth-footer">
-        <button
-          className="auth-inline-link"
-          type="button"
-          onClick={() => void leave()}
-        >
-          Sign out
-        </button>
-      </p>
-    </AuthShell>
+      <StepNav
+        back={() => void leave()}
+        backLabel="Sign out"
+        primary={
+          <ContinueButton
+            type="submit"
+            form="setup-workspace"
+            disabled={submitting}
+          >
+            {submitting ? "Creating…" : "Continue"}
+          </ContinueButton>
+        }
+      />
+    </OnboardingFrame>
   )
 }

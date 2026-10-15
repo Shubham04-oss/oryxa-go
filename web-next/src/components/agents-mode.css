@@ -248,6 +248,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.workspace-primary-file-version {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11px;
+}
 .workspace-primary-file-viewer {
   display: flex;
   flex: 1;

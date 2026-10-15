@@ -374,10 +374,9 @@ describe("WorkspaceShell navigation", () => {
       { kind: "new", message: "Start from Home" }
     )
     fireEvent.click(
-      within(screen.getByRole("region", { name: "Conversations" })).getByRole(
-        "button",
-        { name: "New chat" }
-      )
+      within(
+        screen.getByRole("region", { name: "Pick up where you left off" })
+      ).getByRole("button", { name: "New chat" })
     )
     expect(request).toHaveBeenLastCalledWith(
       { organizationId: "org_sim", userId: viewerId },
@@ -389,21 +388,29 @@ describe("WorkspaceShell navigation", () => {
       { target: { value: "Still composing on Home" } }
     )
     const all = within(
-      screen.getByRole("region", { name: "Conversations" })
+      screen.getByRole("region", { name: "Pick up where you left off" })
     ).getByRole("button", { name: "All conversations" })
     fireEvent.click(all)
+    // The panel's header holds History: it opens on the list.
     const history = await screen.findByRole("button", { name: "History" })
     await waitFor(() =>
-      expect(history.getAttribute("aria-expanded")).toBe("true")
+      expect(history.getAttribute("aria-pressed")).toBe("true")
     )
+    expect(
+      screen.getByRole("region", { name: "Conversation history" })
+    ).toBeTruthy()
     fireEvent.click(history)
-    expect(history.getAttribute("aria-expanded")).toBe("false")
+    expect(history.getAttribute("aria-pressed")).toBe("false")
     fireEvent.click(
       screen.getByRole("button", { name: "Collapse agent panel" })
     )
     fireEvent.click(all)
     await waitFor(() =>
-      expect(history.getAttribute("aria-expanded")).toBe("true")
+      expect(
+        screen
+          .getByRole("button", { name: "History" })
+          .getAttribute("aria-pressed")
+      ).toBe("true")
     )
     expect(screen.getByDisplayValue("Still composing on Home")).toBeTruthy()
     expect(
@@ -534,103 +541,197 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
   })
 
-  it("shows every area's pages in one sidebar, each area its own group", () => {
+  it("lists every page in one sidebar, grouped as the board's tiles", () => {
     render(<WorkspaceShell />)
 
-    const homeNavigation = screen.getByRole("navigation", {
-      name: "Home navigation",
-    })
-    const teamNavigation = screen.getByRole("navigation", {
-      name: "Team navigation",
-    })
-    const agentsNavigation = screen.getByRole("navigation", {
-      name: "Agents navigation",
-    })
-    expect(
-      within(homeNavigation).getByRole("button", { name: "My workspace" })
-    ).toBeTruthy()
-    expect(
-      within(homeNavigation).getByRole("button", { name: "Library" })
-    ).toBeTruthy()
-    expect(
-      within(teamNavigation).queryByRole("button", { name: "My workspace" })
-    ).toBeNull()
-    expect(
-      within(agentsNavigation).getByRole("button", {
-        name: "Multi-agent teams",
-      })
-    ).toBeTruthy()
-    expect(screen.queryByRole("group", { name: "Main areas" })).toBeNull()
-
     fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(
-      within(teamNavigation).getByRole("button", { name: "People" })
-    )
+    const nav = screen.getByRole("navigation", { name: "Workspace" })
+    for (const name of [
+      "My workspace",
+      "Requests",
+      "Chats with your agent",
+      "People",
+      "Specialists",
+      "Agent teams",
+      "Workflows",
+      "Knowledge",
+      "Tools",
+    ])
+      expect(within(nav).getByRole("button", { name })).toBeTruthy()
+    for (const group of ["Teamspaces", "Messages", "Agents", "Library"])
+      expect(within(nav).getByRole("group", { name: group })).toBeTruthy()
+    expect(
+      screen.queryByRole("navigation", { name: "Home navigation" })
+    ).toBeNull()
+
+    const messages = within(nav).getByRole("group", { name: "Messages" })
+    fireEvent.click(within(messages).getByRole("button", { name: "People" }))
     expect(screen.getByRole("heading", { name: "People" })).toBeTruthy()
     expect(
-      within(teamNavigation)
+      within(messages)
         .getByRole("button", { name: "People" })
         .getAttribute("aria-current")
     ).toBe("page")
 
-    fireEvent.click(
-      within(agentsNavigation).getByRole("button", { name: "Specialists" })
-    )
+    fireEvent.click(within(nav).getByRole("button", { name: "Specialists" }))
     expect(screen.getByRole("heading", { name: "Specialists" })).toBeTruthy()
     expect(
-      within(teamNavigation)
+      within(messages)
         .getByRole("button", { name: "People" })
         .getAttribute("aria-current")
     ).toBeNull()
 
-    fireEvent.click(
-      within(homeNavigation).getByRole("button", { name: "My workspace" })
-    )
+    fireEvent.click(within(nav).getByRole("button", { name: "Agent teams" }))
+    expect(
+      screen.getByRole("heading", { name: "Multi-agent teams", level: 1 })
+    ).toBeTruthy()
+
+    fireEvent.click(within(nav).getByRole("button", { name: "My workspace" }))
     expect(screen.getByRole("heading", { name: "My workspace" })).toBeTruthy()
   })
 
-  // Agents mode's focused work is real data now: agents-mode.test.tsx.
-  it("opens focused team work without the left sidebar and returns to the right section", async () => {
+  it("collapses to the board's rail: own pages, teamspaces, agent and Library, Settings", async () => {
     liveBackend()
     render(<SignedInShell />)
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
+      screen.getByRole("button", { name: "Collapse left sidebar" })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Open teamspace" }))
+    const nav = screen.getByRole("navigation", { name: "Workspace" })
+    const spaces = await within(nav).findByRole("group", {
+      name: "Teamspaces",
+    })
+    await waitFor(() =>
+      expect(
+        within(spaces)
+          .getAllByRole("button")
+          .map((button) => button.textContent)
+      ).toEqual(["Launch room", "Design reviews"])
+    )
+    for (const name of ["My workspace", "Chats with your agent", "Library"])
+      expect(within(nav).getByRole("button", { name })).toBeTruthy()
+    // No unread DMs: the rail shows no messages tile.
     expect(
-      screen.queryByRole("complementary", { name: "Workspace navigation" })
+      within(nav).queryByRole("group", { name: "Unread messages" })
     ).toBeNull()
+    expect(screen.getByRole("button", { name: "Settings" })).toBeTruthy()
+
+    fireEvent.click(within(spaces).getByRole("button", { name: "Launch room" }))
+    expect(
+      await screen.findByRole("heading", { name: "Launch room", level: 1 })
+    ).toBeTruthy()
+  })
+
+  it("opens the jump-to palette with ⌘K and from the sidebar's search", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    )
+    Element.prototype.scrollIntoView = vi.fn()
+    render(<WorkspaceShell />)
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true })
+    expect(await screen.findByRole("dialog", { name: "Jump to" })).toBeTruthy()
+    fireEvent.keyDown(window, { key: "k", metaKey: true })
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Jump to" })).toBeNull()
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Search or jump to" }))
+    expect(await screen.findByRole("dialog", { name: "Jump to" })).toBeTruthy()
+  })
+
+  it("opens the Chats page from the sidebar's chats with the agent", async () => {
+    liveBackend()
+    const { container } = render(<SignedInShell />)
+    const shell = container.querySelector(".workspace-shell")
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Chats with your agent" })
+    )
+    // The Chats page is the agent session, its header "Chats"; the agent
+    // panel steps aside for it.
+    expect(await screen.findByRole("heading", { name: "Chats" })).toBeTruthy()
+    expect(shell?.getAttribute("data-right")).toBe("collapsed")
+  })
+
+  // Agents mode's focused work is real data now: agents-mode.test.tsx.
+  it("opens a teamspace with the sidebar kept, under Teamspaces crumbs, and goes back", async () => {
+    liveBackend()
+    render(<SignedInShell />)
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Launch room" })
+    )
+    // The sidebar stays (as its rail, beside the agent panel), and marks
+    // the teamspace; the crumbs lead back to the list.
+    const sidebar = screen.getByRole("complementary", {
+      name: "Workspace navigation",
+    })
+    expect(
+      within(sidebar)
+        .getByRole("button", { name: /^Launch room/ })
+        .getAttribute("aria-current")
+    ).toBe("page")
+    expect(
+      screen.getByRole("navigation", { name: "Breadcrumb" }).textContent
+    ).toBe("TeamspacesLaunch room")
     expect(
       screen.getByRole("heading", { name: "Launch room", level: 1 })
     ).toBeTruthy()
-    expect(screen.getByText("Teamspace · Active")).toBeTruthy()
-    const workPanel = screen.getByRole("region", {
-      name: "Launch room work panel",
-    })
-    const workViews = screen.getByRole("group", { name: "Work views" })
-    expect(workPanel.contains(workViews)).toBe(false)
-    fireEvent.click(within(workViews).getByRole("button", { name: "Files" }))
+    const views = screen.getByRole("tablist", { name: "Launch room views" })
+    fireEvent.click(await within(views).findByRole("tab", { name: /^Files/ }))
     expect(
-      within(workPanel).getByRole("heading", { name: "Team files" })
+      await screen.findByText("No files have been shared with Launch yet.")
     ).toBeTruthy()
     expect(
-      await within(workPanel).findByText(
-        "No files have been shared with Launch yet."
-      )
-    ).toBeTruthy()
-    expect(
-      screen.getByRole("textbox", { name: "Message Launch room" })
+      screen.getByRole("textbox", { name: "Message Launch room", hidden: true })
     ).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "Back to teamspaces" }))
     expect(
-      screen.getByRole("navigation", { name: "Team navigation" })
+      screen.getByRole("complementary", { name: "Workspace navigation" })
     ).toBeTruthy()
     expect(
-      screen.getByRole("button", { name: "Manage Launch room" })
+      screen.getByRole("button", { name: "Open Launch room" })
     ).toBeTruthy()
   })
+
+  it.each([
+    { viewport: "desktop", mobile: false },
+    { viewport: "phone", mobile: true },
+  ])(
+    "opens the member's agent beside a teamspace on $viewport, and keeps the room in front on a phone",
+    async ({ mobile }) => {
+      vi.stubGlobal("matchMedia", () => ({
+        matches: mobile,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }))
+      liveBackend()
+      const { container } = render(<SignedInShell />)
+      const shell = container.querySelector(".workspace-shell")
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Open Launch room" })
+      )
+
+      expect(shell?.getAttribute("data-right")).toBe(
+        mobile ? "collapsed" : "expanded"
+      )
+      expect(shell?.getAttribute("data-left")).toBe("collapsed")
+      if (mobile) return
+      const panel = screen.getByRole("complementary", { name: "Agent panel" })
+      expect(
+        await within(panel).findByText("Only you · in Launch room")
+      ).toBeTruthy()
+      expect(within(panel).getByText("Looking at Launch room")).toBeTruthy()
+    }
+  )
 
   it("keeps mobile panels closed until their header controls are used", () => {
     vi.stubGlobal("matchMedia", () => ({
@@ -650,7 +751,7 @@ describe("WorkspaceShell navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("expanded")
-    expect(screen.getByRole("tab", { name: "Agents" })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: /^(Leo|Your agent)$/ })).toBeTruthy()
 
     fireEvent.click(
       screen.getByRole("button", { name: "Collapse agent panel" })
@@ -679,7 +780,7 @@ describe("WorkspaceShell navigation", () => {
     expect(within(glanceView).queryByRole("list")).toBeNull()
   })
 
-  it("replaces the activity feed with agent and team tabs", () => {
+  it("heads the panel with the agent and a segmented Agent / At a glance / DMs switch", async () => {
     const { container } = render(<WorkspaceShell />)
     const shell = container.querySelector(".workspace-shell")
     const panel = screen.getByRole("complementary", { name: "Agent panel" })
@@ -694,15 +795,17 @@ describe("WorkspaceShell navigation", () => {
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("expanded")
 
+    // The header: who, and that the chat is the member's alone, here.
+    expect(within(panel).getByText("Only you · in My workspace")).toBeTruthy()
     expect(
       within(panel)
         .getAllByRole("tab")
         .map((item) => item.getAttribute("aria-label"))
-    ).toEqual(["Agents", "DMs", "Teams", "At a glance"])
-    const agentsTab = within(panel).getByRole("tab", { name: "Agents" })
+    ).toEqual(["Your agent", "At a glance", "DMs"])
+    const agentsTab = within(panel).getByRole("tab", { name: "Your agent" })
     expect(agentsTab.getAttribute("aria-selected")).toBe("true")
     const agentsView = within(panel).getByRole("tabpanel", {
-      name: "Agents",
+      name: "Your agent",
     })
     // One agent: nothing to switch to, so no switch row and no empty slots.
     expect(
@@ -715,6 +818,8 @@ describe("WorkspaceShell navigation", () => {
     expect(
       within(agentsView).getByText("Ask anything to start a conversation.")
     ).toBeTruthy()
+    // What the agent would be shown with a message.
+    expect(within(agentsView).getByText("Looking at My workspace")).toBeTruthy()
     expect(
       within(agentsView)
         .getByRole("textbox", { name: "Message your agent" })
@@ -728,6 +833,9 @@ describe("WorkspaceShell navigation", () => {
     expect(
       within(agentsView).getByText("Chat isn't connected yet.")
     ).toBeTruthy()
+    // Signed out, nothing to chat with: no History or New chat.
+    expect(within(panel).queryByRole("button", { name: "History" })).toBeNull()
+    expect(within(panel).queryByRole("button", { name: "New chat" })).toBeNull()
 
     const expectSelected = (name: string, text: string) => {
       const selected = within(panel).getByRole("tab", { name })
@@ -740,28 +848,22 @@ describe("WorkspaceShell navigation", () => {
       return selected
     }
     let tab = agentsTab
+    tab.focus()
     for (const [key, name, text] of [
-      ["ArrowRight", "DMs", "Direct messages will appear here."],
-      ["ArrowRight", "Teams", "Team rooms will appear here."],
       [
         "ArrowRight",
         "At a glance",
         "Your apps, teammates and conversations will appear here.",
       ],
-      ["ArrowRight", "Agents", "Ask anything to start a conversation."],
-      [
-        "ArrowLeft",
-        "At a glance",
-        "Your apps, teammates and conversations will appear here.",
-      ],
-      ["Home", "Agents", "Ask anything to start a conversation."],
-      [
-        "End",
-        "At a glance",
-        "Your apps, teammates and conversations will appear here.",
-      ],
+      ["ArrowRight", "DMs", "Direct messages will appear here."],
+      ["ArrowRight", "Your agent", "Ask anything to start a conversation."],
+      ["ArrowLeft", "DMs", "Direct messages will appear here."],
+      ["Home", "Your agent", "Ask anything to start a conversation."],
+      ["End", "DMs", "Direct messages will appear here."],
     ]) {
       fireEvent.keyDown(tab, { key })
+      // The list moves focus a microtask later, and focus opens the view.
+      await act(async () => {})
       tab = expectSelected(name, text)
     }
 
@@ -778,10 +880,15 @@ describe("WorkspaceShell navigation", () => {
 
     for (const [name, text] of [
       ["DMs", "Direct messages will appear here."],
-      ["Teams", "Team rooms will appear here."],
-      ["Agents", "Ask anything to start a conversation."],
+      [
+        "At a glance",
+        "Your apps, teammates and conversations will appear here.",
+      ],
+      ["Your agent", "Ask anything to start a conversation."],
     ]) {
-      fireEvent.click(screen.getByRole("button", { name: `Open ${name}` }))
+      const rail =
+        name === "Your agent" ? `Open chat with ${name}` : `Open ${name}`
+      fireEvent.click(screen.getByRole("button", { name: rail }))
       expect(shell?.getAttribute("data-right")).toBe("expanded")
       expect(shell?.getAttribute("data-left")).toBe("collapsed")
       const tab = screen.getByRole("tab", { name })
@@ -796,24 +903,31 @@ describe("WorkspaceShell navigation", () => {
       )
       expect(screen.queryByRole("tab", { name })).toBeNull()
     }
+    // Teams, which only ever said what it would hold, is gone.
+    expect(screen.queryByRole("button", { name: "Open Teams" })).toBeNull()
   })
 
   it("names the selected teamspace in the header and counts the real ones", async () => {
     liveBackend()
     render(<SignedInShell />)
 
-    const teamNavigation = screen.getByRole("navigation", {
-      name: "Team navigation",
-    })
+    // Team starts with the sidebar open.
+    const listed = screen.getByRole("group", { name: "Teamspaces" })
     await waitFor(() =>
       expect(
-        within(teamNavigation).getByRole("button", { name: /^Teamspaces/ })
-          .textContent
-      ).toBe("Teamspaces2")
+        within(listed)
+          .getAllByRole("listitem")
+          .map((item) => item.textContent)
+      ).toEqual(["Launch room", "Design reviews"])
     )
+    fireEvent.click(within(listed).getByRole("button", { name: "Teamspaces" }))
 
+    // A card opens its teamspace; its details are in the card's More menu.
     fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Design reviews" })
+      await screen.findByRole("button", { name: "More for Design reviews" })
+    )
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Manage details" })
     )
     expect(
       screen.getByRole("heading", { name: "Design reviews", level: 1 })
@@ -958,9 +1072,8 @@ describe("WorkspaceShell navigation", () => {
     const { container } = render(<SignedInShell />)
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
+      await screen.findByRole("button", { name: "Open Launch room" })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Open teamspace" }))
 
     const focus = container.querySelector<HTMLElement>(".workspace-focus")
     const input = screen.getByRole("textbox", { name: "Message Launch room" })

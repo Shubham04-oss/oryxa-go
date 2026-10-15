@@ -26,13 +26,8 @@ import {
 import { toolkitIcon } from "./workspace-tools-data"
 import { Button } from "@/components/ui/button"
 import { connectionsQueryOptions, toolkitName } from "@/lib/apps/client"
-import { LiveChildren } from "./live-work"
-import { threadRoom } from "@/lib/live/children"
-import type { LiveTarget } from "@/lib/live/children"
 import { FollowUpsByTeamspace } from "./team-synthesis"
-import { PrimaryAgentFiles } from "./primary-agent-files"
 import { WorkflowOverview } from "./workflow-overview"
-import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
 import type { ScreenContext } from "@/lib/agents/screen-context"
 import { afterUpdateAgent } from "@/lib/agents/invalidation"
@@ -71,9 +66,6 @@ export function AgentsCanvas({
   section,
   organizationId,
   viewerId,
-  primaryThreadId,
-  onOpenFile,
-  onOpenLive,
   onOpen,
   onNavigate,
   onOpenSettings,
@@ -82,10 +74,6 @@ export function AgentsCanvas({
   /** The signed-in member's organization; without one there is nothing to read. */
   organizationId?: string
   viewerId?: string
-  primaryThreadId?: string | null
-  onOpenFile?: (file: PrimaryAgentFileTarget) => void
-  /** Opens one of the conversation's sandboxes or browsers in the work panel. */
-  onOpenLive?: (target: LiveTarget) => void
   onOpen: (target: AgentsFocusTarget) => void
   onNavigate: (section: AgentsSection) => void
   /** The primary agent's Settings: what it may read (Settings → Tool access). */
@@ -113,9 +101,6 @@ export function AgentsCanvas({
     <AgentsOverview
       organizationId={organizationId}
       viewerId={viewerId}
-      primaryThreadId={primaryThreadId}
-      onOpenFile={onOpenFile}
-      onOpenLive={onOpenLive}
       onOpen={onOpen}
       onNavigate={onNavigate}
       onOpenSettings={onOpenSettings}
@@ -249,18 +234,12 @@ function SectionHead({
 function AgentsOverview({
   organizationId,
   viewerId,
-  primaryThreadId,
-  onOpenFile,
-  onOpenLive,
   onOpen,
   onNavigate,
   onOpenSettings,
 }: {
   organizationId: string
   viewerId?: string
-  primaryThreadId?: string | null
-  onOpenFile?: (file: PrimaryAgentFileTarget) => void
-  onOpenLive?: (target: LiveTarget) => void
   onOpen: (target: AgentsFocusTarget) => void
   onNavigate: (section: AgentsSection) => void
   onOpenSettings?: () => void
@@ -322,7 +301,6 @@ function AgentsOverview({
     )
   }
 
-  const liveRoom = threadRoom(primaryThreadId)
   const primary = primaryAgent(agents.data)
   const specialists = specialistAgents(agents.data)
   const teamList = teams.data ?? []
@@ -417,23 +395,8 @@ function AgentsOverview({
         </section>
       )}
 
-      <PrimaryAgentFiles
-        organizationId={organizationId}
-        threadId={primaryThreadId}
-        onOpenFile={onOpenFile}
-      />
-
-      {onOpenLive && (
-        <LiveChildren
-          organizationId={organizationId}
-          room={liveRoom}
-          viewerId={viewerId}
-          title="This conversation's sandbox and browser"
-          onOpen={(child) => {
-            if (liveRoom) onOpenLive({ room: liveRoom, child })
-          }}
-        />
-      )}
+      {/* The conversation's own files, live work and requests are in the
+          agent session's work pane (agent-session-work.tsx), beside it. */}
 
       <section className="agents-section" aria-labelledby="agents-teams">
         <SectionHead

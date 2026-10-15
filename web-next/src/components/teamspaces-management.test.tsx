@@ -158,71 +158,255 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** Opens a card's More menu and picks `item`. */
+async function fromMenu(name: string, item: string) {
+  fireEvent.click(
+    await screen.findByRole("button", { name: `More for ${name}` })
+  )
+  fireEvent.click(await screen.findByRole("menuitem", { name: item }))
+}
+
+/** Opens a teamspace's management detail from its card. */
+async function manage(name: string) {
+  await fromMenu(name, "Manage details")
+}
+
+/**
+ * The header's New teamspace button (the last card has one too). The open
+ * pop-up hides the page behind it from assistive tech.
+ */
+function newTeamspaceButton() {
+  return screen.getAllByRole("button", {
+    name: "New teamspace",
+    hidden: true,
+  })[0]
+}
+
 describe("TeamspacesManagement list", () => {
-  it("lists the member's real teamspaces with status, member counts and last activity", async () => {
+  it("shows each real teamspace as a card: team, people, purpose and faces", async () => {
     backend()
     render()
 
-    const launchRow = await screen.findByRole("button", {
-      name: "Manage Launch room",
+    const launchCard = await screen.findByRole("article", {
+      name: "Launch room",
     })
-    expect(within(launchRow).getByText("Active")).toBeTruthy()
-    expect(within(launchRow).getByLabelText("2 people")).toBeTruthy()
+    expect(within(launchCard).getByText("Launch team · 2 people")).toBeTruthy()
     expect(
-      within(launchRow).getByText("Launch team · updated 5 min ago")
+      within(launchCard).getByText(
+        "Plans, owners and updates for the next release."
+      )
     ).toBeTruthy()
-    const designRow = screen.getByRole("button", {
-      name: "Manage Design reviews",
-    })
-    expect(within(designRow).getByText("Paused")).toBeTruthy()
-    expect(within(designRow).getByLabelText("3 people")).toBeTruthy()
-
-    const summary = screen.getByLabelText("Teamspace summary")
     expect(
-      Array.from(summary.querySelectorAll("strong"), (item) => item.textContent)
-    ).toEqual(["1", "1", "2"])
-    // Nothing from the old example data.
-    for (const example of ["Product sync", "Avery Morgan", "Jordan Lee"]) {
-      expect(screen.queryByText(example)).toBeNull()
+      within(launchCard).getByRole("img", { name: "Member, Ada" })
+    ).toBeTruthy()
+
+    // A paused card says so, and doesn't promise a read-only room.
+    const designCard = screen.getByRole("article", { name: "Design reviews" })
+    expect(within(designCard).getByText("Design team · paused")).toBeTruthy()
+    expect(
+      within(designCard).getByText(
+        "Paused. Its room is closed until a team admin resumes it."
+      )
+    ).toBeTruthy()
+    expect(
+      within(designCard).getByRole("img", { name: "Ada, Member, Sam" })
+    ).toBeTruthy()
+
+    expect(screen.getByLabelText("Teamspace summary").textContent).toBe(
+      "1 active."
+    )
+    // The shell's header names the page; the canvas doesn't say it again.
+    expect(screen.queryByRole("heading", { name: "Teamspaces" })).toBeNull()
+    // Nothing from the board's example data.
+    for (const example of ["Northwind", "Krude:", "Paused by", "editing"]) {
+      expect(screen.queryByText(new RegExp(example))).toBeNull()
     }
   })
 
-  it("filters by status and searches names, descriptions and teams", async () => {
+  it("shows four faces, then how many more", async () => {
+    backend([
+      teamspace({
+        whisperers: ["Ana", "Ben", "Cy", "Dee", "Eve", "Fay"].map(
+          (name, index) =>
+            whisperer(`user-${index}`, name, `agt_${index}`, name)
+        ),
+      }),
+    ])
+    render()
+    expect(
+      await screen.findByRole("img", { name: "Ana, Ben, Cy, Dee, 2 more" })
+    ).toBeTruthy()
+    expect(screen.getByText("+2")).toBeTruthy()
+  })
+
+  it("opens the teamspace when its card is clicked, not its management", async () => {
+    backend()
+    const { onOpen } = render()
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Launch room" })
+    )
+    expect(onOpen).toHaveBeenCalledWith("tsp_launch")
+    expect(
+      screen.queryByRole("region", { name: "Teamspace details" })
+    ).toBeNull()
+
+    await fromMenu("Design reviews", "Open teamspace")
+    expect(onOpen).toHaveBeenLastCalledWith("tsp_design")
+  })
+
+  it("offers pause and delete in the More menu only to who manages it", async () => {
     backend()
     render()
-    await screen.findByRole("button", { name: "Manage Launch room" })
 
-    fireEvent.click(screen.getByRole("button", { name: "Paused" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "More for Launch room" })
+    )
     expect(
-      screen.getByRole("button", { name: "Manage Design reviews" })
+      (await screen.findAllByRole("menuitem")).map((item) => item.textContent)
+    ).toEqual([
+      "Open teamspace",
+      "Manage details",
+      "Pause teamspace",
+      "Delete teamspace",
+    ])
+    fireEvent.keyDown(screen.getAllByRole("menuitem")[0], { key: "Escape" })
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "More for Design reviews" })
+    )
+    expect(
+      (await screen.findAllByRole("menuitem")).map((item) => item.textContent)
+    ).toEqual(["Open teamspace", "Manage details"])
+  })
+
+  it("pauses or deletes from the menu only through the detail's confirm", async () => {
+    const api = backend()
+    render()
+
+    await fromMenu("Launch room", "Pause teamspace")
+    expect(screen.getByRole("group", { name: "Confirm pausing" })).toBeTruthy()
+    expect(api.calls.some((call) => call.method === "PATCH")).toBe(false)
+
+    cleanup()
+    const again = backend()
+    render()
+    await fromMenu("Launch room", "Delete teamspace")
+    expect(screen.getByRole("group", { name: "Confirm deletion" })).toBeTruthy()
+    expect(again.calls.some((call) => call.method === "DELETE")).toBe(false)
+  })
+
+  it("resumes a paused teamspace straight from its menu", async () => {
+    const paused = { ...launch, status: "disabled" as const }
+    const api = backend([paused], ({ method }) => {
+      if (method !== "PATCH") return undefined
+      const next = { ...launch, revision: 2 }
+      api.state.spaces = [next]
+      return json(next)
+    })
+    render()
+
+    expect(await screen.findByText("Launch team · paused")).toBeTruthy()
+    await fromMenu("Launch room", "Resume teamspace")
+    expect(await screen.findByText("Launch team · 2 people")).toBeTruthy()
+    expect(
+      api.calls
+        .filter((call) => call.method === "PATCH")
+        .map((call) => [call.path, call.body])
+    ).toEqual([[`${orgPath}/teamspaces/tsp_launch`, { status: "active" }]])
+  })
+
+  it("shows a live parley on its card and in the subtitle", async () => {
+    const startedAt = new Date(Date.now() - 18 * 60_000).toISOString()
+    const api = backend([launch, design], ({ path }) =>
+      path === "/live/org_sim/rooms/teamspace/tsp_launch/call"
+        ? json({
+            call: {
+              callId: "call_1",
+              startedAt,
+              startedBy: viewerId,
+              participants: [],
+              recording: { on: false, by: null, since: null },
+              agent: { present: false, name: "Krude" },
+            },
+          })
+        : undefined
+    )
+    render()
+
+    const launchCard = await screen.findByRole("article", {
+      name: "Launch room",
+    })
+    expect(await within(launchCard).findByText("Parley · 18 min")).toBeTruthy()
+    expect(screen.getByLabelText("Teamspace summary").textContent).toBe(
+      "1 active, and a parley is live in Launch room."
+    )
+    // A paused teamspace has no parley to ask after.
+    expect(
+      api.calls.some((call) => call.path.includes("/teamspace/tsp_design/"))
+    ).toBe(false)
+  })
+
+  it("filters by status, with counts, and searches names, descriptions and teams", async () => {
+    backend()
+    render()
+    await screen.findByRole("button", { name: "Open Launch room" })
+    expect(
+      within(screen.getByRole("group", { name: "Teamspace status filter" }))
+        .getAllByRole("button")
+        .map((button) => button.textContent)
+    ).toEqual(["All 2", "Active 1", "Paused 1"])
+
+    fireEvent.click(screen.getByRole("button", { name: "Paused 1" }))
+    expect(
+      screen.getByRole("button", { name: "Open Design reviews" })
     ).toBeTruthy()
     expect(
-      screen.queryByRole("button", { name: "Manage Launch room" })
+      screen.queryByRole("button", { name: "Open Launch room" })
     ).toBeNull()
 
-    fireEvent.click(screen.getByRole("button", { name: "Active" }))
+    fireEvent.click(screen.getByRole("button", { name: "Active 1" }))
     expect(
-      screen.getByRole("button", { name: "Manage Launch room" })
+      screen.getByRole("button", { name: "Open Launch room" })
     ).toBeTruthy()
     expect(
-      screen.queryByRole("button", { name: "Manage Design reviews" })
+      screen.queryByRole("button", { name: "Open Design reviews" })
     ).toBeNull()
 
-    fireEvent.click(screen.getByRole("button", { name: "All" }))
+    fireEvent.click(screen.getByRole("button", { name: "All 2" }))
     const search = screen.getByRole("searchbox", { name: "Search teamspaces" })
     fireEvent.change(search, { target: { value: "design" } })
     expect(
-      screen.getByRole("button", { name: "Manage Design reviews" })
+      screen.getByRole("button", { name: "Open Design reviews" })
     ).toBeTruthy()
     expect(
-      screen.queryByRole("button", { name: "Manage Launch room" })
+      screen.queryByRole("button", { name: "Open Launch room" })
     ).toBeNull()
     fireEvent.change(search, { target: { value: "next release" } })
     expect(
-      screen.getByRole("button", { name: "Manage Launch room" })
+      screen.getByRole("button", { name: "Open Launch room" })
     ).toBeTruthy()
     fireEvent.change(search, { target: { value: "nothing like this" } })
     expect(screen.getByText("No teamspaces found")).toBeTruthy()
+  })
+
+  it("jumps to the search on /, but not while typing elsewhere", async () => {
+    backend()
+    render()
+    await screen.findByRole("button", { name: "Open Launch room" })
+    const search = screen.getByRole("searchbox", { name: "Search teamspaces" })
+
+    fireEvent.keyDown(document.body, { key: "/" })
+    expect(document.activeElement).toBe(search)
+
+    search.blur()
+    const elsewhere = document.createElement("textarea")
+    document.body.appendChild(elsewhere)
+    elsewhere.focus()
+    fireEvent.keyDown(elsewhere, { key: "/" })
+    expect(document.activeElement).toBe(elsewhere)
+    elsewhere.remove()
   })
 
   it("shows loading, a retryable failure, and a server without teamspaces", async () => {
@@ -236,11 +420,15 @@ describe("TeamspacesManagement list", () => {
     render()
 
     expect(screen.getByText("Loading teamspaces…")).toBeTruthy()
+    expect(screen.getByLabelText("Teamspace summary").textContent).toBe(
+      "Loading…"
+    )
     expect(await screen.findByText("Couldn't load teamspaces")).toBeTruthy()
+    expect(screen.queryByLabelText("Teamspace summary")).toBeNull()
     fail = false
     fireEvent.click(screen.getByRole("button", { name: "Try again" }))
     expect(
-      await screen.findByRole("button", { name: "Manage Launch room" })
+      await screen.findByRole("button", { name: "Open Launch room" })
     ).toBeTruthy()
     expect(
       api.calls.filter((call) => call.path === `${orgPath}/teamspaces`)
@@ -253,6 +441,7 @@ describe("TeamspacesManagement list", () => {
       await screen.findByText("Teamspaces aren't set up on this server")
     ).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull()
+    expect(screen.queryByLabelText("Teamspace summary")).toBeNull()
   })
 
   it("says what to do when there are no teamspaces", async () => {
@@ -298,28 +487,29 @@ describe("creating a teamspace", () => {
         : json({ teamspaces: [launch] })
     )
     render()
-    await screen.findByRole("button", { name: "Manage Launch room" })
+    await screen.findByRole("button", { name: "Open Launch room" })
     expect(screen.queryByRole("button", { name: "New teamspace" })).toBeNull()
   })
 
-  it("ends the grid with a card that opens the same form", async () => {
+  it("opens the form as a pop-up, from the header or the grid's last card", async () => {
     backend([launch, design])
     render()
-    await screen.findByRole("button", { name: "Manage Launch room" })
+    await screen.findByRole("button", { name: "Open Launch room" })
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: /Open a new teamspace/ })
-    )
+    const card = screen.getByText("Open a new teamspace").parentElement
+    if (!card) throw new Error("no new-teamspace card")
+    fireEvent.click(within(card).getByRole("button", { name: "New teamspace" }))
+    const dialog = await screen.findByRole("dialog", { name: "New teamspace" })
+    expect(within(dialog).getByRole("combobox", { name: "Team" })).toBeTruthy()
+    expect(newTeamspaceButton().getAttribute("aria-expanded")).toBe("true")
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+
+    fireEvent.click(newTeamspaceButton())
     expect(
-      screen
-        .getByRole("button", { name: "New teamspace" })
-        .getAttribute("aria-expanded")
-    ).toBe("true")
-    expect(screen.getByRole("combobox", { name: "Team" })).toBeTruthy()
-    // With the form open, the card steps aside.
-    expect(
-      screen.queryByRole("button", { name: /Open a new teamspace/ })
-    ).toBeNull()
+      await screen.findByRole("dialog", { name: "New teamspace" })
+    ).toBeTruthy()
   })
 
   it("posts the fields Go takes, for a team the member manages, and opens the result", async () => {
@@ -338,11 +528,11 @@ describe("creating a teamspace", () => {
         : undefined
     )
     render()
-    await screen.findByRole("button", { name: "Manage Launch room" })
+    await screen.findByRole("button", { name: "Open Launch room" })
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "New teamspace" })
-    )
+    await screen.findByRole("button", { name: "Open Launch room" })
+    fireEvent.click(newTeamspaceButton())
+    await screen.findByRole("dialog", { name: "New teamspace" })
     // Launch already has its one teamspace and Design isn't the member's to
     // manage, so Research is the only choice.
     const team = screen.getByRole("combobox", { name: "Team" })
@@ -368,7 +558,12 @@ describe("creating a teamspace", () => {
       screen.getByRole("button", { name: "Creating…" }).hasAttribute("disabled")
     ).toBe(true)
     await waitFor(() =>
-      expect(api.calls.filter((call) => call.method === "POST")).toEqual([
+      expect(
+        api.calls.filter(
+          (call) =>
+            call.method === "POST" && call.path === `${orgPath}/teamspaces`
+        )
+      ).toEqual([
         {
           method: "POST",
           path: `${orgPath}/teamspaces`,
@@ -400,9 +595,9 @@ describe("creating a teamspace", () => {
         : undefined
     )
     render()
-    fireEvent.click(
-      await screen.findByRole("button", { name: "New teamspace" })
-    )
+    await screen.findByRole("button", { name: "Open Launch room" })
+    fireEvent.click(newTeamspaceButton())
+    await screen.findByRole("dialog", { name: "New teamspace" })
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
       target: { value: "Launch room" },
     })
@@ -413,7 +608,7 @@ describe("creating a teamspace", () => {
         "That team already has a teamspace, or another teamspace uses this name."
       )
     ).toBeTruthy()
-    expect(screen.getAllByRole("button", { name: /^Manage / })).toHaveLength(1)
+    expect(screen.getAllByRole("article", { hidden: true })).toHaveLength(1)
   })
 
   it("explains when every team the member manages already has one", async () => {
@@ -423,9 +618,9 @@ describe("creating a teamspace", () => {
       teamspace({ id: "tsp_r", team_id: "team_research", name: "R" }),
     ])
     render()
-    fireEvent.click(
-      await screen.findByRole("button", { name: "New teamspace" })
-    )
+    await screen.findByRole("button", { name: "Open Launch room" })
+    fireEvent.click(newTeamspaceButton())
+    await screen.findByRole("dialog", { name: "New teamspace" })
     expect(
       screen.getByText(
         "Every team you manage already has a teamspace. A team has one."
@@ -455,9 +650,7 @@ describe("TeamspaceDetail", () => {
       }),
     ])
     const { onOpen } = render()
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
-    )
+    await manage("Launch room")
 
     const members = screen.getByRole("region", { name: "Teamspace members" })
     const people = within(members).getAllByTestId("identity-avatar")
@@ -508,9 +701,7 @@ describe("TeamspaceDetail", () => {
       }),
     ])
     render()
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
-    )
+    await manage("Launch room")
     const details = screen.getByRole("region", { name: "Teamspace details" })
     expect(await within(details).findByText("Ada")).toBeTruthy()
   })
@@ -528,9 +719,7 @@ describe("TeamspaceDetail", () => {
         : undefined
     )
     render()
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
-    )
+    await manage("Launch room")
     expect(await screen.findByText("2 hr ago")).toBeTruthy()
   })
 
@@ -546,9 +735,7 @@ describe("TeamspaceDetail", () => {
       return json(next)
     })
     render()
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
-    )
+    await manage("Launch room")
 
     fireEvent.click(screen.getByRole("button", { name: "Pause teamspace" }))
     const confirm = screen.getByRole("group", { name: "Confirm pausing" })
@@ -598,9 +785,7 @@ describe("TeamspaceDetail", () => {
         : undefined
     )
     render()
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
-    )
+    await manage("Launch room")
     fireEvent.click(screen.getByRole("button", { name: "Pause teamspace" }))
     fireEvent.click(
       within(screen.getByRole("group", { name: "Confirm pausing" })).getByRole(
@@ -626,9 +811,7 @@ describe("TeamspaceDetail", () => {
       return new Response(null, { status: 204 })
     })
     render()
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
-    )
+    await manage("Launch room")
 
     fireEvent.click(screen.getByRole("button", { name: "Delete teamspace" }))
     const confirm = screen.getByRole("group", { name: "Confirm deletion" })
@@ -639,10 +822,10 @@ describe("TeamspaceDetail", () => {
     )
 
     expect(
-      await screen.findByRole("button", { name: "Manage Design reviews" })
+      await screen.findByRole("button", { name: "Open Design reviews" })
     ).toBeTruthy()
     expect(
-      screen.queryByRole("button", { name: "Manage Launch room" })
+      screen.queryByRole("button", { name: "Open Launch room" })
     ).toBeNull()
     expect(api.calls.filter((call) => call.method === "DELETE")).toEqual([
       {
@@ -657,9 +840,7 @@ describe("TeamspaceDetail", () => {
     backend([{ ...launch, can_manage: false }, design])
     render()
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
-    )
+    await manage("Launch room")
     expect(screen.getByRole("button", { name: "Open teamspace" })).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Pause teamspace" })).toBeNull()
     expect(
@@ -675,9 +856,7 @@ describe("TeamspaceDetail", () => {
   it("tells a member a paused teamspace waits for its admins", async () => {
     backend()
     render()
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Design reviews" })
-    )
+    await manage("Design reviews")
     expect(screen.queryByRole("button", { name: "Open teamspace" })).toBeNull()
     expect(
       screen.queryByRole("button", { name: "Resume teamspace" })
@@ -692,9 +871,7 @@ describe("TeamspaceDetail", () => {
   it("does not read the ledger for someone who manages the team without being on it", async () => {
     const api = backend([{ ...launch, is_member: false }])
     render()
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
-    )
+    await manage("Launch room")
     expect(
       within(
         screen.getByRole("region", { name: "Teamspace details" })

@@ -312,7 +312,7 @@ describe("Agent overview", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Back to workspace" }))
     expect(
-      screen.getByRole("navigation", { name: "Agents navigation" })
+      screen.getByRole("complementary", { name: "Workspace navigation" })
     ).toBeTruthy()
     expect(
       screen.getByRole("heading", { name: "Agent overview", level: 1 })
@@ -336,7 +336,7 @@ describe("Agents mode without a workspace", () => {
     expect(
       screen.getByText("Your agents appear here once you're signed in.")
     ).toBeTruthy()
-    for (const section of ["Multi-agent teams", "Specialists"]) {
+    for (const section of ["Agent teams", "Specialists"]) {
       fireEvent.click(screen.getByRole("button", { name: section }))
       expect(
         screen.getByText("Your agents appear here once you're signed in.")
