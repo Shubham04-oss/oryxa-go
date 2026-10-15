@@ -163,6 +163,15 @@ beforeEach(() => {
   roomChildren = []
   roomEvents = []
   vi.stubGlobal("WebSocket", QuietSocket)
+  // The Mix layout's resizable panels measure themselves.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  )
   vi.stubGlobal("fetch", fetchMock)
   vi.stubGlobal(
     "MediaStream",
@@ -339,6 +348,45 @@ describe("the parley's stage", () => {
     )
     expect(
       within(stage).getByRole("group", { name: "People in the parley" })
+    ).toBeTruthy()
+  })
+
+  it("tiles the people, the room and the shared screen once the room opens beside a share", async () => {
+    renderWorkspace(fakeMedia(true))
+    const stage = await openStage()
+    fireEvent.click(
+      within(stage).getByRole("button", { name: "Show the room" })
+    )
+    // The crumb names what's open, and the dock gives way to the People tile.
+    expect(
+      within(stage).getByText("Parley, room and Raya Patel's screen")
+    ).toBeTruthy()
+    const people = within(stage).getByRole("region", {
+      name: "Parley, 2 people",
+    })
+    const controls = within(people).getByRole("toolbar", {
+      name: "Parley controls",
+    })
+    expect(within(stage).getAllByRole("toolbar")).toHaveLength(1)
+    for (const name of ["Mute", "Turn camera on", "Share screen", "Full page"])
+      expect(within(controls).getByRole("button", { name })).toBeTruthy()
+    expect(within(controls).getByRole("button", { name: "Leave" })).toBeTruthy()
+    expect(
+      within(stage).getByRole("region", { name: "EU launch room" })
+    ).toBeTruthy()
+    expect(within(stage).getAllByRole("separator").length).toBeGreaterThan(0)
+
+    fireEvent.click(
+      within(stage).getByRole("button", { name: "Hide the room" })
+    )
+    expect(
+      within(stage).queryByRole("region", { name: "EU launch room" })
+    ).toBeNull()
+    expect(
+      within(stage).getByRole("toolbar", { name: "Parley controls" })
+    ).toBeTruthy()
+    expect(
+      within(stage).getByRole("button", { name: "Fill the stage" })
     ).toBeTruthy()
   })
 })

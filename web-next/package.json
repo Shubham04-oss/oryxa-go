@@ -47,6 +47,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^4.14.1",
     "react-textarea-autosize": "^8.5.9",
     "remark-gfm": "^4.0.1",
     "shadcn": "^4.21.0",

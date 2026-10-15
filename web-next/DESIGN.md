@@ -286,7 +286,13 @@ not permission to copy every incidental value into a new component.
     page (the browser pane, compact, with take over and hand back when the
     agent asks), Working or Needs a hand, and its last steps from the
     room's log, the newest marked "now"; the people move to a filmstrip on
-    top. The dock is the full page's. Exit full page
+    top. Opening the Room beside a share or a browser makes it **Mix**
+    (HuddleMix): the crumb names what's open ("Parley, room, Raya's screen
+    and Browser"); on the left a People tile (small named cams, then mute,
+    camera, share, full page and Leave) over the room's conversation (moved
+    in, with a close X); on the right the screen and browsers stacked, with
+    the library's resizable grips between the columns and the tiles.
+    Closing the room goes back. Otherwise the dock is the full page's. Exit full page
     comes back to the stage; where no stage is hosted, Open goes straight
     to the full page and out of it is the mini player.
   - **The full page:** "Parley" with the teamspace's description under it

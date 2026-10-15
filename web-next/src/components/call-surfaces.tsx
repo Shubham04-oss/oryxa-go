@@ -822,9 +822,12 @@ export function DevicePicker({ onClose }: { onClose: () => void }) {
 export function RoomChatPane({
   room,
   roomName,
+  onClose,
 }: {
   room: string
   roomName: string
+  /** A close X in its header, where the pane is a tile of its own. */
+  onClose?: () => void
 }) {
   const { setRoomChat } = useCall()
   const [element, setElement] = useState<HTMLDivElement | null>(null)
@@ -847,7 +850,19 @@ export function RoomChatPane({
       className="call-transcript call-room"
       aria-label={`${roomName} room`}
     >
-      <h2>Room</h2>
+      <h2>
+        Room
+        {onClose && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Hide the room"
+            onClick={onClose}
+          >
+            <X aria-hidden="true" />
+          </Button>
+        )}
+      </h2>
       {!claimed && (
         <p>
           Open {roomName}'s page to talk in its room while you're in the parley.

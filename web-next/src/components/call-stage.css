@@ -178,6 +178,73 @@
   color: var(--tone-f0c7c3);
 }
 
+/* Everything at once (HuddleMix): people and the room on the left, the
+   shared work stacked on the right, with grips between them. */
+.call-mix {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.call-mix-left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+  padding-right: 6px;
+}
+.call-mix-right {
+  height: 100%;
+  padding-left: 6px;
+}
+.call-mix-right > [data-slot="resizable-panel"] > .call-show {
+  height: 100%;
+}
+.call-people {
+  flex: none;
+}
+.call-people .call-show-label span {
+  color: var(--text-muted);
+}
+.call-mini {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: 72px;
+  gap: 8px;
+  padding: 0 8px;
+}
+.call-mini-ctrls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+}
+.call-mini-ctrls .call-btn {
+  width: 32px;
+  height: 32px;
+  background: var(--canvas);
+}
+.call-mini-ctrls .call-leave {
+  height: 32px;
+}
+.call-mix-left > .call-room {
+  flex: 1;
+  width: auto;
+  min-height: 0;
+  background: var(--base);
+}
+.call-room h2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.call-grip {
+  background: transparent;
+}
+.call-grip > div {
+  background: var(--border-quiet);
+}
+
 @media (max-width: 800px) {
   .call-works {
     flex-direction: column;
