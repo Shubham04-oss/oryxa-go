@@ -160,6 +160,18 @@ not permission to copy every incidental value into a new component.
   name is its tooltip and accessible name. A tile with nothing in it is left
   out.
 
+- **⌘K, Jump to** (board NavCommand; `workspace-command-palette.tsx`, the
+  library's command dialog): ⌘K or Ctrl+K anywhere, or the sidebar's
+  Search, opens it. "Go to" lists what matches every typed word, at most
+  five of each, from the lists the workspace already reads: teamspaces
+  (planet, "Teamspace · N people"), requests in the inbox (the question,
+  "Request from Raya"), chats with the agent (title, "Chat with Krude ·
+  4m") and files (downloaded). Once something is typed, "Do" offers: Start
+  a parley in the first matching teamspace (⌘⇧H, not while already in one),
+  Ask the agent about it (⌘↵, a new chat in the panel), and Have the agent
+  open a page and show you (sent as a chat ask). A footer shows the keys.
+  There is no server search: a capped list says so ("Searching your latest
+  50 requests."), and without a workspace it says to sign in.
 - The shared workspace header is compact (56px at normal desktop/mobile
   widths), with its title centered. It contains the **current context**:
   opening a DM shows the person's name/avatar, not “People”; opening an
