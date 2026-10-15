@@ -560,7 +560,7 @@ describe("The Agents tab on a teamspace page", () => {
     expect(
       screen.queryByRole("region", { name: /^Side conversation/ })
     ).toBeNull()
-    const agentsTab = screen.getByRole("tab", { name: "Agents" })
+    const agentsTab = screen.getByRole("tab", { name: /^(Leo|Your agent)$/ })
     agentsTab.focus()
     fireEvent.click(agentsTab)
     const again = screen.getByRole("region", {
@@ -595,7 +595,7 @@ describe("The Agents tab on a teamspace page", () => {
       screen.queryByRole("region", { name: "In this teamspace" })
     ).toBeNull()
     expect(document.activeElement).toBe(
-      screen.getByRole("tab", { name: "Agents" })
+      screen.getByRole("tab", { name: /^(Leo|Your agent)$/ })
     )
   })
 
@@ -1853,14 +1853,17 @@ describe("On the teamspace page", () => {
       </QueryClientProvider>
     )
     fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
+      await screen.findByRole("button", { name: "Open Launch room" })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Open teamspace" }))
-    fireEvent.click(screen.getByRole("button", { name: "Open Agents" }))
+    // The member's own agent opens beside the teamspace, privately, reading it.
     const panel = screen.getByRole("complementary", { name: "Agent panel" })
+    expect(
+      await within(panel).findByText("Only you · in Launch room")
+    ).toBeTruthy()
     expect(
       await within(panel).findByRole("button", { name: "Talk with Priya Shah" })
     ).toBeTruthy()
+    expect(within(panel).getByText("Looking at Launch room")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "Back to teamspaces" }))
     expect(
