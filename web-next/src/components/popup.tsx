@@ -62,9 +62,15 @@ export function Popup({
         )}
         <div className="popup-body">{children}</div>
         <DialogClose
-          className="popup-close"
           aria-label="Close"
-          data-on-scene={scene ? "true" : undefined}
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="popup-close"
+              data-on-scene={scene ? "true" : undefined}
+            />
+          }
         >
           <X size={14} strokeWidth={2.2} aria-hidden="true" />
         </DialogClose>
@@ -137,7 +143,10 @@ export function PopupLine({
   )
 }
 
-/** The actions, with an optional quiet note on the left. */
+/**
+ * The actions (library buttons, default size): a quiet note on the left,
+ * the buttons right-aligned, Cancel (outline) before the confirm.
+ */
 export function PopupFoot({
   note,
   children,
@@ -153,27 +162,10 @@ export function PopupFoot({
   )
 }
 
-export type PopupTone = "primary" | "quiet" | "danger"
-
-/** A pop-up's button: the library's, in the pop-up's pill. */
-export function PopupButton({
-  tone = "quiet",
-  className,
-  ...props
-}: React.ComponentProps<typeof Button> & { tone?: PopupTone }) {
-  return (
-    <Button
-      variant="ghost"
-      className={["popup-btn", className].filter(Boolean).join(" ")}
-      data-tone={tone}
-      {...props}
-    />
-  )
-}
-
 /**
  * A plain confirm (alertdialog): no scene, an icon, what will happen, and
- * Cancel beside the action. Destructive actions take tone "danger".
+ * Cancel (outline) then the action, right-aligned. An action that deletes,
+ * removes, revokes, disconnects or leaves is destructive (the default).
  */
 export function PopupConfirm({
   open,
@@ -184,7 +176,7 @@ export function PopupConfirm({
   confirmLabel,
   pendingLabel,
   pending = false,
-  tone = "danger",
+  destructive = true,
   error,
   onConfirm,
 }: {
@@ -196,7 +188,7 @@ export function PopupConfirm({
   confirmLabel: string
   pendingLabel?: string
   pending?: boolean
-  tone?: "danger" | "primary"
+  destructive?: boolean
   error?: string
   onConfirm: () => void
 }) {
@@ -220,16 +212,14 @@ export function PopupConfirm({
           )}
           <div className="popup-foot">
             <span className="popup-grow" />
-            <AlertDialogCancel
-              variant="ghost"
-              className="popup-btn"
-              data-tone="quiet"
+            <AlertDialogCancel variant="outline">Cancel</AlertDialogCancel>
+            <Button
+              variant={destructive ? "destructive" : "default"}
+              disabled={pending}
+              onClick={onConfirm}
             >
-              Cancel
-            </AlertDialogCancel>
-            <PopupButton tone={tone} disabled={pending} onClick={onConfirm}>
               {pending && pendingLabel ? pendingLabel : confirmLabel}
-            </PopupButton>
+            </Button>
           </div>
         </div>
       </AlertDialogContent>

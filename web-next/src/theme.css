@@ -272,9 +272,6 @@
   /* A switch that is on, and its knob, in both themes. */
   --switch-on: #3f9d63;
   --switch-knob: #ffffff;
-  /* A destructive action's button (a pop-up's Delete), in both themes. */
-  --danger: #d4544f;
-  --on-danger: #ffffff;
   color-scheme: dark;
 }
 

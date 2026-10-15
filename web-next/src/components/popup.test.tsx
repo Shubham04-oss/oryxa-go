@@ -12,13 +12,13 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   Popup,
-  PopupButton,
   PopupConfirm,
   PopupFoot,
   PopupHead,
   PopupLine,
   PopupList,
 } from "./popup"
+import { Button } from "@/components/ui/button"
 
 afterEach(cleanup)
 
@@ -41,9 +41,7 @@ function Notes({ onClose }: { onClose: () => void }) {
         <PopupLine>Rohan closes the findings</PopupLine>
       </PopupList>
       <PopupFoot note="2 notes">
-        <PopupButton tone="primary" onClick={() => setOpen(false)}>
-          Done
-        </PopupButton>
+        <Button onClick={() => setOpen(false)}>Done</Button>
       </PopupFoot>
     </Popup>
   )

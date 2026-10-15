@@ -24,7 +24,8 @@ import {
 import { roomKey, useCall } from "./call-provider"
 import type { ActiveCall, EndedCall } from "./call-provider"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
-import { Popup, PopupButton, PopupFoot, PopupHead, PopupIcon } from "./popup"
+import { Popup, PopupFoot, PopupHead, PopupIcon } from "./popup"
+import { Button } from "@/components/ui/button"
 import { agentIdentity, personIdentity } from "./teamspace-format"
 import { callDuration, whoIsIn } from "@/lib/call/client"
 import type { CallView } from "@/lib/call/client"
@@ -500,9 +501,9 @@ function CallEnded({
           : `The transcript, kept with ${ended.roomName}.`}
       </PopupHead>
       <PopupFoot>
-        <PopupButton ref={done} tone="primary" onClick={onDone}>
+        <Button ref={done} onClick={onDone}>
           Done
-        </PopupButton>
+        </Button>
       </PopupFoot>
     </Popup>
   )

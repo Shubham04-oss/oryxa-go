@@ -241,8 +241,12 @@ not permission to copy every incidental value into a new component.
   Escape and focus return), themed: a raised 420px tile (480px wide
   variant), 18px corners, a close X at the top right, then an icon on a
   raised tile, a green kicker, a 17px title, the text, optional lines on a
-  quiet tile (with a Decision tag), and a foot with a quiet note on the left
-  and pill buttons on the right (primary is text-on-canvas inverted).
+  quiet tile (with a Decision tag), and a foot that follows the dialog
+  footer rule: a quiet note on the left, then `ui/button` buttons at the
+  default size, right-aligned 8px apart, Cancel (`outline`) before the
+  confirm. The close X is a ghost `icon-sm` button (on the deep-sea shade
+  over a scene). Spacing inside is 16 between blocks and 24 padding. On a
+  phone the actions stack full width, the confirm on top.
   - **The brand rule:** a pop-up that opens something (a welcome, an invite,
     a parley's notes, a plan) opens with a slight band of its own brand
     scene, 112px, dimmed and fading into the surface; the icon and title
@@ -251,7 +255,8 @@ not permission to copy every incidental value into a new component.
     one place the wordmark may sit on the painting), the deck for plans.
   - **Plain:** warnings and destructive confirms (`PopupConfirm`, the
     library's alert dialog) never get a scene: an icon, what will happen,
-    Cancel and the action (`--danger` for a delete).
+    Cancel (`outline`) and the action (`destructive` when it deletes,
+    removes, revokes, disconnects or leaves).
 - **Parleys** (live calls; founder's redesign, 14 Oct 2026). A parley is a
   room's call (live layer B6, `call-provider.tsx`, `call-surfaces.tsx`,
   `call.css`).
