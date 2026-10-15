@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { useEffect } from "react"
 import {
   cleanup,
   fireEvent,
@@ -10,8 +11,7 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { createPortal } from "react-dom"
-import { CallProvider, useRoomChatSlot } from "./call-provider"
+import { CallProvider, useRoomChatHost } from "./call-provider"
 import { CallSurface, ParleyButton, ParleyStrip, tintOf } from "./call-surfaces"
 import type { CallView } from "@/lib/call/client"
 import { callDuration, parseVoiceFrame, whoIsIn } from "@/lib/call/client"
@@ -689,11 +689,22 @@ describe("a parley in a teamspace", () => {
     ).toBeNull()
   })
 
-  it("moves the room page's own conversation into the pane, and back", async () => {
+  it("moves the room page's own conversation into the pane, and back, without remounting it", async () => {
+    let mounts = 0
+    function Conversation() {
+      useEffect(() => {
+        mounts += 1
+      }, [])
+      return <input aria-label="Room draft" defaultValue="" />
+    }
     function RoomPage() {
-      const slot = useRoomChatSlot("org_1", room)
-      const chat = <p>The room's conversation</p>
-      return slot ? createPortal(chat, slot) : chat
+      const chat = useRoomChatHost("org_1", room)
+      return (
+        <>
+          <div ref={chat.pageRef} />
+          {chat.render(<Conversation />)}
+        </>
+      )
     }
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -706,6 +717,9 @@ describe("a parley in a teamspace", () => {
         </CallProvider>
       </QueryClientProvider>
     )
+    const draft = await screen.findByRole("textbox", { name: "Room draft" })
+    fireEvent.change(draft, { target: { value: "Half a thought" } })
+
     const strip = await screen.findByRole("region", {
       name: "Parley in progress",
     })
@@ -714,16 +728,17 @@ describe("a parley in a teamspace", () => {
     const page = screen.getByRole("dialog", { name: "EU launch parley" })
     fireEvent.click(within(page).getByRole("button", { name: "Show the room" }))
     const pane = within(page).getByRole("region", { name: "EU launch room" })
-    expect(
-      await within(pane).findByText("The room's conversation")
-    ).toBeTruthy()
-    expect(screen.getAllByText("The room's conversation")).toHaveLength(1)
     await waitFor(() =>
-      expect(within(pane).queryByText(/Open EU launch's page/)).toBeNull()
+      expect(within(pane).getByRole("textbox", { name: "Room draft" })).toBe(
+        draft
+      )
     )
+    expect((draft as HTMLInputElement).value).toBe("Half a thought")
+    expect(within(pane).queryByText(/Open EU launch's page/)).toBeNull()
 
     fireEvent.click(within(page).getByRole("button", { name: "Hide the room" }))
-    expect(screen.getAllByText("The room's conversation")).toHaveLength(1)
-    expect(within(page).queryByText("The room's conversation")).toBeNull()
+    await waitFor(() => expect(within(page).queryByRole("textbox")).toBeNull())
+    expect(screen.getByRole("textbox", { name: "Room draft" })).toBe(draft)
+    expect(mounts).toBe(1)
   })
 })

@@ -1,5 +1,4 @@
 import { useState } from "react"
-import { createPortal } from "react-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft,
@@ -13,7 +12,7 @@ import {
 } from "lucide-react"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { TeamspaceConversation } from "./teamspace-room"
-import { useHasCalls, useRoomChatSlot } from "./call-provider"
+import { useHasCalls, useRoomChatHost } from "./call-provider"
 import { ParleyButton, ParleyStrip } from "./call-surfaces"
 import { TeamSynthesis } from "./team-synthesis"
 import { RoomLive } from "./live-work"
@@ -82,7 +81,9 @@ export function TeamspaceFocus({
   const [isComposing, setIsComposing] = useState(false)
   const visibleHeight = useVisibleHeight(isComposing)
   const hasCalls = useHasCalls()
-  const chatSlot = useRoomChatSlot(organizationId, {
+  // The room's conversation can move to the parley's Room pane and back
+  // without remounting (useRoomChatHost).
+  const chat = useRoomChatHost(organizationId, {
     kind: "teamspace",
     id: teamspaceId,
   })
@@ -181,19 +182,12 @@ export function TeamspaceFocus({
       )}
 
       <main className="workspace-focus-layout">
-        {chatSlot ? (
-          // The parley's full page shows the room beside the call: the same
-          // conversation, moved there, so the room is never open twice.
-          createPortal(
-            <TeamspaceConversation
-              space={space}
-              room={room}
-              viewerId={viewerId}
-              onComposingChange={setIsComposing}
-            />,
-            chatSlot
-          )
-        ) : (
+        {/* The room's conversation always renders into one host, which
+            sits here or, while the parley's Room pane is open, in that pane:
+            moving the host moves the conversation without remounting it,
+            so its draft, scroll and socket carry over. */}
+        <div ref={chat.pageRef} className="workspace-chat-host" />
+        {chat.render(
           <TeamspaceConversation
             space={space}
             room={room}

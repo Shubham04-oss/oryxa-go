@@ -7,10 +7,12 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react"
+import { createPortal } from "react-dom"
 import type { ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ApiError } from "@/lib/api/client"
@@ -175,6 +177,36 @@ export function useRoomChatSlot(
   return slot && slot.room === roomKey(organizationId, room)
     ? slot.element
     : null
+}
+
+/**
+ * A room page's conversation, kept in one host element that sits in the page
+ * (at `pageRef`) or, while the member's parley in that room shows its Room
+ * pane, in that pane. Moving the host moves the conversation without
+ * remounting it: its draft, scroll and socket carry over.
+ */
+export function useRoomChatHost(organizationId: string, room: LiveRoom) {
+  const slot = useRoomChatSlot(organizationId, room)
+  const [host, setHost] = useState<HTMLDivElement | null>(null)
+  const pageRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const element = document.createElement("div")
+    element.className = "workspace-chat-host"
+    setHost(element)
+    return () => {
+      element.remove()
+    }
+  }, [])
+  useLayoutEffect(() => {
+    const target = slot ?? pageRef.current
+    if (host && target && host.parentElement !== target)
+      target.appendChild(host)
+  })
+  return {
+    pageRef,
+    render: (conversation: ReactNode) =>
+      host ? createPortal(conversation, host) : null,
+  }
 }
 
 /** Whether parleys are offered here: inside the workspace's CallProvider. */

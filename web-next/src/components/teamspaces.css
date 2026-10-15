@@ -411,3 +411,7 @@
   .workspace-teamspace-focus .workspace-focus-layout { padding: 0 16px 16px; }
   .workspace-teamspace-focus .workspace-work-tabs { position: static; align-self: flex-start; margin-bottom: 8px; }
 }
+
+/* The room's conversation renders into a host that can move to a parley's
+   Room pane; the hosts take no box, so the conversation lays out as before. */
+.workspace-chat-host { display: contents; }
