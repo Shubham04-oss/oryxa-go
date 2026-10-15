@@ -6,6 +6,11 @@ export const Route = createFileRoute("/auth/reset-password")({
   validateSearch: (search: Record<string, unknown>) => ({
     token: searchToken(search.token),
   }),
-  component: () => <ResetPasswordPage token={Route.useSearch().token} />,
+  component: ResetPasswordRoute,
   head: () => ({ meta: [{ title: "Choose a new password · Oryxa" }] }),
 })
+
+function ResetPasswordRoute() {
+  const { token } = Route.useSearch()
+  return <ResetPasswordPage token={token} />
+}

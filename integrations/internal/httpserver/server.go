@@ -57,20 +57,20 @@ func (server *Server) Internal(pattern string, handler http.HandlerFunc) {
 	server.Public(pattern, func(writer http.ResponseWriter, request *http.Request) {
 		token := request.Header.Get(serviceauth.Header)
 		if token == "" || server.verifier == nil {
-			writeError(writer, http.StatusUnauthorized, "unauthorized", "a service token is required")
+			WriteError(writer, http.StatusUnauthorized, "unauthorized", "a service token is required")
 			return
 		}
 		claims, err := server.verifier.Verify(request.Context(), token)
 		switch {
 		case errors.Is(err, serviceauth.ErrPurposeNotAllowed):
-			writeError(writer, http.StatusForbidden, "forbidden", "the service may not use this purpose")
+			WriteError(writer, http.StatusForbidden, "forbidden", "the service may not use this purpose")
 			return
 		case errors.Is(err, serviceauth.ErrInvalidToken):
-			writeError(writer, http.StatusUnauthorized, "unauthorized", "the service token is invalid")
+			WriteError(writer, http.StatusUnauthorized, "unauthorized", "the service token is invalid")
 			return
 		case err != nil:
 			server.logger.ErrorContext(request.Context(), "check an internal caller", "error", err)
-			writeError(writer, http.StatusServiceUnavailable, "provider_unavailable", "service identity could not be checked; retry")
+			WriteError(writer, http.StatusServiceUnavailable, "provider_unavailable", "service identity could not be checked; retry")
 			return
 		}
 		handler(writer, request.WithContext(context.WithValue(request.Context(), claimsKey{}, claims)))
@@ -84,7 +84,8 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	server.mux.ServeHTTP(writer, request)
 }
 
-func writeError(writer http.ResponseWriter, status int, code, message string) {
+// WriteError answers with the service's JSON error body.
+func WriteError(writer http.ResponseWriter, status int, code, message string) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(map[string]map[string]string{"error": {"code": code, "message": message}})

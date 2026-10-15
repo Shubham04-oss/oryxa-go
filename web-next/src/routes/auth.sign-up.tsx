@@ -6,6 +6,11 @@ export const Route = createFileRoute("/auth/sign-up")({
   validateSearch: (search: Record<string, unknown>) => ({
     redirect: safeRedirect(search.redirect),
   }),
-  component: () => <SignUpPage redirect={Route.useSearch().redirect} />,
+  component: SignUpRoute,
   head: () => ({ meta: [{ title: "Create account · Oryxa" }] }),
 })
+
+function SignUpRoute() {
+  const { redirect } = Route.useSearch()
+  return <SignUpPage redirect={redirect} />
+}
