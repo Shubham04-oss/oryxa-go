@@ -260,6 +260,12 @@ not permission to copy every incidental value into a new component.
     that asks before removing), its label counting seats when the plan has
     a limit; On their way lists invitations with who sent them, when they
     expire, and Cancel.
+  - **Teams:** the library's table, one row a team (its name and how many
+    people, its lead, the faces of who is in it, its teamspaces as chips),
+    from the directory in one read; a row opens the team's own page (name,
+    members with an Admin/Member menu, Add a member, Danger zone → Delete
+    team). New team is a small dialog (name, inside which team), Cancel then
+    Create.
 - **Chats and DMs as tiles** (founder's redesign, 14 Oct 2026). The open
   chat in the chat list is the raised tile and the others lift on hover; DM
   rows are rounded the same way, with unread as a filled count. The member's

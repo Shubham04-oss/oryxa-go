@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
@@ -99,6 +100,15 @@ describe("connected settings sections", () => {
       />
     )
     await screen.findByText("No teams yet.")
+    fireEvent.click(screen.getByRole("button", { name: "New team" }))
+    const dialog = await screen.findByRole("dialog", { name: "New team" })
+    // A dialog footer: Cancel, then the confirm on the right.
+    expect(
+      within(dialog)
+        .getAllByRole("button")
+        .map((button) => button.textContent)
+        .slice(-2)
+    ).toEqual(["Cancel", "Create"])
     fireEvent.change(screen.getByPlaceholderText("Team name"), {
       target: { value: "Design" },
     })
