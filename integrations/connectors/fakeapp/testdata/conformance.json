@@ -1,0 +1,116 @@
+{
+  "streams": [
+    {
+      "name": "full",
+      "stream": "notes",
+      "kind": "full",
+      "cassette": "full",
+      "upserts": [
+        "1",
+        "2",
+        "3"
+      ]
+    },
+    {
+      "name": "incremental",
+      "stream": "notes",
+      "kind": "incremental",
+      "cassette": "incremental",
+      "after": "full"
+    },
+    {
+      "name": "resume",
+      "stream": "notes",
+      "kind": "resume",
+      "cassette": "full",
+      "resume_cassette": "resume",
+      "upserts": [
+        "1",
+        "2",
+        "3"
+      ]
+    },
+    {
+      "name": "empty",
+      "stream": "notes",
+      "kind": "empty",
+      "cassette": "empty"
+    },
+    {
+      "name": "delete",
+      "stream": "notes",
+      "kind": "delete",
+      "cassette": "delete",
+      "after": "full",
+      "deletes": [
+        "2"
+      ]
+    },
+    {
+      "name": "rate_limit",
+      "stream": "notes",
+      "kind": "rate_limit",
+      "cassette": "rate_limit",
+      "upserts": [
+        "1",
+        "2",
+        "3"
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "tool": "fakeapp.echo",
+      "input": {
+        "text": "hi"
+      },
+      "output": {
+        "text": "hi"
+      }
+    },
+    {
+      "tool": "fakeapp.echo",
+      "input": {
+        "text": ""
+      },
+      "error": "invalid_input"
+    },
+    {
+      "tool": "fakeapp.get_note",
+      "cassette": "get_note_ok",
+      "input": {
+        "id": "1"
+      },
+      "output": {
+        "id": "1",
+        "text": "first"
+      }
+    },
+    {
+      "tool": "fakeapp.get_note",
+      "cassette": "get_note_404",
+      "input": {
+        "id": "9"
+      },
+      "error": "not_found"
+    },
+    {
+      "tool": "fakeapp.add_note",
+      "cassette": "add_note_ok",
+      "input": {
+        "text": "new"
+      },
+      "output": {
+        "id": "4"
+      }
+    },
+    {
+      "tool": "fakeapp.add_note",
+      "cassette": "add_note_500",
+      "input": {
+        "text": "new"
+      },
+      "error": "provider_error"
+    }
+  ]
+}

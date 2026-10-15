@@ -2,7 +2,8 @@
    shared workspace look in workspace.css (DESIGN.md §1–§4). */
 
 /* Create form */
-.workspace-teamspace-select {
+.workspace-teamspace-select { width: 100%; }
+.workspace-teamspace-select [data-slot="native-select"] {
   height: 38px;
   padding: 0 10px;
   border: 1px solid var(--tone-454545);
@@ -11,7 +12,7 @@
   color: var(--text);
   font-size: 12px;
 }
-.workspace-teamspace-select:focus-visible {
+.workspace-teamspace-select [data-slot="native-select"]:focus-visible {
   outline: 2px solid var(--tone-d6d6d6);
   outline-offset: 2px;
 }
@@ -23,38 +24,22 @@
   line-height: 1.5;
 }
 .workspace-teamspace-note { margin-top: 16px; max-width: 850px; }
-.workspace-teamspace-form-actions button:disabled { cursor: not-allowed; opacity: 0.5; }
 
-/* Detail actions */
-.workspace-teamspace-secondary-button:disabled,
-.workspace-teamspace-primary-button:disabled { cursor: not-allowed; opacity: 0.55; }
+/* Detail actions: an inline confirm is the message, then Cancel and the
+   confirm right-aligned (DESIGN.md §1, "Buttons and action rows"). */
 .workspace-teamspace-confirm {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 12px;
   max-width: 850px;
-  margin-top: 14px;
-  padding: 14px;
+  margin-top: 16px;
+  padding: 16px;
   border: 1px solid var(--tone-3c3c3c);
   border-radius: 12px;
   background: var(--tone-1b1b1b);
 }
-.workspace-teamspace-confirm p { flex: 1 1 260px; margin: 0; color: var(--tone-dddddd); font-size: 12px; line-height: 1.5; }
-.workspace-teamspace-confirm button {
-  flex: none;
-  min-height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--tone-454545);
-  border-radius: 8px;
-  background: var(--tone-303030);
-  color: var(--tone-eeeeee);
-  font-size: 12px;
-}
-.workspace-teamspace-confirm button:last-child { border-color: var(--tone-dddddd); background: var(--tone-e9e9e9); color: var(--tone-202020); font-weight: 600; }
-.workspace-teamspace-confirm button:hover:not(:disabled) { background: var(--tone-3c3c3c); }
-.workspace-teamspace-confirm button:last-child:hover:not(:disabled) { background: var(--tone-ffffff); }
-.workspace-teamspace-confirm button:disabled { cursor: not-allowed; opacity: 0.5; }
+.workspace-teamspace-confirm p { margin: 0; color: var(--tone-dddddd); font-size: 12px; line-height: 1.5; }
+.workspace-teamspace-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .workspace-teamspace-action-error { max-width: 850px; margin: 12px 0 0; color: var(--tone-ff9d9d); font-size: 12px; }
 
 /* Detail sections */
@@ -177,22 +162,8 @@
 .workspace-teamspace-file { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
 .workspace-teamspace-file strong { overflow: hidden; color: var(--tone-dddddd); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-teamspace-file small { color: var(--tone-8f8f8f); font-size: 11px; }
-.workspace-teamspace-icon-button {
-  display: grid;
-  flex: none;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid var(--tone-3c3c3c);
-  border-radius: 50%;
-  background: var(--selected);
-  color: var(--tone-c9c9c9);
-}
-.workspace-teamspace-icon-button:hover:not(:disabled) { background: var(--tone-333333); color: var(--tone-ffffff); }
-.workspace-teamspace-icon-button:disabled { cursor: wait; opacity: 0.5; }
-.workspace-file-list .workspace-teamspace-icon-button { color: var(--tone-c9c9c9); }
 .workspace-work-card .workspace-teamspace-error { margin: 10px 0 0; color: var(--tone-ff9d9d); font-size: 11px; }
-.workspace-work-card .workspace-teamspace-secondary-button { margin-top: 12px; }
+.workspace-work-card > [data-slot="button"] { margin-top: 12px; }
 
 /* Shared work ledger */
 .workspace-teamspace-ledger { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
@@ -238,9 +209,10 @@
   .workspace-room-seat:hover:not(:disabled) { transform: none; }
 }
 
-/* The teamspaces list (founder's redesign, 14 Oct 2026): a title with the
-   counts under a faint harbour band, segmented filters, and the teamspaces
-   as a grid of cards, the last one opening a new teamspace. */
+/* The teamspaces list (founder's redesign, 14-15 Oct 2026): a title with
+   the counts under a faint harbour band, search and segmented filters with
+   their counts, and the teamspaces as a grid of cards, the last one opening
+   a new teamspace. */
 .workspace-teamspaces-page { position: relative; padding: 0 28px 40px; }
 .workspace-teamspaces-page > :not(.workspace-teamspaces-scene) { position: relative; }
 .workspace-teamspaces-scene {
@@ -255,19 +227,14 @@
 }
 .workspace-teamspaces-hello {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-top: 34px;
+  min-height: 36px;
+  padding-top: 20px;
 }
-.workspace-teamspaces-hello h2 {
-  margin: 0;
-  color: var(--text);
-  font-size: 30px;
-  font-weight: 700;
-  letter-spacing: -.03em;
-}
-.workspace-teamspaces-hello p { margin: 6px 0 0; color: var(--text-muted); font-size: 13.5px; }
+.workspace-teamspaces-hello p { margin: 0; color: var(--text-muted); font-size: 13.5px; }
+.workspace-teamspaces-hello [data-slot="button"] { margin-left: auto; }
 .workspace-teamspaces-hello strong { color: var(--text); font-weight: 600; }
 
 .workspace-teamspace-filters {
@@ -277,49 +244,144 @@
   background: var(--base);
 }
 .workspace-teamspace-filters button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   min-height: 28px;
   border: 0;
   background: transparent;
   color: var(--text-muted);
   font-weight: 600;
 }
+.workspace-teamspace-filters button span { color: var(--text-muted); font-weight: 500; font-variant-numeric: tabular-nums; }
 .workspace-teamspace-filters button:hover { background: transparent; color: var(--text); }
 .workspace-teamspace-filters button.is-active {
   background: var(--raised);
   box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66);
   color: var(--text);
 }
-.workspace-teamspace-search [data-slot="input"] { border-color: transparent; background: var(--base); }
+.workspace-teamspace-search { width: min(100%, 420px); }
+.workspace-teamspace-search [data-slot="input"] { padding-right: 36px; border-color: transparent; background: var(--base); }
+.workspace-teamspace-search kbd {
+  position: absolute;
+  right: 10px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--hover);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.6;
+  pointer-events: none;
+}
+.workspace-teamspace-search:focus-within kbd { display: none; }
+.workspace-teamspaces-page > .workspace-teamspace-action-error { margin: 0 0 12px; }
 
+/* A card opens its teamspace: the name's button stretches over the whole
+   card, and the More menu sits above it. */
 .workspace-teamspace-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
-.workspace-teamspace-row {
-  display: grid;
-  grid-template-areas:
-    "avatar . status"
-    "main main main"
-    "members . arrow";
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 12px 10px;
-  min-height: 176px;
+.workspace-teamspace-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 196px;
   padding: 16px;
-  border: 0;
   border-radius: 16px;
   background: var(--base);
+  box-shadow: none;
+  transition: background 160ms ease;
 }
-.workspace-teamspace-row:hover { background: var(--hover); }
-.workspace-teamspace-row > .workspace-avatar { grid-area: avatar; width: 38px; height: 38px; }
-.workspace-teamspace-row-main { grid-area: main; align-self: start; }
-.workspace-teamspace-row-main strong { font-size: 14px; color: var(--text); }
-.workspace-teamspace-row-main small { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.workspace-teamspace-row-members { grid-area: members; }
-.workspace-teamspace-row .workspace-teamspace-status { grid-area: status; }
-.workspace-teamspace-row > svg:last-child { grid-area: arrow; }
-.workspace-teamspace-row[aria-label] .workspace-teamspace-status.paused ~ svg { opacity: .6; }
+.workspace-teamspace-card:hover { background: var(--hover); }
+.workspace-teamspace-card:focus-within:has(.workspace-teamspace-card-open:focus-visible) {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 2px;
+}
+.workspace-teamspace-card[data-status="paused"] > :not(.workspace-teamspace-card-top),
+.workspace-teamspace-card[data-status="paused"] .workspace-teamspace-card-top > :not(.workspace-teamspace-card-more) { opacity: .62; }
+/* Opacity gives each dimmed row its own stacking context, painted above the
+   title's stretched ::after, so the rows below the title would swallow clicks.
+   Let them fall through so the whole paused card opens, like an active one. */
+.workspace-teamspace-card[data-status="paused"] > :not(.workspace-teamspace-card-top) { pointer-events: none; }
+.workspace-teamspace-card-top { display: flex; align-items: center; gap: 10px; }
+.workspace-teamspace-card-top > .workspace-avatar { width: 34px; height: 34px; }
+.workspace-teamspace-card-title { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }
+.workspace-teamspace-card-title small { overflow: hidden; color: var(--text-muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-teamspace-card-open {
+  display: block;
+  height: auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  outline: none;
+  transform: none;
+}
+.workspace-teamspace-card-open strong { display: block; overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-teamspace-card-open::after { position: absolute; inset: 0; border-radius: inherit; content: ""; }
+.workspace-teamspace-card-more { position: relative; z-index: 1; color: var(--text-muted); }
+.workspace-teamspace-menu { min-width: 190px; }
+.workspace-teamspace-card-purpose {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12.5px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.workspace-teamspace-card-live { display: flex; flex-wrap: wrap; gap: 6px; }
+.workspace-teamspace-card-live > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--tone-263a2e);
+  color: var(--tone-b9e6c6);
+  font-size: 11px;
+  font-weight: 600;
+}
+.workspace-teamspace-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--tone-7fcf98); }
+.workspace-teamspace-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 33px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-quiet);
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+.workspace-teamspace-card-foot > span:first-child { flex: 1; min-width: 0; }
+.workspace-teamspace-faces { display: flex; flex: none; align-items: center; }
+.workspace-teamspace-faces .workspace-avatar {
+  width: 22px;
+  height: 22px;
+  margin-left: -7px;
+  box-shadow: 0 0 0 2px var(--base);
+}
+.workspace-teamspace-faces .workspace-avatar:first-child { margin-left: 0; }
+.workspace-teamspace-card:hover .workspace-teamspace-faces .workspace-avatar { box-shadow: 0 0 0 2px var(--hover); }
+.workspace-teamspace-faces .workspace-avatar:not(:last-child) { margin-right: 0; }
+.workspace-teamspace-faces [data-slot="avatar-group-count"] {
+  width: auto;
+  height: auto;
+  margin-left: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font-size: 11px;
+}
 
 .workspace-teamspace-new {
   position: relative;
@@ -328,12 +390,12 @@
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  min-height: 176px;
+  min-height: 196px;
   padding: 16px;
   overflow: hidden;
-  border: 0;
   border-radius: 16px;
   background: var(--tone-1c3350);
+  box-shadow: none;
   color: var(--on-scene);
   text-align: center;
 }
@@ -341,73 +403,203 @@
   content: "";
   position: absolute;
   inset: 12px 0 auto;
-  height: 100px;
+  height: 96px;
   background: var(--scene-ship-lines) center / contain no-repeat;
   opacity: .42;
 }
 .workspace-teamspace-new > * { position: relative; }
 .workspace-teamspace-new strong { font-size: 14px; }
 .workspace-teamspace-new span { color: var(--on-scene-soft); font-size: 12px; line-height: 1.45; }
+/* The on-scene button keeps the Button's size; only its colours follow the
+   scene. */
+.workspace-teamspace-new [data-slot="button"] { margin-top: 8px; background: var(--on-scene); color: var(--tone-1c3350); }
+.workspace-teamspace-new [data-slot="button"]:hover { background: var(--on-scene-soft); }
 .workspace-teamspace-new:hover::before { opacity: .55; }
+
+/* Creating a teamspace is a pop-up sheet: the ship's lines faint at its
+   top, then the form. */
+.workspace-teamspace-sheet {
+  overflow: hidden;
+  gap: 14px;
+  padding: 22px;
+  border-radius: 16px;
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--border-quiet), 0 24px 60px var(--shade-66);
+}
+@media (min-width: 640px) { .workspace-teamspace-sheet { max-width: 480px; } }
+.workspace-teamspace-sheet-scene {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 110px;
+  background: var(--scene-ship-lines) center 14px / 150px auto no-repeat;
+  -webkit-mask-image: linear-gradient(to bottom, #000, transparent);
+  mask-image: linear-gradient(to bottom, #000, transparent);
+  opacity: .16;
+  pointer-events: none;
+}
+.workspace-teamspace-sheet > :not(.workspace-teamspace-sheet-scene) { position: relative; }
+.workspace-teamspace-sheet-head { display: grid; gap: 6px; padding: 54px 24px 0 0; }
+.workspace-teamspace-sheet-head [data-slot="dialog-title"] { color: var(--text); font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+.workspace-teamspace-sheet-head [data-slot="dialog-description"] { color: var(--text-muted); font-size: 12.5px; line-height: 1.5; }
+.workspace-teamspace-sheet .workspace-teamspace-form {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
 
 @media (max-width: 760px) {
   .workspace-teamspaces-page { padding: 0 16px 32px; }
-  .workspace-teamspaces-hello { flex-direction: column; align-items: flex-start; }
+  .workspace-teamspaces-hello { flex-wrap: wrap; }
+  .workspace-teamspace-toolbar { flex-direction: column-reverse; align-items: stretch; }
+  .workspace-teamspace-filters { align-self: flex-start; }
+  /* On a phone an action row stacks full-width, the primary on top. */
+  .workspace-teamspace-detail-actions { flex-direction: column; align-items: stretch; }
+  .workspace-teamspace-detail-actions [data-slot="button"] { margin-left: 0; }
+  .workspace-teamspace-confirm-actions,
+  .workspace-teamspace-form-actions { flex-direction: column-reverse; align-items: stretch; }
 }
 
-/* A teamspace (founder's redesign, 14 Oct 2026): its name as a title under a
-   faint harbour band, then the room as the main tile and its work (overview,
-   tasks, files, activity) as a side tile with segmented tabs. */
-.workspace-teamspace-focus { position: relative; }
-.workspace-teamspace-focus > :not(.workspace-teamspace-scene) { position: relative; }
+@media (prefers-reduced-motion: reduce) {
+  .workspace-teamspace-card { transition: none; }
+}
+
+/* A teamspace (TeamspaceHome board, 15 Oct 2026): the sidebar stays, the
+   page's header holds "Teamspaces / <name>", and the canvas holds a faint
+   harbour band, the hero, the Room / Plan / Files / Parleys tabs, then the
+   room as the main tile with a side column of cards beside it. */
+.workspace-teamspace-crumbs { padding: 8px 24px 8px 22px; }
+.workspace-teamspace-crumbs ol { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; min-width: 0; margin: 0; padding: 0; list-style: none; color: var(--text-muted); font-size: 13px; }
+.workspace-teamspace-crumbs li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.workspace-teamspace-crumbs [data-slot="breadcrumb-separator"] { flex: none; color: var(--tone-575757); }
+.workspace-teamspace-crumbs [data-slot="breadcrumb-separator"] svg { width: 13px; height: 13px; }
+.workspace-teamspace-crumbs [data-slot="breadcrumb-page"] { display: block; overflow: hidden; color: var(--text); font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-teamspace-crumbs button { margin: -2px -4px; padding: 2px 4px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; }
+.workspace-teamspace-crumbs button:hover { color: var(--text); }
+
+.workspace-teamspace-canvas { position: relative; display: flex; flex-direction: column; gap: 0; overflow: hidden; }
+/* The tab panels inherit the canvas's type, as the plain elements did. */
+.workspace-teamspace-canvas [data-slot="tabs-content"] { font-size: inherit; line-height: inherit; }
+.workspace-teamspace-canvas > :not(.workspace-teamspace-scene) { position: relative; }
 .workspace-teamspace-scene {
   position: absolute;
   inset: 0 0 auto;
   height: 220px;
+  border-radius: 17px 17px 0 0;
   background: var(--scene-harbour) center 34% / cover no-repeat;
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .45) 45%, transparent 100%);
   mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .45) 45%, transparent 100%);
   opacity: var(--scene-soft-opacity);
   pointer-events: none;
 }
-.workspace-teamspace-hero { gap: 16px; padding: 28px 24px 22px; }
-.workspace-teamspace-hero h1 { font-size: 28px; font-weight: 700; letter-spacing: -.03em; line-height: 1.15; }
-.workspace-teamspace-hero p { margin-top: 6px; color: var(--text-muted); font-size: 13px; }
-.workspace-teamspace-hero .workspace-focus-team-avatar { width: 46px; height: 46px; }
-.workspace-teamspace-focus .workspace-focus-layout {
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 38%);
-  gap: 14px;
-  padding: 48px 16px 16px;
+
+.workspace-teamspace-hero { display: flex; flex: none; align-items: flex-end; gap: 16px; padding: 32px 24px 16px; }
+.workspace-teamspace-hero .workspace-focus-team-avatar { flex: none; width: 48px; height: 48px; }
+.workspace-teamspace-hero-title { flex: 1; min-width: 0; }
+.workspace-teamspace-hero h1 { margin: 0; overflow: hidden; font-size: 30px; font-weight: 700; letter-spacing: -.03em; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-teamspace-hero p { margin: 6px 0 0; color: var(--text-muted); font-size: 13.5px; }
+.workspace-teamspace-hero-actions { display: flex; flex: none; align-items: center; gap: 8px; }
+.workspace-teamspace-hero-actions .workspace-teamspace-faces { margin-right: 4px; }
+.workspace-teamspace-hero-actions .workspace-teamspace-faces .workspace-avatar { width: 26px; height: 26px; box-shadow: 0 0 0 2px var(--canvas); }
+.workspace-teamspace-hero-actions .workspace-teamspace-parley { margin-left: 0; border: 1px solid var(--border-quiet); background: transparent; }
+.workspace-teamspace-canvas > .call-strip { margin: 0 24px 12px; }
+
+/* The tabs: a segmented control, the selected tab the raised tile.
+   Activity is the quiet extra one, set a little apart. */
+.workspace-teamspace-tabs {
+  display: inline-flex;
+  flex: none;
+  align-self: flex-start;
+  gap: 2px;
+  height: auto;
+  margin: 0 24px 16px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--base);
 }
+.workspace-teamspace-tabs button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.workspace-teamspace-tabs button:hover { color: var(--text); }
+.workspace-teamspace-tabs button[data-active] {
+  background: var(--raised);
+  box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66);
+  color: var(--text);
+}
+.workspace-teamspace-tabs button.is-quiet { margin-left: 8px; font-weight: 500; }
+.workspace-teamspace-tab-count { color: var(--text-muted); font-weight: 500; }
+
+.workspace-teamspace-room.workspace-focus-layout {
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  padding: 0 24px 24px;
+}
+.workspace-teamspace-room[hidden] { display: none; }
 .workspace-teamspace-focus .workspace-conversation {
   padding: 4px 16px 12px;
   border-radius: 16px;
   background: var(--base);
 }
-.workspace-teamspace-focus .workspace-work-panel { background: var(--base); border-radius: 16px; }
-.workspace-teamspace-focus .workspace-work-tabs {
-  right: auto;
-  gap: 2px;
-  height: auto;
-  bottom: calc(100% + 8px);
-  padding: 3px;
-  border-radius: 999px;
-  background: var(--base);
-}
-.workspace-teamspace-focus .workspace-work-tab { min-height: 28px; border: 0; background: transparent; color: var(--text-muted); font-weight: 600; }
-.workspace-teamspace-focus .workspace-work-tab:hover { background: transparent; color: var(--text); }
-.workspace-teamspace-focus .workspace-work-tab.is-active {
-  background: var(--raised);
-  box-shadow: 0 0 0 1px var(--border-quiet), 0 1px 3px var(--shade-66);
-  color: var(--text);
-}
-.workspace-teamspace-focus .workspace-work-card { border: 0; background: var(--canvas); }
-@media (max-width: 760px) {
-  .workspace-teamspace-hero { padding: 16px; }
-  .workspace-teamspace-hero h1 { font-size: 22px; }
-  .workspace-teamspace-hero-more { display: none; }
-}
+.workspace-teamspace-side { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+.workspace-teamspace-side .workspace-work-card { padding: 16px; border: 0; background: var(--base); }
+.workspace-teamspace-live .live-room { margin-top: 12px; }
+.workspace-teamspace-side-files h3 button { height: auto; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.workspace-teamspace-side-files h3 button:hover { text-decoration: underline; text-underline-offset: 3px; }
+.workspace-teamspace-side-file-list { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.workspace-teamspace-side-file-list li { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.workspace-teamspace-file-kind { flex: none; width: 34px; height: auto; padding: 3px 0; border: 0; border-radius: 6px; background: var(--canvas); color: var(--text-muted); font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-align: center; }
+
+.workspace-teamspace-panel { flex: 1; margin: 0 24px 24px; border-radius: 16px; background: var(--base); }
+.workspace-teamspace-panel .workspace-work-card { border: 0; background: var(--canvas); }
+.workspace-teamspace-coming { margin-top: 24px; }
+
+/* Invite: the create sheet's frame, with the people who could be added. */
+.workspace-teamspace-invite { gap: 14px; }
+.workspace-teamspace-invite .workspace-teamspace-sheet-head { padding-top: 8px; }
+.workspace-teamspace-invite > p { margin: 0; color: var(--text-muted); font-size: 12.5px; }
+.workspace-teamspace-invite-search { position: relative; display: block; }
+.workspace-teamspace-invite-search svg { position: absolute; top: 50%; left: 12px; color: var(--text-muted); transform: translateY(-50%); }
+.workspace-teamspace-invite-search [data-slot="input"] { height: 38px; padding-left: 34px; }
+.workspace-teamspace-invite-list { display: flex; flex-direction: column; gap: 4px; max-height: 320px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.workspace-teamspace-invite-list li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 4px; }
+.workspace-teamspace-invite-list .workspace-avatar { flex: none; width: 30px; height: 30px; }
+.workspace-teamspace-invite-list li > span:not(.workspace-avatar) { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.workspace-teamspace-invite-list strong { overflow: hidden; color: var(--text); font-size: 12.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-teamspace-invite-list small { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+
 @media (max-width: 960px) {
-  .workspace-teamspace-focus .workspace-focus-layout { padding: 0 16px 16px; }
-  .workspace-teamspace-focus .workspace-work-tabs { position: static; align-self: flex-start; margin-bottom: 8px; }
+  .workspace-teamspace-canvas { overflow-y: auto; }
+  .workspace-teamspace-room.workspace-focus-layout { display: flex; overflow: visible; padding: 0 16px 16px; }
+  .workspace-teamspace-side { flex: none; overflow: visible; }
+  .workspace-teamspace-panel { flex: none; min-height: 410px; margin: 0 16px 16px; }
 }
+@media (max-width: 800px) {
+  .workspace-shell .workspace-teamspace-crumbs { justify-content: flex-start; padding: 8px 16px 8px 56px; text-align: left; }
+  .workspace-teamspace-hero { flex-wrap: wrap; align-items: center; padding: 20px 16px 14px; }
+  .workspace-teamspace-hero h1 { font-size: 22px; }
+  .workspace-teamspace-hero-actions { width: 100%; }
+  .workspace-teamspace-tabs { max-width: calc(100% - 32px); margin: 0 16px 12px; overflow-x: auto; }
+  .workspace-teamspace-canvas > .call-strip { margin: 0 16px 12px; }
+  .workspace-focus[data-composing="true"] .workspace-teamspace-scene,
+  .workspace-focus[data-composing="true"] .workspace-teamspace-hero,
+  .workspace-focus[data-composing="true"] .workspace-teamspace-tabs,
+  .workspace-focus[data-composing="true"] .workspace-teamspace-side { display: none; }
+  .workspace-focus[data-composing="true"] .workspace-teamspace-canvas { flex: 1; min-height: 0; overflow: hidden; }
+}
+
+/* The room's conversation renders into a host that can move to a parley's
+   Room pane; the hosts take no box, so the conversation lays out as before. */
+.workspace-chat-host { display: contents; }

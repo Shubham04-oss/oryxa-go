@@ -1,0 +1,91 @@
+/* ⌘K, "Jump to" (workspace-command-palette.tsx; board NavCommand): the
+   library's command dialog, on the raised surface, a little below the top. */
+.workspace-palette {
+  top: 110px;
+  width: 640px;
+  max-width: calc(100% - 32px);
+  padding: 0;
+  border-radius: 18px;
+  background: var(--raised);
+  box-shadow: 0 0 0 1px var(--tone-393939), 0 24px 80px var(--shade-aa);
+  color: var(--text);
+}
+@media (min-width: 640px) {
+  .workspace-palette { max-width: 640px; }
+}
+.workspace-palette [data-slot="command"] {
+  border-radius: 18px;
+  background: transparent;
+  color: var(--text);
+}
+.workspace-palette [data-slot="command-input-wrapper"] {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-quiet);
+}
+.workspace-palette [data-slot="input-group"] {
+  height: 40px;
+  border: 0;
+  background: transparent;
+}
+.workspace-palette [data-slot="command-input"] { color: var(--text); font-size: 15px; }
+.workspace-palette [data-slot="command-input"]::placeholder { color: var(--text-muted); }
+.workspace-palette-list { max-height: min(420px, 60dvh); padding: 8px; }
+.workspace-palette [cmdk-group-heading] {
+  padding: 8px 8px 4px;
+  color: var(--tone-858585);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.workspace-palette [data-slot="command-empty"] { padding: 24px 8px; color: var(--text-muted); font-size: 13px; }
+.workspace-palette-option {
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  color: var(--tone-dcdcdc);
+  font-size: 13px;
+}
+.workspace-palette-option[data-selected="true"] { background: var(--tone-303030); color: var(--text); }
+/* The library's check mark is for choices; a jump has none. */
+.workspace-palette-option > svg:last-child:not(:first-child) { display: none; }
+.workspace-palette-mark { width: 20px; height: 20px; }
+.workspace-palette-mark svg { width: 100%; height: 100%; }
+.workspace-palette-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-palette-hint { flex: none; color: var(--tone-777777); font-size: 12px; }
+.workspace-palette [data-slot="command-shortcut"],
+.workspace-palette kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--tone-2a2a2a);
+  color: var(--tone-aaaaaa);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.workspace-palette-note { margin: 0; padding: 0 16px 8px; color: var(--tone-777777); font-size: 11px; }
+.workspace-palette-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-quiet);
+  color: var(--tone-777777);
+  font-size: 11px;
+}
+.workspace-palette-foot span { display: inline-flex; align-items: center; gap: 8px; }
+@media (max-width: 800px) {
+  .workspace-palette { top: 16px; }
+  .workspace-palette-hint { display: none; }
+}
