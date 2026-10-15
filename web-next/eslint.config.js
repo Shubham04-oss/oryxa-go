@@ -1,9 +1,15 @@
 //  @ts-check
 
 import { tanstackConfig } from "@tanstack/eslint-config"
+import reactHooks from "eslint-plugin-react-hooks"
 
 export default [
   ...tanstackConfig,
+  {
+    // A hook called conditionally breaks React's order of hooks.
+    plugins: { "react-hooks": reactHooks },
+    rules: { "react-hooks/rules-of-hooks": "error" },
+  },
   {
     rules: {
       "import/no-cycle": "off",

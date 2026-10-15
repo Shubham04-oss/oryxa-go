@@ -23,17 +23,20 @@ const Toaster = ({ ...props }: ToasterProps) => {
         error: <OctagonXIcon className="size-4" />,
         loading: <Loader2Icon className="size-4 animate-spin" />,
       }}
+      // The workspace's toasts: raised tiles in the theme's own roles
+      // (workspace-toasts.tsx, popup.css).
       style={
         {
-          "--normal-bg": "var(--popover)",
-          "--normal-text": "var(--popover-foreground)",
-          "--normal-border": "var(--border)",
-          "--border-radius": "var(--radius)",
+          "--normal-bg": "var(--raised)",
+          "--normal-text": "var(--text)",
+          "--normal-border": "var(--border-quiet)",
+          "--border-radius": "16px",
         } as React.CSSProperties
       }
       toastOptions={{
         classNames: {
-          toast: "cn-toast",
+          toast: "cn-toast workspace-toast",
+          description: "workspace-toast-description",
         },
       }}
       {...props}

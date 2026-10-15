@@ -24,15 +24,67 @@ export type HeardSegment = {
   at: number
 }
 
+export type DeviceKind = "audioinput" | "videoinput" | "audiooutput"
+
+/** A small signal to everyone in the call: a raised hand, or a reaction. */
+export type CallSignal =
+  { kind: "hand"; up: boolean } | { kind: "reaction"; emoji: string }
+
+/** The broadcast types the signals travel as (RealtimeKit broadcastMessage). */
+const SIGNAL_TYPES = { hand: "oryxa.hand", reaction: "oryxa.reaction" }
+
+/** Reads a broadcast back into a signal and who sent it, if it is one. */
+export function readSignal(
+  type: string,
+  payload: Record<string, unknown>
+): { member: string; signal: CallSignal } | undefined {
+  const member = payload.member
+  if (typeof member !== "string" || !member) return undefined
+  if (type === SIGNAL_TYPES.hand && typeof payload.up === "boolean")
+    return { member, signal: { kind: "hand", up: payload.up } }
+  if (
+    type === SIGNAL_TYPES.reaction &&
+    typeof payload.emoji === "string" &&
+    payload.emoji.length <= 16
+  )
+    return { member, signal: { kind: "reaction", emoji: payload.emoji } }
+  return undefined
+}
+
+/** The devices the member can choose between, and the ones in use. */
+export type CallDevices = {
+  microphones: MediaDeviceInfo[]
+  cameras: MediaDeviceInfo[]
+  speakers: MediaDeviceInfo[]
+  current: Partial<Record<DeviceKind, string>>
+}
+
 export interface CallMedia {
   tiles: () => CallTile[]
   /** Called whenever anyone's tiles change; returns the unsubscribe. */
   onChange: (listener: () => void) => () => void
   /** Every speaker's live transcript, as RealtimeKit hears it. */
   onTranscript: (listener: (segment: HeardSegment) => void) => () => void
+  devices: () => Promise<CallDevices>
+  /**
+   * Switches to the device of `kind` with `deviceId`. Both are needed: a
+   * browser reuses ids like "default" across microphones and speakers.
+   */
+  setDevice: (kind: DeviceKind, deviceId: string) => Promise<void>
+  /** Called when a device is plugged in or out; returns the unsubscribe. */
+  onDevicesChange: (listener: () => void) => () => void
   setMic: (on: boolean) => Promise<void>
   setCamera: (on: boolean) => Promise<void>
   setScreen: (on: boolean) => Promise<void>
+  /**
+   * Sends a signal to everyone else in the call; absent when this call
+   * can't. It rejects when the member's preset doesn't allow broadcasts.
+   */
+  signal?: (signal: CallSignal) => Promise<void>
+  /** Signals from everyone else; returns the unsubscribe. */
+  onSignal?: (
+    listener: (member: string, signal: CallSignal) => void
+  ) => () => void
   leave: () => Promise<void>
 }
 
@@ -145,6 +197,58 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
       meeting.ai.on("transcript", heard)
       return () => meeting.ai.off("transcript", heard)
     },
+    async devices() {
+      const media = meeting.self as unknown as {
+        getAudioDevices: () => Promise<MediaDeviceInfo[]>
+        getVideoDevices: () => Promise<MediaDeviceInfo[]>
+        getSpeakerDevices: () => Promise<MediaDeviceInfo[]>
+        getCurrentDevices: () => Partial<{
+          audio: MediaDeviceInfo
+          video: MediaDeviceInfo
+          speaker: MediaDeviceInfo
+        }>
+      }
+      const [microphones, cameras, speakers] = await Promise.all([
+        media.getAudioDevices(),
+        media.getVideoDevices(),
+        media.getSpeakerDevices().catch(() => []),
+      ])
+      const current = media.getCurrentDevices()
+      return {
+        microphones,
+        cameras,
+        speakers,
+        current: {
+          audioinput: current.audio?.deviceId,
+          videoinput: current.video?.deviceId,
+          audiooutput: current.speaker?.deviceId,
+        },
+      }
+    },
+    async setDevice(kind, deviceId) {
+      const all = await (
+        meeting.self as unknown as {
+          getAllDevices: () => Promise<MediaDeviceInfo[]>
+        }
+      ).getAllDevices()
+      const device = all.find(
+        (item) => item.kind === kind && item.deviceId === deviceId
+      )
+      if (device) await meeting.self.setDevice(device)
+      changed()
+    },
+    onDevicesChange(listener) {
+      const events = meeting.self as unknown as {
+        on: (event: string, listener: () => void) => void
+        off: (event: string, listener: () => void) => void
+      }
+      events.on("deviceListUpdate", listener)
+      events.on("deviceUpdate", listener)
+      return () => {
+        events.off("deviceListUpdate", listener)
+        events.off("deviceUpdate", listener)
+      }
+    },
     async setMic(on) {
       if (on) await meeting.self.enableAudio()
       else await meeting.self.disableAudio()
@@ -159,6 +263,26 @@ export async function joinMedia(options: MediaOptions): Promise<CallMedia> {
       if (on) await meeting.self.enableScreenShare()
       else await meeting.self.disableScreenShare()
       changed()
+    },
+    async signal(signal) {
+      const member = self.customParticipantId ?? self.id
+      await meeting.participants.broadcastMessage(
+        SIGNAL_TYPES[signal.kind],
+        signal.kind === "hand"
+          ? { member, up: signal.up }
+          : { member, emoji: signal.emoji }
+      )
+    },
+    onSignal(listener) {
+      const heard = (message: {
+        type: string
+        payload: Record<string, unknown>
+      }) => {
+        const read = readSignal(message.type, message.payload)
+        if (read) listener(read.member, read.signal)
+      }
+      meeting.participants.on("broadcastedMessage", heard)
+      return () => meeting.participants.off("broadcastedMessage", heard)
     },
     async leave() {
       listeners.clear()
