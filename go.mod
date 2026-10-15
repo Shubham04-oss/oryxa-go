@@ -71,6 +71,7 @@ require (
 	go.opentelemetry.io/otel/sdk/log v0.22.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
@@ -103,6 +104,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.73.0
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.52.0
 	github.com/aws/smithy-go v1.28.1
+	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/dodopayments/dodopayments-go v1.116.0
 	github.com/exaring/otelpgx v0.12.0
