@@ -248,7 +248,9 @@ not permission to copy every incidental value into a new component.
     parley, and leave.
   - **The full page:** a gallery or speaker layout, live captions, the
     transcript as this page heard it, and a dock (mic, camera, screen,
-    record, ask the agent in, leave), plus "End for everyone".
+    record, ask the agent in, devices, leave), plus "End for everyone".
+    Devices opens a small panel over the stage to choose the microphone,
+    camera and speaker, and follows devices plugged in or out.
   - **Tiles:** camera tiles stay dark in both themes, as video does
     (`--call-*` tokens). A person keeps their tile colour everywhere. The
     agent is a tile with no camera, marked Listening or Speaking.

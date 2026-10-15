@@ -14,6 +14,7 @@ import {
   MonitorUp,
   PhoneOff,
   ScrollText,
+  Settings2,
   Sparkles,
   Video,
   VideoOff,
@@ -25,7 +26,7 @@ import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { agentIdentity, personIdentity } from "./teamspace-format"
 import { callDuration, whoIsIn } from "@/lib/call/client"
 import type { CallView } from "@/lib/call/client"
-import type { CallTile } from "@/lib/call/media"
+import type { CallDevices, CallTile, DeviceKind } from "@/lib/call/media"
 import { useRoomCall } from "@/lib/call/use-room-call"
 import type { LiveRoom } from "@/lib/live/client"
 import "./call.css"
@@ -619,6 +620,97 @@ function CallMiniPlayer({
   )
 }
 
+/** The member's microphone, camera and speaker, while they're in the call. */
+function DevicePicker({ onClose }: { onClose: () => void }) {
+  const { devices, setDevice, onDevicesChange } = useCall()
+  const [list, setList] = useState<CallDevices | undefined>()
+  const [problem, setProblem] = useState("")
+
+  useEffect(() => {
+    let current = true
+    const read = () =>
+      void devices()
+        .then((found) => {
+          if (current) setList(found)
+        })
+        .catch(() => {
+          if (current) setProblem("Couldn't read your devices.")
+        })
+    read()
+    const stop = onDevicesChange(read)
+    return () => {
+      current = false
+      stop()
+    }
+  }, [devices, onDevicesChange])
+
+  const choose = (kind: DeviceKind, deviceId: string) => {
+    setProblem("")
+    void setDevice(kind, deviceId)
+      .then(() => devices().then(setList))
+      .catch(() => setProblem("Couldn't switch to that device."))
+  }
+
+  const groups: {
+    kind: DeviceKind
+    label: string
+    items: MediaDeviceInfo[]
+  }[] = list
+    ? [
+        { kind: "audioinput", label: "Microphone", items: list.microphones },
+        { kind: "videoinput", label: "Camera", items: list.cameras },
+        { kind: "audiooutput", label: "Speaker", items: list.speakers },
+      ]
+    : []
+
+  return (
+    <div className="call-devices" role="dialog" aria-label="Devices">
+      <div className="call-devices-head">
+        <strong>Devices</strong>
+        <button
+          type="button"
+          className="call-btn"
+          aria-label="Close devices"
+          onClick={onClose}
+        >
+          <X size={14} aria-hidden="true" />
+        </button>
+      </div>
+      {!list && !problem && (
+        <p className="call-devices-note">Reading your devices…</p>
+      )}
+      {groups.map((group) => (
+        <label key={group.kind} className="call-device">
+          <span>{group.label}</span>
+          {group.items.length === 0 ? (
+            <small>
+              {group.kind === "audiooutput"
+                ? "This browser plays through its default speaker."
+                : "None found."}
+            </small>
+          ) : (
+            <select
+              value={list?.current[group.kind] ?? ""}
+              onChange={(event) => choose(group.kind, event.target.value)}
+            >
+              {group.items.map((item, index) => (
+                <option key={item.deviceId || index} value={item.deviceId}>
+                  {item.label || `${group.label} ${index + 1}`}
+                </option>
+              ))}
+            </select>
+          )}
+        </label>
+      ))}
+      {problem && (
+        <p className="call-devices-note" role="alert">
+          {problem}
+        </p>
+      )}
+    </div>
+  )
+}
+
 type Layout = "gallery" | "speaker"
 
 function CallFullPage({
@@ -640,6 +732,7 @@ function CallFullPage({
   } = useCall()
   const [layout, setLayout] = useState<Layout>("gallery")
   const [captions, setCaptions] = useState(true)
+  const [choosing, setChoosing] = useState(false)
   const [transcript, setTranscript] = useState(true)
   const [busy, setBusy] = useState(false)
   const duration = useDuration(view?.startedAt)
@@ -769,6 +862,7 @@ function CallFullPage({
             )}
           </section>
         )}
+        {choosing && <DevicePicker onClose={() => setChoosing(false)} />}
         {active.privateAnswer && (
           <div className="call-private" role="status">
             <b>Only you can see this</b>
@@ -857,6 +951,15 @@ function CallFullPage({
             onClick={() => act(() => setAgent(!agent?.present))}
           >
             <Sparkles size={18} aria-hidden="true" />
+          </button>
+          <button
+            className="call-btn"
+            type="button"
+            aria-pressed={choosing}
+            aria-label="Devices"
+            onClick={() => setChoosing((value) => !value)}
+          >
+            <Settings2 size={16} aria-hidden="true" />
           </button>
           <button
             className="call-leave"
