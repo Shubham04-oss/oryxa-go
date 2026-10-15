@@ -439,14 +439,14 @@ describe("Team → People", () => {
       await screen.findByRole("heading", { name: "Priya Shah", level: 1 })
     ).toBeTruthy()
     expect(
-      screen.getByRole("navigation", { name: "Team navigation" })
+      screen.getByRole("complementary", { name: "Workspace navigation" })
     ).toBeTruthy()
     expect(roomSockets.named(priyaDm)).toHaveLength(1)
     expect(document.activeElement).toBe(document.body)
     expect(onDirectMessageChange).not.toHaveBeenCalled()
 
     // Leaving People leaves the DM, and the address follows.
-    fireEvent.click(screen.getByRole("button", { name: /^Teamspaces/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Teamspaces" }))
     expect(onDirectMessageChange).toHaveBeenLastCalledWith(null)
   })
 
@@ -498,11 +498,11 @@ describe("Team → People", () => {
   })
 })
 
-describe("Team's recent conversations", () => {
-  it("shows the three latest DMs, each unread one marked, and opens one in the canvas", async () => {
+describe("The sidebar's Messages", () => {
+  it("lists the three latest DMs and any older unread one, with counts, and opens one in the canvas", async () => {
     backend()
     renderShell({ initialSection: "teamspaces" })
-    const recent = screen.getByRole("region", { name: "Recent conversations" })
+    const messages = screen.getByRole("group", { name: "Messages" })
     inboxSays(
       [
         dm(priya, 2, { body: "See you at 3", unread: 2 }),
@@ -516,61 +516,49 @@ describe("Team's recent conversations", () => {
         },
         dm("user-owen", 60, { body: "Lunch?" }),
         dm("user-sam", 90, { body: "Thanks!" }),
+        dm("user-ivy", 120, { body: "Ping", unread: 1 }),
       ],
-      2
+      3
     )
-    await within(recent).findByRole("button", {
+    await within(messages).findByRole("button", {
       name: "Open conversation with Priya Shah, 2 unread",
     })
-    const items = within(recent).getAllByRole("button", {
+    const items = within(messages).getAllByRole("button", {
       name: /^Open conversation/,
     })
     expect(items.map((item) => item.getAttribute("aria-label"))).toEqual([
       "Open conversation with Priya Shah, 2 unread",
       "Open conversation with Ada Lovelace",
       "Open conversation with Owen Park",
+      expect.stringMatching(/^Open conversation with .*, 1 unread$/),
     ])
-    expect(within(items[0]).getByText("See you at 3")).toBeTruthy()
-    expect(within(items[1]).getByText("You: Sent the deck")).toBeTruthy()
-    expect(items[0].getAttribute("data-unread")).toBe("true")
-    expect(items[1].getAttribute("data-unread")).toBeNull()
 
     fireEvent.click(items[0])
     expect(
       screen.getByRole("heading", { name: "Priya Shah", level: 1 })
     ).toBeTruthy()
-    expect(items[0].getAttribute("aria-current")).toBe("page")
+    expect(
+      within(messages)
+        .getByRole("button", {
+          name: "Open conversation with Priya Shah, 2 unread",
+        })
+        .getAttribute("aria-current")
+    ).toBe("page")
     // People is not the page while its conversation is.
     expect(
-      screen
+      within(messages)
         .getByRole("button", { name: "People" })
         .getAttribute("aria-current")
     ).toBeNull()
-
-    // The rest are one click away, in the agent panel's DMs tab.
-    fireEvent.click(
-      within(recent).getByRole("button", { name: "All conversations" })
-    )
-    const panel = screen.getByRole("complementary", { name: "Agent panel" })
-    expect(
-      within(panel)
-        .getByRole("tab", { name: "DMs, 2 unread" })
-        .getAttribute("aria-selected")
-    ).toBe("true")
-    expect(
-      within(panel).getAllByRole("button", {
-        name: /^Open (side )?conversation/,
-      })
-    ).toHaveLength(5)
   })
 
   it("says when there is nothing to show yet", async () => {
     backend()
     renderShell()
-    const recent = screen.getByRole("region", { name: "Recent conversations" })
-    expect(within(recent).queryByText("Start a chat from People.")).toBeNull()
+    const messages = screen.getByRole("group", { name: "Messages" })
+    expect(within(messages).queryByText("No messages yet.")).toBeNull()
     inboxSays([])
-    expect(within(recent).getByText("Start a chat from People.")).toBeTruthy()
+    expect(within(messages).getByText("No messages yet.")).toBeTruthy()
   })
 
   it("closes the mobile sidebar after opening a conversation", async () => {

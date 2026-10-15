@@ -1,31 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import type { ComponentType, CSSProperties } from "react"
-import {
-  ArrowLeft,
-  ArrowRight,
-  BookOpenText,
-  Bot,
-  ChartNoAxesColumn,
-  Folder,
-  House,
-  Inbox,
-  LayoutGrid,
-  LogOut,
-  MoreHorizontal,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Puzzle,
-  Settings2,
-  Sparkles,
-  UsersRound,
-  Workflow,
-} from "lucide-react"
+import type { CSSProperties } from "react"
+import { ArrowLeft, BookOpenText } from "lucide-react"
 import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { FocusHeader } from "./agents-parts"
 import { PrimaryAgentFileViewer } from "./primary-agent-files"
 import { BrandChip } from "./brand-chip"
 import { HomeOverview } from "./home-overview"
-import { ThemeMenuItem } from "./theme-menu-item"
+import { WorkspaceSidebar, sectionArea } from "./workspace-sidebar"
+import type { SidebarPage, SidebarSection } from "./workspace-sidebar"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import { KnowledgeBases } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
@@ -40,13 +22,9 @@ import { CallProvider } from "./call-provider"
 import { CallSurface } from "./call-surfaces"
 import { statusLabel } from "./teamspace-format"
 import { DirectMessageView, PersonAvatar } from "./direct-message"
-import {
-  RecentConversations,
-  recentDirectMessages,
-} from "./direct-message-inbox"
 import { useDmPeople } from "./direct-message-people"
 import { usePeerOnline } from "./direct-message-presence"
-import { IdentityAvatar, people, TeamspaceAvatar } from "./workspace-avatar"
+import { people, TeamspaceAvatar } from "./workspace-avatar"
 import { WorkspaceTools } from "./workspace-tools"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import type {
@@ -68,7 +46,6 @@ import { useInbox } from "@/lib/dms"
 import { isNameId } from "@/lib/dms/names"
 import { OpenRequestProvider } from "@/lib/dms/request-navigation"
 import type { AvatarIdentity } from "./workspace-avatar"
-import { cn } from "@/lib/utils"
 import { captureScreenContext } from "@/lib/agents/screen-context"
 import type { ScreenContext, ScreenItem } from "@/lib/agents/screen-context"
 import {
@@ -77,52 +54,10 @@ import {
 } from "@/lib/threads/chat-choice"
 import type { PrimaryChatTarget } from "@/lib/threads/chat-choice"
 
-type Section =
-  | "overview"
-  | "knowledge"
-  | "tools"
-  | "teamspaces"
-  | "people"
-  | "agents"
-  | "multi-agents"
-  | "specialists"
-  | "requests"
+// The sidebar (workspace-sidebar.tsx) names every page; each still belongs to
+// an area, which remembers its last page.
+type Section = SidebarSection
 type PrimaryMode = "home" | "team" | "agents"
-
-type NavigationItem = {
-  key: Section
-  label: string
-  icon: ComponentType<{ size?: number; strokeWidth?: number }>
-  count?: string
-}
-
-const navigation: Record<PrimaryMode, NavigationItem[]> = {
-  home: [
-    { key: "overview", label: "My workspace", icon: LayoutGrid },
-    { key: "knowledge", label: "Library", icon: Sparkles },
-    { key: "tools", label: "Tools", icon: Puzzle },
-  ],
-  team: [
-    { key: "teamspaces", label: "Teamspaces", icon: Folder },
-    { key: "people", label: "People", icon: UsersRound },
-  ],
-  agents: [
-    { key: "agents", label: "Agent overview", icon: ChartNoAxesColumn },
-    { key: "multi-agents", label: "Multi-agent teams", icon: Workflow },
-    { key: "specialists", label: "Specialists", icon: Bot },
-    { key: "requests", label: "Requests", icon: Inbox },
-  ],
-}
-
-const primaryModes: Array<{
-  key: PrimaryMode
-  label: string
-  icon: NavigationItem["icon"]
-}> = [
-  { key: "home", label: "Home", icon: House },
-  { key: "team", label: "Team", icon: UsersRound },
-  { key: "agents", label: "Agents", icon: ChartNoAxesColumn },
-]
 
 const defaultSections: Record<PrimaryMode, Section> = {
   home: "overview",
@@ -212,7 +147,6 @@ function WorkspaceShellContent({
     useState<SelectedKnowledgeBase | null>(null)
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState("")
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // The page Settings opens on, when a link asked for one.
   const [settingsPage, setSettingsPage] = useState<SettingsPage>()
@@ -318,15 +252,13 @@ function WorkspaceShellContent({
   }
 
   useEffect(() => {
-    if (!settingsOpen && !profileMenuOpen) return
+    if (!settingsOpen) return
     function onEscape(event: KeyboardEvent) {
-      if (event.key !== "Escape") return
-      if (settingsOpen) closeSettings()
-      else setProfileMenuOpen(false)
+      if (event.key === "Escape") closeSettings()
     }
     window.addEventListener("keydown", onEscape)
     return () => window.removeEventListener("keydown", onEscape)
-  }, [settingsOpen, profileMenuOpen])
+  }, [settingsOpen])
 
   const section = sectionsByMode[activeMode]
   const heading = headings[section]
@@ -352,9 +284,6 @@ function WorkspaceShellContent({
   // On a small screen with the keyboard up, the DM gets the height it leaves.
   const middleHeight = useVisibleHeight(Boolean(canvasPeerId) && dmComposing)
   const primaryVisibleHeight = useVisibleHeight(primaryWork && primaryComposing)
-  const recentPeerIds = recentDirectMessages(inbox.conversations).map(
-    (conversation) => conversation.peerId
-  )
   const selectedKnowledgeBase =
     section === "knowledge" ? (knowledgeBaseSelection ?? undefined) : undefined
   const selectedTeamspace =
@@ -435,12 +364,13 @@ function WorkspaceShellContent({
     onDirectMessageChange?.(canvasPeerId)
   }, [canvasPeerId, onDirectMessageChange])
 
-  /** A nav item is the page: People only while no recent conversation in the nav is. */
-  function navCurrent(key: Section): boolean {
-    if (section !== key) return false
-    return (
-      key !== "people" || !canvasPeerId || !recentPeerIds.includes(canvasPeerId)
-    )
+  /** A sidebar entry: a page and its area, or the member's chats in the panel. */
+  function openSidebarPage(page: SidebarPage) {
+    if (page === "chats") {
+      openHomeHistory()
+      return
+    }
+    selectNav(sectionArea(page), page)
   }
 
   /** The one sidebar: each page belongs to a mode, and picking it opens both. */
@@ -488,12 +418,6 @@ function WorkspaceShellContent({
     setDmPeerId(null)
     setDmOpenedByMember(false)
     setDmComposing(false)
-  }
-
-  /** Team's "All conversations": the agent panel's DMs tab. */
-  function showAllConversations() {
-    expandAgentPanel()
-    setTabRequest({ tab: "dms" })
   }
 
   function openWork(target: AgentsFocusTarget) {
@@ -666,189 +590,43 @@ function WorkspaceShellContent({
       }
     >
       {!isFocused && (
-        <aside
-          id="workspace-navigation"
-          className="workspace-left"
-          aria-label="Workspace navigation"
-        >
-          <div className="workspace-left-top">
-            {leftExpanded ? (
-              <>
-                <span className="workspace-left-title">
-                  {selectedOrganization?.name ?? "Workspace"}
-                </span>
-                <button
-                  className="workspace-icon-button workspace-left-toggle"
-                  type="button"
-                  aria-label="Collapse left sidebar"
-                  aria-controls="workspace-navigation"
-                  aria-expanded={leftExpanded}
-                  onClick={() => setLeftExpanded(false)}
-                >
-                  <PanelLeftClose
-                    className="workspace-panel-toggle-desktop"
-                    size={18}
-                    strokeWidth={1.7}
-                  />
-                  <ArrowLeft
-                    className="workspace-panel-toggle-mobile"
-                    size={17}
-                    strokeWidth={1.7}
-                  />
-                </button>
-              </>
-            ) : (
-              <button
-                className="workspace-mark workspace-mark-button"
-                type="button"
-                aria-label="Expand left sidebar"
-                aria-controls="workspace-navigation"
-                aria-expanded={leftExpanded}
-                onClick={() => {
-                  setLeftExpanded(true)
-                  setRightExpanded(false)
-                }}
-              >
-                <PanelLeftOpen
-                  className="workspace-panel-toggle-desktop"
-                  size={18}
-                  strokeWidth={1.7}
-                />
-                <ArrowRight
-                  className="workspace-panel-toggle-mobile"
-                  size={17}
-                  strokeWidth={1.7}
-                />
-              </button>
-            )}
-          </div>
-
-          <div className="workspace-nav-groups">
-            {primaryModes.map((mode) => (
-              <nav
-                className="workspace-navigation"
-                key={mode.key}
-                aria-label={`${mode.label} navigation`}
-              >
-                {leftExpanded && (
-                  <span className="workspace-nav-heading" aria-hidden="true">
-                    {mode.label}
-                  </span>
-                )}
-                {navigation[mode.key].map((item) => {
-                  const Icon = item.icon
-                  const current =
-                    activeMode === mode.key && navCurrent(item.key)
-                  return (
-                    <button
-                      className={cn(
-                        "workspace-nav-item",
-                        current && "is-active"
-                      )}
-                      key={item.key}
-                      type="button"
-                      title={leftExpanded ? undefined : item.label}
-                      aria-label={leftExpanded ? undefined : item.label}
-                      aria-current={current ? "page" : undefined}
-                      onClick={() => selectNav(mode.key, item.key)}
-                    >
-                      <Icon size={18} strokeWidth={1.7} />
-                      {leftExpanded && (
-                        <span className="workspace-nav-label">
-                          {item.label}
-                        </span>
-                      )}
-                      {leftExpanded &&
-                        (item.count ||
-                          (item.key === "teamspaces" &&
-                            teamspaces.count !== undefined)) && (
-                          <span className="workspace-nav-count">
-                            {item.key === "teamspaces"
-                              ? teamspaces.count
-                              : item.count}
-                          </span>
-                        )}
-                    </button>
-                  )
-                })}
-              </nav>
-            ))}
-
-            <RecentConversations
-              inbox={inbox}
-              people={dmPeople}
-              viewerId={viewerId}
-              expanded={leftExpanded}
-              activePeerId={canvasPeerId}
-              onOpen={openDirectMessage}
-              onShowAll={showAllConversations}
-            />
-          </div>
-
-          <div className="workspace-profile-area">
-            {profileMenuOpen && (
-              <div
-                className="workspace-profile-menu"
-                role="menu"
-                aria-label="User menu"
-              >
-                <ThemeMenuItem />
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setProfileMenuOpen(false)
-                    setSettingsPage(undefined)
-                    setSettingsOpen(true)
-                  }}
-                >
-                  <Settings2 size={17} strokeWidth={1.7} /> Settings
-                </button>
-                {session && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={signingOut}
-                    onClick={() => void handleSignOut()}
-                  >
-                    <LogOut size={17} strokeWidth={1.7} />{" "}
-                    {signingOut ? "Signing out…" : "Sign out"}
-                  </button>
-                )}
-              </div>
-            )}
-            <button
-              className="workspace-profile"
-              type="button"
-              aria-label="Open user menu"
-              aria-haspopup="menu"
-              aria-expanded={profileMenuOpen}
-              onClick={() => setProfileMenuOpen((open) => !open)}
-            >
-              <IdentityAvatar identity={currentIdentity} />
-              {leftExpanded && (
-                <>
-                  <span className="workspace-profile-copy">
-                    <strong>{currentIdentity.name}</strong>
-                    <small>
-                      {session
-                        ? role === "admin"
-                          ? "Workspace admin"
-                          : "Member"
-                        : "Preview admin"}
-                    </small>
-                  </span>
-                  <MoreHorizontal size={17} strokeWidth={1.7} />
-                </>
-              )}
-            </button>
-          </div>
-          {signOutError && (
-            <p className="workspace-profile-error" role="alert">
-              {signOutError}
-            </p>
-          )}
-        </aside>
+        <WorkspaceSidebar
+          expanded={leftExpanded}
+          onExpandedChange={(expanded) => {
+            setLeftExpanded(expanded)
+            // Expanding the left collapses the right (DESIGN.md §2).
+            if (expanded) setRightExpanded(false)
+          }}
+          organizationId={session ? selectedOrganization?.id : undefined}
+          viewerId={viewerId}
+          organizations={session?.organizations ?? []}
+          selectedOrganization={selectedOrganization}
+          identity={currentIdentity}
+          roleLabel={
+            session
+              ? role === "admin"
+                ? "Workspace admin"
+                : "Member"
+              : "Preview admin"
+          }
+          section={primaryWork || agentWork ? null : section}
+          openTeamspaceId={teamspaces.openId}
+          activePeerId={canvasPeerId}
+          teamspaces={teamspaces.spaces}
+          teamspacesLoaded={teamspaces.count !== undefined}
+          inbox={inbox}
+          people={dmPeople}
+          onNavigate={openSidebarPage}
+          onOpenTeamspace={openTeamspace}
+          onOpenDirectMessage={openDirectMessage}
+          onOpenSettings={() => {
+            setSettingsPage(undefined)
+            setSettingsOpen(true)
+          }}
+          onSignOut={session ? () => void handleSignOut() : undefined}
+          signingOut={signingOut}
+          signOutError={signOutError}
+        />
       )}
 
       <div
@@ -964,27 +742,6 @@ function WorkspaceShellContent({
                 </>
               ) : (
                 <h1>{heading}</h1>
-              )}
-              {session && session.organizations.length > 1 && (
-                <label className="workspace-organization-switcher">
-                  <span className="sr-only">Workspace</span>
-                  <select
-                    value={
-                      selectedOrganization?.id || session.organizations[0].id
-                    }
-                    onChange={(event) =>
-                      window.location.assign(
-                        `/?org=${encodeURIComponent(event.target.value)}`
-                      )
-                    }
-                  >
-                    {session.organizations.map((organization) => (
-                      <option value={organization.id} key={organization.id}>
-                        {organization.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
               )}
             </header>
             <main
