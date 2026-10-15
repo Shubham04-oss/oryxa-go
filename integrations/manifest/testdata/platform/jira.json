@@ -1,0 +1,1156 @@
+{
+  "id": "jira",
+  "version": 1,
+  "display_name": "Jira",
+  "description": "Search, create and update Jira issues.",
+  "connection_levels": [
+    "personal",
+    "workspace"
+  ],
+  "auth": {
+    "credential_modes": [
+      "platform",
+      "tenant_app",
+      "user_key"
+    ],
+    "oauth2": {
+      "authorization_url": "https://auth.atlassian.com/authorize",
+      "token_url": "https://auth.atlassian.com/oauth/token",
+      "pkce": true,
+      "authorization_params": {
+        "audience": "api.atlassian.com",
+        "prompt": "consent"
+      },
+      "token_kinds": [
+        {
+          "name": "default",
+          "personal_grant": true,
+          "scopes": [
+            "read:jira-work",
+            "write:jira-work",
+            "read:jira-user",
+            "manage:jira-webhook",
+            "offline_access"
+          ]
+        }
+      ],
+      "refresh": {
+        "ahead_seconds": 300,
+        "rotates": true,
+        "reuse_window_s": 600
+      },
+      "outputs": [
+        {
+          "name": "cloud_id",
+          "pointer": "/id",
+          "request": "https://api.atlassian.com/oauth/token/accessible-resources",
+          "select": {
+            "pointer": "/url",
+            "equals": "https://{config.site}.atlassian.net"
+          }
+        }
+      ]
+    },
+    "user_key": {
+      "fields": {
+        "type": "object",
+        "required": [
+          "email",
+          "api_token"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Atlassian account email"
+          },
+          "api_token": {
+            "type": "string",
+            "secret": true,
+            "minLength": 16,
+            "title": "API token"
+          }
+        },
+        "additionalProperties": false
+      },
+      "inject": {
+        "header": "Authorization",
+        "value": "Basic basic({email}:{api_token})"
+      },
+      "base_url": "https://{config.site}.atlassian.net/rest/api/3",
+      "personal_grant": true
+    }
+  },
+  "config": {
+    "type": "object",
+    "required": [
+      "site"
+    ],
+    "properties": {
+      "site": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+        "title": "Site",
+        "examples": [
+          "acme"
+        ],
+        "description": "The part before .atlassian.net; picks the site when an account can reach several"
+      }
+    },
+    "additionalProperties": false
+  },
+  "base_url": "https://api.atlassian.com/ex/jira/{outputs.cloud_id}/rest/api/3",
+  "egress_allowlist": [
+    "api.atlassian.com",
+    "auth.atlassian.com",
+    "*.atlassian.net"
+  ],
+  "verify": {
+    "path": "/myself",
+    "token_kind": "default"
+  },
+  "rate_limit": {
+    "max_concurrency": 4,
+    "retry_headers": [
+      "Retry-After"
+    ]
+  },
+  "tools": [
+    {
+      "name": "jira.search_issues",
+      "description": "Find issues with a JQL query, e.g. `project = OPS AND statusCategory != Done AND assignee = currentUser() ORDER BY updated DESC`. Use it first whenever you need issues and have no issue key. The query needs at least one condition (Jira refuses an unbounded search): start from a project or `updated >= -30d`, quote values with spaces (`status = \"In Progress\"`), use account ids from find_user for people, and add ORDER BY updated DESC for the most recent first. Returns up to 50 issues per page, without descriptions: use get_issue for those.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "jql"
+        ],
+        "properties": {
+          "jql": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 20
+          },
+          "page_token": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_=+/.-]{1,2048}$",
+            "description": "A previous page's next_page_token."
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "issues",
+          "next_page_token"
+        ],
+        "properties": {
+          "issues": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "summary",
+                "status",
+                "issue_type",
+                "assignee",
+                "updated",
+                "url"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$"
+                },
+                "summary": {
+                  "type": "string",
+                  "maxLength": 1000
+                },
+                "status": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "issue_type": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "assignee": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "required": [
+                    "account_id",
+                    "display_name"
+                  ],
+                  "properties": {
+                    "account_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9:-]{1,128}$"
+                    },
+                    "display_name": {
+                      "type": "string",
+                      "maxLength": 255
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "updated": {
+                  "type": "string",
+                  "maxLength": 40,
+                  "description": "Jira timestamp, e.g. 2026-10-01T10:00:00.000+0000; empty when absent."
+                },
+                "url": {
+                  "type": "string",
+                  "maxLength": 400,
+                  "description": "Link to the issue in Jira; empty when the site is unknown."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "next_page_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2048
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "read:jira-work"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.get_issue",
+      "description": "Read one issue in full: summary, status, type, assignee, reporter, labels, created and updated, and the description as plain text (up to 20 KB; description_truncated says when it was cut). Use after search_issues, or whenever the user names an issue key. Its `updated` is what update_issue needs as expected_updated.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$",
+            "description": "Issue key, e.g. OPS-123."
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "project",
+          "summary",
+          "status",
+          "issue_type",
+          "assignee",
+          "reporter",
+          "labels",
+          "description",
+          "description_truncated",
+          "created",
+          "updated",
+          "url"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$"
+          },
+          "project": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "status": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "issue_type": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "assignee": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "required": [
+              "account_id",
+              "display_name"
+            ],
+            "properties": {
+              "account_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9:-]{1,128}$"
+              },
+              "display_name": {
+                "type": "string",
+                "maxLength": 255
+              }
+            },
+            "additionalProperties": false
+          },
+          "reporter": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "required": [
+              "account_id",
+              "display_name"
+            ],
+            "properties": {
+              "account_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9:-]{1,128}$"
+              },
+              "display_name": {
+                "type": "string",
+                "maxLength": 255
+              }
+            },
+            "additionalProperties": false
+          },
+          "labels": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "string",
+              "maxLength": 255
+            }
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "description_truncated": {
+            "type": "boolean"
+          },
+          "created": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "Jira timestamp, e.g. 2026-10-01T10:00:00.000+0000; empty when absent."
+          },
+          "updated": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "Jira timestamp, e.g. 2026-10-01T10:00:00.000+0000; empty when absent."
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 400,
+            "description": "Link to the issue in Jira; empty when the site is unknown."
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "read:jira-work"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.list_comments",
+      "description": "Read an issue's comments, oldest first, up to 25 per page; each is plain text up to 4 KB (`truncated` marks a cut one). Use to follow the discussion before commenting or summarising an issue; page on with start_at.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$",
+            "description": "Issue key, e.g. OPS-123."
+          },
+          "start_at": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000,
+            "default": 0,
+            "description": "Where to continue: a previous page's next_start_at."
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25,
+            "default": 10
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "comments",
+          "total",
+          "next_start_at"
+        ],
+        "properties": {
+          "comments": {
+            "type": "array",
+            "maxItems": 25,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "author",
+                "text",
+                "truncated",
+                "created"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[0-9]{1,20}$"
+                },
+                "author": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "required": [
+                    "account_id",
+                    "display_name"
+                  ],
+                  "properties": {
+                    "account_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9:-]{1,128}$"
+                    },
+                    "display_name": {
+                      "type": "string",
+                      "maxLength": 255
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 4000
+                },
+                "truncated": {
+                  "type": "boolean"
+                },
+                "created": {
+                  "type": "string",
+                  "maxLength": 40,
+                  "description": "Jira timestamp, e.g. 2026-10-01T10:00:00.000+0000; empty when absent."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_start_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Pass as start_at for the next page; null on the last page."
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "read:jira-work"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.list_projects",
+      "description": "List the Jira projects the user can see, with their key, name and type (`service_desk` means Jira Service Management), up to 100 per page, optionally only those whose key or name contains `query`. Use to find a project key for JQL or create_issue.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "start_at": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000,
+            "default": 0,
+            "description": "Where to continue: a previous page's next_start_at."
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "projects",
+          "next_start_at"
+        ],
+        "properties": {
+          "projects": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "key",
+                "name",
+                "type"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[0-9]{1,20}$"
+                },
+                "key": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "type": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "next_start_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Pass as start_at for the next page; null on the last page."
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "read:jira-work"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.project_issue_types",
+      "description": "List the issue types the user may create in a project (Task, Bug, Story, ...). Use before create_issue to pick a valid issue_type; sub-task types are marked and cannot be created with create_issue.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "project"
+        ],
+        "properties": {
+          "project": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}$",
+            "description": "Project key, e.g. OPS (from list_projects)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "issue_types"
+        ],
+        "properties": {
+          "issue_types": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "subtask"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[0-9]{1,20}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "subtask": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "read:jira-work"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.find_user",
+      "description": "Find people in Jira by a name or email fragment and get their account ids. Use before assign_issue, or to name someone in JQL (`assignee = <account id>`). Returns up to 20 human accounts, active or not; apps and service-desk customers are left out.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "users"
+        ],
+        "properties": {
+          "users": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "object",
+              "required": [
+                "account_id",
+                "display_name",
+                "active"
+              ],
+              "properties": {
+                "account_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9:-]{1,128}$"
+                },
+                "display_name": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "active": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "read:jira-user"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.create_issue",
+      "description": "Create an issue in a project and return its key and link. Use only when the user asked for a new issue; when it may already exist, check with search_issues first. Take issue_type from project_issue_types. Cannot create sub-tasks.",
+      "effect": "write",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "project",
+          "issue_type",
+          "summary"
+        ],
+        "properties": {
+          "project": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}$",
+            "description": "Project key, e.g. OPS (from list_projects)."
+          },
+          "issue_type": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[^\\u0000-\\u001f]+$",
+            "description": "An issue type name from project_issue_types."
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "^[^\\u0000-\\u001f]+$"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 32000,
+            "description": "Plain text; blank lines separate paragraphs."
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "id",
+          "url"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]{1,20}$"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 400,
+            "description": "Link to the issue in Jira; empty when the site is unknown."
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "write:jira-work"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.update_issue",
+      "description": "Change an issue's summary or description (replaced as a whole), or add and remove labels; anything left out is unchanged. expected_updated must be the issue's `updated` from get_issue: if anyone changed the issue since, nothing is written and the error asks you to read it again. Use only when the user asked for the change; for status use transition_issue, for the assignee assign_issue.",
+      "effect": "write",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "expected_updated"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$",
+            "description": "Issue key, e.g. OPS-123."
+          },
+          "expected_updated": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:?[0-9]{2})$",
+            "description": "The `updated` value from get_issue."
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "^[^\\u0000-\\u001f]+$"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 32000,
+            "description": "Plain text; replaces the whole description."
+          },
+          "add_labels": {
+            "type": "array",
+            "maxItems": 20,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[^\\s]{1,255}$"
+            }
+          },
+          "remove_labels": {
+            "type": "array",
+            "maxItems": 20,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[^\\s]{1,255}$"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "summary"
+            ]
+          },
+          {
+            "required": [
+              "description"
+            ]
+          },
+          {
+            "required": [
+              "add_labels"
+            ]
+          },
+          {
+            "required": [
+              "remove_labels"
+            ]
+          }
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "url"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 400,
+            "description": "Link to the issue in Jira; empty when the site is unknown."
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "read:jira-work",
+        "write:jira-work"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.add_comment",
+      "description": "Add a comment to an issue for the team. On a Jira Service Management (service desk) issue it is an internal note that the customer neither sees nor is emailed about; to answer the customer use reply_to_customer. Use only when the user asked to comment; read list_comments first when responding to the discussion.",
+      "effect": "write",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "text"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$",
+            "description": "Issue key, e.g. OPS-123."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "comment_id"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$"
+          },
+          "comment_id": {
+            "type": "string",
+            "pattern": "^[0-9]{1,20}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "write:jira-work"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.reply_to_customer",
+      "description": "Post a public comment on a Jira Service Management issue: the customer who raised it sees it and is emailed. Use only when the user asked to reply to the customer and approved the text. For notes to the team, or on other projects, use add_comment.",
+      "effect": "external",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "text"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$",
+            "description": "Issue key, e.g. OPS-123."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "comment_id"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$"
+          },
+          "comment_id": {
+            "type": "string",
+            "pattern": "^[0-9]{1,20}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "write:jira-work"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.list_transitions",
+      "description": "List the status changes available on an issue right now (e.g. Start progress -> In Progress, Done), with their ids and target status. Always call it before transition_issue: transition ids differ per workflow and depend on the current status.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$",
+            "description": "Issue key, e.g. OPS-123."
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "transitions"
+        ],
+        "properties": {
+          "transitions": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "to"
+              ],
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "to": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 255
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "read:jira-work"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.transition_issue",
+      "description": "Move an issue to another status with a transition id from list_transitions. If that transition is not available any more (for example the issue already moved), nothing changes and the error says the current status: check it rather than retrying. Transitions whose screen has required fields are refused by Jira.",
+      "effect": "write",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "transition_id"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$",
+            "description": "Issue key, e.g. OPS-123."
+          },
+          "transition_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99999999
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "transition_id",
+          "status"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$"
+          },
+          "transition_id": {
+            "type": "integer"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "read:jira-work",
+        "write:jira-work"
+      ],
+      "token_kind": "default"
+    },
+    {
+      "name": "jira.assign_issue",
+      "description": "Assign an issue to a person (an account id from find_user), or unassign it with account_id null. When the issue already has that assignee nothing is written and nobody is notified again (changed is false).",
+      "effect": "write",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "account_id"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$",
+            "description": "Issue key, e.g. OPS-123."
+          },
+          "account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[A-Za-z0-9:-]{1,128}$",
+            "description": "From find_user; null unassigns."
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "account_id",
+          "changed"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}-[0-9]{1,18}$"
+          },
+          "account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[A-Za-z0-9:-]{1,128}$"
+          },
+          "changed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "read:jira-work",
+        "write:jira-work"
+      ],
+      "token_kind": "default"
+    }
+  ],
+  "streams": [
+    {
+      "name": "issues",
+      "modes": [
+        "full",
+        "incremental",
+        "webhook"
+      ],
+      "track_deletes": true,
+      "schedule": "rate(15 minutes)"
+    },
+    {
+      "name": "project_access",
+      "modes": [
+        "full"
+      ],
+      "acl": true,
+      "schedule": "rate(6 hours)"
+    }
+  ],
+  "webhooks": {
+    "ingress": "per_provider",
+    "verification": {
+      "scheme": "jwt",
+      "header": "Authorization"
+    },
+    "replay_window_s": 300,
+    "routing": [
+      "/matchedWebhookIds"
+    ],
+    "routing_per_site": true,
+    "subscription": {
+      "max_ttl_s": 2592000,
+      "renew_at": 0.6
+    },
+    "fallback_poll_s": 900
+  },
+  "reauth_on": [
+    "invalid_grant",
+    "unauthorized_client"
+  ]
+}
