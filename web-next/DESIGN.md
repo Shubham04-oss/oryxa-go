@@ -59,6 +59,34 @@ not permission to copy every incidental value into a new component.
   content wraps past one line — with a circular icon send button inside,
   never a rectangular field with a text "Send" button. Share one set of CSS
   across composers instead of copying the pattern per screen.
+- **Buttons and action rows** (founder, 15 Oct 2026: button order, spacing
+  and consistency were poor across Settings, Teamspaces and the rest of the
+  app). One convention everywhere:
+  - Every button is `ui/button` (`Button`), with its variants (`default`,
+    `outline`, `secondary`, `ghost`, `destructive`, `link`) and sizes. Never
+    write a new button recipe in CSS; restyle through tokens and variants.
+  - One height per context: `size="default"` (32px) for page headers, forms,
+    dialogs and confirms; `sm` for trailing row actions; `icon-sm` for inline
+    row icons. The buttons in one row are always the same size.
+  - **Dialog footers and inline confirm boxes:** the message above, the
+    buttons right-aligned with 8px between them: Cancel (`outline`), then
+    the confirm on the far right. The confirm is `default`, or `destructive`
+    when it deletes, removes, revokes, disconnects or leaves.
+  - **Form footers:** status text on the left, the buttons on the right.
+    A destructive action never sits next to Save; it goes in a separate
+    danger group at the end of the page or dialog.
+  - **Settings rows:** one trailing `outline` `sm` action, right-aligned;
+    switches and selects sit in the same trailing slot.
+  - **Cards and detail headers:** the primary first, start-aligned, 8px gap.
+    A destructive action is pushed to the far end (`ml-auto`) or moved into
+    the ⋯ menu.
+  - **Page header actions:** right-aligned, at most one `default` primary.
+  - **Inline row icons:** `ghost` `icon-sm`; a destructive one tints only on
+    hover. One icon-button size per context, never three.
+  - **Spacing:** 8 between buttons, 8 from a label to its control, 12
+    between rows, 24 between sections, and page padding of 24 (32 when the
+    page is wide). Keep values on the 8/12/16/24/32 rhythm.
+  - **Phones:** an action row stacks full-width, primary on top.
 - Use Lucide for general UI icons. Use actual brand marks for integrations.
   Icons should express an action or entity, never fill empty space.
 - Every interactive state must be visible: hover, active/selected, keyboard
@@ -80,40 +108,104 @@ not permission to copy every incidental value into a new component.
 - Expanding the right panel collapses the left. Collapsing the right expands
   the center; it must **not** automatically expand the left. A manually
   collapsed left sidebar stays collapsed until the user opens it.
-- **One sidebar** (founder, 14 Oct 2026): every page is listed at once, in
-  three tiles headed Home, Team and Agents, so nothing is a mode switch away.
-  Picking a page opens it and its area; the page you are on is the raised
-  tile. The sidebar's top row names the workspace. Collapsed, the rail shows
-  the same three tiles as icons. (The Home/Team/Agents mode pills are gone.)
-- The right agent panel holds the member's agent and team conversations. Its
-  tabs, Agents (the default), DMs, Teams and **At a glance**, use the same
-  icon-first pills. At a glance keeps Today's widgets (from your apps,
-  teammates, conversations, knowledge, files, recurring work) one tab away on
-  every page, as compact tiles in one column, without Today's composer
-  (founder, 14 Oct 2026: the sidebar's quick widgets stay). The
-  Agents pill carries the primary agent's voxel avatar. When the member
+- **One sidebar** (founder, 14 Oct 2026; boards Sidebar and Rail, 15 Oct):
+  every page is listed at once, so nothing is a mode switch away. It is the
+  library's sidebar (`components/ui/sidebar.tsx`) in
+  `workspace-sidebar.tsx`, its colour roles pointed at the theme's tokens in
+  `workspace-sidebar.css`. Picking a page opens it; the page you are on is
+  the raised tile. The top row is the workspace switcher (its initial on a
+  white tile, the name, and a menu of the member's workspaces when they have
+  more than one; it replaced the header's select) beside the collapse
+  toggle; "Search or jump to ⌘K" sits under it once the palette answers it.
+  The footer is the member (avatar, name, role), which opens the profile
+  menu (theme, Settings, Sign out), and a Settings gear beside it. Every
+  count is a real read, left out until it has loaded or when it fails. Its
+  rows and Library tiles are the library's menu buttons; its toggles, search
+  and gear are `ui/button` (outline `icon` for the toggles, as round edge
+  controls; ghost `icon-sm` for the gear), never a CSS button recipe.
+- The right agent panel is the member's own agent, where they are (AgentPanel
+  board, founder's redesign, 15 Oct 2026). Its **header** is the agent's voxel
+  avatar and name over a lock and "Only you · in {place}" (the teamspace, the
+  knowledge base, the person, the file or the page), then History and New
+  chat for the primary agent's chat (in the header, not over the log, whose
+  row only names the conversation), and the collapse toggle. Under it, one
+  **segmented control** (the library's tabs; the open view the raised tile):
+  the agent by name (the default), **At a glance**, with how many requests
+  wait on the member as a count, and DMs as an icon with its unread badge.
+  DMs keep that quiet place until the sidebar's Messages section holds them;
+  the empty Teams tab is gone. Over the agent's chat, a strip of **chips**
+  says only what is real: "Needs you N" (opens Requests) while requests wait
+  on the member; "Parley · Join" on a teamspace whose parley runs without
+  them; "In the parley · Open" while they are in one. My workspace shows no
+  parley chip until the edge can list the organisation's live rooms. The
+  composer carries a quiet **"Looking at {item}"** chip: what the agent is
+  shown with the message (the page's selection, an open file, or the page).
+  The board's quick toggles (reads, suggests, web) are not shown until a
+  capability API exists. **At a glance** keeps My workspace's widgets one tab
+  away on every page (founder, 14 Oct 2026: the sidebar's quick widgets
+  stay), restyled to the AgentPanelGlance board as compact library cards
+  (`ui/card`, `home-glance.tsx`) in one column, without a composer:
+  - **From your apps:** the connected apps' marks in a row, the latest brief
+    (the first sentence Krude wrote in the wake-up thread, opening it) and
+    Manage (Tools). Per-app counts wait for an app digest API.
+  - **Teammates:** avatars with first names, those the member shares a
+    teamspace with first, a tap opening the DM, the green dot where a DM is
+    open; All opens People.
+  - **Conversations** (New chat), **Knowledge** (name · documents, Library),
+    **Files {agent} made** (each with its kind tile, opening its chat) and
+    **Recurring work** (the member's own, All N opening Agent overview).
+  - What needs the member is not a card here: it is the panel's chip and
+    count, and Requests. Each card says in one quiet line what lands there
+    when it is empty, and offers Try again when its read failed. When the member
   has more than one agent, the Agents tab's top row is a quick switch between
   them: the one in use is the oval pill with its name, like the pills
   elsewhere, and the rest stay avatar-only. With a single agent the row is not
   shown, and it never shows empty or example slots. The panel is
-  location-aware: on a teamspace page the Agents tab also offers that
+  location-aware: on a teamspace page the agent's view also offers that
   teamspace's teammates and their agents, below the member's own (§3, "Side
   conversations"); elsewhere it does not. Collapsed, the panel's rail shows
-  one icon per tab, and each opens the panel on that tab. A tab without a
+  one icon per view (the agent, At a glance with the needs count, DMs), and
+  each opens the panel on that view. A tab without a
   live service shows a one-line empty state, never example people, rooms or
   messages.
-- The sidebar's tiles, in order (Team's recent conversations follow them):
+- The sidebar's tiles, in order (each heading in quiet capitals, with its
+  + where it has one):
 
-  | Tile | Pages |
+  | Tile | Rows |
   | --- | --- |
-  | Home | My workspace, Library, Tools |
-  | Team | Teamspaces, People, then up to three visible recent conversations |
-  | Agents | Agent overview, Requests, Multi-agent teams, Specialists |
+  | (no heading) | My workspace; Requests, with how many wait on the member as a strong count; Chats with your agent (the Chats page) |
+  | Live now (only while the member is in a parley) | Its own tile, edged in green: "Parley · {room}" with how long it has run (opens the parley), then mute, camera and leave (`ui/button` outline `icon-sm`, leave `destructive`). Agents' live sessions ("Krude is browsing …") are left out until there is an org-wide live list (#322). |
+  | Teamspaces (the heading opens the list; + leads there to add one) | Each of the member's teamspaces by its planet, opening it, with a green dot while a parley runs there (each room's call read every 20 s, for the first eight only, until the org-wide live list exists); "No teamspaces yet." when there are none |
+  | Messages (+ opens People to pick someone) | The three latest DMs, plus any older one with unread messages (six at most), each with its unread count; People, with how many |
+  | Agents (+ leads to Specialists) | The primary agent by name and voxel avatar, "Your agent" (Agent overview); Specialists, Agent teams and Workflows, each with how many (Workflows opens Agent overview, where they live) |
+  | Library | Two tiles, Knowledge and Tools. The board's Files tile waits for a Files page. |
 
+  Collapsed, the rail (board Rail) is: the workspace's initial, which
+  expands the sidebar (a round arrow on a phone); Search once it is
+  answered; then tiles of icons: My workspace, Requests (its count a badge)
+  and Chats; each teamspace's planet; the DMs with unread messages, each an
+  avatar with its count; the agent's avatar and the Library; and at the
+  foot Settings over the member's avatar (the profile menu). Every icon's
+  name is its tooltip and accessible name. A tile with nothing in it is left
+  out.
+
+- **⌘K, Jump to** (board NavCommand; `workspace-command-palette.tsx`, the
+  library's command dialog): ⌘K or Ctrl+K anywhere, or the sidebar's
+  Search, opens it. "Go to" lists what matches every typed word, at most
+  five of each, from the lists the workspace already reads: teamspaces
+  (planet, "Teamspace · N people"), requests in the inbox (the question,
+  "Request from Raya"), chats with the agent (title, "Chat with Krude ·
+  4m") and files (downloaded). Once something is typed, "Do" offers: Start
+  a parley in the first matching teamspace (⌘⇧H, not while already in one),
+  Ask the agent about it (⌘↵, a new chat in the panel), and Have the agent
+  open a page and show you (sent as a chat ask). A footer shows the keys.
+  There is no server search: a capped list says so ("Searching your latest
+  50 requests."), and without a workspace it says to sign in.
 - The shared workspace header is compact (56px at normal desktop/mobile
   widths), with its title centered. It contains the **current context**:
-  opening a DM shows the person's name/avatar, not “People”; opening a
-  teamspace or agent shows that work's title. Back navigation lives there.
+  opening a DM shows the person's name/avatar, not “People”; opening an
+  agent shows that work's title, and a teamspace its "Teamspaces / <name>"
+  crumbs. Back navigation lives there.
   Do not repeat the page title, a hero slogan, or a generic description at
   the top of the main canvas. No preview badge in the header.
 - Desktop panel toggles use left/right panel glyphs so back navigation remains
@@ -122,56 +214,106 @@ not permission to copy every incidental value into a new component.
 
 ## 3. Focused work and content pages
 
-- **Home — My workspace** (was Today; founder's redesign, 14 Oct 2026).
-  Home is the member's desk: what their apps said, who needs them, a place to
-  ask, and their own stack. Start with both rails collapsed and preserve the
-  member's explicit toggle choices on return. One calm centered column at
-  most 760px wide, under a faint band of the sea-of-bottles scene that fades
-  out before the content (no text on it). In order: a greeting by the
-  member's clock and first name ("Good afternoon, Ada"; no name when only an
-  email is known) with one line saying how many things need them, only when
-  something does; Teammates (what needs them) as one tile; the composer and
-  their tools; then **Pick up where you left off**, a row of cards that
-  scrolls sideways (snapping, the next card faded at the edge): From your
-  apps, Conversations, Knowledge, Files and Recurring work. Inside a card or
-  tile, rows stay plain (a 26px mark, a 13px line clamped to two lines, an
-  11px quiet line) with a hover tint. No starter prompts.
-  - **From your apps** (top left): at most four briefs, newest first. A brief
+- **Home — My workspace** (founder's redesign, centred, 15 Oct 2026; board
+  WorkspaceV3). Home is the member's desk: one centred column on an axis,
+  symmetric and decluttered, under a faint band of the sea-of-bottles scene
+  that fades out before the content (no text on it). Start with both rails
+  collapsed (Krude's panel too) and preserve the member's explicit toggle
+  choices on return. The column is at most 720px wide. Top to bottom:
+  - **The live parley pill** (`home-live-pill.tsx`), only while a parley is
+    live: the member's own parley ("You're in a parley in X", Open), else the
+    first of their open teamspaces with a call running ("Parley in X · 18
+    min", up to three faces, Join opening that teamspace). Each teamspace the
+    member is on is read once a minute with `readCall`, at most eight, with
+    no log socket, until an org-wide live list exists (#322). With nothing
+    live there is no pill.
+  - **The greeting** by the member's clock and first name ("Good afternoon,
+    Ada"; no name when only an email is known), centred, with one line: how
+    many things need them, then how many asks Krude decided for them today
+    (inbox decisions with `decided_by.kind === "agent"`), and nothing when
+    neither is true.
+  - **The composer**, a large pill (60px, the page's only shadow) that asks
+    Krude. It always starts a **new** chat in the right panel through the
+    authenticated chat-choice queue, keeping Home as its screen context;
+    drafts and recoverable unsent messages are kept.
+  - **Suggestions** under it, as outline chips (the founder's starter chips
+    replace the old "no starter prompts" rule): "What needs me today?", and
+    "Catch me up on <app>" for the member's first active app connection.
+    Each asks at once in a new chat. A suggestion is drawn only from what the
+    member really has; never a made-up teammate, file or channel.
+  - **Two equal tiles** side by side (one column on a phone): **Needs you**
+    and **While you were away**, both filled `--base` tiles.
+  - **Pick up where you left off** (`home-pickup.tsx`): four equal cards, the
+    member's most recent work across the files Krude saved in the chats
+    already read for confirmations, their titled chats and their Library
+    collections, newest first, a running chat leading. A card is a
+    thumbnail (the file's kind badge, a chat or Library mark, or the Thinking
+    Orb while it works) over a name and a quiet line. New chat, All
+    conversations and Library sit in its header. Fewer cards leave the row
+    short; none says what lands there in one line.
+  Inside a tile, rows stay plain (a 26px mark, a 13px line clamped to two
+  lines, an 11px quiet line) with a hover tint. Every action is `ui/button`:
+  row actions `outline` `sm`, header actions `ghost` `sm`, inline links
+  `link` `sm`, suggestion chips `outline` `sm` (§1, Buttons and action rows).
+  - **While you were away** (At a glance: **From your apps**): at most three
+    briefs on the page (four at a glance), newest first. A brief
     is the first sentence of what Krude told the member in their wake-up
     thread (`origin: "wakeup"`, "Updates from your apps") after a batch of
     app events; its mark is the first app's logo on the white logo tile and
     its quiet line names the apps (as the batch's `1. github · …` lines do)
     and how long ago. A row and **All updates** open that thread. Krude's
-    words are the source; Today never rewrites or invents a brief.
-  - **Teammates** (top right): who needs the member, one row each. An Inbox
+    words are the source; Today never rewrites or invents a brief. It is
+    never a bare title: with no app connected it says "Connect an app to see
+    what happened while you were away." with Connect your tools; with apps
+    and no briefs, "Nothing new from your apps."; and when the chats or the
+    wake-up thread can't be read, "Updates from your apps can't be loaded
+    right now." Every read's loading and error line on Home is its own
+    sentence naming the area ("Requests can't be loaded right now."), never
+    a resource name dropped into a template.
+  - A Pick up card is one button named for what it opens ("Open Product
+    docs"), its quiet line the description; the thumbnail is decoration.
+  - **Needs you** (was Teammates), with a count beside the heading on the
+    page: who needs the member, one row each. An Inbox
     decision or held answer that waits on them shows the asker's avatar,
     first name and task, a quiet line (Waiting for your OK, Your agent's
     answer is held for you, or Needs your own reply · Slack or Oryxa · ago)
     and one action, Decide, Review or Reply, which opens that exact request
     in Requests, where the request card's choices, race handling and Reply
-    yourself live. At most four; the rest are counted. The same column lists
-    the member's own agent waiting on a tool confirmation (Open goes to that
-    chat) and open access windows, with End access only where the server
+    yourself live. At most four; the rest are counted. The same tile
+    lists the member's own agent waiting on a tool confirmation (Open goes to
+    that chat) and open access windows, with End access only where the server
     grants revocation. Confirmations are checked in the five newest chats plus
     the open chat, as history and the opening rule select them; Go keeps no
     aggregate pending flag, so state that coverage visibly and never show an
     unqualified all-clear while any read is unchecked. **Nothing needs you
     right now.** appears only when every read is complete and quiet.
-  - **The composer** sits centered beneath them (at most 600px). It always
-    starts a **new** chat in the right panel through the authenticated
-    chat-choice queue, keeping Home as its screen context; drafts and
-    recoverable unsent messages are kept. Under it, the member's active app
-    connections as quiet pills (logo tile and name) and **+ Connect**, all
-    opening Tools.
-  - **The stack** follows, under a hairline, two by two: **Conversations**
-    (New chat, All, and up to three titled recent primary chats, the running
-    one first with the Thinking Orb), **Knowledge** (up to three knowledge
-    bases by last update, with document counts), **Files** (what the agent
-    saved in the chats already read for confirmations, newest first, each
-    opening its chat) and **Recurring work** (the member's own agent
-    workflows and their schedules in words). An empty part says what lands
-    there in one quiet line.
-  - **Finish setup:** one centered quiet line at the bottom with a link per
+  - Hidden until the API exists (#322): the Needs-you parley row and
+    "Krude suggested an edit" rows, per-app counts and previews, "N editing"
+    presence, and document thumbnails.
+  - **The first run** (board OnbFirstRunV3, `home-first-run.tsx`): when
+    setup finishes, the page opens with `?welcome=1` on the same axis.
+    Krude's line ("Krude is setting up with you · only you see this page")
+    sits over the greeting, whose line names how many briefs stood out, or
+    invites a first ask. The pair becomes **What Krude found** (the briefs)
+    and **Getting started**: five steps ticked from real reads (the agent
+    grant, an active app connection, another member or a pending
+    invitation, a teamspace, a first chat), each untaken one with a Start
+    action opening its place. A step whose read fails or is not served is
+    left out and the count says "n of m". Needs you appears under the pair
+    only when something waits, and Pick up only once there is work to pick
+    up. Hide (Done once all are ticked) drops `welcome` and returns the
+    page to its everyday form. "What Krude read during setup" (channel and
+    source counts) waits on an API (#322).
+  - **At a glance** keeps the full widget stack: From your apps and Needs
+    you, then **Conversations** (New chat, All, and up to three titled
+    recent primary chats, the running one first with the Thinking Orb),
+    **Knowledge** (up to three knowledge bases by last update, with document
+    counts), **Files** (what the agent saved in the chats already read for
+    confirmations, newest first, each opening its chat) and **Recurring
+    work** (the member's own agent workflows and their schedules in words),
+    then the Finish setup line. An empty part says what lands there in one
+    quiet line.
+  - **Finish setup** (at a glance): one quiet line at the bottom with a link per
     unfinished step (Connect Slack for members who may manage it, Add
     knowledge, Turn on background access), from real Slack, knowledge and
     grant reads. A read that fails or is not served leaves its step out
@@ -196,30 +338,188 @@ not permission to copy every incidental value into a new component.
     Network failures, timeouts and 5xx responses keep the session recoverable
     with bounded backoff. Do not erase scoped chat choices or queued requests;
     drafts held only in the mounted shell are not recovered after a new sign-in.
-- A teamspace or extensive agentic task is a focused work view: no left
-  sidebar, naked conversation on the base surface, compact title/back header,
-  and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
-  sit **above** the work panel. The panel's top area belongs to the selected
-  view's heading and state, not the tab strip.
-  - **A teamspace** (founder's redesign, 14 Oct 2026) opens under a faint
-    band of the harbour scene, its name a title (28px) beside its planet,
-    with its status, team and how many people. Its room is the main tile
-    (on the base), and its work the side tile, the tabs a segmented control
-    whose selected tab is the raised tile.
-  - **The teamspaces list** is a title with the counts (active, paused, in
-    all) under the same faint band, segmented status filters and a search,
-    and the teamspaces as a grid of cards: planet, status, name, purpose,
-    team and when it was last updated, how many people. For a member who
-    can open one, the last card opens a new teamspace, drawn as the ship's
-    lines on deep sea.
+- An extensive agentic task is a focused work view: no left sidebar, naked
+  conversation on the base surface, compact title/back header, and a
+  separate work panel. Tabs sit **above** the work panel. The panel's top
+  area belongs to the selected view's heading and state, not the tab strip.
+  - **A teamspace** (TeamspaceHome board, 15 Oct 2026) keeps the sidebar,
+    which marks Teamspaces. The page's header is the crumbs "Teamspaces /
+    <name>"; the first goes back to the list. On the canvas, under a faint
+    band of the harbour scene: the hero (planet, the name as a 30px title,
+    "<Team> team · N people and M agents", "Paused · " first when paused),
+    and on its right the faces of the people with a seat, the Parley pill
+    and, only for whoever manages the team, an Invite pill. Invite opens a
+    pop-up sheet listing the workspace's people not yet on the team, each
+    with Add (adding them to the team is what opens the teamspace to them;
+    someone new to the workspace is invited from Settings). Under the hero,
+    a segmented control of Room, Plan, Files (with its count) and Parleys,
+    the selected tab the raised tile, then a quieter Activity tab set a
+    little apart (the ledger has no place on the board; owner to confirm).
+  - **Room:** the room is the main tile, with a side column beside it: a
+    Live card only while a sandbox or browser is running in the room
+    (RoomLive), a **Files N** card with the newest four team files (a kind
+    tag from the extension, the name, "added …"; its heading opens the
+    Files tab, and it shows only once there are files to list), the team
+    summary, then the purpose, the contributed agents and the people. The
+    board has a Plan card and a Last parley card too, left out until
+    their APIs exist. Purpose, agents and People aren't on the board; they
+    are kept on purpose, below the board's cards, as Overview's content
+    with nowhere else to go (owner to confirm). The
+    room stays mounted behind the other tabs, so its draft, scroll and
+    socket carry over. **Files** is the team's files, full width. **Plan**
+    and **Parleys** have no API yet, so each is one honest line on the
+    empty scene ("A shared plan is coming", "Past parleys will be listed
+    here"). No launch date in the hero until the teamspace carries one.
+  - **The member's agent beside a teamspace** (TeamspaceHome, Teamspace3 and
+    TeamspaceGlance boards, 15 Oct 2026): opening a teamspace on a desktop
+    opens the agent panel (§2) beside it, so the sidebar folds to its
+    rail; a phone keeps the room in front. The panel is a private session
+    that reads the teamspace: "Only you · in {teamspace}", "Parley · Join"
+    while its parley runs without the member, "Needs you N", "Looking at
+    {teamspace}" on the composer, and the teamspace's teammates for side
+    conversations under the agent's chat. At a glance carries the needs
+    count. The quick toggles (reads room and files, suggests, web) wait for a
+    per-teamspace capability API.
+  - **The teamspaces list** (TeamspacesNew, 15 Oct 2026) opens under the
+    same faint band on a compact row, with no in-page title (the shell's
+    header already says Teamspaces, §2): a subtitle that says how many are
+    active and, when one is, that a parley is live there ("4 active, and a
+    parley is live in EU launch."), and New teamspace. Below it, a search
+    (`/` focuses it, unless the
+    member is typing) and segmented status filters that carry their counts
+    (All 5, Active 4, Paused 1). The teamspaces are a grid of cards: planet,
+    name, "<Team> team · N people" (or "· paused"), purpose, a live row
+    with the "Parley · 18 min" chip while a call runs, and a footer with
+    the faces of the people who have a seat (four, then +N). Clicking a
+    card opens the teamspace; its More menu has Open, Manage details, and,
+    for whoever manages it, Pause or Resume and Delete. Pause and Delete
+    open the details on their usual confirm; Resume needs none. A paused
+    card is dimmed, still opens from anywhere on it, and says its room is
+    closed until a team admin resumes it. The parley chip reads each open teamspace's call once a minute
+    (the member must be on the team), under the room's own call key.
+    Unread counts, who's editing, custom facts, the last activity line and
+    who paused it stay off the card until the list carries them.
+  - For a member who can open one, the last card opens a new teamspace,
+    drawn as the ship's lines on deep sea, with a New teamspace button.
+    Both it and the header's button open the create form as a pop-up
+    sheet (`ui/dialog`), the lines faint at its top.
 - **People, Agents and Settings as tiles** (founder's redesign, 14 Oct
   2026). People is a grid of cards (the person, their presence, what you
-  share, Message). On the Agents pages the primary agent, the stats, teams,
-  specialists and workflows are filled tiles on the canvas, with no
-  outlines. Settings' menu is three groups, You (Account), Workspace
-  (Organisation, People & invitations, Teams, Billing) and Connections (Tool
-  access, Sign-in apps, Slack, Email), on one tile, the open page the raised
-  tile.
+  share, Message), or a plain list of the same people, one toggle away
+  (founder, 15 Oct 2026: people may be a plain list). The page names the
+  workspace and counts its people and the agents the member can reach, with
+  Invite (Settings → People, for owners and admins), a search that also
+  finds an agent's name ("/" moves to it), and a segmented teamspace filter
+  over the teamspaces the member shares with someone. The member's own card
+  leads, with their agent and Settings. Each card shows, under the person,
+  their agent where a shared teamspace seats one ("Nia · Priya's agent"),
+  then Message and **Ask Nia**: a small dialog files an agent request in the
+  member's own session, with no teamspace, so the owner always approves it
+  first; it says so, and that the answer arrives in Requests, with "Open in
+  Requests" once sent (`ask-agent-dialog.tsx`). Someone who shares no
+  teamspace with the member shows no agent and no Ask until the members API
+  names everyone's agent (#322). On the Agents pages the primary agent,
+  teams, specialists and workflows are filled tiles on the canvas, with no
+  outlines. **Agent overview** (AgentsNew board, 15 Oct 2026) reads top to
+  bottom: a hero (the agent's avatar and name, "Your agent · reads Slack,
+  Notion and Drive · suggests, you decide" from the member's active app
+  connections, its status, inline numbers Go can count — waiting for you,
+  specialists, teams, each leading to its page — and Settings, which opens
+  Tool access); then **Multi-agent teams**, **Specialists** and
+  **Workflows**, each under a head with its count and an outline New team,
+  New specialist or New workflow that opens its form in place. A team is a
+  row with its chain (the coordinator, an arrow, its specialists), purpose,
+  "led by Leo, 2 specialists" and status. A specialist is a card with its
+  kind and status, what it does, and a ⋯ menu (Open, Pause or Resume,
+  Edit); a paused one says "Paused · updated <date>", never who paused it.
+  A workflow row keeps its schedule and last run with Run now (Start, for
+  one that runs only when started) beside it. "Answered today", files made
+  and usage per specialist are not shown until Go counts them (#322).
+- **Settings, a pop-up** (founder, 15 Oct 2026: keep it a pop-up; what was
+  wrong was button order, spacing and consistency between pages). Settings is
+  the library's Dialog over the workspace: its head reads "Settings ·
+  {organisation}" with a close button, and its body holds two tiles on the
+  base, its own menu and the open page. The menu is three groups, You (Account, Your
+  agent, Notifications), Workspace (Organisation, People, Teams, Billing) and
+  Connections (Tool access, Sign-in apps for admins, Slack, Email), the open
+  page the raised tile. A page is its title and one line under it, then
+  groups: a quiet uppercase label over one card on the canvas, and in the
+  card rows, a title and what it means on the left and the control on the
+  right, with a hairline between rows. Pages are built only from the settings
+  kit (`settings-kit.tsx`: group, card, row, switch, select, chips, status,
+  value, button, actions, note, message), which wraps the shadcn base-nova
+  library; inside Settings and its pop-ups the library's colour variables are
+  mapped to theme roles (`workspace-settings.css`). Every page has the same
+  padding (24) and 24 between groups. Buttons follow "Buttons and action
+  rows" (§1): a row's one trailing action is `outline` `sm`; a form footer or
+  confirm (`SettingsActions`) has its status on the left and Cancel then the
+  confirm on the right, `destructive` when it removes; a destructive action
+  never sits beside Save but in the page's last group, Danger zone, whose row
+  title is red.
+  - **Account:** the profile row (no Edit until a profile route exists),
+    sign-in (password reset, sign out) and the theme as three swatches
+    (Light, Dark, System) on the library's radio group.
+  - **Your agent:** the primary agent with the apps it reads and Rename
+    (an inline form, Cancel then Save); "Works while you're away" (the agent
+    grant: on goes through its sign-in, off asks first) and "Keeps updates
+    from your apps" as switches; what it hides when it answers (what the
+    level hides for people who ask, as chips, then the two levels); and,
+    while access is on, Danger zone → Revoke background access.
+  - **Notifications:** where each notice goes and quiet hours are one honest
+    line until Go serves them; parley emails by team are switches.
+  - **Organisation:** the workspace row (its first letter as the mark,
+    "Created … by …", Rename), the address (the slug, read-only) and its
+    email domains (Edit), each edit an inline form; Danger zone holds Delete
+    (owners, typing the name) or Leave. No data region, retention or export
+    until Go has them, and no promise of a grace period.
+  - **People:** Invite is one line, several addresses separated by commas
+    and a role, then Send invite at the right (one invitation per address);
+    Members is the library's table (person, role menu for owners, a quiet ✕
+    that asks before removing), its label counting seats when the plan has
+    a limit; On their way lists invitations with who sent them, when they
+    expire, and Cancel.
+  - **Teams:** the library's table, one row a team (its name and how many
+    people, its lead, the faces of who is in it, its teamspaces as chips),
+    from the directory in one read; a row opens the team's own page (name,
+    members with an Admin/Member menu, Add a member, Danger zone → Delete
+    team). New team is a small dialog (name, inside which team), Cancel then
+    Create.
+  - **Billing:** the plan is one card (Current plan, its name, when it
+    renews, seats used against the limit as a bar, and Change plan, which
+    opens the billing portal, or Choose a plan, which lists the plans to
+    check out), the harbour scene fading in at its right. Payment is one row
+    pointing to the portal. No price, card, contact or invoices until the
+    billing routes carry them.
+  - **Tool access:** the member's own connected tools (logo tile, "Only
+    you" and what each reaches, such as "14 channels", and a ⋯ menu whose
+    Disconnect asks first), Add a tool (search and catalog tiles with
+    Connect, and All tools), and for owners and admins who in the
+    organisation has connected what. No "Who can use" choice until Go has
+    one.
+  - **Slack:** Your Slack account, then the workspace row (Connected, and
+    Disconnect on it, which asks first), then high-priority channels as
+    switches, each turned on after a confirm. No who-installed, member
+    counts or "How asks look" until Go serves them.
+  - **Email:** forwarding asks by email is one honest line; Gmail's real
+    connection; masking points to Your agent; what oryxa always sends.
+  - **Sign-in apps** keeps its forms, now on the kit's surfaces: the switch
+    is the library's, Save sits alone at the right, and removing an app is
+    its own danger row with a destructive confirm.
+- **Chats** (ChatsNew; `chats-page.tsx`): the member's chats with their
+  agent as a page. It is the agent session (a focused view, the header
+  "Chats · Only you see these") with a 280px list tile before the chat:
+  Search chats (by title, in the page), Today and Earlier groups, each row
+  its title and how long ago, "Needs approval" where that is known (the open
+  chat, or details the chat already read; the list never reads every
+  transcript to mark itself), the open chat the raised tile, and New chat.
+  Picking a row moves the one primary chat to it through the same queue Home
+  uses, so drafts and unsent messages behave as anywhere else; while a run
+  works the other rows wait, and say so. The chat's own History disclosure is
+  hidden here. Narrower than 1180px the work column gives way to the list
+  until a file or live pane opens, and then the list gives way. The chat's
+  bar says who sees it ("Only you · Krude") and has a ⋯ menu with Delete
+  (a confirm: Cancel, then the destructive Delete); there is no Rename and
+  no file count on a row until Go can say them (#322).
 - **Chats and DMs as tiles** (founder's redesign, 14 Oct 2026). The open
   chat in the chat list is the raised tile and the others lift on hover; DM
   rows are rounded the same way, with unread as a filled count. The member's
@@ -335,18 +635,20 @@ not permission to copy every incidental value into a new component.
     Saving replaces the whole grant. An app the grant names that is no
     longer connected stays listed, marked so, until it is taken off.
 - **What the organization agent made of a team's posts** (I7).
-  - **Team summary:** a teamspace's Overview starts with this card (summary,
-    decisions, risks, open questions) and the team's proposed follow-ups.
+  - **Team summary:** a teamspace's room has this card in its side column
+    (summary, decisions, risks, open questions) and the team's proposed
+    follow-ups.
     Anyone who may not read it (403) sees no card at all.
   - **Agent overview** lists the follow-ups from the member's teamspaces,
     grouped by teamspace.
 - **Live work** (live layer A8): the sandboxes and browsers agents run in a
   room, as far as a member may see them (the edge hides another member's
   private ones).
-  - **Where:** beside the primary agent's chat, Agent overview shows the
-    conversation's own as tiles, and one opens in the work panel like a
-    file. A teamspace has a Live tab with its tiles, the open one, and the
-    run log.
+  - **Where:** beside the primary agent's chat, the session's Live tab
+    shows the conversation's own as tiles, and one opens in the work panel
+    like a file. A teamspace shows a Live card beside its room, only while a
+    sandbox or browser is running there (stopped ones don't count), with
+    its tiles, the open one, and the run log.
   - **A sandbox** has Files (folders and a reader) and Preview (a port it
     serves, in a frame without its own origin). A member gets a Terminal
     (xterm, loaded when opened) only in their own private sandbox (owner's
@@ -374,16 +676,39 @@ not permission to copy every incidental value into a new component.
   the raised tile on hover; search, the source list, an open document and an
   answer are tiles too. The code keeps the corpus names; only what a member
   reads says Library.
-- Expanding the primary agent's chat uses Agent overview as focused work:
-  the same mounted conversation sits on the left, and the overview occupies
-  the work panel. The right rail offers only DMs and Teams in this state.
-  Files from the current conversation appear in the overview, following the
-  conversation the chat is on: a new chat has none, and neither does a chat
-  that has not opened yet. Selecting a file, or a newly saved file while the
+- **The agent session: the chat is always on the left, the work always on
+  the right.** Expanding the primary agent's chat, or opening a file from it,
+  opens Agent overview as one two-column session (`AgentSession`): the
+  conversation column (30%, 300px at least) and the work panel beside it,
+  which holds the overview, a file viewer or a live pane. The conversation is
+  the panel's own mounted chat, moved into the column by a host element
+  (`useAgentChatHost`; the host is portalled into, never remounted) and
+  moved back when the session closes, before the column leaves the page, so
+  its draft, scroll, socket and keyboard focus carry over both ways. The
+  column is named for the agent ("Conversation with Leo"). A plain click on
+  a file chip opens it beside the chat; a Cmd, Ctrl or Shift click still
+  opens it in a new tab, and Download saves it without opening anything. Nothing is laid over the page. On a phone the
+  two stack, the chat above; with the keyboard up the chat takes the screen
+  below the header. The Viewer boards' right-docked agent panel is
+  superseded by this. The right rail offers only At a glance and DMs in this state.
+  With nothing open, the work panel is a segmented control (the chosen tab
+  the raised tile) over four tabs (`agent-session-work.tsx`): **Overview**
+  (the agent's own page: the agent, stats, teams and specialists, follow-ups
+  and workflows, nothing of one conversation), **Files** (this
+  conversation's files, latest version first, "Version 2 of 3"), **Live**
+  (its sandboxes and browsers) and **Requests** (the requests its agent
+  filed in it, as request cards; nothing from other conversations). Each
+  tab counts what it holds, and an empty one says what lands there in one
+  line. Opening a file or a live child swaps in its viewer, and Back returns
+  to the same tab. The tabs follow the conversation the chat is on: a new
+  chat has none of these, and neither does a chat that has not opened yet.
+  Selecting a file in the Files tab or a file chip in
+  the chat (in the panel or in the session), or a newly saved file while the
   chat is in view (the expanded panel's Agents tab, or this view), turns the
-  work panel into a clean, compact viewer while the mounted chat remains on
-  the left, even if the agent panel was never opened. A file saved while the
-  chat is out of view stays a chip in the chat. Markdown uses the same
+  work panel into a clean, compact viewer while the chat stays on the left,
+  even if the agent panel was never opened. A chip never opens a new browser
+  tab there; a small Download control beside it is the second way. A file
+  saved while the chat is out of view stays a chip in the chat. Markdown uses the same
   rendering as chat, and PDF, DOCX,
   PPTX, XLSX, CSV, text and images use small in-app rendering libraries, with
   only page or sheet navigation when needed. A Word document is drawn in a
@@ -404,7 +729,49 @@ not permission to copy every incidental value into a new component.
   header's own centre row (y=28 in its 56px band), vertically level with the
   back button and title, even when (like the work tabs) they are positioned
   over a region below the header rather than inside the `<header>` itself.
-- An agent conversation reads as a quiet log on the base surface: the
+- **The agent conversation is a working session, not a messenger thread**
+  (founder, 15 Oct 2026; `agent-run.tsx`, `agent-run.css`). People chats keep
+  bubbles; the primary agent's chat does not. Each thing the member asks is a
+  **task line**: left-aligned, no bubble, 14px semibold, with "You · 09:41"
+  above it (a batch from their apps keeps its "From your apps" notice there).
+  Under it, the work that answered it is one **run card**, a filled tile (the
+  base on the panel's canvas tile, the canvas in the session's column):
+  - **Header:** a status (Working or Waiting for you with a Thinking Orb;
+    Done, Interrupted or Failed with an icon) as an outline badge, how long
+    it took, and tokens used where the run said; Stop (ghost, sm) while it
+    runs. Duration comes from the run's own start and end markers, which only
+    runs streamed into the chat's transcript carry; otherwise from the items'
+    times; with neither, nothing is shown. Go's history keeps no run markers
+    or usage (#322), so older runs show no tokens.
+  - **Steps:** one ghost toggle ("3 steps · 1 failed", with app marks) that
+    opens a list, one line per call: app mark, what it did, the key argument
+    (query, file, URL or channel, from the call's own arguments), and its
+    state; a failed step shows its error. Open while the run works or waits,
+    folded once it is over, until the member chooses. "Opened" lists the web
+    addresses calls were given. Go sends no result text or sources, so a
+    step says only Done or Failed, and there is no Sources view yet (#322).
+  - **Approvals** sit inside the card as the confirmation cards below.
+  - **Outputs:** a file is a card row (its kind badge, name, "Version 2 ·
+    Made in this chat", Open as outline sm, Download as ghost icon-sm; links,
+    so a click that asks for a new tab gets one); an image also shows its
+    preview. Requests keep their request card.
+  - **The answer** is the Markdown at the end of the card; a failed run's
+    words close it.
+  The composer is a task bar ("Give Leo a task, or ask anything") with a quiet
+  "Looking at …" chip above the field: what the page's screen context names
+  (its selection, or the page), which goes with the message.
+  **Specialist and team chats are working sessions too.** A specialist's
+  card takes what its work result says: "Needs your input" or "Blocked" in
+  place of Done, the files it saved as output rows by name (Go serves no
+  specialist files yet, so they say they can't be opened here), and the
+  hand-offs it suggests as rows ("Suggests Planner: …"; suggestions only,
+  nothing ran); the line under its answer keeps only the tools it used. A
+  multi-agent team's posts are tasks, and the agents' answers after one are
+  its run card, each named for who wrote it; while the team works the card
+  says so and the composer says it can take a minute and a half.
+- No screen uses the older log layout any more (`AgentTimeline`'s `log`
+  variant, kept for now), which read an agent conversation as a quiet log
+  on the base surface: the
   member's messages in raised bubbles on the right; the agent's answers as
   full-width Markdown, labelled only when a sub-agent wrote them; each run of
   tool calls folded into one muted status row with a Thinking Orb for the
@@ -423,15 +790,19 @@ not permission to copy every incidental value into a new component.
   owner's own reply says "Waiting for Ada to reply", and an answer the owner
   wrote says "Ada replied" in place of "Answered" and shows their words as
   they wrote them (plain text, never Markdown). Confirmations are small
-  cards with Decline and Approve pills (several waiting are answered together);
-  files as a thumbnail or a file chip; a failed run as one muted error line,
+  cards whose actions follow the action-row convention: `ui/button`, both
+  `sm`, right-aligned 8px apart, Decline (outline; destructive once chosen)
+  then Approve (default) on the far right (several waiting are answered
+  together with Send answers);
+  files as a thumbnail or a file chip (opening in the session's viewer, with
+  Download beside it); a failed run as one muted error line,
   and an answer cut short marked "Interrupted". A specialist's answer is its
   work result's summary, with one muted line under it for the rest (needs
   your input or blocked, the tools it used, the files it saved, the hand-offs
   it suggests); while it works, one muted line with a Thinking Orb says so. In
-  the agent panel one muted row above it names the conversation, with a
-  clear, quiet New chat control; a specialist's focused view carries the
-  same in its presence row. Below it, a compact History disclosure lists real
+  the agent panel one muted row above it names the conversation, and the
+  panel's header holds New chat and History (§2); Agent overview and a
+  specialist's view keep New chat on that row. A compact History list shows real
   conversations newest first, each with title, relative time, open and delete.
   A waiting conversation says "Needs approval". Hide empty abandoned starts
   unless currently selected or waiting on approval; an accessible untitled
@@ -470,14 +841,30 @@ not permission to copy every incidental value into a new component.
   Switching agents keeps each one's conversation and unsent message. What the panel holds belongs to the member:
   another member taking over the page inherits none of it.
 - People is a DM area, not teammate administration or a combined “People &
-  teams” directory. Recent/started conversations belong in Team's left
-  sidebar, with at most three visible there. A DM uses the same dynamic header
+  teams” directory. Recent conversations belong in the sidebar's Messages
+  tile (above). A DM uses the same dynamic header
   principle and keeps the conversation/composer as the main content.
 - **Direct messages.** A DM is one conversation (`direct-message.tsx`) in two
   layouts, each its own view of the same live object (REALTIME.md): the main
-  canvas, opened from People or Team's recent conversations, under the header
+  canvas, opened from People or the sidebar's Messages, under the header
   that names the person; and the agent panel's DMs tab, under a compact row
   with a back arrow to the list.
+  - **Messages** (founder's redesign, 15 Oct 2026; `messages-page.tsx`). In
+    the canvas, the open DM sits between the member's DM list and a card
+    about the person, the three columns answering the canvas's width (a
+    container query) rather than the window's: a narrow canvas drops the
+    card first, then the list, leaving the DM alone as before. The list, a
+    filled tile, is "Messages · N unread" over "Find a person" and the DMs
+    (side conversations stay in the DMs tab, under their teamspace), the open
+    one the raised tile; a search also lists anyone else who matches, to
+    start a conversation, and New message moves to it. The person card, a
+    filled tile in the canvas and never in the agent panel's place, says
+    their name, role and "Online" only while the page knows it, Parley (the
+    DM's own room; while the card shows, the DM keeps only a running
+    parley's strip), their agent where a shared teamspace seats one, and the
+    teamspaces you share, each agent with Ask as on People. Local time, a profile and shared files wait for
+    the API (#322), so nothing stands in for them. The header still names
+    the person.
   - It reads as a quiet log (a centered column in the canvas): the member's
     messages in raised bubbles on the right, the other person's as plain text
     on the left beside their avatar. Each person's messages within one minute
@@ -494,8 +881,8 @@ not permission to copy every incidental value into a new component.
     messages raise a "N new messages" pill and are announced. The page before
     loads at the top without moving what the reader is looking at, and the
     start of the conversation says so.
-  - Unread is a count on a DMs row, a dot on a recent conversation in Team's
-    navigation, and a badge on the DMs tab and its rail icon ("9+" past
+  - Unread is a count on a DMs row and on a DM in the sidebar's Messages,
+    and a badge on the DMs tab and its rail icon ("9+" past
     nine); a phone, which has no rail, puts a dot on the panel's edge
     control. A DM counts as read while it is on screen, at its end, in a
     visible tab.
@@ -503,10 +890,11 @@ not permission to copy every incidental value into a new component.
     person" once they have left; session ended, with Sign in; and "Can't
     reach this conversation" with Try again, while the composer keeps taking
     messages that send once it is back.
-  - People lists everyone in the organization but the member, with role and
-    shared teamspaces as context, search, and a Message action. Team's
-    navigation shows the three latest DMs, and "All" opens the DMs tab, where
-    "New message" picks anyone in the organization. The canvas DM is in the
+  - People lists everyone in the organization, the member's own card first,
+    with role and shared teamspaces as context, search, and a Message
+    action. The sidebar's Messages shows the latest DMs; the agent panel's
+    DMs tab lists them all, where "New message" picks anyone in the
+    organization. The canvas DM is in the
     page's address (`?dm=`), so a refresh returns to it.
   - Opening a DM moves focus to its composer, or to the log on a phone so the
     keyboard stays down; going back returns focus to the person or row it
@@ -592,16 +980,34 @@ not permission to copy every incidental value into a new component.
   sees what their choice did. When nothing waits and none is open, the side
   says "Every ask answered." under a small scene. Below 1100px the card
   replaces the list while one is opened, with "Back to all requests".
+  - **To the RequestsNew / RequestsClear boards** (15 Oct 2026). The header
+    reads "Requests" over "N waiting for you" or "All clear", and the agent
+    panel collapses as Requests opens, so the open request takes the width
+    (the member may still open it). The list tile has a search (a `ui/button`
+    that opens a field, filtering what the lists hold, Escape to close), the
+    inbox's first heading "Waiting for you N" even at none, then "Earlier".
+    A row's time is the clock today and how long ago before; its tag says
+    what it waits on ("Expires in 1 h", "Wants your reply", "Answer held for
+    you") or who answered ("Answered by Krude", "Answered by you"). The card's
+    head carries the expiry as a quiet pill. The all-clear says "Nothing is
+    waiting for you. Krude will flag the next one." and today's numbers from
+    the inbox (asks today, by Krude, by you, average wait). Not shown until
+    Go serves them: the draft "If you share, Krude will say" with sources and
+    masked count, the Slack thread and channel name, a new/unread dot, and
+    the "Has an email address" warning.
   - **The request card** says who asked, the question, where it came from (in
     Slack, or in Oryxa), where it stands and, for the person it is theirs to
     answer, what to do, in one set of words wherever the request came from,
     the same as the buttons of Slack's notice. A request from Slack is answered
-    with one of three choices, "Share answer", "Allow for 1 hour" or "Deny",
-    and the card says in a line what each lets the agent do ("Allow for 1
-    hour": the agent may quote what it reads, and the asker's follow-ups in
-    that thread are answered for an hour). Any other request, one an agent
-    filed in Oryxa, is answered with "Share answer" or "Deny" and an optional
-    note. Sharing the answer allows the tools the request asked for, which the
+    with one of four choices in a 2×2 grid, "Share answer" (the primary),
+    "Allow for 1 hour", "Reply yourself" and "Deny" (destructive), each a
+    `ui/button` with its key, and the card says in a line what each lets the
+    agent do ("Allow for 1 hour": the agent may quote what it reads, and the
+    asker's follow-ups in that thread are answered for an hour). On the
+    Requests page S, A, R and D pick the open request's choices from
+    anywhere but a text field. Any other request, one an agent filed in
+    Oryxa, is answered with "Share answer", "Reply yourself" or "Deny" (S, R,
+    D) and an optional note. Sharing the answer allows the tools the request asked for, which the
     card says above the choices ("Krude may read team knowledge."), and it
     offers no approval without them. Each button is named to a screen reader by
     its words and whose request it is ("Share answer to Raya's request").
@@ -615,9 +1021,9 @@ not permission to copy every incidental value into a new component.
   - **Reply yourself** lets the owner answer in their own words when an ask
     needs their own judgment (an approval, a plan) or when the agent can't find
     the answer. It is on the owner's card wherever they may decide a pending
-    request or review a held answer, and nowhere else. Under the choices it is
-    a quiet text button ("Reply yourself", named "Reply yourself to Raya's
-    request"); it opens an inline field in the composer's style, a pill at one
+    request or review a held answer, and nowhere else. It is the grid's R choice
+    (under a held answer, a quiet text button), named "Reply yourself to Raya's
+    request"; it opens an inline field in the composer's style, a pill at one
     line that softens as its text wraps and grows to eight lines (its border is
     the focus mark, as the composer's is), taking focus, with "Send reply" (the
     primary action) and "Cancel". It says what it does
@@ -662,7 +1068,8 @@ not permission to copy every incidental value into a new component.
   teamspace shows it.
 - Teamspace management is role-aware. Put account, teammate, organization,
   access, email, and billing administration inside Settings, opened from the
-  user menu. Keep the simple Organization tab in that single Settings surface;
+  sidebar's Settings entry (the user menu, and the rail's Settings button
+  where the rail has one). Keep the simple Organization tab in that single Settings surface;
   do not split account and organization into separate full-page settings apps.
   A generic Settings entry opens Account on the member's first visit, then
   their last section in this browser, remembered per member and workspace.
@@ -704,12 +1111,37 @@ not permission to copy every incidental value into a new component.
   its foot; no text sits on the painting anywhere else. On a phone the scene
   is a band across the top that fades into the page. The Google option uses
   the full-color Google mark.
-- Setting up a new workspace continues in the same layout (`?setup=`, in
-  `components/onboarding.tsx`), with a five-part stepper: Workspace, then
-  Krude (background access), Tools (connect apps), Crew (invite by email)
-  and Teamspace (the first one). Each step does real work through the
-  existing APIs and can be skipped; an app's or the grant's sign-in page
-  returns to the step it left.
+- **Setting up a new workspace** (onboarding v3, founder's redesign of 15
+  Oct 2026; boards OnbV3s1–s5 and Onb3Model) uses the sign-in layout through
+  `OnboardingFrame` (`components/onboarding-frame.tsx`). Naming the
+  workspace is step 1 (routes/index `NewWorkspace`); `?setup=` carries steps
+  2–5 in `components/onboarding.tsx`: Krude (background access), Tools
+  (connect apps), Crew (invite by email) and Teamspace (the first one).
+  - **The scene** on the left holds a miniature of the member's workspace
+    (`WorkspaceModel`): navigation, the page and Krude's panel, as three
+    panes. One part fills in per step, from what is really set up: the
+    workspace's name as it is typed, Krude's panel, connected apps,
+    invited addresses (pending invitations and this session's), and the
+    teamspace's name as it is typed. Parts not yet set up stay as quiet
+    ghost lines (`ui/skeleton`, no pulse); never example people or apps.
+    The scene's caption sits at its foot; on narrow screens the miniature
+    is hidden.
+  - **The form** on the right sits under "Step N of 5 · Name" and a
+    five-part bar (an ordered list; the current part is `aria-current`).
+    Each step opens with an eyebrow, a question (30px) and one line.
+  - **Navigation** follows §1's buttons: Back (`ghost`) on the left, Skip
+    for now (`ghost`) and Continue (`default`, with its ↵ hint) on the
+    right. Enter anywhere outside a field, button or link continues; in a
+    field it submits that field's form. Steps 1 and 2 have no Back (the
+    workspace exists once named; step 1 offers Sign out there). Skip for
+    now shows only while the step has nothing done; the last step's
+    primary is "Open my workspace", which lands on My workspace's first
+    run (§3).
+  - Each step does real work through the existing APIs, and an app's or
+    the grant's sign-in page returns to the step it left. Board elements
+    with no API stay out: the workspace address and domain join, how far
+    Krude acts on its own and what it calls the member (#322), per-person
+    roles on invites, and teamspace starters.
 
 ## 5. Small screens and keyboard
 

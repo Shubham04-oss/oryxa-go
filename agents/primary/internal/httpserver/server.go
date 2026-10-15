@@ -261,6 +261,14 @@ type Config struct {
 	// EdgeMembers admits a member to a room on the edge once they may be in
 	// it (edgemembers.Pusher, A18). Nil leaves the admit route answering 404.
 	EdgeMembers EdgeMembers
+	// Runs stops a member's run (*threads.Drain). Nil leaves the stop route
+	// answering 404, and a run then ends only when it finishes.
+	Runs RunStopper
+}
+
+// RunStopper stops a run going in this process, if it is the member's own.
+type RunStopper interface {
+	Stop(organizationID, userID, runID string) bool
 }
 
 // Server serves the API.
@@ -281,6 +289,7 @@ type Server struct {
 	secretShares        SecretShares
 	edge                *EdgeDispatch
 	edgeMembers         EdgeMembers
+	runs                RunStopper
 	checks              *checkLimiter
 	allowedOrigins      map[string]struct{}
 	runTimeout          time.Duration
@@ -314,6 +323,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		secretShares:        config.SecretShares,
 		edge:                config.EdgeDispatch,
 		edgeMembers:         config.EdgeMembers,
+		runs:                config.Runs,
 		checks:              newCheckLimiter(checksPerWindow, checkWindow),
 		allowedOrigins:      map[string]struct{}{},
 		runTimeout:          config.RunTimeout,
@@ -336,6 +346,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}", server.getThread)
 	server.handle("DELETE /v1/organizations/{organizationID}/threads/{threadID}", server.deleteThread)
 	server.handle("POST /v1/organizations/{organizationID}/threads/{threadID}/runs", server.run)
+	server.handle("POST /v1/organizations/{organizationID}/runs/{runID}/stop", server.stopRun)
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}", server.artifact)
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor", server.documentEditor)
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor-source", server.documentSource)
@@ -1736,7 +1747,34 @@ func (server *Server) streamRun(writer http.ResponseWriter, request *http.Reques
 	stream := newEventStream(writer, controller)
 	stopKeepAlive := stream.keepAlive(keepAliveInterval)
 	defer stopKeepAlive()
-	started.Execute(request.Context(), stream.item)
+	// A run outlives its stream: a dropped connection stops the writing, not
+	// the run, which still records its answer and files. The member stops a
+	// run with POST …/runs/{runID}/stop.
+	gone := false
+	started.Execute(context.WithoutCancel(request.Context()), func(item threads.Item) error {
+		if gone {
+			return nil
+		}
+		if err := stream.item(item); err != nil {
+			gone = true
+			server.logger.InfoContext(request.Context(), "a run's stream closed; the run goes on", "run_id", started.ID(), "error", err)
+		}
+		return nil
+	})
+}
+
+// stopRun stops one of the member's runs. 404 when none of theirs with that id
+// is going here.
+func (server *Server) stopRun(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.runs == nil || !server.runs.Stop(member.OrganizationID, member.UserID, request.PathValue("runID")) {
+		writeError(writer, http.StatusNotFound, "not_found", "no such run is going")
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
 }
 
 // member decides who the caller is in the path's organization. An agent

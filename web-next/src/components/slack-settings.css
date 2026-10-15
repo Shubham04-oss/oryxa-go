@@ -1,67 +1,11 @@
-/* Settings → Slack (slack-settings.tsx): the connection's card and its
-   actions, and the channel rows' small marks. The section, rows, switch,
-   confirm step and notices are Settings' own (workspace-settings.css);
-   the logo tile is the tools page's (workspace-tools.css). */
+/* Settings → Slack (slack-settings.tsx): the channel rows' small lock. The
+   groups, rows, switches, confirms and notices are the settings kit's
+   (workspace-settings.css); the logo tile is the tools page's
+   (workspace-tools.css). */
 
-.workspace-slack-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-.workspace-slack-card > div {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-.workspace-slack-card strong {
-  color: var(--tone-f3f3f3);
-  font-size: 14px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.workspace-slack-card small {
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-.workspace-slack-status {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  min-height: 22px;
-  padding: 3px 9px;
-  border: 1px solid var(--tone-4a4a4a);
-  border-radius: 999px;
-  background: var(--tone-303030);
-  color: var(--tone-aaaaaa);
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1;
-}
-.workspace-slack-status[data-status="active"] {
-  border-color: var(--tone-385c49);
-  background: var(--tone-263a2e);
-  color: var(--tone-b9e6c6);
-}
-
-.workspace-slack-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 16px;
-}
-.workspace-slack-add { gap: 8px; }
 .workspace-slack-lock {
   display: inline-block;
-  margin-right: 6px;
+  margin-right: 8px;
   color: var(--text-muted);
   vertical-align: -1px;
-}
-
-@media (max-width: 800px) {
-  .workspace-slack-card { align-items: flex-start; }
-  .workspace-slack-status { align-self: flex-start; }
 }

@@ -12,7 +12,7 @@ import {
   within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { StrictMode } from "react"
+import { StrictMode, useState } from "react"
 import type { ComponentProps, ReactElement } from "react"
 import {
   ORG,
@@ -20,9 +20,13 @@ import {
   agent,
   fakeAgentsBackend,
   primary,
+  request,
 } from "./agents-fake-backend"
 import type { DmPeople } from "./direct-message-people"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
+import { AgentSession } from "./agent-session"
+import type { PrimaryAgentFileTarget } from "./primary-agent-files"
+import type { AgentRequest } from "@/lib/agents/agent-requests"
 import type { Inbox } from "@/lib/dms"
 import {
   MAX_WAITING_MESSAGES,
@@ -87,6 +91,8 @@ type Seed = {
   created?: Thread
   /** Transport fixtures resume their own explicitly viewed conversation. */
   rememberLatest?: boolean
+  /** The member's Requests inbox. */
+  inbox?: AgentRequest[]
 }
 
 /** A call that starts a conversation. */
@@ -110,7 +116,10 @@ function stubGo(seed: Seed = {}) {
         rememberChoice({ organizationId: ORG, userId }, primary.id, last.id)
     }
   }
-  const backend = fakeAgentsBackend({ agents: [primary, scout] })
+  const backend = fakeAgentsBackend({
+    agents: [primary, scout],
+    inbox: seed.inbox,
+  })
   let threads = seed.threads ?? []
   let made = 0
   let failing = 0
@@ -168,6 +177,16 @@ function stubGo(seed: Seed = {}) {
           pending_confirmations: seed.pending?.[id] ?? [],
         }
         return json(body)
+      }
+      if (
+        /^\/v1\/organizations\/[^/]+\/threads\/[^/]+\/artifacts\//.test(path)
+      ) {
+        return new Response("file", {
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": 'attachment; filename="report.pdf"',
+          },
+        })
       }
       if (
         path.startsWith("/agents/thread-chat-agent/") &&
@@ -353,7 +372,7 @@ describe("what the agents' chats keep across a switch", () => {
     const sockets = roomSockets.named(chatName("th_1")).length
 
     // A new conversation, though a fresh one exists.
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(screen.getByText(blank)).toBeTruthy()
 
     fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
@@ -474,8 +493,7 @@ describe("a first message on its way", () => {
     fireEvent.keyDown(leoBox(), { key: "Enter" })
     const socket = await socketOn(chatName("th_new"))
 
-    const button = () =>
-      screen.getByRole("button", { name: "New conversation" })
+    const button = () => screen.getByRole("button", { name: "New chat" })
     expect(button().hasAttribute("disabled")).toBe(true)
     fireEvent.click(button())
     socket.open()
@@ -635,7 +653,9 @@ describe("a request to open a conversation", () => {
 
     act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
     expect(
-      screen.getByRole("tab", { name: "Agents" }).getAttribute("aria-selected")
+      screen
+        .getByRole("tab", { name: /^(Leo|Your agent)$/ })
+        .getAttribute("aria-selected")
     ).toBe("true")
   })
 
@@ -672,7 +692,7 @@ describe("a request to open a conversation", () => {
     ;(await socketOn(chatName("th_1"))).open()
 
     // The member goes to a new conversation instead.
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(screen.getByText(blank)).toBeTruthy()
     view.rerender(panel({ expanded: true, primaryWork: false }))
     expect(screen.getByText(blank)).toBeTruthy()
@@ -717,7 +737,7 @@ describe("a request to open a conversation", () => {
     expect(rememberedChoice(scope, primary.id)).toBe("th_new")
 
     // Nothing waits to be sent into the next new conversation.
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     await act(async () => {})
     expect(
       go.calls.filter((call) => call.startsWith("POST /v1/organizations/"))
@@ -942,7 +962,7 @@ describe("a request to open a conversation", () => {
       ).toBe("Old plan")
     )
     expect(notSent()).toEqual(["Failed first"])
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(notSent()).toEqual(["Failed first"])
     expect(leoBox().value).toBe("Half a thought")
 
@@ -1144,7 +1164,7 @@ describe("a file the agent saves", () => {
 
     view.rerender(panel({ expanded: true, onPrimaryFileCreated: onFile }))
     expect(onFile).not.toHaveBeenCalled()
-    expect(screen.getByRole("link", { name: "report.pdf" })).toBeTruthy()
+    expect(screen.getByRole("link", { name: "Open report.pdf" })).toBeTruthy()
   })
 
   it("leaves only the chip when the panel is on another tab", async () => {
@@ -1170,5 +1190,272 @@ describe("a file the agent saves", () => {
     await screen.findByRole("textbox", { name: "Message Scout" })
     finish()
     expect(onFile).not.toHaveBeenCalled()
+  })
+})
+
+describe("the agent session", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const saved: Item[] = [
+    { type: "message", id: "ev_1", author: "member", text: "Write it up" },
+    { type: "artifact", id: "ev_f", artifact: "report.pdf", version: 2 },
+  ]
+
+  /**
+   * The session as the shell lays it out: opening a file from the chat
+   * opens the session, the chat column first and the file beside it, and
+   * the panel collapses meanwhile.
+   */
+  function Session() {
+    const [file, setFile] = useState<PrimaryAgentFileTarget | null>(null)
+    const [slot, setSlot] = useState<HTMLElement | null>(null)
+    return (
+      <>
+        {file && (
+          <AgentSession
+            chatSlotRef={setSlot}
+            chatLabel="Conversation with Leo"
+            workLabel="Work"
+          >
+            <button type="button" onClick={() => setFile(null)}>
+              Back to Agent overview
+            </button>
+            <p>Viewing {file.name}</p>
+          </AgentSession>
+        )}
+        {panel({
+          expanded: !file,
+          primaryWork: Boolean(file),
+          primaryChatSlot: file ? slot : null,
+          onOpenPrimaryFile: setFile,
+        })}
+      </>
+    )
+  }
+
+  async function withFile(items: Item[] = saved) {
+    const go = stubGo({ threads: [thread("th_1", "Write it up")] })
+    withQueries(<Session />)
+    ;(await socketOn(chatName("th_1"))).open()
+    const chat = agentChats.named(chatName("th_1"))
+    chat.update({ messages: itemsToChatMessages(items) })
+    return go
+  }
+
+  it("opens a file from the chat beside it: the chat on the left, the file on the right", async () => {
+    await withFile()
+    const box = leoBox()
+    type(box, "And a summary slide")
+    const chip = screen.getByRole("link", { name: "Open report.pdf" })
+    chip.focus()
+    fireEvent.click(chip)
+
+    const work = await screen.findByRole("region", { name: "Work" })
+    expect(within(work).getByText("Viewing report.pdf")).toBeTruthy()
+    const column = screen.getByRole("region", { name: "Conversation with Leo" })
+    // The same conversation, moved and not mounted again: the draft and the
+    // focus come with it.
+    expect(leoBox()).toBe(box)
+    expect(column.contains(box)).toBe(true)
+    expect(box.value).toBe("And a summary slide")
+    expect(document.activeElement).toBe(chip)
+    // The chat comes first, the file after it.
+    expect(
+      column.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      box.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+
+  it("keeps the draft when the session closes and the chat goes back to the panel", async () => {
+    await withFile()
+    const box = leoBox()
+    type(box, "Still writing")
+    fireEvent.click(screen.getByRole("link", { name: "Open report.pdf" }))
+    await screen.findByRole("region", { name: "Work" })
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to Agent overview" })
+    )
+    expect(
+      screen.queryByRole("region", { name: "Conversation with Leo" })
+    ).toBe(null)
+    expect(leoBox()).toBe(box)
+    expect(box.value).toBe("Still writing")
+    expect(
+      document.getElementById("workspace-agent-view-agents")?.contains(box)
+    ).toBe(true)
+  })
+
+  it("keeps the composer's focus when the session closes from inside the chat", async () => {
+    await withFile()
+    const box = leoBox()
+    fireEvent.click(screen.getByRole("link", { name: "Open report.pdf" }))
+    const column = await screen.findByRole("region", {
+      name: "Conversation with Leo",
+    })
+    box.focus()
+    expect(column.contains(document.activeElement)).toBe(true)
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to Agent overview" })
+    )
+    expect(
+      screen.queryByRole("region", { name: "Conversation with Leo" })
+    ).toBe(null)
+    expect(document.activeElement).toBe(box)
+  })
+
+  it("offers the file's download beside it, and opens nothing in a new tab", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null)
+    await withFile()
+    expect(
+      screen.getByRole("link", { name: "Download report.pdf" })
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole("link", { name: "Open report.pdf" }))
+    await screen.findByRole("region", { name: "Work" })
+    expect(opened).not.toHaveBeenCalled()
+  })
+
+  it("downloads the file from Download, without the viewer or a new tab", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null)
+    const saves: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      saves.push(this.download)
+    })
+    const go = await withFile()
+    fireEvent.click(screen.getByRole("link", { name: "Download report.pdf" }))
+
+    await waitFor(() => expect(saves).toEqual(["report.pdf"]))
+    expect(go.calls).toContain(
+      `GET /v1/organizations/${ORG}/threads/th_1/artifacts/report.pdf`
+    )
+    expect(screen.queryByRole("region", { name: "Work" })).toBe(null)
+    expect(opened).not.toHaveBeenCalled()
+  })
+
+  it("opens a new tab, not the viewer, for a click that asks for one", async () => {
+    const saves: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      saves.push(this.download)
+    })
+    const go = await withFile()
+    fireEvent.click(screen.getByRole("link", { name: "Open report.pdf" }), {
+      metaKey: true,
+    })
+
+    // The file's own way out (an attachment here, so it is saved), after
+    // its headers refresh the cookie: not the viewer.
+    await waitFor(() => expect(saves).toEqual(["report.pdf"]))
+    expect(go.calls).toContain(
+      `GET /v1/organizations/${ORG}/threads/th_1/artifacts/report.pdf`
+    )
+    expect(screen.queryByRole("region", { name: "Work" })).toBe(null)
+  })
+
+  it("opens an image from its card beside the chat, its Download beside Open", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null)
+    await withFile([
+      { type: "message", id: "ev_1", author: "member", text: "Chart it" },
+      { type: "artifact", id: "ev_c", artifact: "chart.png", version: 1 },
+    ])
+    const thumbnail = screen.getByRole("link", { name: "Open chart.png" })
+    const caption = thumbnail.closest<HTMLElement>(".agent-run-file")
+    expect(
+      caption &&
+        within(caption).getByRole("link", {
+          name: "Download chart.png",
+        })
+    ).toBeTruthy()
+
+    fireEvent.click(thumbnail)
+    const work = await screen.findByRole("region", { name: "Work" })
+    expect(within(work).getByText("Viewing chart.png")).toBeTruthy()
+    expect(opened).not.toHaveBeenCalled()
+  })
+})
+
+describe("the panel's header, switch and chips", () => {
+  it("names the agent and where the member is, and keeps the chat theirs", async () => {
+    stubGo({ threads: [] })
+    withQueries(panel({ place: "EU launch", lookingAt: "EU launch plan" }))
+    expect(await screen.findByText("Only you · in EU launch")).toBeTruthy()
+    expect(await screen.findByRole("tab", { name: "Leo" })).toBeTruthy()
+    expect(
+      screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label"))
+    ).toEqual(["Leo", "At a glance", "DMs"])
+    // What the agent is shown with a message, on the composer.
+    await screen.findByText(blank)
+    expect(screen.getByText("Looking at EU launch plan")).toBeTruthy()
+  })
+
+  it("counts what needs the member on At a glance and in a chip that opens Requests", async () => {
+    stubGo({
+      threads: [],
+      inbox: [
+        request({ id: "req_1", status: "pending" }),
+        request({ id: "req_2", status: "review" }),
+        // Decided already: nothing to do.
+        request({ id: "req_3", status: "approved" }),
+      ],
+    })
+    const onOpenRequests = vi.fn()
+    withQueries(panel({ onOpenRequests }))
+    const chip = await screen.findByRole("button", {
+      name: "Needs you: 2 requests, open Requests",
+    })
+    expect(
+      screen.getByRole("tab", { name: "At a glance, 2 requests need you" })
+    ).toBeTruthy()
+    fireEvent.click(chip)
+    expect(onOpenRequests).toHaveBeenCalledOnce()
+  })
+
+  it("shows no chip and no count while nothing waits", async () => {
+    stubGo({ threads: [] })
+    withQueries(panel({ onOpenRequests: vi.fn() }))
+    await screen.findByText(blank)
+    expect(screen.queryByRole("group", { name: "For you now" })).toBeNull()
+    expect(screen.queryByText(/Needs you/)).toBeNull()
+    expect(screen.getByRole("tab", { name: "At a glance" })).toBeTruthy()
+  })
+
+  it("keeps History and New chat in the header, for the primary agent's chat", async () => {
+    stubGo({ threads: [thread("th_1", "Plan the launch")] })
+    withQueries(panel())
+    ;(await socketOn(chatName("th_1"))).open()
+    await screen.findByText("Plan the launch", {
+      selector: ".workspace-agent-thread-title",
+    })
+    // The row over the log only names the conversation now.
+    expect(
+      screen.queryByRole("button", { name: "New conversation" })
+    ).toBeNull()
+    expect(document.querySelector(".workspace-chat-history-list")).toBeNull()
+
+    const history = screen.getByRole("button", { name: "History" })
+    fireEvent.click(history)
+    expect(history.getAttribute("aria-pressed")).toBe("true")
+    expect(
+      within(
+        screen.getByRole("region", { name: "Conversation history" })
+      ).getByRole("button", { name: "Delete Plan the launch" })
+    ).toBeTruthy()
+
+    // From At a glance, New chat brings the chat back, on a new conversation.
+    fireEvent.click(screen.getByRole("tab", { name: "At a glance" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
+    expect(
+      screen.getByRole("tab", { name: "Leo" }).getAttribute("aria-selected")
+    ).toBe("true")
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(history.getAttribute("aria-pressed")).toBe("false")
   })
 })
