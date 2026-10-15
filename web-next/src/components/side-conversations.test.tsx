@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { DmPeople, DmPerson } from "./direct-message-people"
+import { CallProvider } from "./call-provider"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import { WorkspaceShell } from "./workspace-shell"
 import type { Session } from "@/lib/auth/client"
@@ -305,10 +306,13 @@ function renderPanel({
   teamspaceId,
   inbox = noConversations,
   route,
+  withCalls = false,
 }: {
   teamspaceId?: string
   inbox?: Inbox
   route?: Route
+  /** Inside the workspace's CallProvider, where parleys are offered. */
+  withCalls?: boolean
 } = {}) {
   const api = mockApi(async (call) => {
     const answer = await route?.(call)
@@ -319,8 +323,8 @@ function renderPanel({
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  const panel = (props: { teamspaceId?: string; inbox: Inbox }) => (
-    <QueryClientProvider client={client}>
+  const panel = (props: { teamspaceId?: string; inbox: Inbox }) => {
+    const agentPanel = (
       <WorkspaceAgentPanel
         expanded
         onExpand={vi.fn()}
@@ -329,8 +333,13 @@ function renderPanel({
         directMessages={{ viewerId, inbox: props.inbox, people }}
         teamspaceId={props.teamspaceId}
       />
-    </QueryClientProvider>
-  )
+    )
+    return (
+      <QueryClientProvider client={client}>
+        {withCalls ? <CallProvider>{agentPanel}</CallProvider> : agentPanel}
+      </QueryClientProvider>
+    )
+  }
   const view = render(panel({ teamspaceId, inbox }))
   return {
     api,
@@ -1850,5 +1859,31 @@ describe("On the teamspace page", () => {
     expect(
       within(panel).queryByRole("region", { name: "In this teamspace" })
     ).toBeNull()
+  })
+})
+
+describe("a parley in a side conversation", () => {
+  it("is offered in the side conversation's own room", async () => {
+    const view = await openWithPriya({ withCalls: true })
+    opened()
+    fireEvent.click(await within(view).findByRole("button", { name: "Parley" }))
+    const room = "/live/org_sim/rooms/side/tsp_launch_user-member_user-priya"
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(fetch)
+          .mock.calls.some(
+            ([url, init]) =>
+              String(url).endsWith(`${room}/call/join`) &&
+              init?.method === "POST"
+          )
+      ).toBe(true)
+    )
+  })
+
+  it("isn't offered outside the workspace, where there are no calls", async () => {
+    const view = await openWithPriya()
+    opened()
+    expect(within(view).queryByRole("button", { name: "Parley" })).toBeNull()
   })
 })

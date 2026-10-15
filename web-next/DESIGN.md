@@ -257,6 +257,9 @@ not permission to copy every incidental value into a new component.
   - **In a DM:** the same strip, or a "Parley" button when none runs, sits
     above the conversation in its reading column. The call is the DM's own
     room on the edge. A DM whose ids the edge can't name offers no parley.
+  - **In a side conversation:** the same, under its bar in the panel; the
+    strip wraps there and leaves out the faces. The call is the side
+    conversation's own room (the teamspace, then the two members).
 - **A specialist's access** (I3, I9). Its page has an Access tab with two
   cards:
   - **Model:** Lite or Main, as two tiles, with the chosen one raised.
