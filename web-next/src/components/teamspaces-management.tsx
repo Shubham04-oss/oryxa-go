@@ -431,6 +431,7 @@ export function TeamspacesManagement({
               onClick={() => setFilter(item.key)}
             >
               {item.label}
+              {loaded && " "}
               {loaded && <span>{counts[item.key]}</span>}
             </button>
           ))}

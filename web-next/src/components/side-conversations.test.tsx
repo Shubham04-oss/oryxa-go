@@ -1846,9 +1846,8 @@ describe("On the teamspace page", () => {
       </QueryClientProvider>
     )
     fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
+      await screen.findByRole("button", { name: "Open Launch room" })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Open teamspace" }))
     fireEvent.click(screen.getByRole("button", { name: "Open Agents" }))
     const panel = screen.getByRole("complementary", { name: "Agent panel" })
     expect(
