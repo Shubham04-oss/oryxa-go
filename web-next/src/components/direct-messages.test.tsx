@@ -208,6 +208,7 @@ function person(id: string, name: string, spaces: string[] = []): DmPerson {
     email: `${id}@sim.oryxa`,
     role: "member",
     spaces,
+    agents: [],
   }
 }
 
@@ -409,7 +410,8 @@ describe("Team → People", () => {
 
     opened(priyaDm, snapshot([], { online: [priya] }))
     expect(screen.getByText("Say hello to Priya")).toBeTruthy()
-    expect(screen.getByText("Online")).toBeTruthy()
+    // The header says so, and so does the card beside the conversation.
+    expect(screen.getAllByText("Online")).toHaveLength(2)
     expect(
       document.querySelector(
         '.workspace-header-detail [data-online="true"] [aria-label="Priya Shah"]'

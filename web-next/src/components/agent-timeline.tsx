@@ -14,7 +14,9 @@ import { ThinkingOrb } from "thinking-orbs"
 import type { OrbState } from "thinking-orbs"
 import { Download, FileText, Inbox, ShieldQuestion } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
+import { buttonVariants } from "@/components/ui/button"
 import { ApiError } from "@/lib/api/client"
+import { cn } from "@/lib/utils"
 import { agentRequestQueryOptions } from "@/lib/agents/queries"
 import { isOwnerWritten } from "@/lib/agents/agent-requests"
 import type { AgentRequest } from "@/lib/agents/agent-requests"
@@ -596,7 +598,10 @@ function ArtifactItem({
   )
   const download = openBeside && (
     <a
-      className="workspace-agent-artifact-download"
+      className={cn(
+        buttonVariants({ variant: "ghost", size: "icon-sm" }),
+        "workspace-agent-artifact-download"
+      )}
       href={url}
       download={fileName}
       aria-label={`Download ${fileName}`}

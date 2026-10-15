@@ -54,6 +54,7 @@ import type {
   AgentPanelChatRequest,
   AgentPanelTabRequest,
 } from "./workspace-agent-panel"
+import { MessagesPage } from "./messages-page"
 import { PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
 import type { SettingsPage } from "./workspace-settings"
@@ -340,9 +341,9 @@ function WorkspaceShellContent({
   // Agents mode's focused work belongs to that mode and its workspace.
   const agentWork =
     activeMode === "agents" && selectedOrganization ? agentsMode.focus : null
-  const isFocused = Boolean(
-    primaryWork || agentWork || (teamspaces.openId && selectedOrganization)
-  )
+  // An open teamspace keeps the sidebar (TeamspaceHome board): its page
+  // carries its own "Teamspaces / <name>" crumbs.
+  const isFocused = Boolean(primaryWork || agentWork)
   // The teamspace on the page: the agent panel offers its teammates.
   const pageTeamspaceId =
     !primaryWork && !agentWork && selectedOrganization && teamspaces.openId
@@ -598,6 +599,9 @@ function WorkspaceShellContent({
 
   function openTeamspace(id: string) {
     teamspaces.open(id)
+    // The sidebar stays, so it marks Teamspaces, where the crumbs lead back.
+    setActiveMode("team")
+    setSectionsByMode((current) => ({ ...current, team: "teamspaces" }))
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
   }
@@ -1017,22 +1021,31 @@ function WorkspaceShellContent({
                     Loading the conversation…
                   </p>
                 ) : canvasPeer && dmOrganizationId && viewerId ? (
-                  <DirectMessageView
-                    key={canvasPeer.id}
+                  <MessagesPage
                     organizationId={dmOrganizationId}
                     viewerId={viewerId}
+                    inbox={inbox}
+                    people={dmPeople}
                     peer={canvasPeer}
-                    layout="canvas"
-                    draft={dmDrafts[canvasPeer.id] ?? ""}
-                    onDraftChange={(draft) =>
-                      setDmDrafts((current) => ({
-                        ...current,
-                        [canvasPeer.id]: draft,
-                      }))
-                    }
-                    onComposingChange={setDmComposing}
-                    autoFocus={dmOpenedByMember}
-                  />
+                    onOpen={openDirectMessage}
+                  >
+                    <DirectMessageView
+                      key={canvasPeer.id}
+                      organizationId={dmOrganizationId}
+                      viewerId={viewerId}
+                      peer={canvasPeer}
+                      layout="canvas"
+                      draft={dmDrafts[canvasPeer.id] ?? ""}
+                      onDraftChange={(draft) =>
+                        setDmDrafts((current) => ({
+                          ...current,
+                          [canvasPeer.id]: draft,
+                        }))
+                      }
+                      onComposingChange={setDmComposing}
+                      autoFocus={dmOpenedByMember}
+                    />
+                  </MessagesPage>
                 ) : (
                   <PeopleDirectory
                     people={dmPeople}

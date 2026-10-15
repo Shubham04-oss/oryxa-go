@@ -31,7 +31,7 @@ export function recentDirectMessages(
 }
 
 /** Now, again every minute, so "5m" becomes "6m". */
-function useMinuteClock(): number {
+export function useMinuteClock(): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000)
@@ -415,7 +415,7 @@ function InboxList({
           >
             {conversations.map((conversation) => (
               <li key={conversation.name}>
-                <InboxRow
+                <DmRow
                   conversation={conversation}
                   name={people.nameOf(conversation.peerId) ?? "Someone"}
                   viewerId={viewerId}
@@ -452,11 +452,17 @@ function InboxList({
   )
 }
 
-function InboxRow({
+/**
+ * One conversation in a list: the person, when it last moved, its preview and
+ * its unread count. The DMs tab lists them, and so does Messages beside the
+ * open DM, where the open one is the raised tile (`active`).
+ */
+export function DmRow({
   conversation,
   name,
   viewerId,
   now,
+  active = false,
   onOpen,
   onOpenSide,
 }: {
@@ -464,8 +470,10 @@ function InboxRow({
   name: string
   viewerId: string
   now: number
+  /** The conversation open beside the list. */
+  active?: boolean
   onOpen: (peerId: string) => void
-  onOpenSide: (name: string) => void
+  onOpenSide?: (name: string) => void
 }) {
   const online = usePeerOnline(conversation.peerId)
   const previewId = useId()
@@ -477,15 +485,16 @@ function InboxRow({
     : `Open conversation with ${name}`
   return (
     <button
-      className="workspace-dm-row"
+      className={cn("workspace-dm-row", active && "is-active")}
       type="button"
       data-unread={unread > 0 ? "true" : undefined}
       data-dm-peer={side ? undefined : conversation.peerId}
       data-dm-side={side ? conversation.name : undefined}
       aria-label={unread > 0 ? `${label}, ${unread} unread` : label}
       aria-describedby={previewId}
+      aria-current={active ? "page" : undefined}
       onClick={() =>
-        side ? onOpenSide(conversation.name) : onOpen(conversation.peerId)
+        side ? onOpenSide?.(conversation.name) : onOpen(conversation.peerId)
       }
     >
       <PersonAvatar id={conversation.peerId} name={name} online={online} />
@@ -596,7 +605,8 @@ function PeoplePicker({
   )
 }
 
-function PickerRow({
+/** Someone to start a conversation with, by name, with what you share as context. */
+export function PickerRow({
   id,
   name,
   context,
