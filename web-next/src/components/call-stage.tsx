@@ -6,7 +6,18 @@
 // room's conversation can move into the Room pane and back.
 import { useEffect, useRef, useState } from "react"
 import type { CSSProperties } from "react"
-import { Globe, Hand, Maximize2, PictureInPicture2 } from "lucide-react"
+import {
+  Globe,
+  Hand,
+  Maximize2,
+  Mic,
+  MicOff,
+  MonitorUp,
+  PhoneOff,
+  PictureInPicture2,
+  Video,
+  VideoOff,
+} from "lucide-react"
 import { roomKey, useCall } from "./call-provider"
 import type { ActiveCall } from "./call-provider"
 import {
@@ -26,6 +37,11 @@ import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { personIdentity } from "./teamspace-format"
 import { Button } from "@/components/ui/button"
 import { Toggle } from "@/components/ui/toggle"
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable"
 import { BrowserPane } from "./browser-pane"
 import { BrowserSteps, useRoomChildren } from "./live-work"
 import { useRoomCall } from "@/lib/call/use-room-call"
@@ -132,6 +148,162 @@ function ParleyBrowser({
   )
 }
 
+/** "Parley, room, Raya's screen and Browser". */
+function namesOf(names: string[]): string {
+  return names.length < 2
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`
+}
+
+/**
+ * Everything at once (HuddleMix): the people with compact controls and the
+ * room's conversation on the left, the shared screen and browsers stacked
+ * on the right, with grips between them.
+ */
+function CallMix({
+  active,
+  people,
+  duration,
+  cams,
+  works,
+  onCloseRoom,
+}: {
+  active: ActiveCall
+  people: number
+  duration?: string
+  cams: React.ReactNode[]
+  works: React.ReactNode[]
+  onCloseRoom: () => void
+}) {
+  const { setMic, setCamera, setScreen, show, leave } = useCall()
+  return (
+    <div className="call-stage-body">
+      <ResizablePanelGroup orientation="horizontal" className="call-mix">
+        <ResizablePanel defaultSize="40" minSize="25">
+          <div className="call-mix-left">
+            <section
+              className="call-show call-people"
+              aria-label={`Parley, ${people} ${people === 1 ? "person" : "people"}`}
+            >
+              <div className="call-show-label">
+                <strong>Parley</strong>
+                <span>
+                  {people} {people === 1 ? "person" : "people"}
+                </span>
+                <span className="call-stage-live">
+                  <span className="call-live-dot" aria-hidden="true" />
+                  {duration}
+                </span>
+              </div>
+              <div
+                className="call-mini"
+                role="group"
+                aria-label="People in the parley"
+              >
+                {cams}
+              </div>
+              <div
+                className="call-mini-ctrls"
+                role="toolbar"
+                aria-label="Parley controls"
+              >
+                <Toggle
+                  className="call-btn"
+                  data-state={active.mic ? undefined : "off"}
+                  pressed={!active.mic}
+                  aria-label={active.mic ? "Mute" : "Unmute"}
+                  onPressedChange={() => void setMic(!active.mic)}
+                >
+                  {active.mic ? (
+                    <Mic aria-hidden="true" />
+                  ) : (
+                    <MicOff aria-hidden="true" />
+                  )}
+                </Toggle>
+                <Toggle
+                  className="call-btn"
+                  data-state={active.camera ? undefined : "off"}
+                  pressed={active.camera}
+                  aria-label={
+                    active.camera ? "Turn camera off" : "Turn camera on"
+                  }
+                  onPressedChange={() => void setCamera(!active.camera)}
+                >
+                  {active.camera ? (
+                    <Video aria-hidden="true" />
+                  ) : (
+                    <VideoOff aria-hidden="true" />
+                  )}
+                </Toggle>
+                <Toggle
+                  className="call-btn"
+                  data-state={active.screen ? "on" : undefined}
+                  pressed={active.screen}
+                  aria-label={active.screen ? "Stop sharing" : "Share screen"}
+                  onPressedChange={() => void setScreen(!active.screen)}
+                >
+                  <MonitorUp aria-hidden="true" />
+                </Toggle>
+                <Button
+                  variant="ghost"
+                  className="call-btn"
+                  aria-label="Full page"
+                  onClick={() => show("full")}
+                >
+                  <Maximize2 aria-hidden="true" />
+                </Button>
+                <span className="call-grow" />
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="call-leave"
+                  onClick={() => void leave()}
+                >
+                  <PhoneOff aria-hidden="true" />
+                  Leave
+                </Button>
+              </div>
+            </section>
+            <RoomChatPane
+              room={roomKey(active.organizationId, active.room)}
+              roomName={active.roomName}
+              onClose={onCloseRoom}
+            />
+          </div>
+        </ResizablePanel>
+        <ResizableHandle withHandle className="call-grip" />
+        <ResizablePanel defaultSize="60" minSize="30">
+          <ResizablePanelGroup
+            orientation="vertical"
+            className="call-mix-right"
+          >
+            {works.flatMap((work, index) => [
+              ...(index > 0
+                ? [
+                    <ResizableHandle
+                      key={`grip-${index}`}
+                      withHandle
+                      className="call-grip"
+                    />,
+                  ]
+                : []),
+              <ResizablePanel key={`work-${index}`} minSize="20">
+                {work}
+              </ResizablePanel>,
+            ])}
+          </ResizablePanelGroup>
+        </ResizablePanel>
+      </ResizablePanelGroup>
+      {active.privateAnswer && (
+        <div className="call-private" role="status">
+          <b>Only you can see this</b>
+          {active.privateAnswer}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function CallStage({ active }: { active: ActiveCall }) {
   const { show, markRoomSeen, roomUnread } = useCall()
   const { call: view } = useRoomCall(active.organizationId, active.room)
@@ -192,6 +364,14 @@ export function CallStage({ active }: { active: ActiveCall }) {
   const count = cams.length
   const cols = count <= 1 ? 1 : count <= 4 ? 2 : count <= 9 ? 3 : 4
   const owner = share ? (share.self ? "Your" : `${share.name}'s`) : ""
+  // The room open beside shared work: everything as tiles (HuddleMix).
+  const mix = side === "room" && (Boolean(share) || browsers.length > 0)
+  const open = [
+    "Parley",
+    "room",
+    ...(share ? [`${owner} screen`] : []),
+    ...browsers.map((child) => childLabel(child, active.member)),
+  ]
 
   return (
     <section
@@ -214,10 +394,14 @@ export function CallStage({ active }: { active: ActiveCall }) {
           <TeamspaceAvatar name={active.roomName} />
           <strong>{active.roomName}</strong>
           <span aria-hidden="true">·</span>
-          <span className="call-stage-live">
-            <span className="call-live-dot" aria-hidden="true" />
-            Parley{duration ? ` · ${duration}` : ""}
-          </span>
+          {mix ? (
+            <span>{namesOf(open)}</span>
+          ) : (
+            <span className="call-stage-live">
+              <span className="call-live-dot" aria-hidden="true" />
+              Parley{duration ? ` · ${duration}` : ""}
+            </span>
+          )}
           {recording && <span className="call-recording">{recording}</span>}
         </div>
         <div className="call-grow" />
@@ -236,114 +420,151 @@ export function CallStage({ active }: { active: ActiveCall }) {
             {people.length > FACES && <small>+{people.length - FACES}</small>}
           </span>
         )}
-        <Button variant="outline" onClick={() => show("full")}>
-          <Maximize2 aria-hidden="true" />
-          Full page
-        </Button>
+        {!mix && (
+          <Button variant="outline" onClick={() => show("full")}>
+            <Maximize2 aria-hidden="true" />
+            Full page
+          </Button>
+        )}
       </header>
-      <div className="call-stage-body">
-        {browsers.length > 0 ? (
-          <div className="call-browse">
-            <div
-              className="call-film"
-              role="group"
-              aria-label="People in the parley"
-            >
-              {cams}
-            </div>
-            <div className="call-works">
-              {share && (
-                <div className="call-show">
-                  <div className="call-show-label">
-                    <strong>{owner} screen</strong>
-                  </div>
-                  <ShareCam tile={share} named={false} />
-                </div>
-              )}
-              {browsers.map((child) => (
-                <ParleyBrowser
-                  key={child.name}
-                  organizationId={active.organizationId}
-                  room={active.room}
-                  child={child}
-                  events={log.events}
-                  viewerId={active.member}
-                  agentName={agent?.name}
-                />
-              ))}
-            </div>
-          </div>
-        ) : share ? (
-          <div className="call-split">
-            <div className="call-show">
-              <div className="call-show-label">
-                <strong>{owner} screen</strong>
-                <span className="call-grow" />
-                <Toggle
-                  variant="outline"
-                  size="sm"
-                  pressed={fill}
-                  onPressedChange={setFill}
-                  aria-label={fill ? "Show the people" : "Fill the stage"}
-                >
-                  <Maximize2 aria-hidden="true" />
-                  Fill
-                </Toggle>
-              </div>
-              <ShareCam tile={share} named={false} />
-            </div>
-            {!fill && (
+      {mix ? (
+        <CallMix
+          active={active}
+          people={view?.participants.length ?? active.tiles.length}
+          duration={duration}
+          cams={cams}
+          works={[
+            ...(share
+              ? [
+                  <div key="share" className="call-show">
+                    <div className="call-show-label">
+                      <strong>{owner} screen</strong>
+                    </div>
+                    <ShareCam tile={share} named={false} />
+                  </div>,
+                ]
+              : []),
+            ...browsers.map((child) => (
+              <ParleyBrowser
+                key={child.name}
+                organizationId={active.organizationId}
+                room={active.room}
+                child={child}
+                events={log.events}
+                viewerId={active.member}
+                agentName={agent?.name}
+              />
+            )),
+          ]}
+          onCloseRoom={() => setSide(null)}
+        />
+      ) : (
+        <div className="call-stage-body">
+          {browsers.length > 0 ? (
+            <div className="call-browse">
               <div
-                className="call-col"
+                className="call-film"
                 role="group"
                 aria-label="People in the parley"
               >
                 {cams}
               </div>
-            )}
-          </div>
-        ) : (
-          <div
-            className="call-gallery"
-            role="group"
-            aria-label="People in the parley"
-            style={{ "--cols": cols } as CSSProperties}
-          >
-            {cams}
-          </div>
-        )}
-        {captions && active.caption && (
-          <div className="call-caption" role="status">
-            <b>{active.caption.name}</b>
-            {active.caption.text}
-          </div>
-        )}
-        {side === "transcript" && <CallTranscript active={active} />}
-        {side === "room" && (
-          <RoomChatPane
-            room={roomKey(active.organizationId, active.room)}
-            roomName={active.roomName}
-          />
-        )}
-        {choosing && <DevicePicker onClose={() => setChoosing(false)} />}
-        {active.privateAnswer && (
-          <div className="call-private" role="status">
-            <b>Only you can see this</b>
-            {active.privateAnswer}
-          </div>
-        )}
-      </div>
-      <CallDock
-        mode="stage"
-        active={active}
-        view={view}
-        captions={captions}
-        onCaptions={setCaptions}
-        side={side}
-        onSide={setSide}
-        choosing={choosing}
-        onChoosing={setChoosing}
-      />
+              <div className="call-works">
+                {share && (
+                  <div className="call-show">
+                    <div className="call-show-label">
+                      <strong>{owner} screen</strong>
+                    </div>
+                    <ShareCam tile={share} named={false} />
+                  </div>
+                )}
+                {browsers.map((child) => (
+                  <ParleyBrowser
+                    key={child.name}
+                    organizationId={active.organizationId}
+                    room={active.room}
+                    child={child}
+                    events={log.events}
+                    viewerId={active.member}
+                    agentName={agent?.name}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : share ? (
+            <div className="call-split">
+              <div className="call-show">
+                <div className="call-show-label">
+                  <strong>{owner} screen</strong>
+                  <span className="call-grow" />
+                  <Toggle
+                    variant="outline"
+                    size="sm"
+                    pressed={fill}
+                    onPressedChange={setFill}
+                    aria-label={fill ? "Show the people" : "Fill the stage"}
+                  >
+                    <Maximize2 aria-hidden="true" />
+                    Fill
+                  </Toggle>
+                </div>
+                <ShareCam tile={share} named={false} />
+              </div>
+              {!fill && (
+                <div
+                  className="call-col"
+                  role="group"
+                  aria-label="People in the parley"
+                >
+                  {cams}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div
+              className="call-gallery"
+              role="group"
+              aria-label="People in the parley"
+              style={{ "--cols": cols } as CSSProperties}
+            >
+              {cams}
+            </div>
+          )}
+          {captions && active.caption && (
+            <div className="call-caption" role="status">
+              <b>{active.caption.name}</b>
+              {active.caption.text}
+            </div>
+          )}
+          {side === "transcript" && <CallTranscript active={active} />}
+          {side === "room" && (
+            <RoomChatPane
+              room={roomKey(active.organizationId, active.room)}
+              roomName={active.roomName}
+            />
+          )}
+          {choosing && <DevicePicker onClose={() => setChoosing(false)} />}
+          {active.privateAnswer && (
+            <div className="call-private" role="status">
+              <b>Only you can see this</b>
+              {active.privateAnswer}
+            </div>
+          )}
+        </div>
+      )}
+      {!mix && (
+        <CallDock
+          mode="stage"
+          active={active}
+          view={view}
+          captions={captions}
+          onCaptions={setCaptions}
+          side={side}
+          onSide={setSide}
+          choosing={choosing}
+          onChoosing={setChoosing}
+        />
+      )}
     </section>
   )
 }
