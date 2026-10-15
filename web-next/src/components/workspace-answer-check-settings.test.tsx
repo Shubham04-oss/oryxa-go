@@ -25,7 +25,7 @@ const cacheKey = ["settings", "answer-guard", "org-1"]
 const ownerTitle = "Answers you start yourself"
 const peerTitle = "Answers other people read"
 const intro =
-  "When your agent answers someone, Oryxa checks the answer first. Choose what it hides."
+  "When your agent answers someone, oryxa checks the answer first and hides these. You see them; the person asking doesn't."
 const floorLine =
   "Your organization requires all personal details to be hidden here."
 const regulatedLine =
@@ -192,18 +192,18 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe("What your agents share", () => {
+describe("What it hides when it answers", () => {
   it("shows both rows as labelled radio groups, with what each option hides", async () => {
     backend()
     showSection()
 
     const section = await screen.findByRole("region", {
-      name: "What your agents share",
+      name: "What it hides when it answers",
     })
     expect(
       within(section).getByRole("heading", {
         level: 3,
-        name: "What your agents share",
+        name: "What it hides when it answers",
       })
     ).toBeTruthy()
     expect(within(section).getByText(intro)).toBeTruthy()
@@ -703,7 +703,7 @@ describe("What your agents share", () => {
       expect(service.reads()).toHaveLength(1)
       expect(container.firstChild).toBeNull()
       expect(screen.queryByRole("alert")).toBeNull()
-      expect(screen.queryByText("What your agents share")).toBeNull()
+      expect(screen.queryByText("What it hides when it answers")).toBeNull()
     })
 
     it("shows nothing for a server that keeps no settings", async () => {
@@ -766,7 +766,7 @@ describe("What your agents share", () => {
       const alert = await screen.findByRole("alert")
       expect(alert.textContent).toContain("Could not load these settings.")
       expect(
-        screen.getByRole("heading", { name: "What your agents share" })
+        screen.getByRole("heading", { name: "What it hides when it answers" })
       ).toBeTruthy()
       expect(screen.queryAllByRole("radiogroup")).toHaveLength(0)
 

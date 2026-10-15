@@ -27,7 +27,11 @@ export const organizationProfileSchema = z
 
 export type OrganizationProfile = z.output<typeof organizationProfileSchema>
 
-export function updateOrganization(id: string, input: OrganizationProfile) {
+/** Name and slug are always sent; `domains`, when given, replaces the list. */
+export function updateOrganization(
+  id: string,
+  input: OrganizationProfile & { domains?: string[] }
+) {
   return apiRequest<Organization>(organizationPath(id), {
     method: "PATCH",
     body: input,

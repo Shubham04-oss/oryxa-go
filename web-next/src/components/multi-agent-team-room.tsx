@@ -3,10 +3,9 @@
 // useAgentTeamRoom, the seam its Durable Object will take over.
 import { useRef, useState } from "react"
 import { AgentComposer } from "./agent-composer"
-import { AgentFace } from "./agents-parts"
 import { AgentConversation } from "./agent-conversation"
-import { AgentActivity, AgentMarkdown } from "./agent-timeline"
-import { agentIdentity, formatTime, runeCount } from "./agents-format"
+import { AgentTimeline } from "./agent-timeline"
+import { agentIdentity, runeCount } from "./agents-format"
 import { IdentityAvatar } from "./workspace-avatar"
 import {
   AGENT_TEAM_MESSAGE_MAX_RUNES,
@@ -14,37 +13,41 @@ import {
 } from "@/hooks/use-agent-team-room"
 import type { AgentTeam, AgentTeamMessage } from "@/lib/agents/agent-teams"
 import { agentTeamSeats } from "@/lib/agents/policy"
+import type { MessageEntry } from "@/lib/threads/timeline"
 
-function RoomLine({ message }: { message: AgentTeamMessage }) {
-  if (message.kind === "member") {
-    return (
-      <p className="workspace-agent-message" data-from="member">
-        {message.body}
-      </p>
-    )
-  }
-  const time = formatTime(message.created_at)
-  return (
-    <article
-      className="workspace-agents-room-line"
-      aria-label={`${message.author_name}${time ? `, ${time}` : ""}`}
-    >
-      <AgentFace
-        agent={{
-          id: message.author_agent_id || message.author_name,
-          name: message.author_name,
-        }}
-      />
-      <div className="workspace-agents-room-body">
-        <p className="workspace-agents-room-meta">
-          <strong>{message.author_name}</strong>
-          {time && <time dateTime={message.created_at}>{time}</time>}
-        </p>
-        <AgentMarkdown text={message.body} />
-      </div>
-    </article>
-  )
+/**
+ * The room's messages as timeline entries, so a team reads as a working
+ * session like any agent chat: the member's messages are tasks, and the
+ * agents' answers after one are its run, each labelled with who wrote it.
+ * A message still being sent is the member's own, so it is a task too.
+ */
+export function roomEntries(
+  messages: readonly AgentTeamMessage[],
+  sending?: string | null
+): MessageEntry[] {
+  const entries: MessageEntry[] = messages.map((message) => ({
+    kind: "message",
+    key: `room:${message.id}`,
+    id: message.id,
+    at: message.created_at,
+    author: message.kind === "member" ? "member" : message.author_name,
+    role: message.kind === "member" ? "member" : "agent",
+    text: message.body,
+    state: "complete",
+  }))
+  if (sending)
+    entries.push({
+      kind: "message",
+      key: "room:sending",
+      author: "member",
+      role: "member",
+      text: sending,
+      state: "complete",
+    })
+  return entries
 }
+
+const noConfirmations: ReadonlySet<string> = new Set()
 
 export function AgentTeamRoom({
   organizationId,
@@ -93,7 +96,7 @@ export function AgentTeamRoom({
   ) : problem ? (
     <span role="alert">{problem}</span>
   ) : replying ? (
-    "You can send again once the team has answered."
+    "The team is working; this can take up to a minute and a half. You can send again once it has answered."
   ) : coordinatorPaused ? (
     `${team.coordinator_name} is paused, so only the specialists you @mention answer.`
   ) : (
@@ -145,6 +148,7 @@ export function AgentTeamRoom({
         error={room.readError}
         onRetry={room.readError ? room.reload : undefined}
         follow={sent}
+        variant="session"
       >
         {room.messages.length === 0 && !room.sending && !room.readError && (
           <p className="workspace-agent-empty">
@@ -152,23 +156,19 @@ export function AgentTeamRoom({
             coordinates, and an @mention reaches a specialist directly.
           </p>
         )}
-        {room.messages.map((message) => (
-          <RoomLine message={message} key={message.id} />
-        ))}
-        {room.sending && !room.sendingStored && (
-          <div className="workspace-agents-pending" aria-busy="true">
-            <p className="workspace-agent-message" data-from="member">
-              {room.sending}
-            </p>
-            <small>Sending…</small>
-          </div>
-        )}
-        {room.sending && (
-          <AgentActivity
-            state="weaving"
-            label="The team is replying. This can take up to a minute and a half."
-          />
-        )}
+        <AgentTimeline
+          variant="session"
+          entries={roomEntries(
+            room.messages,
+            room.sending && !room.sendingStored ? room.sending : null
+          )}
+          running={replying}
+          actionable={noConfirmations}
+          submitted={{}}
+          answering
+          onAnswer={() => {}}
+          organizationId={organizationId}
+        />
       </AgentConversation>
 
       <div className="workspace-agents-room-composer" ref={composerRef}>

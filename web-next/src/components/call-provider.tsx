@@ -7,10 +7,12 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react"
+import { createPortal } from "react-dom"
 import type { ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ApiError } from "@/lib/api/client"
@@ -26,10 +28,16 @@ import {
   setAgentPresent,
   setRecording,
 } from "@/lib/call/client"
-import type { TranscriptSegment } from "@/lib/call/client"
+import type { CallView, TranscriptSegment } from "@/lib/call/client"
 import { joinMedia } from "@/lib/call/media"
 import { CALL_REFRESH_MS } from "@/lib/call/use-room-call"
-import type { CallMedia, CallTile } from "@/lib/call/media"
+import type {
+  CallDevices,
+  CallMedia,
+  CallSignal,
+  CallTile,
+  DeviceKind,
+} from "@/lib/call/media"
 import { livePath, liveSocketUrl } from "@/lib/live/client"
 import type { LiveRoom } from "@/lib/live/client"
 
@@ -72,6 +80,8 @@ export type ActiveCall = {
   organizationId: string
   room: LiveRoom
   roomName: string
+  /** A line under "Parley" on the full page: the teamspace's description. */
+  subtitle?: string
   member: string
   phase: "joining" | "in" | "failed"
   callId?: string
@@ -85,13 +95,32 @@ export type ActiveCall = {
   heard: HeardLine[]
   /** An answer the agent found with the member's own access, for them only. */
   privateAnswer?: string
-  expanded: boolean
+  /**
+   * Where the call is open: the mini player (or the strip on its room's
+   * page), the stage in the workspace's main column, or the full page.
+   */
+  surface: CallSurfaceKind
+  /** Whose hands are up, by member. */
+  hands: string[]
+  /** Reactions showing on their senders' tiles, for a moment each. */
+  reactions: Reaction[]
+  /** Hands and reactions can be sent in this call (the preset allows it). */
+  signals: boolean
 }
+
+export type Reaction = { id: number; member: string; emoji: string }
+
+/** How long a reaction shows on its sender's tile. */
+export const REACTION_MS = 4_000
+
+export type CallSurfaceKind = "pip" | "stage" | "full"
 
 export type JoinOptions = {
   organizationId: string
   room: LiveRoom
   roomName: string
+  /** A line under "Parley" on the full page: the teamspace's description. */
+  subtitle?: string
   member: string
   name?: string
   mic: boolean
@@ -106,17 +135,63 @@ type CallActions = {
   setCamera: (on: boolean) => Promise<void>
   setScreen: (on: boolean) => Promise<void>
   setRecording: (on: boolean) => Promise<void>
+  /** Raises or lowers the member's hand, for everyone in the call. */
+  setHand: (up: boolean) => Promise<void>
+  /** Shows a reaction on the member's tile, for everyone in the call. */
+  react: (emoji: string) => Promise<void>
   setAgent: (present: boolean) => Promise<void>
-  expand: (expanded: boolean) => void
+  /**
+   * Opens the call as `surface`. The stage needs a host in the workspace
+   * (CallStageHost); without one the call opens full page instead.
+   */
+  show: (surface: CallSurfaceKind) => void
+  /** The devices the member can choose between; none outside a call. */
+  devices: () => Promise<CallDevices | undefined>
+  setDevice: (kind: DeviceKind, deviceId: string) => Promise<void>
+  onDevicesChange: (listener: () => void) => () => void
   dismiss: () => void
+}
+
+/** A parley that just ended, as the member saw it. */
+export type EndedCall = {
+  roomName: string
+  startedAt?: string
+  endedAt: string
+  /** How many people were in it at the end. */
+  people: number
+  /** It was being recorded: the recording and transcript are kept. */
+  recorded: boolean
 }
 
 type CallContextValue = {
   active: ActiveCall | null
+  /** The parley that just ended, until the member dismisses it. */
+  ended: EndedCall | null
+  dismissEnded: () => void
   /** The room whose own page is on screen, which shows the call itself. */
   roomOnScreen: string | null
   showingRoom: (room: string | null) => void
+  /** Where the full page shows its room's conversation, while it does. */
+  roomChat: RoomChatSlot | null
+  setRoomChat: (slot: RoomChatSlot | null) => void
+  /**
+   * New messages from others in the member's call's room since its Room pane
+   * was last open; undefined while no page reports the room's messages.
+   */
+  roomUnread: number | undefined
+  /** The Room pane is open: what the room says now has been seen. */
+  markRoomSeen: () => void
+  reportRoomActivity: (activity: RoomActivity | null) => void
+  /** A CallStageHost is mounted: the stage has a place to open. */
+  stageHosted: boolean
+  setStageHosted: (hosted: boolean) => void
 } & CallActions
+
+/** The messages a room's page holds from others, by their seq. */
+export type RoomActivity = { room: string; seqs: number[] }
+
+/** The full page's place for the room's conversation, and whose room it is. */
+export type RoomChatSlot = { room: string; element: HTMLElement }
 
 /** A room's key, for telling whether a page shows the member's call. */
 export function roomKey(organizationId: string, room: LiveRoom): string {
@@ -130,6 +205,89 @@ export function useCall(): CallContextValue {
   const value = useContext(CallContext)
   if (!value) throw new Error("useCall outside CallProvider")
   return value
+}
+
+/**
+ * Where a room's page puts its conversation while the member's parley in
+ * that room is open full page: the call's Room pane, or nowhere (it stays on
+ * the page). One conversation, moved, so the room is never open twice.
+ */
+export function useRoomChatSlot(
+  organizationId: string,
+  room: LiveRoom
+): HTMLElement | null {
+  const value = useContext(CallContext)
+  const slot = value?.roomChat
+  return slot && slot.room === roomKey(organizationId, room)
+    ? slot.element
+    : null
+}
+
+/**
+ * A room page's conversation, kept in one host element that sits in the page
+ * (at `pageRef`) or, while the member's parley in that room shows its Room
+ * pane, in that pane. Moving the host moves the conversation without
+ * remounting it: its draft, scroll and socket carry over.
+ */
+export function useRoomChatHost(organizationId: string, room: LiveRoom) {
+  const slot = useRoomChatSlot(organizationId, room)
+  const [host, setHost] = useState<HTMLDivElement | null>(null)
+  const pageRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const element = document.createElement("div")
+    element.className = "workspace-chat-host"
+    setHost(element)
+    return () => {
+      element.remove()
+    }
+  }, [])
+  useLayoutEffect(() => {
+    const target = slot ?? pageRef.current
+    if (host && target && host.parentElement !== target)
+      target.appendChild(host)
+  })
+  return {
+    pageRef,
+    render: (conversation: ReactNode) =>
+      host ? createPortal(conversation, host) : null,
+  }
+}
+
+/**
+ * A room's page tells the call which messages others have sent, so the
+ * parley's Room button can count the new ones. Nothing outside a CallProvider.
+ */
+export function useReportRoomActivity(
+  organizationId: string | undefined,
+  room: LiveRoom,
+  seqs: number[]
+) {
+  const report = useContext(CallContext)?.reportRoomActivity
+  const key = organizationId ? roomKey(organizationId, room) : undefined
+  const joined = seqs.join(",")
+  useEffect(() => {
+    if (!report || !key) return
+    report({ room: key, seqs: joined ? joined.split(",").map(Number) : [] })
+  }, [joined, key, report])
+  useEffect(() => {
+    if (!report || !key) return
+    return () => report(null)
+  }, [key, report])
+}
+
+/**
+ * A member's hand and latest reaction in the call the viewer is in; nothing
+ * outside a CallProvider or a call.
+ */
+export function useSignalsOf(member: string): {
+  hand: boolean
+  reaction?: Reaction
+} {
+  const active = useContext(CallContext)?.active
+  return {
+    hand: active?.hands.includes(member) ?? false,
+    reaction: active?.reactions.find((reaction) => reaction.member === member),
+  }
 }
 
 /** Whether parleys are offered here: inside the workspace's CallProvider. */
@@ -181,6 +339,14 @@ export function CallProvider({
   const queryClient = useQueryClient()
   const [active, setActive] = useState<ActiveCall | null>(null)
   const [roomOnScreen, showingRoom] = useState<string | null>(null)
+  const [roomChat, setRoomChat] = useState<RoomChatSlot | null>(null)
+  const [ended, setEnded] = useState<EndedCall | null>(null)
+  const [activity, setActivity] = useState<RoomActivity | null>(null)
+  const [stageHosted, setStageHosted] = useState(false)
+  /** The last message seen in each room, by seq. */
+  const [seenIn, setSeen] = useState<Record<string, number>>({})
+  /** The last view of the member's call, for the summary once it ends. */
+  const lastView = useRef<CallView | null>(null)
   const media = useRef<CallMedia | null>(null)
   const cleanups = useRef<(() => void)[]>([])
   const activeRef = useRef<ActiveCall | null>(null)
@@ -227,13 +393,94 @@ export function CallProvider({
     }
   }, [refreshCall, teardown])
 
+  const setHandOf = useCallback(
+    (member: string, up: boolean) =>
+      setActive((current) =>
+        current
+          ? {
+              ...current,
+              hands: up
+                ? [...current.hands.filter((hand) => hand !== member), member]
+                : current.hands.filter((hand) => hand !== member),
+            }
+          : current
+      ),
+    []
+  )
+  const reactionId = useRef(0)
+  const showReaction = useCallback((member: string, emoji: string) => {
+    reactionId.current += 1
+    const id = reactionId.current
+    setActive((current) =>
+      current
+        ? {
+            ...current,
+            reactions: [
+              ...current.reactions.filter(
+                (reaction) => reaction.member !== member
+              ),
+              { id, member, emoji },
+            ],
+          }
+        : current
+    )
+    setTimeout(
+      () =>
+        setActive((current) =>
+          current
+            ? {
+                ...current,
+                reactions: current.reactions.filter(
+                  (reaction) => reaction.id !== id
+                ),
+              }
+            : current
+        ),
+      REACTION_MS
+    )
+  }, [])
+  // A signal the preset refuses turns hands and reactions off for this call.
+  const sendSignal = useCallback(
+    async (signal: CallSignal, undo: () => void) => {
+      const current = media.current
+      if (!current?.signal) return
+      try {
+        await current.signal(signal)
+      } catch {
+        undo()
+        update({ signals: false })
+      }
+    },
+    [update]
+  )
+  const setHand = useCallback(
+    async (up: boolean) => {
+      const member = activeRef.current?.member
+      if (!member) return
+      setHandOf(member, up)
+      await sendSignal({ kind: "hand", up }, () => setHandOf(member, !up))
+    },
+    [sendSignal, setHandOf]
+  )
+  const react = useCallback(
+    async (emoji: string) => {
+      const member = activeRef.current?.member
+      if (!member) return
+      showReaction(member, emoji)
+      await sendSignal({ kind: "reaction", emoji }, () => undefined)
+    },
+    [sendSignal, showReaction]
+  )
+
   const join = useCallback(
     async (options: JoinOptions) => {
       if (activeRef.current?.phase === "in") await teardownAndLeave()
+      setEnded(null)
       setActive({
         organizationId: options.organizationId,
         room: options.room,
         roomName: options.roomName,
+        subtitle: options.subtitle,
         member: options.member,
         phase: "joining",
         mic: options.mic,
@@ -242,7 +489,10 @@ export function CallProvider({
         tiles: [],
         heard: [],
         agentSpeaking: false,
-        expanded: false,
+        hands: [],
+        reactions: [],
+        signals: false,
+        surface: "pip",
       })
       const id = (attempt.current += 1)
       const stale = () => attempt.current !== id
@@ -287,12 +537,25 @@ export function CallProvider({
       }
       joinedAt.current = Date.now()
       media.current = joined
-      update({ phase: "in", callId, tiles: joined.tiles() })
+      update({
+        phase: "in",
+        callId,
+        tiles: joined.tiles(),
+        signals: Boolean(joined.signal && joined.onSignal),
+      })
       refreshCall(options.organizationId, options.room)
 
       cleanups.current.push(
         joined.onChange(() => update({ tiles: joined.tiles() }))
       )
+      // Hands and reactions from everyone else.
+      if (joined.onSignal)
+        cleanups.current.push(
+          joined.onSignal((member, signal) => {
+            if (signal.kind === "hand") setHandOf(member, signal.up)
+            else showReaction(member, signal.emoji)
+          })
+        )
 
       // Captions for everyone; the member's own words also go to the room,
       // which is how the agent hears them.
@@ -375,21 +638,43 @@ export function CallProvider({
         })
       )
     },
-    [joinMediaWith, refreshCall, teardownAndLeave, update, viewerName]
+    [
+      joinMediaWith,
+      refreshCall,
+      setHandOf,
+      showReaction,
+      teardownAndLeave,
+      update,
+      viewerName,
+    ]
   )
 
   /**
    * Someone else ended the call: there is no seat to give back, only the
    * media and the page's own state to clear.
    */
+  const remember = useCallback(() => {
+    const current = activeRef.current
+    if (current?.phase !== "in") return
+    const seen = lastView.current
+    setEnded({
+      roomName: current.roomName,
+      startedAt: seen?.startedAt,
+      endedAt: new Date().toISOString(),
+      people: Math.max(seen?.participants.length ?? 0, current.tiles.length),
+      recorded: seen?.recording.on ?? false,
+    })
+  }, [])
+
   const endedElsewhere = useCallback(
     async (id: number) => {
       if (attempt.current !== id) return
       attempt.current += 1
+      remember()
       await teardown()
       setActive(null)
     },
-    [teardown]
+    [remember, teardown]
   )
 
   // The edge's view of the call the member is in: once a view read after
@@ -410,6 +695,11 @@ export function CallProvider({
     refetchInterval: CALL_REFRESH_MS,
   })
   useEffect(() => {
+    if (inCall && view.data && view.data.callId === inCall.callId) {
+      lastView.current = view.data
+    }
+  }, [inCall, view.data])
+  useEffect(() => {
     if (!inCall || !view.isSuccess) return
     if (view.dataUpdatedAt <= joinedAt.current) return
     if (view.data && view.data.callId === inCall.callId) return
@@ -420,11 +710,12 @@ export function CallProvider({
     const current = activeRef.current
     if (!current) return
     attempt.current += 1
+    remember()
     await endCall(current.organizationId, current.room).catch(() => undefined)
     await teardown()
     setActive(null)
     refreshCall(current.organizationId, current.room)
-  }, [refreshCall, teardown])
+  }, [refreshCall, remember, teardown])
 
   const toggle = useCallback(
     (key: "mic" | "camera" | "screen") => async (on: boolean) => {
@@ -480,11 +771,61 @@ export function CallProvider({
     }
   }, [teardown])
 
+  // The media is a ref, so these never change: a picker that reads devices
+  // isn't re-run by every caption or tile update.
+  const devices = useCallback(async () => media.current?.devices(), [])
+  const setDevice = useCallback(async (kind: DeviceKind, deviceId: string) => {
+    await media.current?.setDevice(kind, deviceId)
+  }, [])
+  const onDevicesChange = useCallback(
+    (listener: () => void) =>
+      media.current?.onDevicesChange(listener) ?? (() => undefined),
+    []
+  )
+
+  const activeRoom = active ? roomKey(active.organizationId, active.room) : null
+  const roomActivity =
+    activity && activity.room === activeRoom ? activity : undefined
+  const latest = roomActivity ? Math.max(0, ...roomActivity.seqs) : 0
+  const seenUpTo = activeRoom ? seenIn[activeRoom] : undefined
+  // A room first reported counts nothing that came before it.
+  useEffect(() => {
+    if (activeRoom && roomActivity && seenUpTo === undefined)
+      setSeen((current) => ({ ...current, [activeRoom]: latest }))
+  }, [activeRoom, latest, roomActivity, seenUpTo])
+  const roomUnread =
+    roomActivity && seenUpTo !== undefined
+      ? roomActivity.seqs.filter((seq) => seq > seenUpTo).length
+      : undefined
+  const markRoomSeen = useCallback(() => {
+    if (!activeRoom || !roomActivity) return
+    setSeen((current) =>
+      current[activeRoom] === latest
+        ? current
+        : { ...current, [activeRoom]: latest }
+    )
+  }, [activeRoom, latest, roomActivity])
+
+  const show = useCallback(
+    (surface: CallSurfaceKind) =>
+      update({
+        surface: surface === "stage" && !stageHosted ? "full" : surface,
+      }),
+    [stageHosted, update]
+  )
+
   const value = useMemo<CallContextValue>(
     () => ({
       active,
+      ended,
+      dismissEnded: () => setEnded(null),
       roomOnScreen,
       showingRoom,
+      roomChat,
+      setRoomChat,
+      roomUnread,
+      markRoomSeen,
+      reportRoomActivity: setActivity,
       join,
       leave: teardownAndLeave,
       end,
@@ -492,18 +833,36 @@ export function CallProvider({
       setCamera: toggle("camera"),
       setScreen: toggle("screen"),
       setRecording: record,
+      setHand,
+      react,
       setAgent: agent,
-      expand: (expanded) => update({ expanded }),
+      show,
+      stageHosted,
+      setStageHosted,
+      devices,
+      setDevice,
+      onDevicesChange,
       dismiss: () =>
         setActive((current) => (current?.phase === "in" ? current : null)),
     }),
     [
       active,
       agent,
+      devices,
       end,
+      ended,
       join,
+      markRoomSeen,
+      onDevicesChange,
       record,
+      roomChat,
+      roomUnread,
       roomOnScreen,
+      react,
+      setDevice,
+      setHand,
+      show,
+      stageHosted,
       teardownAndLeave,
       toggle,
       update,

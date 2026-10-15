@@ -1,18 +1,46 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { FormEvent } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import {
   ArrowRight,
+  Ellipsis,
   Pause,
   Play,
   Plus,
   Search,
+  Settings2,
   Trash2,
   UsersRound,
 } from "lucide-react"
+import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Kbd } from "@/components/ui/kbd"
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Textarea } from "@/components/ui/textarea"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import {
   agentIdentity,
@@ -24,6 +52,8 @@ import {
 import { ApiError } from "@/lib/api/client"
 import { isUnavailableHere } from "@/lib/agents/policy"
 import { getMembers } from "@/lib/auth/invitations"
+import { callKey, readCall } from "@/lib/call/client"
+import type { CallView } from "@/lib/call/client"
 import { listTeams } from "@/lib/settings/client"
 import {
   createTeamspace,
@@ -46,6 +76,13 @@ export type WorkspaceRole = "admin" | "member"
 // The service's own limits (agents/primary/internal/teamspaces/service.go).
 const maxNameLength = 100
 const maxDescriptionLength = 2_000
+
+// The list reads each open teamspace's parley without the room's live log,
+// so it asks again on a slower beat than an open room does.
+const parleyRefreshMs = 60_000
+
+// How many teammates' faces a card shows before "+N".
+const maxFaces = 4
 
 type Filter = "all" | TeamspaceStatus
 const filters: { key: Filter; label: string }[] = [
@@ -73,6 +110,39 @@ function sentence(message: string) {
   if (!text) return text
   const capitalized = text.charAt(0).toUpperCase() + text.slice(1)
   return /[.!?]$/.test(capitalized) ? capitalized : `${capitalized}.`
+}
+
+function people(count: number) {
+  return `${count} ${count === 1 ? "person" : "people"}`
+}
+
+/** How long a parley has run, as the card's chip says it. */
+function parleyLength(startedAt: string, now = Date.now()) {
+  const minutes = Math.max(
+    1,
+    Math.floor((now - new Date(startedAt).getTime()) / 60_000)
+  )
+  if (minutes < 60) return `${minutes} min`
+  return `${Math.floor(minutes / 60)} hr`
+}
+
+/** The subtitle under the title: how many are open, and where a parley is. */
+function summaryLine(activeCount: number, liveIn: Teamspace[]) {
+  const active = `${activeCount} active`
+  if (liveIn.length === 0) return `${active}.`
+  if (liveIn.length === 1) {
+    return `${active}, and a parley is live in ${liveIn[0].name}.`
+  }
+  return `${active}, and ${liveIn.length} parleys are live.`
+}
+
+/** A typed character belongs to the field (or editor) it was typed in. */
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  return (
+    target.isContentEditable ||
+    ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
+  )
 }
 
 /** What a refused teamspace change means, in the member's terms. */
@@ -138,6 +208,9 @@ function replaceInList(
   )
 }
 
+/** What a card's More menu asked the detail to start with. */
+type Intent = { id: string; confirming: Confirming }
+
 export function TeamspacesManagement({
   organizationId,
   viewerId,
@@ -151,9 +224,12 @@ export function TeamspacesManagement({
   onSelect: (id: string | null) => void
   onOpen: (id: string) => void
 }) {
+  const queryClient = useQueryClient()
   const [filter, setFilter] = useState<Filter>("all")
   const [query, setQuery] = useState("")
   const [isCreating, setIsCreating] = useState(false)
+  const [intent, setIntent] = useState<Intent | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const spaces = useQuery({
     ...teamspacesQueryOptions(organizationId ?? ""),
     enabled: Boolean(organizationId),
@@ -162,6 +238,71 @@ export function TeamspacesManagement({
     ...teamsQueryOptions(organizationId ?? ""),
     enabled: Boolean(organizationId),
   })
+  const list = spaces.data ?? []
+  const selectedSpace = selectedId
+    ? list.find((space) => space.id === selectedId)
+    : undefined
+
+  // A parley only runs in an open teamspace, and the edge answers only the
+  // team's members. One light read per such card, under the same key the
+  // room's own call view uses, so opening the room starts from it.
+  const listening = organizationId && !selectedSpace ? list : []
+  const parleyable = listening.filter(
+    (space) => space.status === "active" && space.is_member
+  )
+  const parleys = useQueries({
+    queries: parleyable.map((space) => {
+      const room = { kind: "teamspace" as const, id: space.id }
+      return {
+        queryKey: callKey(organizationId ?? "", room),
+        queryFn: ({ signal }: { signal: AbortSignal }) =>
+          readCall(organizationId ?? "", room, signal),
+        refetchInterval: parleyRefreshMs,
+        retry: false,
+      }
+    }),
+  })
+  const liveCalls = new Map<string, CallView>()
+  parleyable.forEach((space, index) => {
+    const call = parleys[index].data
+    if (call) liveCalls.set(space.id, call)
+  })
+
+  const resume = useMutation({
+    mutationFn: (space: Teamspace) =>
+      updateTeamspace(organizationId ?? "", space.id, { status: "active" }),
+    onSuccess: async (updated) => {
+      if (!organizationId) return
+      replaceInList(queryClient, organizationId, updated)
+      await afterUpdateTeamspace(queryClient, organizationId, updated)
+    },
+    onError: (error) => {
+      if (organizationId)
+        refreshAfterRefusal(queryClient, organizationId, error)
+    },
+  })
+
+  // "/" jumps to the search, unless the member is typing somewhere.
+  const listShown = Boolean(organizationId) && !selectedSpace
+  useEffect(() => {
+    if (!listShown) return
+    function onKey(event: KeyboardEvent) {
+      if (
+        event.key !== "/" ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.defaultPrevented ||
+        isTypingTarget(event.target)
+      ) {
+        return
+      }
+      event.preventDefault()
+      searchRef.current?.focus()
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [listShown])
 
   if (!organizationId) {
     return (
@@ -175,10 +316,6 @@ export function TeamspacesManagement({
     )
   }
 
-  const list = spaces.data ?? []
-  const selectedSpace = selectedId
-    ? list.find((space) => space.id === selectedId)
-    : undefined
   // Go lets whoever manages a team (its admins, and organization owners and
   // admins) open that team's one teamspace.
   const manageableTeams = (teams.data ?? []).filter((team) => team.can_manage)
@@ -194,14 +331,31 @@ export function TeamspacesManagement({
           organizationId={organizationId}
           space={selectedSpace}
           viewerId={viewerId}
+          initialConfirming={
+            intent?.id === selectedSpace.id ? intent.confirming : null
+          }
           onOpen={() => onOpen(selectedSpace.id)}
-          onDeleted={() => onSelect(null)}
+          onDeleted={() => {
+            setIntent(null)
+            onSelect(null)
+          }}
         />
       </div>
     )
   }
 
+  function manage(space: Teamspace, confirming: Confirming = null) {
+    setIntent({ id: space.id, confirming })
+    onSelect(space.id)
+  }
+
   const activeCount = list.filter((space) => space.status === "active").length
+  const counts: Record<Filter, number> = {
+    all: list.length,
+    active: activeCount,
+    disabled: list.length - activeCount,
+  }
+  const liveIn = list.filter((space) => liveCalls.has(space.id))
   const needle = query.trim().toLocaleLowerCase()
   const filteredSpaces = list.filter(
     (space) =>
@@ -215,71 +369,91 @@ export function TeamspacesManagement({
   return (
     <div className="workspace-teamspaces-page">
       <div className="workspace-teamspaces-scene" aria-hidden="true" />
-      <header className="workspace-teamspaces-hello">
-        <div>
-          <h2>Teamspaces</h2>
+      {/* The shell's header already names the page (DESIGN.md §2), so the
+          canvas opens on a compact row: the summary and New teamspace. */}
+      <div className="workspace-teamspaces-hello">
+        {(loaded || spaces.isPending) && (
           <p aria-label="Teamspace summary">
-            <strong>{loaded ? activeCount : "–"}</strong> active ·{" "}
-            <strong>{loaded ? list.length - activeCount : "–"}</strong> paused ·{" "}
-            <strong>{loaded ? list.length : "–"}</strong> in all
+            {loaded ? summaryLine(activeCount, liveIn) : "Loading…"}
           </p>
-        </div>
-        {canCreate && (
-          <button
-            className="workspace-teamspace-primary-button"
-            type="button"
-            aria-expanded={isCreating}
-            onClick={() => setIsCreating((current) => !current)}
-          >
-            <Plus size={17} strokeWidth={1.8} />
-            New teamspace
-          </button>
         )}
-      </header>
+        {canCreate && (
+          <Button
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={isCreating}
+            onClick={() => setIsCreating(true)}
+          >
+            <Plus data-icon="inline-start" />
+            New teamspace
+          </Button>
+        )}
+      </div>
 
       {canCreate && isCreating && (
-        <CreateTeamspaceForm
+        <CreateTeamspaceDialog
           organizationId={organizationId}
           teams={openTeams}
-          onCancel={() => setIsCreating(false)}
+          onClose={() => setIsCreating(false)}
           onCreated={(created) => {
             setIsCreating(false)
             setFilter("all")
             setQuery("")
+            setIntent(null)
             onSelect(created.id)
           }}
         />
       )}
 
       <div className="workspace-teamspace-toolbar">
-        <div
-          className="workspace-teamspace-filters"
-          role="group"
-          aria-label="Teamspace status filter"
-        >
-          {filters.map((item) => (
-            <button
-              type="button"
-              key={item.key}
-              className={cn(filter === item.key && "is-active")}
-              aria-pressed={filter === item.key}
-              onClick={() => setFilter(item.key)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
         <label className="workspace-teamspace-search">
-          <Search size={17} strokeWidth={1.7} aria-hidden="true" />
+          <Search size={16} strokeWidth={1.7} aria-hidden="true" />
           <span className="sr-only">Search teamspaces</span>
           <Input
+            ref={searchRef}
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && query) {
+                event.preventDefault()
+                setQuery("")
+              }
+            }}
             placeholder="Search teamspaces"
+            aria-keyshortcuts="/"
           />
+          <Kbd aria-hidden="true">/</Kbd>
         </label>
+        <ToggleGroup
+          className="workspace-teamspace-filters"
+          aria-label="Teamspace status filter"
+          value={[filter]}
+          onValueChange={(value) => {
+            // A segmented control: pressing the chosen filter keeps it.
+            const next = value[0] as Filter | undefined
+            if (next) setFilter(next)
+          }}
+        >
+          {filters.map((item) => (
+            <ToggleGroupItem
+              key={item.key}
+              value={item.key}
+              className={cn(filter === item.key && "is-active")}
+            >
+              {item.label}
+              {loaded && " "}
+              {loaded && <span>{counts[item.key]}</span>}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
       </div>
+
+      {resume.isError && (
+        <p className="workspace-teamspace-action-error" role="alert">
+          {refusal(resume.error, "Couldn't resume the teamspace. Try again.")}
+        </p>
+      )}
 
       {spaces.isPending ? (
         <div className="workspace-teamspace-empty" role="status">
@@ -295,67 +469,44 @@ export function TeamspacesManagement({
               : "Couldn't load teamspaces"}
           </strong>
           {!isUnavailableHere(spaces.error) && (
-            <button
-              className="workspace-teamspace-secondary-button"
+            <Button
+              variant="outline"
               type="button"
               onClick={() => void spaces.refetch()}
             >
               Try again
-            </button>
+            </Button>
           )}
         </div>
       ) : filteredSpaces.length ? (
         <div className="workspace-teamspace-list">
           {filteredSpaces.map((space) => (
-            <button
-              className="workspace-teamspace-row"
-              type="button"
+            <TeamspaceCard
               key={space.id}
-              data-screen-context-kind="teamspace"
-              data-screen-context-id={space.id}
-              data-screen-context-name={space.name}
-              aria-label={`Manage ${space.name}`}
-              onClick={() => onSelect(space.id)}
-            >
-              <TeamspaceAvatar name={space.name} />
-              <span className="workspace-teamspace-row-main">
-                <strong>{space.name}</strong>
-                <small>{space.description || "No description yet."}</small>
-                <span>
-                  {space.team_name} team · updated {timeAgo(space.updated_at)}
-                </span>
-              </span>
-              <span
-                className="workspace-teamspace-row-members"
-                aria-label={`${space.whisperers.length} ${
-                  space.whisperers.length === 1 ? "person" : "people"
-                }`}
-              >
-                <UsersRound size={15} strokeWidth={1.7} />
-                {space.whisperers.length}
-              </span>
-              <span
-                className={cn(
-                  "workspace-teamspace-status",
-                  space.status === "active" ? "active" : "paused"
-                )}
-              >
-                {statusLabel(space)}
-              </span>
-              <ArrowRight size={17} strokeWidth={1.7} aria-hidden="true" />
-            </button>
+              space={space}
+              call={liveCalls.get(space.id)}
+              resuming={resume.isPending && resume.variables.id === space.id}
+              onOpen={() => onOpen(space.id)}
+              onManage={() => manage(space)}
+              onPause={() => manage(space, "pause")}
+              onResume={() => resume.mutate(space)}
+              onDelete={() => manage(space, "delete")}
+            />
           ))}
-          {canCreate && !isCreating && filter === "all" && !needle && (
-            <button
-              className="workspace-teamspace-new"
-              type="button"
-              onClick={() => setIsCreating(true)}
-            >
+          {canCreate && filter === "all" && !needle && (
+            <Card className="workspace-teamspace-new">
               <strong>Open a new teamspace</strong>
               <span>
                 A room, its files and its parleys, for people and their agents.
               </span>
-            </button>
+              <Button
+                type="button"
+                aria-haspopup="dialog"
+                onClick={() => setIsCreating(true)}
+              >
+                New teamspace
+              </Button>
+            </Card>
           )}
         </div>
       ) : list.length ? (
@@ -381,16 +532,209 @@ export function TeamspacesManagement({
   )
 }
 
+/**
+ * One teamspace in the grid. The card opens the teamspace; managing it
+ * (details, pause or resume, delete) is in its More menu.
+ */
+function TeamspaceCard({
+  space,
+  call,
+  resuming,
+  onOpen,
+  onManage,
+  onPause,
+  onResume,
+  onDelete,
+}: {
+  space: Teamspace
+  call?: CallView
+  resuming: boolean
+  onOpen: () => void
+  onManage: () => void
+  onPause: () => void
+  onResume: () => void
+  onDelete: () => void
+}) {
+  const active = space.status === "active"
+  return (
+    <Card
+      role="article"
+      className="workspace-teamspace-card"
+      data-status={active ? "active" : "paused"}
+      data-screen-context-kind="teamspace"
+      data-screen-context-id={space.id}
+      data-screen-context-name={space.name}
+      aria-label={space.name}
+    >
+      <div className="workspace-teamspace-card-top">
+        <TeamspaceAvatar name={space.name} />
+        <span className="workspace-teamspace-card-title">
+          <Button
+            className="workspace-teamspace-card-open"
+            variant="ghost"
+            type="button"
+            aria-label={`Open ${space.name}`}
+            onClick={onOpen}
+          >
+            <strong>{space.name}</strong>
+          </Button>
+          <small>
+            {space.team_name} team ·{" "}
+            {active ? people(space.whisperers.length) : "paused"}
+          </small>
+        </span>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                className="workspace-teamspace-card-more"
+                variant="ghost"
+                size="icon-sm"
+              />
+            }
+            aria-label={`More for ${space.name}`}
+          >
+            <Ellipsis size={16} strokeWidth={1.8} aria-hidden="true" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="workspace-teamspace-menu" align="end">
+            <DropdownMenuItem onClick={onOpen}>
+              <ArrowRight aria-hidden="true" />
+              Open teamspace
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onManage}>
+              <Settings2 aria-hidden="true" />
+              Manage details
+            </DropdownMenuItem>
+            {space.can_manage && (
+              <>
+                <DropdownMenuSeparator />
+                {active ? (
+                  <DropdownMenuItem onClick={onPause}>
+                    <Pause aria-hidden="true" />
+                    Pause teamspace
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem disabled={resuming} onClick={onResume}>
+                    <Play aria-hidden="true" />
+                    {resuming ? "Resuming…" : "Resume teamspace"}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem variant="destructive" onClick={onDelete}>
+                  <Trash2 aria-hidden="true" />
+                  Delete teamspace
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      <p className="workspace-teamspace-card-purpose">
+        {active
+          ? space.description || "No description yet."
+          : "Paused. Its room is closed until a team admin resumes it."}
+      </p>
+      {call && (
+        <div className="workspace-teamspace-card-live">
+          <Badge variant="secondary">
+            <span className="workspace-teamspace-live-dot" aria-hidden="true" />
+            Parley · {parleyLength(call.startedAt)}
+          </Badge>
+        </div>
+      )}
+      <div className="workspace-teamspace-card-foot">
+        <span>{active ? "" : "Paused"}</span>
+        <TeamspaceFaces space={space} />
+      </div>
+    </Card>
+  )
+}
+
+/** The teammates with a seat in the room, as a small stack of faces. */
+export function TeamspaceFaces({ space }: { space: Teamspace }) {
+  const shown = space.whisperers.slice(0, maxFaces)
+  const more = space.whisperers.length - shown.length
+  if (shown.length === 0) return null
+  return (
+    <AvatarGroup
+      className="workspace-teamspace-faces"
+      role="img"
+      aria-label={shown
+        .map((whisperer) => whisperer.user_display_name || "Teammate")
+        .concat(more > 0 ? [`${more} more`] : [])
+        .join(", ")}
+    >
+      {shown.map((whisperer) => (
+        <IdentityAvatar
+          key={whisperer.user_id}
+          identity={personIdentity(
+            whisperer.user_id,
+            whisperer.user_display_name || "Teammate"
+          )}
+        />
+      ))}
+      {more > 0 && <AvatarGroupCount>+{more}</AvatarGroupCount>}
+    </AvatarGroup>
+  )
+}
+
+/** Creating a teamspace, as a pop-up over the list. */
+function CreateTeamspaceDialog({
+  organizationId,
+  teams,
+  onClose,
+  onCreated,
+}: {
+  organizationId: string
+  teams: Array<{ id: string; name: string }>
+  onClose: () => void
+  onCreated: (created: Teamspace) => void
+}) {
+  const [pending, setPending] = useState(false)
+  return (
+    <Dialog
+      open
+      disablePointerDismissal={pending}
+      onOpenChange={(open) => {
+        if (!open && !pending) onClose()
+      }}
+    >
+      <DialogContent
+        className="workspace-teamspace-sheet"
+        showCloseButton={!pending}
+      >
+        <div className="workspace-teamspace-sheet-scene" aria-hidden="true" />
+        <div className="workspace-teamspace-sheet-head">
+          <DialogTitle>New teamspace</DialogTitle>
+          <DialogDescription>
+            A shared room for one team: everyone on it, and their agents, can
+            talk and publish work there.
+          </DialogDescription>
+        </div>
+        <CreateTeamspaceForm
+          organizationId={organizationId}
+          teams={teams}
+          onCancel={onClose}
+          onCreated={onCreated}
+          onPendingChange={setPending}
+        />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function CreateTeamspaceForm({
   organizationId,
   teams,
   onCancel,
   onCreated,
+  onPendingChange,
 }: {
   organizationId: string
   teams: Array<{ id: string; name: string }>
   onCancel: () => void
   onCreated: (created: Teamspace) => void
+  /** Whether a create is on its way, so the pop-up holds still meanwhile. */
+  onPendingChange: (pending: boolean) => void
 }) {
   const queryClient = useQueryClient()
   const [teamId, setTeamId] = useState(teams.length === 1 ? teams[0].id : "")
@@ -415,6 +759,10 @@ function CreateTeamspaceForm({
     onError: (error) => refreshAfterRefusal(queryClient, organizationId, error),
   })
   const chosenTeam = teams.find((team) => team.id === teamId)
+
+  useEffect(() => {
+    onPendingChange(create.isPending)
+  }, [create.isPending, onPendingChange])
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -451,21 +799,14 @@ function CreateTeamspaceForm({
 
   return (
     <form className="workspace-teamspace-form" onSubmit={submit} noValidate>
-      <div>
-        <h3>New teamspace</h3>
-        <p>
-          A shared room for one team: everyone on it, and their agents, can talk
-          and publish work there.
-        </p>
-      </div>
       {teams.length === 0 ? (
         <p className="workspace-teamspace-form-note">
           Every team you manage already has a teamspace. A team has one.
         </p>
       ) : (
         <>
-          <label htmlFor="teamspace-team">Team</label>
-          <select
+          <FieldLabel htmlFor="teamspace-team">Team</FieldLabel>
+          <NativeSelect
             id="teamspace-team"
             className="workspace-teamspace-select"
             value={teamId}
@@ -478,19 +819,21 @@ function CreateTeamspaceForm({
               errorFor("team") ? "teamspace-team-error" : undefined
             }
           >
-            {teams.length > 1 && <option value="">Choose a team</option>}
+            {teams.length > 1 && (
+              <NativeSelectOption value="">Choose a team</NativeSelectOption>
+            )}
             {teams.map((team) => (
-              <option value={team.id} key={team.id}>
+              <NativeSelectOption value={team.id} key={team.id}>
                 {team.name}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
           {errorFor("team") && (
             <p className="workspace-teamspace-error" id="teamspace-team-error">
               {errorFor("team")}
             </p>
           )}
-          <label htmlFor="teamspace-title">Name</label>
+          <FieldLabel htmlFor="teamspace-title">Name</FieldLabel>
           <Input
             id="teamspace-title"
             value={name}
@@ -512,7 +855,7 @@ function CreateTeamspaceForm({
               {errorFor("name")}
             </p>
           )}
-          <label htmlFor="teamspace-description">Description</label>
+          <FieldLabel htmlFor="teamspace-description">Description</FieldLabel>
           <Textarea
             id="teamspace-description"
             value={description}
@@ -550,12 +893,12 @@ function CreateTeamspaceForm({
         </p>
       )}
       <div className="workspace-teamspace-form-actions">
-        <button type="button" onClick={onCancel}>
+        <Button type="button" variant="outline" onClick={onCancel}>
           Cancel
-        </button>
-        <button type="submit" disabled={create.isPending || teams.length === 0}>
+        </Button>
+        <Button type="submit" disabled={create.isPending || teams.length === 0}>
           {create.isPending ? "Creating…" : "Create teamspace"}
-        </button>
+        </Button>
       </div>
     </form>
   )
@@ -567,17 +910,22 @@ function TeamspaceDetail({
   organizationId,
   space,
   viewerId,
+  initialConfirming = null,
   onOpen,
   onDeleted,
 }: {
   organizationId: string
   space: Teamspace
   viewerId?: string
+  /** A confirm the card's More menu asked for (pause or delete). */
+  initialConfirming?: Confirming
   onOpen: () => void
   onDeleted: () => void
 }) {
   const queryClient = useQueryClient()
-  const [confirming, setConfirming] = useState<Confirming>(null)
+  const [confirming, setConfirming] = useState<Confirming>(
+    space.can_manage ? initialConfirming : null
+  )
   const entries = useQuery({
     ...teamspaceEntriesQueryOptions(organizationId, space.id),
     // The ledger is for the team's members; anyone else is refused 403.
@@ -640,47 +988,45 @@ function TeamspaceDetail({
     <>
       <div className="workspace-teamspace-detail-actions">
         {active && (
-          <button
-            className="workspace-teamspace-primary-button"
-            type="button"
-            onClick={onOpen}
-          >
+          <Button type="button" onClick={onOpen}>
             Open teamspace
-            <ArrowRight size={16} strokeWidth={1.7} />
-          </button>
+            <ArrowRight data-icon="inline-end" />
+          </Button>
         )}
         {space.can_manage && confirming === null && (
           <>
             {active ? (
-              <button
-                className="workspace-teamspace-secondary-button"
+              <Button
+                variant="outline"
                 type="button"
                 disabled={busy}
                 onClick={() => setConfirming("pause")}
               >
-                <Pause size={15} strokeWidth={1.8} />
+                <Pause data-icon="inline-start" />
                 Pause teamspace
-              </button>
+              </Button>
             ) : (
-              <button
-                className="workspace-teamspace-secondary-button"
+              <Button
+                variant="outline"
                 type="button"
                 disabled={busy}
                 onClick={() => changeStatus.mutate("active")}
               >
-                <Play size={15} strokeWidth={1.8} />
+                <Play data-icon="inline-start" />
                 {changeStatus.isPending ? "Resuming…" : "Resume teamspace"}
-              </button>
+              </Button>
             )}
-            <button
-              className="workspace-teamspace-secondary-button"
+            {/* Destructive, so pushed to the far end of the row. */}
+            <Button
+              className="ml-auto"
+              variant="destructive"
               type="button"
               disabled={busy}
               onClick={() => setConfirming("delete")}
             >
-              <Trash2 size={15} strokeWidth={1.8} />
+              <Trash2 data-icon="inline-start" />
               Delete teamspace
-            </button>
+            </Button>
           </>
         )}
       </div>
@@ -695,16 +1041,22 @@ function TeamspaceDetail({
             Pause {space.name}? Its room closes for everyone until it is
             resumed. Its shared work stays.
           </p>
-          <button type="button" onClick={() => setConfirming(null)}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => changeStatus.mutate("disabled")}
-          >
-            {changeStatus.isPending ? "Pausing…" : "Pause teamspace"}
-          </button>
+          <div className="workspace-teamspace-confirm-actions">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirming(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={busy}
+              onClick={() => changeStatus.mutate("disabled")}
+            >
+              {changeStatus.isPending ? "Pausing…" : "Pause teamspace"}
+            </Button>
+          </div>
         </div>
       )}
       {confirming === "delete" && (
@@ -718,12 +1070,23 @@ function TeamspaceDetail({
             Specialists contributed to it stay with their owners. This can't be
             undone.
           </p>
-          <button type="button" onClick={() => setConfirming(null)}>
-            Cancel
-          </button>
-          <button type="button" disabled={busy} onClick={() => remove.mutate()}>
-            {remove.isPending ? "Deleting…" : "Delete teamspace"}
-          </button>
+          <div className="workspace-teamspace-confirm-actions">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirming(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={busy}
+              onClick={() => remove.mutate()}
+            >
+              {remove.isPending ? "Deleting…" : "Delete teamspace"}
+            </Button>
+          </div>
         </div>
       )}
       {(changeStatus.isError || remove.isError) && (

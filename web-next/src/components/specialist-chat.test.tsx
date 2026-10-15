@@ -354,11 +354,11 @@ describe("A specialist's focused view", () => {
     // The object streams one progress marker per draft: a delta with no text.
     const marker: Item = { type: "delta", author: "Scout", text: "" }
     chat.update({ status: "streaming", messages: transcript(asked, marker) })
-    expect(within(log).getByRole("status").textContent).toBe(
-      "Scout is working…"
-    )
+    // Its run card says it works; nothing of the draft shows.
+    expect(
+      within(log).getByRole("article", { name: "Run: Working" })
+    ).toBeTruthy()
     expect(log.querySelector('[data-from="agent"]')).toBeNull()
-    expect(screen.getByText("Working")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Stop response" })).toBeTruthy()
     expect(
       screen
@@ -366,8 +366,9 @@ describe("A specialist's focused view", () => {
         .hasAttribute("disabled")
     ).toBe(true)
 
-    // The finished message takes the marker's place, readable: its summary,
-    // and one quiet line for the tools, files and hand-offs of its result.
+    // The finished message takes the marker's place, readable: its summary
+    // and the tools it used, with its files and hand-offs as the card's
+    // outputs.
     const tools: Item[] = [
       {
         type: "tool_call",
@@ -395,15 +396,15 @@ describe("A specialist's focused view", () => {
       status: "ready",
       messages: transcript(asked, ...tools, answered, file),
     })
-    expect(within(log).queryByText("Scout is working…")).toBeNull()
+    expect(within(log).getByRole("article", { name: "Run: Done" })).toBeTruthy()
     const answer = log.querySelector<HTMLElement>('[data-from="agent"]')
     expect(answer).toBeTruthy()
     expect(within(answer!).getByText("stalled")).toBeTruthy()
     expect(
-      within(answer!).getByText(
-        "Used Search web, Read sheet · Saved q3-report.pdf · Suggests Planner: Draft the rollout"
-      )
+      within(answer!).getByText("Used Search web, Read sheet")
     ).toBeTruthy()
+    const handoff = within(log).getByText("Planner").closest("p")
+    expect(handoff?.textContent).toBe("Suggests Planner: Draft the rollout")
     expect(within(log).getByText("Search web")).toBeTruthy()
     // Go has no file route for a specialist's conversation: named, not linked.
     expect(within(log).getByText("q3-report.pdf").closest("a")).toBeNull()
@@ -415,7 +416,9 @@ describe("A specialist's focused view", () => {
       messages: transcript(asked, answered, { ...asked, id: "ev_4" }, marker),
     })
     chat.update({ status: "ready" })
-    expect(within(log).getByText("Interrupted")).toBeTruthy()
+    expect(
+      within(log).getByRole("article", { name: "Run: Interrupted" })
+    ).toBeTruthy()
   })
 
   it("answers a specialist's confirmation in the chat request's body", async () => {
@@ -798,7 +801,7 @@ describe("The chat seam", () => {
     fireEvent.click(screen.getByRole("button", { name: "Chat with Scout" }))
     expect(shell?.getAttribute("data-right")).toBe("expanded")
     const panel = screen.getByRole("complementary", { name: "Agent panel" })
-    const agentsTab = within(panel).getByRole("tab", { name: "Agents" })
+    const agentsTab = within(panel).getByRole("tab", { name: "Leo" })
     expect(agentsTab.getAttribute("aria-selected")).toBe("true")
     expect(document.activeElement).toBe(agentsTab)
     expect(
@@ -814,7 +817,7 @@ describe("The chat seam", () => {
     fireEvent.click(screen.getByRole("button", { name: "Chat with Scout" }))
     expect(
       within(panel)
-        .getByRole("tab", { name: "Agents" })
+        .getByRole("tab", { name: "Leo" })
         .getAttribute("aria-selected")
     ).toBe("true")
   })

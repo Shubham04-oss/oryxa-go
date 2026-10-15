@@ -1,8 +1,8 @@
 // The member's conversations as the page lists them (REALTIME.md, the
 // inbox): the agent panel's DMs tab, with its "New message" picker and the
-// compact conversation, and Team's most recent in the left navigation. They
-// all read the one inbox the shell holds (useInbox), and name people from
-// the organization's members (useDmPeople).
+// compact conversation. The sidebar's Messages (workspace-sidebar.tsx) lists
+// the latest. They all read the one inbox the shell holds (useInbox), and
+// name people from the organization's members (useDmPeople).
 import { useEffect, useId, useRef, useState } from "react"
 import { ArrowLeft, Search, SquarePen } from "lucide-react"
 import { signInAgain } from "./conversation-log"
@@ -18,152 +18,14 @@ import type { Conversation, Inbox } from "@/lib/dms"
 import { parseSideConversationName, peerIn } from "@/lib/dms/names"
 import { cn } from "@/lib/utils"
 
-/** How many of the latest DMs Team's left navigation shows (DESIGN.md §2). */
-export const RECENT_CONVERSATIONS = 3
-
-/** The DMs Team's left navigation shows: the latest few. */
-export function recentDirectMessages(
-  conversations: readonly Conversation[]
-): Conversation[] {
-  return conversations
-    .filter((conversation) => conversation.kind === "dm")
-    .slice(0, RECENT_CONVERSATIONS)
-}
-
 /** Now, again every minute, so "5m" becomes "6m". */
-function useMinuteClock(): number {
+export function useMinuteClock(): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000)
     return () => clearInterval(timer)
   }, [])
   return now
-}
-
-/**
- * Team's recent conversations in the left navigation: the three latest DMs,
- * each with a dot while it holds unread messages.
- */
-export function RecentConversations({
-  inbox,
-  people,
-  viewerId,
-  expanded,
-  activePeerId,
-  onOpen,
-  onShowAll,
-}: {
-  inbox: Inbox
-  people: DmPeople
-  viewerId?: string
-  /** The sidebar is expanded; collapsed, only the avatars show. */
-  expanded: boolean
-  /** The DM open in the main canvas. */
-  activePeerId: string | null
-  onOpen: (peerId: string) => void
-  /** Opens the whole list: the agent panel's DMs tab. */
-  onShowAll: () => void
-}) {
-  const recent = recentDirectMessages(inbox.conversations)
-  const named = people.status !== "loading"
-  const more = inbox.conversations.length > recent.length
-  const quiet = recentQuietLine(inbox, recent.length)
-
-  return (
-    <section
-      className="workspace-conversations"
-      aria-label="Recent conversations"
-    >
-      {expanded && (
-        <div className="workspace-conversations-heading">
-          <span>Conversations</span>
-          {more && (
-            <button
-              className="workspace-conversations-all"
-              type="button"
-              aria-label="All conversations"
-              onClick={onShowAll}
-            >
-              All
-            </button>
-          )}
-        </div>
-      )}
-      {recent.length > 0 && named ? (
-        <ul className="workspace-conversations-list">
-          {recent.map((conversation) => (
-            <li key={conversation.name}>
-              <RecentConversation
-                conversation={conversation}
-                name={people.nameOf(conversation.peerId) ?? "Someone"}
-                viewerId={viewerId}
-                expanded={expanded}
-                active={activePeerId === conversation.peerId}
-                onOpen={onOpen}
-              />
-            </li>
-          ))}
-        </ul>
-      ) : (
-        expanded &&
-        quiet && <p className="workspace-conversations-empty">{quiet}</p>
-      )}
-    </section>
-  )
-}
-
-function recentQuietLine(inbox: Inbox, count: number): string | undefined {
-  switch (inbox.status) {
-    case "live":
-      return count === 0 ? "Start a chat from People." : undefined
-    case "error":
-      return "Can't reach your conversations right now."
-    case "session_expired":
-      return "Sign in again to see your conversations."
-    default:
-      return undefined
-  }
-}
-
-function RecentConversation({
-  conversation,
-  name,
-  viewerId,
-  expanded,
-  active,
-  onOpen,
-}: {
-  conversation: Conversation
-  name: string
-  viewerId?: string
-  expanded: boolean
-  active: boolean
-  onOpen: (peerId: string) => void
-}) {
-  const online = usePeerOnline(conversation.peerId)
-  const unread = conversation.unread
-  return (
-    <button
-      className={cn("workspace-conversation-item", active && "is-active")}
-      type="button"
-      data-unread={unread > 0 ? "true" : undefined}
-      aria-label={`Open conversation with ${name}${unread > 0 ? `, ${unread} unread` : ""}`}
-      aria-current={active ? "page" : undefined}
-      title={expanded ? undefined : name}
-      onClick={() => onOpen(conversation.peerId)}
-    >
-      <PersonAvatar id={conversation.peerId} name={name} online={online} />
-      {expanded && (
-        <span className="workspace-conversation-copy">
-          <strong>{name}</strong>
-          <small>{conversationPreview(conversation, viewerId ?? "")}</small>
-        </span>
-      )}
-      {unread > 0 && (
-        <span className="workspace-unread-dot" aria-hidden="true" />
-      )}
-    </button>
-  )
 }
 
 /**
@@ -415,7 +277,7 @@ function InboxList({
           >
             {conversations.map((conversation) => (
               <li key={conversation.name}>
-                <InboxRow
+                <DmRow
                   conversation={conversation}
                   name={people.nameOf(conversation.peerId) ?? "Someone"}
                   viewerId={viewerId}
@@ -452,11 +314,17 @@ function InboxList({
   )
 }
 
-function InboxRow({
+/**
+ * One conversation in a list: the person, when it last moved, its preview and
+ * its unread count. The DMs tab lists them, and so does Messages beside the
+ * open DM, where the open one is the raised tile (`active`).
+ */
+export function DmRow({
   conversation,
   name,
   viewerId,
   now,
+  active = false,
   onOpen,
   onOpenSide,
 }: {
@@ -464,8 +332,10 @@ function InboxRow({
   name: string
   viewerId: string
   now: number
+  /** The conversation open beside the list. */
+  active?: boolean
   onOpen: (peerId: string) => void
-  onOpenSide: (name: string) => void
+  onOpenSide?: (name: string) => void
 }) {
   const online = usePeerOnline(conversation.peerId)
   const previewId = useId()
@@ -477,15 +347,16 @@ function InboxRow({
     : `Open conversation with ${name}`
   return (
     <button
-      className="workspace-dm-row"
+      className={cn("workspace-dm-row", active && "is-active")}
       type="button"
       data-unread={unread > 0 ? "true" : undefined}
       data-dm-peer={side ? undefined : conversation.peerId}
       data-dm-side={side ? conversation.name : undefined}
       aria-label={unread > 0 ? `${label}, ${unread} unread` : label}
       aria-describedby={previewId}
+      aria-current={active ? "page" : undefined}
       onClick={() =>
-        side ? onOpenSide(conversation.name) : onOpen(conversation.peerId)
+        side ? onOpenSide?.(conversation.name) : onOpen(conversation.peerId)
       }
     >
       <PersonAvatar id={conversation.peerId} name={name} online={online} />
@@ -596,7 +467,8 @@ function PeoplePicker({
   )
 }
 
-function PickerRow({
+/** Someone to start a conversation with, by name, with what you share as context. */
+export function PickerRow({
   id,
   name,
   context,
