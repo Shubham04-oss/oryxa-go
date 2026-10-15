@@ -48,6 +48,174 @@
 .popup-scene[data-scene="deck"] {
   background-image: var(--scene-deck);
 }
+/* The welcome's hero: a taller crow's nest with the wordmark on it. */
+.popup-scene[data-hero="true"] {
+  position: relative;
+  height: 200px;
+  background-position: center 55%;
+  filter: none;
+}
+.popup-mark {
+  position: absolute;
+  top: 16px;
+  left: 24px;
+  color: var(--on-scene);
+  font-family: "Inter", var(--font-sans);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.055em;
+  text-shadow: 0 1px 8px var(--scene-shade);
+}
+.popup-mark i {
+  color: var(--brand-gold);
+  font-style: normal;
+}
+
+/* A checklist (the welcome's first steps). */
+.popup-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.popup-steps li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--canvas);
+  color: var(--text-soft);
+  font-size: 12.5px;
+}
+.popup-steps li > span:first-child {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--hover);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.popup-steps li[data-done="true"] {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+.popup-steps li[data-done="true"] > span:first-child {
+  background: var(--switch-on);
+  color: var(--switch-knob);
+}
+
+/* A hover card (a teamspace from the sidebar): the pop-up, small. */
+.popup-card {
+  width: 300px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--border-quiet),
+    0 12px 32px var(--shade-66);
+  color: var(--text);
+}
+.popup-card .popup-scene {
+  height: 72px;
+}
+.popup-card .popup-body {
+  gap: 8px;
+  margin-top: -24px;
+  padding: 0 16px 16px;
+}
+.popup-card .popup-icon {
+  width: 36px;
+  height: 36px;
+}
+.popup-card h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+.popup-card p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.popup-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.popup-card-faces {
+  display: inline-flex;
+  margin-left: auto;
+}
+.popup-card-faces .workspace-avatar {
+  width: 22px;
+  height: 22px;
+  margin-left: -6px;
+  box-shadow: 0 0 0 2px var(--raised);
+}
+.popup-card-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--tone-b9e6c6);
+  font-size: 12px;
+  font-weight: 600;
+}
+.popup-card-live::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tone-7fcf98);
+  content: "";
+}
+
+/* Toasts (ui/sonner): raised, and a thin strip of scene on the left for
+   the ones that carry a person (someone started a parley). */
+.workspace-toast[data-sonner-toast] {
+  border-radius: 16px;
+  box-shadow:
+    0 0 0 1px var(--border-quiet),
+    0 12px 32px var(--shade-66);
+}
+.workspace-toast-scene {
+  overflow: hidden;
+  padding-left: 72px;
+}
+.workspace-toast-scene::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 96px;
+  background: var(--tone-1c3350) var(--scene-sea) center / cover no-repeat;
+  filter: brightness(0.82) saturate(0.9);
+  content: "";
+  -webkit-mask-image: linear-gradient(to right, #000 30%, transparent);
+  mask-image: linear-gradient(to right, #000 30%, transparent);
+}
+.workspace-toast-scene [data-icon] {
+  position: absolute;
+  left: 16px;
+  z-index: 1;
+  width: 34px;
+  height: 34px;
+}
+.workspace-toast-scene [data-icon] .workspace-avatar {
+  width: 34px;
+  height: 34px;
+  box-shadow: 0 0 0 2px var(--raised);
+}
 
 .popup-body {
   position: relative;
@@ -179,4 +347,7 @@
   .popup-foot .popup-note:empty {
     display: none;
   }
+}
+.workspace-toast-description {
+  color: var(--text-muted);
 }

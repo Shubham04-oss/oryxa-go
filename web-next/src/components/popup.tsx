@@ -34,6 +34,7 @@ export function Popup({
   onOpenChange,
   scene,
   wide = false,
+  wordmark = false,
   initialFocus,
   className,
   children,
@@ -43,6 +44,11 @@ export function Popup({
   /** The scene band at the top; leave it out for a plain pop-up. */
   scene?: PopupScene
   wide?: boolean
+  /**
+   * The wordmark on a taller scene: the welcome only, the one pop-up where
+   * words sit on the painting.
+   */
+  wordmark?: boolean
   /** What takes focus when it opens: by default its first control. */
   initialFocus?: RefObject<HTMLElement | null>
   className?: string
@@ -58,7 +64,18 @@ export function Popup({
         initialFocus={initialFocus}
       >
         {scene && (
-          <div className="popup-scene" data-scene={scene} aria-hidden="true" />
+          <div
+            className="popup-scene"
+            data-scene={scene}
+            data-hero={wordmark ? "true" : undefined}
+            aria-hidden="true"
+          >
+            {wordmark && (
+              <span className="popup-mark">
+                oryxa<i>.</i>
+              </span>
+            )}
+          </div>
         )}
         <div className="popup-body">{children}</div>
         <DialogClose

@@ -29,6 +29,7 @@ import type { LiveTarget } from "@/lib/live/children"
 import { CallProvider } from "./call-provider"
 import { CallSurface } from "./call-surfaces"
 import { CallStageHost } from "./call-stage"
+import { WelcomeDialog } from "./welcome-dialog"
 import { statusLabel } from "./teamspace-format"
 import { DirectMessageView, PersonAvatar } from "./direct-message"
 import { useDmPeople } from "./direct-message-people"
@@ -742,6 +743,19 @@ function WorkspaceShellContent({
             agentWork ? "agent" : "",
           ].join("/")}
         />
+        {session && selectedOrganization && viewerId && (
+          <WelcomeDialog
+            organizationId={selectedOrganization.id}
+            viewerId={viewerId}
+            viewerName={currentIdentity.name}
+            onConnectApps={() => navigateFromHome("home", "tools")}
+            onInviteTeam={() => {
+              setSettingsPage("people")
+              setSettingsOpen(true)
+            }}
+            onAskAgent={() => openHomeConversation({ kind: "new" })}
+          />
+        )}
         {primaryWork && selectedOrganization ? (
           <div className="workspace-focus workspace-primary-focus">
             <FocusHeader

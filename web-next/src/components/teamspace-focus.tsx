@@ -215,6 +215,7 @@ export function TeamspaceFocus({
                 organizationId={organizationId}
                 room={liveRoom}
                 roomName={space.name}
+                subtitle={space.description || undefined}
                 member={viewerId}
                 name={memberName(space, viewerId)}
               />
@@ -236,6 +237,7 @@ export function TeamspaceFocus({
             organizationId={organizationId}
             room={liveRoom}
             roomName={space.name}
+            subtitle={space.description || undefined}
             member={viewerId}
             name={memberName(space, viewerId)}
           />

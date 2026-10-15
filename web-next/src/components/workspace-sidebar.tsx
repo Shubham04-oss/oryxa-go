@@ -3,7 +3,7 @@
 // their agents, the Library and who they are. Built on the library's sidebar
 // (components/ui/sidebar.tsx). Every count is a real read; one that has not
 // loaded, or failed, is left out rather than guessed.
-import type { ReactNode } from "react"
+import type { ReactElement, ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import {
   ArrowLeft,
@@ -54,6 +54,7 @@ import {
 import { ThemeMenuItem } from "./theme-menu-item"
 import { LiveDot, LiveNow, useLiveTeamspaces } from "./workspace-sidebar-live"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
+import { TeamspaceHoverCard } from "./teamspace-hover-card"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { PersonAvatar } from "./direct-message"
 import { countLabel } from "./direct-message-format"
@@ -368,6 +369,11 @@ function ExpandedSidebar({
                   current={openTeamspaceId === space.id}
                   live={live.has(space.id)}
                   onClick={() => onOpenTeamspace(space.id)}
+                  wrap={(button) => (
+                    <TeamspaceHoverCard space={space}>
+                      {button}
+                    </TeamspaceHoverCard>
+                  )}
                 />
               ))}
             </SidebarMenu>
@@ -775,6 +781,7 @@ function NavItem({
   collapsed = false,
   live = false,
   onClick,
+  wrap,
 }: {
   label: string
   icon: ReactNode
@@ -788,26 +795,31 @@ function NavItem({
   /** A parley runs here: a green dot, and said in the name. */
   live?: boolean
   onClick: () => void
+  /** Wraps the row's button, as a hover card does (a teamspace's). */
+  wrap?: (button: ReactElement) => ReactElement
 }) {
   const name = live ? `${label}, parley live` : label
+  const button = (
+    <SidebarMenuButton
+      className="workspace-sidebar-item"
+      isActive={current}
+      aria-current={current ? "page" : undefined}
+      // The name alone: a planet or avatar icon names itself too.
+      aria-label={spokenCount ? `${name}, ${spokenCount}` : name}
+      tooltip={collapsed ? label : undefined}
+      onClick={onClick}
+    >
+      {icon}
+      {collapsed ? (
+        <span className="sr-only">{label}</span>
+      ) : (
+        <span className="workspace-sidebar-label">{label}</span>
+      )}
+    </SidebarMenuButton>
+  )
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton
-        className="workspace-sidebar-item"
-        isActive={current}
-        aria-current={current ? "page" : undefined}
-        // The name alone: a planet or avatar icon names itself too.
-        aria-label={spokenCount ? `${name}, ${spokenCount}` : name}
-        tooltip={collapsed ? label : undefined}
-        onClick={onClick}
-      >
-        {icon}
-        {collapsed ? (
-          <span className="sr-only">{label}</span>
-        ) : (
-          <span className="workspace-sidebar-label">{label}</span>
-        )}
-      </SidebarMenuButton>
+      {wrap ? wrap(button) : button}
       {count && (
         <SidebarMenuBadge
           className={cn(
