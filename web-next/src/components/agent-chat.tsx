@@ -189,6 +189,8 @@ export function AgentChat({
   getScreenContext,
   openHistoryRequest,
   onHistoryOpened,
+  historyOpen,
+  onHistoryOpenChange,
 }: {
   organizationId: string
   /** Whose choices the chat remembers for the session; without it none are. */
@@ -214,8 +216,16 @@ export function AgentChat({
   getScreenContext?: () => ScreenContext
   openHistoryRequest?: object | null
   onHistoryOpened?: () => void
+  /**
+   * In the agent panel, its header holds History and New chat: the history
+   * list shows while this is true, and the row above the log only names the
+   * conversation. Left undefined (Agent overview), the row keeps both.
+   */
+  historyOpen?: boolean
+  onHistoryOpenChange?: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
+  const headerControls = historyOpen !== undefined
   const hydrated = useHydrated()
   // The list is this member's own entry in the cache: another member's
   // (same organization, the page taken over without a reload) is never read.
@@ -585,20 +595,24 @@ export function AgentChat({
             <Expand size={15} strokeWidth={1.7} />
           </button>
         )}
-        <button
-          className="workspace-agent-new workspace-agent-new-chat"
-          type="button"
-          aria-label="New conversation"
-          title="New conversation"
-          disabled={first !== null}
-          onClick={startNew}
-        >
-          <SquarePen size={15} strokeWidth={1.7} /> New chat
-        </button>
+        {!headerControls && (
+          <button
+            className="workspace-agent-new workspace-agent-new-chat"
+            type="button"
+            aria-label="New conversation"
+            title="New conversation"
+            disabled={first !== null}
+            onClick={startNew}
+          >
+            <SquarePen size={15} strokeWidth={1.7} /> New chat
+          </button>
+        )}
       </div>
       <AgentChatHistory
         openRequest={openHistoryRequest}
         onOpened={onHistoryOpened}
+        open={historyOpen}
+        onOpenChange={onHistoryOpenChange}
         threads={history}
         selected={threadId}
         waiting={approvals}

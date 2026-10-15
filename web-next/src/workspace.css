@@ -659,6 +659,77 @@
 .workspace-rail-button:hover { background: var(--tone-2a2a2a); color: var(--tone-efefef); }
 .workspace-rail-button .workspace-avatar { width: 26px; height: 26px; }
 
+/* The panel's header (DESIGN.md §2): the agent, "Only you · in {place}",
+   History, New chat and the collapse toggle, on the header's 56px row. */
+.workspace-agent-head { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; }
+.workspace-agent-head .workspace-avatar { flex: none; width: 30px; height: 30px; }
+.workspace-agent-head-title { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.workspace-agent-head-title strong { overflow: hidden; color: var(--text); font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-agent-head-title small { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--text-muted); font-size: 11px; }
+.workspace-agent-head-title small span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-agent-head-title small svg { flex: none; }
+.workspace-agent-head-button { flex: none; border-radius: 50%; color: var(--text-soft); }
+.workspace-agent-head-button:hover,
+.workspace-agent-head-button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+
+/* Krude | At a glance | DMs: one segmented control, the open view the
+   raised tile (DESIGN.md §1). */
+.workspace-agent-segment-root { flex: none; margin: 0 0 8px; }
+.workspace-agent-segment.workspace-agent-segment {
+  display: flex;
+  width: 100%;
+  height: 36px;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--workspace-canvas);
+  color: var(--text-muted);
+}
+.workspace-agent-segment-item.workspace-agent-segment-item {
+  position: relative;
+  flex: 1;
+  height: 100%;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.workspace-agent-segment-item[data-icon-only="true"] { flex: 0 0 40px; }
+.workspace-agent-segment-item:hover { color: var(--text); }
+.workspace-agent-segment-item.workspace-agent-segment-item[data-active] {
+  border-color: var(--border-quiet);
+  background: var(--raised);
+  box-shadow: 0 1px 3px var(--shade-66);
+  color: var(--text);
+  font-weight: 600;
+}
+.workspace-agent-segment-item:focus-visible { outline: 2px solid var(--tone-d6d6d6); outline-offset: 1px; }
+.workspace-agent-segment-count.workspace-agent-segment-count,
+.workspace-agent-chip-count.workspace-agent-chip-count {
+  height: 16px;
+  min-width: 16px;
+  padding: 0 5px;
+  border: 0;
+  background: var(--text);
+  color: var(--text-inverse);
+  font-size: 10px;
+  font-weight: 700;
+}
+.workspace-agent-segment-item .workspace-unread-badge { top: -6px; right: -4px; }
+
+/* What is live or waits for the member, over the agent's chat. */
+.workspace-agent-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px; }
+/* A chip is ui/button (outline, sm) drawn as a pill in the role tokens. */
+.workspace-agent-chip.workspace-agent-chip {
+  border-color: var(--border-quiet);
+  border-radius: 999px;
+  background: var(--base);
+  color: var(--text-soft);
+}
+.workspace-agent-chip.workspace-agent-chip:hover { background: var(--raised); color: var(--text); }
+.workspace-agent-chip:focus-visible { outline: 2px solid var(--tone-d6d6d6); outline-offset: 1px; }
+
 .workspace-agent-view { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .workspace-agent-view[hidden] { display: none; }
 .workspace-primary-focus-layout .workspace-agents-page { padding-top: 28px; }
@@ -799,6 +870,19 @@
 .workspace-agent-apps-text { margin: 0; color: var(--tone-c9c9c9); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
 
 .workspace-agent-composer { display: flex; flex-direction: column; gap: 7px; padding-top: 12px; }
+/* "Looking at {item}": what the agent is shown with the message. */
+.workspace-agent-looking-at.workspace-agent-looking-at {
+  align-self: flex-start;
+  max-width: 100%;
+  height: 22px;
+  margin-left: 10px;
+  border: 1px solid var(--border-quiet);
+  background: var(--base);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.workspace-agent-looking-at span { overflow: hidden; text-overflow: ellipsis; }
 /* Field/button look now comes from the shared .workspace-composer classes;
    this class is kept as a semantic hook and for the data-multiline toggle. */
 .workspace-agent-composer-status { margin: 0 14px; color: var(--tone-858585); font-size: 11px; line-height: 1.4; }

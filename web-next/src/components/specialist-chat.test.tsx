@@ -801,7 +801,7 @@ describe("The chat seam", () => {
     fireEvent.click(screen.getByRole("button", { name: "Chat with Scout" }))
     expect(shell?.getAttribute("data-right")).toBe("expanded")
     const panel = screen.getByRole("complementary", { name: "Agent panel" })
-    const agentsTab = within(panel).getByRole("tab", { name: "Agents" })
+    const agentsTab = within(panel).getByRole("tab", { name: "Leo" })
     expect(agentsTab.getAttribute("aria-selected")).toBe("true")
     expect(document.activeElement).toBe(agentsTab)
     expect(
@@ -817,7 +817,7 @@ describe("The chat seam", () => {
     fireEvent.click(screen.getByRole("button", { name: "Chat with Scout" }))
     expect(
       within(panel)
-        .getByRole("tab", { name: "Agents" })
+        .getByRole("tab", { name: "Leo" })
         .getAttribute("aria-selected")
     ).toBe("true")
   })

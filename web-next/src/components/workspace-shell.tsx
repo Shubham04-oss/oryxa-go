@@ -336,7 +336,13 @@ function WorkspaceShellContent({
             ? "agents/overview"
             : `${activeMode}/${section}`
   const screenSelection: ScreenItem | undefined = primaryWork
-    ? undefined
+    ? primaryViewer === "file" && primaryFile
+      ? {
+          kind: "file",
+          id: `${primaryFile.threadId}/${primaryFile.name}`,
+          name: primaryFile.name,
+        }
+      : undefined
     : agentWork
       ? {
           kind: agentWork.kind,
@@ -376,6 +382,12 @@ function WorkspaceShellContent({
   screenContextRef.current = () =>
     captureScreenContext(screenView, screenSelection)
   const getScreenContext = useCallback(() => screenContextRef.current(), [])
+  // Where the member is, for the agent panel's "Only you · in …", and what
+  // its composer says the agent will be shown.
+  const panelPlace = primaryWork
+    ? "Agent overview"
+    : screenSelection?.name || detailTitle || heading
+  const panelLookingAt = screenSelection?.name || panelPlace
 
   // The page's address follows the DM in the main canvas, so a refresh
   // returns to it.
@@ -938,6 +950,9 @@ function WorkspaceShellContent({
         tabRequest={tabRequest}
         directMessages={directMessages}
         teamspaceId={pageTeamspaceId}
+        place={panelPlace}
+        lookingAt={panelLookingAt}
+        onOpenRequests={() => openRequestsSection()}
         glance={
           <HomeOverview
             key={homeOverviewKey}
