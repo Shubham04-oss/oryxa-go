@@ -1,0 +1,128 @@
+/* The spreadsheet viewer (sheet-viewer.tsx): formula bar, a lettered and
+   numbered grid with a selected cell, and the sheets as tabs. */
+.sheet-viewer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.sheet-formula {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-quiet);
+  font-size: 12px;
+}
+.sheet-formula-ref {
+  min-width: 48px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--canvas);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: center;
+}
+.sheet-formula-fx {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.sheet-formula-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-grid {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.sheet-grid:focus-visible {
+  outline: 2px solid var(--text-muted);
+  outline-offset: -2px;
+}
+.sheet-grid table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+}
+.sheet-grid th,
+.sheet-grid td {
+  min-width: 72px;
+  max-width: 280px;
+  height: 26px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-right: 1px solid var(--border-quiet);
+  border-bottom: 1px solid var(--border-quiet);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-grid td {
+  color: var(--text);
+  cursor: cell;
+}
+.sheet-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--canvas);
+  color: var(--text-muted);
+  font-weight: 500;
+  text-align: center;
+}
+.sheet-grid tbody th {
+  position: sticky;
+  left: 0;
+  min-width: 40px;
+  background: var(--canvas);
+  color: var(--text-muted);
+  font-weight: 500;
+  text-align: right;
+}
+.sheet-grid .sheet-corner {
+  left: 0;
+  z-index: 2;
+  min-width: 40px;
+}
+.sheet-grid th[data-current="true"] {
+  background: var(--selected);
+  color: var(--text);
+}
+.sheet-grid td.is-selected {
+  box-shadow: inset 0 0 0 2px var(--text-soft);
+}
+.sheet-clipped {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.sheet-count {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sheet-tabs {
+  flex: none;
+  padding: 8px;
+  border-top: 1px solid var(--border-quiet);
+}
+.sheet-tabs [data-slot="tabs-list"] {
+  background: var(--canvas);
+}
+/* The chosen sheet is the raised tile (DESIGN.md §1). */
+.sheet-tabs [data-slot="tabs-trigger"][data-active] {
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--border-quiet),
+    0 1px 3px var(--shade-66);
+  color: var(--text);
+}

@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react"
-import { ChevronLeft, ChevronRight } from "lucide-react"
 import type { PresentationData } from "@office-kit/pptx"
 import Papa from "papaparse"
 import { AgentMarkdown } from "./agent-timeline"
 import { PdfViewer } from "./pdf-viewer"
+import { SheetViewer } from "./sheet-viewer"
+import type { Sheet } from "./sheet-viewer"
+import { SlidesViewer } from "./slides-viewer"
+import type { SlideImage } from "./slides-viewer"
 
 // The Word, Excel and PowerPoint readers and the PDF worker script are
 // megabytes that only a browser ever runs. `import.meta.env.SSR` is decided
@@ -49,46 +52,6 @@ export function previewKind(name: string, contentType: string): PreviewKind {
   if (extension === "md" || extension === "markdown") return "markdown"
   if (extension === "txt" || /^text\/plain\b/i.test(contentType)) return "text"
   return "unsupported"
-}
-
-function PageNavigation({
-  index,
-  count,
-  label,
-  onChange,
-}: {
-  index: number
-  count: number
-  label: string
-  onChange: (index: number) => void
-}) {
-  if (count < 2) return null
-  return (
-    <nav
-      className="workspace-document-pages"
-      aria-label={`${label} navigation`}
-    >
-      <button
-        type="button"
-        aria-label={`Previous ${label.toLowerCase()}`}
-        disabled={index === 0}
-        onClick={() => onChange(index - 1)}
-      >
-        <ChevronLeft size={17} />
-      </button>
-      <span>
-        {label} {index + 1} of {count}
-      </span>
-      <button
-        type="button"
-        aria-label={`Next ${label.toLowerCase()}`}
-        disabled={index === count - 1}
-        onClick={() => onChange(index + 1)}
-      >
-        <ChevronRight size={17} />
-      </button>
-    </nav>
-  )
 }
 
 /**
@@ -266,15 +229,13 @@ function DocxPreview({ bytes, name }: { bytes: ArrayBuffer; name: string }) {
 }
 
 function PptxPreview({ bytes }: { bytes: ArrayBuffer }) {
-  const [slides, setSlides] = useState<string[]>([])
-  const [index, setIndex] = useState(0)
+  const [slides, setSlides] = useState<SlideImage[]>([])
   const [error, setError] = useState("")
   const [ready, setReady] = useState(false)
   useEffect(() => {
     let cancelled = false
     let urls: string[] = []
     setSlides([])
-    setIndex(0)
     setError("")
     setReady(false)
     void loadPresentationLibraries()
@@ -291,7 +252,12 @@ function PptxPreview({ bytes }: { bytes: ArrayBuffer }) {
         )
         if (cancelled) urls.forEach(URL.revokeObjectURL)
         else {
-          setSlides(urls)
+          setSlides(
+            urls.map((url, number) => ({
+              url,
+              notes: pptx.getSlideNotes(pages[number]),
+            }))
+          )
           setReady(true)
         }
       })
@@ -303,73 +269,21 @@ function PptxPreview({ bytes }: { bytes: ArrayBuffer }) {
       urls.forEach(URL.revokeObjectURL)
     }
   }, [bytes])
-  return (
-    <div className="workspace-document-preview">
-      <div className="workspace-document-scroll workspace-document-slides">
-        {error ? (
-          <p role="alert">{error}</p>
-        ) : slides.length ? (
-          <img src={slides[index]} alt={`Slide ${index + 1}`} />
-        ) : (
-          <p role={ready ? undefined : "status"}>
-            {ready
-              ? "This presentation has no slides."
-              : "Rendering presentation…"}
-          </p>
-        )}
-      </div>
-      <PageNavigation
-        index={index}
-        count={slides.length}
-        label="Slide"
-        onChange={setIndex}
-      />
-    </div>
-  )
+  if (error) return <p role="alert">{error}</p>
+  if (!slides.length)
+    return (
+      <p role={ready ? undefined : "status"}>
+        {ready ? "This presentation has no slides." : "Rendering presentation…"}
+      </p>
+    )
+  return <SlidesViewer slides={slides} />
 }
 
-type Sheet = { name: string; rows: string[][]; clipped: boolean }
-
-function TablePreview({ sheets }: { sheets: Sheet[] }) {
-  const [selected, setSelected] = useState(0)
-  const sheet = sheets[selected]
-  return (
-    <div className="workspace-document-preview">
-      <div className="workspace-document-scroll workspace-document-grid">
-        <table>
-          <tbody>
-            {sheet.rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>
-                {row.map((cell, columnIndex) => (
-                  <td key={columnIndex}>{cell}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {sheet.clipped && <p>Showing the first 300 rows and 40 columns.</p>}
-      </div>
-      {sheets.length > 1 && (
-        <div
-          className="workspace-document-sheets"
-          role="tablist"
-          aria-label="Sheets"
-        >
-          {sheets.map((item, index) => (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={selected === index}
-              key={item.name}
-              onClick={() => setSelected(index)}
-            >
-              {item.name}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
+/** A cell's formula, when it has one; shared formulas give their own. */
+function cellFormula(cell: { formula?: unknown }): string | undefined {
+  return typeof cell.formula === "string" && cell.formula
+    ? cell.formula
+    : undefined
 }
 
 function SpreadsheetPreview({ bytes }: { bytes: ArrayBuffer }) {
@@ -407,6 +321,13 @@ function SpreadsheetPreview({ bytes }: { bytes: ArrayBuffer }) {
                   worksheet.getRow(rowIndex + 1).getCell(columnIndex + 1).text
               )
             ),
+            formulas: rowIndexes.map((rowIndex) =>
+              columnIndexes.map((columnIndex) =>
+                cellFormula(
+                  worksheet.getRow(rowIndex + 1).getCell(columnIndex + 1)
+                )
+              )
+            ),
           }
         })
         if (!cancelled) {
@@ -424,7 +345,7 @@ function SpreadsheetPreview({ bytes }: { bytes: ArrayBuffer }) {
   return error ? (
     <p role="alert">{error}</p>
   ) : sheets.length ? (
-    <TablePreview sheets={sheets} />
+    <SheetViewer sheets={sheets} />
   ) : (
     <p role={ready ? undefined : "status"}>
       {ready ? "This spreadsheet is empty." : "Rendering spreadsheet…"}
@@ -487,7 +408,7 @@ export function DocumentPreview({
     const parsed = Papa.parse<string[]>(decoded, { skipEmptyLines: false }).data
     const rows = parsed.slice(0, 300)
     return (
-      <TablePreview
+      <SheetViewer
         sheets={[
           {
             name: "CSV",
