@@ -19,6 +19,13 @@ export type Organization = {
   id: string
   name: string
   slug: string
+  /** The organisation's own email domains; Go always sends them, older caches may not. */
+  domains?: string[]
+  timezone?: string
+  guests_allowed?: boolean
+  /** The user id of whoever created it. */
+  created_by?: string
+  created_at?: string
 }
 
 export type Session = {

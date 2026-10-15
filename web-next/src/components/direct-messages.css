@@ -84,49 +84,6 @@
   right: -6px;
 }
 
-/* Team's recent conversations in the left navigation. */
-.workspace-conversations-heading .workspace-conversations-all {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--tone-9a9a9a);
-  font: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-}
-.workspace-conversations-heading .workspace-conversations-all:hover {
-  color: var(--text);
-}
-ul.workspace-conversations-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.workspace-conversation-item {
-  position: relative;
-}
-.workspace-conversation-item:hover {
-  --presence-ring: var(--tone-222222);
-}
-.workspace-conversation-item.is-active {
-  --presence-ring: var(--tone-2d2d2d);
-}
-.workspace-conversation-item[data-unread="true"] strong {
-  color: var(--tone-ffffff);
-  font-weight: 680;
-}
-.workspace-conversation-item[data-unread="true"] small {
-  color: var(--tone-c4c4c4);
-}
-.workspace-shell[data-left="collapsed"]
-  .workspace-conversation-item
-  .workspace-unread-dot {
-  position: absolute;
-  top: 5px;
-  right: calc(50% - 18px);
-  box-sizing: content-box;
-  border: 2px solid var(--workspace-base, var(--base));
-}
 
 /* One conversation. */
 .workspace-dm {

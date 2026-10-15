@@ -196,6 +196,18 @@ describe("files", () => {
     expect(read.files[0]).toMatchObject({ truncated: true, size: 300_000 });
   });
 
+  it("reads a whole file when the caller raises the budget for an artifact", async () => {
+    await post("/sandbox/shared/files/write", { files: [{ path: "deck.txt", content: "a".repeat(300_000) }] });
+    const read = (await (await post("/sandbox/shared/files/read", { paths: ["deck.txt"], maxBytes: 25 << 20 })).json()) as { files: { content: string; truncated?: boolean }[] };
+    expect(read.files[0]!.content.length).toBe(300_000);
+    expect(read.files[0]!.truncated).toBeUndefined();
+  });
+
+  it("refuses a read budget past the artifact cap", async () => {
+    const response = await post("/sandbox/shared/files/read", { paths: ["deck.txt"], maxBytes: (64 << 20) + 1 });
+    expect(response.status).toBe(400);
+  });
+
   it("resolves .. inside the sandbox and refuses removing the workspace itself", async () => {
     await post("/sandbox/shared/files/write", { files: [{ path: "a/../b.txt", content: "x" }] });
     expect(workspace().files.has("/workspace/b.txt")).toBe(true);

@@ -1,0 +1,1025 @@
+{
+  "id": "gmail",
+  "version": 1,
+  "display_name": "Gmail",
+  "description": "Read, search and send email from your Gmail.",
+  "connection_levels": [
+    "personal"
+  ],
+  "auth": {
+    "credential_modes": [
+      "platform",
+      "tenant_app"
+    ],
+    "oauth2": {
+      "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+      "token_url": "https://oauth2.googleapis.com/token",
+      "revoke_url": "https://oauth2.googleapis.com/revoke",
+      "pkce": true,
+      "authorization_params": {
+        "access_type": "offline",
+        "prompt": "consent"
+      },
+      "token_kinds": [
+        {
+          "name": "read",
+          "scopes": [
+            "https://www.googleapis.com/auth/gmail.readonly"
+          ]
+        },
+        {
+          "name": "send",
+          "scopes": [
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.compose"
+          ],
+          "optional": true
+        },
+        {
+          "name": "modify",
+          "scopes": [
+            "https://www.googleapis.com/auth/gmail.modify"
+          ],
+          "optional": true
+        }
+      ],
+      "refresh": {
+        "ahead_seconds": 300,
+        "rotates": false
+      }
+    }
+  },
+  "config": {
+    "type": "object",
+    "properties": {
+      "full_sync_days": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 3650,
+        "title": "Days of mail to index",
+        "description": "A full sync indexes this many days back (default 90); new mail is always indexed"
+      }
+    },
+    "additionalProperties": false
+  },
+  "base_url": "https://gmail.googleapis.com",
+  "egress_allowlist": [
+    "accounts.google.com",
+    "oauth2.googleapis.com",
+    "gmail.googleapis.com"
+  ],
+  "verify": {
+    "path": "/gmail/v1/users/me/profile",
+    "token_kind": "read"
+  },
+  "rate_limit": {
+    "max_concurrency": 8,
+    "retry_headers": [
+      "Retry-After"
+    ]
+  },
+  "tools": [
+    {
+      "name": "gmail.search_messages",
+      "description": "Find emails in the user's mailbox with a Gmail search query (from:, to:, subject:, after:, label:, has:attachment, is:unread). Use it first whenever you need an email and have no message id. Returns headers and snippets, not bodies; spam and trash are excluded.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25,
+            "default": 10
+          },
+          "page_token": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_=-]{1,512}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "messages"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "thread_id",
+                "label_ids",
+                "from",
+                "to",
+                "cc",
+                "subject",
+                "date",
+                "snippet"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "thread_id": {
+                  "type": "string"
+                },
+                "label_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cc": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string",
+                  "description": "RFC 3339 receive time; empty when Gmail gives none."
+                },
+                "snippet": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ],
+      "token_kind": "read"
+    },
+    {
+      "name": "gmail.get_message",
+      "description": "Read one email in full (headers and plain-text body, up to 100 KB) by message id. Use after search_messages when the snippet is not enough.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "message_id"
+        ],
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{1,64}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "thread_id",
+          "label_ids",
+          "from",
+          "to",
+          "cc",
+          "subject",
+          "date",
+          "snippet",
+          "body_text",
+          "body_truncated"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "label_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subject": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string",
+            "description": "RFC 3339 receive time; empty when Gmail gives none."
+          },
+          "snippet": {
+            "type": "string"
+          },
+          "body_text": {
+            "type": "string"
+          },
+          "body_truncated": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ],
+      "token_kind": "read"
+    },
+    {
+      "name": "gmail.get_thread",
+      "description": "Read a whole conversation, oldest message first, each body up to 20 KB. Use when summarising or answering a back-and-forth rather than a single email.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "thread_id"
+        ],
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{1,64}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "messages"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "thread_id",
+                "label_ids",
+                "from",
+                "to",
+                "cc",
+                "subject",
+                "date",
+                "snippet",
+                "body_text",
+                "body_truncated"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "thread_id": {
+                  "type": "string"
+                },
+                "label_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cc": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string",
+                  "description": "RFC 3339 receive time; empty when Gmail gives none."
+                },
+                "snippet": {
+                  "type": "string"
+                },
+                "body_text": {
+                  "type": "string"
+                },
+                "body_truncated": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ],
+      "token_kind": "read"
+    },
+    {
+      "name": "gmail.list_labels",
+      "description": "List the mailbox's labels with their ids. Use before modify_labels, or to turn a label name into an id.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "labels"
+        ],
+        "properties": {
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "type"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "system",
+                    "user"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ],
+      "token_kind": "read"
+    },
+    {
+      "name": "gmail.list_drafts",
+      "description": "List the user's unsent drafts, newest first. Use to find a draft to revise with update_draft or send with send_draft.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "properties": {
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25,
+            "default": 10
+          },
+          "page_token": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_=-]{1,512}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "drafts"
+        ],
+        "properties": {
+          "drafts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "message"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "thread_id",
+                    "label_ids",
+                    "from",
+                    "to",
+                    "cc",
+                    "subject",
+                    "date",
+                    "snippet"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "thread_id": {
+                      "type": "string"
+                    },
+                    "label_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "cc": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "subject": {
+                      "type": "string"
+                    },
+                    "date": {
+                      "type": "string",
+                      "description": "RFC 3339 receive time; empty when Gmail gives none."
+                    },
+                    "snippet": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ],
+      "token_kind": "read"
+    },
+    {
+      "name": "gmail.send_message",
+      "description": "Send a new plain-text email from the user right away. Use only when the user asked to send it now; when they may want to review the wording, use create_draft instead. To answer an existing email, use reply.",
+      "effect": "external",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "properties": {
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"
+            },
+            "maxItems": 50,
+            "uniqueItems": true,
+            "minItems": 1
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"
+            },
+            "maxItems": 50,
+            "uniqueItems": true
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"
+            },
+            "maxItems": 50,
+            "uniqueItems": true
+          },
+          "subject": {
+            "type": "string",
+            "maxLength": 998,
+            "pattern": "^[^\\r\\n]*$"
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "thread_id",
+          "label_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "label_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.send"
+      ],
+      "token_kind": "send"
+    },
+    {
+      "name": "gmail.reply",
+      "description": "Reply in an existing thread, to the sender or to everyone (reply_all), keeping Gmail threading and the Re: subject. Use instead of send_message when answering an email the user received.",
+      "effect": "external",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "message_id",
+          "body"
+        ],
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{1,64}$"
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "reply_all": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "thread_id",
+          "label_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "label_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.send"
+      ],
+      "token_kind": "send"
+    },
+    {
+      "name": "gmail.create_draft",
+      "description": "Save an email as a draft for the user to review, optionally threaded as a reply to a message. Prefer this over sending whenever the user has not approved the final text.",
+      "effect": "write",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "properties": {
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"
+            },
+            "maxItems": 50,
+            "uniqueItems": true,
+            "minItems": 1
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"
+            },
+            "maxItems": 50,
+            "uniqueItems": true
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"
+            },
+            "maxItems": 50,
+            "uniqueItems": true
+          },
+          "subject": {
+            "type": "string",
+            "maxLength": 998,
+            "pattern": "^[^\\r\\n]*$"
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "in_reply_to_message_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{1,64}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "draft_id",
+          "message_id",
+          "thread_id"
+        ],
+        "properties": {
+          "draft_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.compose"
+      ],
+      "token_kind": "send"
+    },
+    {
+      "name": "gmail.update_draft",
+      "description": "Replace a draft's recipients, subject and body (the whole draft, not a patch). Use to revise a draft the user is reviewing.",
+      "effect": "write",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "draft_id",
+          "to",
+          "subject",
+          "body"
+        ],
+        "properties": {
+          "draft_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,256}$"
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"
+            },
+            "maxItems": 50,
+            "uniqueItems": true,
+            "minItems": 1
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"
+            },
+            "maxItems": 50,
+            "uniqueItems": true
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"
+            },
+            "maxItems": 50,
+            "uniqueItems": true
+          },
+          "subject": {
+            "type": "string",
+            "maxLength": 998,
+            "pattern": "^[^\\r\\n]*$"
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "draft_id",
+          "message_id",
+          "thread_id"
+        ],
+        "properties": {
+          "draft_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.compose"
+      ],
+      "token_kind": "send"
+    },
+    {
+      "name": "gmail.send_draft",
+      "description": "Send an existing draft exactly as saved. Use after the user approves a draft.",
+      "effect": "external",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "draft_id"
+        ],
+        "properties": {
+          "draft_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,256}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "thread_id",
+          "label_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "label_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.compose"
+      ],
+      "token_kind": "send"
+    },
+    {
+      "name": "gmail.modify_labels",
+      "description": "Add or remove labels on one email: archive (remove INBOX), mark read (remove UNREAD) or unread (add UNREAD), star (add STARRED), or file it under a user label from list_labels. Not for trash or spam: use trash_message.",
+      "effect": "write",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "message_id"
+        ],
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{1,64}$"
+          },
+          "add_label_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "not": {
+                "enum": [
+                  "TRASH",
+                  "SPAM"
+                ]
+              }
+            },
+            "minItems": 1,
+            "maxItems": 20,
+            "uniqueItems": true
+          },
+          "remove_label_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$"
+            },
+            "minItems": 1,
+            "maxItems": 20,
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "add_label_ids"
+            ]
+          },
+          {
+            "required": [
+              "remove_label_ids"
+            ]
+          }
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "thread_id",
+          "label_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "label_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.modify"
+      ],
+      "token_kind": "modify"
+    },
+    {
+      "name": "gmail.trash_message",
+      "description": "Move one email to Trash, where Gmail keeps it for 30 days. Use only when the user asks to delete an email. Never deletes permanently.",
+      "effect": "delete",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "message_id"
+        ],
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{1,64}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "thread_id",
+          "label_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "label_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.modify"
+      ],
+      "token_kind": "modify"
+    }
+  ],
+  "streams": [
+    {
+      "name": "messages",
+      "modes": [
+        "full",
+        "incremental"
+      ],
+      "track_deletes": true,
+      "schedule": "rate(15 minutes)"
+    }
+  ],
+  "reauth_on": [
+    "invalid_grant"
+  ]
+}

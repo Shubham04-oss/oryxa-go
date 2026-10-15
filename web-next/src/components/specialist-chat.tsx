@@ -13,7 +13,7 @@ import { failureText, lastUserMessageId } from "./agent-chat"
 import { AgentChatHistory } from "./agent-chat-history"
 import { AgentComposer } from "./agent-composer"
 import { AgentConversation } from "./agent-conversation"
-import { AgentActivity, AgentTimeline } from "./agent-timeline"
+import { AgentTimeline } from "./agent-timeline"
 import { ApiError } from "@/lib/api/client"
 import type { Session } from "@/lib/auth/client"
 import { getSession } from "@/lib/auth/client"
@@ -386,6 +386,7 @@ function ClosedChat({
         state={loading ? "loading" : "ready"}
         error={error}
         onRetry={onRetry}
+        variant="session"
       />
       <AgentComposer
         label={`Message ${specialist.name}`}
@@ -785,14 +786,6 @@ function SpecialistChatSession({
     return new Set(waiting.filter((id) => !(id in submitted)))
   }, [history, items, submitted, threadId])
 
-  const lastEntry = entries.at(-1)
-  // A specialist's draft streams as a marker with no words (its deltas are
-  // raw JSON), so the conversation says it is working until the readable
-  // answer lands and the turn ends.
-  const writing =
-    lastEntry?.kind === "message" &&
-    lastEntry.state === "streaming" &&
-    lastEntry.text !== ""
   const blocked = blockedWords(specialist, refusal)
   const open = connection === "open" && !refusal
   const title =
@@ -870,10 +863,17 @@ function SpecialistChatSession({
         state={entries.length > 0 || running ? "ready" : "empty"}
         error={runError}
         follow={lastUserMessageId(chat.messages)}
+        variant="session"
       >
+        {/* A specialist's draft streams as a marker with no words (its
+            deltas are raw JSON): its run card says Working until the
+            readable answer lands and the turn ends. */}
         <AgentTimeline
+          variant="session"
           entries={entries}
+          items={items}
           running={running}
+          onStop={() => void chat.stop()}
           agentName={name}
           actionable={actionable}
           submitted={submitted}
@@ -882,7 +882,6 @@ function SpecialistChatSession({
           onAnswer={answer}
           organizationId={organizationId}
         />
-        {running && !writing && <AgentActivity name={name} />}
       </AgentConversation>
       <AgentComposer
         label={`Message ${name}`}

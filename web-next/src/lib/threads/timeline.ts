@@ -1,6 +1,11 @@
 import type { SpecialistResult } from "@/lib/specialists/result"
 import { sessionExpiredCode } from "./chat-messages"
-import type { ConfirmationStatus, Item, ThreadDetail } from "./client"
+import type {
+  ConfirmationStatus,
+  Item,
+  ItemUsage,
+  ThreadDetail,
+} from "./client"
 
 /** Who a message is from, for how it is shown. */
 export type MessageRole = "member" | "apps" | "agent"
@@ -496,6 +501,269 @@ export function buildTimeline(
   })
 
   return entries
+}
+
+/**
+ * One run of the agent, as the items a stream carries mark it: when it
+ * started and ended, and what it used. A thread's history from Go keeps no
+ * run markers, so only runs streamed into a transcript (the chat Durable
+ * Objects keep every item they relay) have one.
+ */
+export type RunSpan = {
+  runId?: string
+  startedAt?: string
+  endedAt?: string
+  usage?: ItemUsage
+  failed?: boolean
+}
+
+/**
+ * One task and the work that answered it: the message that started it (the
+ * member's, or a batch from their apps), then everything the agent did until
+ * the next one, and the runs that did it. Work before any prompt (a
+ * conversation whose history starts mid-way) is a turn with no prompt.
+ */
+export type Turn = {
+  key: string
+  prompt?: MessageEntry
+  entries: TimelineEntry[]
+  runs: RunSpan[]
+}
+
+const isPrompt = (entry: TimelineEntry): entry is MessageEntry =>
+  entry.kind === "message" && entry.role !== "agent"
+
+/**
+ * The entries `buildTimeline` made, as turns. Pass the items they were built
+ * from (history then live, as `buildTimeline` merged them) to place each
+ * run's markers in its turn: a run belongs to the turn of the last prompt
+ * before it, counted the way `buildTimeline` counts messages (a message seen
+ * again by its id is the same one).
+ */
+export function groupTurns(
+  entries: readonly TimelineEntry[],
+  items: readonly Item[] = []
+): Turn[] {
+  const turns: Turn[] = []
+  let current: Turn | undefined
+  for (const entry of entries) {
+    if (isPrompt(entry)) {
+      current = {
+        key: `turn:${entry.key}`,
+        prompt: entry,
+        entries: [],
+        runs: [],
+      }
+      turns.push(current)
+      continue
+    }
+    if (!current) {
+      current = { key: `turn:${entry.key}`, entries: [], runs: [] }
+      turns.push(current)
+    }
+    current.entries.push(entry)
+  }
+
+  // Runs by turn: the number of prompts before each, as above.
+  const leading = turns[0] && !turns[0].prompt ? turns[0] : undefined
+  const prompted = turns.filter((turn) => turn.prompt)
+  const seen = new Set<string>()
+  let prompts = 0
+  let run: RunSpan | undefined
+  const turnAt = (count: number): Turn | undefined =>
+    count === 0 ? leading : prompted[count - 1]
+  for (const item of items) {
+    if (item.type === "message") {
+      if (roleOf(item.author ?? "") === "agent") continue
+      if (item.id) {
+        if (seen.has(item.id)) continue
+        seen.add(item.id)
+      }
+      prompts += 1
+    } else if (item.type === "run_started") {
+      run = { runId: item.run_id, startedAt: item.at }
+      turnAt(prompts)?.runs.push(run)
+    } else if (item.type === "run_completed" || item.type === "run_failed") {
+      if (item.type === "run_failed" && item.code === sessionExpiredCode)
+        continue
+      if (!run || (item.run_id && run.runId && item.run_id !== run.runId)) {
+        // An end with no start in this list: the run began before it.
+        run = { runId: item.run_id }
+        turnAt(prompts)?.runs.push(run)
+      }
+      run.endedAt = item.at
+      if (item.usage) run.usage = item.usage
+      if (item.type === "run_failed") run.failed = true
+      run = undefined
+    }
+  }
+  return turns
+}
+
+/** How a turn stands, for its run card. */
+export type TurnStatus =
+  "working" | "waiting" | "done" | "interrupted" | "failed"
+
+/**
+ * A turn's status. A confirmation waiting for the member comes first, then
+ * a run still working (`live`: the last turn, while a run streams or its end
+ * is not yet certain), then a failure, then anything cut short: an answer or
+ * a call its run left unfinished, or a task that got no answer at all.
+ */
+export function turnStatus(
+  turn: Turn,
+  {
+    live,
+    waiting,
+  }: {
+    live: boolean
+    /** The confirmations the member can answer now, by call id. */
+    waiting: ReadonlySet<string>
+  }
+): TurnStatus {
+  if (
+    turn.entries.some(
+      (entry) => entry.kind === "confirmation" && waiting.has(entry.callId)
+    )
+  )
+    return "waiting"
+  if (live) return "working"
+  if (
+    turn.entries.some((entry) => entry.kind === "run_failed") ||
+    turn.runs.some((run) => run.failed)
+  )
+    return "failed"
+  const cut = turn.entries.some(
+    (entry) =>
+      (entry.kind === "message" &&
+        entry.role === "agent" &&
+        entry.state !== "complete") ||
+      (entry.kind === "tool" &&
+        (entry.state === "interrupted" || entry.state === "running"))
+  )
+  if (cut || turn.entries.length === 0) return "interrupted"
+  return "done"
+}
+
+function timeOf(at: string | undefined): number | undefined {
+  if (!at) return undefined
+  const value = Date.parse(at)
+  return Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * When a turn's work started and ended, in ms, as far as its items say: its
+ * runs' markers where it has them, otherwise the prompt's time and its last
+ * item's. `end` is left out while the turn is still being worked on, and
+ * whenever the items say nothing readable.
+ */
+export function turnTimes(
+  turn: Turn,
+  { finished }: { finished: boolean }
+): { start?: number; end?: number } {
+  const start = [
+    timeOf(turn.runs[0]?.startedAt),
+    timeOf(turn.prompt?.at),
+    ...turn.entries.map((entry) => timeOf(entry.at)),
+  ].find((value) => value !== undefined)
+  if (!finished || start === undefined) return { start }
+  const ends = [
+    ...turn.runs.map((run) => timeOf(run.endedAt)),
+    ...turn.entries.map((entry) => timeOf(entry.at)),
+  ].filter((value): value is number => value !== undefined)
+  const end = ends.length > 0 ? Math.max(...ends) : undefined
+  return { start, end: end !== undefined && end > start ? end : undefined }
+}
+
+/** What a turn's runs used, added up; nothing when no run says. */
+export function turnUsage(turn: Turn): ItemUsage | undefined {
+  const used = turn.runs.flatMap((run) => (run.usage ? [run.usage] : []))
+  if (used.length === 0) return undefined
+  return used.reduce(
+    (total, usage) => ({
+      input_tokens: total.input_tokens + usage.input_tokens,
+      output_tokens: total.output_tokens + usage.output_tokens,
+      total_tokens: total.total_tokens + usage.total_tokens,
+    }),
+    { input_tokens: 0, output_tokens: 0, total_tokens: 0 }
+  )
+}
+
+const keyArgumentNames = [
+  "query",
+  "q",
+  "search",
+  "url",
+  "file_path",
+  "path",
+  "file",
+  "filename",
+  "name",
+  "channel",
+  "title",
+  "subject",
+  "to",
+]
+
+function argumentWords(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value)
+  if (typeof value !== "string") return undefined
+  const words = value.replace(/\s+/g, " ").trim()
+  if (!words) return undefined
+  return words.length > 80 ? `${words.slice(0, 79)}…` : words
+}
+
+/**
+ * The one argument that says what a call was about (its query, file, URL or
+ * channel), in a few words, or nothing. An app call's own arguments sit one
+ * level down, and are read first.
+ */
+export function toolKeyArgument(
+  args: Record<string, unknown> | undefined,
+  depth = 0
+): string | undefined {
+  if (!args || depth > 2) return undefined
+  for (const nested of ["arguments", "input", "params"]) {
+    const inner = args[nested]
+    if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+      const found = toolKeyArgument(inner as Record<string, unknown>, depth + 1)
+      if (found) return found
+    }
+  }
+  for (const name of keyArgumentNames) {
+    const words = argumentWords(args[name])
+    if (words) return words
+  }
+  return undefined
+}
+
+/**
+ * The web addresses a turn's calls were given, in order and once each: what
+ * the agent opened, as its calls said. Only http and https count.
+ */
+export function openedLinks(entries: readonly TimelineEntry[]): URL[] {
+  const links = new Map<string, URL>()
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 3 || links.size >= 12) return
+    if (typeof value === "string") {
+      const text = value.trim()
+      if (!/^https?:\/\/\S+$/i.test(text)) return
+      try {
+        const url = new URL(text)
+        links.set(url.href, url)
+      } catch {
+        // Not an address after all.
+      }
+      return
+    }
+    if (value && typeof value === "object") {
+      for (const part of Object.values(value)) visit(part, depth + 1)
+    }
+  }
+  for (const entry of entries) {
+    if (entry.kind === "tool") visit(entry.arguments, 0)
+  }
+  return [...links.values()]
 }
 
 function isRunMarker(item: Item): boolean {
