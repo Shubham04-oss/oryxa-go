@@ -50,6 +50,7 @@ export function BrowserPane({
   child,
   events,
   agentName = "The agent",
+  compact = false,
 }: {
   organizationId: string
   room: LiveRoom
@@ -57,6 +58,8 @@ export function BrowserPane({
   /** The room's log, which says when the agent asks for a hand. */
   events: readonly LiveEvent[]
   agentName?: string
+  /** A tile among others (in a parley): the live page fills it. */
+  compact?: boolean
 }) {
   const browser = child.name
   const running = child.status === "running"
@@ -149,7 +152,7 @@ export function BrowserPane({
   }, [asked])
 
   return (
-    <div className="live-pane">
+    <div className="live-pane" data-compact={compact ? "true" : undefined}>
       {asked && (
         <div className="browser-handoff" role="alert">
           <Hand size={16} aria-hidden="true" />

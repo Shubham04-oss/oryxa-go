@@ -281,7 +281,12 @@ not permission to copy every incidental value into a new component.
     a Full page pill. A shared screen is the focused tile under a label
     bar ("Raya's screen", Fill), with a column of named small cams beside
     it (a row on a phone); Fill gives the screen the whole stage. With no
-    share, a grid of cams. The dock is the full page's. Exit full page
+    share, a grid of cams. While the room's agents run a browser
+    (HuddleBrowse), each running one is a tile beside the share: its live
+    page (the browser pane, compact, with take over and hand back when the
+    agent asks), Working or Needs a hand, and its last steps from the
+    room's log, the newest marked "now"; the people move to a filmstrip on
+    top. The dock is the full page's. Exit full page
     comes back to the stage; where no stage is hosted, Open goes straight
     to the full page and out of it is the mini player.
   - **The full page:** "Parley" with the teamspace's description under it
