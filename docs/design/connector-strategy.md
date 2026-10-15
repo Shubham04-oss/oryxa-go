@@ -81,6 +81,13 @@ the big five"), in this order, easiest and least restricted first:
 | 4 | Slack | slack-go | allowed channels' history and threads | Events API | no (Slack's review is only for its directory) |
 | 5 | Gmail | `google.golang.org/api/gmail/v1` | messages, threads | history API (+ Pub/Sub push) | **yes** (`gmail.modify`) |
 
+*Update, 2026-10-15:* the five are now built in the integrations service, and
+its design decides SDKs, runtimes and tools: the vendor's best SDK in any
+language (Slack and Notion in Node), tools from the vendor's MCP server where
+it accepts our credential, a 20–30 tool minimum per app, BYO first. See
+[integrations/README.md](integrations/README.md) D11–D16, §8.5 and §12.5–12.6;
+where this section disagrees, that design wins.
+
 Each passes G1 (`go run ./apps/internal/integration/cmd/check <toolkit>`:
 readers, read-only tools, events, cassette tests), G2 review, G3 the owner's
 live smoke test with real accounts on the a1 stack, then G4: macbookpro adds
