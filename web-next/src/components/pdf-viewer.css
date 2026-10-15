@@ -1,0 +1,132 @@
+/* The PDF viewer (pdf-viewer.tsx): thumbnails on the left, the pages one
+   under another on paper, and its tools in the frame's bar. */
+.pdf-viewer {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.pdf-thumbs {
+  flex: none;
+  width: 120px;
+  min-height: 0;
+}
+.pdf-thumbs ol {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  margin: 0;
+  padding: 16px 12px;
+  overflow-y: auto;
+  list-style: none;
+}
+.pdf-thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: auto;
+  padding: 4px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.pdf-thumb canvas {
+  border-radius: 4px;
+  background: var(--paper);
+}
+.pdf-thumb:hover {
+  background: var(--hover);
+}
+.pdf-thumb[aria-current="page"] {
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--border-quiet),
+    0 1px 3px var(--shade-66);
+  color: var(--text);
+}
+.pdf-thumb:focus-visible {
+  outline: 2px solid var(--text-muted);
+  outline-offset: 2px;
+}
+.pdf-pages {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px;
+  overflow: auto;
+}
+.pdf-pages.is-loading {
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.pdf-page {
+  position: relative;
+  flex: none;
+  border-radius: 2px;
+  background: var(--paper);
+  box-shadow: 0 1px 3px var(--shade-66);
+}
+.pdf-page canvas {
+  display: block;
+}
+.pdf-page > p {
+  margin: 0;
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+/* What find marks, over the drawn page; the current one is stronger. */
+.pdf-match {
+  position: absolute;
+  border-radius: 2px;
+  background: var(--viewer-highlight);
+  mix-blend-mode: multiply;
+  pointer-events: none;
+}
+.pdf-match[data-current="true"] {
+  background: var(--viewer-highlight-current);
+}
+
+/* Its tools in the frame's bar: pages, zoom, find. */
+.pdf-tools-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.pdf-tools-group + .pdf-tools-group,
+.pdf-tools-group + [data-slot="button"] {
+  margin-left: 8px;
+}
+.pdf-tools-count {
+  min-width: 44px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+  white-space: nowrap;
+}
+.pdf-find [data-slot="input"] {
+  width: 160px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--base);
+  font-size: 12px;
+}
+
+@media (max-width: 800px) {
+  .pdf-thumbs {
+    display: none;
+  }
+  .pdf-pages {
+    padding: 12px;
+  }
+}

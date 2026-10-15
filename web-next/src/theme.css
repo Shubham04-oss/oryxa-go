@@ -249,6 +249,11 @@
   --collection-4: #b0487a;
   --collection-5: #2f8f8a;
   --collection-6: #c9a23f;
+  /* A document's page and what a viewer marks on it (find, a cited
+     passage): paper stays white in both themes, as print does. */
+  --paper: #ffffff;
+  --viewer-highlight: #ffd54a73;
+  --viewer-highlight-current: #ff9f1aa6;
   /* A sandbox's terminal stays dark in both themes, as a shell does. */
   --terminal-bg: #0d0d0d;
   --terminal-fg: #e6e6e6;
