@@ -229,6 +229,8 @@
   --scene-ships: url("/scenes/ships.jpg");
   --scene-harbour: url("/scenes/harbour.webp");
   --scene-ship-lines: url("/scenes/ship-lines.webp");
+  --scene-crows-nest: url("/scenes/crows-nest.webp");
+  --scene-deck: url("/scenes/deck.webp");
   --scene-soft-opacity: 0.24;
   --scene-band-opacity: 0.38;
   /* A file's kind badge (file-kind.tsx): the same in both themes. */
@@ -270,6 +272,9 @@
   /* A switch that is on, and its knob, in both themes. */
   --switch-on: #3f9d63;
   --switch-knob: #ffffff;
+  /* A destructive action's button (a pop-up's Delete), in both themes. */
+  --danger: #d4544f;
+  --on-danger: #ffffff;
   color-scheme: dark;
 }
 
@@ -496,6 +501,8 @@
   --scene-ships: url("/scenes/ships.jpg");
   --scene-harbour: url("/scenes/harbour.webp");
   --scene-ship-lines: url("/scenes/ship-lines.webp");
+  --scene-crows-nest: url("/scenes/crows-nest.webp");
+  --scene-deck: url("/scenes/deck.webp");
   --scene-soft-opacity: 0.38;
   --scene-band-opacity: 0.55;
   color-scheme: light;
