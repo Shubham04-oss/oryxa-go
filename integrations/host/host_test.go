@@ -197,7 +197,7 @@ func (r *rogue) Sync(_ *pb.SyncRequest, s pb.Connector_SyncServer) error {
 // attachRogue registers fakeapp's manifest on a host whose connector is an in-process server.
 func attachRogue(t *testing.T, h *Host, r *rogue) {
 	t.Helper()
-	raw, err := os.ReadFile("../connectors/fakeapp/manifest.json")
+	raw, err := os.ReadFile("../connectors/fakeapp/app/manifest.json")
 	if err != nil {
 		t.Fatal(err)
 	}

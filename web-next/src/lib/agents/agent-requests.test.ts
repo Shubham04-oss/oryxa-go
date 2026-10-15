@@ -4,6 +4,7 @@ import {
   asksForConsent,
   canCarrySecret,
   consentAgentRequest,
+  createAgentRequest,
   decideAgentRequest,
   getAgentRequest,
   isLeaseLive,
@@ -25,6 +26,7 @@ import {
 import type {
   AgentLease,
   AgentRequest,
+  CreateAgentRequestInput,
   DecideAgentRequestInput,
 } from "./agent-requests"
 
@@ -134,6 +136,27 @@ describe("agent requests API", () => {
         "POST",
         "/v1/organizations/org-1/agent-requests/irq_1/response",
         '{"status":"completed","summary":"Explained.","content":"The boundary is the team.","tools_used":["github.search"]}',
+      ],
+    ])
+  })
+
+  it("files a member's own request with only the fields the handler reads", async () => {
+    const fetchMock = stubFetch(() => json(request, 201))
+
+    expect(
+      await createAgentRequest("org-1", {
+        target_agent_id: "agt_nia",
+        purpose: "Asked directly from Oryxa.",
+        task: "Is VAT included?",
+        approval: "agent",
+      } as CreateAgentRequestInput)
+    ).toEqual(request)
+
+    expect(sent(fetchMock)).toEqual([
+      [
+        "POST",
+        "/v1/organizations/org-1/agent-requests",
+        '{"target_agent_id":"agt_nia","purpose":"Asked directly from Oryxa.","task":"Is VAT included?"}',
       ],
     ])
   })
