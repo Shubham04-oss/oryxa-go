@@ -103,10 +103,22 @@ not permission to copy every incidental value into a new component.
   composer carries a quiet **"Looking at {item}"** chip: what the agent is
   shown with the message (the page's selection, an open file, or the page).
   The board's quick toggles (reads, suggests, web) are not shown until a
-  capability API exists. At a glance keeps Today's widgets (from your apps,
-  teammates, conversations, knowledge, files, recurring work) one tab away on
-  every page, as compact tiles in one column, without Today's composer
-  (founder, 14 Oct 2026: the sidebar's quick widgets stay). When the member
+  capability API exists. **At a glance** keeps My workspace's widgets one tab
+  away on every page (founder, 14 Oct 2026: the sidebar's quick widgets
+  stay), restyled to the AgentPanelGlance board as compact library cards
+  (`ui/card`, `home-glance.tsx`) in one column, without a composer:
+  - **From your apps:** the connected apps' marks in a row, the latest brief
+    (the first sentence Krude wrote in the wake-up thread, opening it) and
+    Manage (Tools). Per-app counts wait for an app digest API.
+  - **Teammates:** avatars with first names, those the member shares a
+    teamspace with first, a tap opening the DM, the green dot where a DM is
+    open; All opens People.
+  - **Conversations** (New chat), **Knowledge** (name · documents, Library),
+    **Files {agent} made** (each with its kind tile, opening its chat) and
+    **Recurring work** (the member's own, All N opening Agent overview).
+  - What needs the member is not a card here: it is the panel's chip and
+    count, and Requests. Each card says in one quiet line what lands there
+    when it is empty, and offers Try again when its read failed. When the member
   has more than one agent, the Agents tab's top row is a quick switch between
   them: the one in use is the oval pill with its name, like the pills
   elsewhere, and the rest stay avatar-only. With a single agent the row is not
