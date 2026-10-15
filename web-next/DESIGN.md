@@ -407,10 +407,19 @@ not permission to copy every incidental value into a new component.
     words close it.
   The composer is a task bar ("Give Leo a task, or ask anything") with a quiet
   "Looking at …" chip above the field: what the page's screen context names
-  (its selection, or the page), which goes with the message. Specialist and
-  team chats still use the log below until they move to run cards.
-- Elsewhere (specialists, until they move to run cards) an agent
-  conversation reads as a quiet log on the base surface: the
+  (its selection, or the page), which goes with the message.
+  **Specialist and team chats are working sessions too.** A specialist's
+  card takes what its work result says: "Needs your input" or "Blocked" in
+  place of Done, the files it saved as output rows by name (Go serves no
+  specialist files yet, so they say they can't be opened here), and the
+  hand-offs it suggests as rows ("Suggests Planner: …"; suggestions only,
+  nothing ran); the line under its answer keeps only the tools it used. A
+  multi-agent team's posts are tasks, and the agents' answers after one are
+  its run card, each named for who wrote it; while the team works the card
+  says so and the composer says it can take a minute and a half.
+- No screen uses the older log layout any more (`AgentTimeline`'s `log`
+  variant, kept for now), which read an agent conversation as a quiet log
+  on the base surface: the
   member's messages in raised bubbles on the right; the agent's answers as
   full-width Markdown, labelled only when a sub-agent wrote them; each run of
   tool calls folded into one muted status row with a Thinking Orb for the

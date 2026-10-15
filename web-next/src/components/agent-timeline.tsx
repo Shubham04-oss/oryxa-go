@@ -313,21 +313,32 @@ const resultStatusWords: Record<SpecialistResultStatus, string | undefined> = {
  * and the hand-offs it suggests (suggestions only: nothing ran). The
  * answer itself is the result's summary, shown above it.
  */
-function WorkResult({ result }: { result: SpecialistResult }) {
+function WorkResult({
+  result,
+  session = false,
+}: {
+  result: SpecialistResult
+  /** In a run card, which shows the status, files and hand-offs itself. */
+  session?: boolean
+}) {
   const tools = [
     ...new Set(result.tools_used.map(humanizeToolName).filter(Boolean)),
   ]
   const files = [
     ...new Set(result.artifacts.map(artifactFileName).filter(Boolean)),
   ]
-  const words = [
-    resultStatusWords[result.status],
-    tools.length > 0 ? `Used ${tools.join(", ")}` : undefined,
-    files.length > 0 ? `Saved ${files.join(", ")}` : undefined,
-    ...result.handoffs.map(
-      (handoff) => `Suggests ${handoff.target}: ${handoff.request}`
-    ),
-  ].filter((part): part is string => Boolean(part))
+  const words = (
+    session
+      ? [tools.length > 0 ? `Used ${tools.join(", ")}` : undefined]
+      : [
+          resultStatusWords[result.status],
+          tools.length > 0 ? `Used ${tools.join(", ")}` : undefined,
+          files.length > 0 ? `Saved ${files.join(", ")}` : undefined,
+          ...result.handoffs.map(
+            (handoff) => `Suggests ${handoff.target}: ${handoff.request}`
+          ),
+        ]
+  ).filter((part): part is string => Boolean(part))
   if (words.length === 0) return null
   return (
     <p className="workspace-agent-result" data-status={result.status}>
@@ -340,11 +351,14 @@ function MessageBlock({
   entry,
   ended,
   agentName,
+  session = false,
 }: {
   entry: MessageEntry
   /** Whether the run is definitely over (see `AgentTimeline`). */
   ended: boolean
   agentName?: string
+  /** Inside a run card (see `WorkResult`). */
+  session?: boolean
 }) {
   if (entry.role === "member") {
     return (
@@ -388,7 +402,7 @@ function MessageBlock({
     >
       {labelled && <p className="workspace-agent-author">{entry.author}</p>}
       <AgentMarkdown text={entry.text} />
-      {entry.result && <WorkResult result={entry.result} />}
+      {entry.result && <WorkResult result={entry.result} session={session} />}
       {entry.error && <p className="workspace-agent-note">{entry.error}</p>}
       {interrupted && <p className="workspace-agent-note">Interrupted</p>}
     </div>
@@ -897,6 +911,7 @@ export function AgentTimeline({
             entry={entry}
             ended={ended}
             agentName={agentName}
+            session={session}
           />
         )
       case "tools":
