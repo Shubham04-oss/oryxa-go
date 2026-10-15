@@ -85,21 +85,37 @@ not permission to copy every incidental value into a new component.
   Picking a page opens it and its area; the page you are on is the raised
   tile. The sidebar's top row names the workspace. Collapsed, the rail shows
   the same three tiles as icons. (The Home/Team/Agents mode pills are gone.)
-- The right agent panel holds the member's agent and team conversations. Its
-  tabs, Agents (the default), DMs, Teams and **At a glance**, use the same
-  icon-first pills. At a glance keeps Today's widgets (from your apps,
+- The right agent panel is the member's own agent, where they are (AgentPanel
+  board, founder's redesign, 15 Oct 2026). Its **header** is the agent's voxel
+  avatar and name over a lock and "Only you · in {place}" (the teamspace, the
+  knowledge base, the person, the file or the page), then History and New
+  chat for the primary agent's chat (in the header, not over the log, whose
+  row only names the conversation), and the collapse toggle. Under it, one
+  **segmented control** (the library's tabs; the open view the raised tile):
+  the agent by name (the default), **At a glance**, with how many requests
+  wait on the member as a count, and DMs as an icon with its unread badge.
+  DMs keep that quiet place until the sidebar's Messages section holds them;
+  the empty Teams tab is gone. Over the agent's chat, a strip of **chips**
+  says only what is real: "Needs you N" (opens Requests) while requests wait
+  on the member; "Parley · Join" on a teamspace whose parley runs without
+  them; "In the parley · Open" while they are in one. My workspace shows no
+  parley chip until the edge can list the organisation's live rooms. The
+  composer carries a quiet **"Looking at {item}"** chip: what the agent is
+  shown with the message (the page's selection, an open file, or the page).
+  The board's quick toggles (reads, suggests, web) are not shown until a
+  capability API exists. At a glance keeps Today's widgets (from your apps,
   teammates, conversations, knowledge, files, recurring work) one tab away on
   every page, as compact tiles in one column, without Today's composer
-  (founder, 14 Oct 2026: the sidebar's quick widgets stay). The
-  Agents pill carries the primary agent's voxel avatar. When the member
+  (founder, 14 Oct 2026: the sidebar's quick widgets stay). When the member
   has more than one agent, the Agents tab's top row is a quick switch between
   them: the one in use is the oval pill with its name, like the pills
   elsewhere, and the rest stay avatar-only. With a single agent the row is not
   shown, and it never shows empty or example slots. The panel is
-  location-aware: on a teamspace page the Agents tab also offers that
+  location-aware: on a teamspace page the agent's view also offers that
   teamspace's teammates and their agents, below the member's own (§3, "Side
   conversations"); elsewhere it does not. Collapsed, the panel's rail shows
-  one icon per tab, and each opens the panel on that tab. A tab without a
+  one icon per view (the agent, At a glance with the needs count, DMs), and
+  each opens the panel on that view. A tab without a
   live service shows a one-line empty state, never example people, rooms or
   messages.
 - The sidebar's tiles, in order (Team's recent conversations follow them):
@@ -311,7 +327,7 @@ not permission to copy every incidental value into a new component.
   reads says Library.
 - Expanding the primary agent's chat uses Agent overview as focused work:
   the same mounted conversation sits on the left, and the overview occupies
-  the work panel. The right rail offers only DMs and Teams in this state.
+  the work panel. The right rail offers only At a glance and DMs in this state.
   Files from the current conversation appear in the overview, following the
   conversation the chat is on: a new chat has none, and neither does a chat
   that has not opened yet. Selecting a file, or a newly saved file while the
@@ -364,9 +380,9 @@ not permission to copy every incidental value into a new component.
   work result's summary, with one muted line under it for the rest (needs
   your input or blocked, the tools it used, the files it saved, the hand-offs
   it suggests); while it works, one muted line with a Thinking Orb says so. In
-  the agent panel one muted row above it names the conversation, with a
-  clear, quiet New chat control; a specialist's focused view carries the
-  same in its presence row. Below it, a compact History disclosure lists real
+  the agent panel one muted row above it names the conversation, and the
+  panel's header holds New chat and History (§2); Agent overview and a
+  specialist's view keep New chat on that row. A compact History list shows real
   conversations newest first, each with title, relative time, open and delete.
   A waiting conversation says "Needs approval". Hide empty abandoned starts
   unless currently selected or waiting on approval; an accessible untitled
