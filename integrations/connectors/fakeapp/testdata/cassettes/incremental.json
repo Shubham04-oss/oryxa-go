@@ -1,0 +1,12 @@
+[
+  {
+    "method": "GET",
+    "host": "api.fakeapp.example.com",
+    "path": "/notes?after=3",
+    "status": 200,
+    "body": {
+      "notes": [],
+      "has_more": false
+    }
+  }
+]

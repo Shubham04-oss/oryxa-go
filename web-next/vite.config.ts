@@ -35,6 +35,10 @@ const config = defineConfig(({ command, mode }) => {
       proxy: { "^/v1/": { changeOrigin: true, target } },
     },
     plugins,
+    test: {
+      setupFiles: ["./src/test/setup.ts"],
+      testTimeout: 15_000,
+    },
   }
 })
 
