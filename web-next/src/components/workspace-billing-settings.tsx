@@ -1,9 +1,11 @@
 import { useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { ArrowUpRight } from "lucide-react"
+import { Input } from "@/components/ui/input"
 import { ApiError } from "@/lib/api/client"
 import type { Organization } from "@/lib/auth/client"
 import { authErrorMessage } from "@/lib/auth/client"
+import { getMembers } from "@/lib/auth/invitations"
 import {
   getBillingSummary,
   getPlans,
@@ -11,6 +13,14 @@ import {
   startCheckout,
 } from "@/lib/settings/client"
 import type { Plan } from "@/lib/settings/client"
+import {
+  SettingsButton,
+  SettingsCard,
+  SettingsGroup,
+  SettingsMessage,
+  SettingsNote,
+  SettingsRow,
+} from "./settings-kit"
 
 const planName = (key: string) =>
   key === "unpaid"
@@ -21,6 +31,11 @@ const allowance = (limit: number | null) =>
     ? "Unlimited members"
     : `Up to ${limit} ${limit === 1 ? "member" : "members"}`
 const openStatuses = new Set(["active", "past_due", "on_hold", "paused"])
+const longDate = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+})
 
 function PlanRow({
   plan,
@@ -45,50 +60,53 @@ function PlanRow({
     onSuccess: (url) => window.location.assign(url),
   })
   return (
-    <div className="workspace-settings-row workspace-settings-plan-row">
-      <div>
-        <strong>
-          {planName(plan.key)}{" "}
-          {current && <span className="workspace-settings-tag">Current</span>}
-        </strong>
-        <small>
-          {plan.member_limit_per_unit
+    <>
+      <SettingsRow
+        title={current ? `${planName(plan.key)} · current` : planName(plan.key)}
+        description={
+          plan.member_limit_per_unit
             ? `${plan.member_limit_per_unit} members per seat`
-            : allowance(plan.member_limit)}
-        </small>
-      </div>
-      {canCheckout && (
-        <div className="workspace-settings-plan-actions">
-          {plan.member_limit_per_unit && (
-            <label>
-              Seats
-              <input
-                type="number"
-                min={min}
-                max={plan.max_quantity}
-                value={seats}
-                onChange={(event) => setSeats(event.target.value)}
-              />
-            </label>
-          )}
-          <button
-            type="button"
+            : allowance(plan.member_limit)
+        }
+      >
+        {canCheckout && plan.member_limit_per_unit && (
+          <Input
+            className="settings-input settings-seats-input"
+            type="number"
+            aria-label={`Seats for ${planName(plan.key)}`}
+            min={min}
+            max={plan.max_quantity}
+            value={seats}
+            onChange={(event) => setSeats(event.target.value)}
+          />
+        )}
+        {canCheckout && (
+          <SettingsButton
             disabled={!valid || checkout.isPending}
             onClick={() => checkout.mutate()}
           >
             {checkout.isPending ? "Opening…" : "Choose"}
-          </button>
-        </div>
-      )}
+          </SettingsButton>
+        )}
+      </SettingsRow>
       {checkout.isError && (
-        <p className="workspace-settings-error" role="alert">
+        <SettingsMessage tone="error">
           {authErrorMessage(checkout.error, "Could not start checkout.")}
-        </p>
+        </SettingsMessage>
       )}
-    </div>
+    </>
   )
 }
 
+/**
+ * Settings → Billing: the plan as one card (its name, renewal, seats used
+ * against the limit, and Change plan), the plans to choose from while there
+ * is no subscription, and payment, which the billing portal holds.
+ *
+ * Plan prices, the card on file, the billing contact and invoices are not on
+ * the billing routes yet, so the card names no price and the portal stands in
+ * for the rest.
+ */
 export function WorkspaceBillingSettings({
   organization,
   preview,
@@ -96,17 +114,25 @@ export function WorkspaceBillingSettings({
   organization?: Organization
   preview: boolean
 }) {
+  const live = !preview && Boolean(organization)
+  const [choosing, setChoosing] = useState(false)
   const summary = useQuery({
     queryKey: ["billing", "summary", organization?.id],
     queryFn: () => getBillingSummary(organization!.id),
-    enabled: !preview && Boolean(organization),
+    enabled: live,
     retry: false,
   })
   const plans = useQuery({
     queryKey: ["billing", "plans"],
     queryFn: getPlans,
-    enabled: !preview && Boolean(organization),
+    enabled: live,
     staleTime: 5 * 60_000,
+    retry: false,
+  })
+  const members = useQuery({
+    queryKey: ["organizations", organization?.id, "members"],
+    queryFn: () => getMembers(organization!.id),
+    enabled: live,
     retry: false,
   })
   const portal = useMutation({
@@ -114,176 +140,164 @@ export function WorkspaceBillingSettings({
     onSuccess: (url) => window.location.assign(url),
   })
 
-  if (preview || !organization)
+  if (preview || !organization) {
     return (
-      <div className="workspace-settings-account">
-        <div className="workspace-settings-section">
-          <div className="workspace-settings-section-title">
-            <h3>Current plan</h3>
-            <p>
-              Layout preview · Sign in to load the real plan and subscription.
-            </p>
-          </div>
-          <div className="workspace-settings-billing-plan">
-            <strong>Unpaid</strong>
-            <span className="workspace-settings-tag">Example</span>
-          </div>
-          <p className="workspace-settings-hint">
-            The plan, member allowance, and renewal date appear here.
-          </p>
-        </div>
-        <div className="workspace-settings-section">
-          <div className="workspace-settings-section-title">
-            <h3>Plans</h3>
-            <p>
-              Available plans and seat limits load from Billing. Owners can
-              start checkout or open the billing portal.
-            </p>
-          </div>
-        </div>
-        <div className="workspace-settings-section">
-          <div className="workspace-settings-section-title">
-            <h3>Billing contact</h3>
-            <p>
-              Receipts and invoices go to the contact set in the billing portal.
-            </p>
-          </div>
-        </div>
-      </div>
+      <SettingsGroup label="Current plan">
+        <SettingsNote>
+          Layout preview. Sign in to load the real plan and subscription.
+        </SettingsNote>
+      </SettingsGroup>
     )
-
-  if (summary.isPending)
+  }
+  if (summary.isPending) return <SettingsNote>Loading billing…</SettingsNote>
+  if (summary.isError) {
     return (
-      <div className="workspace-settings-account">
-        <p role="status">Loading billing…</p>
-      </div>
-    )
-  if (summary.isError)
-    return (
-      <div className="workspace-settings-account">
-        <div className="workspace-settings-section">
-          <p className="workspace-settings-error" role="alert">
-            {summary.error instanceof ApiError && summary.error.status === 404
-              ? "Billing is not available in this environment."
-              : authErrorMessage(summary.error, "Could not load billing.")}
-          </p>
-          <button type="button" onClick={() => void summary.refetch()}>
+      <SettingsGroup label="Current plan">
+        <SettingsMessage tone="error">
+          {summary.error instanceof ApiError && summary.error.status === 404
+            ? "Billing is not available in this environment."
+            : authErrorMessage(summary.error, "Could not load billing.")}{" "}
+          <SettingsButton onClick={() => void summary.refetch()}>
             Retry
-          </button>
-        </div>
-      </div>
+          </SettingsButton>
+        </SettingsMessage>
+      </SettingsGroup>
     )
+  }
 
   const data = summary.data
+  const subscription = data.subscription
   const hasSubscription = Boolean(
-    data.subscription && openStatuses.has(data.subscription.status)
+    subscription && openStatuses.has(subscription.status)
   )
   const canCheckout = data.can_manage && !hasSubscription
+  const limit = data.entitlements.member_limit
+  const used = Array.isArray(members.data) ? members.data.length : undefined
+  const status = data.entitlements.status.replace(/_/g, " ")
+  const renewal = subscription?.renews_at
+    ? `Renews ${longDate.format(new Date(subscription.renews_at))}`
+    : subscription?.ends_at
+      ? `Ends ${longDate.format(new Date(subscription.ends_at))}`
+      : undefined
+  const planLine = [
+    renewal,
+    subscription && subscription.quantity > 1
+      ? `${subscription.quantity} seats`
+      : undefined,
+    status !== "active" ? status : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+  const showPlans = canCheckout || choosing || !data.can_manage
+
   return (
-    <div className="workspace-settings-account">
-      <section className="workspace-settings-section" aria-label="Current plan">
-        <div className="workspace-settings-section-title">
-          <h3>Current plan</h3>
-          <p>
-            {data.can_manage
-              ? "Owners manage the plan and payment."
-              : "Only owners can manage billing."}
-          </p>
-        </div>
-        <div className="workspace-settings-billing-plan">
+    <>
+      <SettingsCard className="settings-plan">
+        <div className="settings-plan-scene" aria-hidden="true" />
+        <div className="settings-plan-text">
+          <small>Current plan</small>
           <strong>{planName(data.entitlements.plan)}</strong>
-          <span className="workspace-settings-tag">
-            {data.entitlements.status.replace(/_/g, " ")}
-          </span>
+          <span>{planLine || allowance(limit)}</span>
         </div>
-        <p className="workspace-settings-hint">
-          {allowance(data.entitlements.member_limit)}
-        </p>
-        {data.subscription && (
-          <p className="workspace-settings-hint">
-            {planName(data.subscription.plan)} subscription ·{" "}
-            {data.subscription.status.replace(/_/g, " ")}
-            {data.subscription.quantity > 1
-              ? ` · ${data.subscription.quantity} seats`
-              : ""}
-            {data.subscription.renews_at
-              ? ` · renews ${new Date(data.subscription.renews_at).toLocaleDateString()}`
-              : ""}
-          </p>
+        {limit !== null && used !== undefined && (
+          <div className="settings-seats">
+            <small>
+              {used} of {limit} seats
+            </small>
+            <div
+              className="settings-seats-bar"
+              role="meter"
+              aria-label="Seats used"
+              aria-valuemin={0}
+              aria-valuemax={limit}
+              aria-valuenow={Math.min(used, limit)}
+            >
+              <i style={{ width: `${Math.min(100, (used / limit) * 100)}%` }} />
+            </div>
+          </div>
         )}
-        {data.entitlements.grace_ends_at && (
-          <p className="workspace-settings-error">
-            Payment is being retried until{" "}
-            {new Date(data.entitlements.grace_ends_at).toLocaleDateString()}.
-          </p>
-        )}
-        {data.can_manage && hasSubscription && (
-          <button
-            className="workspace-settings-action"
-            type="button"
+        {data.can_manage && (
+          <SettingsButton
+            size="default"
+            tone="primary"
             disabled={portal.isPending}
-            onClick={() => portal.mutate()}
+            onClick={() =>
+              hasSubscription ? portal.mutate() : setChoosing(true)
+            }
           >
-            {portal.isPending ? "Opening…" : "Manage billing"}{" "}
-            <ArrowUpRight size={14} />
-          </button>
-        )}
-        {portal.isError && (
-          <p className="workspace-settings-error" role="alert">
-            {authErrorMessage(
-              portal.error,
-              "Could not open the billing portal."
-            )}
-          </p>
-        )}
-      </section>
-      <section className="workspace-settings-section" aria-label="Plans">
-        <div className="workspace-settings-section-title">
-          <h3>Plans</h3>
-          <p>
             {hasSubscription
-              ? "Change plans in the billing portal."
-              : data.can_manage
-                ? "Checkout opens securely with the payment provider."
-                : "An organisation owner can choose a plan."}
-          </p>
-        </div>
-        {plans.isPending && <p role="status">Loading plans…</p>}
-        {plans.isError && (
-          <p className="workspace-settings-error" role="alert">
-            {authErrorMessage(plans.error, "Could not load plans.")}{" "}
-            <button type="button" onClick={() => void plans.refetch()}>
-              Retry
-            </button>
-          </p>
+              ? portal.isPending
+                ? "Opening…"
+                : "Change plan"
+              : "Choose a plan"}
+          </SettingsButton>
         )}
-        {plans.data?.plans.length === 0 && (
-          <p className="workspace-settings-hint">
-            No paid plans are available yet.
-          </p>
-        )}
-        {plans.data?.plans.map((plan) => (
-          <PlanRow
-            key={plan.key}
-            plan={plan}
-            orgId={organization.id}
-            canCheckout={canCheckout}
-            current={data.entitlements.plan === plan.key}
+      </SettingsCard>
+      {limit !== null && planLine && (
+        <SettingsNote>{allowance(limit)}</SettingsNote>
+      )}
+      {data.entitlements.grace_ends_at && (
+        <SettingsMessage tone="error">
+          Payment is being retried until{" "}
+          {longDate.format(new Date(data.entitlements.grace_ends_at))}.
+        </SettingsMessage>
+      )}
+      {portal.isError && (
+        <SettingsMessage tone="error">
+          {authErrorMessage(portal.error, "Could not open the billing portal.")}
+        </SettingsMessage>
+      )}
+
+      {showPlans && (
+        <SettingsGroup label="Plans">
+          <SettingsRow
+            description={
+              hasSubscription
+                ? "Change plans in the billing portal."
+                : data.can_manage
+                  ? "Checkout opens securely with the payment provider."
+                  : "An organisation owner can choose a plan."
+            }
           />
-        ))}
-      </section>
-      <section
-        className="workspace-settings-section"
-        aria-label="Billing contact"
-      >
-        <div className="workspace-settings-section-title">
-          <h3>Billing contact</h3>
-          <p>
-            Receipts, invoices, and billing notices go to the contact set in the
-            billing portal.
-          </p>
-        </div>
-      </section>
-    </div>
+          {plans.isPending && <SettingsNote>Loading plans…</SettingsNote>}
+          {plans.isError && (
+            <SettingsMessage tone="error">
+              {authErrorMessage(plans.error, "Could not load plans.")}{" "}
+              <SettingsButton onClick={() => void plans.refetch()}>
+                Retry
+              </SettingsButton>
+            </SettingsMessage>
+          )}
+          {plans.data?.plans.length === 0 && (
+            <SettingsNote>No paid plans are available yet.</SettingsNote>
+          )}
+          {plans.data?.plans.map((plan) => (
+            <PlanRow
+              key={plan.key}
+              plan={plan}
+              orgId={organization.id}
+              canCheckout={canCheckout}
+              current={data.entitlements.plan === plan.key}
+            />
+          ))}
+        </SettingsGroup>
+      )}
+
+      <SettingsGroup label="Payment">
+        <SettingsRow
+          title="Card, billing contact and invoices"
+          description="Managed in the billing portal, where receipts and invoices go to your billing contact."
+        >
+          {data.can_manage && hasSubscription && (
+            <SettingsButton
+              disabled={portal.isPending}
+              onClick={() => portal.mutate()}
+            >
+              Open portal <ArrowUpRight />
+            </SettingsButton>
+          )}
+        </SettingsRow>
+      </SettingsGroup>
+    </>
   )
 }

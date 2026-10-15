@@ -356,7 +356,7 @@ func TestToolsRefuseAConversationWithNoOrganization(t *testing.T) {
 }
 
 func TestSaveArtifactMovesTheFileWithoutTheModel(t *testing.T) {
-	executor, _, _ := fakeEdge(t, func(seenRequest) (int, any) {
+	executor, _, seen := fakeEdge(t, func(seenRequest) (int, any) {
 		return 200, edgev1.ReadFilesResponse{Files: []edgev1.FileContent{{Path: "/workspace/chart.png", Encoding: "base64", Content: base64.StdEncoding.EncodeToString([]byte{1, 2, 3}), MIMEType: "image/png", Size: 3}}}
 	})
 	saved := &artifacts{}
@@ -370,5 +370,21 @@ func TestSaveArtifactMovesTheFileWithoutTheModel(t *testing.T) {
 	}
 	if result["artifact_version"] != int64(3) && result["artifact_version"] != float64(3) {
 		t.Errorf("result = %v", result)
+	}
+	// Its bytes never reach the model, so it asks the edge for the artifact
+	// budget rather than the model's 256 KiB.
+	if len(*seen) == 0 || (*seen)[len(*seen)-1].Body["maxBytes"] != float64(maxArtifactBytes) {
+		t.Errorf("read asked for %v, want maxBytes %d", *seen, maxArtifactBytes)
+	}
+}
+
+func TestSaveArtifactNeverReturnsAnEmptyError(t *testing.T) {
+	executor, _, _ := fakeEdge(t, func(seenRequest) (int, any) {
+		return 200, edgev1.ReadFilesResponse{Files: []edgev1.FileContent{{Path: "/workspace/deck.pptx", Error: "ENOENT: no such file"}}}
+	})
+	ctx := toolContext{state: mapState{"organization_id": "org_1"}, artifacts: &artifacts{}}
+	_, err := tools(t, executor)["sandbox_save_artifact"].Run(ctx, map[string]any{"path": "/workspace/deck.pptx"})
+	if err == nil || !strings.Contains(err.Error(), "deck.pptx") || strings.HasSuffix(strings.TrimSpace(err.Error()), ":") {
+		t.Fatalf("error = %v, want the path and a reason", err)
 	}
 }

@@ -25,6 +25,12 @@ import {
   toolkitName,
   webhookSecretProblem,
 } from "@/lib/apps/client"
+import {
+  SettingsActions,
+  SettingsButton,
+  SettingsRow,
+  SettingsSwitch,
+} from "./settings-kit"
 import type {
   OAuthClient,
   OrganizationWebhook,
@@ -178,9 +184,8 @@ export function WorkspaceSigninAppsSettings({
               integrations.error ?? manifestFailure?.error,
               "Sign-in apps could not be loaded."
             )}{" "}
-            <button
+            <SettingsButton
               type="button"
-              className="underline"
               onClick={() => {
                 if (integrations.isError) void integrations.refetch()
                 for (const read of manifests) {
@@ -189,7 +194,7 @@ export function WorkspaceSigninAppsSettings({
               }}
             >
               Retry
-            </button>
+            </SettingsButton>
           </p>
         ) : !registrations.length ? (
           <p className="workspace-settings-hint">
@@ -259,13 +264,9 @@ function OAuthClientCard({
               view.error,
               `${registration.name}'s sign-in app could not be loaded.`
             )}{" "}
-            <button
-              type="button"
-              className="underline"
-              onClick={() => void view.refetch()}
-            >
+            <SettingsButton type="button" onClick={() => void view.refetch()}>
               Retry
-            </button>
+            </SettingsButton>
           </p>
         ) : (
           <p className="workspace-settings-hint" role="status">
@@ -726,20 +727,15 @@ function OAuthClientForm({
                 : `Oryxa has no ${name} app here, so this changes nothing.`}
             </small>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-label={`Don't use Oryxa's ${name} app`}
-            aria-checked={refuse}
-            className="workspace-settings-switch"
+          <SettingsSwitch
+            label={`Don't use Oryxa's ${name} app`}
+            checked={refuse}
             disabled={busy}
-            onClick={() => {
-              setRefuse((current) => !current)
+            onCheckedChange={(next) => {
+              setRefuse(next)
               onStatus("")
             }}
-          >
-            <span />
-          </button>
+          />
         </div>
       )}
 
@@ -753,35 +749,27 @@ function OAuthClientForm({
           {appsErrorMessage(remove.error, `Could not remove the ${name} app.`)}
         </p>
       )}
-      {confirmRemove ? (
-        <div className="workspace-settings-confirm">
-          <p>
-            Remove your organisation's {name} app? Members' new sign-ins go
-            through Oryxa's app again. Connections made through yours keep
-            working until they're disconnected.
-          </p>
-          <button
-            type="button"
-            disabled={remove.isPending}
-            onClick={() => setConfirmRemove(false)}
+      <SettingsActions start={<span role="status">{status}</span>}>
+        <SettingsButton
+          type="submit"
+          size="default"
+          tone="primary"
+          disabled={busy || !changed}
+        >
+          {pending ? "Saving…" : "Save"}
+        </SettingsButton>
+      </SettingsActions>
+
+      {/* Removing never sits beside Save: it is the form's own danger row. */}
+      {view.saved && (
+        <div className="settings-danger-row">
+          <SettingsRow
+            tone="danger"
+            title={`Remove your ${name} app`}
+            description="Members' new sign-ins go through Oryxa's app again."
           >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={remove.isPending}
-            onClick={() => remove.mutate()}
-          >
-            {remove.isPending ? "Removing…" : "Remove app"}
-          </button>
-        </div>
-      ) : (
-        <div className="workspace-settings-form-footer">
-          <span role="status">{status}</span>
-          <span className="flex gap-2">
-            {view.saved && (
-              <button
-                type="button"
+            {!confirmRemove && (
+              <SettingsButton
                 disabled={busy}
                 onClick={() => {
                   remove.reset()
@@ -789,12 +777,30 @@ function OAuthClientForm({
                 }}
               >
                 Remove
-              </button>
+              </SettingsButton>
             )}
-            <button type="submit" disabled={busy || !changed}>
-              {pending ? "Saving…" : "Save"}
-            </button>
-          </span>
+          </SettingsRow>
+          {confirmRemove && (
+            <SettingsActions
+              start={`Remove your organisation's ${name} app? Members' new sign-ins go through Oryxa's app again. Connections made through yours keep working until they're disconnected.`}
+            >
+              <SettingsButton
+                size="default"
+                disabled={remove.isPending}
+                onClick={() => setConfirmRemove(false)}
+              >
+                Cancel
+              </SettingsButton>
+              <SettingsButton
+                size="default"
+                tone="danger"
+                disabled={remove.isPending}
+                onClick={() => remove.mutate()}
+              >
+                {remove.isPending ? "Removing…" : "Remove app"}
+              </SettingsButton>
+            </SettingsActions>
+          )}
         </div>
       )}
     </form>
@@ -939,13 +945,9 @@ function VerificationToken({
           value={token}
           hint={`Shown once. Paste it into ${appName} now: it can't be shown again.`}
         />
-        <button
-          type="button"
-          className="workspace-settings-action justify-self-start"
-          onClick={() => setToken("")}
-        >
+        <SettingsButton type="button" onClick={() => setToken("")}>
           Done
-        </button>
+        </SettingsButton>
       </div>
     )
   }
@@ -962,51 +964,45 @@ function VerificationToken({
             Waiting for {appName} to send its verification token. Once the URL
             is in your {appName} app, {appName} sends it here.
           </p>
-          <button
-            type="button"
-            className="workspace-settings-action justify-self-start"
-            onClick={onRefresh}
-          >
+          <SettingsButton type="button" onClick={onRefresh}>
             Check again
-          </button>
+          </SettingsButton>
         </>
       ) : state === "ready" ? (
         confirming ? (
-          <div className="workspace-settings-confirm">
-            <p>
-              {appName}'s verification token is shown only once. Have your{" "}
-              {appName} app's webhook settings open to paste it straight in.
-            </p>
-            <button
-              type="button"
+          <SettingsActions
+            start={`${appName}'s verification token is shown only once. Have your ${appName} app's webhook settings open to paste it straight in.`}
+          >
+            <SettingsButton
+              size="default"
               disabled={pending}
               onClick={() => setConfirming(false)}
             >
               Cancel
-            </button>
-            <button
-              type="button"
+            </SettingsButton>
+            <SettingsButton
+              size="default"
+              tone="primary"
               disabled={pending}
               onClick={() => void reveal()}
             >
               {pending ? "Revealing…" : "Reveal once"}
-            </button>
-          </div>
+            </SettingsButton>
+          </SettingsActions>
         ) : (
           <>
             <p className="workspace-settings-hint">
               {appName} sent its verification token.
             </p>
-            <button
+            <SettingsButton
               type="button"
-              className="workspace-settings-action justify-self-start"
               onClick={() => {
                 setProblem("")
                 setConfirming(true)
               }}
             >
               Reveal token
-            </button>
+            </SettingsButton>
           </>
         )
       ) : (
@@ -1061,15 +1057,14 @@ function CopyField({
           aria-describedby={hint ? `${id}-hint` : undefined}
           onFocus={(event) => event.currentTarget.select()}
         />
-        <button
+        <SettingsButton
           type="button"
-          className="workspace-settings-action"
           aria-label={`Copy ${label}`}
           onClick={() => void copy()}
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
           {copied ? "Copied" : "Copy"}
-        </button>
+        </SettingsButton>
       </div>
       {hint && (
         <p className="workspace-settings-hint mt-0!" id={`${id}-hint`}>

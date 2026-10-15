@@ -413,7 +413,7 @@ describe("AgentChat", () => {
     renderChat()
     await waitFor(() => expect(hooks.agentOptions.length).toBeGreaterThan(0))
     open("org_1~th_1")
-    const row = () => document.querySelector(".workspace-agent-tools")
+    const row = () => document.querySelector(".agent-run-step")
     expect(row()?.getAttribute("data-state")).toBe("running")
 
     fireEvent.click(screen.getByRole("button", { name: "Stop response" }))
@@ -428,7 +428,7 @@ describe("AgentChat", () => {
       { type: "message", id: "ev_1", author: "member", text: "Look it up" },
       { type: "tool_call", id: "ev_2", call_id: "c1", tool: "web_search" },
     ]
-    const row = () => document.querySelector(".workspace-agent-tools")
+    const row = () => document.querySelector(".agent-run-step")
     const state = () => row()?.getAttribute("data-state")
     const settle = (ms: number) =>
       act(() => {
@@ -521,7 +521,7 @@ describe("AgentChat", () => {
         { type: "tool_call", id: "ev_4", call_id: "c2", tool: "read_file" },
       ])
       updateChat({ status: "streaming" })
-      const rows = document.querySelectorAll(".workspace-agent-tools")
+      const rows = document.querySelectorAll(".agent-run-step")
       expect(rows).toHaveLength(2)
       expect(rows[0].getAttribute("data-state")).toBe("interrupted")
       expect(rows[1].getAttribute("data-state")).toBe("running")
@@ -1446,9 +1446,9 @@ describe("WorkspaceAgentPanel", () => {
       await screen.findByRole("textbox", { name: "Message Leo" })
     ).toBeTruthy()
     expect(screen.queryByRole("group", { name: "Switch agent" })).toBeNull()
-    expect(
-      within(screen.getByRole("tab", { name: "Agents" })).getByLabelText("Leo")
-    ).toBeTruthy()
+    // The panel's header and its first view are named for the agent.
+    expect(screen.getByRole("tab", { name: "Leo" })).toBeTruthy()
+    expect(screen.getByText("Only you")).toBeTruthy()
   })
 })
 

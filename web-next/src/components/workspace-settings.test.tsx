@@ -167,11 +167,9 @@ describe("WorkspaceSettings", () => {
     expect(
       screen.getByRole("heading", { level: 2, name: "Account" })
     ).toBeTruthy()
-    fireEvent.click(
-      screen.getByRole("button", { name: "People & invitations" })
-    )
+    fireEvent.click(screen.getByRole("button", { name: "People" }))
     expect(
-      screen.getByRole("heading", { level: 2, name: "People & invitations" })
+      screen.getByRole("heading", { level: 2, name: "People" })
     ).toBeTruthy()
   })
 })
