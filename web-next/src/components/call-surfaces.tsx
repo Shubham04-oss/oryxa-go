@@ -15,18 +15,19 @@ import {
   MonitorUp,
   PhoneOff,
   ScrollText,
+  Settings2,
   Sparkles,
   Video,
   VideoOff,
   X,
 } from "lucide-react"
 import { roomKey, useCall } from "./call-provider"
-import type { ActiveCall } from "./call-provider"
+import type { ActiveCall, EndedCall } from "./call-provider"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { agentIdentity, personIdentity } from "./teamspace-format"
 import { callDuration, whoIsIn } from "@/lib/call/client"
 import type { CallView } from "@/lib/call/client"
-import type { CallTile } from "@/lib/call/media"
+import type { CallDevices, CallTile, DeviceKind } from "@/lib/call/media"
 import { useRoomCall } from "@/lib/call/use-room-call"
 import type { LiveRoom } from "@/lib/live/client"
 import "./call.css"
@@ -430,10 +431,14 @@ export function ParleyStrip({
 /** The member's parley, wherever they are: the mini player or the full page. */
 export function CallSurface() {
   const call = useCall()
-  const { active } = call
+  const { active, ended } = call
+  // Every hook runs on every render; only then does the surface choose.
   const { call: view } = useRoomCall(active?.organizationId, active?.room, {
     enabled: active?.phase === "in",
   })
+  if (!active && ended) {
+    return <CallEnded ended={ended} onDone={call.dismissEnded} />
+  }
   if (!active) return null
   if (active.phase === "failed") return null
   if (active.expanded && active.phase === "in") {
@@ -442,6 +447,106 @@ export function CallSurface() {
   if (call.roomOnScreen === roomKey(active.organizationId, active.room))
     return null
   return <CallMiniPlayer active={active} view={view} />
+}
+
+function minutesBetween(
+  from: string | undefined,
+  to: string
+): string | undefined {
+  if (!from) return undefined
+  const minutes = Math.round((Date.parse(to) - Date.parse(from)) / 60_000)
+  if (!Number.isFinite(minutes) || minutes < 0) return undefined
+  return minutes < 1 ? "under a minute" : `${minutes} min`
+}
+
+/**
+ * A parley just ended (founder's redesign, "Parley ended" on the pop-ups
+ * board): a slight sea scene, how long it ran and who was in it, and what was
+ * kept. The agent's notes from it arrive with an API for them.
+ */
+function CallEnded({
+  ended,
+  onDone,
+}: {
+  ended: EndedCall
+  onDone: () => void
+}) {
+  const done = useRef<HTMLButtonElement>(null)
+  const dialog = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    // Focus moves into the dialog, stays there, and goes back where it was.
+    const before =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null
+    done.current?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onDone()
+        return
+      }
+      if (event.key !== "Tab" || !dialog.current) return
+      const focusable = [
+        ...dialog.current.querySelectorAll<HTMLElement>(
+          "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
+        ),
+      ].filter((element) => !element.hasAttribute("disabled"))
+      const first = focusable.at(0)
+      const last = focusable.at(-1)
+      if (!first || !last) return
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => {
+      window.removeEventListener("keydown", onKey)
+      if (before?.isConnected) before.focus()
+    }
+  }, [onDone])
+  const length = minutesBetween(ended.startedAt, ended.endedAt)
+  const facts = [
+    length,
+    `${ended.people} ${ended.people === 1 ? "person" : "people"}`,
+  ].filter(Boolean)
+  return (
+    <div className="call-ended-backdrop">
+      <div
+        ref={dialog}
+        className="call-ended"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="call-ended-title"
+      >
+        <div className="call-ended-scene" aria-hidden="true" />
+        <div className="call-ended-body">
+          <h2 id="call-ended-title">Parley ended</h2>
+          <p className="call-ended-facts">
+            {ended.roomName} · {facts.join(" · ")}
+          </p>
+          <p>
+            {ended.recorded
+              ? `The recording and transcript are kept with ${ended.roomName}. Only people in it can open them.`
+              : `The transcript is kept with ${ended.roomName}.`}
+          </p>
+          <div className="call-ended-actions">
+            <button
+              ref={done}
+              type="button"
+              className="call-join"
+              onClick={onDone}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function speakingMember(active: ActiveCall): string | undefined {
@@ -547,6 +652,97 @@ function CallMiniPlayer({
   )
 }
 
+/** The member's microphone, camera and speaker, while they're in the call. */
+function DevicePicker({ onClose }: { onClose: () => void }) {
+  const { devices, setDevice, onDevicesChange } = useCall()
+  const [list, setList] = useState<CallDevices | undefined>()
+  const [problem, setProblem] = useState("")
+
+  useEffect(() => {
+    let current = true
+    const read = () =>
+      void devices()
+        .then((found) => {
+          if (current) setList(found)
+        })
+        .catch(() => {
+          if (current) setProblem("Couldn't read your devices.")
+        })
+    read()
+    const stop = onDevicesChange(read)
+    return () => {
+      current = false
+      stop()
+    }
+  }, [devices, onDevicesChange])
+
+  const choose = (kind: DeviceKind, deviceId: string) => {
+    setProblem("")
+    void setDevice(kind, deviceId)
+      .then(() => devices().then(setList))
+      .catch(() => setProblem("Couldn't switch to that device."))
+  }
+
+  const groups: {
+    kind: DeviceKind
+    label: string
+    items: MediaDeviceInfo[]
+  }[] = list
+    ? [
+        { kind: "audioinput", label: "Microphone", items: list.microphones },
+        { kind: "videoinput", label: "Camera", items: list.cameras },
+        { kind: "audiooutput", label: "Speaker", items: list.speakers },
+      ]
+    : []
+
+  return (
+    <div className="call-devices" role="dialog" aria-label="Devices">
+      <div className="call-devices-head">
+        <strong>Devices</strong>
+        <button
+          type="button"
+          className="call-btn"
+          aria-label="Close devices"
+          onClick={onClose}
+        >
+          <X size={14} aria-hidden="true" />
+        </button>
+      </div>
+      {!list && !problem && (
+        <p className="call-devices-note">Reading your devices…</p>
+      )}
+      {groups.map((group) => (
+        <label key={group.kind} className="call-device">
+          <span>{group.label}</span>
+          {group.items.length === 0 ? (
+            <small>
+              {group.kind === "audiooutput"
+                ? "This browser plays through its default speaker."
+                : "None found."}
+            </small>
+          ) : (
+            <select
+              value={list?.current[group.kind] ?? ""}
+              onChange={(event) => choose(group.kind, event.target.value)}
+            >
+              {group.items.map((item, index) => (
+                <option key={item.deviceId || index} value={item.deviceId}>
+                  {item.label || `${group.label} ${index + 1}`}
+                </option>
+              ))}
+            </select>
+          )}
+        </label>
+      ))}
+      {problem && (
+        <p className="call-devices-note" role="alert">
+          {problem}
+        </p>
+      )}
+    </div>
+  )
+}
+
 /**
  * The room's conversation beside the call. The room's own page moves its
  * conversation in here while it's open (useRoomChatSlot), so there's only
@@ -606,6 +802,7 @@ function CallFullPage({
   } = useCall()
   const [layout, setLayout] = useState<Layout>("gallery")
   const [captions, setCaptions] = useState(true)
+  const [choosing, setChoosing] = useState(false)
   // The side pane: what's been said, the room's conversation, or neither.
   const [side, setSide] = useState<"transcript" | "room" | null>("transcript")
   const transcript = side === "transcript"
@@ -741,6 +938,7 @@ function CallFullPage({
             )}
           </section>
         )}
+        {choosing && <DevicePicker onClose={() => setChoosing(false)} />}
         {side === "room" && (
           <RoomChatPane
             room={roomKey(active.organizationId, active.room)}
@@ -835,6 +1033,15 @@ function CallFullPage({
             onClick={() => act(() => setAgent(!agent?.present))}
           >
             <Sparkles size={18} aria-hidden="true" />
+          </button>
+          <button
+            className="call-btn"
+            type="button"
+            aria-pressed={choosing}
+            aria-label="Devices"
+            onClick={() => setChoosing((value) => !value)}
+          >
+            <Settings2 size={16} aria-hidden="true" />
           </button>
           <button
             className="call-leave"

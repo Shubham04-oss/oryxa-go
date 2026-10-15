@@ -71,6 +71,14 @@ function view(overrides: Partial<CallView> = {}): CallView {
   }
 }
 
+function device(
+  deviceId: string,
+  kind: MediaDeviceKind,
+  label: string
+): MediaDeviceInfo {
+  return { deviceId, kind, label, groupId: "g", toJSON: () => ({}) }
+}
+
 function fakeMedia() {
   const tiles: CallTile[] = [
     {
@@ -104,6 +112,24 @@ function fakeMedia() {
     setCamera: vi.fn(async () => undefined),
     setScreen: vi.fn(async () => undefined),
     leave: vi.fn(async () => undefined),
+    devices: vi.fn(async () => ({
+      microphones: [
+        device("mic-1", "audioinput", "MacBook mic"),
+        device("mic-2", "audioinput", "AirPods"),
+      ],
+      cameras: [device("cam-1", "videoinput", "FaceTime camera")],
+      speakers: [
+        device("spk-1", "audiooutput", "MacBook speakers"),
+        device("default", "audiooutput", "Default speaker"),
+      ],
+      current: {
+        audioinput: "mic-1",
+        videoinput: "cam-1",
+        audiooutput: "spk-1",
+      },
+    })),
+    setDevice: vi.fn(async () => undefined),
+    onDevicesChange: () => () => undefined,
     say: (segment) => heard?.(segment),
   }
   return media
@@ -521,6 +547,120 @@ describe("a parley in a teamspace", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ name: "Ada Brennan" })
   })
 
+  it("says the parley ended, how long and who was in it, when someone else ends it", async () => {
+    const media = fakeMedia()
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    await screen.findByText(/^You're in the parley/)
+    // The view after joining is the one the summary remembers.
+    await waitFor(() => expect(requests(`${base}/call`)).not.toHaveLength(0))
+
+    socketFor("/voice/live")?.frame({
+      type: "voice.stop",
+      utteranceId: "u1",
+      reason: "call_ended",
+    })
+    const ended = await screen.findByRole("dialog", { name: "Parley ended" })
+    expect(within(ended).getByText(/EU launch · 1 min · 2 people/)).toBeTruthy()
+    expect(
+      within(ended).getByText(/transcript is kept with EU launch/)
+    ).toBeTruthy()
+    // Focus is on Done, and Tab keeps it inside the dialog.
+    const done = within(ended).getByRole("button", { name: "Done" })
+    expect(document.activeElement).toBe(done)
+    fireEvent.keyDown(window, { key: "Tab" })
+    expect(document.activeElement).toBe(done)
+    fireEvent.click(done)
+    expect(screen.queryByRole("dialog", { name: "Parley ended" })).toBeNull()
+  })
+
+  it("says so after ending it for everyone, but not after just leaving", async () => {
+    renderParley()
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    fireEvent.click(
+      within(page).getByRole("button", { name: /End for everyone/ })
+    )
+    expect(
+      await screen.findByRole("dialog", { name: "Parley ended" })
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Done" }))
+
+    const again = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(again).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Leave" }))
+    await waitFor(() => expect(requests("/call/leave", "POST")).toHaveLength(1))
+    expect(screen.queryByRole("dialog", { name: "Parley ended" })).toBeNull()
+  })
+  it("lets the member choose their microphone, camera and speaker", async () => {
+    const media = fakeMedia()
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    fireEvent.click(within(page).getByRole("button", { name: "Devices" }))
+
+    const picker = await within(page).findByRole("dialog", { name: "Devices" })
+    const microphone = await within(picker).findByRole("combobox", {
+      name: "Microphone",
+    })
+    expect(within(picker).getByDisplayValue("MacBook mic")).toBe(microphone)
+    expect(
+      within(picker).getByRole("combobox", { name: "Camera" })
+    ).toBeTruthy()
+    expect(
+      within(picker).getByRole("combobox", { name: "Speaker" })
+    ).toBeTruthy()
+
+    fireEvent.change(microphone, { target: { value: "mic-2" } })
+    await waitFor(() =>
+      expect(media.setDevice).toHaveBeenCalledWith("audioinput", "mic-2")
+    )
+
+    // The speaker called "default" is chosen as a speaker, never as a mic.
+    fireEvent.change(
+      within(picker).getByRole("combobox", { name: "Speaker" }),
+      {
+        target: { value: "default" },
+      }
+    )
+    await waitFor(() =>
+      expect(media.setDevice).toHaveBeenCalledWith("audiooutput", "default")
+    )
+
+    // Captions arriving don't make the picker read the devices again.
+    const reads = vi.mocked(media.devices).mock.calls.length
+    media.say({
+      id: "c1",
+      member: "usr_raya",
+      name: "Raya Patel",
+      text: "Hi",
+      partial: false,
+      at: 1,
+    })
+    media.say({
+      id: "c2",
+      member: "usr_raya",
+      name: "Raya Patel",
+      text: "Hi all",
+      partial: false,
+      at: 2,
+    })
+    await screen.findAllByText("Hi all")
+    expect(vi.mocked(media.devices).mock.calls.length).toBe(reads)
+  })
   it("shows the room's conversation beside the call, moved from the room's page", async () => {
     renderParley()
     const strip = await screen.findByRole("region", {
