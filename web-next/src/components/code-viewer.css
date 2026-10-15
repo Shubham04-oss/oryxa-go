@@ -1,0 +1,78 @@
+/* A code file (code-viewer.tsx): numbered lines and light highlighting in
+   the theme's code colours (--code-* in theme.css). */
+.code-viewer {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.code-scroll {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 20px;
+}
+.code-lines {
+  position: sticky;
+  left: 0;
+  flex: none;
+  margin: 0;
+  padding: 12px 12px 12px 16px;
+  background: var(--base);
+  color: var(--text-muted);
+  list-style: none;
+  text-align: right;
+  user-select: none;
+}
+.code-text {
+  flex: 1;
+  margin: 0;
+  padding: 12px 16px 12px 4px;
+  color: var(--text);
+  tab-size: 2;
+  white-space: pre;
+}
+.code-viewer[data-wrap="true"] .code-text {
+  padding-left: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.code-text .hljs-keyword,
+.code-text .hljs-built_in,
+.code-text .hljs-literal,
+.code-text .hljs-meta,
+.code-text .hljs-selector-tag {
+  color: var(--code-keyword);
+}
+.code-text .hljs-string,
+.code-text .hljs-regexp,
+.code-text .hljs-addition {
+  color: var(--code-string);
+}
+.code-text .hljs-number,
+.code-text .hljs-symbol {
+  color: var(--code-number);
+}
+.code-text .hljs-comment,
+.code-text .hljs-quote,
+.code-text .hljs-deletion {
+  color: var(--code-comment);
+  font-style: italic;
+}
+.code-text .hljs-title,
+.code-text .hljs-section,
+.code-text .hljs-name {
+  color: var(--code-title);
+}
+.code-text .hljs-attr,
+.code-text .hljs-attribute,
+.code-text .hljs-variable,
+.code-text .hljs-property,
+.code-text .hljs-type {
+  color: var(--code-attr);
+}

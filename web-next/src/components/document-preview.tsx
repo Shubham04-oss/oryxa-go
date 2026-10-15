@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react"
 import type { PresentationData } from "@office-kit/pptx"
 import Papa from "papaparse"
 import { AgentMarkdown } from "./agent-timeline"
+import { CodeViewer, codeExtensions } from "./code-viewer"
+import { ImageViewer, MediaPlayer } from "./media-viewer"
 import { PdfViewer } from "./pdf-viewer"
 import { SheetViewer } from "./sheet-viewer"
 import type { Sheet } from "./sheet-viewer"
@@ -32,6 +34,9 @@ const loadExcel = () =>
 
 type PreviewKind =
   | "image"
+  | "video"
+  | "audio"
+  | "code"
   | "pdf"
   | "docx"
   | "pptx"
@@ -41,15 +46,37 @@ type PreviewKind =
   | "text"
   | "unsupported"
 
+// An SVG shows as its source (code), so what it draws is never fetched.
+const imageExtensions = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif"])
+const videoExtensions = new Set(["mp4", "m4v", "mov", "webm"])
+const audioExtensions = new Set([
+  "mp3",
+  "m4a",
+  "wav",
+  "ogg",
+  "oga",
+  "aac",
+  "flac",
+])
+
 export function previewKind(name: string, contentType: string): PreviewKind {
-  const extension = name.split(".").at(-1)?.toLowerCase()
-  if (/^image\/(png|jpeg|gif|webp|avif)\b/i.test(contentType)) return "image"
+  const extension = name.split(".").at(-1)?.toLowerCase() ?? ""
+  if (
+    /^image\/(png|jpeg|gif|webp|avif)\b/i.test(contentType) ||
+    imageExtensions.has(extension)
+  )
+    return "image"
+  if (/^video\//i.test(contentType) || videoExtensions.has(extension))
+    return "video"
+  if (/^audio\//i.test(contentType) || audioExtensions.has(extension))
+    return "audio"
   if (extension === "pdf") return "pdf"
   if (extension === "docx") return "docx"
   if (extension === "pptx" || extension === "ppsx") return "pptx"
   if (extension === "xlsx" || extension === "xlsm") return "xlsx"
   if (extension === "csv") return "csv"
   if (extension === "md" || extension === "markdown") return "markdown"
+  if (codeExtensions.has(extension)) return "code"
   if (extension === "txt" || /^text\/plain\b/i.test(contentType)) return "text"
   return "unsupported"
 }
@@ -369,7 +396,11 @@ export function DocumentPreview({
   const kind = previewKind(name, contentType)
   const fetched = useFileBytes(
     url,
-    text === undefined && kind !== "image" && kind !== "unsupported"
+    text === undefined &&
+      kind !== "image" &&
+      kind !== "video" &&
+      kind !== "audio" &&
+      kind !== "unsupported"
   )
   const held = useMemo(
     () =>
@@ -378,11 +409,15 @@ export function DocumentPreview({
   )
   const bytes = held ?? fetched.bytes
   const error = held ? undefined : fetched.error
-  if (kind === "image")
+  if (kind === "image") return <ImageViewer url={url} name={name} />
+  if (kind === "video" || kind === "audio")
     return (
-      <div className="workspace-document-scroll workspace-document-image">
-        <img src={url} alt={name} />
-      </div>
+      <MediaPlayer
+        url={url}
+        name={name}
+        kind={kind}
+        contentType={contentType}
+      />
     )
   if (kind === "unsupported")
     return (
@@ -397,6 +432,7 @@ export function DocumentPreview({
   if (kind === "pptx") return <PptxPreview bytes={bytes} />
   if (kind === "xlsx") return <SpreadsheetPreview bytes={bytes} />
   const decoded = new TextDecoder().decode(bytes)
+  if (kind === "code") return <CodeViewer text={decoded} name={name} />
   if (kind === "markdown")
     return (
       <article className="workspace-document-scroll workspace-document-prose">

@@ -1,0 +1,42 @@
+/* Images, video and audio (media-viewer.tsx). */
+.media-viewer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.media-stage {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  overflow: auto;
+}
+.media-stage > img,
+.media-stage > video,
+.media-stage > audio {
+  margin: auto;
+}
+.media-stage[data-fit="true"] > img,
+.media-stage > video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.media-stage > video {
+  border-radius: 8px;
+  background: var(--media-ground);
+}
+.media-stage > audio {
+  width: min(100%, 560px);
+}
+.media-count {
+  min-width: 44px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}

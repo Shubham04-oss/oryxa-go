@@ -252,7 +252,16 @@ not permission to copy every incidental value into a new component.
   tile) with "N sheets" in the bar. It is read-only. A presentation
   (`slides-viewer.tsx`) is the slide on a stage, its speaker notes under it
   when it has any, and a filmstrip of every slide, with previous and next
-  and "n / N" in the bar; the arrow keys move between slides. A Library file opens
+  and "n / N" in the bar; the arrow keys move between slides. An image
+  (`media-viewer.tsx`) fits the frame by default and zooms in steps from
+  there (− / % / + and Fit). Video and audio use the browser's own player,
+  with speed and, for video, full screen in the bar; a file the browser
+  can't play says so in one line and leaves it to Download, never a broken
+  player. A code file (`code-viewer.tsx`; JS/TS, Python, Go, Rust, Java,
+  Ruby, JSON, YAML, SQL, shell, HTML/XML/SVG and CSS) has numbered lines,
+  light highlighting from a pinned highlight.js core loaded only when code
+  opens (its colours are the `--code-*` tokens), and Wrap and Copy in the
+  bar. HTML and SVG show as their source and never run. A Library file opens
   over the whole Library page: an uploaded file from files, a connected
   app's document as the text knowledge keeps. A note or a link says
   plainly that its text isn't kept for reading, since rag gives none back. A file's kind is a small coloured tile with

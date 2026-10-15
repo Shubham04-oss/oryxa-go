@@ -254,6 +254,15 @@
   --paper: #ffffff;
   --viewer-highlight: #ffd54a73;
   --viewer-highlight-current: #ff9f1aa6;
+  /* Behind a video's picture, black in both themes, as a screen is. */
+  --media-ground: #000000;
+  /* Code's colours (code-viewer.tsx), legible on the base in both themes. */
+  --code-keyword: #c678dd;
+  --code-string: #3f9d63;
+  --code-number: #d19a66;
+  --code-comment: #8a8a8a;
+  --code-title: #5b8fd6;
+  --code-attr: #2f8f8a;
   /* A sandbox's terminal stays dark in both themes, as a shell does. */
   --terminal-bg: #0d0d0d;
   --terminal-fg: #e6e6e6;
