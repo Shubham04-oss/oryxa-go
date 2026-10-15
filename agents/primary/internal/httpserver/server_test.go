@@ -52,6 +52,7 @@ type fakeThreads struct {
 	run           *fakeRun
 	createOrigins []string
 	listOrigins   []string
+	titles        []string
 	edited        []byte
 	// fileReads and versionReads count the reads of a file's bytes and of
 	// only its version, which the document editor's routes tell apart.
@@ -119,6 +120,18 @@ func (service *fakeThreads) Delete(_ context.Context, member threads.Member, thr
 		return threads.ErrNotFound
 	}
 	return service.err
+}
+
+func (service *fakeThreads) Rename(_ context.Context, member threads.Member, threadID, title string) (threads.Thread, error) {
+	service.members = append(service.members, member)
+	service.titles = append(service.titles, title)
+	if threadID != "thread_1" {
+		return threads.Thread{}, threads.ErrNotFound
+	}
+	if service.err != nil {
+		return threads.Thread{}, service.err
+	}
+	return threads.Thread{ID: threadID, Title: strings.TrimSpace(title), Origin: threads.OriginChat}, nil
 }
 
 func (service *fakeThreads) StartRun(_ context.Context, member threads.Member, _ string, input threads.RunInput) (Run, error) {
@@ -714,7 +727,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 77 {
+	if len(patterns) != 78 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -917,6 +930,7 @@ func TestEveryThreadRouteWantsAMember(t *testing.T) {
 		{http.MethodGet, "/v1/organizations/org_1/threads"},
 		{http.MethodPost, "/v1/organizations/org_1/threads"},
 		{http.MethodGet, "/v1/organizations/org_1/threads/thread_1"},
+		{http.MethodPatch, "/v1/organizations/org_1/threads/thread_1"},
 		{http.MethodDelete, "/v1/organizations/org_1/threads/thread_1"},
 		{http.MethodPost, "/v1/organizations/org_1/threads/thread_1/runs"},
 	} {
@@ -1158,6 +1172,33 @@ func TestThreadsAreCreatedListedReadAndDeleted(t *testing.T) {
 	for _, seen := range service.members {
 		if seen.UserID != "user_1" || seen.OrganizationID != "org_1" || seen.AccessToken != "member-token" {
 			t.Fatalf("member = %+v", seen)
+		}
+	}
+}
+
+func TestAThreadIsRenamed(t *testing.T) {
+	service := &fakeThreads{}
+	server := newTestServer(member(), service)
+	renamed := serve(server, http.MethodPatch, "/v1/organizations/org_1/threads/thread_1", `{"title":" Launch plan "}`, bearer)
+	if renamed.Code != http.StatusOK || !strings.Contains(renamed.Body.String(), `{"id":"thread_1","title":"Launch plan"`) {
+		t.Fatalf("rename = %d %s", renamed.Code, renamed.Body.String())
+	}
+	if len(service.titles) != 1 || service.titles[0] != " Launch plan " {
+		t.Fatalf("titles = %q, want the title passed to the service as sent", service.titles)
+	}
+	if refused := serve(server, http.MethodPatch, "/v1/organizations/org_1/threads/thread_1", `{"name":"x"}`, bearer); refused.Code != http.StatusBadRequest {
+		t.Fatalf("rename with an unknown field = %d, want 400", refused.Code)
+	}
+	if missing := serve(server, http.MethodPatch, "/v1/organizations/org_1/threads/other", `{"title":"x"}`, bearer); missing.Code != http.StatusNotFound {
+		t.Fatalf("rename another = %d, want 404", missing.Code)
+	}
+	for err, want := range map[error]int{
+		fmt.Errorf("%w: a title needs at least one character", threads.ErrInvalid): http.StatusBadRequest,
+		threads.ErrRunInProgress: http.StatusConflict,
+	} {
+		service.err = err
+		if got := serve(server, http.MethodPatch, "/v1/organizations/org_1/threads/thread_1", `{"title":""}`, bearer); got.Code != want {
+			t.Errorf("rename failing with %v = %d %s, want %d", err, got.Code, got.Body.String(), want)
 		}
 	}
 }

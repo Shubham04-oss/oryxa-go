@@ -57,6 +57,7 @@ type Threads interface {
 	List(ctx context.Context, member threads.Member, origin string) ([]threads.Thread, error)
 	Get(ctx context.Context, member threads.Member, threadID string) (threads.Detail, error)
 	Delete(ctx context.Context, member threads.Member, threadID string) error
+	Rename(ctx context.Context, member threads.Member, threadID, title string) (threads.Thread, error)
 	StartRun(ctx context.Context, member threads.Member, threadID string, input threads.RunInput) (Run, error)
 	Artifact(ctx context.Context, member threads.Member, threadID, name string, version int64) (threads.File, error)
 	// ArtifactVersion is the version a file is at now, read without the file.
@@ -344,6 +345,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/threads", server.listThreads)
 	server.handle("POST /v1/organizations/{organizationID}/threads", server.createThread)
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}", server.getThread)
+	server.handle("PATCH /v1/organizations/{organizationID}/threads/{threadID}", server.renameThread)
 	server.handle("DELETE /v1/organizations/{organizationID}/threads/{threadID}", server.deleteThread)
 	server.handle("POST /v1/organizations/{organizationID}/threads/{threadID}/runs", server.run)
 	server.handle("POST /v1/organizations/{organizationID}/runs/{runID}/stop", server.stopRun)
@@ -1600,6 +1602,27 @@ func (server *Server) getThread(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	writeJSON(writer, http.StatusOK, detail)
+}
+
+// renameThread gives one of the member's threads a title of their own. The
+// title's rules are the service's, so an empty or overlong one is its 400.
+func (server *Server) renameThread(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if !server.decode(writer, request, &body) {
+		return
+	}
+	renamed, err := server.threads.Rename(request.Context(), member, request.PathValue("threadID"), body.Title)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, renamed)
 }
 
 func (server *Server) deleteThread(writer http.ResponseWriter, request *http.Request) {
