@@ -355,9 +355,6 @@ func (service *Service) startRun(ctx context.Context, member threads.Member, id,
 	return StartedRun{ThreadID: threadID, Run: started}, nil
 }
 
-// DeleteThread removes one known persistent agent conversation. It addresses
-// the session by the agent's stable id instead of loading its definition, so
-// cleanup still works after a specialist itself was deleted.
 // RenameThread gives one of this member's conversations with a specialist a
 // title of their own, by the same rules and in the same ownership boundary as
 // the primary agent's threads (threads.Service.Rename).
@@ -374,6 +371,9 @@ func (service *Service) RenameThread(ctx context.Context, member threads.Member,
 	return engine.Rename(ctx, member, threadID, title)
 }
 
+// DeleteThread removes one known persistent agent conversation. It addresses
+// the session by the agent's stable id instead of loading its definition, so
+// cleanup still works after a specialist itself was deleted.
 func (service *Service) DeleteThread(ctx context.Context, member threads.Member, id, threadID string) error {
 	if strings.TrimSpace(id) == "" || strings.TrimSpace(threadID) == "" {
 		return threads.ErrNotFound

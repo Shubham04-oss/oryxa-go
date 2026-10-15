@@ -404,9 +404,21 @@ func TestASpecialistsConversationIsRenamedInItsOwnEngine(t *testing.T) {
 	if err != nil || len(listed) != 1 || listed[0].Title != "Q3 review" {
 		t.Fatalf("ListThreads() = %+v, %v", listed, err)
 	}
+	// Another member does not find the specialist, so never reaches its
+	// conversations.
 	someoneElse := threads.Member{OrganizationID: "org_1", UserID: "user_2"}
-	if _, err := service.RenameThread(ctx, someoneElse, repo.primary.ID, created.ID, "Mine"); err == nil {
-		t.Fatal("another member renamed the conversation")
+	if _, err := service.RenameThread(ctx, someoneElse, repo.primary.ID, created.ID, "Mine"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another member's rename = %v, want ErrNotFound", err)
+	}
+	// A conversation the member does not own is not found in the engine, even
+	// when the specialist is theirs.
+	stranger := threads.Member{OrganizationID: "org_1", UserID: "user_2"}
+	strangers, err := engine.Create(ctx, stranger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RenameThread(ctx, member, repo.primary.ID, strangers.ID, "Mine"); !errors.Is(err, threads.ErrNotFound) {
+		t.Fatalf("a rename of another member's conversation = %v, want threads.ErrNotFound", err)
 	}
 	if _, err := service.RenameThread(ctx, member, repo.primary.ID, created.ID, " "); !errors.Is(err, threads.ErrInvalid) {
 		t.Fatalf("a blank title = %v, want ErrInvalid", err)

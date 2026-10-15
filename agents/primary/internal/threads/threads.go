@@ -414,7 +414,9 @@ const renameInvocation = "oryxa-rename"
 // Rename gives one of the member's threads a title of their own, in place of
 // the one taken from its first message. The title is trimmed, its spaces
 // collapsed as a created thread's are, and must then hold 1 to maxTitleRunes
-// characters: a longer one is refused rather than cut.
+// characters: a longer one is refused rather than cut. The Requests thread
+// keeps RequestsTitle: it is Oryxa's, and notes are written to it without the
+// hold below, so a rename of it is refused (ErrInvalid).
 //
 // The title is the thread's state, so it is written as ADK writes state: an
 // event of a state change alone, by the member, which shows nothing in the
@@ -423,6 +425,10 @@ const renameInvocation = "oryxa-rename"
 // would fail; the rename holds the thread the way a run does while it writes,
 // and answers ErrRunInProgress while a run is answering it. The hold is
 // released without a trace: no run is recorded, and no event published.
+//
+// The rename is a write to the thread like any other, so it moves the
+// thread's updated_at and with it the thread to the top of List: the member
+// has just touched it.
 func (service *Service) Rename(ctx context.Context, member Member, threadID, title string) (Thread, error) {
 	title = strings.Join(strings.Fields(title), " ")
 	switch count := utf8.RuneCountInString(title); {
@@ -430,6 +436,9 @@ func (service *Service) Rename(ctx context.Context, member Member, threadID, tit
 		return Thread{}, fmt.Errorf("%w: a title needs at least one character", ErrInvalid)
 	case count > maxTitleRunes:
 		return Thread{}, fmt.Errorf("%w: a title holds at most %d characters", ErrInvalid, maxTitleRunes)
+	}
+	if threadID == RequestsThreadID(member.OrganizationID) {
+		return Thread{}, fmt.Errorf("%w: the Requests thread keeps its title", ErrInvalid)
 	}
 	// The thread must be the member's before the rename holds it, as before
 	// a run does.

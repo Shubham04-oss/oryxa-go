@@ -1579,6 +1579,10 @@ func TestAMemberRenamesTheirThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.run(asha, created.ID, RunInput{Message: "Say hello"})
+	newer, err := h.service.Create(ctx, asha)
+	if err != nil {
+		t.Fatal(err)
+	}
 	before := len(h.runs.started)
 
 	renamed, err := h.service.Rename(ctx, asha, created.ID, "  Launch \n plan  ")
@@ -1587,6 +1591,10 @@ func TestAMemberRenamesTheirThread(t *testing.T) {
 	}
 	if renamed.ID != created.ID || renamed.Title != "Launch plan" {
 		t.Fatalf("renamed = %+v, want the trimmed title", renamed)
+	}
+	// A rename is a write: it moves updated_at, as a run does.
+	if !renamed.UpdatedAt.After(newer.UpdatedAt) {
+		t.Fatalf("renamed.UpdatedAt = %v, want after %v", renamed.UpdatedAt, newer.UpdatedAt)
 	}
 	// The rename held the thread as a run does, then let it go unrecorded.
 	if len(h.runs.started) != before+1 || h.runs.started[before].SessionID != created.ID {
@@ -1610,8 +1618,9 @@ func TestAMemberRenamesTheirThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed) != 1 || listed[0].Title != "Launch plan" {
-		t.Fatalf("listed = %+v", listed)
+	// So the renamed thread comes first, above the one made after it.
+	if len(listed) != 2 || listed[0].ID != created.ID || listed[0].Title != "Launch plan" || listed[1].ID != newer.ID {
+		t.Fatalf("listed = %+v, want the renamed thread first", listed)
 	}
 
 	// The next message neither retitles the thread nor reads the rename.
@@ -1647,6 +1656,18 @@ func TestARenameIsRefusedWhenItCannotBeKept(t *testing.T) {
 	elsewhere := Member{UserID: asha.UserID, OrganizationID: "org_2"}
 	if _, err := h.service.Rename(ctx, elsewhere, created.ID, "Elsewhere"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a rename from another organization = %v, want ErrNotFound", err)
+	}
+
+	// The Requests thread is Oryxa's, and keeps its title.
+	if err := h.service.Note(ctx, asha, askedNote("irq_1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.service.Rename(ctx, asha, RequestsThreadID(asha.OrganizationID), "My inbox"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a rename of the Requests thread = %v, want ErrInvalid", err)
+	}
+	requests, err := h.service.Get(ctx, asha, RequestsThreadID(asha.OrganizationID))
+	if err != nil || requests.Title != RequestsTitle {
+		t.Errorf("Requests thread = %+v, %v, want its title kept", requests.Thread, err)
 	}
 
 	h.runs.startErr = runstore.ErrRunInProgress
