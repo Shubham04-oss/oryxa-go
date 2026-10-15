@@ -168,7 +168,7 @@ describe("Requests in the workspace shell", () => {
     async (target) => {
       renderShell({ mode: "home" })
       const teammates = await screen.findByRole("region", {
-        name: "Teammates",
+        name: "Needs you",
       })
       fireEvent.click(
         await within(teammates).findByRole("button", {

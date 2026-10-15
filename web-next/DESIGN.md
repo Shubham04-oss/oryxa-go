@@ -214,56 +214,92 @@ not permission to copy every incidental value into a new component.
 
 ## 3. Focused work and content pages
 
-- **Home — My workspace** (was Today; founder's redesign, 14 Oct 2026).
-  Home is the member's desk: what their apps said, who needs them, a place to
-  ask, and their own stack. Start with both rails collapsed and preserve the
-  member's explicit toggle choices on return. One calm centered column at
-  most 760px wide, under a faint band of the sea-of-bottles scene that fades
-  out before the content (no text on it). In order: a greeting by the
-  member's clock and first name ("Good afternoon, Ada"; no name when only an
-  email is known) with one line saying how many things need them, only when
-  something does; Teammates (what needs them) as one tile; the composer and
-  their tools; then **Pick up where you left off**, a row of cards that
-  scrolls sideways (snapping, the next card faded at the edge): From your
-  apps, Conversations, Knowledge, Files and Recurring work. Inside a card or
-  tile, rows stay plain (a 26px mark, a 13px line clamped to two lines, an
-  11px quiet line) with a hover tint. No starter prompts.
-  - **From your apps** (top left): at most four briefs, newest first. A brief
+- **Home — My workspace** (founder's redesign, centred, 15 Oct 2026; board
+  WorkspaceV3). Home is the member's desk: one centred column on an axis,
+  symmetric and decluttered, under a faint band of the sea-of-bottles scene
+  that fades out before the content (no text on it). Start with both rails
+  collapsed (Krude's panel too) and preserve the member's explicit toggle
+  choices on return. The column is at most 720px wide. Top to bottom:
+  - **The live parley pill** (`home-live-pill.tsx`), only while a parley is
+    live: the member's own parley ("You're in a parley in X", Open), else the
+    first of their open teamspaces with a call running ("Parley in X · 18
+    min", up to three faces, Join opening that teamspace). Each teamspace the
+    member is on is read once a minute with `readCall`, at most eight, with
+    no log socket, until an org-wide live list exists (#322). With nothing
+    live there is no pill.
+  - **The greeting** by the member's clock and first name ("Good afternoon,
+    Ada"; no name when only an email is known), centred, with one line: how
+    many things need them, then how many asks Krude decided for them today
+    (inbox decisions with `decided_by.kind === "agent"`), and nothing when
+    neither is true.
+  - **The composer**, a large pill (60px, the page's only shadow) that asks
+    Krude. It always starts a **new** chat in the right panel through the
+    authenticated chat-choice queue, keeping Home as its screen context;
+    drafts and recoverable unsent messages are kept.
+  - **Suggestions** under it, as outline chips (the founder's starter chips
+    replace the old "no starter prompts" rule): "What needs me today?", and
+    "Catch me up on <app>" for the member's first active app connection.
+    Each asks at once in a new chat. A suggestion is drawn only from what the
+    member really has; never a made-up teammate, file or channel.
+  - **Two equal tiles** side by side (one column on a phone): **Needs you**
+    and **While you were away**, both filled `--base` tiles.
+  - **Pick up where you left off** (`home-pickup.tsx`): four equal cards, the
+    member's most recent work across the files Krude saved in the chats
+    already read for confirmations, their titled chats and their Library
+    collections, newest first, a running chat leading. A card is a
+    thumbnail (the file's kind badge, a chat or Library mark, or the Thinking
+    Orb while it works) over a name and a quiet line. New chat, All
+    conversations and Library sit in its header. Fewer cards leave the row
+    short; none says what lands there in one line.
+  Inside a tile, rows stay plain (a 26px mark, a 13px line clamped to two
+  lines, an 11px quiet line) with a hover tint. Every action is `ui/button`:
+  row actions `outline` `sm`, header actions `ghost` `sm`, inline links
+  `link` `sm`, suggestion chips `outline` `sm` (§1, Buttons and action rows).
+  - **While you were away** (At a glance: **From your apps**): at most three
+    briefs on the page (four at a glance), newest first. A brief
     is the first sentence of what Krude told the member in their wake-up
     thread (`origin: "wakeup"`, "Updates from your apps") after a batch of
     app events; its mark is the first app's logo on the white logo tile and
     its quiet line names the apps (as the batch's `1. github · …` lines do)
     and how long ago. A row and **All updates** open that thread. Krude's
-    words are the source; Today never rewrites or invents a brief.
-  - **Teammates** (top right): who needs the member, one row each. An Inbox
+    words are the source; Today never rewrites or invents a brief. It is
+    never a bare title: with no app connected it says "Connect an app to see
+    what happened while you were away." with Connect your tools; with apps
+    and no briefs, "Nothing new from your apps."; and when the chats or the
+    wake-up thread can't be read, "Updates from your apps can't be loaded
+    right now." Every read's loading and error line on Home is its own
+    sentence naming the area ("Requests can't be loaded right now."), never
+    a resource name dropped into a template.
+  - A Pick up card is one button named for what it opens ("Open Product
+    docs"), its quiet line the description; the thumbnail is decoration.
+  - **Needs you** (was Teammates), with a count beside the heading on the
+    page: who needs the member, one row each. An Inbox
     decision or held answer that waits on them shows the asker's avatar,
     first name and task, a quiet line (Waiting for your OK, Your agent's
     answer is held for you, or Needs your own reply · Slack or Oryxa · ago)
     and one action, Decide, Review or Reply, which opens that exact request
     in Requests, where the request card's choices, race handling and Reply
-    yourself live. At most four; the rest are counted. The same column lists
-    the member's own agent waiting on a tool confirmation (Open goes to that
-    chat) and open access windows, with End access only where the server
+    yourself live. At most four; the rest are counted. The same tile
+    lists the member's own agent waiting on a tool confirmation (Open goes to
+    that chat) and open access windows, with End access only where the server
     grants revocation. Confirmations are checked in the five newest chats plus
     the open chat, as history and the opening rule select them; Go keeps no
     aggregate pending flag, so state that coverage visibly and never show an
     unqualified all-clear while any read is unchecked. **Nothing needs you
     right now.** appears only when every read is complete and quiet.
-  - **The composer** sits centered beneath them (at most 600px). It always
-    starts a **new** chat in the right panel through the authenticated
-    chat-choice queue, keeping Home as its screen context; drafts and
-    recoverable unsent messages are kept. Under it, the member's active app
-    connections as quiet pills (logo tile and name) and **+ Connect**, all
-    opening Tools.
-  - **The stack** follows, under a hairline, two by two: **Conversations**
-    (New chat, All, and up to three titled recent primary chats, the running
-    one first with the Thinking Orb), **Knowledge** (up to three knowledge
-    bases by last update, with document counts), **Files** (what the agent
-    saved in the chats already read for confirmations, newest first, each
-    opening its chat) and **Recurring work** (the member's own agent
-    workflows and their schedules in words). An empty part says what lands
-    there in one quiet line.
-  - **Finish setup:** one centered quiet line at the bottom with a link per
+  - Hidden until the API exists (#322): the Needs-you parley row and
+    "Krude suggested an edit" rows, per-app counts and previews, "N editing"
+    presence, and document thumbnails.
+  - **At a glance** keeps the full widget stack: From your apps and Needs
+    you, then **Conversations** (New chat, All, and up to three titled
+    recent primary chats, the running one first with the Thinking Orb),
+    **Knowledge** (up to three knowledge bases by last update, with document
+    counts), **Files** (what the agent saved in the chats already read for
+    confirmations, newest first, each opening its chat) and **Recurring
+    work** (the member's own agent workflows and their schedules in words),
+    then the Finish setup line. An empty part says what lands there in one
+    quiet line.
+  - **Finish setup** (at a glance): one quiet line at the bottom with a link per
     unfinished step (Connect Slack for members who may manage it, Add
     knowledge, Turn on background access), from real Slack, knowledge and
     grant reads. A read that fails or is not served leaves its step out
