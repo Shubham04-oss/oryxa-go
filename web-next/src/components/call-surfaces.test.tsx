@@ -262,14 +262,25 @@ describe("the call's words", () => {
 })
 
 describe("a parley in a teamspace", () => {
-  it("shows a running parley and who is in it, and hides Start", async () => {
+  it("shows a running parley and who is in it, and keeps the header pill to join it", async () => {
     renderParley()
     const strip = await screen.findByRole("region", {
       name: "Parley in progress",
     })
     expect(within(strip).getByText(/^Parley · 1:0\d$/)).toBeTruthy()
     expect(within(strip).getByText("Raya, Rohan and Krude are in")).toBeTruthy()
+    // The strip's faces carry their names, as on the board.
+    expect(within(strip).getByText("Raya Patel")).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Parley" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Join the parley" }))
+    await waitFor(() => expect(requests("/call/join", "POST")).toHaveLength(1))
+    // In it, the pill opens it.
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open the parley" })
+    )
+    expect(
+      screen.getByRole("dialog", { name: "EU launch parley" })
+    ).toBeTruthy()
   })
 
   it("offers to start one when none runs", async () => {
@@ -808,6 +819,35 @@ describe("the shared dock and tiles", () => {
         .getByRole("button", { name: "Shared" })
         .getAttribute("aria-pressed")
     ).toBe("true")
+  })
+
+  it("keeps the speaker's cam inset over a share in the mini player", async () => {
+    const media = fakeMedia()
+    const tiles = media.tiles()
+    media.tiles = () => [
+      tiles[0],
+      { ...tiles[1], screenTrack: {} as MediaStreamTrack },
+    ]
+    const { leaveRoomPage } = renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    await screen.findByText(/^You're in the parley/)
+    leaveRoomPage()
+    const pip = screen.getByRole("region", {
+      name: "EU launch parley, mini player",
+    })
+    expect(
+      within(pip).getByRole("group", { name: "Raya Patel's screen" })
+    ).toBeTruthy()
+    // Nobody is speaking: the sharer's own cam is the inset.
+    expect(
+      within(pip).getByRole("group", { name: "Raya Patel, sharing" })
+    ).toBeTruthy()
+    expect(
+      within(pip).getByText("Raya Patel is sharing · 2 people")
+    ).toBeTruthy()
   })
 
   it("offers Shared only while someone shares", async () => {

@@ -682,28 +682,25 @@
   }
 }
 
-/* "Parley" in a teamspace's header: starts one when none runs. */
+/* "Parley" in a teamspace's header (the library's outline button): starts
+   one, or, with the live dot, joins or opens the one running. */
 .workspace-teamspace-parley {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
   margin-left: auto;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--canvas);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
 }
-.workspace-teamspace-parley:hover:not(:disabled) {
-  background: var(--selected);
+
+/* The mini player over a share: the speaker's cam inset, bottom right. */
+.call-pip-speaker {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 92px;
+  height: 60px;
 }
-.workspace-teamspace-parley:disabled {
-  opacity: 0.5;
-  cursor: default;
+.call-pip-speaker .call-cam {
+  width: 100%;
+  height: 100%;
+  border-radius: 9px;
+  box-shadow: 0 0 0 2px var(--call-speaking);
 }
 /* In a teamspace the strip lines up with the room and the work column. */
 .workspace-teamspace-focus > .call-strip {

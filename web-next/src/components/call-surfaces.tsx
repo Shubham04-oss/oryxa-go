@@ -185,11 +185,14 @@ function AgentCam({
   speaking,
   size = "default",
   named = true,
+  flagged = named,
 }: {
   name: string
   speaking: boolean
   size?: "default" | "big" | "small"
   named?: boolean
+  /** Its Taking notes / Speaking flag; the join strip's faces go without. */
+  flagged?: boolean
 }) {
   return (
     <div
@@ -201,7 +204,7 @@ function AgentCam({
       style={{ "--c": "var(--call-tint-6)" } as CSSProperties}
     >
       <IdentityAvatar identity={agentIdentity(`agent:${name}`, name)} />
-      {named && (
+      {flagged && (
         <CallFlag
           agent
           icon={speaking ? <Wave /> : <Sparkles size={11} aria-hidden="true" />}
@@ -262,7 +265,8 @@ function isThisRoom(
 
 /**
  * "Parley" in a room's header: starts one when there is none. While one
- * runs, the strip below offers to join it instead.
+ * runs it stays, with the live dot: it joins (as the strip's Join does), or
+ * opens the parley the member is already in.
  */
 export function ParleyButton({
   organizationId,
@@ -280,21 +284,30 @@ export function ParleyButton({
   member: string
   name?: string
 }) {
-  const { active, join } = useCall()
+  const { active, join, expand } = useCall()
   const { call, unavailable } = useRoomCall(organizationId, room)
   const here = isThisRoom(active, organizationId, room)
-  if (call || (here && active?.phase !== "failed")) return null
+  const inIt = here && active?.phase === "in"
+  const live = Boolean(call) || inIt
   return (
-    <button
+    <Button
+      variant="outline"
       className="workspace-teamspace-parley"
-      type="button"
-      disabled={unavailable || active?.phase === "joining"}
+      data-live={live ? "true" : undefined}
+      disabled={unavailable || (here && active?.phase === "joining")}
+      aria-label={
+        inIt ? "Open the parley" : call ? "Join the parley" : undefined
+      }
       title={
         unavailable
           ? "Parleys aren't available in this teamspace yet."
           : undefined
       }
-      onClick={() =>
+      onClick={() => {
+        if (inIt) {
+          expand(true)
+          return
+        }
         void join({
           organizationId,
           room,
@@ -305,11 +318,15 @@ export function ParleyButton({
           mic: true,
           camera: false,
         })
-      }
+      }}
     >
-      <Mic size={13} strokeWidth={2} aria-hidden="true" />
+      {live ? (
+        <span className="call-live-dot" aria-hidden="true" />
+      ) : (
+        <Mic size={13} strokeWidth={2} aria-hidden="true" />
+      )}
       Parley
-    </button>
+    </Button>
   )
 }
 
@@ -420,7 +437,6 @@ export function ParleyStrip({
             member={person.member}
             name={person.name}
             size="small"
-            named={false}
           />
         ))}
         {call.agent.present && (
@@ -428,7 +444,7 @@ export function ParleyStrip({
             name={call.agent.name}
             speaking={false}
             size="small"
-            named={false}
+            flagged={false}
           />
         )}
       </div>
@@ -598,6 +614,11 @@ function CallMiniPlayer({
         ...active.tiles.filter((tile) => !tile.self),
         ...active.tiles.filter((tile) => tile.self),
       ].slice(0, 4)
+  // Over a share, the speaker's cam sits inset (else the sharer's own).
+  const inset = share
+    ? (active.tiles.find((tile) => !tile.self && tile.member === speaking) ??
+      (share.self ? undefined : share))
+    : undefined
   const people = view?.participants.length ?? active.tiles.length
   const recording = recordingLine(view)
   return (
@@ -609,6 +630,18 @@ function CallMiniPlayer({
       {active.phase === "in" && (
         <div className="call-pip-stage">
           {share && <ShareCam tile={share} />}
+          {inset && (
+            <div className="call-pip-speaker">
+              <CallCam
+                member={inset.member}
+                name={inset.name}
+                tile={inset}
+                size="small"
+                speaking={inset.member === speaking}
+                flag={false}
+              />
+            </div>
+          )}
           {shown.map((tile) => (
             <CallCam
               key={tile.id}
