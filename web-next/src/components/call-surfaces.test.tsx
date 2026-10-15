@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { useEffect } from "react"
 import {
   cleanup,
   fireEvent,
@@ -10,7 +11,7 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { CallProvider } from "./call-provider"
+import { CallProvider, useRoomChatHost } from "./call-provider"
 import { CallSurface, ParleyButton, ParleyStrip, tintOf } from "./call-surfaces"
 import type { CallView } from "@/lib/call/client"
 import { callDuration, parseVoiceFrame, whoIsIn } from "@/lib/call/client"
@@ -659,5 +660,85 @@ describe("a parley in a teamspace", () => {
     })
     await screen.findAllByText("Hi all")
     expect(vi.mocked(media.devices).mock.calls.length).toBe(reads)
+  })
+  it("shows the room's conversation beside the call, moved from the room's page", async () => {
+    renderParley()
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    fireEvent.click(within(page).getByRole("button", { name: "Show the room" }))
+    const pane = within(page).getByRole("region", { name: "EU launch room" })
+    // No room page here has moved its conversation in, so the pane says where it is.
+    expect(
+      within(pane).getByText(/Open EU launch's page to talk in its room/)
+    ).toBeTruthy()
+    expect(
+      within(page).queryByRole("region", { name: "Transcript" })
+    ).toBeNull()
+    fireEvent.click(
+      within(page).getByRole("button", { name: "Show the transcript" })
+    )
+    expect(
+      within(page).getByRole("region", { name: "Transcript" })
+    ).toBeTruthy()
+    expect(
+      within(page).queryByRole("region", { name: "EU launch room" })
+    ).toBeNull()
+  })
+
+  it("moves the room page's own conversation into the pane, and back, without remounting it", async () => {
+    let mounts = 0
+    function Conversation() {
+      useEffect(() => {
+        mounts += 1
+      }, [])
+      return <input aria-label="Room draft" defaultValue="" />
+    }
+    function RoomPage() {
+      const chat = useRoomChatHost("org_1", room)
+      return (
+        <>
+          <div ref={chat.pageRef} />
+          {chat.render(<Conversation />)}
+        </>
+      )
+    }
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CallProvider joinMediaWith={async () => fakeMedia()}>
+          <RoomPage />
+          <Parley onRoomPage />
+        </CallProvider>
+      </QueryClientProvider>
+    )
+    const draft = await screen.findByRole("textbox", { name: "Room draft" })
+    fireEvent.change(draft, { target: { value: "Half a thought" } })
+
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    const page = screen.getByRole("dialog", { name: "EU launch parley" })
+    fireEvent.click(within(page).getByRole("button", { name: "Show the room" }))
+    const pane = within(page).getByRole("region", { name: "EU launch room" })
+    await waitFor(() =>
+      expect(within(pane).getByRole("textbox", { name: "Room draft" })).toBe(
+        draft
+      )
+    )
+    expect((draft as HTMLInputElement).value).toBe("Half a thought")
+    expect(within(pane).queryByText(/Open EU launch's page/)).toBeNull()
+
+    fireEvent.click(within(page).getByRole("button", { name: "Hide the room" }))
+    await waitFor(() => expect(within(page).queryByRole("textbox")).toBeNull())
+    expect(screen.getByRole("textbox", { name: "Room draft" })).toBe(draft)
+    expect(mounts).toBe(1)
   })
 })

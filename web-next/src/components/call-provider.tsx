@@ -7,10 +7,12 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react"
+import { createPortal } from "react-dom"
 import type { ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ApiError } from "@/lib/api/client"
@@ -139,7 +141,13 @@ type CallContextValue = {
   /** The room whose own page is on screen, which shows the call itself. */
   roomOnScreen: string | null
   showingRoom: (room: string | null) => void
+  /** Where the full page shows its room's conversation, while it does. */
+  roomChat: RoomChatSlot | null
+  setRoomChat: (slot: RoomChatSlot | null) => void
 } & CallActions
+
+/** The full page's place for the room's conversation, and whose room it is. */
+export type RoomChatSlot = { room: string; element: HTMLElement }
 
 /** A room's key, for telling whether a page shows the member's call. */
 export function roomKey(organizationId: string, room: LiveRoom): string {
@@ -153,6 +161,52 @@ export function useCall(): CallContextValue {
   const value = useContext(CallContext)
   if (!value) throw new Error("useCall outside CallProvider")
   return value
+}
+
+/**
+ * Where a room's page puts its conversation while the member's parley in
+ * that room is open full page: the call's Room pane, or nowhere (it stays on
+ * the page). One conversation, moved, so the room is never open twice.
+ */
+export function useRoomChatSlot(
+  organizationId: string,
+  room: LiveRoom
+): HTMLElement | null {
+  const value = useContext(CallContext)
+  const slot = value?.roomChat
+  return slot && slot.room === roomKey(organizationId, room)
+    ? slot.element
+    : null
+}
+
+/**
+ * A room page's conversation, kept in one host element that sits in the page
+ * (at `pageRef`) or, while the member's parley in that room shows its Room
+ * pane, in that pane. Moving the host moves the conversation without
+ * remounting it: its draft, scroll and socket carry over.
+ */
+export function useRoomChatHost(organizationId: string, room: LiveRoom) {
+  const slot = useRoomChatSlot(organizationId, room)
+  const [host, setHost] = useState<HTMLDivElement | null>(null)
+  const pageRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const element = document.createElement("div")
+    element.className = "workspace-chat-host"
+    setHost(element)
+    return () => {
+      element.remove()
+    }
+  }, [])
+  useLayoutEffect(() => {
+    const target = slot ?? pageRef.current
+    if (host && target && host.parentElement !== target)
+      target.appendChild(host)
+  })
+  return {
+    pageRef,
+    render: (conversation: ReactNode) =>
+      host ? createPortal(conversation, host) : null,
+  }
 }
 
 /** Whether parleys are offered here: inside the workspace's CallProvider. */
@@ -204,6 +258,7 @@ export function CallProvider({
   const queryClient = useQueryClient()
   const [active, setActive] = useState<ActiveCall | null>(null)
   const [roomOnScreen, showingRoom] = useState<string | null>(null)
+  const [roomChat, setRoomChat] = useState<RoomChatSlot | null>(null)
   const [ended, setEnded] = useState<EndedCall | null>(null)
   /** The last view of the member's call, for the summary once it ends. */
   const lastView = useRef<CallView | null>(null)
@@ -546,6 +601,8 @@ export function CallProvider({
       dismissEnded: () => setEnded(null),
       roomOnScreen,
       showingRoom,
+      roomChat,
+      setRoomChat,
       join,
       leave: teardownAndLeave,
       end,
@@ -570,6 +627,7 @@ export function CallProvider({
       join,
       onDevicesChange,
       record,
+      roomChat,
       roomOnScreen,
       setDevice,
       teardownAndLeave,

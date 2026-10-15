@@ -278,7 +278,11 @@ not permission to copy every incidental value into a new component.
     transcript as this page heard it, and a dock (mic, camera, screen,
     record, ask the agent in, devices, leave), plus "End for everyone".
     Devices opens a small panel over the stage to choose the microphone,
-    camera and speaker, and follows devices plugged in or out.
+    camera and speaker, and follows devices plugged in or out. Beside the
+    call is the Transcript or the **Room**: the room's own conversation,
+    moved in from the room's page while the pane is open (there's only ever
+    one, so the room is never open twice). From any other page the Room
+    pane says to open the room's page.
   - **Tiles:** camera tiles stay dark in both themes, as video does
     (`--call-*` tokens). A person keeps their tile colour everywhere. The
     agent is a tile with no camera, marked Listening or Speaking.
