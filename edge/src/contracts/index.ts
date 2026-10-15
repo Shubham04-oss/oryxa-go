@@ -153,7 +153,12 @@ export const ListFilesResponse = z.strictObject({
 });
 export type ListFilesResponse = z.infer<typeof ListFilesResponse>;
 
-export const ReadFilesRequest = z.strictObject({ paths: z.array(z.string().min(1)).min(1) });
+export const ReadFilesRequest = z.strictObject({
+  paths: z.array(z.string().min(1)).min(1),
+  // A caller that never shows the bytes to a model (saving an artifact) may
+  // raise the read budget, up to the artifact cap.
+  maxBytes: z.number().int().positive().max(64 << 20).optional(),
+});
 export type ReadFilesRequest = z.infer<typeof ReadFilesRequest>;
 
 export const Encoding = z.enum(["utf8", "base64"]);

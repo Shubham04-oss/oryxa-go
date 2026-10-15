@@ -212,12 +212,14 @@ func saveArtifactTool(executor executor) (tool.Tool, error) {
 		if path == "" {
 			return sandboxSavedArtifact{}, errors.New("path is required")
 		}
-		result, err := invoke(ctx, executor, Request{Action: ReadFiles, Paths: []string{path}})
+		// The bytes go to the artifact store, never to the model, so the read
+		// may use the artifact budget.
+		result, err := invoke(ctx, executor, Request{Action: ReadFiles, Paths: []string{path}, MaxOutputBytes: maxArtifactBytes})
 		if err != nil {
 			return sandboxSavedArtifact{}, err
 		}
 		if result.IsError {
-			return sandboxSavedArtifact{}, fmt.Errorf("sandbox: %s", strings.TrimSpace(result.Stderr+" "+result.Stdout))
+			return sandboxSavedArtifact{}, fmt.Errorf("sandbox could not read %s: %s", path, sandboxErrorText(result))
 		}
 		raw, mimeType, err := sandboxFileBytes(result, path)
 		if err != nil {
@@ -242,6 +244,25 @@ func saveArtifactTool(executor executor) (tool.Tool, error) {
 			SessionRecreated: result.SessionRecreated,
 		}, nil
 	})
+}
+
+// sandboxErrorText is what a failed sandbox call said, from its streams or,
+// when those are empty, its text blocks: an empty error leaves the model
+// retrying the same call blind.
+func sandboxErrorText(result Result) string {
+	if text := strings.TrimSpace(result.Stderr + " " + result.Stdout); text != "" {
+		return text
+	}
+	var said []string
+	for _, block := range result.Content {
+		if text := strings.TrimSpace(block.Text + " " + block.ResourceText); text != "" {
+			said = append(said, text)
+		}
+	}
+	if len(said) == 0 {
+		return "it gave no reason; check the path with sandbox_list_files"
+	}
+	return strings.Join(said, "; ")
 }
 
 // sandboxFileBytes picks requestedPath's own content block out of a ReadFiles
