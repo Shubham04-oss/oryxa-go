@@ -1,0 +1,126 @@
+/* The Chats page (ChatsNew): the list tile beside the agent session. */
+.chats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--canvas);
+}
+.chats-list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chats-list-search {
+  flex: 1;
+  min-width: 0;
+  border-color: var(--border-quiet);
+  background: var(--base);
+  color: var(--text);
+}
+.chats-list-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+}
+.chats-list-group ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.chats-list-group-label {
+  margin: 0 0 8px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+/* A row is a ghost ui/button laid out as two lines; the open one is the
+   raised tile, the others lift on hover. */
+.chats-list-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+  height: auto;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--text-soft);
+  text-align: left;
+  white-space: normal;
+}
+.chats-list-row strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 590;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chats-list-row:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.chats-list-row[aria-current="true"] {
+  border-color: var(--border-quiet);
+  background: var(--raised);
+  box-shadow: 0 1px 3px var(--shade-66);
+  color: var(--text);
+}
+.chats-list-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.chats-list-waiting {
+  color: var(--text);
+  font-weight: 560;
+}
+.chats-list-note {
+  margin: 0 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* The page: the list, the chat, then the work. */
+.agent-session[data-list="true"] {
+  grid-template-columns: 280px minmax(300px, 32%) minmax(0, 1fr);
+}
+/* The list replaces the chat's own History disclosure here. */
+.agent-session[data-list="true"] .workspace-chat-history {
+  display: none;
+}
+@media (max-width: 1180px) {
+  /* Narrower, the work column gives way to the list until something is
+     open in it; then the list does. */
+  .agent-session[data-list="true"] {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+  .agent-session[data-list="true"][data-work="tabs"] .workspace-work-column {
+    display: none;
+  }
+  .agent-session[data-list="true"][data-work="viewer"] {
+    grid-template-columns: minmax(300px, 40%) minmax(0, 1fr);
+  }
+  .agent-session[data-list="true"][data-work="viewer"] .chats-list {
+    display: none;
+  }
+}
+@media (max-width: 960px) {
+  .agent-session[data-list="true"] .chats-list {
+    flex: none;
+    max-height: 30dvh;
+  }
+}

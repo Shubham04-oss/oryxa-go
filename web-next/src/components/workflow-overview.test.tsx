@@ -667,6 +667,39 @@ describe("workflow overview", () => {
     }
   )
 
+  it("runs from its row, as the board has it, and opens to show the run", async () => {
+    const api = backend()
+    overview()
+    const run = await screen.findByRole<HTMLButtonElement>("button", {
+      name: "Run now Weekly review",
+    })
+    await waitFor(() => expect(run.disabled).toBe(false))
+    fireEvent.click(run)
+    await waitFor(() => expect(api.writes.length).toBe(1))
+    expect(api.writes[0]).toEqual({
+      method: "POST",
+      path: `/v1/organizations/${ORG}/agent-workflows/${weekly.id}/executions`,
+      body: undefined,
+    })
+    expect(
+      await screen.findByRole("button", {
+        name: "Close Weekly review workflow",
+      })
+    ).toBeTruthy()
+  })
+
+  it("keeps a row's Run now off while its team is paused", async () => {
+    backend({ teams: [{ ...crew, status: "disabled" }] })
+    overview()
+    const run = await screen.findByRole<HTMLButtonElement>("button", {
+      name: "Run now Weekly review",
+    })
+    expect(run.disabled).toBe(true)
+    expect(run.title).toBe(
+      "The team is paused. Resume it in Multi-agent teams before running."
+    )
+  })
+
   it("allows preparing paused teams but refuses running paused workflow/team/assignments", async () => {
     backend({ teams: [{ ...crew, status: "disabled" }] })
     overview()

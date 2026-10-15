@@ -32,6 +32,7 @@ import {
   replyYourselfName,
 } from "./request-card-format"
 import { REPLY_MAX_CHARACTERS } from "@/lib/agents/agent-requests"
+import { Button } from "@/components/ui/button"
 
 /** The most lines the field grows to before it scrolls. */
 const MAX_LINES = 8
@@ -181,12 +182,26 @@ export function ReplyOption({
   hint,
   onSend,
   onCancel,
+  open: openGiven,
+  onOpenChange,
 }: Omit<FieldProps, "lines"> & {
   /** It is this reply that is on its way, not another choice. */
   sending: boolean
   onCancel: () => void
+  /**
+   * Held by the card when its choices grid offers Reply yourself (R): the
+   * field shows while `open`, and there is no text button of its own.
+   */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [ownOpen, setOwnOpen] = useState(false)
+  const controlled = openGiven !== undefined
+  const open = controlled ? openGiven : ownOpen
+  const setOpen = (next: boolean) => {
+    if (controlled) onOpenChange?.(next)
+    else setOwnOpen(next)
+  }
   const buttonRef = useRef<HTMLButtonElement>(null)
   const giveFocusBack = useRef(false)
 
@@ -200,19 +215,21 @@ export function ReplyOption({
     buttonRef.current?.focus()
   }, [open])
 
+  if (!open && controlled) return null
   if (!open) {
     return (
       <div className="workspace-request-quiet">
-        <button
-          className="workspace-agent-text-button"
-          type="button"
+        <Button
+          variant="link"
+          size="sm"
+          className="workspace-request-quiet-button"
           ref={buttonRef}
           aria-label={replyYourselfName(askerName)}
           disabled={busy}
           onClick={() => setOpen(true)}
         >
           {REPLY_YOURSELF}
-        </button>
+        </Button>
       </div>
     )
   }
@@ -231,26 +248,20 @@ export function ReplyOption({
         onSend={onSend}
       />
       <div className="workspace-request-actions">
-        <button
-          className="workspace-agent-pill"
-          type="button"
+        <Button
+          variant="outline"
           disabled={busy}
           onClick={() => {
-            giveFocusBack.current = true
+            giveFocusBack.current = !controlled
             onCancel()
             setOpen(false)
           }}
         >
           Cancel
-        </button>
-        <button
-          className="workspace-agent-pill"
-          data-primary="true"
-          type="submit"
-          disabled={busy}
-        >
+        </Button>
+        <Button type="submit" data-primary="true" disabled={busy}>
           {sending ? SENDING_REPLY : SEND_REPLY}
-        </button>
+        </Button>
       </div>
     </form>
   )
@@ -306,33 +317,27 @@ export function ReplyFirst({
         data-align="start"
         data-first="true"
       >
-        <button
-          className="workspace-agent-pill"
-          data-primary="true"
-          type="submit"
-          disabled={busy}
-        >
+        <Button type="submit" data-primary="true" disabled={busy}>
           {pressed === "reply" ? SENDING_REPLY : SEND_REPLY}
-        </button>
-        <button
-          className="workspace-agent-pill"
-          type="button"
+        </Button>
+        <Button
+          variant="outline"
           aria-label={letMyAgentAnswerName(askerName)}
           aria-describedby={agentDetail ? detailId : undefined}
           disabled={busy}
           onClick={onAgent}
         >
           {pressed === "agent" ? ASKING_AGENT : LET_MY_AGENT_ANSWER}
-        </button>
-        <button
-          className="workspace-agent-pill"
-          type="button"
+        </Button>
+        <Button
+          variant="destructive"
+          className="workspace-request-deny-end"
           aria-label={denyName(askerName)}
           disabled={busy}
           onClick={onDeny}
         >
           {pressed === "deny" ? "Denying…" : DENY}
-        </button>
+        </Button>
       </div>
       {agentDetail && (
         <p className="workspace-request-reply-detail" id={detailId}>
