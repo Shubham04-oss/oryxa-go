@@ -1096,6 +1096,10 @@ function WorkspaceShellContent({
                   viewerId={session?.user.id}
                   onOpen={openWork}
                   onNavigate={selectSection}
+                  onOpenSettings={() => {
+                    setSettingsPage("tools")
+                    setSettingsOpen(true)
+                  }}
                   onOpenFile={openPrimaryFile}
                 />
               )}

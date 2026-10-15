@@ -227,9 +227,24 @@ not permission to copy every incidental value into a new component.
   first; it says so, and that the answer arrives in Requests, with "Open in
   Requests" once sent (`ask-agent-dialog.tsx`). Someone who shares no
   teamspace with the member shows no agent and no Ask until the members API
-  names everyone's agent (#322). On the Agents pages the primary agent, the stats, teams,
-  specialists and workflows are filled tiles on the canvas, with no
-  outlines. Settings' menu is three groups, You (Account), Workspace
+  names everyone's agent (#322). On the Agents pages the primary agent,
+  teams, specialists and workflows are filled tiles on the canvas, with no
+  outlines. **Agent overview** (AgentsNew board, 15 Oct 2026) reads top to
+  bottom: a hero (the agent's avatar and name, "Your agent · reads Slack,
+  Notion and Drive · suggests, you decide" from the member's active app
+  connections, its status, inline numbers Go can count — waiting for you,
+  specialists, teams, each leading to its page — and Settings, which opens
+  Tool access); then **Multi-agent teams**, **Specialists** and
+  **Workflows**, each under a head with its count and an outline New team,
+  New specialist or New workflow that opens its form in place. A team is a
+  row with its chain (the coordinator, an arrow, its specialists), purpose,
+  "led by Leo, 2 specialists" and status. A specialist is a card with its
+  kind and status, what it does, and a ⋯ menu (Open, Pause or Resume,
+  Edit); a paused one says "Paused · updated <date>", never who paused it.
+  A workflow row keeps its schedule and last run with Run now (Start, for
+  one that runs only when started) beside it. "Answered today", files made
+  and usage per specialist are not shown until Go counts them (#322).
+  Settings' menu is three groups, You (Account), Workspace
   (Organisation, People & invitations, Teams, Billing) and Connections (Tool
   access, Sign-in apps, Slack, Email), on one tile, the open page the raised
   tile.
