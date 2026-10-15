@@ -162,22 +162,8 @@
 .workspace-teamspace-file { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
 .workspace-teamspace-file strong { overflow: hidden; color: var(--tone-dddddd); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-teamspace-file small { color: var(--tone-8f8f8f); font-size: 11px; }
-.workspace-teamspace-icon-button {
-  display: grid;
-  flex: none;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid var(--tone-3c3c3c);
-  border-radius: 50%;
-  background: var(--selected);
-  color: var(--tone-c9c9c9);
-}
-.workspace-teamspace-icon-button:hover:not(:disabled) { background: var(--tone-333333); color: var(--tone-ffffff); }
-.workspace-teamspace-icon-button:disabled { cursor: wait; opacity: 0.5; }
-.workspace-file-list .workspace-teamspace-icon-button { color: var(--tone-c9c9c9); }
 .workspace-work-card .workspace-teamspace-error { margin: 10px 0 0; color: var(--tone-ff9d9d); font-size: 11px; }
-.workspace-work-card .workspace-teamspace-secondary-button { margin-top: 12px; }
+.workspace-work-card > [data-slot="button"] { margin-top: 12px; }
 
 /* Shared work ledger */
 .workspace-teamspace-ledger { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
@@ -514,7 +500,7 @@
   pointer-events: none;
 }
 
-.workspace-teamspace-hero { display: flex; flex: none; align-items: flex-end; gap: 16px; padding: 34px 28px 18px; }
+.workspace-teamspace-hero { display: flex; flex: none; align-items: flex-end; gap: 16px; padding: 32px 24px 16px; }
 .workspace-teamspace-hero .workspace-focus-team-avatar { flex: none; width: 48px; height: 48px; }
 .workspace-teamspace-hero-title { flex: 1; min-width: 0; }
 .workspace-teamspace-hero h1 { margin: 0; overflow: hidden; font-size: 30px; font-weight: 700; letter-spacing: -.03em; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
@@ -523,25 +509,7 @@
 .workspace-teamspace-hero-actions .workspace-teamspace-faces { margin-right: 4px; }
 .workspace-teamspace-hero-actions .workspace-teamspace-faces .workspace-avatar { width: 26px; height: 26px; box-shadow: 0 0 0 2px var(--canvas); }
 .workspace-teamspace-hero-actions .workspace-teamspace-parley { margin-left: 0; border: 1px solid var(--border-quiet); background: transparent; }
-/* Invite, and Add in its pop-up: the Parley pill's outline twin. */
-.workspace-teamspace-pill {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--border-quiet);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.workspace-teamspace-pill:hover:not(:disabled) { background: var(--selected); }
-.workspace-teamspace-pill:disabled { opacity: .5; cursor: default; }
-.workspace-teamspace-canvas > .call-strip { margin: 0 20px 12px; }
+.workspace-teamspace-canvas > .call-strip { margin: 0 24px 12px; }
 
 /* The tabs: a segmented control, the selected tab the raised tile.
    Activity is the quiet extra one, set a little apart. */
@@ -551,7 +519,7 @@
   align-self: flex-start;
   gap: 2px;
   height: auto;
-  margin: 0 28px 14px;
+  margin: 0 24px 16px;
   padding: 3px;
   border-radius: 999px;
   background: var(--base);
@@ -581,8 +549,8 @@
 
 .workspace-teamspace-room.workspace-focus-layout {
   grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 18px;
-  padding: 0 20px 20px;
+  gap: 16px;
+  padding: 0 24px 24px;
 }
 .workspace-teamspace-room[hidden] { display: none; }
 .workspace-teamspace-focus .workspace-conversation {
@@ -599,7 +567,7 @@
 .workspace-teamspace-side-file-list li { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .workspace-teamspace-file-kind { flex: none; width: 34px; height: auto; padding: 3px 0; border: 0; border-radius: 6px; background: var(--canvas); color: var(--text-muted); font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-align: center; }
 
-.workspace-teamspace-panel { flex: 1; margin: 0 20px 20px; border-radius: 16px; background: var(--base); }
+.workspace-teamspace-panel { flex: 1; margin: 0 24px 24px; border-radius: 16px; background: var(--base); }
 .workspace-teamspace-panel .workspace-work-card { border: 0; background: var(--canvas); }
 .workspace-teamspace-coming { margin-top: 24px; }
 

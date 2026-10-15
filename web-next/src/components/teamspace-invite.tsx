@@ -152,7 +152,7 @@ export function TeamspaceInviteDialog({
                   <Button
                     type="button"
                     variant="outline"
-                    className="workspace-teamspace-pill"
+                    size="sm"
                     disabled={done || add.isPending}
                     aria-label={done ? `${name} added` : `Add ${name}`}
                     onClick={() => add.mutate(member.user_id)}

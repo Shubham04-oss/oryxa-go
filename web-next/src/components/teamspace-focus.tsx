@@ -166,8 +166,7 @@ export function TeamspaceFocus({
           </p>
           {!detail.isPending && !gone && !isUnavailableHere(detail.error) && (
             <Button
-              className="workspace-teamspace-secondary-button"
-              variant="secondary"
+              variant="outline"
               type="button"
               onClick={() => void detail.refetch()}
             >
@@ -224,10 +223,9 @@ export function TeamspaceFocus({
               <Button
                 type="button"
                 variant="outline"
-                className="workspace-teamspace-pill"
                 onClick={() => setInviting(true)}
               >
-                <UserPlus size={13} strokeWidth={2} aria-hidden="true" />
+                <UserPlus data-icon="inline-start" aria-hidden="true" />
                 Invite
               </Button>
             )}
@@ -663,8 +661,7 @@ function FilesPanel({
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon"
-                    className="workspace-teamspace-icon-button"
+                    size="icon-sm"
                     aria-label={`Download ${file.filename}`}
                     disabled={downloading === file.id}
                     onClick={() => void download(file.id)}
@@ -733,8 +730,7 @@ function ActivityPanel({
           <div className="workspace-work-card">
             <p role="alert">Couldn't load the shared work.</p>
             <Button
-              className="workspace-teamspace-secondary-button"
-              variant="secondary"
+              variant="outline"
               type="button"
               onClick={() => void entries.refetch()}
             >
