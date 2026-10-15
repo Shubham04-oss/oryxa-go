@@ -84,6 +84,7 @@ import type {
   CorpusDocument,
   DocumentAccess,
   DocumentPage,
+  DocumentSource,
   RagViewer,
   SearchResults,
 } from "@/lib/rag/client"
@@ -479,16 +480,38 @@ function excerpt(text: string, limit = 280): string {
   return flat.length > limit ? `${flat.slice(0, limit - 1).trimEnd()}…` : flat
 }
 
+/** A passage an answer or a search pointed at, to open in its file. */
+export type CitedPassage = {
+  documentId: string
+  start: number
+  end: number
+}
+
+/**
+ * Whether the Library can open a source's text: an uploaded file, or a
+ * connected app's document (knowledge keeps its text). A note's and a
+ * link's text are not given back.
+ */
+function opensInViewer(source: DocumentSource): boolean {
+  return (
+    source.kind === "file" ||
+    (source.kind === "external" &&
+      Boolean(source.ref?.startsWith("knowledge:")))
+  )
+}
+
 function AskKnowledgeBase({
   organizationId,
   corpus,
   answering,
   indexing,
+  onOpenPassage,
 }: {
   organizationId: string
   corpus: Corpus
   answering: boolean
   indexing: boolean
+  onOpenPassage?: (passage: CitedPassage) => void
 }) {
   const [question, setQuestion] = useState("")
   const ask = useMutation({
@@ -596,7 +619,22 @@ function AskKnowledgeBase({
                             {citation.index}
                           </span>
                           <span>
-                            {href ? (
+                            {onOpenPassage && opensInViewer(citation.source) ? (
+                              <Button
+                                variant="link"
+                                className="library-cite"
+                                aria-label={`Open the cited passage in ${title}`}
+                                onClick={() =>
+                                  onOpenPassage({
+                                    documentId: citation.document_id,
+                                    start: citation.start_byte,
+                                    end: citation.end_byte,
+                                  })
+                                }
+                              >
+                                {title}
+                              </Button>
+                            ) : href ? (
                               <a
                                 href={href}
                                 target="_blank"
@@ -641,7 +679,23 @@ function AskKnowledgeBase({
                       <li key={match.chunk.id}>
                         <blockquote>{excerpt(match.chunk.text)}</blockquote>
                         <small>
-                          {href ? (
+                          {onOpenPassage &&
+                          opensInViewer(match.document.source) ? (
+                            <Button
+                              variant="link"
+                              className="library-cite"
+                              aria-label={`Open the passage in ${title}`}
+                              onClick={() =>
+                                onOpenPassage({
+                                  documentId: match.document.id,
+                                  start: match.chunk.start_byte,
+                                  end: match.chunk.end_byte,
+                                })
+                              }
+                            >
+                              {title}
+                            </Button>
+                          ) : href ? (
                             <a
                               href={href}
                               target="_blank"
@@ -827,6 +881,7 @@ export function KnowledgeBaseDetail({
   onClose,
   onOpenTools,
   onOpen,
+  onOpenPassage,
 }: {
   organizationId: string
   corpusId: string
@@ -845,6 +900,8 @@ export function KnowledgeBaseDetail({
   onOpenTools?: () => void
   /** Opens a file in the viewer. */
   onOpen?: (file: LibraryFile) => void
+  /** Opens a cited passage in its file. */
+  onOpenPassage?: (passage: CitedPassage) => void
 }) {
   const queryClient = useQueryClient()
   const corpusQuery = useQuery({
@@ -1022,6 +1079,7 @@ export function KnowledgeBaseDetail({
           corpus={corpus}
           answering={answering}
           indexing={indexingCount > 0}
+          onOpenPassage={onOpenPassage}
         />
       )}
 

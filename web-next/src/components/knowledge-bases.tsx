@@ -32,6 +32,7 @@ import {
   capabilitiesQueryOptions,
   corporaQueryOptions,
   createCorpus,
+  documentQueryOptions,
   documentsPageSize,
   documentsPollInterval,
   listDocuments,
@@ -52,7 +53,7 @@ import {
   filterFiles,
   KnowledgeBaseDetail,
 } from "./knowledge-base-detail"
-import type { ContentKind } from "./knowledge-base-detail"
+import type { CitedPassage, ContentKind } from "./knowledge-base-detail"
 import {
   documentTitle,
   libraryFileCount,
@@ -491,6 +492,39 @@ function LibraryPage({
   }, [openId, openName, onOpenFileChange])
   useEffect(() => () => onOpenFileChange?.(null), [onOpenFileChange])
 
+  // A cited passage opens in its file: the document from the loaded list,
+  // or else read on its own.
+  async function openPassage(
+    collection: SelectedKnowledgeBase,
+    passage: CitedPassage
+  ) {
+    setNotice("")
+    const loaded = queryClient
+      .getQueryData<InfiniteData<DocumentPage>>(
+        ragKeys.documents(organizationId, collection.id)
+      )
+      ?.pages.flatMap((page) => page.documents)
+      .find((item) => item.id === passage.documentId)
+    try {
+      const document =
+        loaded ??
+        (await queryClient.fetchQuery(
+          documentQueryOptions(
+            organizationId,
+            collection.id,
+            passage.documentId
+          )
+        ))
+      setOpenFile({
+        document,
+        collection,
+        passage: { start: passage.start, end: passage.end },
+      })
+    } catch {
+      setNotice("Couldn’t open that passage’s file. It may have been removed.")
+    }
+  }
+
   function openAdding() {
     setNotice("")
     const current = selected
@@ -616,6 +650,7 @@ function LibraryPage({
                 collection: { id: selected.id, name: selected.name },
               })
             }
+            onOpenPassage={(passage) => void openPassage(selected, passage)}
           />
         ) : source ? (
           <LibrarySourceFiles

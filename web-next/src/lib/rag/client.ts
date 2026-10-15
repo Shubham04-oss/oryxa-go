@@ -390,6 +390,19 @@ export function listDocuments(
   })
 }
 
+/** `GET …/corpora/{id}/documents/{documentId}`: one document's record. */
+export function getDocument(
+  organizationId: string,
+  corpusId: string,
+  documentId: string,
+  { signal }: ReadOptions = {}
+): Promise<CorpusDocument> {
+  return apiRequest<CorpusDocument>(
+    corpusPath(organizationId, corpusId, "documents", documentId),
+    { signal }
+  )
+}
+
 /**
  * A document, in the three forms `addDocument` accepts. There is no upload
  * and no fetching: rag takes text, and a `file` is a files object it reads.
@@ -886,6 +899,19 @@ export function corpusQueryOptions(organizationId: string, corpusId: string) {
   return queryOptions({
     queryKey: ragKeys.corpus(organizationId, corpusId),
     queryFn: ({ signal }) => getCorpus(organizationId, corpusId, { signal }),
+  })
+}
+
+/** One document, such as the one a citation names. */
+export function documentQueryOptions(
+  organizationId: string,
+  corpusId: string,
+  documentId: string
+) {
+  return queryOptions({
+    queryKey: [...ragKeys.documents(organizationId, corpusId), documentId],
+    queryFn: ({ signal }) =>
+      getDocument(organizationId, corpusId, documentId, { signal }),
   })
 }
 
