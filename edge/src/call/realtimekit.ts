@@ -88,11 +88,14 @@ export class RealtimeKit implements CallProvider {
       record_on_start: false,
       persist_chat: false,
       // Live per-speaker transcription, which the clients forward to the
-      // room, and a Whisper transcript once the call ends. No language:
-      // RealtimeKit refuses en-US for the Whisper transcript ("Invalid
-      // language 'en-US' for post-meeting transcription") and detects it.
-      ai_config: { transcription: { profanity_filter: false } },
-      transcribe_on_end: true,
+      // room (saved as transcript.ndjson).
+      ai_config: { transcription: { language: "en-US", profanity_filter: false } },
+      // ponytail: no Whisper transcript at the end: RealtimeKit refuses it
+      // beside en-US ("Invalid language 'en-US' for post-meeting
+      // transcription") and fills in en-US when the language is left out.
+      // The live transcript above is the call's record; turn this back on
+      // with a language RealtimeKit's Whisper accepts.
+      transcribe_on_end: false,
     });
     return { id: requireString(data.id, "meeting id") };
   }

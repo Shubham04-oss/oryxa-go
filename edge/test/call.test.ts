@@ -651,16 +651,16 @@ describe("the real clients, in workerd", () => {
     }
   });
 
-  it("create meetings RealtimeKit accepts: no transcription language beside a Whisper transcript", async () => {
+  it("create meetings RealtimeKit accepts: en-US live transcription, no Whisper transcript", async () => {
     let sent: { transcribe_on_end?: boolean; ai_config?: { transcription?: Record<string, unknown> } } = {};
     const client = new RealtimeKit("acct", "app", "token", async (_input, init) => {
       sent = JSON.parse(String(init?.body));
       return new Response(JSON.stringify({ success: true, data: { id: "mtg_1" } }));
     });
     expect(await client.createMeeting("oryxa:test")).toEqual({ id: "mtg_1" });
-    expect(sent.transcribe_on_end).toBe(true);
-    // RealtimeKit refuses en-US for the post-meeting transcript.
-    expect(sent.ai_config?.transcription).not.toHaveProperty("language");
+    expect(sent.ai_config?.transcription?.language).toBe("en-US");
+    // RealtimeKit refuses en-US for the post-meeting (Whisper) transcript.
+    expect(sent.transcribe_on_end).toBe(false);
   });
 
   it("say why RealtimeKit refused, whatever shape its error takes", async () => {
