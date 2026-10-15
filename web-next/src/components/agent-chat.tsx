@@ -15,6 +15,7 @@ import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { useAgent } from "agents/react"
 import { Expand, SquarePen } from "lucide-react"
 import { AgentChatHistory } from "./agent-chat-history"
+import { AgentChatMenu } from "./agent-chat-menu"
 import { AgentComposer } from "./agent-composer"
 import { AgentTimeline } from "./agent-timeline"
 import { LookingAt } from "./agent-run"
@@ -432,6 +433,22 @@ export function AgentChat({
     dispatch({ type: "move", thread: null })
   }
 
+  // Clears the live chat object first, then the Go thread (DESIGN.md §3).
+  async function deleteConversation(id: string) {
+    await deleteThreadChat(organizationId, id)
+    await queryClient.cancelQueries({ queryKey: list.queryKey })
+    queryClient.setQueryData<Thread[]>(list.queryKey, (old) =>
+      old?.filter((thread) => thread.id !== id)
+    )
+    queryClient.removeQueries({
+      queryKey: threadKeys.detail(organizationId, id),
+    })
+    if (threadId === id) startNew()
+    void queryClient.invalidateQueries({
+      queryKey: threadKeys.list(organizationId),
+    })
+  }
+
   // The message its conversation's chat has yet to take.
   const waiting =
     first && first.threadId === threadId && !first.taken ? first.text : null
@@ -542,9 +559,21 @@ export function AgentChat({
   return (
     <>
       <div className="workspace-agent-thread-bar">
-        <p className="workspace-agent-thread-title" title={title}>
-          {title}
-        </p>
+        <div className="workspace-agent-thread-heading">
+          <p className="workspace-agent-thread-title" title={title}>
+            {title}
+          </p>
+          <p className="workspace-agent-thread-privacy">
+            Only you{agentName ? ` · ${agentName}` : ""}
+          </p>
+        </div>
+        {threadId && listed && (
+          <AgentChatMenu
+            title={title}
+            disabled={first !== null || state === "running"}
+            onDelete={() => deleteConversation(threadId)}
+          />
+        )}
         {onOpenOverview && !inOverview && (
           <button
             className="workspace-agent-new"
@@ -582,20 +611,7 @@ export function AgentChat({
         onRetry={() => void threads.refetch()}
         disabled={first !== null || state === "running"}
         onOpen={(id) => dispatch({ type: "move", thread: id })}
-        onDelete={async (id) => {
-          await deleteThreadChat(organizationId, id)
-          await queryClient.cancelQueries({ queryKey: list.queryKey })
-          queryClient.setQueryData<Thread[]>(list.queryKey, (old) =>
-            old?.filter((thread) => thread.id !== id)
-          )
-          queryClient.removeQueries({
-            queryKey: threadKeys.detail(organizationId, id),
-          })
-          if (threadId === id) startNew()
-          void queryClient.invalidateQueries({
-            queryKey: threadKeys.list(organizationId),
-          })
-        }}
+        onDelete={deleteConversation}
       />
       {body}
     </>
