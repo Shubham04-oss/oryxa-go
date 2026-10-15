@@ -636,14 +636,17 @@ function ArtifactItem({
   )
   const fileName = artifactFileName(entry.name)
 
-  // Where the session offers it, a file opens in the in-app viewer beside
-  // the chat, and downloading is the second way. Otherwise the plain URL
+  // Where the session offers it, a plain click opens the file in the in-app
+  // viewer beside the chat, and downloading is the second way; a click that
+  // asks for a new tab or window still gets one. Otherwise the plain URL
   // relies on the session cookie, which may have expired since the
   // conversation loaded: read the file's headers first (that refreshes it,
   // and reports a file that is gone), then open or download it.
   async function open(event: MouseEvent<HTMLAnchorElement>, download = false) {
     event.preventDefault()
-    if (openBeside && !download) {
+    const plainClick =
+      event.button === 0 && !(event.metaKey || event.ctrlKey || event.shiftKey)
+    if (openBeside && !download && plainClick) {
       openBeside({ threadId, name: entry.name, version: entry.version })
       return
     }

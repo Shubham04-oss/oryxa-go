@@ -172,6 +172,16 @@ function stubGo(seed: Seed = {}) {
         return json(body)
       }
       if (
+        /^\/v1\/organizations\/[^/]+\/threads\/[^/]+\/artifacts\//.test(path)
+      ) {
+        return new Response("file", {
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": 'attachment; filename="report.pdf"',
+          },
+        })
+      }
+      if (
         path.startsWith("/agents/thread-chat-agent/") &&
         path.endsWith("/get-messages")
       ) {
@@ -1176,6 +1186,10 @@ describe("a file the agent saves", () => {
 })
 
 describe("the agent session", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   const saved: Item[] = [
     { type: "message", id: "ev_1", author: "member", text: "Write it up" },
     { type: "artifact", id: "ev_f", artifact: "report.pdf", version: 2 },
@@ -1192,7 +1206,11 @@ describe("the agent session", () => {
     return (
       <>
         {file && (
-          <AgentSession chatSlotRef={setSlot} workLabel="Work">
+          <AgentSession
+            chatSlotRef={setSlot}
+            chatLabel="Conversation with Leo"
+            workLabel="Work"
+          >
             <button type="button" onClick={() => setFile(null)}>
               Back to Agent overview
             </button>
@@ -1209,13 +1227,13 @@ describe("the agent session", () => {
     )
   }
 
-  async function withFile() {
-    stubGo({ threads: [thread("th_1", "Write it up")] })
-    const view = withQueries(<Session />)
+  async function withFile(items: Item[] = saved) {
+    const go = stubGo({ threads: [thread("th_1", "Write it up")] })
+    withQueries(<Session />)
     ;(await socketOn(chatName("th_1"))).open()
     const chat = agentChats.named(chatName("th_1"))
-    chat.update({ messages: itemsToChatMessages(saved) })
-    return view
+    chat.update({ messages: itemsToChatMessages(items) })
+    return go
   }
 
   it("opens a file from the chat beside it: the chat on the left, the file on the right", async () => {
@@ -1228,7 +1246,7 @@ describe("the agent session", () => {
 
     const work = await screen.findByRole("region", { name: "Work" })
     expect(within(work).getByText("Viewing report.pdf")).toBeTruthy()
-    const column = screen.getByRole("region", { name: "Agent conversation" })
+    const column = screen.getByRole("region", { name: "Conversation with Leo" })
     // The same conversation, moved and not mounted again: the draft and the
     // focus come with it.
     expect(leoBox()).toBe(box)
@@ -1254,14 +1272,33 @@ describe("the agent session", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Back to Agent overview" })
     )
-    expect(screen.queryByRole("region", { name: "Agent conversation" })).toBe(
-      null
-    )
+    expect(
+      screen.queryByRole("region", { name: "Conversation with Leo" })
+    ).toBe(null)
     expect(leoBox()).toBe(box)
     expect(box.value).toBe("Still writing")
     expect(
       document.getElementById("workspace-agent-view-agents")?.contains(box)
     ).toBe(true)
+  })
+
+  it("keeps the composer's focus when the session closes from inside the chat", async () => {
+    await withFile()
+    const box = leoBox()
+    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }))
+    const column = await screen.findByRole("region", {
+      name: "Conversation with Leo",
+    })
+    box.focus()
+    expect(column.contains(document.activeElement)).toBe(true)
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to Agent overview" })
+    )
+    expect(
+      screen.queryByRole("region", { name: "Conversation with Leo" })
+    ).toBe(null)
+    expect(document.activeElement).toBe(box)
   })
 
   it("offers the file's download beside it, and opens nothing in a new tab", async () => {
@@ -1272,6 +1309,67 @@ describe("the agent session", () => {
     ).toBeTruthy()
     fireEvent.click(screen.getByRole("link", { name: "report.pdf" }))
     await screen.findByRole("region", { name: "Work" })
+    expect(opened).not.toHaveBeenCalled()
+  })
+
+  it("downloads the file from Download, without the viewer or a new tab", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null)
+    const saves: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      saves.push(this.download)
+    })
+    const go = await withFile()
+    fireEvent.click(screen.getByRole("link", { name: "Download report.pdf" }))
+
+    await waitFor(() => expect(saves).toEqual(["report.pdf"]))
+    expect(go.calls).toContain(
+      `GET /v1/organizations/${ORG}/threads/th_1/artifacts/report.pdf`
+    )
+    expect(screen.queryByRole("region", { name: "Work" })).toBe(null)
+    expect(opened).not.toHaveBeenCalled()
+  })
+
+  it("opens a new tab, not the viewer, for a click that asks for one", async () => {
+    const saves: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      saves.push(this.download)
+    })
+    const go = await withFile()
+    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }), {
+      metaKey: true,
+    })
+
+    // The file's own way out (an attachment here, so it is saved), after
+    // its headers refresh the cookie: not the viewer.
+    await waitFor(() => expect(saves).toEqual(["report.pdf"]))
+    expect(go.calls).toContain(
+      `GET /v1/organizations/${ORG}/threads/th_1/artifacts/report.pdf`
+    )
+    expect(screen.queryByRole("region", { name: "Work" })).toBe(null)
+  })
+
+  it("opens an image from its thumbnail beside the chat, its Download in the caption", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null)
+    await withFile([
+      { type: "message", id: "ev_1", author: "member", text: "Chart it" },
+      { type: "artifact", id: "ev_c", artifact: "chart.png", version: 1 },
+    ])
+    const thumbnail = screen.getByRole("link", { name: "Open chart.png" })
+    const caption = thumbnail.closest("figure")?.querySelector("figcaption")
+    expect(
+      caption &&
+        within(caption).getByRole("link", {
+          name: "Download chart.png",
+        })
+    ).toBeTruthy()
+
+    fireEvent.click(thumbnail)
+    const work = await screen.findByRole("region", { name: "Work" })
+    expect(within(work).getByText("Viewing chart.png")).toBeTruthy()
     expect(opened).not.toHaveBeenCalled()
   })
 })

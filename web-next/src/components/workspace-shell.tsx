@@ -60,6 +60,7 @@ import type { SettingsPage } from "./workspace-settings"
 import { useTeamspaces } from "@/hooks/use-teamspaces"
 import { useQuery } from "@tanstack/react-query"
 import { agentsQueryOptions } from "@/lib/agents/queries"
+import { primaryAgent } from "@/lib/agents/policy"
 import { useAgentsMode } from "@/hooks/use-agents-mode"
 import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
@@ -871,6 +872,10 @@ function WorkspaceShellContent({
             />
             <AgentSession
               chatSlotRef={setPrimaryChatSlot}
+              chatLabel={`Conversation with ${
+                (ownAgents.data && primaryAgent(ownAgents.data)?.name) ??
+                "primary agent"
+              }`}
               workLabel="Agent overview work panel"
             >
               {primaryViewer === "live" && primaryLive ? (

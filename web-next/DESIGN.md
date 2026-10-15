@@ -315,9 +315,12 @@ not permission to copy every incidental value into a new component.
   conversation column (30%, 300px at least) and the work panel beside it,
   which holds the overview, a file viewer or a live pane. The conversation is
   the panel's own mounted chat, moved into the column by a host element
-  (`useAgentChatHost`, the pattern a room's chat uses to move into a parley)
-  and moved back when the session closes, so its draft, scroll, socket and
-  keyboard focus carry over. Nothing is laid over the page. On a phone the
+  (`useAgentChatHost`; the host is portalled into, never remounted) and
+  moved back when the session closes, before the column leaves the page, so
+  its draft, scroll, socket and keyboard focus carry over both ways. The
+  column is named for the agent ("Conversation with Leo"). A plain click on
+  a file chip opens it beside the chat; a Cmd, Ctrl or Shift click still
+  opens it in a new tab, and Download saves it without opening anything. Nothing is laid over the page. On a phone the
   two stack, the chat above; with the keyboard up the chat takes the screen
   below the header. The Viewer boards' right-docked agent panel is
   superseded by this. The right rail offers only DMs and Teams in this state.

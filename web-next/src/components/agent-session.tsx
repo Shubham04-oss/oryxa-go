@@ -1,4 +1,6 @@
+import { useCallback } from "react"
 import type { ReactNode } from "react"
+import { releaseAgentChatSlot } from "@/hooks/use-agent-chat-host"
 import "./agent-session.css"
 
 /**
@@ -10,22 +12,38 @@ import "./agent-session.css"
  */
 export function AgentSession({
   chatSlotRef,
+  chatLabel,
   workLabel,
   children,
 }: {
   /** Receives the conversation column, for the panel to move its chat into. */
   chatSlotRef: (element: HTMLElement | null) => void
+  /** Names the conversation column, with the agent's name where it is known. */
+  chatLabel: string
   /** What the work column holds, for assistive technology. */
   workLabel: string
   /** The work: the overview, a file viewer or a live pane. */
   children: ReactNode
 }) {
+  // The column hands the chat back while it is still in the page: removed
+  // first, it would take the chat's focus with it.
+  const slotRef = useCallback(
+    (element: HTMLElement | null) => {
+      if (!element) return
+      chatSlotRef(element)
+      return () => {
+        releaseAgentChatSlot(element)
+        chatSlotRef(null)
+      }
+    },
+    [chatSlotRef]
+  )
   return (
     <main className="workspace-focus-layout workspace-primary-focus-layout agent-session">
       <section
-        ref={chatSlotRef}
+        ref={slotRef}
         className="workspace-conversation agent-session-chat"
-        aria-label="Agent conversation"
+        aria-label={chatLabel}
       />
       <div className="workspace-work-column">
         <section className="workspace-work-panel" aria-label={workLabel}>
