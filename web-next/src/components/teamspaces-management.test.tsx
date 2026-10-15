@@ -400,7 +400,7 @@ describe("TeamspacesManagement list", () => {
 
     search.blur()
     const elsewhere = document.createElement("textarea")
-    document.body.append(elsewhere)
+    document.body.appendChild(elsewhere)
     elsewhere.focus()
     fireEvent.keyDown(elsewhere, { key: "/" })
     expect(document.activeElement).toBe(elsewhere)
