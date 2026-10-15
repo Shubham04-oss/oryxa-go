@@ -875,12 +875,12 @@ func TestATeamspaceTargetIsSetAndClearedThroughItsPatch(t *testing.T) {
 	}
 }
 
-// Saying something in a paused room is refused with a code a client can tell
-// from any other conflict.
+// Saying something in a paused room is refused the way everything else a
+// paused teamspace refuses is, so a client handles one code for one state.
 func TestAPausedRoomRefusesAPostAsPaused(t *testing.T) {
 	status, code := ErrorCode(rooms.ErrPaused)
-	if status != http.StatusConflict || code != "teamspace_paused" {
-		t.Fatalf("ErrorCode(ErrPaused) = %d %s, want 409 teamspace_paused", status, code)
+	if status != http.StatusConflict || code != "teamspace_disabled" {
+		t.Fatalf("ErrorCode(ErrPaused) = %d %s, want 409 teamspace_disabled", status, code)
 	}
 }
 

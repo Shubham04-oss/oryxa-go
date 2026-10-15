@@ -2016,8 +2016,6 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusConflict, "teamspace_conflict"
 	case errors.Is(err, teamspaces.ErrNotFound):
 		return http.StatusNotFound, "not_found"
-	case errors.Is(err, rooms.ErrPaused):
-		return http.StatusConflict, "teamspace_paused"
 	case errors.Is(err, rooms.ErrInvalid):
 		return http.StatusBadRequest, "invalid_request"
 	case errors.Is(err, agentteamrooms.ErrInvalid):

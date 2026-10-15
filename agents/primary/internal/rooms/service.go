@@ -19,8 +19,10 @@ var (
 	ErrForbidden = errors.New("room is not available to this member")
 	ErrInvalid   = errors.New("invalid room request")
 	// ErrPaused refuses saying anything in a room whose teamspace is paused.
-	// What was said there stays readable to the team.
-	ErrPaused = errors.New("this room is paused")
+	// What was said there stays readable to the team. It is
+	// teamspaces.ErrDisabled, so the API names it as it names every other
+	// refusal a paused teamspace gives: 409 teamspace_disabled.
+	ErrPaused = fmt.Errorf("%w: this room is paused", teamspaces.ErrDisabled)
 )
 
 // presentWithin is how recently somebody must have read a room to count as
