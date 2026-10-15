@@ -40,3 +40,20 @@ This is a reference branch only: never merge it. It is a snapshot of the founder
    huddle/hd names.
 6. **No fake data.** Where the API is missing, hide the element or show an
    honest one-line state. The backend asks are in discussion #322.
+7. **Settings stays a pop-up** (founder, 15 Oct). Keep the modal dialog, and
+   put the boards' content and grouped nav inside it. Don't make it a page.
+8. **Buttons and action rows** (founder, 15 Oct). Button order, spacing and
+   consistency were poor. The full rule is in PR #332, which adds it to
+   web-next/DESIGN.md §1:
+   - every button is `ui/button`; no CSS button recipes;
+   - one height per context (`default` 32px, `sm` for row actions,
+     `icon-sm` for inline icons);
+   - dialog footers and confirm boxes: Cancel (`outline`), then the confirm,
+     right-aligned with 8px between them; the confirm is `destructive` when
+     it removes something;
+   - destructive actions are kept apart from Save, in a danger group or the
+     ⋯ menu;
+   - card actions: primary first, start-aligned;
+   - page headers: right-aligned, one primary;
+   - spacing on 8/12/16/24/32: 8 between buttons, 12 between rows, 24
+     between sections.
