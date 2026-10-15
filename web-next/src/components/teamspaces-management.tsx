@@ -650,7 +650,7 @@ function TeamspaceCard({
 }
 
 /** The teammates with a seat in the room, as a small stack of faces. */
-function TeamspaceFaces({ space }: { space: Teamspace }) {
+export function TeamspaceFaces({ space }: { space: Teamspace }) {
   const shown = space.whisperers.slice(0, maxFaces)
   const more = space.whisperers.length - shown.length
   if (shown.length === 0) return null

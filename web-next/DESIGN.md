@@ -140,8 +140,9 @@ not permission to copy every incidental value into a new component.
 
 - The shared workspace header is compact (56px at normal desktop/mobile
   widths), with its title centered. It contains the **current context**:
-  opening a DM shows the person's name/avatar, not “People”; opening a
-  teamspace or agent shows that work's title. Back navigation lives there.
+  opening a DM shows the person's name/avatar, not “People”; opening an
+  agent shows that work's title, and a teamspace its "Teamspaces / <name>"
+  crumbs. Back navigation lives there.
   Do not repeat the page title, a hero slogan, or a generic description at
   the top of the main canvas. No preview badge in the header.
 - Desktop panel toggles use left/right panel glyphs so back navigation remains
@@ -224,21 +225,44 @@ not permission to copy every incidental value into a new component.
     Network failures, timeouts and 5xx responses keep the session recoverable
     with bounded backoff. Do not erase scoped chat choices or queued requests;
     drafts held only in the mounted shell are not recovered after a new sign-in.
-- A teamspace or extensive agentic task is a focused work view: no left
-  sidebar, naked conversation on the base surface, compact title/back header,
-  and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
-  sit **above** the work panel. The panel's top area belongs to the selected
-  view's heading and state, not the tab strip.
-  - **A teamspace** (founder's redesign, 14 Oct 2026) opens under a faint
-    band of the harbour scene, its name a title (28px) beside its planet,
-    with its status, team and how many people. Its room is the main tile
-    (on the base), and its work the side tile, the tabs a segmented control
-    whose selected tab is the raised tile.
+- An extensive agentic task is a focused work view: no left sidebar, naked
+  conversation on the base surface, compact title/back header, and a
+  separate work panel. Tabs sit **above** the work panel. The panel's top
+  area belongs to the selected view's heading and state, not the tab strip.
+  - **A teamspace** (TeamspaceHome board, 15 Oct 2026) keeps the sidebar,
+    which marks Teamspaces. The page's header is the crumbs "Teamspaces /
+    <name>"; the first goes back to the list. On the canvas, under a faint
+    band of the harbour scene: the hero (planet, the name as a 30px title,
+    "<Team> team · N people and M agents", "Paused · " first when paused),
+    and on its right the faces of the people with a seat, the Parley pill
+    and, only for whoever manages the team, an Invite pill. Invite opens a
+    pop-up sheet listing the workspace's people not yet on the team, each
+    with Add (adding them to the team is what opens the teamspace to them;
+    someone new to the workspace is invited from Settings). Under the hero,
+    a segmented control of Room, Plan, Files (with its count) and Parleys,
+    the selected tab the raised tile, then a quieter Activity tab set a
+    little apart (the ledger has no place on the board; owner to confirm).
+  - **Room:** the room is the main tile, with a side column beside it: a
+    Live card only while a sandbox or browser is running in the room
+    (RoomLive), a **Files N** card with the newest four team files (a kind
+    tag from the extension, the name, "added …"; its heading opens the
+    Files tab, and it shows only once there are files to list), the team
+    summary, then the purpose, the contributed agents and the people. The
+    board has a Plan card and a Last parley card too, left out until
+    their APIs exist. Purpose, agents and People aren't on the board; they
+    are kept on purpose, below the board's cards, as Overview's content
+    with nowhere else to go (owner to confirm). The
+    room stays mounted behind the other tabs, so its draft, scroll and
+    socket carry over. **Files** is the team's files, full width. **Plan**
+    and **Parleys** have no API yet, so each is one honest line on the
+    empty scene ("A shared plan is coming", "Past parleys will be listed
+    here"). No launch date in the hero until the teamspace carries one.
   - **The teamspaces list** (TeamspacesNew, 15 Oct 2026) opens under the
     same faint band on a compact row, with no in-page title (the shell's
     header already says Teamspaces, §2): a subtitle that says how many are
     active and, when one is, that a parley is live there ("4 active, and a
-    parley is live in EU launch."), and New teamspace. Below it, a search (`/` focuses it, unless the
+    parley is live in EU launch."), and New teamspace. Below it, a search
+    (`/` focuses it, unless the
     member is typing) and segmented status filters that carry their counts
     (All 5, Active 4, Paused 1). The teamspaces are a grid of cards: planet,
     name, "<Team> team · N people" (or "· paused"), purpose, a live row
@@ -325,8 +349,9 @@ not permission to copy every incidental value into a new component.
     Saving replaces the whole grant. An app the grant names that is no
     longer connected stays listed, marked so, until it is taken off.
 - **What the organization agent made of a team's posts** (I7).
-  - **Team summary:** a teamspace's Overview starts with this card (summary,
-    decisions, risks, open questions) and the team's proposed follow-ups.
+  - **Team summary:** a teamspace's room has this card in its side column
+    (summary, decisions, risks, open questions) and the team's proposed
+    follow-ups.
     Anyone who may not read it (403) sees no card at all.
   - **Agent overview** lists the follow-ups from the member's teamspaces,
     grouped by teamspace.
@@ -335,8 +360,9 @@ not permission to copy every incidental value into a new component.
   private ones).
   - **Where:** beside the primary agent's chat, Agent overview shows the
     conversation's own as tiles, and one opens in the work panel like a
-    file. A teamspace has a Live tab with its tiles, the open one, and the
-    run log.
+    file. A teamspace shows a Live card beside its room, only while a
+    sandbox or browser is running there (stopped ones don't count), with
+    its tiles, the open one, and the run log.
   - **A sandbox** has Files (folders and a reader) and Preview (a port it
     serves, in a frame without its own origin). A member gets a Terminal
     (xterm, loaded when opened) only in their own private sandbox (owner's

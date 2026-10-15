@@ -334,9 +334,9 @@ function WorkspaceShellContent({
   // Agents mode's focused work belongs to that mode and its workspace.
   const agentWork =
     activeMode === "agents" && selectedOrganization ? agentsMode.focus : null
-  const isFocused = Boolean(
-    primaryWork || agentWork || (teamspaces.openId && selectedOrganization)
-  )
+  // An open teamspace keeps the sidebar (TeamspaceHome board): its page
+  // carries its own "Teamspaces / <name>" crumbs.
+  const isFocused = Boolean(primaryWork || agentWork)
   // The teamspace on the page: the agent panel offers its teammates.
   const pageTeamspaceId =
     !primaryWork && !agentWork && selectedOrganization && teamspaces.openId
@@ -592,6 +592,9 @@ function WorkspaceShellContent({
 
   function openTeamspace(id: string) {
     teamspaces.open(id)
+    // The sidebar stays, so it marks Teamspaces, where the crumbs lead back.
+    setActiveMode("team")
+    setSectionsByMode((current) => ({ ...current, team: "teamspaces" }))
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
   }
