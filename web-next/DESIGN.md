@@ -234,12 +234,28 @@ not permission to copy every incidental value into a new component.
     with its status, team and how many people. Its room is the main tile
     (on the base), and its work the side tile, the tabs a segmented control
     whose selected tab is the raised tile.
-  - **The teamspaces list** is a title with the counts (active, paused, in
-    all) under the same faint band, segmented status filters and a search,
-    and the teamspaces as a grid of cards: planet, status, name, purpose,
-    team and when it was last updated, how many people. For a member who
-    can open one, the last card opens a new teamspace, drawn as the ship's
-    lines on deep sea.
+  - **The teamspaces list** (TeamspacesNew, 15 Oct 2026) opens under the
+    same faint band on a compact row, with no in-page title (the shell's
+    header already says Teamspaces, §2): a subtitle that says how many are
+    active and, when one is, that a parley is live there ("4 active, and a
+    parley is live in EU launch."), and New teamspace. Below it, a search (`/` focuses it, unless the
+    member is typing) and segmented status filters that carry their counts
+    (All 5, Active 4, Paused 1). The teamspaces are a grid of cards: planet,
+    name, "<Team> team · N people" (or "· paused"), purpose, a live row
+    with the "Parley · 18 min" chip while a call runs, and a footer with
+    the faces of the people who have a seat (four, then +N). Clicking a
+    card opens the teamspace; its More menu has Open, Manage details, and,
+    for whoever manages it, Pause or Resume and Delete. Pause and Delete
+    open the details on their usual confirm; Resume needs none. A paused
+    card is dimmed, still opens from anywhere on it, and says its room is
+    closed until a team admin resumes it. The parley chip reads each open teamspace's call once a minute
+    (the member must be on the team), under the room's own call key.
+    Unread counts, who's editing, custom facts, the last activity line and
+    who paused it stay off the card until the list carries them.
+  - For a member who can open one, the last card opens a new teamspace,
+    drawn as the ship's lines on deep sea, with a New teamspace button.
+    Both it and the header's button open the create form as a pop-up
+    sheet (`ui/dialog`), the lines faint at its top.
 - **People, Agents and Settings as tiles** (founder's redesign, 14 Oct
   2026). People is a grid of cards (the person, their presence, what you
   share, Message). On the Agents pages the primary agent, the stats, teams,

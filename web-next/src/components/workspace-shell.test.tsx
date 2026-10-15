@@ -595,9 +595,8 @@ describe("WorkspaceShell navigation", () => {
     render(<SignedInShell />)
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
+      await screen.findByRole("button", { name: "Open Launch room" })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Open teamspace" }))
     expect(
       screen.queryByRole("complementary", { name: "Workspace navigation" })
     ).toBeNull()
@@ -628,7 +627,7 @@ describe("WorkspaceShell navigation", () => {
       screen.getByRole("navigation", { name: "Team navigation" })
     ).toBeTruthy()
     expect(
-      screen.getByRole("button", { name: "Manage Launch room" })
+      screen.getByRole("button", { name: "Open Launch room" })
     ).toBeTruthy()
   })
 
@@ -812,8 +811,12 @@ describe("WorkspaceShell navigation", () => {
       ).toBe("Teamspaces2")
     )
 
+    // A card opens its teamspace; its details are in the card's More menu.
     fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Design reviews" })
+      await screen.findByRole("button", { name: "More for Design reviews" })
+    )
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Manage details" })
     )
     expect(
       screen.getByRole("heading", { name: "Design reviews", level: 1 })
@@ -958,9 +961,8 @@ describe("WorkspaceShell navigation", () => {
     const { container } = render(<SignedInShell />)
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Manage Launch room" })
+      await screen.findByRole("button", { name: "Open Launch room" })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Open teamspace" }))
 
     const focus = container.querySelector<HTMLElement>(".workspace-focus")
     const input = screen.getByRole("textbox", { name: "Message Launch room" })
