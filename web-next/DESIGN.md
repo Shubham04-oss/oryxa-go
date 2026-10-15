@@ -266,6 +266,12 @@ not permission to copy every incidental value into a new component.
     members with an Admin/Member menu, Add a member, Danger zone → Delete
     team). New team is a small dialog (name, inside which team), Cancel then
     Create.
+  - **Billing:** the plan is one card (Current plan, its name, when it
+    renews, seats used against the limit as a bar, and Change plan, which
+    opens the billing portal, or Choose a plan, which lists the plans to
+    check out), the harbour scene fading in at its right. Payment is one row
+    pointing to the portal. No price, card, contact or invoices until the
+    billing routes carry them.
 - **Chats and DMs as tiles** (founder's redesign, 14 Oct 2026). The open
   chat in the chat list is the raised tile and the others lift on hover; DM
   rows are rounded the same way, with unread as a filled count. The member's

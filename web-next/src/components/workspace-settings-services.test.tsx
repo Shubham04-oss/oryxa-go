@@ -70,6 +70,63 @@ describe("connected settings sections", () => {
     expect(screen.queryByRole("button", { name: "Choose" })).toBeNull()
   })
 
+  it("shows the plan as one card with renewal and seats, and Change plan opens the portal", async () => {
+    const assign = vi.fn()
+    vi.stubGlobal("location", { ...window.location, assign })
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) =>
+      json(
+        url.endsWith("/plans")
+          ? { plans: [{ key: "team", member_limit: 10 }], unpaid: {} }
+          : url.endsWith("/members")
+            ? {
+                members: [1, 2, 3].map((n) => ({
+                  organization_id: "org-1",
+                  user_id: `u${n}`,
+                  email: `u${n}@example.com`,
+                  role: "member",
+                  joined_at: "2026-09-01T00:00:00Z",
+                })),
+              }
+            : url.endsWith("/portal") && init?.method === "POST"
+              ? { portal_url: "https://billing.example/portal" }
+              : {
+                  can_manage: true,
+                  organization_id: "org-1",
+                  entitlements: {
+                    plan: "team",
+                    status: "active",
+                    member_limit: 10,
+                    grace_ends_at: null,
+                  },
+                  subscription: {
+                    plan: "team",
+                    status: "active",
+                    quantity: 1,
+                    renews_at: "2026-11-01T00:00:00Z",
+                    ends_at: null,
+                  },
+                }
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    show(
+      <WorkspaceBillingSettings organization={organization} preview={false} />
+    )
+    expect(await screen.findByText("Renews 1 November 2026")).toBeTruthy()
+    expect(await screen.findByText("3 of 10 seats")).toBeTruthy()
+    expect(
+      screen
+        .getByRole("meter", { name: "Seats used" })
+        .getAttribute("aria-valuenow")
+    ).toBe("3")
+    // A subscription changes plan in the portal; no checkout list.
+    expect(screen.queryByRole("region", { name: "Plans" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Change plan" }))
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith("https://billing.example/portal")
+    )
+  })
+
   it("creates a real team through the teams service", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) =>
       json(

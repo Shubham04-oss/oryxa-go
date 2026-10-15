@@ -388,6 +388,40 @@
 .settings-field .settings-input[data-slot="input"] { width: 100%; }
 .settings-dialog-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 
+/* Billing: the plan as one card, the harbour fading in at its right. */
+.settings-plan[data-slot="card"] {
+  position: relative;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border-radius: 16px;
+}
+.settings-plan > :not(.settings-plan-scene) { position: relative; }
+.settings-plan-scene {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 46%;
+  background: var(--scene-harbour) center 55% / cover no-repeat;
+  opacity: var(--scene-soft-opacity);
+  -webkit-mask-image: linear-gradient(to right, transparent, var(--text) 100%);
+  mask-image: linear-gradient(to right, transparent, var(--text) 100%);
+  pointer-events: none;
+}
+.settings-plan-text { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 180px; }
+.settings-plan-text small,
+.settings-seats small { color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.settings-seats small { letter-spacing: 0; text-transform: none; font-size: 12px; font-weight: 500; }
+.settings-plan-text strong { color: var(--text); font-size: 20px; font-weight: 700; }
+.settings-plan-text span { color: var(--text-soft); font-size: 12.5px; }
+.settings-seats { display: flex; flex-direction: column; gap: 8px; min-width: 160px; }
+.settings-seats-bar { height: 6px; overflow: hidden; border-radius: 999px; background: var(--hover); }
+.settings-seats-bar i { display: block; height: 100%; background: var(--text); }
+.settings-seats-input[data-slot="input"] { width: 80px; }
+
 /* Older page blocks, until each page moves onto the kit. */
 .workspace-settings-account { padding: 0; }
 .workspace-settings-account > * {
@@ -517,8 +551,7 @@
   font-size: 12px;
   line-height: 1.5;
 }
-.workspace-settings-confirm input,
-.workspace-settings-plan-actions input {
+.workspace-settings-confirm input {
   min-height: 32px;
   padding: 0 9px;
   border: 1px solid var(--tone-454545);
@@ -530,8 +563,7 @@
 .workspace-settings-confirm input {
   width: 100%;
 }
-.workspace-settings-action,
-.workspace-settings-plan-actions button {
+.workspace-settings-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -544,12 +576,10 @@
   color: var(--tone-eeeeee);
   font-size: 12px;
 }
-.workspace-settings-action:hover,
-.workspace-settings-plan-actions button:hover {
+.workspace-settings-action:hover {
   background: var(--tone-3c3c3c);
 }
-.workspace-settings-action:disabled,
-.workspace-settings-plan-actions button:disabled {
+.workspace-settings-action:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
@@ -560,30 +590,6 @@
   color: var(--text-muted);
   font-size: 11px;
 }
-.workspace-settings-plan-actions {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.workspace-settings-plan-actions label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--tone-aaaaaa);
-  font-size: 11px;
-}
-.workspace-settings-plan-actions input {
-  width: 62px;
-}
-.workspace-settings-billing-plan {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 15px 0 9px;
-}
-.workspace-settings-billing-plan strong {
-  font-size: 22px;
-}
 .workspace-settings-tag {
   padding: 5px 8px;
   border: 1px solid var(--tone-454545);
@@ -592,9 +598,6 @@
   font-size: 10px;
   font-weight: 500;
   text-transform: capitalize;
-}
-.workspace-settings-plan-row {
-  border-top: 1px solid var(--tone-383838);
 }
 .workspace-settings-tool-row {
   display: flex;
