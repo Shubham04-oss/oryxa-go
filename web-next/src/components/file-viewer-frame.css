@@ -1,0 +1,108 @@
+/* One frame for an open file (file-viewer-frame.tsx): a bar over an inset
+   tile. The bar's buttons are ghost icon-sm (DESIGN.md, Buttons and action
+   rows); colours are theme tokens only. */
+.file-viewer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.file-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 8px 8px 8px 12px;
+  color: var(--text-soft);
+}
+.file-viewer-title {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.file-viewer-title strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-viewer-title small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-viewer-crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.file-viewer-crumbs li + li::before {
+  margin: 0 6px;
+  content: "/";
+}
+.file-viewer-crumb {
+  height: auto;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.file-viewer-crumb:hover {
+  color: var(--text);
+}
+.file-viewer-tools,
+.file-viewer-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.file-viewer-tools {
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.file-viewer-actions [data-slot="button"],
+.file-viewer-actions > a,
+.file-viewer-tools [data-slot="button"] {
+  color: var(--text-muted);
+}
+.file-viewer-actions [data-slot="button"]:hover,
+.file-viewer-actions > a:hover,
+.file-viewer-tools [data-slot="button"]:hover {
+  color: var(--text);
+}
+.file-viewer-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 8px 8px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--base);
+}
+
+@media (max-width: 800px) {
+  .file-viewer-bar {
+    flex-wrap: wrap;
+  }
+  .file-viewer-tools {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+  }
+}

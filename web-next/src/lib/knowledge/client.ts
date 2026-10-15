@@ -219,6 +219,37 @@ export async function listRuns(
   return runs
 }
 
+/**
+ * One document knowledge extracted from a connected app
+ * (`GET /v1/organizations/{org}/documents/{id}`, getDocument in
+ * knowledge/internal/httpserver/server.go): its text and where it lives.
+ */
+export type KnowledgeDocument = {
+  id: string
+  source_id: string
+  external_id: string
+  kind: string
+  title: string
+  /** The document at its app, when the app gives one. */
+  url?: string
+  mime: string
+  body: string
+  byte_size: number
+  metadata?: Record<string, string>
+  source_updated_at?: string
+  extracted_at?: string
+  removed_at?: string | null
+}
+
+export function getKnowledgeDocument(
+  organizationId: string,
+  documentId: string
+): Promise<KnowledgeDocument> {
+  return apiRequest<KnowledgeDocument>(
+    `/v1/organizations/${encodeURIComponent(organizationId)}/documents/${encodeURIComponent(documentId)}`
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Query keys and options
 // ---------------------------------------------------------------------------
@@ -275,6 +306,21 @@ export function sourceRunsQueryOptions(
   return queryOptions({
     queryKey: [...sourceRunsQueryKey(organizationId, sourceId), limit] as const,
     queryFn: () => listRuns(organizationId, sourceId, limit),
+  })
+}
+
+export function knowledgeDocumentQueryOptions(
+  organizationId: string,
+  documentId: string
+) {
+  return queryOptions({
+    queryKey: [
+      ...knowledgeQueryKey(organizationId),
+      "document",
+      documentId,
+    ] as const,
+    queryFn: () => getKnowledgeDocument(organizationId, documentId),
+    staleTime: 60_000,
   })
 }
 

@@ -15,6 +15,7 @@ import { AppLogo } from "./app-logo"
 import { filterFiles } from "./knowledge-base-detail"
 import { countLabel } from "./knowledge-format"
 import { LibraryFileTable } from "./library-file-table"
+import type { LibraryFile } from "./library-file-table"
 import type { LibrarySource } from "./library-rail"
 
 function SourceHeader({
@@ -66,6 +67,7 @@ export function LibrarySourceFiles({
   members,
   filter,
   onOpenTools,
+  onOpen,
 }: {
   organizationId: string
   source: LibrarySource
@@ -73,6 +75,7 @@ export function LibrarySourceFiles({
   members: readonly Member[]
   filter: string
   onOpenTools?: () => void
+  onOpen?: (file: LibraryFile) => void
 }) {
   const corpus = corpora.find(isFromConnectedApps)
   const documentsQuery = useInfiniteQuery({
@@ -126,6 +129,9 @@ export function LibrarySourceFiles({
               label={`Files from ${source.name}`}
               files={files}
               members={members}
+              onOpen={
+                onOpen && ((file) => onOpen({ ...file, collection: corpus }))
+              }
             />
           ) : fromSource.length ? (
             <p className="workspace-knowledge-loading">

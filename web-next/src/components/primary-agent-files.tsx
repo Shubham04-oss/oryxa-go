@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { ArrowLeft, Download, Pencil } from "lucide-react"
+import { Pencil } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { ApiError } from "@/lib/api/client"
 import {
   fetchArtifactLink,
@@ -10,6 +11,7 @@ import type { ArtifactLink } from "@/lib/threads/client"
 import { artifactFileName, buildTimeline } from "@/lib/threads/timeline"
 import type { ArtifactEntry } from "@/lib/threads/timeline"
 import { FileKindBadge } from "./file-kind"
+import { FileViewerFrame } from "./file-viewer-frame"
 import { OfficeEditor } from "./office-editor"
 
 const DocumentPreview = lazy(() =>
@@ -226,80 +228,59 @@ export function PrimaryAgentFileViewer({
   const name = current ? artifactFileName(current.name) : "File"
 
   return (
-    <div className="workspace-primary-file-viewer">
-      <header className="workspace-primary-file-viewer-bar">
-        <button
-          type="button"
-          className="workspace-icon-button"
-          aria-label="Back to Agent overview"
-          onClick={onBack}
-        >
-          <ArrowLeft size={17} strokeWidth={1.7} />
-        </button>
-        <FileKindBadge name={name} />
-        <strong>{name}</strong>
-        {editable && link && (
-          <button
-            type="button"
-            className="workspace-primary-file-edit-button"
+    <FileViewerFrame
+      name={name}
+      backLabel="Back to Agent overview"
+      onBack={onBack}
+      actions={
+        editable && link ? (
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => setEditingFileKey(editing ? null : currentFileKey)}
             aria-label={editing ? `View ${name}` : `Edit ${name}`}
           >
-            {!editing && (
-              <Pencil size={13} strokeWidth={1.8} aria-hidden="true" />
-            )}
+            {!editing && <Pencil strokeWidth={1.8} aria-hidden="true" />}
             {editing ? "View" : "Edit"}
-          </button>
-        )}
-        {link && (
-          <a
-            href={link.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            download={link.inline ? undefined : name}
-            aria-label={`Open ${name}`}
-          >
-            <Download size={16} strokeWidth={1.7} />
-          </a>
-        )}
-      </header>
-      <div
-        className="workspace-primary-file-viewer-content"
-        data-screen-context-kind={current ? "artifact" : undefined}
-        data-screen-context-id={current?.name}
-        data-screen-context-name={current ? name : undefined}
-        data-screen-context-selected={current ? "true" : undefined}
-      >
-        <div className="workspace-document-stage">
-          {error ? (
-            <p role="alert">{error}</p>
-          ) : listError && !file ? (
-            <p role="alert">{status}</p>
-          ) : !current ? (
-            <p role={pending ? "status" : undefined}>
-              {pending ? "Opening file…" : "The agent has no file to show yet."}
-            </p>
-          ) : !link ? (
-            <p role="status">Opening preview…</p>
-          ) : editing && activeThreadId ? (
-            <OfficeEditor
-              organizationId={organizationId}
-              threadId={activeThreadId}
-              name={current.name}
-              mode="edit"
-            />
-          ) : (
-            <Suspense fallback={<p role="status">Opening preview…</p>}>
-              <DocumentPreview
-                key={currentFileKey}
-                url={link.url}
-                name={name}
-                contentType={link.contentType}
-              />
-            </Suspense>
-          )}
-        </div>
-      </div>
-    </div>
+          </Button>
+        ) : undefined
+      }
+      download={
+        link
+          ? { href: link.url, fileName: link.inline ? undefined : name }
+          : undefined
+      }
+      context={
+        current ? { kind: "artifact", id: current.name, name } : undefined
+      }
+    >
+      {error ? (
+        <p role="alert">{error}</p>
+      ) : listError && !file ? (
+        <p role="alert">{status}</p>
+      ) : !current ? (
+        <p role={pending ? "status" : undefined}>
+          {pending ? "Opening file…" : "The agent has no file to show yet."}
+        </p>
+      ) : !link ? (
+        <p role="status">Opening preview…</p>
+      ) : editing && activeThreadId ? (
+        <OfficeEditor
+          organizationId={organizationId}
+          threadId={activeThreadId}
+          name={current.name}
+          mode="edit"
+        />
+      ) : (
+        <Suspense fallback={<p role="status">Opening preview…</p>}>
+          <DocumentPreview
+            key={currentFileKey}
+            url={link.url}
+            name={name}
+            contentType={link.contentType}
+          />
+        </Suspense>
+      )}
+    </FileViewerFrame>
   )
 }

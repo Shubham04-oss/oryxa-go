@@ -253,80 +253,8 @@
   color: var(--text-muted);
   font-size: 11px;
 }
-.workspace-primary-file-viewer {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-.workspace-primary-file-viewer-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 48px;
-  padding: 6px 8px 6px 14px;
-  color: var(--tone-bcbcbc);
-}
-.workspace-primary-file-viewer-bar strong {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--tone-ededed);
-  font-size: 12px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.workspace-primary-file-edit-button {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 54px;
-  min-height: 30px;
-  padding: 5px 12px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--base);
-  color: var(--tone-e4e4e4);
-  font-size: 11px;
-  font-weight: 600;
-}
-.workspace-primary-file-edit-button:hover {
-  background: var(--hover);
-  color: var(--tone-ffffff);
-}
-.workspace-primary-file-edit-button:focus-visible {
-  outline: 2px solid var(--tone-aaaaaa);
-  outline-offset: 2px;
-}
-.workspace-primary-file-viewer-bar a {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 999px;
-  color: var(--tone-aaaaaa);
-}
-.workspace-primary-file-viewer-bar a:hover {
-  background: var(--hover);
-  color: var(--text);
-}
 /* The file sits in an inset tile under its bar, as one frame (founder's redesign, 14 Oct 2026). */
-.workspace-primary-file-viewer-content {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  margin: 0 8px 8px;
-  overflow: auto;
-  border-radius: 10px;
-  background: var(--base);
-}
+
 .workspace-document-stage {
   position: relative;
   display: flex;

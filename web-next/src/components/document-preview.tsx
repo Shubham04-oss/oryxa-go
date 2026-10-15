@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import type {
   PDFDocumentLoadingTask,
@@ -535,19 +535,30 @@ function SpreadsheetPreview({ bytes }: { bytes: ArrayBuffer }) {
 }
 
 export function DocumentPreview({
-  url,
+  url = "",
+  text,
   name,
   contentType,
 }: {
-  url: string
+  /** Where the file's bytes are read from. */
+  url?: string
+  /** The file's text, when the page already holds it; nothing is fetched. */
+  text?: string
   name: string
   contentType: string
 }) {
   const kind = previewKind(name, contentType)
-  const { bytes, error } = useFileBytes(
+  const fetched = useFileBytes(
     url,
-    kind !== "image" && kind !== "unsupported"
+    text === undefined && kind !== "image" && kind !== "unsupported"
   )
+  const held = useMemo(
+    () =>
+      text === undefined ? undefined : new TextEncoder().encode(text).buffer,
+    [text]
+  )
+  const bytes = held ?? fetched.bytes
+  const error = held ? undefined : fetched.error
   if (kind === "image")
     return (
       <div className="workspace-document-scroll workspace-document-image">
@@ -557,7 +568,7 @@ export function DocumentPreview({
   if (kind === "unsupported")
     return (
       <p>
-        Preview is not available for this format. Use Edit or download the file.
+        Preview isn’t available for this format. Download the file to open it.
       </p>
     )
   if (error) return <p role="alert">{error}</p>
@@ -566,16 +577,16 @@ export function DocumentPreview({
   if (kind === "docx") return <DocxPreview bytes={bytes} name={name} />
   if (kind === "pptx") return <PptxPreview bytes={bytes} />
   if (kind === "xlsx") return <SpreadsheetPreview bytes={bytes} />
-  const text = new TextDecoder().decode(bytes)
+  const decoded = new TextDecoder().decode(bytes)
   if (kind === "markdown")
     return (
       <article className="workspace-document-scroll workspace-document-prose">
-        <AgentMarkdown text={text} />
+        <AgentMarkdown text={decoded} />
       </article>
     )
   if (kind === "csv") {
     // CSV is data, not HTML: React escapes every parsed cell.
-    const parsed = Papa.parse<string[]>(text, { skipEmptyLines: false }).data
+    const parsed = Papa.parse<string[]>(decoded, { skipEmptyLines: false }).data
     const rows = parsed.slice(0, 300)
     return (
       <TablePreview
@@ -591,7 +602,7 @@ export function DocumentPreview({
   }
   return (
     <pre className="workspace-document-scroll workspace-document-text">
-      {text}
+      {decoded}
     </pre>
   )
 }

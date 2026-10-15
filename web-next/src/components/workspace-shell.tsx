@@ -166,6 +166,13 @@ function WorkspaceShellContent({
   })
   const [knowledgeBaseSelection, setKnowledgeBaseSelection] =
     useState<SelectedKnowledgeBase | null>(null)
+  // The Library file open in its viewer, for the agent's screen context.
+  const [libraryFile, setLibraryFile] = useState<ScreenItem | null>(null)
+  const openLibraryFile = useCallback((file: ScreenItem | null) => {
+    setLibraryFile(file)
+    // A file is never to the left of a chat: the panel steps aside.
+    if (file) setRightExpanded(false)
+  }, [])
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState("")
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -381,19 +388,21 @@ function WorkspaceShellContent({
           }
         : canvasPeerId && canvasPeerName
           ? { kind: "person", id: canvasPeerId, name: canvasPeerName }
-          : selectedKnowledgeBase
-            ? {
-                kind: "knowledge_base",
-                id: selectedKnowledgeBase.id,
-                name: selectedKnowledgeBase.name,
-              }
-            : selectedTeamspace
+          : section === "knowledge" && libraryFile
+            ? libraryFile
+            : selectedKnowledgeBase
               ? {
-                  kind: "teamspace",
-                  id: selectedTeamspace.id,
-                  name: selectedTeamspace.name,
+                  kind: "knowledge_base",
+                  id: selectedKnowledgeBase.id,
+                  name: selectedKnowledgeBase.name,
                 }
-              : undefined
+              : selectedTeamspace
+                ? {
+                    kind: "teamspace",
+                    id: selectedTeamspace.id,
+                    name: selectedTeamspace.name,
+                  }
+                : undefined
   const screenContextRef = useRef<() => ScreenContext>(() =>
     captureScreenContext("home/overview")
   )
@@ -916,6 +925,7 @@ function WorkspaceShellContent({
                   selected={selectedKnowledgeBase ?? null}
                   onSelect={setKnowledgeBaseSelection}
                   onOpenTools={() => selectSection("tools")}
+                  onOpenFileChange={openLibraryFile}
                 />
               )}
               {section === "tools" && (
