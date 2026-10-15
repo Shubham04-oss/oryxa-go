@@ -21,7 +21,13 @@ import {
 import { CallSurface, ParleyButton, ParleyStrip, tintOf } from "./call-surfaces"
 import type { CallView } from "@/lib/call/client"
 import { callDuration, parseVoiceFrame, whoIsIn } from "@/lib/call/client"
-import type { CallMedia, CallTile, HeardSegment } from "@/lib/call/media"
+import type {
+  CallMedia,
+  CallSignal,
+  CallTile,
+  HeardSegment,
+} from "@/lib/call/media"
+import { readSignal } from "@/lib/call/media"
 
 const room = { kind: "teamspace", id: "tsp_1" } as const
 const base = "/live/org_1/rooms/teamspace/tsp_1"
@@ -908,6 +914,98 @@ describe("the shared dock and tiles", () => {
     expect(
       within(page).getByRole("button", { name: "Show the room" })
     ).toBeTruthy()
+  })
+})
+
+describe("raised hands and reactions", () => {
+  function signalling(fails = false) {
+    const media = fakeMedia()
+    let heard: ((member: string, signal: CallSignal) => void) | undefined
+    const signal = vi.fn(async () => {
+      if (fails) throw new Error("not allowed")
+    })
+    return Object.assign(media, {
+      signal,
+      onSignal(listener: (member: string, signal: CallSignal) => void) {
+        heard = listener
+        return () => undefined
+      },
+      from: (member: string, sent: CallSignal) => heard?.(member, sent),
+    })
+  }
+
+  async function openFullPage(media: CallMedia) {
+    renderParley(vi.fn(async () => media))
+    const strip = await screen.findByRole("region", {
+      name: "Parley in progress",
+    })
+    fireEvent.click(within(strip).getByRole("button", { name: "Join" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }))
+    return screen.getByRole("dialog", { name: "EU launch parley" })
+  }
+
+  it("reads only well-formed signals", () => {
+    expect(readSignal("oryxa.hand", { member: "usr_raya", up: true })).toEqual({
+      member: "usr_raya",
+      signal: { kind: "hand", up: true },
+    })
+    expect(
+      readSignal("oryxa.reaction", { member: "usr_raya", emoji: "🎉" })
+    ).toEqual({ member: "usr_raya", signal: { kind: "reaction", emoji: "🎉" } })
+    expect(readSignal("oryxa.hand", { up: true })).toBeUndefined()
+    expect(readSignal("chat", { member: "usr_raya" })).toBeUndefined()
+  })
+
+  it("raises the member's hand for everyone, and shows others' hands and reactions", async () => {
+    const media = signalling()
+    const page = await openFullPage(media)
+    const dock = within(page).getByRole("toolbar", { name: "Parley controls" })
+    fireEvent.click(within(dock).getByRole("button", { name: "Raise hand" }))
+    expect(media.signal).toHaveBeenCalledWith({ kind: "hand", up: true })
+    const me = within(page).getByRole("group", { name: "You, hand raised" })
+    expect(within(me).getByText("Raised hand")).toBeTruthy()
+    expect(
+      within(dock).getByRole("button", { name: "Lower hand" })
+    ).toBeTruthy()
+
+    act(() => {
+      media.from("usr_raya", { kind: "hand", up: true })
+      media.from("usr_raya", { kind: "reaction", emoji: "🎉" })
+    })
+    const raya = within(page).getByRole("group", {
+      name: "Raya Patel, hand raised",
+    })
+    expect(within(raya).getByRole("img", { name: "Reacted 🎉" })).toBeTruthy()
+    act(() => media.from("usr_raya", { kind: "hand", up: false }))
+    expect(within(page).getByRole("group", { name: "Raya Patel" })).toBeTruthy()
+
+    fireEvent.click(within(dock).getByRole("button", { name: "React" }))
+    fireEvent.click(await screen.findByRole("menuitem", { name: "React 👍" }))
+    expect(media.signal).toHaveBeenCalledWith({
+      kind: "reaction",
+      emoji: "👍",
+    })
+  })
+
+  it("hides hands and reactions when the call can't carry them", async () => {
+    const media = signalling(true)
+    const page = await openFullPage(media)
+    const dock = within(page).getByRole("toolbar", { name: "Parley controls" })
+    fireEvent.click(within(dock).getByRole("button", { name: "Raise hand" }))
+    await waitFor(() =>
+      expect(within(dock).queryByRole("button", { name: /hand/ })).toBeNull()
+    )
+    expect(within(dock).queryByRole("button", { name: "React" })).toBeNull()
+    // The hand went back down.
+    expect(within(page).getByRole("group", { name: "You" })).toBeTruthy()
+  })
+
+  it("offers neither without a way to send them", async () => {
+    const page = await openFullPage(fakeMedia())
+    const dock = within(page).getByRole("toolbar", { name: "Parley controls" })
+    expect(
+      within(dock).queryByRole("button", { name: "Raise hand" })
+    ).toBeNull()
   })
 })
 

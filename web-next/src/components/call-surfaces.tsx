@@ -7,6 +7,8 @@ import type { CSSProperties } from "react"
 import {
   ArrowLeft,
   Captions,
+  Hand,
+  SmilePlus,
   Circle,
   Maximize2,
   MessageSquareText,
@@ -22,10 +24,16 @@ import {
   VideoOff,
   X,
 } from "lucide-react"
-import { roomKey, useCall } from "./call-provider"
+import { roomKey, useCall, useSignalsOf } from "./call-provider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Toggle } from "@/components/ui/toggle"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { ActiveCall, EndedCall } from "./call-provider"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
@@ -107,8 +115,15 @@ export function CallFlag({
  */
 function flagOf(
   tile: CallTile | undefined,
-  size: "default" | "big" | "small"
+  size: "default" | "big" | "small",
+  hand: boolean
 ): React.ReactNode {
+  if (hand)
+    return (
+      <CallFlag icon={<Hand size={11} aria-hidden="true" />}>
+        {size === "small" ? undefined : "Raised hand"}
+      </CallFlag>
+    )
   if (tile?.screenTrack)
     return (
       <CallFlag icon={<MonitorUp size={11} aria-hidden="true" />}>
@@ -144,7 +159,8 @@ export function CallCam({
   named?: boolean
 }) {
   const muted = tile ? !tile.audio : false
-  const label = `${tile?.self ? "You" : name}${speaking ? ", speaking" : ""}${muted ? ", muted" : ""}${tile?.screenTrack ? ", sharing" : ""}`
+  const { hand, reaction } = useSignalsOf(member)
+  const label = `${tile?.self ? "You" : name}${speaking ? ", speaking" : ""}${muted ? ", muted" : ""}${tile?.screenTrack ? ", sharing" : ""}${hand ? ", hand raised" : ""}`
   return (
     <div
       className="call-cam"
@@ -160,7 +176,17 @@ export function CallCam({
       ) : (
         <IdentityAvatar identity={personIdentity(member, name)} />
       )}
-      {named && (flag ?? flagOf(tile, size))}
+      {named && (flag ?? flagOf(tile, size, hand))}
+      {reaction && (
+        <span
+          key={reaction.id}
+          className="call-reaction"
+          role="img"
+          aria-label={`Reacted ${reaction.emoji}`}
+        >
+          {reaction.emoji}
+        </span>
+      )}
       {named && (
         <span className="call-name">
           {speaking ? (
@@ -878,6 +904,52 @@ type Layout = "gallery" | "speaker" | "shared"
 /** What sits beside the call: what's been said, the room's conversation, or neither. */
 export type Side = "transcript" | "room" | null
 
+/** The reactions a member can send, in the order the menu offers them. */
+export const REACTIONS = ["👍", "👏", "😂", "🎉", "❤️"]
+
+/**
+ * Raise hand and React, while the call can carry them (the member's preset
+ * allows broadcasts); nothing otherwise.
+ */
+export function CallSignals({ active }: { active: ActiveCall }) {
+  const { setHand, react } = useCall()
+  if (!active.signals) return null
+  const up = active.hands.includes(active.member)
+  return (
+    <>
+      <Toggle
+        className="call-btn"
+        data-state={up ? "on" : undefined}
+        pressed={up}
+        aria-label={up ? "Lower hand" : "Raise hand"}
+        onPressedChange={(on) => void setHand(on)}
+      >
+        <Hand size={17} aria-hidden="true" />
+      </Toggle>
+      <DropdownMenu>
+        <DropdownMenuTrigger className="call-btn" aria-label="React">
+          <SmilePlus size={17} aria-hidden="true" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          side="top"
+          positionerClassName="call-menu"
+          className="call-reactions"
+        >
+          {REACTIONS.map((emoji) => (
+            <DropdownMenuItem
+              key={emoji}
+              aria-label={`React ${emoji}`}
+              onClick={() => void react(emoji)}
+            >
+              {emoji}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
+  )
+}
+
 /** "5 people, Krude taking notes": who the call has, for the dock. */
 function dockLine(active: ActiveCall, view: CallView | null): string {
   const people = view?.participants.length ?? active.tiles.length
@@ -985,6 +1057,7 @@ export function CallDock({
         >
           <MonitorUp size={18} aria-hidden="true" />
         </Toggle>
+        <CallSignals active={active} />
         <Toggle
           className="call-btn"
           data-state={view?.recording.on ? "off" : undefined}

@@ -3,6 +3,60 @@
    follows the theme. The strip joins from a teamspace, the mini player
    follows the member to other pages, and the full page is the parley. */
 
+/* A reaction rises briefly from its sender's tile. */
+.call-reaction {
+  position: absolute;
+  bottom: 36px;
+  left: 50%;
+  z-index: 1;
+  font-size: 28px;
+  line-height: 1;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.call-cam[data-size="small"] .call-reaction {
+  bottom: 24px;
+  font-size: 20px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .call-reaction {
+    animation: call-reaction 4s ease-out forwards;
+  }
+}
+@keyframes call-reaction {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.8);
+  }
+  12% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -16px);
+  }
+}
+/* The React menu opens over the parley's full page. */
+.call-menu {
+  z-index: 80;
+}
+.call-reactions {
+  display: flex;
+  width: auto;
+  min-width: 0;
+  gap: 4px;
+}
+.call-reactions [role="menuitem"] {
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  font-size: 20px;
+}
+
 /* A person in the call. */
 .call-cam {
   position: relative;
