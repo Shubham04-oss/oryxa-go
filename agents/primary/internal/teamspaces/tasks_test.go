@@ -75,7 +75,7 @@ func TestMembersKeepATeamspaceChecklistInOrder(t *testing.T) {
 	first, err := service.CreateTask(context.Background(), actor(), "tsp_1", TaskInput{
 		Title: "  Draft the   launch post ", OwnerUserID: ptr("user_2"), DueDate: ptr("2026-10-30"),
 	})
-	if err != nil || first.Title != "Draft the launch post" || *first.OwnerUserID != "user_2" || first.CreatedBy != "user_1" || first.Position != 0 {
+	if err != nil || first.Title != "Draft the launch post" || *first.OwnerUserID != "user_2" || first.CreatedByUserID != "user_1" || first.Position != 0 {
 		t.Fatalf("first = %+v, %v", first, err)
 	}
 	second, err := service.CreateTask(context.Background(), teammate(), "tsp_1", TaskInput{Title: "Book the venue"})
@@ -144,7 +144,7 @@ func TestOnlyItsCreatorOrAManagerRemovesATask(t *testing.T) {
 
 func TestAPausedChecklistIsReadOnlyAndOnlyMembersUseIt(t *testing.T) {
 	repo := taskSpace(StatusDisabled)
-	repo.tasks = []Task{{ID: "tst_1", TeamspaceID: "tsp_1", Title: "Ship", CreatedBy: "user_1"}}
+	repo.tasks = []Task{{ID: "tst_1", TeamspaceID: "tsp_1", Title: "Ship", CreatedByUserID: "user_1"}}
 	service, _ := New(repo, fakeDirectory{directory: teamDirectory(true, true)})
 	if tasks, err := service.ListTasks(context.Background(), actor(), "tsp_1"); err != nil || len(tasks) != 1 {
 		t.Fatalf("paused list = %+v, %v", tasks, err)

@@ -376,7 +376,7 @@ func (service *fakeTeamspaces) CreateTask(_ context.Context, actor teamspaces.Ac
 	if service.space.ID != id {
 		return teamspaces.Task{}, teamspaces.ErrNotFound
 	}
-	task := teamspaces.Task{ID: "tst_1", TeamspaceID: id, Title: input.Title, OwnerUserID: input.OwnerUserID, CreatedBy: actor.UserID}
+	task := teamspaces.Task{ID: "tst_1", TeamspaceID: id, Title: input.Title, OwnerUserID: input.OwnerUserID, CreatedByUserID: actor.UserID}
 	service.tasks = append(service.tasks, task)
 	return task, nil
 }

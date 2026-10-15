@@ -460,17 +460,17 @@ func TestStoreKeepsAChecklist(t *testing.T) {
 
 	owner, due := "user_grace", "2026-10-30"
 	first, err := store.CreateTask(ctx, Task{ID: fmt.Sprintf("tst_a_%d", suffix), TeamspaceID: space.ID, OrganizationID: organizationID,
-		Title: "Draft the post", OwnerUserID: &owner, DueDate: &due, Position: -1, CreatedBy: "user_owner"})
+		Title: "Draft the post", OwnerUserID: &owner, DueDate: &due, Position: -1, CreatedByUserID: "user_owner"})
 	if err != nil || first.Position != 0 || first.DueDate == nil || *first.DueDate != due || *first.OwnerUserID != owner || first.Done {
 		t.Fatalf("first = %+v, %v", first, err)
 	}
 	second, err := store.CreateTask(ctx, Task{ID: fmt.Sprintf("tst_b_%d", suffix), TeamspaceID: space.ID, OrganizationID: organizationID,
-		Title: "Book the venue", Position: -1, CreatedBy: "user_owner"})
+		Title: "Book the venue", Position: -1, CreatedByUserID: "user_owner"})
 	if err != nil || second.Position != 1 || second.OwnerUserID != nil || second.DueDate != nil {
 		t.Fatalf("second = %+v, %v", second, err)
 	}
 	if _, err := store.CreateTask(ctx, Task{ID: fmt.Sprintf("tst_c_%d", suffix), TeamspaceID: "tsp_missing", OrganizationID: organizationID,
-		Title: "Nowhere", Position: -1, CreatedBy: "user_owner"}); !errors.Is(err, ErrNotFound) {
+		Title: "Nowhere", Position: -1, CreatedByUserID: "user_owner"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a task in no teamspace: %v, want ErrNotFound", err)
 	}
 
