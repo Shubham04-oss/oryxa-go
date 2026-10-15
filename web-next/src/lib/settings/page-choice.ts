@@ -1,5 +1,7 @@
 export type SettingsPage =
   | "account"
+  | "agent"
+  | "notifications"
   | "organization"
   | "people"
   | "teams"
@@ -13,6 +15,8 @@ export type SettingsScope = { organizationId: string; userId: string }
 
 const pages: readonly SettingsPage[] = [
   "account",
+  "agent",
+  "notifications",
   "organization",
   "people",
   "teams",

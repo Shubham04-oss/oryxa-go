@@ -501,9 +501,7 @@ describe("WorkspaceShell navigation", () => {
     expect(
       screen.getByRole("heading", { name: "Account", level: 2 })
     ).toBeTruthy()
-    fireEvent.click(
-      screen.getByRole("button", { name: "People & invitations" })
-    )
+    fireEvent.click(screen.getByRole("button", { name: "People" }))
     expect(
       screen.getByRole("heading", { name: "Make room for someone new." })
     ).toBeTruthy()
