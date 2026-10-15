@@ -18,6 +18,10 @@ import {
   Trash2,
   UsersRound,
 } from "lucide-react"
+import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -31,8 +35,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Kbd } from "@/components/ui/kbd"
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Textarea } from "@/components/ui/textarea"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import {
   agentIdentity,
@@ -364,12 +372,14 @@ export function TeamspacesManagement({
       <header className="workspace-teamspaces-hello">
         <div>
           <h2>Teamspaces</h2>
-          <p aria-label="Teamspace summary">
-            {loaded ? summaryLine(activeCount, liveIn) : "Loading…"}
-          </p>
+          {(loaded || spaces.isPending) && (
+            <p aria-label="Teamspace summary">
+              {loaded ? summaryLine(activeCount, liveIn) : "Loading…"}
+            </p>
+          )}
         </div>
         {canCreate && (
-          <button
+          <Button
             className="workspace-teamspace-primary-button"
             type="button"
             aria-haspopup="dialog"
@@ -378,7 +388,7 @@ export function TeamspacesManagement({
           >
             <Plus size={16} strokeWidth={1.8} />
             New teamspace
-          </button>
+          </Button>
         )}
       </header>
 
@@ -415,27 +425,30 @@ export function TeamspacesManagement({
             placeholder="Search teamspaces"
             aria-keyshortcuts="/"
           />
-          <kbd aria-hidden="true">/</kbd>
+          <Kbd aria-hidden="true">/</Kbd>
         </label>
-        <div
+        <ToggleGroup
           className="workspace-teamspace-filters"
-          role="group"
           aria-label="Teamspace status filter"
+          value={[filter]}
+          onValueChange={(value) => {
+            // A segmented control: pressing the chosen filter keeps it.
+            const next = value[0] as Filter | undefined
+            if (next) setFilter(next)
+          }}
         >
           {filters.map((item) => (
-            <button
-              type="button"
+            <ToggleGroupItem
               key={item.key}
+              value={item.key}
               className={cn(filter === item.key && "is-active")}
-              aria-pressed={filter === item.key}
-              onClick={() => setFilter(item.key)}
             >
               {item.label}
               {loaded && " "}
               {loaded && <span>{counts[item.key]}</span>}
-            </button>
+            </ToggleGroupItem>
           ))}
-        </div>
+        </ToggleGroup>
       </div>
 
       {resume.isError && (
@@ -458,13 +471,14 @@ export function TeamspacesManagement({
               : "Couldn't load teamspaces"}
           </strong>
           {!isUnavailableHere(spaces.error) && (
-            <button
+            <Button
               className="workspace-teamspace-secondary-button"
+              variant="secondary"
               type="button"
               onClick={() => void spaces.refetch()}
             >
               Try again
-            </button>
+            </Button>
           )}
         </div>
       ) : filteredSpaces.length ? (
@@ -483,19 +497,19 @@ export function TeamspacesManagement({
             />
           ))}
           {canCreate && filter === "all" && !needle && (
-            <div className="workspace-teamspace-new">
+            <Card className="workspace-teamspace-new">
               <strong>Open a new teamspace</strong>
               <span>
                 A room, its files and its parleys, for people and their agents.
               </span>
-              <button
+              <Button
                 type="button"
                 aria-haspopup="dialog"
                 onClick={() => setIsCreating(true)}
               >
                 New teamspace
-              </button>
-            </div>
+              </Button>
+            </Card>
           )}
         </div>
       ) : list.length ? (
@@ -546,7 +560,8 @@ function TeamspaceCard({
 }) {
   const active = space.status === "active"
   return (
-    <article
+    <Card
+      role="article"
       className="workspace-teamspace-card"
       data-status={active ? "active" : "paused"}
       data-screen-context-kind="teamspace"
@@ -557,14 +572,15 @@ function TeamspaceCard({
       <div className="workspace-teamspace-card-top">
         <TeamspaceAvatar name={space.name} />
         <span className="workspace-teamspace-card-title">
-          <button
+          <Button
             className="workspace-teamspace-card-open"
+            variant="ghost"
             type="button"
             aria-label={`Open ${space.name}`}
             onClick={onOpen}
           >
             <strong>{space.name}</strong>
-          </button>
+          </Button>
           <small>
             {space.team_name} team ·{" "}
             {active ? people(space.whisperers.length) : "paused"}
@@ -572,7 +588,13 @@ function TeamspaceCard({
         </span>
         <DropdownMenu>
           <DropdownMenuTrigger
-            className="workspace-teamspace-card-more"
+            render={
+              <Button
+                className="workspace-teamspace-card-more"
+                variant="ghost"
+                size="icon"
+              />
+            }
             aria-label={`More for ${space.name}`}
           >
             <Ellipsis size={16} strokeWidth={1.8} aria-hidden="true" />
@@ -616,17 +638,17 @@ function TeamspaceCard({
       </p>
       {call && (
         <div className="workspace-teamspace-card-live">
-          <span>
+          <Badge variant="secondary">
             <span className="workspace-teamspace-live-dot" aria-hidden="true" />
             Parley · {parleyLength(call.startedAt)}
-          </span>
+          </Badge>
         </div>
       )}
       <div className="workspace-teamspace-card-foot">
         <span>{active ? "" : "Paused"}</span>
         <TeamspaceFaces space={space} />
       </div>
-    </article>
+    </Card>
   )
 }
 
@@ -636,7 +658,7 @@ export function TeamspaceFaces({ space }: { space: Teamspace }) {
   const more = space.whisperers.length - shown.length
   if (shown.length === 0) return null
   return (
-    <span
+    <AvatarGroup
       className="workspace-teamspace-faces"
       role="img"
       aria-label={shown
@@ -653,8 +675,8 @@ export function TeamspaceFaces({ space }: { space: Teamspace }) {
           )}
         />
       ))}
-      {more > 0 && <em>+{more}</em>}
-    </span>
+      {more > 0 && <AvatarGroupCount>+{more}</AvatarGroupCount>}
+    </AvatarGroup>
   )
 }
 
@@ -786,8 +808,8 @@ function CreateTeamspaceForm({
         </p>
       ) : (
         <>
-          <label htmlFor="teamspace-team">Team</label>
-          <select
+          <FieldLabel htmlFor="teamspace-team">Team</FieldLabel>
+          <NativeSelect
             id="teamspace-team"
             className="workspace-teamspace-select"
             value={teamId}
@@ -800,19 +822,21 @@ function CreateTeamspaceForm({
               errorFor("team") ? "teamspace-team-error" : undefined
             }
           >
-            {teams.length > 1 && <option value="">Choose a team</option>}
+            {teams.length > 1 && (
+              <NativeSelectOption value="">Choose a team</NativeSelectOption>
+            )}
             {teams.map((team) => (
-              <option value={team.id} key={team.id}>
+              <NativeSelectOption value={team.id} key={team.id}>
                 {team.name}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
           {errorFor("team") && (
             <p className="workspace-teamspace-error" id="teamspace-team-error">
               {errorFor("team")}
             </p>
           )}
-          <label htmlFor="teamspace-title">Name</label>
+          <FieldLabel htmlFor="teamspace-title">Name</FieldLabel>
           <Input
             id="teamspace-title"
             value={name}
@@ -834,7 +858,7 @@ function CreateTeamspaceForm({
               {errorFor("name")}
             </p>
           )}
-          <label htmlFor="teamspace-description">Description</label>
+          <FieldLabel htmlFor="teamspace-description">Description</FieldLabel>
           <Textarea
             id="teamspace-description"
             value={description}
@@ -872,12 +896,12 @@ function CreateTeamspaceForm({
         </p>
       )}
       <div className="workspace-teamspace-form-actions">
-        <button type="button" onClick={onCancel}>
+        <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel
-        </button>
-        <button type="submit" disabled={create.isPending || teams.length === 0}>
+        </Button>
+        <Button type="submit" disabled={create.isPending || teams.length === 0}>
           {create.isPending ? "Creating…" : "Create teamspace"}
-        </button>
+        </Button>
       </div>
     </form>
   )
@@ -967,47 +991,50 @@ function TeamspaceDetail({
     <>
       <div className="workspace-teamspace-detail-actions">
         {active && (
-          <button
+          <Button
             className="workspace-teamspace-primary-button"
             type="button"
             onClick={onOpen}
           >
             Open teamspace
             <ArrowRight size={16} strokeWidth={1.7} />
-          </button>
+          </Button>
         )}
         {space.can_manage && confirming === null && (
           <>
             {active ? (
-              <button
+              <Button
                 className="workspace-teamspace-secondary-button"
+                variant="secondary"
                 type="button"
                 disabled={busy}
                 onClick={() => setConfirming("pause")}
               >
                 <Pause size={15} strokeWidth={1.8} />
                 Pause teamspace
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button
                 className="workspace-teamspace-secondary-button"
+                variant="secondary"
                 type="button"
                 disabled={busy}
                 onClick={() => changeStatus.mutate("active")}
               >
                 <Play size={15} strokeWidth={1.8} />
                 {changeStatus.isPending ? "Resuming…" : "Resume teamspace"}
-              </button>
+              </Button>
             )}
-            <button
+            <Button
               className="workspace-teamspace-secondary-button"
+              variant="secondary"
               type="button"
               disabled={busy}
               onClick={() => setConfirming("delete")}
             >
               <Trash2 size={15} strokeWidth={1.8} />
               Delete teamspace
-            </button>
+            </Button>
           </>
         )}
       </div>
@@ -1022,16 +1049,20 @@ function TeamspaceDetail({
             Pause {space.name}? Its room closes for everyone until it is
             resumed. Its shared work stays.
           </p>
-          <button type="button" onClick={() => setConfirming(null)}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => setConfirming(null)}
+          >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             disabled={busy}
             onClick={() => changeStatus.mutate("disabled")}
           >
             {changeStatus.isPending ? "Pausing…" : "Pause teamspace"}
-          </button>
+          </Button>
         </div>
       )}
       {confirming === "delete" && (
@@ -1045,12 +1076,21 @@ function TeamspaceDetail({
             Specialists contributed to it stay with their owners. This can't be
             undone.
           </p>
-          <button type="button" onClick={() => setConfirming(null)}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => setConfirming(null)}
+          >
             Cancel
-          </button>
-          <button type="button" disabled={busy} onClick={() => remove.mutate()}>
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={busy}
+            onClick={() => remove.mutate()}
+          >
             {remove.isPending ? "Deleting…" : "Delete teamspace"}
-          </button>
+          </Button>
         </div>
       )}
       {(changeStatus.isError || remove.isError) && (

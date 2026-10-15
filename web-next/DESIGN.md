@@ -241,8 +241,8 @@ not permission to copy every incidental value into a new component.
     card opens the teamspace; its More menu has Open, Manage details, and,
     for whoever manages it, Pause or Resume and Delete. Pause and Delete
     open the details on their usual confirm; Resume needs none. A paused
-    card is dimmed and says its room is closed until a team admin resumes
-    it. The parley chip reads each open teamspace's call once a minute
+    card is dimmed, still opens from anywhere on it, and says its room is
+    closed until a team admin resumes it. The parley chip reads each open teamspace's call once a minute
     (the member must be on the team), under the room's own call key.
     Unread counts, who's editing, custom facts, the last activity line and
     who paused it stay off the card until the list carries them.

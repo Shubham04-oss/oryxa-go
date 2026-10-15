@@ -418,7 +418,11 @@ describe("TeamspacesManagement list", () => {
     render()
 
     expect(screen.getByText("Loading teamspaces…")).toBeTruthy()
+    expect(screen.getByLabelText("Teamspace summary").textContent).toBe(
+      "Loading…"
+    )
     expect(await screen.findByText("Couldn't load teamspaces")).toBeTruthy()
+    expect(screen.queryByLabelText("Teamspace summary")).toBeNull()
     fail = false
     fireEvent.click(screen.getByRole("button", { name: "Try again" }))
     expect(
@@ -435,6 +439,7 @@ describe("TeamspacesManagement list", () => {
       await screen.findByText("Teamspaces aren't set up on this server")
     ).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull()
+    expect(screen.queryByLabelText("Teamspace summary")).toBeNull()
   })
 
   it("says what to do when there are no teamspaces", async () => {
