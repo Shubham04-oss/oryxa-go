@@ -1,7 +1,8 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
+import type { KeyboardEvent } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import type { UseQueryResult } from "@tanstack/react-query"
 import {
-  ArrowLeft,
   ArrowUpRight,
   CheckCircle2,
   Download,
@@ -9,9 +10,12 @@ import {
   FileText,
   MessageSquareText,
   Sparkles,
+  UserPlus,
 } from "lucide-react"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { TeamspaceConversation } from "./teamspace-room"
+import { TeamspaceFaces } from "./teamspaces-management"
+import { TeamspaceInviteDialog } from "./teamspace-invite"
 import { useHasCalls, useRoomChatHost } from "./call-provider"
 import { ParleyButton, ParleyStrip } from "./call-surfaces"
 import { TeamSynthesis } from "./team-synthesis"
@@ -20,7 +24,6 @@ import {
   agentIdentity,
   memberName,
   personIdentity,
-  statusLabel,
   timeAgo,
 } from "./teamspace-format"
 import { useTeamspaceRoom } from "@/hooks/use-teamspace-room"
@@ -32,6 +35,9 @@ import {
   filesQueryOptions,
   formatBytes,
 } from "@/lib/files/client"
+import type { StoredFile } from "@/lib/files/client"
+import { childKey, listChildren } from "@/lib/live/children"
+import type { LiveRoom } from "@/lib/live/client"
 import type {
   Teamspace,
   TeamspaceEntry,
@@ -45,12 +51,40 @@ import {
 } from "@/lib/teamspaces/queries"
 import { cn } from "@/lib/utils"
 
-type WorkTab = "Overview" | "Tasks" | "Files" | "Live" | "Activity"
-const tabs: WorkTab[] = ["Overview", "Tasks", "Files", "Live", "Activity"]
+type Tab = "room" | "plan" | "files" | "parleys" | "activity"
+// Room, Plan, Files and Parleys are the board's; Activity (the ledger) has
+// no place on it, so it stays reachable as a quiet last tab.
+const tabs: Tab[] = ["room", "plan", "files", "parleys", "activity"]
+const tabLabels: Record<Tab, string> = {
+  room: "Room",
+  plan: "Plan",
+  files: "Files",
+  parleys: "Parleys",
+  activity: "Activity",
+}
+
+// Without the room's live log, the side column asks again on a slow beat
+// whether anything started running here.
+const liveRefreshMs = 30_000
+
+function count(value: number, one: string, many: string) {
+  return `${value} ${value === 1 ? one : many}`
+}
+
+/** "2 people and 3 agents": the teammates with a seat and every agent in the room. */
+function whoLine(space: Teamspace) {
+  const agents = new Set([
+    ...space.whisperers.map((whisperer) => whisperer.agent_id),
+    ...space.contributions.map((contribution) => contribution.agent_id),
+  ])
+  return `${count(space.whisperers.length, "person", "people")} and ${count(agents.size, "agent", "agents")}`
+}
 
 /**
- * A teamspace as focused work (DESIGN.md §3): no left sidebar, the room as
- * a naked conversation, a compact header, and work tabs above the panel.
+ * A teamspace (DESIGN.md §3), inside the shell with its sidebar kept: the
+ * "Teamspaces / <name>" crumbs, a hero (planet, name, who's in, Parley and
+ * Invite), then Room / Plan / Files / Parleys tabs. The room is the main
+ * tile with a side column beside it.
  */
 export function TeamspaceFocus({
   organizationId,
@@ -77,33 +111,45 @@ export function TeamspaceFocus({
   // Mounted for as long as this view is: reading the room is what keeps the
   // member present in it.
   const room = useTeamspaceRoom(organizationId, space, viewerId)
-  const [tab, setTab] = useState<WorkTab>("Overview")
+  const [tab, setTab] = useState<Tab>("room")
+  const [inviting, setInviting] = useState(false)
   const [isComposing, setIsComposing] = useState(false)
   const visibleHeight = useVisibleHeight(isComposing)
   const hasCalls = useHasCalls()
+  const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({})
   // The room's conversation can move to the parley's Room pane and back
   // without remounting (useRoomChatHost).
   const chat = useRoomChatHost(organizationId, {
     kind: "teamspace",
     id: teamspaceId,
   })
+  // Team files are this teamspace's files: a teamspace is its team's one
+  // shared space, and files keeps what was shared with that team. Read here
+  // so the Files tab can carry the count.
+  const canSeeFiles = Boolean(space && (space.is_member || space.can_manage))
+  const files = useQuery({
+    ...filesQueryOptions(organizationId, {
+      scope: "team",
+      teamId: space?.team_id,
+    }),
+    enabled: canSeeFiles,
+    retry: false,
+  })
+
+  function onTabKey(event: KeyboardEvent<HTMLDivElement>) {
+    const step =
+      event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0
+    if (!step) return
+    event.preventDefault()
+    const next = tabs[(tabs.indexOf(tab) + step + tabs.length) % tabs.length]
+    setTab(next)
+    tabRefs.current[next]?.focus()
+  }
 
   if (!space) {
     return (
       <div className="workspace-focus">
-        <header className="workspace-focus-header">
-          <button
-            className="workspace-icon-button"
-            type="button"
-            aria-label="Back to teamspaces"
-            onClick={onBack}
-          >
-            <ArrowLeft size={17} strokeWidth={1.7} />
-          </button>
-          <div>
-            <h1>Teamspace</h1>
-          </div>
-        </header>
+        <TeamspaceCrumbs onBack={onBack} />
         <main className="workspace-focus-unavailable">
           <p role={detail.isPending ? "status" : "alert"}>
             {detail.isPending
@@ -128,6 +174,9 @@ export function TeamspaceFocus({
     )
   }
 
+  const liveRoom: LiveRoom = { kind: "teamspace", id: space.id }
+  const paused = space.status !== "active"
+
   return (
     <div
       className="workspace-focus workspace-teamspace-focus"
@@ -136,133 +185,312 @@ export function TeamspaceFocus({
         isComposing && visibleHeight ? { height: visibleHeight } : undefined
       }
     >
-      <div className="workspace-teamspace-scene" aria-hidden="true" />
-      <header className="workspace-focus-header workspace-teamspace-hero">
-        <button
-          className="workspace-icon-button"
-          type="button"
-          aria-label="Back to teamspaces"
-          onClick={onBack}
-        >
-          <ArrowLeft size={17} strokeWidth={1.7} />
-        </button>
-        <TeamspaceAvatar
-          name={space.name}
-          className="workspace-focus-team-avatar"
-        />
-        <div>
-          <h1>{space.name}</h1>
-          <p>
-            <span>Teamspace · {statusLabel(space)}</span>
-            <span className="workspace-teamspace-hero-more">
-              {" "}
-              · {space.team_name} team · {space.whisperers.length}{" "}
-              {space.whisperers.length === 1 ? "person" : "people"}
-            </span>
-          </p>
+      <TeamspaceCrumbs name={space.name} onBack={onBack} />
+      <div className="workspace-canvas workspace-teamspace-canvas">
+        <div className="workspace-teamspace-scene" aria-hidden="true" />
+        <div className="workspace-teamspace-hero">
+          <TeamspaceAvatar
+            name={space.name}
+            className="workspace-focus-team-avatar"
+          />
+          <div className="workspace-teamspace-hero-title">
+            <h1>{space.name}</h1>
+            <p>
+              {paused && "Paused · "}
+              {space.team_name} team · {whoLine(space)}
+            </p>
+          </div>
+          <div className="workspace-teamspace-hero-actions">
+            <TeamspaceFaces space={space} />
+            {hasCalls && viewerId && (
+              <ParleyButton
+                organizationId={organizationId}
+                room={liveRoom}
+                roomName={space.name}
+                member={viewerId}
+                name={memberName(space, viewerId)}
+              />
+            )}
+            {space.can_manage && (
+              <button
+                type="button"
+                className="workspace-teamspace-pill"
+                onClick={() => setInviting(true)}
+              >
+                <UserPlus size={13} strokeWidth={2} aria-hidden="true" />
+                Invite
+              </button>
+            )}
+          </div>
         </div>
         {hasCalls && viewerId && (
-          <ParleyButton
+          <ParleyStrip
             organizationId={organizationId}
-            room={{ kind: "teamspace", id: space.id }}
+            room={liveRoom}
             roomName={space.name}
             member={viewerId}
             name={memberName(space, viewerId)}
           />
         )}
-      </header>
-      {hasCalls && viewerId && (
-        <ParleyStrip
-          organizationId={organizationId}
-          room={{ kind: "teamspace", id: space.id }}
-          roomName={space.name}
-          member={viewerId}
-          name={memberName(space, viewerId)}
-        />
-      )}
+        <div
+          className="workspace-teamspace-tabs"
+          role="tablist"
+          aria-label={`${space.name} views`}
+          onKeyDown={onTabKey}
+        >
+          {tabs.map((item) => (
+            <button
+              key={item}
+              ref={(element) => {
+                tabRefs.current[item] = element
+              }}
+              id={`teamspace-tab-${item}`}
+              type="button"
+              role="tab"
+              aria-selected={tab === item}
+              aria-controls={`teamspace-panel-${item}`}
+              tabIndex={tab === item ? 0 : -1}
+              className={cn(
+                tab === item && "is-active",
+                item === "activity" && "is-quiet"
+              )}
+              onClick={() => setTab(item)}
+            >
+              {tabLabels[item]}
+              {item === "files" && files.isSuccess && (
+                <span className="workspace-teamspace-tab-count">
+                  {files.data.length}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
 
-      <main className="workspace-focus-layout">
-        {/* The room's conversation always renders into one host, which
+        {/* The room stays mounted behind the other tabs, so its draft, scroll
+          and socket carry over when the member comes back to it. */}
+        <main
+          id="teamspace-panel-room"
+          role="tabpanel"
+          aria-labelledby="teamspace-tab-room"
+          className="workspace-focus-layout workspace-teamspace-room"
+          hidden={tab !== "room"}
+        >
+          {/* The room's conversation always renders into one host, which
             sits here or, while the parley's Room pane is open, in that pane:
             moving the host moves the conversation without remounting it,
             so its draft, scroll and socket carry over. */}
-        <div ref={chat.pageRef} className="workspace-chat-host" />
-        {chat.render(
-          <TeamspaceConversation
+          <div ref={chat.pageRef} className="workspace-chat-host" />
+          {chat.render(
+            <TeamspaceConversation
+              space={space}
+              room={room}
+              viewerId={viewerId}
+              onComposingChange={setIsComposing}
+            />
+          )}
+          <TeamspaceSide
+            organizationId={organizationId}
             space={space}
-            room={room}
+            room={liveRoom}
             viewerId={viewerId}
-            onComposingChange={setIsComposing}
           />
-        )}
-
-        <div className="workspace-work-column">
-          <div
-            className="workspace-work-tabs"
-            role="group"
-            aria-label="Work views"
-          >
-            {tabs.map((item) => (
-              <button
-                key={item}
-                type="button"
-                className={cn(
-                  "workspace-work-tab",
-                  tab === item && "is-active"
-                )}
-                aria-pressed={tab === item}
-                onClick={() => setTab(item)}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
+        </main>
+        {tab !== "room" && (
           <section
-            className="workspace-work-panel"
-            aria-label={`${space.name} work panel`}
+            id={`teamspace-panel-${tab}`}
+            role="tabpanel"
+            aria-labelledby={`teamspace-tab-${tab}`}
+            className="workspace-work-panel workspace-teamspace-panel"
           >
-            {tab === "Overview" && (
-              <OverviewPanel
-                organizationId={organizationId}
-                space={space}
-                viewerId={viewerId}
+            {tab === "plan" && (
+              <ComingPanel
+                title="A shared plan is coming"
+                text={`A plan the ${space.team_name} team writes together, beside the room. Until then, the room and its team summary carry what's decided.`}
               />
             )}
-            {tab === "Tasks" && (
-              <>
-                <WorkHeading eyebrow="Tasks" title="Tasks" />
-                <div className="workspace-work-body">
-                  <div className="workspace-work-card">
-                    <p>Teamspaces don't track tasks yet.</p>
-                  </div>
-                </div>
-              </>
+            {tab === "files" && (
+              <FilesPanel
+                organizationId={organizationId}
+                space={space}
+                canSee={canSeeFiles}
+                files={files}
+              />
             )}
-            {tab === "Files" && (
-              <FilesPanel organizationId={organizationId} space={space} />
+            {tab === "parleys" && (
+              <ComingPanel
+                title="Past parleys will be listed here"
+                text="With how long each ran, who was in it and what was kept. For now, start one with Parley above."
+              />
             )}
-            {tab === "Live" && (
-              <>
-                <WorkHeading
-                  eyebrow="Live"
-                  title="Live work"
-                  description="Sandboxes and browsers agents run for this room, and what they do there."
-                />
-                <div className="workspace-work-body">
-                  <RoomLive
-                    organizationId={organizationId}
-                    room={{ kind: "teamspace", id: space.id }}
-                    viewerId={viewerId}
-                  />
-                </div>
-              </>
-            )}
-            {tab === "Activity" && (
+            {tab === "activity" && (
               <ActivityPanel organizationId={organizationId} space={space} />
             )}
           </section>
+        )}
+      </div>
+      {inviting && (
+        <TeamspaceInviteDialog
+          organizationId={organizationId}
+          space={space}
+          onClose={() => setInviting(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+/** "Teamspaces / <name>" in the page's 56px header; the first crumb goes back. */
+function TeamspaceCrumbs({
+  name,
+  onBack,
+}: {
+  name?: string
+  onBack: () => void
+}) {
+  return (
+    <header className="workspace-focus-header workspace-teamspace-crumbs">
+      <nav aria-label="Breadcrumb">
+        <ol>
+          <li>
+            <button
+              type="button"
+              aria-label="Back to teamspaces"
+              onClick={onBack}
+            >
+              Teamspaces
+            </button>
+          </li>
+          <li aria-current="page">{name ?? "Teamspace"}</li>
+        </ol>
+      </nav>
+    </header>
+  )
+}
+
+/**
+ * Beside the room: live work while something runs, the team summary, and
+ * what the teamspace is for, with its agents and people.
+ */
+function TeamspaceSide({
+  organizationId,
+  space,
+  room,
+  viewerId,
+}: {
+  organizationId: string
+  space: Teamspace
+  room: LiveRoom
+  viewerId?: string
+}) {
+  // The same key RoomLive reads, without opening the room's log: the card
+  // shows only while the room has a sandbox or browser, and RoomLive then
+  // follows the log itself.
+  const live = useQuery({
+    queryKey: childKey(organizationId, room),
+    queryFn: ({ signal }) => listChildren(organizationId, room, signal),
+    enabled: space.is_member && space.status === "active",
+    refetchInterval: liveRefreshMs,
+    retry: false,
+  })
+  const running = live.isSuccess && live.data.length > 0
+  const contributions = space.contributions
+  return (
+    <aside
+      className="workspace-teamspace-side"
+      aria-label={`About ${space.name}`}
+    >
+      {running && (
+        <div className="workspace-work-card workspace-teamspace-live">
+          <h3>Live</h3>
+          <RoomLive
+            organizationId={organizationId}
+            room={room}
+            viewerId={viewerId}
+          />
         </div>
-      </main>
+      )}
+      <TeamSynthesis organizationId={organizationId} teamspaceId={space.id} />
+      <div className="workspace-work-card">
+        <h3>Purpose</h3>
+        <p className="workspace-teamspace-purpose">
+          {space.description || "No description yet."}
+        </p>
+      </div>
+      <div className="workspace-work-card">
+        <h3>Contributed agents</h3>
+        {contributions.length ? (
+          <ul className="workspace-teamspace-roster">
+            {contributions.map((contribution) => (
+              <li key={contribution.agent_id}>
+                <IdentityAvatar
+                  identity={agentIdentity(
+                    contribution.agent_id,
+                    contribution.name
+                  )}
+                />
+                <span>
+                  <strong>{contribution.name}</strong>
+                  <small>{contribution.role}</small>
+                </span>
+                <em>
+                  {contribution.status !== "active"
+                    ? "Paused"
+                    : contribution.delegation_mode === "automatic"
+                      ? "Works on its own"
+                      : "Asks its owner first"}
+                </em>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="workspace-work-empty">
+            No one has contributed a specialist yet.
+          </p>
+        )}
+      </div>
+      <div className="workspace-work-card">
+        <h3>People</h3>
+        {space.whisperers.length ? (
+          <ul className="workspace-teamspace-roster">
+            {space.whisperers.map((whisperer) => {
+              const name =
+                whisperer.user_id === viewerId
+                  ? "You"
+                  : whisperer.user_display_name || "Teammate"
+              return (
+                <li key={whisperer.user_id}>
+                  <IdentityAvatar
+                    identity={personIdentity(
+                      whisperer.user_id,
+                      whisperer.user_display_name || "Teammate"
+                    )}
+                  />
+                  <span>
+                    <strong>{name}</strong>
+                    <small>with {whisperer.agent_name}</small>
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        ) : (
+          <p className="workspace-work-empty">
+            No one on {space.team_name} has an active agent yet.
+          </p>
+        )}
+      </div>
+    </aside>
+  )
+}
+
+/** A tab whose data has no API yet: one honest line, on the empty scene. */
+function ComingPanel({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="workspace-work-body">
+      <div className="workspace-teamspace-coming workspace-empty-scene">
+        <strong>{title}</strong>
+        <p>{text}</p>
+      </div>
     </div>
   )
 }
@@ -271,12 +499,10 @@ function WorkHeading({
   eyebrow,
   title,
   description,
-  status,
 }: {
   eyebrow: string
   title: string
   description?: string
-  status?: string
 }) {
   return (
     <div className="workspace-work-heading">
@@ -285,123 +511,21 @@ function WorkHeading({
         <h2>{title}</h2>
         {description && <p>{description}</p>}
       </div>
-      {status && <span className="workspace-work-status">{status}</span>}
     </div>
-  )
-}
-
-function OverviewPanel({
-  organizationId,
-  space,
-  viewerId,
-}: {
-  organizationId: string
-  space: Teamspace
-  viewerId?: string
-}) {
-  const contributions = space.contributions
-  return (
-    <>
-      <WorkHeading
-        eyebrow="Overview"
-        title={space.name}
-        description={`${space.team_name} team · updated ${timeAgo(space.updated_at)}`}
-        status={statusLabel(space)}
-      />
-      <div className="workspace-work-body">
-        <TeamSynthesis organizationId={organizationId} teamspaceId={space.id} />
-        <div className="workspace-work-card">
-          <h3>Purpose</h3>
-          <p className="workspace-teamspace-purpose">
-            {space.description || "No description yet."}
-          </p>
-        </div>
-        <div className="workspace-work-card">
-          <h3>Contributed agents</h3>
-          {contributions.length ? (
-            <ul className="workspace-teamspace-roster">
-              {contributions.map((contribution) => (
-                <li key={contribution.agent_id}>
-                  <IdentityAvatar
-                    identity={agentIdentity(
-                      contribution.agent_id,
-                      contribution.name
-                    )}
-                  />
-                  <span>
-                    <strong>{contribution.name}</strong>
-                    <small>{contribution.role}</small>
-                  </span>
-                  <em>
-                    {contribution.status !== "active"
-                      ? "Paused"
-                      : contribution.delegation_mode === "automatic"
-                        ? "Works on its own"
-                        : "Asks its owner first"}
-                  </em>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="workspace-work-empty">
-              No one has contributed a specialist yet.
-            </p>
-          )}
-        </div>
-        <div className="workspace-work-card">
-          <h3>People</h3>
-          {space.whisperers.length ? (
-            <ul className="workspace-teamspace-roster">
-              {space.whisperers.map((whisperer) => {
-                const name =
-                  whisperer.user_id === viewerId
-                    ? "You"
-                    : whisperer.user_display_name || "Teammate"
-                return (
-                  <li key={whisperer.user_id}>
-                    <IdentityAvatar
-                      identity={personIdentity(
-                        whisperer.user_id,
-                        whisperer.user_display_name || "Teammate"
-                      )}
-                    />
-                    <span>
-                      <strong>{name}</strong>
-                      <small>with {whisperer.agent_name}</small>
-                    </span>
-                  </li>
-                )
-              })}
-            </ul>
-          ) : (
-            <p className="workspace-work-empty">
-              No one on {space.team_name} has an active agent yet.
-            </p>
-          )}
-        </div>
-      </div>
-    </>
   )
 }
 
 function FilesPanel({
   organizationId,
   space,
+  canSee,
+  files,
 }: {
   organizationId: string
   space: Teamspace
+  canSee: boolean
+  files: UseQueryResult<StoredFile[]>
 }) {
-  // Team files are this teamspace's files: a teamspace is its team's one
-  // shared space, and files keeps what was shared with that team.
-  const canSee = space.is_member || space.can_manage
-  const files = useQuery({
-    ...filesQueryOptions(organizationId, {
-      scope: "team",
-      teamId: space.team_id,
-    }),
-    enabled: canSee,
-    retry: false,
-  })
   const [downloading, setDownloading] = useState<string>()
   const [downloadError, setDownloadError] = useState<string>()
 
