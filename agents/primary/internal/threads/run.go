@@ -129,6 +129,9 @@ type Run struct {
 	// the run's context and nowhere else: not in stateDelta, not in the run's
 	// record, not in an event.
 	teamspaceID string
+	// artifacts is the files the thread has kept, as the run found them and
+	// with every one the run keeps, which the run records as it ends.
+	artifacts artifactTally
 	// remembering is the run's view of memory, scoped to the member's
 	// organization, that the run is handed to once it ends. It is built when
 	// the run starts driving, and nil when the service has no memory or the
@@ -251,6 +254,7 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 		maps.Copy(run.stateDelta, agents.ClearDeliveryState())
 	}
 	history := sessionEvents(stored)
+	run.artifacts = tallyArtifacts(history)
 	run.guardInput = publicationGuardInput(history, message)
 	if stateString(stored.State(), stateOrigin) == OriginSideConversation {
 		// The wrapped prompt contains other people's untrusted words. It must
@@ -420,6 +424,13 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 		// call it cut short reported.
 		failure = cause
 	}
+	// Recorded while the run still holds the thread, so nothing else writes
+	// it in between, and whether the run failed or not: what it kept, it kept.
+	// A run that lost its hold writes nothing more: another run may be
+	// writing the thread now.
+	if !errors.Is(failure, errLeaseLost) {
+		run.record(ctx)
+	}
 	stopLease()
 
 	run.finish(ctx, counter, failure)
@@ -562,6 +573,7 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 			}
 			continue
 		}
+		run.artifacts.add(event)
 		for _, item := range displayAgent(streamItems(event), answering.Name(), run.member.AgentName) {
 			send(item)
 		}
