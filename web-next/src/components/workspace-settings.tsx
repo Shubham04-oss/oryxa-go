@@ -28,7 +28,9 @@ import {
 import { WorkspaceEmailSettings } from "./workspace-email-settings"
 import { SlackMark, WorkspaceSlackSettings } from "./slack-settings"
 import { WorkspaceBillingSettings } from "./workspace-billing-settings"
-import { SettingsHeading, SettingsNote } from "./settings-kit"
+import { SettingsHeading } from "./settings-kit"
+import { WorkspaceAgentSettings } from "./workspace-agent-settings"
+import { WorkspaceNotificationSettings } from "./workspace-notification-settings"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -204,17 +206,19 @@ export function WorkspaceSettings({
       break
     case "agent":
       content = (
-        <SettingsNote>
-          Your agent's settings are moving here. For now, they are on Account.
-        </SettingsNote>
+        <WorkspaceAgentSettings
+          organization={organization}
+          viewerName={session ? identity.name.split(/\s+/)[0] : undefined}
+          preview={preview}
+        />
       )
       break
     case "notifications":
       content = (
-        <SettingsNote>
-          Notifications are moving here. For now, team parley emails are on
-          Account.
-        </SettingsNote>
+        <WorkspaceNotificationSettings
+          organization={organization}
+          preview={preview}
+        />
       )
       break
     case "organization":

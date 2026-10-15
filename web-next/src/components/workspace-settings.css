@@ -232,59 +232,62 @@
   .settings-actions-end [data-slot="button"] { width: 100%; }
 }
 
+/* A text field in a row or an inline form (the library's Input). */
+.settings-input[data-slot="input"] {
+  width: min(100%, 280px);
+  height: 32px;
+  border-color: var(--border-quiet);
+  border-radius: 9px;
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 12.5px;
+}
+.settings-input[data-slot="input"]::placeholder { color: var(--text-muted); }
+
+/* Account → Theme: three swatches, the library's radios under them. */
+.settings-theme[data-slot="radio-group"] { display: flex; gap: 8px; width: auto; }
+.settings-theme-option { display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer; }
+.settings-theme-swatch {
+  display: block;
+  width: 72px;
+  height: 48px;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--border-quiet);
+}
+.settings-theme-swatch[data-swatch="light"] { background: linear-gradient(135deg, var(--swatch-light-base) 50%, var(--swatch-light-canvas) 50%); }
+.settings-theme-swatch[data-swatch="dark"] { background: linear-gradient(135deg, var(--swatch-dark-base) 50%, var(--swatch-dark-canvas) 50%); }
+.settings-theme-swatch[data-swatch="system"] { background: linear-gradient(135deg, var(--swatch-light-base) 50%, var(--swatch-dark-base) 50%); }
+.settings-theme-option:has([data-checked]) .settings-theme-swatch { box-shadow: 0 0 0 2px var(--text); }
+.settings-theme-label { display: inline-flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.settings-theme-option:has([data-checked]) .settings-theme-label { color: var(--text); }
+
+/* A choice between levels (Your agent → what it hides): tiles, one per level. */
+.settings-choices-row { flex-direction: column; align-items: stretch; gap: 8px; }
+.settings-choices { display: flex; flex: 1; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; transition: opacity .15s; }
+.settings-choices[aria-busy="true"] { opacity: .6; }
+.settings-choices-title { padding: 0; color: var(--text); font-size: 13px; font-weight: 600; }
+.settings-choices-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 8px; }
+.settings-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-quiet);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.settings-choice:hover { background: var(--hover); }
+.settings-choice:has(:checked) { border-color: var(--border-strong); background: var(--raised); box-shadow: 0 1px 3px var(--shade-66); }
+.settings-choice:has(:focus-visible) { outline: 2px solid var(--border-strong); outline-offset: 1px; }
+.settings-choice[data-disabled] { cursor: not-allowed; opacity: .5; }
+.settings-choice input { margin-top: 2px; accent-color: var(--text); }
+.settings-choice-text { display: grid; gap: 2px; min-width: 0; color: var(--text); font-size: 13px; }
+.settings-choice-text small { color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+
 /* Older page blocks, until each page moves onto the kit. */
 .workspace-settings-account { padding: 0; }
 .workspace-settings-account > * {
   max-width: 740px;
-}
-.workspace-settings-account-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 19px;
-  border: 1px solid var(--tone-383838);
-  border-radius: 15px;
-  background: var(--tone-252525);
-}
-.workspace-settings-account-card .workspace-avatar {
-  width: 44px;
-  height: 44px;
-}
-.workspace-settings-account-card > div {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.workspace-settings-account-card strong {
-  font-size: 15px;
-}
-.workspace-settings-account-card small {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.workspace-settings-account dl {
-  margin-top: 18px;
-  border: 1px solid var(--tone-383838);
-  border-radius: 15px;
-  background: var(--tone-252525);
-}
-.workspace-settings-account dl > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 15px 18px;
-  font-size: 13px;
-}
-.workspace-settings-account dl > div + div {
-  border-top: 1px solid var(--tone-383838);
-}
-.workspace-settings-account dt {
-  color: var(--text-muted);
-}
-.workspace-settings-account dd {
-  margin: 0;
-  color: var(--tone-eeeeee);
-  text-transform: capitalize;
 }
 .workspace-settings-section,
 .workspace-settings-form {

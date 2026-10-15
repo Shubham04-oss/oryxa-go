@@ -270,6 +270,12 @@
   /* A switch that is on, and its knob, in both themes. */
   --switch-on: #3f9d63;
   --switch-knob: #ffffff;
+  /* Settings → Appearance: each theme's swatch shows that theme's own base
+     and canvas, the same in both themes. */
+  --swatch-light-base: #f4f4f4;
+  --swatch-light-canvas: #ffffff;
+  --swatch-dark-base: #111111;
+  --swatch-dark-canvas: #1e1e1e;
   color-scheme: dark;
 }
 
