@@ -12,6 +12,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
 import { WorkspaceBillingSettings } from "./workspace-billing-settings"
+import { WorkspaceEmailSettings } from "./workspace-email-settings"
 import { WorkspaceTeamsSettings } from "./workspace-teams-settings"
 import { WorkspaceToolAccessSettings } from "./workspace-tool-access-settings"
 
@@ -325,6 +326,82 @@ describe("connected settings sections", () => {
       />
     )
     expect(screen.getByText(/owners and admins can see/)).toBeTruthy()
-    expect(fetchMock).not.toHaveBeenCalled()
+    // A member reads their own tools and the catalog, never everyone's.
+    expect(
+      (fetchMock.mock.calls as unknown[][]).some(([url]) =>
+        String(url).includes("scope=organization")
+      )
+    ).toBe(false)
+  })
+
+  it("lists a member's own tools with who uses them and what they reach, and disconnects after a destructive confirm", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/targets")) {
+        return json({
+          targets: Array.from({ length: 14 }, (_, n) => ({
+            kind: "channel",
+            id: `C${n}`,
+            name: `#c${n}`,
+            target: {},
+          })),
+        })
+      }
+      if (url.endsWith("/apps/connections/c1") && init?.method === "DELETE") {
+        return new Response(null, { status: 204 })
+      }
+      if (url.includes("/apps/connections")) {
+        return json({
+          connections: [
+            { id: "c1", toolkit: "slack", member_id: "me", status: "active" },
+          ],
+        })
+      }
+      if (url.includes("/apps/catalog")) return json({ toolkits: [] })
+      return json({})
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    show(
+      <WorkspaceToolAccessSettings
+        organization={organization}
+        role="member"
+        preview={false}
+        onOpenTools={() => {}}
+      />
+    )
+    expect(await screen.findByText("Only you · 14 channels")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "More for Slack" }))
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Disconnect" }))
+    const confirm = screen.getByRole("button", { name: "Disconnect" })
+    expect(confirm.getAttribute("data-tone")).toBe("danger")
+    fireEvent.click(confirm)
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(
+        true
+      )
+    )
+  })
+
+  it("shows Gmail's real connection on Email, and nothing it can't back", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        json({
+          connections: [
+            { id: "g", toolkit: "gmail", member_id: "me", status: "active" },
+          ],
+        })
+      )
+    )
+    show(
+      <WorkspaceEmailSettings
+        organization={organization}
+        onBilling={() => {}}
+        onAgent={() => {}}
+        onOpenTools={() => {}}
+      />
+    )
+    expect(await screen.findByText("Connected")).toBeTruthy()
+    expect(screen.getByText(/coming soon/)).toBeTruthy()
+    expect(screen.queryByRole("switch")).toBeNull()
   })
 })

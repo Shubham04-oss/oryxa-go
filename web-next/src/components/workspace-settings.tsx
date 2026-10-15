@@ -88,7 +88,7 @@ function pageSubtitle(page: SettingsPage, organizationName?: string): string {
     case "slack":
       return "Ask a teammate's agent from Slack. The person asked chooses what their agent shares."
     case "email":
-      return "What oryxa sends by email."
+      return "Forward asks to oryxa by email, and what oryxa always sends."
   }
 }
 
@@ -292,8 +292,10 @@ export function WorkspaceSettings({
       content = (
         <WorkspaceEmailSettings
           organization={organization}
+          preview={preview}
           onBilling={() => setPage("billing")}
-          onAccount={() => setPage("account")}
+          onAgent={() => setPage("agent")}
+          onOpenTools={onOpenTools}
         />
       )
       break

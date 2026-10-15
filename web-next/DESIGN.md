@@ -272,6 +272,21 @@ not permission to copy every incidental value into a new component.
     check out), the harbour scene fading in at its right. Payment is one row
     pointing to the portal. No price, card, contact or invoices until the
     billing routes carry them.
+  - **Tool access:** the member's own connected tools (logo tile, "Only
+    you" and what each reaches, such as "14 channels", and a ⋯ menu whose
+    Disconnect asks first), Add a tool (search and catalog tiles with
+    Connect, and All tools), and for owners and admins who in the
+    organisation has connected what. No "Who can use" choice until Go has
+    one.
+  - **Slack:** Your Slack account, then the workspace row (Connected, and
+    Disconnect on it, which asks first), then high-priority channels as
+    switches, each turned on after a confirm. No who-installed, member
+    counts or "How asks look" until Go serves them.
+  - **Email:** forwarding asks by email is one honest line; Gmail's real
+    connection; masking points to Your agent; what oryxa always sends.
+  - **Sign-in apps** keeps its forms, now on the kit's surfaces: the switch
+    is the library's, Save sits alone at the right, and removing an app is
+    its own danger row with a destructive confirm.
 - **Chats and DMs as tiles** (founder's redesign, 14 Oct 2026). The open
   chat in the chat list is the raised tile and the others lift on hover; DM
   rows are rounded the same way, with unread as a filled count. The member's
