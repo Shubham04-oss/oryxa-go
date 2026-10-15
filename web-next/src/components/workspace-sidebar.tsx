@@ -16,7 +16,6 @@ import {
   LogOut,
   MessageSquare,
   PanelLeftClose,
-  PanelLeftOpen,
   Plus,
   Puzzle,
   Repeat,
@@ -524,25 +523,50 @@ function ExpandedSidebar({
 }
 
 /**
- * The collapsed rail: the way back out, the member's own pages as icons, and
- * who they are.
+ * The collapsed rail (board Rail): the workspace's mark, which expands the
+ * sidebar; search; then tiles of icons: the member's own pages, their
+ * teamspaces, the DMs with unread messages, and their agent and the Library;
+ * Settings and the member's avatar at the foot. A name is each icon's tooltip
+ * and accessible name; a count is a small badge.
  */
 function CollapsedSidebar({
   onExpandedChange,
   organizationId,
   viewerId,
+  organizations,
+  selectedOrganization,
   identity,
   roleLabel,
   section,
   openTeamspaceId,
   activePeerId,
+  teamspaces,
+  inbox,
+  people,
   onNavigate,
+  onOpenTeamspace,
+  onOpenDirectMessage,
   onOpenSettings,
   onSignOut,
   signingOut,
+  onSearch,
 }: WorkspaceSidebarProps) {
   const counts = useSidebarCounts(organizationId, viewerId)
-  const page = openTeamspaceId || activePeerId ? null : section
+  const workspaceName =
+    (selectedOrganization ?? organizations.at(0))?.name ?? "Workspace"
+  // The rail lists only the DMs that wait on the member.
+  const unread =
+    people.status === "loading"
+      ? []
+      : sidebarDirectMessages(inbox.conversations).filter(
+          (conversation) => conversation.unread > 0
+        )
+  const listedPeer = unread.some(
+    (conversation) => conversation.peerId === activePeerId
+  )
+    ? activePeerId
+    : null
+  const page = openTeamspaceId || listedPeer ? null : section
   return (
     <>
       <SidebarHeader className="workspace-sidebar-header">
@@ -551,16 +575,32 @@ function CollapsedSidebar({
           variant="outline"
           size="icon"
           aria-label="Expand left sidebar"
+          title={workspaceName}
           aria-controls="workspace-navigation"
           aria-expanded={false}
           onClick={() => onExpandedChange(true)}
         >
-          <PanelLeftOpen className="workspace-panel-toggle-desktop" />
+          <span
+            className="workspace-sidebar-org-mark workspace-panel-toggle-desktop"
+            aria-hidden="true"
+          >
+            {workspaceInitial(workspaceName)}
+          </span>
           <ArrowRight className="workspace-panel-toggle-mobile" />
         </Button>
       </SidebarHeader>
       <SidebarContent className="workspace-sidebar-content">
         <nav className="workspace-sidebar-nav" aria-label="Workspace">
+          {onSearch && (
+            <SidebarMenu className="workspace-sidebar-rail-search">
+              <NavItem
+                label="Search or jump to"
+                icon={<Search />}
+                collapsed
+                onClick={onSearch}
+              />
+            </SidebarMenu>
+          )}
           <SidebarGroup className="workspace-sidebar-tile">
             <SidebarMenu>
               <NavItem
@@ -591,11 +631,72 @@ function CollapsedSidebar({
               />
             </SidebarMenu>
           </SidebarGroup>
+          {teamspaces.length > 0 && (
+            <SidebarGroup
+              className="workspace-sidebar-tile"
+              role="group"
+              aria-label="Teamspaces"
+            >
+              <SidebarMenu>
+                {teamspaces.map((space) => (
+                  <NavItem
+                    key={space.id}
+                    label={space.name}
+                    icon={
+                      <TeamspaceAvatar
+                        name={space.name}
+                        className="workspace-sidebar-mark"
+                      />
+                    }
+                    current={openTeamspaceId === space.id}
+                    collapsed
+                    onClick={() => onOpenTeamspace(space.id)}
+                  />
+                ))}
+              </SidebarMenu>
+            </SidebarGroup>
+          )}
+          {unread.length > 0 && (
+            <SidebarGroup
+              className="workspace-sidebar-tile"
+              role="group"
+              aria-label="Unread messages"
+            >
+              <SidebarMenu>
+                {unread.map((conversation) => (
+                  <DirectMessageItem
+                    key={conversation.name}
+                    conversation={conversation}
+                    name={people.nameOf(conversation.peerId) ?? "Someone"}
+                    current={listedPeer === conversation.peerId}
+                    collapsed
+                    onOpen={onOpenDirectMessage}
+                  />
+                ))}
+              </SidebarMenu>
+            </SidebarGroup>
+          )}
           <SidebarGroup className="workspace-sidebar-tile">
             <SidebarMenu>
               <NavItem
-                label="Your agent"
-                icon={<Bot />}
+                label={
+                  counts.primary
+                    ? `${counts.primary.name}, your agent`
+                    : "Your agent"
+                }
+                icon={
+                  counts.primary ? (
+                    <IdentityAvatar
+                      identity={agentIdentity(
+                        counts.primary.id,
+                        counts.primary.name
+                      )}
+                      className="workspace-sidebar-mark"
+                    />
+                  ) : (
+                    <Bot />
+                  )
+                }
                 current={page === "agents"}
                 collapsed
                 onClick={() => onNavigate("agents")}
@@ -603,7 +704,7 @@ function CollapsedSidebar({
               <NavItem
                 label="Library"
                 icon={<BookOpenText />}
-                current={page === "knowledge"}
+                current={page === "knowledge" || page === "tools"}
                 collapsed
                 onClick={() => onNavigate("knowledge")}
               />
@@ -612,6 +713,15 @@ function CollapsedSidebar({
         </nav>
       </SidebarContent>
       <SidebarFooter className="workspace-sidebar-footer">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Settings"
+          title="Settings"
+          onClick={onOpenSettings}
+        >
+          <Settings />
+        </Button>
         <ProfileMenu
           identity={identity}
           roleLabel={roleLabel}
@@ -623,6 +733,10 @@ function CollapsedSidebar({
       </SidebarFooter>
     </>
   )
+}
+
+function workspaceInitial(name: string): string {
+  return name.trim().charAt(0).toUpperCase() || "W"
 }
 
 function optionalCount(count: number | undefined): string | undefined {
@@ -671,7 +785,8 @@ function NavItem({
         className="workspace-sidebar-item"
         isActive={current}
         aria-current={current ? "page" : undefined}
-        aria-label={spokenCount ? `${label}, ${spokenCount}` : undefined}
+        // The name alone: a planet or avatar icon names itself too.
+        aria-label={spokenCount ? `${label}, ${spokenCount}` : label}
         tooltip={collapsed ? label : undefined}
         onClick={onClick}
       >
@@ -707,11 +822,13 @@ function DirectMessageItem({
   conversation,
   name,
   current,
+  collapsed = false,
   onOpen,
 }: {
   conversation: Conversation
   name: string
   current: boolean
+  collapsed?: boolean
   onOpen: (peerId: string) => void
 }) {
   const online = usePeerOnline(conversation.peerId)
@@ -723,6 +840,7 @@ function DirectMessageItem({
         isActive={current}
         aria-current={current ? "page" : undefined}
         aria-label={`Open conversation with ${name}${unread > 0 ? `, ${unread} unread` : ""}`}
+        tooltip={collapsed ? name : undefined}
         onClick={() => onOpen(conversation.peerId)}
       >
         <PersonAvatar
@@ -731,10 +849,13 @@ function DirectMessageItem({
           online={online}
           className="workspace-sidebar-mark"
         />
-        <span className="workspace-sidebar-label">{name}</span>
+        {!collapsed && <span className="workspace-sidebar-label">{name}</span>}
       </SidebarMenuButton>
       {unread > 0 && (
-        <SidebarMenuBadge className="workspace-sidebar-count" aria-hidden>
+        <SidebarMenuBadge
+          className={cn("workspace-sidebar-count", collapsed && "is-badge")}
+          aria-hidden
+        >
           {countLabel(unread, 99)}
         </SidebarMenuBadge>
       )}
@@ -791,7 +912,7 @@ function OrganizationSwitcher({
   const name = current?.name ?? "Workspace"
   const mark = (
     <span className="workspace-sidebar-org-mark" aria-hidden="true">
-      {name.trim().charAt(0).toUpperCase() || "W"}
+      {workspaceInitial(name)}
     </span>
   )
   if (organizations.length < 2) {

@@ -277,8 +277,26 @@ button.workspace-sidebar-heading[aria-current="page"] { color: var(--text); }
   font-size: 9px;
   font-weight: 700;
 }
+/* Board Rail: tiles of icons, each centred; DMs and teamspaces a little
+   larger than the glyphs. */
+.workspace-shell[data-left="collapsed"] .workspace-sidebar-tile,
+.workspace-shell[data-left="collapsed"] .workspace-sidebar-rail-search { align-items: center; }
+.workspace-shell[data-left="collapsed"] .workspace-sidebar-rail-search { width: auto; margin: 0 auto; }
+.workspace-shell[data-left="collapsed"] .workspace-sidebar-item .workspace-sidebar-mark {
+  width: 24px;
+  height: 24px;
+}
+.workspace-shell[data-left="collapsed"] .workspace-sidebar-toggle .workspace-sidebar-org-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+/* The rail's foot: Settings over the member's avatar, as the board has. */
 .workspace-shell[data-left="collapsed"] .workspace-sidebar-footer {
+  flex-direction: column;
   justify-content: center;
+  gap: 8px;
   padding: 4px;
   background: transparent;
 }
@@ -287,4 +305,8 @@ button.workspace-sidebar-heading[aria-current="page"] { color: var(--text); }
   justify-content: center;
   width: 40px;
   padding: 0;
+}
+@media (max-width: 800px) {
+  /* On a phone the closed sidebar is one round arrow at the edge. */
+  .workspace-sidebar-toggle .workspace-sidebar-org-mark { display: none; }
 }

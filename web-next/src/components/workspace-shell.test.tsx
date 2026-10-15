@@ -583,6 +583,38 @@ describe("WorkspaceShell navigation", () => {
     expect(screen.getByRole("heading", { name: "My workspace" })).toBeTruthy()
   })
 
+  it("collapses to the board's rail: own pages, teamspaces, agent and Library, Settings", async () => {
+    liveBackend()
+    render(<SignedInShell />)
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Collapse left sidebar" })
+    )
+    const nav = screen.getByRole("navigation", { name: "Workspace" })
+    const spaces = await within(nav).findByRole("group", {
+      name: "Teamspaces",
+    })
+    await waitFor(() =>
+      expect(
+        within(spaces)
+          .getAllByRole("button")
+          .map((button) => button.textContent)
+      ).toEqual(["Launch room", "Design reviews"])
+    )
+    for (const name of ["My workspace", "Chats with your agent", "Library"])
+      expect(within(nav).getByRole("button", { name })).toBeTruthy()
+    // No unread DMs: the rail shows no messages tile.
+    expect(
+      within(nav).queryByRole("group", { name: "Unread messages" })
+    ).toBeNull()
+    expect(screen.getByRole("button", { name: "Settings" })).toBeTruthy()
+
+    fireEvent.click(within(spaces).getByRole("button", { name: "Launch room" }))
+    expect(
+      await screen.findByRole("heading", { name: "Launch room", level: 1 })
+    ).toBeTruthy()
+  })
+
   it("opens the Chats page from the sidebar's chats with the agent", async () => {
     liveBackend()
     const { container } = render(<SignedInShell />)

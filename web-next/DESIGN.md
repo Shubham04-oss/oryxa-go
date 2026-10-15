@@ -151,9 +151,14 @@ not permission to copy every incidental value into a new component.
   | Agents (+ leads to Specialists) | The primary agent by name and voxel avatar, "Your agent" (Agent overview); Specialists, Agent teams and Workflows, each with how many (Workflows opens Agent overview, where they live) |
   | Library | Two tiles, Knowledge and Tools. The board's Files tile waits for a Files page. |
 
-  Collapsed, the rail keeps the way back out, the first tile's pages, the
-  agent and the Library as icons (names as tooltips, the Requests count as a
-  badge), and the member's avatar with the profile menu.
+  Collapsed, the rail (board Rail) is: the workspace's initial, which
+  expands the sidebar (a round arrow on a phone); Search once it is
+  answered; then tiles of icons: My workspace, Requests (its count a badge)
+  and Chats; each teamspace's planet; the DMs with unread messages, each an
+  avatar with its count; the agent's avatar and the Library; and at the
+  foot Settings over the member's avatar (the profile menu). Every icon's
+  name is its tooltip and accessible name. A tile with nothing in it is left
+  out.
 
 - The shared workspace header is compact (56px at normal desktop/mobile
   widths), with its title centered. It contains the **current context**:
