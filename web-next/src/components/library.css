@@ -385,6 +385,18 @@
   text-overflow: ellipsis;
 }
 
+/* A citation's title opens its passage in the viewer. */
+.library-cite {
+  justify-content: flex-start;
+  height: auto;
+  padding: 0;
+  color: var(--text);
+  font-size: inherit;
+  font-weight: 500;
+  white-space: normal;
+  text-align: left;
+}
+
 /* An open file takes the whole page, in the shared frame. */
 .library-page:has(> .library-viewer) {
   display: flex;

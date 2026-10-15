@@ -4,6 +4,8 @@ import Papa from "papaparse"
 import { AgentMarkdown } from "./agent-timeline"
 import { CodeViewer, codeExtensions } from "./code-viewer"
 import { ImageViewer, MediaPlayer } from "./media-viewer"
+import { PassageView } from "./passage-view"
+import type { Passage } from "./passage-view"
 import { PdfViewer } from "./pdf-viewer"
 import { SheetViewer } from "./sheet-viewer"
 import type { Sheet } from "./sheet-viewer"
@@ -385,6 +387,7 @@ export function DocumentPreview({
   text,
   name,
   contentType,
+  passage,
 }: {
   /** Where the file's bytes are read from. */
   url?: string
@@ -392,6 +395,11 @@ export function DocumentPreview({
   text?: string
   name: string
   contentType: string
+  /**
+   * A cited passage, as byte offsets into the file's text: a text file
+   * opens on it, marked. Other kinds open as they are.
+   */
+  passage?: Passage
 }) {
   const kind = previewKind(name, contentType)
   const fetched = useFileBytes(
@@ -432,6 +440,23 @@ export function DocumentPreview({
   if (kind === "pptx") return <PptxPreview bytes={bytes} />
   if (kind === "xlsx") return <SpreadsheetPreview bytes={bytes} />
   const decoded = new TextDecoder().decode(bytes)
+  const view = textView(kind, decoded, name)
+  if (passage) {
+    return (
+      <PassageView
+        bytes={bytes}
+        passage={passage}
+        wholeLabel={kind === "markdown" ? "Formatted" : "Whole file"}
+      >
+        {view}
+      </PassageView>
+    )
+  }
+  return view
+}
+
+/** A text file as its kind reads best: Markdown, a table, code or text. */
+function textView(kind: PreviewKind, decoded: string, name: string) {
   if (kind === "code") return <CodeViewer text={decoded} name={name} />
   if (kind === "markdown")
     return (

@@ -2045,3 +2045,122 @@ describe("opening a Library file", () => {
     ).toBeTruthy()
   })
 })
+
+describe("opening a cited passage", () => {
+  const notes = "# Launch\n\nFalcon launches on 14 October.\n"
+  const start = new TextEncoder().encode("# Launch\n\n").length
+  const end =
+    start + new TextEncoder().encode("Falcon launches on 14 October.").length
+  const launchNotes = document({
+    id: "doc_3",
+    title: "launch-notes.md",
+    source: { kind: "file", ref: "file_1" },
+    content_type: "text/markdown",
+  })
+  const answer = (citation: Record<string, unknown>) => ({
+    answer: {
+      text: "Falcon launches on 14 October [1].",
+      citations: [
+        {
+          index: 1,
+          chunk_id: "chk_1",
+          title: "launch-notes.md",
+          start_byte: start,
+          end_byte: end,
+          score: 0.9,
+          ...citation,
+        },
+      ],
+      model: "m",
+      usage: {},
+      grounded: true,
+    },
+    matches: [],
+  })
+
+  async function ask() {
+    fireEvent.change(
+      await screen.findByRole("textbox", { name: "Ask Handbook" }),
+      { target: { value: "When is the launch?" } }
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }))
+  }
+
+  it("opens the file on the passage, marked", async () => {
+    stubApi({
+      ...detailRoutes(corpus(), () => [launchNotes]),
+      [`POST ${corpusPath}/answer`]: answer({
+        document_id: "doc_3",
+        source: { kind: "file", ref: "file_1" },
+      }),
+      "GET /v1/organizations/org_1/files/file_1/content": () =>
+        new Response(notes),
+    })
+    const onOpenFileChange = vi.fn()
+    renderKnowledge({ ...openHandbook, onOpenFileChange })
+    await screen.findByText("launch-notes.md")
+    await ask()
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Open the cited passage in launch-notes.md",
+      })
+    )
+    const mark = await screen.findByLabelText("Cited passage")
+    expect(mark.textContent).toBe("Falcon launches on 14 October.")
+    expect(onOpenFileChange).toHaveBeenLastCalledWith({
+      kind: "document",
+      id: "doc_3",
+      name: "launch-notes.md",
+    })
+  })
+
+  it("reads a document that isn't loaded before opening it", async () => {
+    const api = stubApi({
+      ...detailRoutes(corpus(), () => [document()]),
+      [`POST ${corpusPath}/answer`]: answer({
+        document_id: "doc_3",
+        source: { kind: "file", ref: "file_1" },
+      }),
+      [`GET ${corpusPath}/documents/doc_3`]: launchNotes,
+      "GET /v1/organizations/org_1/files/file_1/content": () =>
+        new Response(notes),
+    })
+    renderKnowledge(openHandbook)
+    await screen.findByText("Decision log")
+    await ask()
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Open the cited passage in launch-notes.md",
+      })
+    )
+    expect((await screen.findByLabelText("Cited passage")).textContent).toBe(
+      "Falcon launches on 14 October."
+    )
+    expect(api.find("GET", `${corpusPath}/documents/doc_3`)).toHaveLength(1)
+  })
+
+  it("keeps a link's citation a link, since its text isn't kept", async () => {
+    stubApi({
+      ...detailRoutes(corpus(), () => [document()]),
+      [`POST ${corpusPath}/answer`]: answer({
+        document_id: "doc_9",
+        title: "Pricing page",
+        source: { kind: "external", ref: "https://example.com/pricing" },
+      }),
+    })
+    renderKnowledge(openHandbook)
+    await screen.findByText("Decision log")
+    await ask()
+
+    expect(
+      (await screen.findByRole("link", { name: "Pricing page" })).getAttribute(
+        "href"
+      )
+    ).toBe("https://example.com/pricing")
+    expect(
+      screen.queryByRole("button", { name: /Open the cited passage/ })
+    ).toBeNull()
+  })
+})

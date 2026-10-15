@@ -1,0 +1,50 @@
+/* A cited passage in its file (passage-view.tsx). */
+.passage-text {
+  flex: 1;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px;
+  overflow: auto;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.passage-mark {
+  padding: 2px 0;
+  border-radius: 3px;
+  background: var(--viewer-highlight);
+  box-shadow: 0 0 0 2px var(--viewer-highlight);
+  color: var(--text);
+}
+.passage-switch {
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--base);
+}
+.passage-switch [data-slot="button"] {
+  border-radius: 999px;
+}
+/* The view shown is the raised tile, as in any segmented control. */
+.passage-switch [data-slot="button"][aria-pressed="true"] {
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--border-quiet),
+    0 1px 3px var(--shade-66);
+  color: var(--text);
+}
+.passage-missing {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.passage-missing > p {
+  margin: 0;
+  padding: 12px 16px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}

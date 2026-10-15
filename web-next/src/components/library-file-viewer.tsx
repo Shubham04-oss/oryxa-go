@@ -9,6 +9,7 @@ import { knowledgeDocumentQueryOptions } from "@/lib/knowledge/client"
 import { documentOrigin, externalSourceLink } from "@/lib/rag/client"
 import type { Corpus, CorpusDocument } from "@/lib/rag/client"
 import { FileViewerFrame } from "./file-viewer-frame"
+import type { Passage } from "./passage-view"
 import type { FileViewerCrumb, FileViewerDownload } from "./file-viewer-frame"
 import {
   documentKindName,
@@ -27,6 +28,8 @@ const DocumentPreview = lazy(() =>
 export type OpenLibraryFile = {
   document: CorpusDocument
   collection?: Pick<Corpus, "id" | "name">
+  /** A cited passage to open on, as byte offsets into the file's text. */
+  passage?: Passage
 }
 
 /** A link only when it is a web address, so nothing else is followed. */
@@ -47,11 +50,13 @@ function Preview({
   text,
   name,
   contentType,
+  passage,
 }: {
   url?: string
   text?: string
   name: string
   contentType: string
+  passage?: Passage
 }) {
   return (
     <Suspense fallback={<p role="status">Opening preview…</p>}>
@@ -60,6 +65,7 @@ function Preview({
         text={text}
         name={name}
         contentType={contentType}
+        passage={passage}
       />
     </Suspense>
   )
@@ -70,11 +76,13 @@ function AppDocument({
   organizationId,
   knowledgeId,
   document,
+  passage,
   onOriginal,
 }: {
   organizationId: string
   knowledgeId: string
   document: CorpusDocument
+  passage?: Passage
   onOriginal: (href: string | undefined) => void
 }) {
   const query = useQuery(
@@ -91,6 +99,7 @@ function AppDocument({
       text={query.data.body}
       name={documentKindName({ ...document, content_type: mime })}
       contentType={mime}
+      passage={passage}
     />
   )
 }
@@ -181,12 +190,14 @@ export function LibraryFileViewer({
           url={fileContentUrl(organizationId, fileId)}
           name={documentKindName(document)}
           contentType={document.content_type}
+          passage={file.passage}
         />
       ) : origin.kind === "app" && knowledgeId ? (
         <AppDocument
           organizationId={organizationId}
           knowledgeId={knowledgeId}
           document={document}
+          passage={file.passage}
           onOriginal={setAppOriginal}
         />
       ) : origin.kind === "link" ? (

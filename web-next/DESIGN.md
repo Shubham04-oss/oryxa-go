@@ -261,7 +261,15 @@ not permission to copy every incidental value into a new component.
   Ruby, JSON, YAML, SQL, shell, HTML/XML/SVG and CSS) has numbered lines,
   light highlighting from a pinned highlight.js core loaded only when code
   opens (its colours are the `--code-*` tokens), and Wrap and Copy in the
-  bar. HTML and SVG show as their source and never run. A Library file opens
+  bar. HTML and SVG show as their source and never run. A cited passage
+  (a citation in an answer, or a passage search matched) opens in its file
+  when the Library can read the file's text: an uploaded file, or a connected
+  app's document. The file opens on the passage, its text in a reading column
+  with the passage marked (`--viewer-highlight`) and scrolled to, and a
+  Cited passage / Formatted (or Whole file) switch in the bar
+  (`passage-view.tsx`). Offsets are rag's bytes, cut as bytes before
+  decoding. A link's citation stays a link to the page, and a PDF or Office
+  citation never happens, since rag indexes text only. A Library file opens
   over the whole Library page: an uploaded file from files, a connected
   app's document as the text knowledge keeps. A note or a link says
   plainly that its text isn't kept for reading, since rag gives none back. A file's kind is a small coloured tile with
