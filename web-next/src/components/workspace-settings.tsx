@@ -1,17 +1,18 @@
 import { useEffect, useState } from "react"
 import {
-  ArrowLeft,
+  Bell,
+  Bot,
   Building2,
   CreditCard,
   KeyRound,
   Mail,
   Network,
   Puzzle,
-  Settings2,
   UserRound,
   UsersRound,
-  X,
 } from "lucide-react"
+import type { LucideIcon } from "lucide-react"
+import type { ReactNode } from "react"
 import type { Organization, Role, Session } from "@/lib/auth/client"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { PeopleManagement } from "./people-management"
@@ -26,6 +27,7 @@ import {
 import { WorkspaceEmailSettings } from "./workspace-email-settings"
 import { SlackMark, WorkspaceSlackSettings } from "./slack-settings"
 import { WorkspaceBillingSettings } from "./workspace-billing-settings"
+import { SettingsHeading, SettingsNote } from "./settings-kit"
 import { cn } from "@/lib/utils"
 import {
   rememberedSettingsPage,
@@ -37,18 +39,90 @@ export type { SettingsPage } from "@/lib/settings/page-choice"
 
 const pageTitles: Record<SettingsPage, string> = {
   account: "Account",
+  agent: "Your agent",
+  notifications: "Notifications",
   organization: "Organisation",
-  people: "People & invitations",
+  people: "People",
   teams: "Teams",
+  billing: "Billing",
   tools: "Tool access",
   signin: "Sign-in apps",
   slack: "Slack",
   email: "Email",
-  billing: "Billing",
 }
 
+/** The line under each page's title. */
+function pageSubtitle(page: SettingsPage, organizationName?: string): string {
+  switch (page) {
+    case "account":
+      return "You, how you sign in, and how oryxa looks."
+    case "agent":
+      return "What your agent may do for you, and what it hides when it answers."
+    case "notifications":
+      return "Where oryxa tells you about things."
+    case "organization":
+      return organizationName
+        ? `${organizationName}'s name, address and who may join.`
+        : "The workspace's name, address and who may join."
+    case "people":
+      return "Everyone brings their own agent."
+    case "teams":
+      return "Teams group people. Each team can own teamspaces and get parley emails."
+    case "billing":
+      return "Owners manage the plan and payment."
+    case "tools":
+      return "Agents read only what each tool already lets that person see."
+    case "signin":
+      return "Apps your people use to sign in to oryxa."
+    case "slack":
+      return "Ask a teammate's agent from Slack. The person asked chooses what their agent shares."
+    case "email":
+      return "What oryxa sends by email."
+  }
+}
+
+type NavItem = { page: SettingsPage; icon: LucideIcon | typeof SlackMark }
+
+/** Settings' own navigation: three groups, as the boards have them. */
+const navGroups: readonly { label: string; items: readonly NavItem[] }[] = [
+  {
+    label: "You",
+    items: [
+      { page: "account", icon: UserRound },
+      { page: "agent", icon: Bot },
+      { page: "notifications", icon: Bell },
+    ],
+  },
+  {
+    label: "Workspace",
+    items: [
+      { page: "organization", icon: Building2 },
+      { page: "people", icon: UsersRound },
+      { page: "teams", icon: Network },
+      { page: "billing", icon: CreditCard },
+    ],
+  },
+  {
+    label: "Connections",
+    items: [
+      { page: "tools", icon: Puzzle },
+      // Organisation admins only, once Oryxa's own sign-in is on.
+      { page: "signin", icon: KeyRound },
+      // Every member links their own Slack account; owners and admins also
+      // manage the organisation's connection there.
+      { page: "slack", icon: SlackMark },
+      { page: "email", icon: Mail },
+    ],
+  },
+]
+
+/**
+ * Settings, a page of the shell (DESIGN.md §3): the "Settings · org" header,
+ * its own grouped navigation on a tile, and the open page beside it. It opens
+ * from the sidebar's Settings entry, and on Billing or Slack when a link
+ * asked for them (`?view=billing|slack`).
+ */
 export function WorkspaceSettings({
-  onClose,
   identity,
   session,
   selectedOrganization,
@@ -60,7 +134,6 @@ export function WorkspaceSettings({
   onOpenTools,
   initialPage,
 }: {
-  onClose: () => void
   identity: AvatarIdentity
   session?: Session
   selectedOrganization?: Organization
@@ -80,7 +153,6 @@ export function WorkspaceSettings({
   const [selectedPage, setPage] = useState<SettingsPage>(
     () => initialPage ?? rememberedSettingsPage(scope) ?? "account"
   )
-  // Organization admins only, and only once Oryxa's own sign-in is on.
   const signinApps = useSigninAppsAvailable({
     organizationId: organization?.id,
     role: organizationRole,
@@ -103,198 +175,173 @@ export function WorkspaceSettings({
     )
   }, [organizationId, userId, selectedPage, signinApps])
 
+  let content: ReactNode
+  switch (page) {
+    case "account":
+      content = (
+        <WorkspaceAccountSettings
+          identity={identity}
+          session={session}
+          organization={organization}
+          role={organizationRole}
+          preview={preview}
+          onSignOut={onSignOut}
+          signingOut={signingOut}
+          signOutError={signOutError}
+        />
+      )
+      break
+    case "agent":
+      content = (
+        <SettingsNote>
+          Your agent's settings are moving here. For now, they are on Account.
+        </SettingsNote>
+      )
+      break
+    case "notifications":
+      content = (
+        <SettingsNote>
+          Notifications are moving here. For now, team parley emails are on
+          Account.
+        </SettingsNote>
+      )
+      break
+    case "organization":
+      content = (
+        <WorkspaceOrganizationSettings
+          organization={organization}
+          role={organizationRole}
+          preview={preview}
+          session={session}
+        />
+      )
+      break
+    case "people":
+      content = (
+        <PeopleManagement
+          organizationId={
+            organization?.id || (preview ? "preview-organization" : undefined)
+          }
+          role={session ? organizationRole || "member" : "owner"}
+          viewerId={session?.user.id}
+          preview={preview}
+        />
+      )
+      break
+    case "teams":
+      content = (
+        <WorkspaceTeamsSettings
+          organization={organization}
+          role={organizationRole}
+          preview={preview}
+        />
+      )
+      break
+    case "billing":
+      content = (
+        <WorkspaceBillingSettings
+          organization={organization}
+          preview={preview}
+        />
+      )
+      break
+    case "tools":
+      content = (
+        <WorkspaceToolAccessSettings
+          organization={organization}
+          role={organizationRole}
+          preview={preview}
+          onOpenTools={onOpenTools}
+        />
+      )
+      break
+    case "signin":
+      content = (
+        <WorkspaceSigninAppsSettings
+          organization={organization}
+          role={organizationRole}
+          preview={preview}
+        />
+      )
+      break
+    case "slack":
+      content = (
+        <WorkspaceSlackSettings
+          organization={organization}
+          role={organizationRole}
+          preview={preview}
+        />
+      )
+      break
+    case "email":
+      content = (
+        <WorkspaceEmailSettings
+          organization={organization}
+          onBilling={() => setPage("billing")}
+          onAccount={() => setPage("account")}
+        />
+      )
+      break
+  }
+
   return (
-    <div
-      className="workspace-settings-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-    >
-      <div
-        className="workspace-settings-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Settings"
-      >
-        <aside
-          className="workspace-settings-sidebar"
-          aria-label="Settings navigation"
-        >
-          <div className="workspace-settings-sidebar-head">
-            <span className="workspace-settings-icon">
-              <Settings2 size={19} strokeWidth={1.7} />
-            </span>
-            <strong>Settings</strong>
-          </div>
-          <nav aria-label="Settings sections">
-            <span className="workspace-settings-group" aria-hidden="true">
-              You
-            </span>
-            <button
-              type="button"
-              className={cn(page === "account" && "is-active")}
-              onClick={() => setPage("account")}
-            >
-              <UserRound size={18} strokeWidth={1.7} /> Account
-            </button>
-            <span className="workspace-settings-group" aria-hidden="true">
-              Workspace
-            </span>
-            <button
-              type="button"
-              className={cn(page === "organization" && "is-active")}
-              onClick={() => setPage("organization")}
-            >
-              <Building2 size={18} strokeWidth={1.7} /> Organisation
-            </button>
-            <button
-              type="button"
-              className={cn(page === "people" && "is-active")}
-              onClick={() => setPage("people")}
-            >
-              <UsersRound size={18} strokeWidth={1.7} /> People & invitations
-            </button>
-            <button
-              type="button"
-              className={cn(page === "teams" && "is-active")}
-              onClick={() => setPage("teams")}
-            >
-              <Network size={18} strokeWidth={1.7} /> Teams
-            </button>
-            <button
-              type="button"
-              className={cn(page === "billing" && "is-active")}
-              onClick={() => setPage("billing")}
-            >
-              <CreditCard size={18} strokeWidth={1.7} /> Billing
-            </button>
-            <span className="workspace-settings-group" aria-hidden="true">
-              Connections
-            </span>
-            <button
-              type="button"
-              className={cn(page === "tools" && "is-active")}
-              onClick={() => setPage("tools")}
-            >
-              <Puzzle size={18} strokeWidth={1.7} /> Tool access
-            </button>
-            {signinApps && (
-              <button
-                type="button"
-                className={cn(page === "signin" && "is-active")}
-                onClick={() => setPage("signin")}
-              >
-                <KeyRound size={18} strokeWidth={1.7} /> Sign-in apps
-              </button>
-            )}
-            {/* Every member links their own Slack account; owners and admins
-                also manage the organisation's connection there. */}
-            <button
-              type="button"
-              className={cn(page === "slack" && "is-active")}
-              onClick={() => setPage("slack")}
-            >
-              <SlackMark size={18} /> Slack
-            </button>
-            <button
-              type="button"
-              className={cn(page === "email" && "is-active")}
-              onClick={() => setPage("email")}
-            >
-              <Mail size={18} strokeWidth={1.7} /> Email
-            </button>
+    <>
+      <header className="workspace-header settings-header">
+        <h1>
+          Settings
+          {organization && (
+            <>
+              <span className="settings-crumb-sep" aria-hidden="true">
+                ·
+              </span>
+              <span className="settings-crumb-org">{organization.name}</span>
+            </>
+          )}
+        </h1>
+      </header>
+      <main className="workspace-canvas settings-canvas" aria-label="Settings">
+        <div className="settings-layout">
+          <nav className="settings-nav" aria-label="Settings sections">
+            {navGroups.map((group) => (
+              <div className="settings-nav-group" key={group.label}>
+                <span className="settings-nav-heading" aria-hidden="true">
+                  {group.label}
+                </span>
+                {group.items
+                  .filter((item) => item.page !== "signin" || signinApps)
+                  .map(({ page: item, icon: Icon }) => (
+                    <button
+                      key={item}
+                      type="button"
+                      className={cn(
+                        "settings-nav-item",
+                        page === item && "is-active"
+                      )}
+                      aria-current={page === item ? "page" : undefined}
+                      onClick={() => setPage(item)}
+                    >
+                      <Icon size={17} strokeWidth={1.7} />
+                      {pageTitles[item]}
+                    </button>
+                  ))}
+              </div>
+            ))}
           </nav>
-          <button
-            className="workspace-settings-back"
-            type="button"
-            onClick={onClose}
+          <section
+            className="settings-body"
+            aria-labelledby="settings-page-title"
           >
-            <ArrowLeft size={17} strokeWidth={1.7} /> Back to workspace
-          </button>
-        </aside>
-        <div className="workspace-settings-content">
-          <header className="workspace-settings-header">
-            <div>
-              <h2>{pageTitles[page]}</h2>
+            <div className="settings-body-inner">
+              <SettingsHeading
+                id="settings-page-title"
+                title={pageTitles[page]}
+                subtitle={pageSubtitle(page, organization?.name)}
+              />
+              {content}
             </div>
-            <button
-              type="button"
-              aria-label="Close settings"
-              autoFocus
-              onClick={onClose}
-            >
-              <X size={18} strokeWidth={1.7} />
-            </button>
-          </header>
-          <div className="workspace-settings-scroll">
-            {page === "people" ? (
-              <PeopleManagement
-                organizationId={
-                  organization?.id ||
-                  (preview ? "preview-organization" : undefined)
-                }
-                role={session ? organizationRole || "member" : "owner"}
-                viewerId={session?.user.id}
-                preview={preview}
-              />
-            ) : page === "organization" ? (
-              <WorkspaceOrganizationSettings
-                organization={organization}
-                role={organizationRole}
-                preview={preview}
-                session={session}
-              />
-            ) : page === "account" ? (
-              <WorkspaceAccountSettings
-                identity={identity}
-                session={session}
-                organization={organization}
-                role={organizationRole}
-                preview={preview}
-                onSignOut={onSignOut}
-                signingOut={signingOut}
-                signOutError={signOutError}
-              />
-            ) : page === "teams" ? (
-              <WorkspaceTeamsSettings
-                organization={organization}
-                role={organizationRole}
-                preview={preview}
-              />
-            ) : page === "tools" ? (
-              <WorkspaceToolAccessSettings
-                organization={organization}
-                role={organizationRole}
-                preview={preview}
-                onOpenTools={onOpenTools}
-              />
-            ) : page === "signin" ? (
-              <WorkspaceSigninAppsSettings
-                organization={organization}
-                role={organizationRole}
-                preview={preview}
-              />
-            ) : page === "slack" ? (
-              <WorkspaceSlackSettings
-                organization={organization}
-                role={organizationRole}
-                preview={preview}
-              />
-            ) : page === "email" ? (
-              <WorkspaceEmailSettings
-                organization={organization}
-                onBilling={() => setPage("billing")}
-                onAccount={() => setPage("account")}
-              />
-            ) : (
-              <WorkspaceBillingSettings
-                organization={organization}
-                preview={preview}
-              />
-            )}
-          </div>
+          </section>
         </div>
-      </div>
-    </div>
+      </main>
+    </>
   )
 }

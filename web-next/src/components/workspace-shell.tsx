@@ -312,21 +312,29 @@ function WorkspaceShellContent({
     setSectionsByMode((current) => ({ ...current, home: "tools" }))
   }, [])
 
+  // Settings is a page of the shell: opening it puts focused work away, and
+  // opening any other page leaves it.
+  function openSettings(page?: SettingsPage) {
+    closePrimaryWork()
+    agentsMode.close()
+    teamspaces.close()
+    setSettingsPage(page)
+    setSettingsOpen(true)
+    if (isMobile) setLeftExpanded(false)
+  }
   function closeSettings() {
     setSettingsOpen(false)
     setSettingsPage(undefined)
   }
 
   useEffect(() => {
-    if (!settingsOpen && !profileMenuOpen) return
+    if (!profileMenuOpen) return
     function onEscape(event: KeyboardEvent) {
-      if (event.key !== "Escape") return
-      if (settingsOpen) closeSettings()
-      else setProfileMenuOpen(false)
+      if (event.key === "Escape") setProfileMenuOpen(false)
     }
     window.addEventListener("keydown", onEscape)
     return () => window.removeEventListener("keydown", onEscape)
-  }, [settingsOpen, profileMenuOpen])
+  }, [profileMenuOpen])
 
   const section = sectionsByMode[activeMode]
   const heading = headings[section]
@@ -461,6 +469,7 @@ function WorkspaceShellContent({
   }
 
   function selectSection(nextSection: Section, mode = activeMode) {
+    closeSettings()
     setDmPeerId(null)
     setKnowledgeBaseSelection(null)
     teamspaces.reset()
@@ -475,6 +484,7 @@ function WorkspaceShellContent({
   function openDirectMessage(peerId: string) {
     const peer = openable(peerId)
     if (!peer) return
+    closeSettings()
     setDmPeerId(peer)
     setDmOpenedByMember(true)
     setActiveMode("team")
@@ -497,6 +507,7 @@ function WorkspaceShellContent({
   }
 
   function openWork(target: AgentsFocusTarget) {
+    closeSettings()
     teamspaces.close()
     setPrimaryWork(false)
     setPrimaryComposing(false)
@@ -506,6 +517,7 @@ function WorkspaceShellContent({
   }
 
   function openPrimaryWork() {
+    closeSettings()
     teamspaces.close()
     agentsMode.close()
     setPrimaryWork(true)
@@ -541,6 +553,7 @@ function WorkspaceShellContent({
   }
 
   function navigateFromHome(mode: PrimaryMode, next: Section) {
+    closeSettings()
     closePrimaryWork()
     teamspaces.close()
     agentsMode.close()
@@ -590,6 +603,7 @@ function WorkspaceShellContent({
   }
 
   function openTeamspace(id: string) {
+    closeSettings()
     teamspaces.open(id)
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
@@ -604,6 +618,7 @@ function WorkspaceShellContent({
   // A request named by a link or a note (requests-view-open.ts) opens in
   // Agents → Requests, first; leaving Requests puts it away.
   function openRequestsSection(requestId?: string) {
+    closeSettings()
     closePrimaryWork()
     teamspaces.reset()
     agentsMode.close()
@@ -637,14 +652,8 @@ function WorkspaceShellContent({
     onOpenAgent: openHomeHistory,
     onOpenTools: () => navigateFromHome("home", "tools"),
     onOpenKnowledge: () => navigateFromHome("home", "knowledge"),
-    onOpenSlack: () => {
-      setSettingsPage("slack")
-      setSettingsOpen(true)
-    },
-    onOpenAccount: () => {
-      setSettingsPage("account")
-      setSettingsOpen(true)
-    },
+    onOpenSlack: () => openSettings("slack"),
+    onOpenAccount: () => openSettings("account"),
   }
 
   return (
@@ -738,7 +747,9 @@ function WorkspaceShellContent({
                 {navigation[mode.key].map((item) => {
                   const Icon = item.icon
                   const current =
-                    activeMode === mode.key && navCurrent(item.key)
+                    !settingsOpen &&
+                    activeMode === mode.key &&
+                    navCurrent(item.key)
                   return (
                     <button
                       className={cn(
@@ -798,8 +809,7 @@ function WorkspaceShellContent({
                   role="menuitem"
                   onClick={() => {
                     setProfileMenuOpen(false)
-                    setSettingsPage(undefined)
-                    setSettingsOpen(true)
+                    openSettings()
                   }}
                 >
                   <Settings2 size={17} strokeWidth={1.7} /> Settings
@@ -856,7 +866,26 @@ function WorkspaceShellContent({
         data-composing={middleHeight ? "true" : undefined}
         style={middleHeight ? { height: middleHeight } : undefined}
       >
-        {primaryWork && selectedOrganization ? (
+        {settingsOpen ? (
+          <WorkspaceSettings
+            key={JSON.stringify([
+              "settings",
+              selectedOrganization?.id ?? session?.organizations[0]?.id,
+              viewerId,
+              settingsPage,
+            ])}
+            initialPage={settingsPage}
+            identity={currentIdentity}
+            session={session}
+            selectedOrganization={selectedOrganization}
+            organizationRole={organizationRole}
+            preview={preview}
+            onSignOut={() => void handleSignOut()}
+            signingOut={signingOut}
+            signOutError={signOutError}
+            onOpenTools={() => navigateFromHome("home", "tools")}
+          />
+        ) : primaryWork && selectedOrganization ? (
           <div className="workspace-focus workspace-primary-focus">
             <FocusHeader
               title="Agent overview"
@@ -1100,31 +1129,6 @@ function WorkspaceShellContent({
           />
         }
       />
-      {settingsOpen && (
-        <WorkspaceSettings
-          key={JSON.stringify([
-            "settings",
-            selectedOrganization?.id ?? session?.organizations[0]?.id,
-            viewerId,
-          ])}
-          onClose={closeSettings}
-          initialPage={settingsPage}
-          identity={currentIdentity}
-          session={session}
-          selectedOrganization={selectedOrganization}
-          organizationRole={organizationRole}
-          preview={preview}
-          onSignOut={() => void handleSignOut()}
-          signingOut={signingOut}
-          signOutError={signOutError}
-          onOpenTools={() => {
-            setActiveMode("home")
-            setSectionsByMode((current) => ({ ...current, home: "tools" }))
-            closeSettings()
-            if (isMobile) setLeftExpanded(false)
-          }}
-        />
-      )}
     </div>
   )
 }

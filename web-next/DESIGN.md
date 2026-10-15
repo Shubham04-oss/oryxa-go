@@ -216,10 +216,23 @@ not permission to copy every incidental value into a new component.
   2026). People is a grid of cards (the person, their presence, what you
   share, Message). On the Agents pages the primary agent, the stats, teams,
   specialists and workflows are filled tiles on the canvas, with no
-  outlines. Settings' menu is three groups, You (Account), Workspace
-  (Organisation, People & invitations, Teams, Billing) and Connections (Tool
-  access, Sign-in apps, Slack, Email), on one tile, the open page the raised
-  tile.
+  outlines.
+- **Settings as a full page** (founder's redesign, 15 Oct 2026). Settings is a
+  page of the shell, not a modal: the sidebar stays, the header reads
+  "Settings · {organisation}", and the canvas holds two tiles on the base, its
+  own menu and the open page. The menu is three groups, You (Account, Your
+  agent, Notifications), Workspace (Organisation, People, Teams, Billing) and
+  Connections (Tool access, Sign-in apps for admins, Slack, Email), the open
+  page the raised tile. A page is its title and one line under it, then
+  groups: a quiet uppercase label over one card on the canvas, and in the
+  card rows, a title and what it means on the left and the control on the
+  right, with a hairline between rows. Pages are built only from the settings
+  kit (`settings-kit.tsx`: group, card, row, switch, select, chips, status,
+  value, button, note, message), which wraps the shadcn base-nova library;
+  inside Settings and its pop-ups the library's colour variables are mapped
+  to theme roles (`workspace-settings.css`). A danger zone is its own group
+  whose row title is red. Opening any other page leaves Settings; Escape no
+  longer closes it.
 - **Chats and DMs as tiles** (founder's redesign, 14 Oct 2026). The open
   chat in the chat list is the raised tile and the others lift on hover; DM
   rows are rounded the same way, with unread as a filled count. The member's
@@ -597,7 +610,8 @@ not permission to copy every incidental value into a new component.
   teamspace shows it.
 - Teamspace management is role-aware. Put account, teammate, organization,
   access, email, and billing administration inside Settings, opened from the
-  user menu. Keep the simple Organization tab in that single Settings surface;
+  sidebar's Settings entry (the user menu, and the rail's Settings button
+  where the rail has one). Keep the simple Organization tab in that single Settings surface;
   do not split account and organization into separate full-page settings apps.
   A generic Settings entry opens Account on the member's first visit, then
   their last section in this browser, remembered per member and workspace.

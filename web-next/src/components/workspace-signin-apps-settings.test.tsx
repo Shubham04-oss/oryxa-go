@@ -210,7 +210,6 @@ function showSettings(role: Role) {
   }
   return render(
     <WorkspaceSettings
-      onClose={() => {}}
       identity={{ id: "user-1", name: "Avery", initials: "A", kind: "user" }}
       session={session}
       selectedOrganization={organization}

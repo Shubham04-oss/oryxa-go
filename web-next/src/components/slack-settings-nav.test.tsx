@@ -36,7 +36,6 @@ function showSettings({
   render(
     <QueryClientProvider client={client}>
       <WorkspaceSettings
-        onClose={() => {}}
         identity={{ id: "user-1", name: "Avery", initials: "A", kind: "user" }}
         session={{
           user: {
@@ -89,13 +88,17 @@ describe("Slack among Settings' sections", () => {
       name: "Settings sections",
     })
     expect(
-      Array.from(sections.children, (item) => item.textContent.trim())
+      Array.from(sections.querySelectorAll("span, button"), (item) =>
+        item.textContent.trim()
+      )
     ).toEqual([
       "You",
       "Account",
+      "Your agent",
+      "Notifications",
       "Workspace",
       "Organisation",
-      "People & invitations",
+      "People",
       "Teams",
       "Billing",
       "Connections",
