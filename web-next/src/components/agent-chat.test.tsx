@@ -1446,9 +1446,9 @@ describe("WorkspaceAgentPanel", () => {
       await screen.findByRole("textbox", { name: "Message Leo" })
     ).toBeTruthy()
     expect(screen.queryByRole("group", { name: "Switch agent" })).toBeNull()
-    expect(
-      within(screen.getByRole("tab", { name: "Agents" })).getByLabelText("Leo")
-    ).toBeTruthy()
+    // The panel's header and its first view are named for the agent.
+    expect(screen.getByRole("tab", { name: "Leo" })).toBeTruthy()
+    expect(screen.getByText("Only you")).toBeTruthy()
   })
 })
 

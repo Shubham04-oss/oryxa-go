@@ -20,9 +20,11 @@ import {
   agent,
   fakeAgentsBackend,
   primary,
+  request,
 } from "./agents-fake-backend"
 import type { DmPeople } from "./direct-message-people"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
+import type { AgentRequest } from "@/lib/agents/agent-requests"
 import type { Inbox } from "@/lib/dms"
 import {
   MAX_WAITING_MESSAGES,
@@ -87,6 +89,8 @@ type Seed = {
   created?: Thread
   /** Transport fixtures resume their own explicitly viewed conversation. */
   rememberLatest?: boolean
+  /** The member's Requests inbox. */
+  inbox?: AgentRequest[]
 }
 
 /** A call that starts a conversation. */
@@ -110,7 +114,10 @@ function stubGo(seed: Seed = {}) {
         rememberChoice({ organizationId: ORG, userId }, primary.id, last.id)
     }
   }
-  const backend = fakeAgentsBackend({ agents: [primary, scout] })
+  const backend = fakeAgentsBackend({
+    agents: [primary, scout],
+    inbox: seed.inbox,
+  })
   let threads = seed.threads ?? []
   let made = 0
   let failing = 0
@@ -353,7 +360,7 @@ describe("what the agents' chats keep across a switch", () => {
     const sockets = roomSockets.named(chatName("th_1")).length
 
     // A new conversation, though a fresh one exists.
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(screen.getByText(blank)).toBeTruthy()
 
     fireEvent.click(within(switcher()).getByRole("button", { name: "Scout" }))
@@ -474,8 +481,7 @@ describe("a first message on its way", () => {
     fireEvent.keyDown(leoBox(), { key: "Enter" })
     const socket = await socketOn(chatName("th_new"))
 
-    const button = () =>
-      screen.getByRole("button", { name: "New conversation" })
+    const button = () => screen.getByRole("button", { name: "New chat" })
     expect(button().hasAttribute("disabled")).toBe(true)
     fireEvent.click(button())
     socket.open()
@@ -635,7 +641,9 @@ describe("a request to open a conversation", () => {
 
     act(() => requestPrimaryChat(scope, { kind: "thread", threadId: "th_1" }))
     expect(
-      screen.getByRole("tab", { name: "Agents" }).getAttribute("aria-selected")
+      screen
+        .getByRole("tab", { name: /^(Leo|Your agent)$/ })
+        .getAttribute("aria-selected")
     ).toBe("true")
   })
 
@@ -672,7 +680,7 @@ describe("a request to open a conversation", () => {
     ;(await socketOn(chatName("th_1"))).open()
 
     // The member goes to a new conversation instead.
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(screen.getByText(blank)).toBeTruthy()
     view.rerender(panel({ expanded: true, primaryWork: false }))
     expect(screen.getByText(blank)).toBeTruthy()
@@ -717,7 +725,7 @@ describe("a request to open a conversation", () => {
     expect(rememberedChoice(scope, primary.id)).toBe("th_new")
 
     // Nothing waits to be sent into the next new conversation.
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     await act(async () => {})
     expect(
       go.calls.filter((call) => call.startsWith("POST /v1/organizations/"))
@@ -942,7 +950,7 @@ describe("a request to open a conversation", () => {
       ).toBe("Old plan")
     )
     expect(notSent()).toEqual(["Failed first"])
-    fireEvent.click(screen.getByRole("button", { name: "New conversation" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(notSent()).toEqual(["Failed first"])
     expect(leoBox().value).toBe("Half a thought")
 
@@ -1170,5 +1178,83 @@ describe("a file the agent saves", () => {
     await screen.findByRole("textbox", { name: "Message Scout" })
     finish()
     expect(onFile).not.toHaveBeenCalled()
+  })
+})
+
+describe("the panel's header, switch and chips", () => {
+  it("names the agent and where the member is, and keeps the chat theirs", async () => {
+    stubGo({ threads: [] })
+    withQueries(panel({ place: "EU launch", lookingAt: "EU launch plan" }))
+    expect(await screen.findByText("Only you · in EU launch")).toBeTruthy()
+    expect(await screen.findByRole("tab", { name: "Leo" })).toBeTruthy()
+    expect(
+      screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label"))
+    ).toEqual(["Leo", "At a glance", "DMs"])
+    // What the agent is shown with a message, on the composer.
+    await screen.findByText(blank)
+    expect(screen.getByText("Looking at EU launch plan")).toBeTruthy()
+  })
+
+  it("counts what needs the member on At a glance and in a chip that opens Requests", async () => {
+    stubGo({
+      threads: [],
+      inbox: [
+        request({ id: "req_1", status: "pending" }),
+        request({ id: "req_2", status: "review" }),
+        // Decided already: nothing to do.
+        request({ id: "req_3", status: "approved" }),
+      ],
+    })
+    const onOpenRequests = vi.fn()
+    withQueries(panel({ onOpenRequests }))
+    const chip = await screen.findByRole("button", {
+      name: "Needs you: 2 requests, open Requests",
+    })
+    expect(
+      screen.getByRole("tab", { name: "At a glance, 2 requests need you" })
+    ).toBeTruthy()
+    fireEvent.click(chip)
+    expect(onOpenRequests).toHaveBeenCalledOnce()
+  })
+
+  it("shows no chip and no count while nothing waits", async () => {
+    stubGo({ threads: [] })
+    withQueries(panel({ onOpenRequests: vi.fn() }))
+    await screen.findByText(blank)
+    expect(screen.queryByRole("group", { name: "For you now" })).toBeNull()
+    expect(screen.queryByText(/Needs you/)).toBeNull()
+    expect(screen.getByRole("tab", { name: "At a glance" })).toBeTruthy()
+  })
+
+  it("keeps History and New chat in the header, for the primary agent's chat", async () => {
+    stubGo({ threads: [thread("th_1", "Plan the launch")] })
+    withQueries(panel())
+    ;(await socketOn(chatName("th_1"))).open()
+    await screen.findByText("Plan the launch", {
+      selector: ".workspace-agent-thread-title",
+    })
+    // The row over the log only names the conversation now.
+    expect(
+      screen.queryByRole("button", { name: "New conversation" })
+    ).toBeNull()
+    expect(document.querySelector(".workspace-chat-history-list")).toBeNull()
+
+    const history = screen.getByRole("button", { name: "History" })
+    fireEvent.click(history)
+    expect(history.getAttribute("aria-pressed")).toBe("true")
+    expect(
+      within(
+        screen.getByRole("region", { name: "Conversation history" })
+      ).getByRole("button", { name: "Delete Plan the launch" })
+    ).toBeTruthy()
+
+    // From At a glance, New chat brings the chat back, on a new conversation.
+    fireEvent.click(screen.getByRole("tab", { name: "At a glance" }))
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }))
+    expect(
+      screen.getByRole("tab", { name: "Leo" }).getAttribute("aria-selected")
+    ).toBe("true")
+    expect(await screen.findByText(blank)).toBeTruthy()
+    expect(history.getAttribute("aria-pressed")).toBe("false")
   })
 })

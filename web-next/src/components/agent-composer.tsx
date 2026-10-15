@@ -1,5 +1,7 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -7,9 +9,19 @@ import {
   useState,
 } from "react"
 import type { FormEvent, KeyboardEvent, ReactNode } from "react"
-import { ArrowUp, Square } from "lucide-react"
+import { ArrowUp, Eye, Square } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
 
 const maxRows = 6
+
+/**
+ * What the page shows, as the agent will be told when a message is sent
+ * ("Looking at EU launch"). The agent panel provides it; a composer outside
+ * it (a DM, a room) has none and shows nothing.
+ */
+export const AgentComposerLookingAt = createContext<string | undefined>(
+  undefined
+)
 
 export function AgentComposer({
   label,
@@ -43,6 +55,7 @@ export function AgentComposer({
   onBlur?: () => void
 }) {
   const statusId = useId()
+  const lookingAt = useContext(AgentComposerLookingAt)?.trim()
   const message = value.trim()
   const canSend = !disabled && !sendDisabled && !streaming && message.length > 0
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -105,6 +118,16 @@ export function AgentComposer({
 
   return (
     <form className="workspace-agent-composer" onSubmit={submit}>
+      {lookingAt && (
+        <Badge
+          variant="secondary"
+          className="workspace-agent-looking-at"
+          title={`Sent with your message: you are looking at ${lookingAt}`}
+        >
+          <Eye aria-hidden="true" />
+          <span>Looking at {lookingAt}</span>
+        </Badge>
+      )}
       <div
         className="workspace-composer workspace-agent-composer-field"
         data-multiline={multiline ? "true" : "false"}
