@@ -42,7 +42,10 @@ export function isEditableDocument(name: string): boolean {
  * first expanded): which conversation it opens is the chat's to decide, not
  * something to guess from the list here.
  */
-function useCurrentFiles(organizationId: string, threadId?: string | null) {
+export function useConversationFiles(
+  organizationId: string,
+  threadId?: string | null
+) {
   const currentThreadId = threadId ?? null
   const detail = useQuery({
     ...threadDetailQueryOptions(organizationId, currentThreadId ?? ""),
@@ -55,7 +58,14 @@ function useCurrentFiles(organizationId: string, threadId?: string | null) {
     )
     const latest = new Map<string, ArtifactEntry>()
     for (const entry of entries) latest.set(entry.name, entry)
-    return [...latest.values()].reverse()
+    return [...latest.values()].reverse().map((entry) => ({
+      ...entry,
+      versions: new Set(
+        entries
+          .filter((other) => other.name === entry.name)
+          .map((other) => other.version ?? 0)
+      ).size,
+    }))
   }, [detail.data])
   const status = !currentThreadId
     ? "Start a conversation to see its files here."
@@ -74,23 +84,27 @@ export function PrimaryAgentFiles({
   organizationId,
   threadId,
   onOpenFile,
+  heading = "Current conversation files",
 }: {
   organizationId: string
   threadId?: string | null
   onOpenFile?: (file: PrimaryAgentFileTarget) => void
+  /** The section's eyebrow; none where a tab already names it. */
+  heading?: string | null
 }) {
-  const { currentThreadId, files, status, error, pending } = useCurrentFiles(
-    organizationId,
-    threadId
-  )
+  const { currentThreadId, files, status, error, pending } =
+    useConversationFiles(organizationId, threadId)
   return (
     <section
       className="workspace-primary-files-section"
-      aria-labelledby="agents-overview-files"
+      aria-labelledby={heading ? "agents-overview-files" : undefined}
+      aria-label={heading ? undefined : "Conversation files"}
     >
-      <p className="workspace-eyebrow" id="agents-overview-files">
-        Current conversation files
-      </p>
+      {heading && (
+        <p className="workspace-eyebrow" id="agents-overview-files">
+          {heading}
+        </p>
+      )}
       {status ? (
         <p
           className={
@@ -129,6 +143,15 @@ export function PrimaryAgentFiles({
             >
               <FileKindBadge name={file.name} size="small" />
               <span>{artifactFileName(file.name)}</span>
+              {file.version !== undefined && (
+                <small
+                  className="workspace-primary-file-version"
+                  aria-hidden="true"
+                >
+                  Version {file.version}
+                  {file.versions > 1 ? ` of ${file.versions}` : ""}
+                </small>
+              )}
             </button>
           ))}
         </div>
@@ -155,7 +178,7 @@ export function PrimaryAgentFileViewer({
     status,
     error: listError,
     pending,
-  } = useCurrentFiles(organizationId, threadId)
+  } = useConversationFiles(organizationId, threadId)
   const current = file ?? files.at(0)
   const editable = current ? isEditableDocument(current.name) : false
   const activeThreadId = file?.threadId ?? currentThreadId

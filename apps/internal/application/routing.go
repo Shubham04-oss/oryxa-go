@@ -11,8 +11,9 @@ import (
 
 // BrokerFor answers the broker a new connect to toolkit goes through, for a
 // connect that does not name one. Each toolkit is served by exactly one
-// broker, preferring Oryxa's own sign-in, then Composio, then Pipedream,
-// unless APPS_TOOLKIT_BROKERS pins it. It decides only new connects: an
+// broker, preferring the integrations service (APPS_NATIVE_TOOLKITS), then
+// Oryxa's own sign-in, then Composio, then Pipedream, unless
+// APPS_TOOLKIT_BROKERS pins it. It decides only new connects: an
 // existing connection keeps the broker it was made through, whatever this
 // says today.
 func (s *Service) BrokerFor(ctx context.Context, toolkit string) (string, error) {
@@ -26,6 +27,9 @@ func (s *Service) BrokerFor(ctx context.Context, toolkit string) (string, error)
 func (s *Service) brokerFor(ctx context.Context, toolkit string) (string, error) {
 	if broker, ok := s.toolkitBrokers[toolkit]; ok {
 		return broker, nil
+	}
+	if s.nativeServes(toolkit) {
+		return brokerNative, nil
 	}
 	if s.oryxa != nil && s.oryxa.enabled[toolkit] {
 		return domain.BrokerOryxa, nil
