@@ -35,6 +35,7 @@ export function AgentComposer({
   onStop,
   status,
   leading,
+  context,
   onFocus,
   onBlur,
 }: {
@@ -51,6 +52,8 @@ export function AgentComposer({
   status?: ReactNode
   /** A control inside the pill, before the field: a side conversation's "who this goes to". */
   leading?: ReactNode
+  /** A quiet line above the field: what an agent's task bar says it sees (`LookingAt`). */
+  context?: ReactNode
   onFocus?: () => void
   onBlur?: () => void
 }) {
@@ -118,7 +121,9 @@ export function AgentComposer({
 
   return (
     <form className="workspace-agent-composer" onSubmit={submit}>
-      {lookingAt && (
+      {/* Two "Looking at" sources: the agent panel's place (the context
+          provider) wins; a task bar's own reading shows only without it. */}
+      {lookingAt ? (
         <Badge
           variant="secondary"
           className="workspace-agent-looking-at"
@@ -127,6 +132,10 @@ export function AgentComposer({
           <Eye aria-hidden="true" />
           <span>Looking at {lookingAt}</span>
         </Badge>
+      ) : (
+        context && (
+          <div className="workspace-agent-composer-context">{context}</div>
+        )
       )}
       <div
         className="workspace-composer workspace-agent-composer-field"
