@@ -29,6 +29,12 @@ import { HomeAsk } from "./home-ask"
 import type { HomeSuggestion } from "./home-ask"
 import { HomeLivePill } from "./home-live-pill"
 import { HomePickup } from "./home-pickup"
+import {
+  HomeGettingStarted,
+  startSteps,
+  useCrewStep,
+  useTeamspaceStep,
+} from "./home-first-run"
 import { ToolkitLogo } from "./workspace-tool-logo"
 import { toolkitIcon } from "./workspace-tools-data"
 import { IdentityAvatar } from "./workspace-avatar"
@@ -129,6 +135,16 @@ type HomeProps = {
   onOpenAccount?: () => void
   /** Opens a teamspace, where its live parley is joined. */
   onOpenTeamspace?: (teamspaceId: string) => void
+  /** Opens Teamspaces, where a first one is made. */
+  onOpenTeamspaces?: () => void
+  /** Opens Settings → People, where the crew is invited. */
+  onOpenPeople?: () => void
+  /**
+   * The first run, right after setup (OnbFirstRunV3): Getting started takes
+   * While you were away's place until the member hides it.
+   */
+  firstRun?: boolean
+  onFirstRunDone?: () => void
   /**
    * "glance" is the agent panel's At a glance tab: the same widgets in one
    * compact column, without the page's composer (the agent's chat is a tab
@@ -162,6 +178,10 @@ function HomeDesk({
   onOpenSlack,
   onOpenAccount,
   onOpenTeamspace,
+  onOpenTeamspaces,
+  onOpenPeople,
+  firstRun = false,
+  onFirstRunDone,
   variant = "page",
   viewerName,
 }: HomeProps) {
@@ -365,6 +385,9 @@ function HomeDesk({
       })),
   ].slice(0, 3)
   const people = usePeopleNames(org, viewer, enabled)
+  const starting = enabled && variant === "page" && firstRun
+  const crewStep = useCrewStep(org, viewer, starting)
+  const teamspaceStep = useTeamspaceStep(org, starting)
   const nameOf = (userId: string, fallback?: string) =>
     people.nameOf(userId) || fallback?.trim() || "A teammate"
 
@@ -434,7 +457,11 @@ function HomeDesk({
     <section className="home-column" aria-labelledby="home-briefs">
       <header className="home-column-head">
         <h2 id="home-briefs">
-          {page ? "While you were away" : "From your apps"}
+          {!page
+            ? "From your apps"
+            : firstRun
+              ? "What Krude found"
+              : "While you were away"}
         </h2>
         {updatesThreadId && (
           <Button
@@ -760,8 +787,32 @@ function HomeDesk({
             : []),
         ].filter(() => Boolean(onNewChat))
       : []
+    const steps = startSteps(
+      {
+        granted: agentGrant?.granted,
+        tools: connections.isSuccess ? tools.length > 0 : undefined,
+        crew: crewStep,
+        teamspace: teamspaceStep,
+        asked: threads.isSuccess ? conversations.length > 0 : undefined,
+      },
+      {
+        grant: onOpenAccount,
+        tools: onOpenTools,
+        crew: onOpenPeople,
+        teamspace: onOpenTeamspaces,
+      }
+    )
+    const firstLine =
+      helloLine ||
+      (briefs.length > 0
+        ? `${briefs.length === 1 ? "One thing" : `${briefs.length} things`} stood out in your apps. Ask Krude about any of it, or anything else.`
+        : "Ask Krude anything, or finish getting started below.")
+    const showNeeds = needsMember || activeLeases.length > 0
     return (
-      <div className="home-overview home-today home-centred">
+      <div
+        className="home-overview home-today home-centred"
+        data-first-run={firstRun || undefined}
+      >
         <div className="home-scene" aria-hidden="true" />
         {enabled && (
           <HomeLivePill
@@ -770,9 +821,18 @@ function HomeDesk({
             onOpenTeamspace={onOpenTeamspace}
           />
         )}
+        {enabled && firstRun && (
+          <p className="home-krude">
+            <ThinkingOrb size={20} state="listening" aria-hidden="true" />
+            <span>
+              <b>Krude</b> is setting up with you · only you see this page
+            </span>
+          </p>
+        )}
         <header className="home-hello">
           <h2>{greeting(now, viewerName)}</h2>
-          {enabled && helloLine && <p>{helloLine}</p>}
+          {enabled &&
+            (firstRun ? <p>{firstLine}</p> : helloLine && <p>{helloLine}</p>)}
         </header>
         <HomeAsk
           draft={draft}
@@ -781,13 +841,22 @@ function HomeDesk({
           onNewChat={onNewChat}
           suggestions={suggestions}
         />
-        {enabled && (
+        {enabled && !firstRun && (
           <div className="home-pair">
             {needsSection}
             {appsSection}
           </div>
         )}
-        {enabled && (
+        {enabled && firstRun && (
+          <div className="home-pair">
+            {appsSection}
+            <HomeGettingStarted steps={steps} onHide={onFirstRunDone} />
+          </div>
+        )}
+        {enabled && firstRun && showNeeds && (
+          <div className="home-pair home-pair-one">{needsSection}</div>
+        )}
+        {enabled && (!firstRun || pickup.length > 0) && (
           <HomePickup
             items={pickup}
             ready={pickupReady}

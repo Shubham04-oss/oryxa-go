@@ -495,6 +495,78 @@ it("orders Pick up where you left off by what was touched last, four at most", a
   expect(view.onOpenAgent).toHaveBeenCalledOnce()
 })
 
+it("opens the first run with Getting started in place of While you were away, ticked from real reads", async () => {
+  stubApi({
+    [`${path}/apps/connections`]: { connections: [connection("github")] },
+    [`${path}/teamspaces`]: { teamspaces: [] },
+    [`${path}/invitations`]: { invitations: [] },
+  })
+  const onOpenTeamspaces = vi.fn()
+  const onOpenPeople = vi.fn()
+  const onFirstRunDone = vi.fn()
+  const view = renderHome({
+    firstRun: true,
+    viewerName: "Ada",
+    onOpenTeamspaces,
+    onOpenPeople,
+    onFirstRunDone,
+  })
+  const start = screen.getByRole("region", { name: "Getting started" })
+  expect(await within(start).findByLabelText("3 of 5 done")).toBeTruthy()
+  const steps = within(start).getByRole("list", { name: "Getting started" })
+  expect(
+    within(steps)
+      .getAllByRole("listitem")
+      .map((row) => row.textContent)
+  ).toEqual([
+    "Let Krude work while you’re awayDone",
+    "Connect your toolsDone",
+    "Invite your crewDone",
+    "Open a teamspaceA room for a team and its agentsStart",
+    "Ask Krude somethingUse the box above",
+  ])
+  fireEvent.click(
+    within(steps).getByRole("button", { name: "Open a teamspace" })
+  )
+  expect(onOpenTeamspaces).toHaveBeenCalledOnce()
+  expect(onOpenPeople).not.toHaveBeenCalled()
+  expect(screen.getByRole("region", { name: "What Krude found" })).toBeTruthy()
+  expect(
+    screen.queryByRole("region", { name: "While you were away" })
+  ).toBeNull()
+  // Nothing waits, so Needs you stays out of the first run.
+  expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
+  expect(screen.getByText(/only you see this page/)).toBeTruthy()
+  expect(
+    screen.getByText("Ask Krude anything, or finish getting started below.")
+  ).toBeTruthy()
+  fireEvent.click(within(start).getByRole("button", { name: "Hide" }))
+  expect(onFirstRunDone).toHaveBeenCalledOnce()
+  expect(view.onOpenAccount).not.toHaveBeenCalled()
+})
+
+it("leaves a step out when its read is refused, rather than guessing", async () => {
+  stubApi({
+    [`${path}/teamspaces`]: refused,
+    "/v1/agent-grant": { granted: false },
+  })
+  const view = renderHome({ firstRun: true })
+  const start = screen.getByRole("region", { name: "Getting started" })
+  const steps = await within(start).findByRole("list", {
+    name: "Getting started",
+  })
+  await waitFor(() =>
+    expect(within(steps).getAllByRole("listitem").length).toBeGreaterThan(2)
+  )
+  expect(within(steps).queryByText("Open a teamspace")).toBeNull()
+  fireEvent.click(
+    within(steps).getByRole("button", {
+      name: "Let Krude work while you’re away",
+    })
+  )
+  expect(view.onOpenAccount).toHaveBeenCalledOnce()
+})
+
 it("lists waiting teammate requests as rows with one action that opens that exact request in Requests", async () => {
   const consent = slackRequest({
     expires_at: new Date(NOW + 3600_000).toISOString(),
