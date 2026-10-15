@@ -1,15 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { ChevronLeft, ChevronRight } from "lucide-react"
-import type {
-  PDFDocumentLoadingTask,
-  PDFDocumentProxy,
-  RenderTask,
-} from "pdfjs-dist"
 import type { PresentationData } from "@office-kit/pptx"
 import Papa from "papaparse"
 import { AgentMarkdown } from "./agent-timeline"
+import { PdfViewer } from "./pdf-viewer"
 
-// PDF.js, the Word, Excel and PowerPoint readers and the PDF worker script are
+// The Word, Excel and PowerPoint readers and the PDF worker script are
 // megabytes that only a browser ever runs. `import.meta.env.SSR` is decided
 // when the app is built: in the Worker's build it is true, so each import
 // below sits in a branch that is never taken and is left out, with the
@@ -19,12 +15,6 @@ import { AgentMarkdown } from "./agent-timeline"
 function unavailableOnTheServer(): never {
   throw new Error("The document preview runs in the browser.")
 }
-const loadPdfjs = () =>
-  import.meta.env.SSR ? unavailableOnTheServer() : import("pdfjs-dist")
-const loadPdfWorker = () =>
-  import.meta.env.SSR
-    ? unavailableOnTheServer()
-    : import("pdfjs-dist/build/pdf.worker.min.mjs?url")
 const loadDocxPreview = () =>
   import.meta.env.SSR ? unavailableOnTheServer() : import("docx-preview")
 const loadPresentationLibraries = () =>
@@ -173,98 +163,6 @@ function useFileBytes(url: string, enabled: boolean) {
     return () => controller.abort()
   }, [url, enabled])
   return result
-}
-
-function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
-  const canvas = useRef<HTMLCanvasElement>(null)
-  const frame = useRef<HTMLDivElement>(null)
-  const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
-  const [index, setIndex] = useState(0)
-  const [error, setError] = useState("")
-  const [width, setWidth] = useState(0)
-  useEffect(() => {
-    let cancelled = false
-    let loading: PDFDocumentLoadingTask | undefined
-    setPdf(null)
-    setIndex(0)
-    setError("")
-    void Promise.all([loadPdfjs(), loadPdfWorker()])
-      .then(async ([pdfjs, worker]) => {
-        pdfjs.GlobalWorkerOptions.workerSrc = worker.default
-        loading = pdfjs.getDocument({ data: new Uint8Array(bytes) })
-        const document = await loading.promise
-        if (!cancelled) setPdf(document)
-      })
-      .catch(() => {
-        if (!cancelled) setError("Could not render this PDF.")
-      })
-    return () => {
-      cancelled = true
-      void loading?.destroy()
-    }
-  }, [bytes])
-  useEffect(() => {
-    if (!frame.current) return
-    const observer = new ResizeObserver(() =>
-      setWidth(frame.current?.clientWidth ?? 0)
-    )
-    observer.observe(frame.current)
-    setWidth(frame.current.clientWidth)
-    return () => observer.disconnect()
-  }, [])
-  useEffect(() => {
-    if (!pdf || !canvas.current || !width) return
-    let cancelled = false
-    let render: RenderTask | undefined
-    void pdf
-      .getPage(index + 1)
-      .then(async (page) => {
-        if (cancelled || !canvas.current) return
-        const base = page.getViewport({ scale: 1 })
-        const viewport = page.getViewport({
-          scale: Math.min(1.6, Math.max(0.25, (width - 32) / base.width)),
-        })
-        const pixelRatio = window.devicePixelRatio || 1
-        const element = canvas.current
-        element.width = Math.ceil(viewport.width * pixelRatio)
-        element.height = Math.ceil(viewport.height * pixelRatio)
-        element.style.width = `${viewport.width}px`
-        element.style.height = `${viewport.height}px`
-        const context = element.getContext("2d")
-        if (!context) throw new Error("Canvas unavailable")
-        render = page.render({
-          canvas: element,
-          canvasContext: context,
-          viewport,
-          transform: [pixelRatio, 0, 0, pixelRatio, 0, 0],
-        })
-        await render.promise
-      })
-      .catch(() => {
-        if (!cancelled) setError("Could not render this PDF page.")
-      })
-    return () => {
-      cancelled = true
-      render?.cancel()
-    }
-  }, [pdf, index, width])
-  return (
-    <div className="workspace-document-preview">
-      <div className="workspace-document-scroll" ref={frame}>
-        {error ? (
-          <p role="alert">{error}</p>
-        ) : (
-          <canvas ref={canvas} aria-label={`PDF page ${index + 1}`} />
-        )}
-      </div>
-      <PageNavigation
-        index={index}
-        count={pdf?.numPages ?? 0}
-        label="Page"
-        onChange={setIndex}
-      />
-    </div>
-  )
 }
 
 /**
@@ -573,7 +471,7 @@ export function DocumentPreview({
     )
   if (error) return <p role="alert">{error}</p>
   if (!bytes) return <p role="status">Opening preview…</p>
-  if (kind === "pdf") return <PdfPreview bytes={bytes} />
+  if (kind === "pdf") return <PdfViewer bytes={bytes} />
   if (kind === "docx") return <DocxPreview bytes={bytes} name={name} />
   if (kind === "pptx") return <PptxPreview bytes={bytes} />
   if (kind === "xlsx") return <SpreadsheetPreview bytes={bytes} />

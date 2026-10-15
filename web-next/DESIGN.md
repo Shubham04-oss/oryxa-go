@@ -536,8 +536,16 @@ not permission to copy every incidental value into a new component.
   `icon-sm`. The frame is only the file's column: where a chat shares the
   screen, the chat is on the left and the file on the right (AgentSession),
   so opening a Library file folds the agent panel away. Show in parley is
-  not offered until a call can be handed a file. The page and sheet controls
-  are pills, and the chosen sheet is the raised tile. A Library file opens
+  not offered until a call can be handed a file. A viewer puts its own
+  controls in the bar (`ViewerTools`). A PDF (`pdf-viewer.tsx`) is its pages
+  one under another on white paper (`--paper`), with a rail of page
+  thumbnails (the page in view is the raised tile; hidden on a phone). Its
+  tools are the page counter "3 / 12" with previous and next, zoom − / % / +
+  in steps with Fit (to the width, the default), and Find, which marks every
+  match on the page (`--viewer-highlight`, the current one stronger) and
+  steps through them with Enter. A page is drawn only near the view and
+  gives its pixels back when far from it. The sheet controls are pills, and
+  the chosen sheet is the raised tile. A Library file opens
   over the whole Library page: an uploaded file from files, a connected
   app's document as the text knowledge keeps. A note or a link says
   plainly that its text isn't kept for reading, since rag gives none back. A file's kind is a small coloured tile with

@@ -3,7 +3,9 @@
 // facts, the viewer's own tools, Download, Open original and More, over an
 // inset tile holding the file. The frame is only the file's column: where a
 // chat shares the screen with it, the chat sits to its left (AgentSession).
+import { createContext, useContext, useState } from "react"
 import type { ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { ArrowLeft, Download, ExternalLink, MoreHorizontal } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
@@ -24,6 +26,25 @@ export type FileViewerCrumb = {
 /** How the file is saved: a link to follow, or a step that checks first. */
 export type FileViewerDownload =
   { href: string; fileName?: string } | { onDownload: () => void }
+
+/** Where a viewer inside the frame puts its own controls: the bar. */
+// undefined: no frame around the viewer; null: the frame's bar is not up yet.
+const ToolsSlot = createContext<HTMLElement | null | undefined>(undefined)
+
+/**
+ * A viewer's controls (pages, zoom, find). Inside a frame they sit in its
+ * bar; anywhere else, above the viewer.
+ */
+export function ViewerTools({ children }: { children: ReactNode }) {
+  const slot = useContext(ToolsSlot)
+  if (slot) return createPortal(children, slot)
+  if (slot === null) return null
+  return (
+    <div className="file-viewer-tools" role="toolbar" aria-label="View">
+      {children}
+    </div>
+  )
+}
 
 // A link that looks like the bar's buttons: a ghost icon-sm from ui/button.
 const iconLink = buttonVariants({ variant: "ghost", size: "icon-sm" })
@@ -66,6 +87,7 @@ export function FileViewerFrame({
   context?: ScreenItem
   children: ReactNode
 }) {
+  const [toolsSlot, setToolsSlot] = useState<HTMLElement | null>(null)
   return (
     <div className="file-viewer">
       <header className="file-viewer-bar">
@@ -104,11 +126,14 @@ export function FileViewerFrame({
           <strong>{name}</strong>
           {meta && <small>{meta}</small>}
         </div>
-        {tools && (
-          <div className="file-viewer-tools" role="toolbar" aria-label="View">
-            {tools}
-          </div>
-        )}
+        <div
+          ref={setToolsSlot}
+          className="file-viewer-tools"
+          role="toolbar"
+          aria-label="View"
+        >
+          {tools}
+        </div>
         <div className="file-viewer-actions">
           {actions}
           {download &&
@@ -172,7 +197,9 @@ export function FileViewerFrame({
         data-screen-context-name={context?.name}
         data-screen-context-selected={context ? "true" : undefined}
       >
-        <div className="workspace-document-stage">{children}</div>
+        <div className="workspace-document-stage">
+          <ToolsSlot.Provider value={toolsSlot}>{children}</ToolsSlot.Provider>
+        </div>
       </div>
     </div>
   )
