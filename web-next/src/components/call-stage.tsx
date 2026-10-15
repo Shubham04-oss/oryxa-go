@@ -24,6 +24,7 @@ import {
   AgentCam,
   CallCam,
   CallDock,
+  CallSignals,
   CallTranscript,
   DevicePicker,
   RoomChatPane,
@@ -244,6 +245,7 @@ function CallMix({
                 >
                   <MonitorUp aria-hidden="true" />
                 </Toggle>
+                <CallSignals active={active} />
                 <Button
                   variant="ghost"
                   className="call-btn"

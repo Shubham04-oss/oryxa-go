@@ -310,6 +310,12 @@ not permission to copy every incidental value into a new component.
     The dock is its own button context (#332): round `ui/toggle` icon
     controls of one size, Leave a `destructive` button at the end of the
     controls, "End for everyone" `destructive` too.
+  - **Raise hand and React** sit after share in the dock and in Mix's
+    People tile, while the call can carry them (RealtimeKit broadcast
+    messages; a refused broadcast hides both for that call). A raised hand
+    is a "Raised hand" flag on the tile (the hand alone on a small tile)
+    and the pressed button; a reaction (👍 👏 😂 🎉 ❤️, from the library's
+    menu) rises from its sender's tile for four seconds.
     Devices opens a small panel over the stage to choose the microphone,
     camera and speaker, and follows devices plugged in or out. Beside the
     call is the Transcript or the **Room**: the room's own conversation,

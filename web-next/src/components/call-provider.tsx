@@ -34,6 +34,7 @@ import { CALL_REFRESH_MS } from "@/lib/call/use-room-call"
 import type {
   CallDevices,
   CallMedia,
+  CallSignal,
   CallTile,
   DeviceKind,
 } from "@/lib/call/media"
@@ -99,7 +100,18 @@ export type ActiveCall = {
    * page), the stage in the workspace's main column, or the full page.
    */
   surface: CallSurfaceKind
+  /** Whose hands are up, by member. */
+  hands: string[]
+  /** Reactions showing on their senders' tiles, for a moment each. */
+  reactions: Reaction[]
+  /** Hands and reactions can be sent in this call (the preset allows it). */
+  signals: boolean
 }
+
+export type Reaction = { id: number; member: string; emoji: string }
+
+/** How long a reaction shows on its sender's tile. */
+export const REACTION_MS = 4_000
 
 export type CallSurfaceKind = "pip" | "stage" | "full"
 
@@ -123,6 +135,10 @@ type CallActions = {
   setCamera: (on: boolean) => Promise<void>
   setScreen: (on: boolean) => Promise<void>
   setRecording: (on: boolean) => Promise<void>
+  /** Raises or lowers the member's hand, for everyone in the call. */
+  setHand: (up: boolean) => Promise<void>
+  /** Shows a reaction on the member's tile, for everyone in the call. */
+  react: (emoji: string) => Promise<void>
   setAgent: (present: boolean) => Promise<void>
   /**
    * Opens the call as `surface`. The stage needs a host in the workspace
@@ -259,6 +275,21 @@ export function useReportRoomActivity(
   }, [key, report])
 }
 
+/**
+ * A member's hand and latest reaction in the call the viewer is in; nothing
+ * outside a CallProvider or a call.
+ */
+export function useSignalsOf(member: string): {
+  hand: boolean
+  reaction?: Reaction
+} {
+  const active = useContext(CallContext)?.active
+  return {
+    hand: active?.hands.includes(member) ?? false,
+    reaction: active?.reactions.find((reaction) => reaction.member === member),
+  }
+}
+
 /** Whether parleys are offered here: inside the workspace's CallProvider. */
 export function useHasCalls(): boolean {
   return useContext(CallContext) !== null
@@ -362,6 +393,85 @@ export function CallProvider({
     }
   }, [refreshCall, teardown])
 
+  const setHandOf = useCallback(
+    (member: string, up: boolean) =>
+      setActive((current) =>
+        current
+          ? {
+              ...current,
+              hands: up
+                ? [...current.hands.filter((hand) => hand !== member), member]
+                : current.hands.filter((hand) => hand !== member),
+            }
+          : current
+      ),
+    []
+  )
+  const reactionId = useRef(0)
+  const showReaction = useCallback((member: string, emoji: string) => {
+    reactionId.current += 1
+    const id = reactionId.current
+    setActive((current) =>
+      current
+        ? {
+            ...current,
+            reactions: [
+              ...current.reactions.filter(
+                (reaction) => reaction.member !== member
+              ),
+              { id, member, emoji },
+            ],
+          }
+        : current
+    )
+    setTimeout(
+      () =>
+        setActive((current) =>
+          current
+            ? {
+                ...current,
+                reactions: current.reactions.filter(
+                  (reaction) => reaction.id !== id
+                ),
+              }
+            : current
+        ),
+      REACTION_MS
+    )
+  }, [])
+  // A signal the preset refuses turns hands and reactions off for this call.
+  const sendSignal = useCallback(
+    async (signal: CallSignal, undo: () => void) => {
+      const current = media.current
+      if (!current?.signal) return
+      try {
+        await current.signal(signal)
+      } catch {
+        undo()
+        update({ signals: false })
+      }
+    },
+    [update]
+  )
+  const setHand = useCallback(
+    async (up: boolean) => {
+      const member = activeRef.current?.member
+      if (!member) return
+      setHandOf(member, up)
+      await sendSignal({ kind: "hand", up }, () => setHandOf(member, !up))
+    },
+    [sendSignal, setHandOf]
+  )
+  const react = useCallback(
+    async (emoji: string) => {
+      const member = activeRef.current?.member
+      if (!member) return
+      showReaction(member, emoji)
+      await sendSignal({ kind: "reaction", emoji }, () => undefined)
+    },
+    [sendSignal, showReaction]
+  )
+
   const join = useCallback(
     async (options: JoinOptions) => {
       if (activeRef.current?.phase === "in") await teardownAndLeave()
@@ -379,6 +489,9 @@ export function CallProvider({
         tiles: [],
         heard: [],
         agentSpeaking: false,
+        hands: [],
+        reactions: [],
+        signals: false,
         surface: "pip",
       })
       const id = (attempt.current += 1)
@@ -424,12 +537,25 @@ export function CallProvider({
       }
       joinedAt.current = Date.now()
       media.current = joined
-      update({ phase: "in", callId, tiles: joined.tiles() })
+      update({
+        phase: "in",
+        callId,
+        tiles: joined.tiles(),
+        signals: Boolean(joined.signal && joined.onSignal),
+      })
       refreshCall(options.organizationId, options.room)
 
       cleanups.current.push(
         joined.onChange(() => update({ tiles: joined.tiles() }))
       )
+      // Hands and reactions from everyone else.
+      if (joined.onSignal)
+        cleanups.current.push(
+          joined.onSignal((member, signal) => {
+            if (signal.kind === "hand") setHandOf(member, signal.up)
+            else showReaction(member, signal.emoji)
+          })
+        )
 
       // Captions for everyone; the member's own words also go to the room,
       // which is how the agent hears them.
@@ -512,7 +638,15 @@ export function CallProvider({
         })
       )
     },
-    [joinMediaWith, refreshCall, teardownAndLeave, update, viewerName]
+    [
+      joinMediaWith,
+      refreshCall,
+      setHandOf,
+      showReaction,
+      teardownAndLeave,
+      update,
+      viewerName,
+    ]
   )
 
   /**
@@ -699,6 +833,8 @@ export function CallProvider({
       setCamera: toggle("camera"),
       setScreen: toggle("screen"),
       setRecording: record,
+      setHand,
+      react,
       setAgent: agent,
       show,
       stageHosted,
@@ -722,7 +858,9 @@ export function CallProvider({
       roomChat,
       roomUnread,
       roomOnScreen,
+      react,
       setDevice,
+      setHand,
       show,
       stageHosted,
       teardownAndLeave,
