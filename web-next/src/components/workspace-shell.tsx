@@ -24,6 +24,8 @@ import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { FocusHeader } from "./agents-parts"
 import { PrimaryAgentFileViewer } from "./primary-agent-files"
 import { AgentSession } from "./agent-session"
+import { SessionWorkTabs } from "./agent-session-work"
+import type { SessionWorkTab } from "./agent-session-work"
 import { BrandChip } from "./brand-chip"
 import { HomeOverview } from "./home-overview"
 import { ThemeMenuItem } from "./theme-menu-item"
@@ -232,6 +234,7 @@ function WorkspaceShellContent({
     "overview" | "file" | "live"
   >("overview")
   const [primaryLive, setPrimaryLive] = useState<LiveTarget | null>(null)
+  const [primaryTab, setPrimaryTab] = useState<SessionWorkTab>("overview")
   const [primaryFile, setPrimaryFile] = useState<PrimaryAgentFileTarget | null>(
     null
   )
@@ -894,15 +897,23 @@ function WorkspaceShellContent({
                   onBack={() => setPrimaryViewer("overview")}
                 />
               ) : (
-                <AgentsCanvas
-                  section="agents"
-                  primaryThreadId={primaryThreadId}
+                <SessionWorkTabs
                   organizationId={selectedOrganization.id}
+                  threadId={primaryThreadId}
                   viewerId={session?.user.id}
-                  onOpen={openWork}
-                  onNavigate={navigatePrimarySection}
+                  tab={primaryTab}
+                  onTabChange={setPrimaryTab}
                   onOpenFile={openPrimaryFile}
                   onOpenLive={openPrimaryLive}
+                  overview={
+                    <AgentsCanvas
+                      section="agents"
+                      organizationId={selectedOrganization.id}
+                      viewerId={session?.user.id}
+                      onOpen={openWork}
+                      onNavigate={navigatePrimarySection}
+                    />
+                  }
                 />
               )}
             </AgentSession>
@@ -1053,14 +1064,12 @@ function WorkspaceShellContent({
               {isAgentsSection(section) && (
                 <AgentsCanvas
                   section={section}
-                  primaryThreadId={primaryThreadId}
                   organizationId={
                     session ? selectedOrganization?.id : undefined
                   }
                   viewerId={session?.user.id}
                   onOpen={openWork}
                   onNavigate={selectSection}
-                  onOpenFile={openPrimaryFile}
                 />
               )}
               {section === "requests" && (
