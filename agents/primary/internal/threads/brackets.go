@@ -101,10 +101,16 @@ func failureCode(failure error) string {
 // that ends it, the tally of the thread's files. It is written while the run
 // still holds its thread, so nothing else writes the thread in between. It is
 // bookkeeping beside the answer: a failure is a log line, never a failed run,
-// and leaves the bracket only streamed.
+// and leaves the bracket only streamed. An interrupted run's record has half
+// the drain's grace, so recording how the run ended (Run.finish), which frees
+// the thread, still fits in what remains.
 func (run *Run) record(ctx context.Context, bracket Item) {
 	service := run.service
-	recordContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
+	timeout := finishTimeout
+	if bracket.Interrupted {
+		timeout = min(timeout, interruptGrace/2)
+	}
+	recordContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	stored, err := service.readThread(recordContext, run.member, run.threadID, 1)
 	if err != nil {

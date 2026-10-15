@@ -424,12 +424,7 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	run.record(ctx, started)
 	send(started)
 
-	failure := run.drive(runContext, send)
-	if cause := context.Cause(runContext); runContext.Err() != nil && (failure == nil || Interrupted(cause)) {
-		// A drain's interruption is why the run ended, whatever the model
-		// call it cut short reported.
-		failure = cause
-	}
+	failure := endedBy(runContext, run.drive(runContext, send))
 	total := counter.Total()
 	ended := Item{Type: ItemRunCompleted, ID: bracketID(run.id, ItemRunCompleted), RunID: run.id, At: bracketAt(), Usage: &total}
 	if failure != nil {
@@ -440,7 +435,8 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	}
 	// Recorded whether the run failed or not: what it kept, it kept. A run
 	// that lost its hold writes nothing more: another run may be writing the
-	// thread now.
+	// thread now. An interrupted one records in part of the drain's grace
+	// (Run.record), so finish below still has its turn.
 	if !errors.Is(failure, errLeaseLost) {
 		run.record(ctx, ended)
 	}
@@ -456,6 +452,19 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	if run.remembering != nil {
 		run.remember(ctx, run.remembering)
 	}
+}
+
+// endedBy is why a run ended, given what driving it returned. A drain's
+// interruption, or a lost hold on the thread, is the reason whatever the call
+// it cut short reported: ADK passes on the context's cause for the calls it
+// makes, but an error from anywhere else, such as the session store, is a
+// plain cancellation that says neither.
+func endedBy(runContext context.Context, failure error) error {
+	cause := context.Cause(runContext)
+	if runContext.Err() != nil && (failure == nil || Interrupted(cause) || errors.Is(cause, errLeaseLost)) {
+		return cause
+	}
+	return failure
 }
 
 // publicationGuardInput uses the actual thread, not a model's report. A
