@@ -24,6 +24,9 @@ type serviceFakeStore struct {
 	brief    Brief
 	watched  map[string]time.Time
 	saved    []Brief
+	read     map[string]int64
+	// activityCalls counts reads of Activity: one per list, however long.
+	activityCalls int
 }
 
 var _ Store = (*serviceFakeStore)(nil)
@@ -99,6 +102,37 @@ func (store *serviceFakeStore) Watching(_ context.Context, _ string, since time.
 }
 
 func (store *serviceFakeStore) Forget(_ context.Context, _, _ string) error { return nil }
+
+func (store *serviceFakeStore) MarkRead(_ context.Context, _, userID string, seq int64) (int64, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.read == nil {
+		store.read = map[string]int64{}
+	}
+	store.read[userID] = max(store.read[userID], min(seq, store.seq))
+	return store.read[userID], nil
+}
+
+func (store *serviceFakeStore) Activity(_ context.Context, _, userID string, roomIDs []string) (map[string]Activity, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.activityCalls++
+	activity := map[string]Activity{}
+	for _, roomID := range roomIDs {
+		current := Activity{LastReadSeq: store.read[userID]}
+		for _, message := range store.messages {
+			if message.Seq > current.LastReadSeq && !(message.AuthorKind == SeatPerson && message.AuthorUserID == userID) {
+				current.Unread++
+			}
+		}
+		if len(store.messages) > 0 {
+			last := store.messages[len(store.messages)-1]
+			current.Last = &last
+		}
+		activity[roomID] = current
+	}
+	return activity, nil
+}
 
 // serviceFakeSpaces answers with one teamspace, whatever it is asked for.
 type serviceFakeSpaces struct{ space teamspaces.Space }
@@ -306,6 +340,95 @@ func TestAPausedRoomIsReadOnly(t *testing.T) {
 	}
 	if _, missed, err := service.Catchup(context.Background(), actor, "tsp_room", 0); err != nil || len(missed) != 1 {
 		t.Fatalf("catch up on a paused room = %+v, %v", missed, err)
+	}
+}
+
+// A member's unread count is what others said after the last message they
+// marked read, and the cursor only moves forward. Reading the room marks
+// nothing: the client says what it showed.
+func TestUnreadCountsWhatOthersSaidSinceTheReadCursor(t *testing.T) {
+	store := newServiceFakeStore()
+	service := aService(t, store, &serviceFakeDecider{}, nil)
+	ada := Actor{OrganizationID: "org_1", UserID: "user-ada"}
+	bo := Actor{OrganizationID: "org_1", UserID: "user-bo"}
+	for _, said := range []struct {
+		actor Actor
+		body  string
+	}{{ada, "morning"}, {bo, "morning Ada"}, {bo, "the pricing sheet is done"}} {
+		if _, err := service.Post(context.Background(), said.actor, "tsp_room", said.body); err != nil {
+			t.Fatalf("post: %v", err)
+		}
+	}
+	if _, _, err := service.Read(context.Background(), ada, "tsp_room", 0, 50); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	spaces, err := service.Activity(context.Background(), ada, []teamspaces.Space{aRoom()})
+	if err != nil {
+		t.Fatalf("activity: %v", err)
+	}
+	if got := spaces[0]; got.UnreadCount == nil || *got.UnreadCount != 2 || *got.LastReadSeq != 0 {
+		t.Fatalf("before marking read: %+v, want Bo's two messages unread", got)
+	}
+	last := spaces[0].LastMessage
+	if last == nil || last.Seq != 3 || last.AuthorName != "Bo" || last.AuthorKind != "person" || last.AuthorID != "user-bo" || last.Preview != "the pricing sheet is done" {
+		t.Fatalf("last message = %+v", last)
+	}
+
+	if read, err := service.MarkRead(context.Background(), ada, "tsp_room", 2); err != nil || read != 2 {
+		t.Fatalf("mark read = %d, %v", read, err)
+	}
+	if read, err := service.MarkRead(context.Background(), ada, "tsp_room", 1); err != nil || read != 2 {
+		t.Fatalf("mark read backwards = %d, %v; want the cursor to stay at 2", read, err)
+	}
+	if read, err := service.MarkRead(context.Background(), ada, "tsp_room", 99); err != nil || read != 3 {
+		t.Fatalf("mark read past the end = %d, %v; want the last message", read, err)
+	}
+	if _, err := service.MarkRead(context.Background(), ada, "tsp_room", -1); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("mark read -1: %v, want ErrInvalid", err)
+	}
+	spaces, _ = service.Activity(context.Background(), ada, []teamspaces.Space{aRoom()})
+	if *spaces[0].UnreadCount != 0 {
+		t.Fatalf("after marking all read: %d unread", *spaces[0].UnreadCount)
+	}
+}
+
+// A teamspace list's activity is one read for every room in it, and none of
+// it for a teamspace the caller manages without being on its team.
+func TestActivityIsOneReadAndOnlyForMembers(t *testing.T) {
+	store := newServiceFakeStore()
+	service := aService(t, store, &serviceFakeDecider{}, nil)
+	ada := Actor{OrganizationID: "org_1", UserID: "user-ada"}
+	if _, err := service.Post(context.Background(), ada, "tsp_room", "morning"); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	managed := aRoom()
+	managed.ID, managed.IsMember = "tsp_managed", false
+	second := aRoom()
+	second.ID = "tsp_second"
+	spaces, err := service.Activity(context.Background(), ada, []teamspaces.Space{aRoom(), managed, second})
+	if err != nil {
+		t.Fatalf("activity: %v", err)
+	}
+	if store.activityCalls != 1 {
+		t.Errorf("activity read %d times for three teamspaces, want once", store.activityCalls)
+	}
+	if spaces[1].UnreadCount != nil || spaces[1].LastMessage != nil {
+		t.Errorf("a teamspace the caller only manages shows its room: %+v", spaces[1])
+	}
+	if spaces[0].UnreadCount == nil || spaces[2].UnreadCount == nil {
+		t.Errorf("a member's teamspaces lack their activity: %+v", spaces)
+	}
+}
+
+func TestAPreviewIsOneLineAndAtMost140Characters(t *testing.T) {
+	long := strings.Repeat("pricing ", 40)
+	got := preview(long)
+	if runes := []rune(got); len(runes) > 140 || !strings.HasSuffix(got, "…") {
+		t.Errorf("preview of a long message = %q (%d characters)", got, len(runes))
+	}
+	if got := preview("two\nlines"); got != "two lines" {
+		t.Errorf("preview = %q, want one line", got)
 	}
 }
 

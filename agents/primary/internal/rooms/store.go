@@ -375,6 +375,87 @@ func (store *PostgresStore) Watching(ctx context.Context, roomID string, since t
 	return userIDs, rows.Err()
 }
 
+// MarkRead implements [Store]. The cursor only moves forward, as presence
+// does, so a slow client's older read cannot undo a newer one; and it stops at
+// the room's last message, so a seq from the future cannot hide what is said
+// next.
+func (store *PostgresStore) MarkRead(ctx context.Context, roomID, userID string, seq int64) (int64, error) {
+	var read int64
+	err := store.database.Pool.QueryRow(ctx, `
+		INSERT INTO agents_primary.room_read_cursors (room_id, organization_id, user_id, last_read_seq, updated_at)
+		SELECT $1, teamspace.organization_id, $2, LEAST($3, COALESCE((
+			SELECT counter.next_seq - 1 FROM agents_primary.room_message_seqs counter WHERE counter.room_id = $1
+		), 0)), now()
+		FROM agents_primary.teamspaces teamspace WHERE teamspace.id = $1
+		ON CONFLICT (room_id, user_id) DO UPDATE
+			SET last_read_seq = GREATEST(room_read_cursors.last_read_seq, EXCLUDED.last_read_seq),
+				updated_at = EXCLUDED.updated_at
+		RETURNING last_read_seq`,
+		roomID, userID, seq).Scan(&read)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrRoomNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("mark room read: %w", err)
+	}
+	return read, nil
+}
+
+// Activity implements [Store] in one statement, however many rooms it is
+// asked about: each room's unread count and newest message are read beside
+// one another, rather than a query per room.
+func (store *PostgresStore) Activity(ctx context.Context, organizationID, userID string, roomIDs []string) (map[string]Activity, error) {
+	activity := make(map[string]Activity, len(roomIDs))
+	if len(roomIDs) == 0 {
+		return activity, nil
+	}
+	rows, err := store.database.Pool.Query(ctx, `
+		SELECT room.id, COALESCE(reader.last_read_seq, 0),
+			(SELECT count(*) FROM agents_primary.room_messages unread
+				WHERE unread.room_id = room.id AND unread.organization_id = $1
+				  AND unread.seq > COALESCE(reader.last_read_seq, 0)
+				  AND NOT (unread.author_kind = 'person' AND unread.author_user_id = $2)),
+			newest.id, newest.room_id, newest.seq, newest.author_handle, newest.author_kind, newest.author_user_id,
+			newest.author_agent_id, newest.body, newest.addressed_to, newest.in_reply_to_seq, newest.created_at
+		FROM unnest($3::text[]) AS room(id)
+		LEFT JOIN agents_primary.room_read_cursors reader ON reader.room_id = room.id AND reader.user_id = $2
+		LEFT JOIN LATERAL (
+			SELECT `+messageColumns+` FROM agents_primary.room_messages
+			WHERE room_id = room.id AND organization_id = $1 ORDER BY seq DESC LIMIT 1
+		) newest ON true`, organizationID, userID, roomIDs)
+	if err != nil {
+		return nil, fmt.Errorf("read room activity: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			roomID  string
+			current Activity
+			last    struct {
+				id, roomID, handle, kind, userID, agentID, body *string
+				seq, inReplyTo                                  *int64
+				addressed                                       []string
+				createdAt                                       *time.Time
+			}
+		)
+		if err := rows.Scan(&roomID, &current.LastReadSeq, &current.Unread,
+			&last.id, &last.roomID, &last.seq, &last.handle, &last.kind, &last.userID,
+			&last.agentID, &last.body, &last.addressed, &last.inReplyTo, &last.createdAt); err != nil {
+			return nil, fmt.Errorf("scan room activity: %w", err)
+		}
+		if last.id != nil {
+			current.Last = &Message{
+				ID: *last.id, RoomID: *last.roomID, Seq: *last.seq, AuthorHandle: *last.handle,
+				AuthorKind: SeatKind(*last.kind), AuthorUserID: *last.userID, AuthorAgentID: *last.agentID,
+				Body: *last.body, AddressedTo: nonNilStrings(last.addressed), InReplyToSeq: *last.inReplyTo,
+				CreatedAt: *last.createdAt,
+			}
+		}
+		activity[roomID] = current
+	}
+	return activity, rows.Err()
+}
+
 // Thread implements [Threads] (declared in speaker.go): the empty string
 // when agentID has not spoken in roomID yet.
 func (store *PostgresStore) Thread(ctx context.Context, roomID, agentID string) (string, error) {
@@ -424,8 +505,8 @@ func clampLimit(limit int) int {
 	}
 }
 
-// Forget implements [Store]: it removes a member's own messages, presence
-// and agent-thread pointers from organizationID's rooms, or, when userID is
+// Forget implements [Store]: it removes a member's own messages, presence,
+// read cursors and agent-thread pointers from organizationID's rooms, or, when userID is
 // empty, everything every room of that organization holds. A message's
 // owning member is always AuthorUserID, whether a person or their own agent
 // said it (Message.AuthorUserID is never empty), so scoping by it catches
@@ -450,6 +531,9 @@ func (store *PostgresStore) Forget(ctx context.Context, organizationID, userID s
 			if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_agent_threads WHERE organization_id=$1`, organizationID); err != nil {
 				return err
 			}
+			if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_read_cursors WHERE organization_id=$1`, organizationID); err != nil {
+				return err
+			}
 			_, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_message_seqs WHERE organization_id=$1`, organizationID)
 			return err
 		})
@@ -460,6 +544,10 @@ func (store *PostgresStore) Forget(ctx context.Context, organizationID, userID s
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_presence
+			WHERE organization_id=$1 AND user_id=$2`, organizationID, userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_read_cursors
 			WHERE organization_id=$1 AND user_id=$2`, organizationID, userID); err != nil {
 			return err
 		}

@@ -206,6 +206,26 @@ type Store interface {
 	Watch(ctx context.Context, roomID, userID string, at time.Time) error
 	// Watching lists the people who have read the room since at.
 	Watching(ctx context.Context, roomID string, since time.Time) ([]string, error)
+	// MarkRead moves userID's read cursor in roomID forward to seq, never
+	// back and never past the room's last message, and returns where it
+	// stands.
+	MarkRead(ctx context.Context, roomID, userID string, seq int64) (int64, error)
+	// Activity is, for each of roomIDs in the organization, how much of it
+	// userID has not read and the last thing said there, read in one go
+	// however many rooms are asked about.
+	Activity(ctx context.Context, organizationID, userID string, roomIDs []string) (map[string]Activity, error)
 	// Forget removes a room's messages, brief and presence.
 	Forget(ctx context.Context, organizationID, userID string) error
+}
+
+// Activity is one member's standing in one room: how far they have read, how
+// many messages after that somebody else said, and the last message.
+type Activity struct {
+	LastReadSeq int64
+	// Unread counts the messages after LastReadSeq, leaving out what the
+	// member said themself. What their own agent said counts: they were not
+	// the one saying it.
+	Unread int64
+	// Last is the room's newest message, nil for a room nobody has spoken in.
+	Last *Message
 }

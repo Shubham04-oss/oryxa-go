@@ -12,6 +12,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteams"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
@@ -538,6 +539,10 @@ var authzRoutes = []authzRoute{
 		pattern: "GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/catchup", method: http.MethodGet,
 		path: "/v1/organizations/org_1/teamspaces/tsp_other/catchup", malformedQuery: "?after=abc", identity: lastRoomActor,
 	},
+	{
+		pattern: "POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/read", method: http.MethodPost,
+		path: "/v1/organizations/org_1/teamspaces/tsp_other/read", body: `{"seq":3}`, malformedBody: unknownField, identity: lastRoomActor,
+	},
 	// -- preferences --------------------------------------------------------
 	{
 		pattern: "GET /v1/organizations/{organizationID}/preferences", method: http.MethodGet,
@@ -578,8 +583,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 73 {
-		t.Fatalf("authzRoutes has %d entries, want 73 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 74 {
+		t.Fatalf("authzRoutes has %d entries, want 74 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -671,8 +676,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 39 {
-		t.Fatalf("tested %d state-changing routes, want 39 - a route's method changed without updating this expectation", tested)
+	if tested != 40 {
+		t.Fatalf("tested %d state-changing routes, want 40 - a route's method changed without updating this expectation", tested)
 	}
 }
 
@@ -730,8 +735,8 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 			}
 		})
 	}
-	if tested != 40 {
-		t.Fatalf("tested %d routes for malformed input, want 40 - a route gained or lost a body/limit/version without updating this expectation", tested)
+	if tested != 41 {
+		t.Fatalf("tested %d routes for malformed input, want 41 - a route gained or lost a body/limit/version without updating this expectation", tested)
 	}
 }
 
@@ -755,4 +760,18 @@ func (f *fakeRooms) Read(_ context.Context, actor rooms.Actor, _ string, _ int64
 func (f *fakeRooms) Catchup(_ context.Context, actor rooms.Actor, _ string, _ int64) (rooms.Brief, []rooms.Message, error) {
 	f.actors = append(f.actors, actor)
 	return rooms.Brief{}, nil, nil
+}
+
+func (f *fakeRooms) MarkRead(_ context.Context, actor rooms.Actor, _ string, seq int64) (int64, error) {
+	f.actors = append(f.actors, actor)
+	return seq, nil
+}
+
+func (f *fakeRooms) Activity(_ context.Context, actor rooms.Actor, spaces []teamspaces.Space) ([]teamspaces.Space, error) {
+	f.actors = append(f.actors, actor)
+	unread := int64(len(spaces))
+	for index := range spaces {
+		spaces[index].UnreadCount = &unread
+	}
+	return spaces, nil
 }

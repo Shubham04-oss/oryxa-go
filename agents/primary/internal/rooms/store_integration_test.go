@@ -75,6 +75,7 @@ func testStore(t *testing.T) *fixture {
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.room_briefs WHERE organization_id=$1`, organizationID)
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.room_presence WHERE organization_id=$1`, organizationID)
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.room_agent_threads WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.room_read_cursors WHERE organization_id=$1`, organizationID)
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.room_message_seqs WHERE organization_id=$1`, organizationID)
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.teamspaces WHERE organization_id=$1`, organizationID)
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.organization_agents WHERE organization_id=$1`, organizationID)
@@ -639,5 +640,68 @@ func TestAppendAnnouncesNothingItDidNotStore(t *testing.T) {
 	}
 	if events := fixture.postedEvents(t, roomID); len(events) != 2 || events[1].posted.Message.Seq != 2 {
 		t.Fatalf("events = %+v, want the next message's too", events)
+	}
+}
+
+// A read cursor moves only forward and stops at the room's last message, and
+// activity reads every room's unread count and newest message at once,
+// counting nothing the reader said themself.
+func TestReadCursorsAndActivity(t *testing.T) {
+	fixture := testStore(t)
+	ctx := context.Background()
+	busy, quiet := fixture.newRoom(t), fixture.newRoom(t)
+	for _, message := range []Message{
+		{RoomID: busy, AuthorHandle: "ada", AuthorKind: SeatPerson, AuthorUserID: "user-ada", Body: "morning"},
+		{RoomID: busy, AuthorHandle: "bo", AuthorKind: SeatPerson, AuthorUserID: "user-bo", Body: "morning Ada"},
+		{RoomID: busy, AuthorHandle: "mira", AuthorKind: SeatAgent, AuthorUserID: "user-ada", AuthorAgentID: "agt_ada", Body: "Ada's agent, standing in"},
+	} {
+		if _, err := fixture.store.Append(ctx, message); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	activity, err := fixture.store.Activity(ctx, fixture.organizationID, "user-ada", []string{busy, quiet, "room_missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := activity[busy]; got.LastReadSeq != 0 || got.Unread != 2 || got.Last == nil || got.Last.Seq != 3 || got.Last.AuthorAgentID != "agt_ada" {
+		t.Fatalf("busy room = %+v (last %+v), want Bo's message and Ada's agent's unread", got, got.Last)
+	}
+	if got := activity[quiet]; got.Unread != 0 || got.Last != nil {
+		t.Fatalf("quiet room = %+v", got)
+	}
+	if got, ok := activity["room_missing"]; !ok || got.Last != nil || got.Unread != 0 {
+		t.Fatalf("a room with no teamspace = %+v, %v", got, ok)
+	}
+
+	for _, step := range []struct{ seq, want int64 }{{2, 2}, {1, 2}, {99, 3}} {
+		read, err := fixture.store.MarkRead(ctx, busy, "user-ada", step.seq)
+		if err != nil || read != step.want {
+			t.Fatalf("mark read %d = %d, %v; want %d", step.seq, read, err, step.want)
+		}
+	}
+	if read, err := fixture.store.MarkRead(ctx, quiet, "user-ada", 5); err != nil || read != 0 {
+		t.Fatalf("mark an empty room read = %d, %v; want 0", read, err)
+	}
+	if _, err := fixture.store.MarkRead(ctx, "room_missing", "user-ada", 1); !errors.Is(err, ErrRoomNotFound) {
+		t.Fatalf("mark a room with no teamspace read: %v, want ErrRoomNotFound", err)
+	}
+	activity, err = fixture.store.Activity(ctx, fixture.organizationID, "user-ada", []string{busy})
+	if err != nil || activity[busy].Unread != 0 || activity[busy].LastReadSeq != 3 {
+		t.Fatalf("after reading everything = %+v, %v", activity[busy], err)
+	}
+	// Somebody else's cursor is their own.
+	activity, err = fixture.store.Activity(ctx, fixture.organizationID, "user-bo", []string{busy})
+	if err != nil || activity[busy].Unread != 2 {
+		t.Fatalf("Bo's activity = %+v, %v; want Ada's message and her agent's unread", activity[busy], err)
+	}
+
+	if err := fixture.store.Forget(ctx, fixture.organizationID, "user-ada"); err != nil {
+		t.Fatal(err)
+	}
+	var cursors int
+	if err := fixture.database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.room_read_cursors
+		WHERE organization_id=$1 AND user_id='user-ada'`, fixture.organizationID).Scan(&cursors); err != nil || cursors != 0 {
+		t.Fatalf("Ada's cursors after Forget = %d, %v", cursors, err)
 	}
 }

@@ -113,8 +113,31 @@ type Space struct {
 	// recorded.
 	PausedByUserID *string    `json:"paused_by_user_id"`
 	PausedAt       *time.Time `json:"paused_at"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	// LastReadSeq, UnreadCount and LastMessage are the caller's view of the
+	// teamspace's room. The room service fills them in for a member of the
+	// team, and they are left out for anybody else.
+	LastReadSeq *int64       `json:"last_read_seq,omitempty"`
+	UnreadCount *int64       `json:"unread_count,omitempty"`
+	LastMessage *LastMessage `json:"last_message,omitempty"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at"`
+}
+
+// LastMessage is the newest thing said in a teamspace's room, as a list of
+// teamspaces shows it.
+type LastMessage struct {
+	Seq int64 `json:"seq"`
+	// AuthorKind is "person" or "agent". AuthorID is the person's user id, or
+	// the agent's id.
+	AuthorKind   string `json:"author_kind"`
+	AuthorID     string `json:"author_id"`
+	AuthorHandle string `json:"author_handle"`
+	// AuthorName is the name the author has in the teamspace now, or their
+	// handle when they no longer have a seat there.
+	AuthorName string `json:"author_name"`
+	// Preview is the start of the message, at most 140 characters.
+	Preview   string    `json:"preview"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type CreateInput struct {

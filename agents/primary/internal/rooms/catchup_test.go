@@ -72,6 +72,14 @@ func (store *catchupFakeStore) Watching(_ context.Context, _ string, _ time.Time
 	return nil, nil
 }
 
+func (store *catchupFakeStore) MarkRead(context.Context, string, string, int64) (int64, error) {
+	return 0, nil
+}
+
+func (store *catchupFakeStore) Activity(context.Context, string, string, []string) (map[string]Activity, error) {
+	return map[string]Activity{}, nil
+}
+
 func (store *catchupFakeStore) Forget(_ context.Context, _, _ string) error {
 	return nil
 }
