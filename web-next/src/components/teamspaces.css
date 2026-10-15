@@ -24,38 +24,22 @@
   line-height: 1.5;
 }
 .workspace-teamspace-note { margin-top: 16px; max-width: 850px; }
-.workspace-teamspace-form-actions button:disabled { cursor: not-allowed; opacity: 0.5; }
 
-/* Detail actions */
-.workspace-teamspace-secondary-button:disabled,
-.workspace-teamspace-primary-button:disabled { cursor: not-allowed; opacity: 0.55; }
+/* Detail actions: an inline confirm is the message, then Cancel and the
+   confirm right-aligned (DESIGN.md §1, "Buttons and action rows"). */
 .workspace-teamspace-confirm {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 12px;
   max-width: 850px;
-  margin-top: 14px;
-  padding: 14px;
+  margin-top: 16px;
+  padding: 16px;
   border: 1px solid var(--tone-3c3c3c);
   border-radius: 12px;
   background: var(--tone-1b1b1b);
 }
-.workspace-teamspace-confirm p { flex: 1 1 260px; margin: 0; color: var(--tone-dddddd); font-size: 12px; line-height: 1.5; }
-.workspace-teamspace-confirm button {
-  flex: none;
-  min-height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--tone-454545);
-  border-radius: 8px;
-  background: var(--tone-303030);
-  color: var(--tone-eeeeee);
-  font-size: 12px;
-}
-.workspace-teamspace-confirm button:last-child { border-color: var(--tone-dddddd); background: var(--tone-e9e9e9); color: var(--tone-202020); font-weight: 600; }
-.workspace-teamspace-confirm button:hover:not(:disabled) { background: var(--tone-3c3c3c); }
-.workspace-teamspace-confirm button:last-child:hover:not(:disabled) { background: var(--tone-ffffff); }
-.workspace-teamspace-confirm button:disabled { cursor: not-allowed; opacity: 0.5; }
+.workspace-teamspace-confirm p { margin: 0; color: var(--tone-dddddd); font-size: 12px; line-height: 1.5; }
+.workspace-teamspace-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .workspace-teamspace-action-error { max-width: 850px; margin: 12px 0 0; color: var(--tone-ff9d9d); font-size: 12px; }
 
 /* Detail sections */
@@ -360,22 +344,7 @@
 }
 .workspace-teamspace-card-open strong { display: block; overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-teamspace-card-open::after { position: absolute; inset: 0; border-radius: inherit; content: ""; }
-.workspace-teamspace-card-more {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  flex: none;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-muted);
-}
-.workspace-teamspace-card-more:hover,
-.workspace-teamspace-card-more[data-popup-open] { background: var(--selected); color: var(--text); }
-.workspace-teamspace-card-more:focus-visible { outline: 2px solid var(--border-strong); outline-offset: 1px; }
+.workspace-teamspace-card-more { position: relative; z-index: 1; color: var(--text-muted); }
 .workspace-teamspace-menu { min-width: 190px; }
 .workspace-teamspace-card-purpose {
   display: -webkit-box;
@@ -460,19 +429,10 @@
 .workspace-teamspace-new > * { position: relative; }
 .workspace-teamspace-new strong { font-size: 14px; }
 .workspace-teamspace-new span { color: var(--on-scene-soft); font-size: 12px; line-height: 1.45; }
-.workspace-teamspace-new button {
-  height: 30px;
-  margin-top: 6px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--on-scene);
-  color: var(--tone-1c3350);
-  font-size: 12.5px;
-  font-weight: 600;
-}
-.workspace-teamspace-new button:hover { background: var(--on-scene-soft); }
-.workspace-teamspace-new button:focus-visible { outline: 2px solid var(--on-scene); outline-offset: 2px; }
+/* The on-scene button keeps the Button's size; only its colours follow the
+   scene. */
+.workspace-teamspace-new [data-slot="button"] { margin-top: 8px; background: var(--on-scene); color: var(--tone-1c3350); }
+.workspace-teamspace-new [data-slot="button"]:hover { background: var(--on-scene-soft); }
 .workspace-teamspace-new:hover::before { opacity: .55; }
 
 /* Creating a teamspace is a pop-up sheet: the ship's lines faint at its
@@ -514,6 +474,11 @@
   .workspace-teamspaces-hello { flex-direction: column; align-items: flex-start; }
   .workspace-teamspace-toolbar { flex-direction: column-reverse; align-items: stretch; }
   .workspace-teamspace-filters { align-self: flex-start; }
+  /* On a phone an action row stacks full-width, the primary on top. */
+  .workspace-teamspace-detail-actions { flex-direction: column; align-items: stretch; }
+  .workspace-teamspace-detail-actions [data-slot="button"] { margin-left: 0; }
+  .workspace-teamspace-confirm-actions,
+  .workspace-teamspace-form-actions { flex-direction: column-reverse; align-items: stretch; }
 }
 
 @media (prefers-reduced-motion: reduce) {
