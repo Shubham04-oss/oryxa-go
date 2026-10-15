@@ -152,7 +152,8 @@ export class RealtimeKit implements CallProvider {
     if (!response.ok || envelope.success === false) {
       const message = refusal(envelope, text, response.status);
       const retryable = response.status === 429 || response.status >= 500;
-      console.warn(JSON.stringify({ msg: "realtimekit refused", method, route: route(path), status: response.status, message }));
+      // The body says which field failed validation; it holds no credentials.
+      console.warn(JSON.stringify({ msg: "realtimekit refused", method, route: route(path), status: response.status, message, body: text.slice(0, 1000) }));
       throw new EdgeError("unavailable", `RealtimeKit refused ${method}: ${message}`, retryable);
     }
     return (envelope.data ?? {}) as T;
