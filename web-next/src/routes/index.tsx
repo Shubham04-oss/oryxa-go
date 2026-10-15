@@ -35,12 +35,16 @@ export const Route = createFileRoute("/")({
     dm: isNameId(search.dm) ? search.dm : undefined,
     // A step of setting up a new workspace (components/onboarding.tsx).
     ...(isSetupStep(search.setup) ? { setup: search.setup } : {}),
+    // Setup just finished: My workspace opens as its first run.
+    ...(search.welcome === "1" || search.welcome === 1
+      ? { welcome: "1" as const }
+      : {}),
   }),
   component: Home,
 })
 
 function Home() {
-  const { org, dm, setup } = Route.useSearch()
+  const { org, dm, setup, welcome } = Route.useSearch()
   const navigate = Route.useNavigate()
   const queryClient = useQueryClient()
   const sessionEnded = useSyncExternalStore(
@@ -154,6 +158,7 @@ function Home() {
               org: selectedOrganization.id,
               view: undefined,
               dm: undefined,
+              welcome: "1",
             },
             replace: true,
           })
@@ -171,6 +176,14 @@ function Home() {
       organizationRole={role.data}
       selectedOrganization={selectedOrganization}
       initialDirectMessage={dm}
+      firstRun={welcome === "1"}
+      onFirstRunDone={() =>
+        void navigate({
+          to: "/",
+          search: (previous) => ({ ...previous, welcome: undefined }),
+          replace: true,
+        })
+      }
       onDirectMessageChange={(peerId) =>
         void navigate({
           to: "/",

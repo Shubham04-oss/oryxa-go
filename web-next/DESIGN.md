@@ -290,6 +290,20 @@ not permission to copy every incidental value into a new component.
   - Hidden until the API exists (#322): the Needs-you parley row and
     "Krude suggested an edit" rows, per-app counts and previews, "N editing"
     presence, and document thumbnails.
+  - **The first run** (board OnbFirstRunV3, `home-first-run.tsx`): when
+    setup finishes, the page opens with `?welcome=1` on the same axis.
+    Krude's line ("Krude is setting up with you · only you see this page")
+    sits over the greeting, whose line names how many briefs stood out, or
+    invites a first ask. The pair becomes **What Krude found** (the briefs)
+    and **Getting started**: five steps ticked from real reads (the agent
+    grant, an active app connection, another member or a pending
+    invitation, a teamspace, a first chat), each untaken one with a Start
+    action opening its place. A step whose read fails or is not served is
+    left out and the count says "n of m". Needs you appears under the pair
+    only when something waits, and Pick up only once there is work to pick
+    up. Hide (Done once all are ticked) drops `welcome` and returns the
+    page to its everyday form. "What Krude read during setup" (channel and
+    source counts) waits on an API (#322).
   - **At a glance** keeps the full widget stack: From your apps and Needs
     you, then **Conversations** (New chat, All, and up to three titled
     recent primary chats, the running one first with the Thinking Orb),

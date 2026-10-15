@@ -607,6 +607,34 @@ div.home-item:hover {
   white-space: nowrap;
 }
 
+/* The first run (OnbFirstRunV3): Krude's line over the greeting, and the
+   Getting started checklist. */
+.home-krude {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+.home-krude b { color: var(--text); font-weight: 600; }
+.home-pair-one { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
+.home-check {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--border-strong);
+  color: var(--canvas);
+}
+.home-check svg { width: 12px; height: 12px; stroke-width: 3; }
+.home-item[data-done] .home-check { background: var(--text); box-shadow: none; }
+.home-item[data-done] .home-item-copy > span {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
 @media (max-width: 800px) {
   .home-centred { width: calc(100% - 32px); margin-top: 48px; }
   .home-hello h2 { font-size: 26px; }

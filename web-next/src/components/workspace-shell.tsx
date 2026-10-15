@@ -118,6 +118,8 @@ function WorkspaceShellContent({
   initialSection,
   initialDirectMessage,
   onDirectMessageChange,
+  firstRun = false,
+  onFirstRunDone,
 }: {
   session?: Session
   role?: WorkspaceRole
@@ -130,6 +132,9 @@ function WorkspaceShellContent({
   initialDirectMessage?: string
   /** The DM open in the main canvas changed (null: none), for the page's address. */
   onDirectMessageChange?: (peerId: string | null) => void
+  /** Setup just finished: My workspace opens as its first run. */
+  firstRun?: boolean
+  onFirstRunDone?: () => void
 } = {}) {
   const viewerId = session?.user.id
   // DMs are the signed-in member's, in the organization they have open.
@@ -626,6 +631,13 @@ function WorkspaceShellContent({
     onOpenTools: () => navigateFromHome("home", "tools"),
     onOpenKnowledge: () => navigateFromHome("home", "knowledge"),
     onOpenTeamspace: openTeamspace,
+    onOpenTeamspaces: () => navigateFromHome("team", "teamspaces"),
+    onOpenPeople: () => {
+      setSettingsPage("people")
+      setSettingsOpen(true)
+    },
+    firstRun,
+    onFirstRunDone,
     onOpenSlack: () => {
       setSettingsPage("slack")
       setSettingsOpen(true)
