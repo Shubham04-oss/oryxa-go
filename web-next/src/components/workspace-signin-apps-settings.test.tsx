@@ -287,6 +287,29 @@ describe("Settings → Sign-in apps", () => {
     expect(requests).toHaveLength(0)
   })
 
+  it("clears the Copied flag's timer when the field goes away", async () => {
+    vi.stubGlobal("navigator", {
+      clipboard: { writeText: vi.fn(async () => undefined) },
+    })
+    backend({ clients: { github: view({ client: "github", saved: true }) } })
+    showPage()
+    const github = await screen.findByRole("form", {
+      name: "GitHub sign-in app",
+    })
+    const setTimer = vi.spyOn(window, "setTimeout")
+    const clearTimer = vi.spyOn(window, "clearTimeout")
+    fireEvent.click(
+      within(github).getByRole("button", { name: "Copy Redirect URI" })
+    )
+    await waitFor(() => expect(within(github).getByText("Copied")).toBeTruthy())
+    const index = setTimer.mock.calls.findIndex(([, delay]) => delay === 2000)
+    expect(index).toBeGreaterThanOrEqual(0)
+    const timer = setTimer.mock.results[index]?.value as number
+
+    cleanup()
+    expect(clearTimer).toHaveBeenCalledWith(timer)
+  })
+
   it("shows one card per OAuth client, with what to copy into the app and only a hint of the secret", async () => {
     const writeText = vi.fn(async () => undefined)
     vi.stubGlobal("navigator", { clipboard: { writeText } })
