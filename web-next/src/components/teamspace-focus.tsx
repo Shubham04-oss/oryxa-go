@@ -258,9 +258,12 @@ export function TeamspaceFocus({
             >
               {tabLabels[item]}
               {item === "files" && files.isSuccess && (
-                <span className="workspace-teamspace-tab-count">
-                  {files.data.length}
-                </span>
+                <>
+                  {" "}
+                  <span className="workspace-teamspace-tab-count">
+                    {files.data.length}
+                  </span>
+                </>
               )}
             </button>
           ))}
