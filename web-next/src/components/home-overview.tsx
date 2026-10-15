@@ -90,14 +90,30 @@ type ReadState = {
   refetch: () => unknown
 }
 
-function ReadNotice({ name, query }: { name: string; query: ReadState }) {
+/**
+ * One read's loading or error line, in its own words: each area names what
+ * it lists ("Requests can’t be loaded right now."), never a resource name
+ * dropped into a template. A read this server doesn't offer (or a 404) has
+ * nothing to retry, so only a failure gets Try again.
+ */
+function ReadNotice({
+  failed,
+  loading,
+  query,
+}: {
+  /** A whole sentence: "Recent chats can’t be loaded right now." */
+  failed: string
+  /** A whole line: "Loading recent chats…" */
+  loading: string
+  query: ReadState
+}) {
   if (query.isError) {
     const absent =
       isUnavailableHere(query.error) ||
       (query.error instanceof ApiError && query.error.status === 404)
     return (
       <p className="home-quiet" role="status">
-        {absent ? `${name} is not available here.` : `Couldn’t load ${name}.`}
+        {failed}
         {!absent && (
           <Button variant="link" size="sm" onClick={() => void query.refetch()}>
             Try again
@@ -109,11 +125,42 @@ function ReadNotice({ name, query }: { name: string; query: ReadState }) {
   if (query.isPending)
     return (
       <p className="home-quiet" role="status">
-        Loading {name}…
+        {loading}
       </p>
     )
   return null
 }
+
+const notices = {
+  requests: {
+    failed: "Requests can’t be loaded right now.",
+    loading: "Loading requests…",
+  },
+  chats: {
+    failed: "Recent chats can’t be loaded right now.",
+    loading: "Loading recent chats…",
+  },
+  updates: {
+    failed: "Updates from your apps can’t be loaded right now.",
+    loading: "Loading updates from your apps…",
+  },
+  access: {
+    failed: "Open access windows can’t be loaded right now.",
+    loading: "Loading open access windows…",
+  },
+  confirmations: {
+    failed: "Tool confirmations can’t be loaded right now.",
+    loading: "Loading tool confirmations…",
+  },
+  collections: {
+    failed: "Library collections can’t be loaded right now.",
+    loading: "Loading Library collections…",
+  },
+  workflows: {
+    failed: "Recurring work can’t be loaded right now.",
+    loading: "Loading recurring work…",
+  },
+} as const
 
 export { greeting }
 
@@ -403,6 +450,7 @@ function HomeDesk({
         .map((connection) => connection.toolkit)
     ),
   ]
+  const noApps = connections.isSuccess && tools.length === 0
   const workflowRows = (authorizedData(workflows) ?? [])
     .filter((workflow) => workflow.owner_user_id === viewer)
     .slice(0, 3)
@@ -474,7 +522,16 @@ function HomeDesk({
           </Button>
         )}
       </header>
-      {updatesThreadId && <ReadNotice name="updates" query={updates} />}
+      {/* The briefs live in the wake-up thread, found in the chat list: a
+          list that can't be read leaves them unknown, and says so. With no
+          app connected and no wake-up thread yet there is nothing to report
+          either way. */}
+      {!(noApps && !updatesThreadId) && (
+        <ReadNotice
+          {...notices.updates}
+          query={updatesThreadId ? updates : threads}
+        />
+      )}
       {briefs.length > 0 ? (
         <ul className="home-list">
           {briefs.slice(0, page ? 3 : undefined).map((brief) => (
@@ -513,13 +570,13 @@ function HomeDesk({
           ))}
         </ul>
       ) : (
-        (!updatesThreadId || updates.isSuccess) &&
-        threads.isSuccess && (
+        ((noApps && !updatesThreadId) ||
+          (threads.isSuccess && (!updatesThreadId || updates.isSuccess))) && (
           <p className="home-quiet">
-            {connections.isSuccess && tools.length === 0
-              ? "Connect a tool and its news lands here."
-              : "No updates from your apps yet."}
-            {page && connections.isSuccess && tools.length === 0 && (
+            {noApps
+              ? "Connect an app to see what happened while you were away."
+              : "Nothing new from your apps."}
+            {noApps && (
               <Button variant="link" size="sm" onClick={onOpenTools}>
                 Connect your tools
               </Button>
@@ -549,7 +606,7 @@ function HomeDesk({
           </Button>
         )}
       </header>
-      <ReadNotice name="requests" query={inbox} />
+      <ReadNotice {...notices.requests} query={inbox} />
       {(needsMember || activeLeases.length > 0) && (
         <ul className="home-list" aria-label="Needs you">
           {waitingRequests.slice(0, 4).map((request) => {
@@ -699,7 +756,7 @@ function HomeDesk({
               : "Show less"}
         </Button>
       )}
-      <ReadNotice name="open access" query={leases} />
+      <ReadNotice {...notices.access} query={leases} />
       {leaseProblem && (
         <p className="home-quiet" role="alert">
           {leaseProblem}
@@ -713,7 +770,7 @@ function HomeDesk({
       {checkedIds.map((id, index) => (
         <ReadNotice
           key={id}
-          name="tool confirmations"
+          {...notices.confirmations}
           query={confirmations[index]}
         />
       ))}
@@ -866,8 +923,8 @@ function HomeDesk({
             onNewChat={onNewChat ? () => onNewChat() : undefined}
             notices={
               <>
-                <ReadNotice name="conversations" query={threads} />
-                <ReadNotice name="knowledge bases" query={corpora} />
+                <ReadNotice {...notices.chats} query={threads} />
+                <ReadNotice {...notices.collections} query={corpora} />
               </>
             }
           />
@@ -908,7 +965,7 @@ function HomeDesk({
                 </Button>
               </div>
             </header>
-            <ReadNotice name="conversations" query={threads} />
+            <ReadNotice {...notices.chats} query={threads} />
             {agentWork.length > 0 ? (
               <ul className="home-list" aria-label="Recent conversations">
                 {agentWork.map((work) => (
@@ -972,7 +1029,7 @@ function HomeDesk({
                 All
               </Button>
             </header>
-            <ReadNotice name="knowledge bases" query={corpora} />
+            <ReadNotice {...notices.collections} query={corpora} />
             {knowledgeRows.length > 0 ? (
               <ul className="home-list">
                 {knowledgeRows.map((base) => (
@@ -1055,7 +1112,7 @@ function HomeDesk({
             <header className="home-column-head">
               <h2 id="home-workflows">Recurring work</h2>
             </header>
-            <ReadNotice name="recurring work" query={workflows} />
+            <ReadNotice {...notices.workflows} query={workflows} />
             {workflowRows.length > 0 ? (
               <ul className="home-list">
                 {workflowRows.map((workflow) => (
