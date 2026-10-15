@@ -53,6 +53,7 @@ import type {
   AgentPanelChatRequest,
   AgentPanelTabRequest,
 } from "./workspace-agent-panel"
+import { MessagesPage } from "./messages-page"
 import { PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
 import type { SettingsPage } from "./workspace-settings"
@@ -1014,22 +1015,31 @@ function WorkspaceShellContent({
                     Loading the conversation…
                   </p>
                 ) : canvasPeer && dmOrganizationId && viewerId ? (
-                  <DirectMessageView
-                    key={canvasPeer.id}
+                  <MessagesPage
                     organizationId={dmOrganizationId}
                     viewerId={viewerId}
+                    inbox={inbox}
+                    people={dmPeople}
                     peer={canvasPeer}
-                    layout="canvas"
-                    draft={dmDrafts[canvasPeer.id] ?? ""}
-                    onDraftChange={(draft) =>
-                      setDmDrafts((current) => ({
-                        ...current,
-                        [canvasPeer.id]: draft,
-                      }))
-                    }
-                    onComposingChange={setDmComposing}
-                    autoFocus={dmOpenedByMember}
-                  />
+                    onOpen={openDirectMessage}
+                  >
+                    <DirectMessageView
+                      key={canvasPeer.id}
+                      organizationId={dmOrganizationId}
+                      viewerId={viewerId}
+                      peer={canvasPeer}
+                      layout="canvas"
+                      draft={dmDrafts[canvasPeer.id] ?? ""}
+                      onDraftChange={(draft) =>
+                        setDmDrafts((current) => ({
+                          ...current,
+                          [canvasPeer.id]: draft,
+                        }))
+                      }
+                      onComposingChange={setDmComposing}
+                      autoFocus={dmOpenedByMember}
+                    />
+                  </MessagesPage>
                 ) : (
                   <PeopleDirectory
                     people={dmPeople}
