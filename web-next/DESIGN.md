@@ -59,6 +59,34 @@ not permission to copy every incidental value into a new component.
   content wraps past one line — with a circular icon send button inside,
   never a rectangular field with a text "Send" button. Share one set of CSS
   across composers instead of copying the pattern per screen.
+- **Buttons and action rows** (founder, 15 Oct 2026: button order, spacing
+  and consistency were poor across Settings, Teamspaces and the rest of the
+  app). One convention everywhere:
+  - Every button is `ui/button` (`Button`), with its variants (`default`,
+    `outline`, `secondary`, `ghost`, `destructive`, `link`) and sizes. Never
+    write a new button recipe in CSS; restyle through tokens and variants.
+  - One height per context: `size="default"` (32px) for page headers, forms,
+    dialogs and confirms; `sm` for trailing row actions; `icon-sm` for inline
+    row icons. The buttons in one row are always the same size.
+  - **Dialog footers and inline confirm boxes:** the message above, the
+    buttons right-aligned with 8px between them: Cancel (`outline`), then
+    the confirm on the far right. The confirm is `default`, or `destructive`
+    when it deletes, removes, revokes, disconnects or leaves.
+  - **Form footers:** status text on the left, the buttons on the right.
+    A destructive action never sits next to Save; it goes in a separate
+    danger group at the end of the page or dialog.
+  - **Settings rows:** one trailing `outline` `sm` action, right-aligned;
+    switches and selects sit in the same trailing slot.
+  - **Cards and detail headers:** the primary first, start-aligned, 8px gap.
+    A destructive action is pushed to the far end (`ml-auto`) or moved into
+    the ⋯ menu.
+  - **Page header actions:** right-aligned, at most one `default` primary.
+  - **Inline row icons:** `ghost` `icon-sm`; a destructive one tints only on
+    hover. One icon-button size per context, never three.
+  - **Spacing:** 8 between buttons, 8 from a label to its control, 12
+    between rows, 24 between sections, and page padding of 24 (32 when the
+    page is wide). Keep values on the 8/12/16/24/32 rhythm.
+  - **Phones:** an action row stacks full-width, primary on top.
 - Use Lucide for general UI icons. Use actual brand marks for integrations.
   Icons should express an action or entity, never fill empty space.
 - Every interactive state must be visible: hover, active/selected, keyboard
@@ -112,8 +140,9 @@ not permission to copy every incidental value into a new component.
 
 - The shared workspace header is compact (56px at normal desktop/mobile
   widths), with its title centered. It contains the **current context**:
-  opening a DM shows the person's name/avatar, not “People”; opening a
-  teamspace or agent shows that work's title. Back navigation lives there.
+  opening a DM shows the person's name/avatar, not “People”; opening an
+  agent shows that work's title, and a teamspace its "Teamspaces / <name>"
+  crumbs. Back navigation lives there.
   Do not repeat the page title, a hero slogan, or a generic description at
   the top of the main canvas. No preview badge in the header.
 - Desktop panel toggles use left/right panel glyphs so back navigation remains
@@ -196,22 +225,61 @@ not permission to copy every incidental value into a new component.
     Network failures, timeouts and 5xx responses keep the session recoverable
     with bounded backoff. Do not erase scoped chat choices or queued requests;
     drafts held only in the mounted shell are not recovered after a new sign-in.
-- A teamspace or extensive agentic task is a focused work view: no left
-  sidebar, naked conversation on the base surface, compact title/back header,
-  and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
-  sit **above** the work panel. The panel's top area belongs to the selected
-  view's heading and state, not the tab strip.
-  - **A teamspace** (founder's redesign, 14 Oct 2026) opens under a faint
-    band of the harbour scene, its name a title (28px) beside its planet,
-    with its status, team and how many people. Its room is the main tile
-    (on the base), and its work the side tile, the tabs a segmented control
-    whose selected tab is the raised tile.
-  - **The teamspaces list** is a title with the counts (active, paused, in
-    all) under the same faint band, segmented status filters and a search,
-    and the teamspaces as a grid of cards: planet, status, name, purpose,
-    team and when it was last updated, how many people. For a member who
-    can open one, the last card opens a new teamspace, drawn as the ship's
-    lines on deep sea.
+- An extensive agentic task is a focused work view: no left sidebar, naked
+  conversation on the base surface, compact title/back header, and a
+  separate work panel. Tabs sit **above** the work panel. The panel's top
+  area belongs to the selected view's heading and state, not the tab strip.
+  - **A teamspace** (TeamspaceHome board, 15 Oct 2026) keeps the sidebar,
+    which marks Teamspaces. The page's header is the crumbs "Teamspaces /
+    <name>"; the first goes back to the list. On the canvas, under a faint
+    band of the harbour scene: the hero (planet, the name as a 30px title,
+    "<Team> team · N people and M agents", "Paused · " first when paused),
+    and on its right the faces of the people with a seat, the Parley pill
+    and, only for whoever manages the team, an Invite pill. Invite opens a
+    pop-up sheet listing the workspace's people not yet on the team, each
+    with Add (adding them to the team is what opens the teamspace to them;
+    someone new to the workspace is invited from Settings). Under the hero,
+    a segmented control of Room, Plan, Files (with its count) and Parleys,
+    the selected tab the raised tile, then a quieter Activity tab set a
+    little apart (the ledger has no place on the board; owner to confirm).
+  - **Room:** the room is the main tile, with a side column beside it: a
+    Live card only while a sandbox or browser is running in the room
+    (RoomLive), a **Files N** card with the newest four team files (a kind
+    tag from the extension, the name, "added …"; its heading opens the
+    Files tab, and it shows only once there are files to list), the team
+    summary, then the purpose, the contributed agents and the people. The
+    board has a Plan card and a Last parley card too, left out until
+    their APIs exist. Purpose, agents and People aren't on the board; they
+    are kept on purpose, below the board's cards, as Overview's content
+    with nowhere else to go (owner to confirm). The
+    room stays mounted behind the other tabs, so its draft, scroll and
+    socket carry over. **Files** is the team's files, full width. **Plan**
+    and **Parleys** have no API yet, so each is one honest line on the
+    empty scene ("A shared plan is coming", "Past parleys will be listed
+    here"). No launch date in the hero until the teamspace carries one.
+  - **The teamspaces list** (TeamspacesNew, 15 Oct 2026) opens under the
+    same faint band on a compact row, with no in-page title (the shell's
+    header already says Teamspaces, §2): a subtitle that says how many are
+    active and, when one is, that a parley is live there ("4 active, and a
+    parley is live in EU launch."), and New teamspace. Below it, a search
+    (`/` focuses it, unless the
+    member is typing) and segmented status filters that carry their counts
+    (All 5, Active 4, Paused 1). The teamspaces are a grid of cards: planet,
+    name, "<Team> team · N people" (or "· paused"), purpose, a live row
+    with the "Parley · 18 min" chip while a call runs, and a footer with
+    the faces of the people who have a seat (four, then +N). Clicking a
+    card opens the teamspace; its More menu has Open, Manage details, and,
+    for whoever manages it, Pause or Resume and Delete. Pause and Delete
+    open the details on their usual confirm; Resume needs none. A paused
+    card is dimmed, still opens from anywhere on it, and says its room is
+    closed until a team admin resumes it. The parley chip reads each open teamspace's call once a minute
+    (the member must be on the team), under the room's own call key.
+    Unread counts, who's editing, custom facts, the last activity line and
+    who paused it stay off the card until the list carries them.
+  - For a member who can open one, the last card opens a new teamspace,
+    drawn as the ship's lines on deep sea, with a New teamspace button.
+    Both it and the header's button open the create form as a pop-up
+    sheet (`ui/dialog`), the lines faint at its top.
 - **People, Agents and Settings as tiles** (founder's redesign, 14 Oct
   2026). People is a grid of cards (the person, their presence, what you
   share, Message). On the Agents pages the primary agent, the stats, teams,
@@ -248,12 +316,23 @@ not permission to copy every incidental value into a new component.
     parley, and leave.
   - **The full page:** a gallery or speaker layout, live captions, the
     transcript as this page heard it, and a dock (mic, camera, screen,
-    record, ask the agent in, leave), plus "End for everyone".
+    record, ask the agent in, devices, leave), plus "End for everyone".
+    Devices opens a small panel over the stage to choose the microphone,
+    camera and speaker, and follows devices plugged in or out. Beside the
+    call is the Transcript or the **Room**: the room's own conversation,
+    moved in from the room's page while the pane is open (there's only ever
+    one, so the room is never open twice). From any other page the Room
+    pane says to open the room's page.
   - **Tiles:** camera tiles stay dark in both themes, as video does
     (`--call-*` tokens). A person keeps their tile colour everywhere. The
     agent is a tile with no camera, marked Listening or Speaking.
   - **Recording:** while it is on, everyone in the call sees who turned it
     on, and when.
+  - **Parley ended:** when the call the member is in ends (someone ended it,
+    or they ended it for everyone), a pop-up with a slight sea scene says
+    how long it ran, how many were in it, and what was kept (the recording
+    and transcript, or the transcript). Just leaving shows nothing. The
+    agent's notes join it once there's an API for them.
   - **In a DM:** the same strip, or a "Parley" button when none runs, sits
     above the conversation in its reading column. The call is the DM's own
     room on the edge. A DM whose ids the edge can't name offers no parley.
@@ -270,8 +349,9 @@ not permission to copy every incidental value into a new component.
     Saving replaces the whole grant. An app the grant names that is no
     longer connected stays listed, marked so, until it is taken off.
 - **What the organization agent made of a team's posts** (I7).
-  - **Team summary:** a teamspace's Overview starts with this card (summary,
-    decisions, risks, open questions) and the team's proposed follow-ups.
+  - **Team summary:** a teamspace's room has this card in its side column
+    (summary, decisions, risks, open questions) and the team's proposed
+    follow-ups.
     Anyone who may not read it (403) sees no card at all.
   - **Agent overview** lists the follow-ups from the member's teamspaces,
     grouped by teamspace.
@@ -280,8 +360,9 @@ not permission to copy every incidental value into a new component.
   private ones).
   - **Where:** beside the primary agent's chat, the session's Live tab
     shows the conversation's own as tiles, and one opens in the work panel
-    like a file. A teamspace has a Live tab with its tiles, the open one, and the
-    run log.
+    like a file. A teamspace shows a Live card beside its room, only while a
+    sandbox or browser is running there (stopped ones don't count), with
+    its tiles, the open one, and the run log.
   - **A sandbox** has Files (folders and a reader) and Preview (a port it
     serves, in a frame without its own origin). A member gets a Terminal
     (xterm, loaded when opened) only in their own private sandbox (owner's
@@ -473,6 +554,22 @@ not permission to copy every incidental value into a new component.
   canvas, opened from People or Team's recent conversations, under the header
   that names the person; and the agent panel's DMs tab, under a compact row
   with a back arrow to the list.
+  - **Messages** (founder's redesign, 15 Oct 2026; `messages-page.tsx`). In
+    the canvas, the open DM sits between the member's DM list and a card
+    about the person, the three columns answering the canvas's width (a
+    container query) rather than the window's: a narrow canvas drops the
+    card first, then the list, leaving the DM alone as before. The list, a
+    filled tile, is "Messages · N unread" over "Find a person" and the DMs
+    (side conversations stay in the DMs tab, under their teamspace), the open
+    one the raised tile; a search also lists anyone else who matches, to
+    start a conversation, and New message moves to it. The person card, a
+    filled tile in the canvas and never in the agent panel's place, says
+    their name, role and "Online" only while the page knows it, Parley (the
+    DM's own room; while the card shows, the DM keeps only a running
+    parley's strip), their agent where a shared teamspace seats one, and the
+    teamspaces you share. Local time, a profile and shared files wait for
+    the API (#322), so nothing stands in for them. The header still names
+    the person.
   - It reads as a quiet log (a centered column in the canvas): the member's
     messages in raised bubbles on the right, the other person's as plain text
     on the left beside their avatar. Each person's messages within one minute

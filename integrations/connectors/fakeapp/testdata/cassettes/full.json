@@ -1,0 +1,42 @@
+[
+  {
+    "method": "GET",
+    "host": "api.fakeapp.example.com",
+    "path": "/notes?after=0",
+    "status": 200,
+    "body": {
+      "notes": [
+        {
+          "id": "1",
+          "seq": 1,
+          "text": "first",
+          "deleted": false
+        },
+        {
+          "id": "2",
+          "seq": 2,
+          "text": "second",
+          "deleted": false
+        }
+      ],
+      "has_more": true
+    }
+  },
+  {
+    "method": "GET",
+    "host": "api.fakeapp.example.com",
+    "path": "/notes?after=2",
+    "status": 200,
+    "body": {
+      "notes": [
+        {
+          "id": "3",
+          "seq": 3,
+          "text": "third",
+          "deleted": false
+        }
+      ],
+      "has_more": false
+    }
+  }
+]
