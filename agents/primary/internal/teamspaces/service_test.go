@@ -24,6 +24,7 @@ type fakeRepository struct {
 	spaces            []Space
 	organizationAgent OrganizationAgent
 	entries           []Entry
+	tasks             []Task
 	ensureCount       int
 }
 

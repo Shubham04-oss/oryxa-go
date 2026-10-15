@@ -176,6 +176,10 @@ type Teamspaces interface {
 	DeleteContribution(context.Context, teamspaces.Actor, string, string) (teamspaces.Space, error)
 	PublishEntry(context.Context, teamspaces.Actor, string, teamspaces.PublishEntryInput) (teamspaces.Entry, error)
 	ListEntries(context.Context, teamspaces.Actor, string, int) ([]teamspaces.Entry, error)
+	ListTasks(context.Context, teamspaces.Actor, string) ([]teamspaces.Task, error)
+	CreateTask(context.Context, teamspaces.Actor, string, teamspaces.TaskInput) (teamspaces.Task, error)
+	UpdateTask(context.Context, teamspaces.Actor, string, string, teamspaces.TaskUpdate) (teamspaces.Task, error)
+	DeleteTask(context.Context, teamspaces.Actor, string, string) error
 }
 
 // OrganizationAgentContext reads the organization agent's output by audience;
@@ -409,6 +413,10 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.listTeamspaceEntries)
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/synthesis", server.getTeamspaceSynthesis)
 	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.publishTeamspaceEntry)
+	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks", server.listTeamspaceTasks)
+	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks", server.createTeamspaceTask)
+	server.handle("PATCH /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks/{taskID}", server.updateTeamspaceTask)
+	server.handle("DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks/{taskID}", server.deleteTeamspaceTask)
 	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/messages", server.postRoomMessage)
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/messages", server.readRoom)
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/catchup", server.catchUpOnRoom)
@@ -1365,6 +1373,85 @@ func (server *Server) listTeamspaceEntries(writer http.ResponseWriter, request *
 	writeJSON(writer, http.StatusOK, map[string]any{"entries": entries})
 }
 
+// listTeamspaceTasks is a teamspace's checklist, in order, for a member of
+// its team.
+func (server *Server) listTeamspaceTasks(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	tasks, err := server.teamspaces.ListTasks(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (server *Server) createTeamspaceTask(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	var input teamspaces.TaskInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	task, err := server.teamspaces.CreateTask(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, task)
+}
+
+func (server *Server) updateTeamspaceTask(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	var input teamspaces.TaskUpdate
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	task, err := server.teamspaces.UpdateTask(request.Context(), teamspaceActorOf(member),
+		request.PathValue("teamspaceID"), request.PathValue("taskID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, task)
+}
+
+func (server *Server) deleteTeamspaceTask(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	if err := server.teamspaces.DeleteTask(request.Context(), teamspaceActorOf(member),
+		request.PathValue("teamspaceID"), request.PathValue("taskID")); err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
 func (server *Server) publishTeamspaceEntry(writer http.ResponseWriter, request *http.Request) {
 	member, ok := server.member(writer, request)
 	if !ok {
@@ -2056,6 +2143,8 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, teamspaces.ErrDisabled):
 		return http.StatusConflict, "teamspace_disabled"
+	case errors.Is(err, teamspaces.ErrPaused):
+		return http.StatusConflict, "teamspace_paused"
 	case errors.Is(err, teamspaces.ErrConflict):
 		return http.StatusConflict, "teamspace_conflict"
 	case errors.Is(err, teamspaces.ErrNotFound):

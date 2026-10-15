@@ -432,3 +432,79 @@ func TestStoreKeepsTheTargetAndWhoPaused(t *testing.T) {
 		t.Fatalf("listed = %+v, %v", listed, err)
 	}
 }
+
+// A teamspace's checklist is kept in order, its counts are read with the
+// teamspace in the same statement, and somebody leaving the team leaves their
+// tasks unowned rather than gone.
+func TestStoreKeepsAChecklist(t *testing.T) {
+	database, store, _ := testStores(t)
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	organizationID := fmt.Sprintf("org_teamspace_tasks_%d", suffix)
+	defer func() {
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.teamspaces WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.organization_agents WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.agents_outbox WHERE detail->>'organization_id'=$1`, organizationID)
+	}()
+	organizationAgent, err := store.EnsureOrganizationAgent(ctx, organizationID, "Tasks Org", "user_owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, err := store.Create(ctx, Space{
+		ID: fmt.Sprintf("tsp_tasks_%d", suffix), OrganizationID: organizationID, TeamID: "team_tasks",
+		Name: "Launch", CreatedByUserID: "user_owner", OrganizationAgentID: organizationAgent.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	owner, due := "user_grace", "2026-10-30"
+	first, err := store.CreateTask(ctx, Task{ID: fmt.Sprintf("tst_a_%d", suffix), TeamspaceID: space.ID, OrganizationID: organizationID,
+		Title: "Draft the post", OwnerUserID: &owner, DueDate: &due, Position: -1, CreatedBy: "user_owner"})
+	if err != nil || first.Position != 0 || first.DueDate == nil || *first.DueDate != due || *first.OwnerUserID != owner || first.Done {
+		t.Fatalf("first = %+v, %v", first, err)
+	}
+	second, err := store.CreateTask(ctx, Task{ID: fmt.Sprintf("tst_b_%d", suffix), TeamspaceID: space.ID, OrganizationID: organizationID,
+		Title: "Book the venue", Position: -1, CreatedBy: "user_owner"})
+	if err != nil || second.Position != 1 || second.OwnerUserID != nil || second.DueDate != nil {
+		t.Fatalf("second = %+v, %v", second, err)
+	}
+	if _, err := store.CreateTask(ctx, Task{ID: fmt.Sprintf("tst_c_%d", suffix), TeamspaceID: "tsp_missing", OrganizationID: organizationID,
+		Title: "Nowhere", Position: -1, CreatedBy: "user_owner"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a task in no teamspace: %v, want ErrNotFound", err)
+	}
+
+	ticked, err := store.UpdateTask(ctx, organizationID, space.ID, first.ID, TaskUpdate{Done: ptr(true), Position: ptr(4), DueDate: Nullable{Set: true}})
+	if err != nil || !ticked.Done || ticked.DoneAt == nil || ticked.Position != 4 || ticked.DueDate != nil || *ticked.OwnerUserID != owner {
+		t.Fatalf("ticked = %+v, %v", ticked, err)
+	}
+	if _, err := store.UpdateTask(ctx, organizationID, space.ID, "tst_missing", TaskUpdate{Done: ptr(true)}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("update a missing task: %v, want ErrNotFound", err)
+	}
+	tasks, err := store.ListTasks(ctx, organizationID, space.ID)
+	if err != nil || len(tasks) != 2 || tasks[0].ID != second.ID || tasks[1].ID != first.ID {
+		t.Fatalf("tasks = %+v, %v", tasks, err)
+	}
+
+	read, err := store.Get(ctx, organizationID, space.ID)
+	if err != nil || read.TaskCounts != (TaskCounts{Done: 1, Total: 2}) {
+		t.Fatalf("counts on get = %+v, %v", read.TaskCounts, err)
+	}
+	listed, err := store.List(ctx, organizationID)
+	if err != nil || len(listed) != 1 || listed[0].TaskCounts != (TaskCounts{Done: 1, Total: 2}) {
+		t.Fatalf("counts on list = %+v, %v", listed, err)
+	}
+
+	if err := store.ForgetTeamMember(ctx, organizationID, space.TeamID, owner, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := store.GetTask(ctx, organizationID, space.ID, first.ID); err != nil || kept.OwnerUserID != nil {
+		t.Fatalf("a departed member's task = %+v, %v; want it kept with no owner", kept, err)
+	}
+	if err := store.DeleteTask(ctx, organizationID, space.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteTask(ctx, organizationID, space.ID, second.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete twice: %v, want ErrNotFound", err)
+	}
+}
