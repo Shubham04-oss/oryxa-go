@@ -264,13 +264,6 @@
   font-size: 12px;
   text-align: center;
 }
-.workspace-document-preview {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
 .workspace-document-scroll {
   display: flex;
   flex: 1;
@@ -289,66 +282,18 @@
 .workspace-document-image {
   justify-content: center;
 }
-.workspace-document-image img,
-.workspace-document-slides img {
+.workspace-document-image img {
   display: block;
   max-width: 100%;
   max-height: 100%;
   margin: auto;
   object-fit: contain;
 }
-.workspace-document-slides {
-  justify-content: center;
-}
 .workspace-document-scroll canvas {
   display: block;
   flex: none;
   margin: 0 auto;
   background: var(--tone-ffffff);
-}
-.workspace-document-pages,
-.workspace-document-sheets {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  min-height: 40px;
-  padding: 5px 12px;
-  border-top: 1px solid var(--border-quiet);
-  color: var(--tone-bbbbbb);
-  font-size: 11px;
-}
-.workspace-document-pages button,
-.workspace-document-sheets button {
-  display: inline-grid;
-  min-width: 28px;
-  min-height: 28px;
-  place-items: center;
-  padding: 4px 9px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--tone-dddddd);
-}
-.workspace-document-pages button:hover:not(:disabled),
-.workspace-document-sheets button:hover {
-  background: var(--hover);
-}
-.workspace-document-pages button:disabled {
-  color: var(--tone-666666);
-  cursor: default;
-}
-.workspace-document-sheets {
-  justify-content: flex-start;
-  overflow-x: auto;
-}
-.workspace-document-sheets button[aria-selected="true"] {
-  background: var(--raised);
-  box-shadow:
-    0 0 0 1px var(--border-quiet),
-    0 1px 3px var(--shade-66);
-  color: var(--text);
 }
 /* A Word document is drawn in a sandboxed frame of its own (document-preview.tsx), which supplies its surround; the frame fills the panel and scrolls the pages itself. */
 .workspace-document-word {
@@ -371,34 +316,6 @@
 }
 .workspace-document-frame[data-ready="false"] {
   visibility: hidden;
-}
-.workspace-document-grid {
-  display: block;
-}
-.workspace-document-grid table {
-  border-collapse: separate;
-  border-spacing: 0;
-  width: max-content;
-  min-width: 100%;
-  background: var(--tone-fdfdfd);
-  color: var(--raised);
-  font-size: 12px;
-}
-.workspace-document-grid td {
-  min-width: 90px;
-  max-width: 320px;
-  padding: 8px 10px;
-  overflow-wrap: anywhere;
-  border-right: 1px solid var(--tone-dddddd);
-  border-bottom: 1px solid var(--tone-dddddd);
-  vertical-align: top;
-}
-.workspace-document-grid tr:first-child td {
-  font-weight: 600;
-}
-.workspace-document-grid > p {
-  margin: 12px 0;
-  color: var(--text-muted);
 }
 .workspace-document-text,
 .workspace-document-prose {

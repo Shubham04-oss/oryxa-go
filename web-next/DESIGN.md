@@ -244,8 +244,15 @@ not permission to copy every incidental value into a new component.
   in steps with Fit (to the width, the default), and Find, which marks every
   match on the page (`--viewer-highlight`, the current one stronger) and
   steps through them with Enter. A page is drawn only near the view and
-  gives its pixels back when far from it. The sheet controls are pills, and
-  the chosen sheet is the raised tile. A Library file opens
+  gives its pixels back when far from it. A spreadsheet or CSV
+  (`sheet-viewer.tsx`) has a formula bar (the selected cell's reference, then
+  its formula from exceljs or its value), lettered columns and numbered rows
+  that stick as it scrolls, a cell selected by click or the arrow keys, and
+  its sheets as tabs under the grid (`ui/tabs`, the chosen one the raised
+  tile) with "N sheets" in the bar. It is read-only. A presentation
+  (`slides-viewer.tsx`) is the slide on a stage, its speaker notes under it
+  when it has any, and a filmstrip of every slide, with previous and next
+  and "n / N" in the bar; the arrow keys move between slides. A Library file opens
   over the whole Library page: an uploaded file from files, a connected
   app's document as the text knowledge keeps. A note or a link says
   plainly that its text isn't kept for reading, since rag gives none back. A file's kind is a small coloured tile with

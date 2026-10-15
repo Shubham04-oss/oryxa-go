@@ -9,6 +9,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import {
   DocumentPreview,
@@ -18,6 +19,18 @@ import {
 
 const renderAsync = vi.hoisted(() => vi.fn())
 vi.mock("docx-preview", () => ({ renderAsync }))
+
+// A three-slide deck; the second has speaker notes.
+vi.mock("@office-kit/pptx", () => ({
+  loadPresentation: () => Promise.resolve({}),
+  getSlides: () => [{ id: 1 }, { id: 2 }, { id: 3 }],
+  getSlideNotes: (slide: { id: number }) =>
+    slide.id === 2 ? "Say the date twice." : null,
+}))
+vi.mock("@office-kit/pptx-preview", () => ({
+  renderSlideToSvg: (_: unknown, slide: { id: number }) =>
+    `<svg data-slide="${slide.id}"></svg>`,
+}))
 
 afterEach(() => {
   cleanup()
@@ -73,6 +86,7 @@ describe("simple document previews", () => {
     const sheet = workbook.addWorksheet("Budget")
     sheet.addRow(["Item", "Cost"])
     sheet.addRow(["Design", 42])
+    sheet.addRow(["Total", { formula: "B2*2", result: 84 }])
     workbook.addWorksheet("Notes").addRow(["Reviewed"])
     const bytes = await workbook.xlsx.writeBuffer()
     vi.stubGlobal(
@@ -86,19 +100,46 @@ describe("simple document previews", () => {
         contentType="application/octet-stream"
       />
     )
-    expect(await screen.findByText("Design")).toBeTruthy()
-    expect(screen.getByText("42")).toBeTruthy()
+    expect(await screen.findByRole("cell", { name: "Design" })).toBeTruthy()
+    expect(screen.getByRole("cell", { name: "42" })).toBeTruthy()
+    // Columns are lettered and rows numbered, as a spreadsheet's are.
+    expect(screen.getByRole("columnheader", { name: "B" })).toBeTruthy()
+    expect(screen.getByRole("rowheader", { name: "3" })).toBeTruthy()
+    // The formula bar names the selected cell and shows its formula.
+    const formula = screen.getByRole("status", { name: "Formula or value" })
+    expect(screen.getByLabelText("Cell").textContent).toBe("A1")
+    expect(formula.textContent).toBe("Item")
+    fireEvent.click(screen.getByRole("cell", { name: "84" }))
+    expect(screen.getByLabelText("Cell").textContent).toBe("B3")
+    expect(formula.textContent).toBe("=B2*2")
+    expect(screen.getByText("2 sheets")).toBeTruthy()
+
     const budget = screen.getByRole("tab", { name: "Budget" })
     const notes = screen.getByRole("tab", { name: "Notes" })
     expect(budget.getAttribute("aria-selected")).toBe("true")
     expect(notes.getAttribute("aria-selected")).toBe("false")
     fireEvent.click(notes)
-    expect(screen.getByText("Reviewed")).toBeTruthy()
-    expect(screen.queryByText("Design")).toBeNull()
+    expect(screen.getByRole("cell", { name: "Reviewed" })).toBeTruthy()
+    expect(screen.queryByRole("cell", { name: "Design" })).toBeNull()
     expect(notes.getAttribute("aria-selected")).toBe("true")
     fireEvent.click(budget)
-    expect(screen.getByText("Design")).toBeTruthy()
-    expect(screen.getByText("42")).toBeTruthy()
+    expect(screen.getByRole("cell", { name: "Design" })).toBeTruthy()
+  })
+
+  it("moves the selected cell with the arrow keys", async () => {
+    serve("Name,Amount\nA,1\nB,2")
+    render(
+      <DocumentPreview url="/data.csv" name="data.csv" contentType="text/csv" />
+    )
+    const grid = await screen.findByRole("region", { name: /selected/ })
+    fireEvent.keyDown(grid, { key: "ArrowDown" })
+    fireEvent.keyDown(grid, { key: "ArrowRight" })
+    expect(screen.getByLabelText("Cell").textContent).toBe("B2")
+    expect(
+      screen.getByRole("status", { name: "Formula or value" }).textContent
+    ).toBe("1")
+    fireEvent.keyDown(grid, { key: "ArrowRight" })
+    expect(screen.getByLabelText("Cell").textContent).toBe("B2")
   })
 })
 
@@ -371,5 +412,54 @@ describe("a Word document", () => {
     expect((await screen.findByRole("alert")).textContent).toBe(
       "Could not render this document."
     )
+  })
+})
+
+describe("a presentation", () => {
+  it("shows a slide on a stage, a filmstrip, the counter and its speaker notes", async () => {
+    let made = 0
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: () => `blob:slide-${++made}`,
+      revokeObjectURL: () => {},
+    })
+    serve("PK")
+    render(
+      <DocumentPreview
+        url="/deck.pptx"
+        name="deck.pptx"
+        contentType="application/octet-stream"
+      />
+    )
+    const stage = await screen.findByRole("img", { name: "Slide 1" })
+    expect(stage.getAttribute("src")).toBe("blob:slide-1")
+    const strip = screen.getByRole("navigation", { name: "Slides" })
+    const thumbs = within(strip).getAllByRole("button")
+    expect(thumbs).toHaveLength(3)
+    expect(thumbs[0].getAttribute("aria-current")).toBe("true")
+    expect(screen.getByText("1 / 3")).toBeTruthy()
+    expect(screen.queryByRole("region", { name: "Speaker notes" })).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Next slide" }))
+    expect(screen.getByRole("img", { name: "Slide 2" })).toBeTruthy()
+    expect(screen.getByText("2 / 3")).toBeTruthy()
+    expect(
+      within(screen.getByRole("region", { name: "Speaker notes" })).getByText(
+        "Say the date twice."
+      )
+    ).toBeTruthy()
+
+    fireEvent.click(thumbs[2])
+    expect(screen.getByText("3 / 3")).toBeTruthy()
+    expect(
+      screen
+        .getByRole("button", { name: "Next slide" })
+        .hasAttribute("disabled")
+    ).toBe(true)
+    fireEvent.keyDown(
+      screen.getByRole("region", { name: /Arrow keys move between slides/ }),
+      { key: "ArrowLeft" }
+    )
+    expect(screen.getByText("2 / 3")).toBeTruthy()
   })
 })
