@@ -3,6 +3,7 @@ package threads
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -86,6 +87,29 @@ func (drain *Drain) end(run *Run) {
 		close(drain.idle)
 		drain.idle = make(chan struct{})
 	}
+}
+
+// ErrStopped is why a run its member stopped ended.
+var ErrStopped = fmt.Errorf("the member stopped the run: %w", context.Canceled)
+
+// Stop stops the run going here with this id, if it is the member's own, and
+// says whether there was one. A run outlives its stream, so this is how a
+// member stops one.
+// ponytail: only this process's runs; with more than one task, a stop that
+// lands on another answers false. Route it by run id when the service scales out.
+func (drain *Drain) Stop(organizationID, userID, runID string) bool {
+	if drain == nil {
+		return false
+	}
+	drain.mu.Lock()
+	defer drain.mu.Unlock()
+	for run, cancel := range drain.running {
+		if run.id == runID && run.member.OrganizationID == organizationID && run.member.UserID == userID {
+			cancel(ErrStopped)
+			return true
+		}
+	}
+	return false
 }
 
 // Running is how many runs are going.

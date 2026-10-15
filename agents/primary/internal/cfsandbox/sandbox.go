@@ -27,6 +27,9 @@ const (
 	maxPathsPerCall   = 100
 	maxFilesPerCall   = 20
 	maxFileInputBytes = 5 * 1024 * 1024
+	// maxArtifactBytes is what sandbox_save_artifact may move in one read,
+	// matching agentcoresandbox; the edge caps artifacts at 64 MiB.
+	maxArtifactBytes = 25 * 1024 * 1024
 
 	// execTimeout is how long a run may take on the edge, and callSlack
 	// what the call adds for the container to start and answer.
@@ -63,6 +66,9 @@ type Request struct {
 	DirectoryPath string
 	Paths         []string
 	Files         []File
+	// MaxOutputBytes raises a file read's budget for a caller whose bytes never
+	// reach the model; zero keeps the edge's model budget.
+	MaxOutputBytes int
 }
 
 // Content is one output block, in agentcoresandbox's shape: text, an image
@@ -166,7 +172,7 @@ func (executor *Executor) Invoke(ctx context.Context, target edgeclient.Target, 
 		return listResult(listed), nil
 	case ReadFiles:
 		var read edgev1.ReadFilesResponse
-		if err := executor.call(ctx, target, http.MethodPost, "/files/read", nil, edgev1.ReadFilesRequest{Paths: request.Paths}, &read, fileTimeout+callSlack, true); err != nil {
+		if err := executor.call(ctx, target, http.MethodPost, "/files/read", nil, edgev1.ReadFilesRequest{Paths: request.Paths, MaxBytes: request.MaxOutputBytes}, &read, fileTimeout+callSlack, true); err != nil {
 			return Result{}, sandboxError(err)
 		}
 		return readResult(read), nil

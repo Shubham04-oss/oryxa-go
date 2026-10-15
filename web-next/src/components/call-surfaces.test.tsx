@@ -12,6 +12,7 @@ import {
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { AgentPanelChips } from "./agent-panel-chips"
 import {
   CallProvider,
   useReportRoomActivity,
@@ -1046,5 +1047,48 @@ describe("a parley starting in the room the member has open", () => {
     expect(toast).toBeTruthy()
     fireEvent.click(within(toast!).getByRole("button", { name: "Join" }))
     await waitFor(() => expect(requests("/call/join", "POST")).toHaveLength(1))
+  })
+})
+
+describe("the agent panel's parley chip", () => {
+  function renderChips(teamspace?: { id: string; name: string }) {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CallProvider joinMediaWith={vi.fn(async () => fakeMedia())}>
+          <AgentPanelChips
+            organizationId="org_1"
+            viewerId="usr_ada"
+            teamspace={teamspace}
+          />
+        </CallProvider>
+      </QueryClientProvider>
+    )
+  }
+
+  it("offers to join the teamspace's parley, then says the member is in it", async () => {
+    renderChips({ id: "tsp_1", name: "EU launch" })
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Join the parley in EU launch",
+      })
+    )
+    expect(
+      await screen.findByRole("button", { name: /In the parley · Open/ })
+    ).toBeTruthy()
+    expect(requests("/call/join", "POST")).toHaveLength(1)
+  })
+
+  it("shows nothing where no parley runs, or off a teamspace", async () => {
+    current = null
+    renderChips({ id: "tsp_1", name: "EU launch" })
+    await waitFor(() => expect(requests(`${base}/call`)).not.toHaveLength(0))
+    expect(screen.queryByRole("group", { name: "For you now" })).toBeNull()
+    cleanup()
+    current = view()
+    renderChips()
+    expect(screen.queryByRole("group", { name: "For you now" })).toBeNull()
   })
 })

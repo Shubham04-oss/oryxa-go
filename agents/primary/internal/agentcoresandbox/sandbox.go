@@ -32,12 +32,16 @@ const (
 	// data independently of AgentCore's much larger transport limits so one tool
 	// call cannot consume the whole model context.
 	maxModelOutputBytes = 256 * 1024
-	maxCodeInputBytes   = 1024 * 1024
-	maxCommandBytes     = 64 * 1024
-	maxPathBytes        = 4 * 1024
-	maxPathsPerCall     = 100
-	maxFilesPerCall     = 20
-	maxFileInputBytes   = 5 * 1024 * 1024
+	// maxArtifactBytes bounds a file moved straight to the artifact store
+	// (sandbox_save_artifact): its bytes never reach the model, so the model
+	// budget above does not apply. A deck with images is well past 256 KiB.
+	maxArtifactBytes  = 25 * 1024 * 1024
+	maxCodeInputBytes = 1024 * 1024
+	maxCommandBytes   = 64 * 1024
+	maxPathBytes      = 4 * 1024
+	maxPathsPerCall   = 100
+	maxFilesPerCall   = 20
+	maxFileInputBytes = 5 * 1024 * 1024
 )
 
 // Action is one synchronous Code Interpreter operation exposed to ADK.
@@ -68,6 +72,9 @@ type Request struct {
 	DirectoryPath string
 	Paths         []string
 	Files         []File
+	// MaxOutputBytes bounds what the result carries; zero is the model's
+	// budget, maxModelOutputBytes.
+	MaxOutputBytes int
 }
 
 // Content is one output block returned by AgentCore. Binary content is base64
@@ -198,7 +205,11 @@ func (m *Manager) Invoke(ctx context.Context, sessionKey string, request Request
 	if err != nil {
 		return Result{}, fmt.Errorf("invoke AgentCore sandbox: %w", err)
 	}
-	result := aggregate(results)
+	limit := request.MaxOutputBytes
+	if limit <= 0 {
+		limit = maxModelOutputBytes
+	}
+	result := aggregate(results, limit)
 	result.SessionRecreated = recreated
 	return result, nil
 }
@@ -469,9 +480,9 @@ func (request Request) arguments() *types.ToolArguments {
 	return arguments
 }
 
-func aggregate(events []types.CodeInterpreterResult) Result {
+func aggregate(events []types.CodeInterpreterResult, limit int) Result {
 	result := Result{}
-	remaining := maxModelOutputBytes
+	remaining := limit
 	for _, event := range events {
 		result.IsError = result.IsError || aws.ToBool(event.IsError)
 		for _, block := range event.Content {

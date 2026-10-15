@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { Onboarding, emailsIn } from "./onboarding"
@@ -80,19 +81,64 @@ describe("emailsIn", () => {
 })
 
 describe("Onboarding", () => {
-  it("names the step it is on, with the workspace done", () => {
+  it("names the step it is on, with a five-part bar and the workspace done", () => {
     stubApi({ "GET /v1/agent-grant": () => [200, { granted: false }] })
     renderStep("agent")
-    const steps = screen.getByRole("list", { name: "Step 2 of 5" })
-    expect(steps.textContent).toContain("Workspace")
-    expect(screen.getByText("Krude").getAttribute("aria-current")).toBe("step")
+    expect(screen.getByText("Step 2 of 5 · Krude")).toBeTruthy()
+    const bar = screen.getByRole("list", { name: "Step 2 of 5" })
+    const parts = within(bar).getAllByRole("listitem")
+    expect(parts).toHaveLength(5)
+    expect(parts[1].getAttribute("aria-current")).toBe("step")
+    expect(parts[0].textContent).toBe("Step 1, done")
+    // Step 2 is the first after naming the workspace: no Back.
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull()
+  })
+
+  it("builds the miniature from what is really set up", async () => {
+    stubApi({
+      [`GET ${base}/apps/connections`]: () => [
+        200,
+        { connections: [{ id: "c1", toolkit: "slack", status: "active" }] },
+      ],
+      [`GET ${base}/invitations`]: () => [
+        200,
+        {
+          invitations: [
+            { id: "i1", email: "raya@northstar.io", status: "pending" },
+            { id: "i2", email: "old@northstar.io", status: "revoked" },
+          ],
+        },
+      ],
+    })
+    renderStep("crew")
+    const model = screen.getByRole("img", {
+      name: "A preview of your workspace as you set it up",
+    })
+    expect(model.textContent).toContain("Northstar")
+    expect(await within(model).findByText("Slack connected")).toBeTruthy()
+    expect(await within(model).findByText("raya")).toBeTruthy()
+    expect(model.textContent).not.toContain("old")
+    expect(
+      within(screen.getByRole("list", { name: "Invited" })).getAllByRole(
+        "listitem"
+      )
+    ).toHaveLength(1)
+  })
+
+  it("continues on Enter outside a field, and goes back with Back", () => {
+    stubApi({})
+    const { onStep } = renderStep("tools")
+    fireEvent.keyDown(document.body, { key: "Enter" })
+    expect(onStep).toHaveBeenLastCalledWith("crew")
+    fireEvent.click(screen.getByRole("button", { name: "Back" }))
+    expect(onStep).toHaveBeenLastCalledWith("agent")
   })
 
   it("shows background access as on when the grant exists, and moves on", async () => {
     stubApi({ "GET /v1/agent-grant": () => [200, { granted: true }] })
     const { onStep } = renderStep("agent")
     expect(await screen.findByText(/On\. Krude can act for you/)).toBeTruthy()
-    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Skip for now" })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: /Continue/ }))
     expect(onStep).toHaveBeenCalledWith("tools")
   })
@@ -126,7 +172,8 @@ describe("Onboarding", () => {
     fireEvent.change(field, { target: { value: "not-an-email" } })
     fireEvent.click(screen.getByRole("button", { name: "Send invitations" }))
     expect(screen.getByText("Check not-an-email.")).toBeTruthy()
-    expect(calls).toEqual([])
+    // The miniature reads; nothing is sent.
+    expect(calls.filter((call) => call.method !== "GET")).toEqual([])
 
     fireEvent.change(field, {
       target: {
@@ -137,7 +184,9 @@ describe("Onboarding", () => {
     const invited = await screen.findByRole("list", { name: "Invited" })
     expect(invited.textContent).toContain("raya@northstar.io")
     expect(invited.textContent).toContain("priya@northstar.io")
-    expect(calls.map((call) => call.body)).toEqual([
+    expect(
+      calls.filter((call) => call.method === "POST").map((call) => call.body)
+    ).toEqual([
       { email: "raya@northstar.io", role: "member" },
       { email: "priya@northstar.io", role: "member" },
     ])
@@ -158,9 +207,13 @@ describe("Onboarding", () => {
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: " EU launch " },
     })
-    fireEvent.click(screen.getByRole("button", { name: /Open teamspace/ }))
+    fireEvent.click(screen.getByRole("button", { name: /Open my workspace/ }))
     await waitFor(() => expect(onDone).toHaveBeenCalledWith("ts_1"))
-    expect(calls.map((call) => [call.url, call.body])).toEqual([
+    expect(
+      calls
+        .filter((call) => call.method === "POST")
+        .map((call) => [call.url, call.body])
+    ).toEqual([
       [`${base}/teams`, { name: "EU launch" }],
       [`${base}/teamspaces`, { team_id: "team_1", name: "EU launch" }],
     ])
@@ -169,7 +222,7 @@ describe("Onboarding", () => {
   it("lets the last step be skipped straight into the workspace", () => {
     stubApi({})
     const { onDone } = renderStep("teamspace")
-    fireEvent.click(screen.getByRole("button", { name: "Skip" }))
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }))
     expect(onDone).toHaveBeenCalledWith()
   })
 })

@@ -32,7 +32,18 @@ import {
   startSlackLink,
   unlinkSlack,
 } from "@/lib/apps/slack"
-import type { SlackChannel, SlackInstall } from "@/lib/apps/slack"
+import type { SlackChannel } from "@/lib/apps/slack"
+import {
+  SettingsActions,
+  SettingsButton,
+  SettingsGroup,
+  SettingsMessage,
+  SettingsNote,
+  SettingsRow,
+  SettingsStatus,
+  SettingsSwitch,
+  SettingsValue,
+} from "./settings-kit"
 
 /** Owners and admins manage the Slack connection; apps refuses anyone else. */
 function canManageSlack(role: Role | undefined): boolean {
@@ -119,41 +130,45 @@ export function WorkspaceSlackSettings({
   role?: Role
   preview: boolean
 }) {
+  if (preview) {
+    return (
+      <SettingsGroup label="Workspace">
+        <SettingsNote>Layout preview · Sign in to manage Slack.</SettingsNote>
+      </SettingsGroup>
+    )
+  }
+  if (!organization) {
+    return (
+      <SettingsGroup label="Workspace">
+        <SettingsNote>Select an organisation first.</SettingsNote>
+      </SettingsGroup>
+    )
+  }
   return (
-    <div className="workspace-settings-account">
-      {preview ? (
-        <SlackSection>
-          <p className="workspace-settings-hint">
-            Layout preview · Sign in to manage Slack.
-          </p>
-        </SlackSection>
-      ) : !organization ? (
-        <SlackSection>
-          <p className="workspace-settings-hint">
-            Select an organisation first.
-          </p>
-        </SlackSection>
+    <>
+      <SlackAccountLink
+        key={`link-${organization.id}`}
+        organizationId={organization.id}
+      />
+      {canManageSlack(role) ? (
+        <SlackSettings key={organization.id} organizationId={organization.id} />
       ) : (
-        <>
-          <SlackAccountLink
-            key={`link-${organization.id}`}
-            organizationId={organization.id}
-          />
-          {canManageSlack(role) ? (
-            <SlackSettings
-              key={organization.id}
-              organizationId={organization.id}
-            />
-          ) : (
-            <SlackSection>
-              <p className="workspace-settings-hint">
-                Organisation owners and admins manage Slack.
-              </p>
-            </SlackSection>
-          )}
-        </>
+        <SettingsGroup label="Workspace">
+          <SettingsNote>
+            Organisation owners and admins manage Slack.
+          </SettingsNote>
+        </SettingsGroup>
       )}
-    </div>
+    </>
+  )
+}
+
+/** Slack's mark on the white logo tile, as every app's logo sits. */
+function SlackTile() {
+  return (
+    <span className="workspace-tool-logo" aria-hidden="true">
+      <SlackMark size={20} />
+    </span>
   )
 }
 
@@ -231,83 +246,44 @@ function SlackAccountLink({ organizationId }: { organizationId: string }) {
   }
 
   if (link.isError && isSlackUnavailable(link.error)) return null
-  const about =
-    "Link your Slack account so Oryxa knows the messages are yours: what you ask, approve or answer in Slack counts as you."
   return (
-    <SlackSection
-      label="Your Slack account"
-      title="Your Slack account"
-      about={about}
-    >
+    <SettingsGroup label="Your Slack account">
       {returned?.status === "linked" && (
-        <p className="workspace-settings-notice" role="status">
+        <SettingsMessage tone="notice">
           Your Slack account is linked.
-        </p>
+        </SettingsMessage>
       )}
       {returned?.status === "error" && (
-        <p className="workspace-settings-error" role="alert">
+        <SettingsMessage tone="error">
           {slackLinkFailureMessage(returned.reason)}
-        </p>
+        </SettingsMessage>
       )}
       {link.isPending ? (
-        <p className="workspace-settings-hint" role="status">
-          Checking your Slack account…
-        </p>
+        <SettingsNote>Checking your Slack account…</SettingsNote>
       ) : link.isError ? (
-        <p className="workspace-settings-error" role="alert">
+        <SettingsMessage tone="error">
           {slackError(link.error, "Could not check your Slack account.")}{" "}
-          <button
-            type="button"
-            className="underline"
-            onClick={() => void link.refetch()}
-          >
+          <SettingsButton onClick={() => void link.refetch()}>
             Try again
-          </button>
-        </p>
+          </SettingsButton>
+        </SettingsMessage>
       ) : (
         <>
-          <p className="workspace-settings-hint">
-            {link.data.linked
-              ? `Linked${link.data.linked_at ? ` since ${new Date(link.data.linked_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}` : ""}.`
-              : "Not linked. Slack can't tell your messages apart from anyone else's."}
-          </p>
-          {notice && (
-            <p className="workspace-settings-notice" role="status">
-              {notice}
-            </p>
-          )}
-          {problem && (
-            <p className="workspace-settings-error" role="alert">
-              {problem}
-            </p>
-          )}
-          {confirming ? (
-            <div className="workspace-settings-confirm">
-              <p>
-                Unlink your Slack account? What you ask or approve in Slack
-                stops counting as you until you link it again.
-              </p>
-              <button
-                type="button"
-                disabled={unlink.isPending}
-                onClick={() => setConfirming(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={unlink.isPending}
-                onClick={() => unlink.mutate()}
-              >
-                {unlink.isPending ? "Unlinking…" : "Unlink"}
-              </button>
-            </div>
-          ) : (
-            <div className="workspace-slack-actions">
-              {link.data.linked ? (
-                <button
-                  type="button"
-                  className="workspace-settings-action"
+          <SettingsRow
+            media={<SlackTile />}
+            title="Your Slack account"
+            description={
+              <>
+                {link.data.linked
+                  ? `Linked${link.data.linked_at ? ` since ${new Date(link.data.linked_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}` : ""}.`
+                  : "Not linked. Slack can't tell your messages apart from anyone else's."}{" "}
+                Linked, what you ask, approve or answer in Slack counts as you.
+              </>
+            }
+          >
+            {!confirming &&
+              (link.data.linked ? (
+                <SettingsButton
                   onClick={() => {
                     setNotice("")
                     setProblem("")
@@ -315,45 +291,40 @@ function SlackAccountLink({ organizationId }: { organizationId: string }) {
                   }}
                 >
                   Unlink
-                </button>
+                </SettingsButton>
               ) : (
-                <button
-                  type="button"
-                  className="workspace-settings-action workspace-slack-add"
+                <SettingsButton
                   disabled={opening}
                   onClick={() => void startLink()}
                 >
-                  <SlackMark size={16} />
                   {opening ? "Opening Slack…" : "Link your Slack account"}
-                </button>
-              )}
-            </div>
+                </SettingsButton>
+              ))}
+          </SettingsRow>
+          {confirming && (
+            <SettingsActions start="Unlink your Slack account? What you ask or approve in Slack stops counting as you until you link it again.">
+              <SettingsButton
+                size="default"
+                disabled={unlink.isPending}
+                onClick={() => setConfirming(false)}
+              >
+                Cancel
+              </SettingsButton>
+              <SettingsButton
+                size="default"
+                tone="danger"
+                disabled={unlink.isPending}
+                onClick={() => unlink.mutate()}
+              >
+                {unlink.isPending ? "Unlinking…" : "Unlink"}
+              </SettingsButton>
+            </SettingsActions>
           )}
+          {notice && <SettingsMessage tone="notice">{notice}</SettingsMessage>}
+          {problem && <SettingsMessage tone="error">{problem}</SettingsMessage>}
         </>
       )}
-    </SlackSection>
-  )
-}
-
-function SlackSection({
-  children,
-  label = "Slack",
-  title = "Slack",
-  about,
-}: {
-  children: ReactNode
-  label?: string
-  title?: string
-  about?: string
-}) {
-  return (
-    <section className="workspace-settings-section" aria-label={label}>
-      <div className="workspace-settings-section-title">
-        <h3>{title}</h3>
-        {about && <p>{about}</p>}
-      </div>
-      {children}
-    </section>
+    </SettingsGroup>
   )
 }
 
@@ -443,96 +414,77 @@ function SlackSettings({ organizationId }: { organizationId: string }) {
 
   if (install.isPending) {
     return (
-      <SlackSection>
-        <p className="workspace-settings-hint" role="status">
-          Loading Slack…
-        </p>
-      </SlackSection>
+      <SettingsGroup label="Workspace">
+        <SettingsNote>Loading Slack…</SettingsNote>
+      </SettingsGroup>
     )
   }
   if (install.isError) {
     const denied =
       install.error instanceof ApiError && install.error.status === 403
     return (
-      <SlackSection>
+      <SettingsGroup label="Workspace">
         {isSlackUnavailable(install.error) ? (
-          <p className="workspace-settings-hint">
+          <SettingsNote>
             <strong>Slack isn't available here.</strong> This server doesn't run
             Oryxa's Slack app.
-          </p>
+          </SettingsNote>
         ) : denied ? (
-          <p className="workspace-settings-hint">{slackCopy.forbidden}</p>
+          <SettingsNote>{slackCopy.forbidden}</SettingsNote>
         ) : (
-          <p className="workspace-settings-error" role="alert">
+          <SettingsMessage tone="error">
             {slackError(install.error, "Slack could not be loaded.")}{" "}
-            <button
-              type="button"
-              className="underline"
-              onClick={() => void install.refetch()}
-            >
+            <SettingsButton onClick={() => void install.refetch()}>
               Retry
-            </button>
-          </p>
+            </SettingsButton>
+          </SettingsMessage>
         )}
-      </SlackSection>
+      </SettingsGroup>
     )
   }
 
   const data = install.data
   const active = data.status === "active"
+  const now = Date.now()
+  const name = data.team?.name || "Slack workspace"
   return (
     <>
-      <SlackSection about="Connect your Slack workspace so people can mention Oryxa, name a teammate, and ask that teammate's agent a question. The person asked chooses what their agent shares, in Slack or in Requests, before anything is answered.">
+      <SettingsGroup label="Workspace">
         {returned?.status === "connected" && (
-          <p className="workspace-settings-notice" role="status">
-            Slack is connected.
-          </p>
+          <SettingsMessage tone="notice">Slack is connected.</SettingsMessage>
         )}
         {returned?.status === "error" && (
-          <p className="workspace-settings-error" role="alert">
+          <SettingsMessage tone="error">
             {slackInstallFailureMessage(returned.reason)}
-          </p>
+          </SettingsMessage>
         )}
-        <InstallCard install={data} />
-        {notice && (
-          <p className="workspace-settings-notice" role="status">
-            {notice}
-          </p>
-        )}
-        {problem && (
-          <p className="workspace-settings-error" role="alert">
-            {problem}
-          </p>
-        )}
-        {confirmingDisconnect ? (
-          <div className="workspace-settings-confirm">
-            <p>
-              Disconnect Slack{data.team?.name ? ` from ${data.team.name}` : ""}
-              ? Oryxa's app is removed from the workspace, so nobody can ask
-              through Slack until you add it again. Requests already made stay
-              in Requests.
-            </p>
-            <button
-              type="button"
-              disabled={disconnect.isPending}
-              onClick={() => setConfirmingDisconnect(false)}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={disconnect.isPending}
-              onClick={() => disconnect.mutate()}
-            >
-              {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
-            </button>
-          </div>
-        ) : (
-          <div className="workspace-slack-actions">
-            {active ? (
-              <button
-                type="button"
-                className="workspace-settings-action"
+        <SettingsRow
+          media={<SlackTile />}
+          title={
+            data.status === "not_installed" ? "Slack isn't connected" : name
+          }
+          description={
+            data.status === "not_installed"
+              ? "Add Oryxa to a workspace you administer, so people can mention it, name a teammate and ask that teammate's agent."
+              : active
+                ? `Connected${dayPhrase(data.installed_at, now)}${
+                    data.installed_at
+                      ? ` at ${clockTime(data.installed_at)}`
+                      : ""
+                  }.`
+                : slackEndReasonMessage(data.end_reason)
+          }
+        >
+          {active ? (
+            <SettingsStatus>Connected</SettingsStatus>
+          ) : (
+            data.status !== "not_installed" && (
+              <SettingsValue>Not connected</SettingsValue>
+            )
+          )}
+          {!confirmingDisconnect &&
+            (active ? (
+              <SettingsButton
                 onClick={() => {
                   setNotice("")
                   setProblem("")
@@ -540,67 +492,46 @@ function SlackSettings({ organizationId }: { organizationId: string }) {
                 }}
               >
                 Disconnect
-              </button>
+              </SettingsButton>
             ) : (
-              <button
-                type="button"
-                className="workspace-settings-action workspace-slack-add"
+              <SettingsButton
                 disabled={adding}
                 onClick={() => void addToSlack()}
               >
-                <SlackMark size={16} />
                 {adding
                   ? "Opening Slack…"
                   : data.status === "ended"
                     ? "Add to Slack again"
                     : "Add to Slack"}
-              </button>
-            )}
-          </div>
+              </SettingsButton>
+            ))}
+        </SettingsRow>
+        {confirmingDisconnect && (
+          <SettingsActions
+            start={`Disconnect Slack${data.team?.name ? ` from ${data.team.name}` : ""}? Oryxa's app is removed from the workspace, so nobody can ask through Slack until you add it again. Requests already made stay in Requests.`}
+          >
+            <SettingsButton
+              size="default"
+              disabled={disconnect.isPending}
+              onClick={() => setConfirmingDisconnect(false)}
+            >
+              Cancel
+            </SettingsButton>
+            <SettingsButton
+              size="default"
+              tone="danger"
+              disabled={disconnect.isPending}
+              onClick={() => disconnect.mutate()}
+            >
+              {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
+            </SettingsButton>
+          </SettingsActions>
         )}
-      </SlackSection>
+        {notice && <SettingsMessage tone="notice">{notice}</SettingsMessage>}
+        {problem && <SettingsMessage tone="error">{problem}</SettingsMessage>}
+      </SettingsGroup>
       {active && <SlackChannels organizationId={organizationId} />}
     </>
-  )
-}
-
-/** Where the install stands: the workspace, and since when, or why it ended. */
-function InstallCard({ install }: { install: SlackInstall }) {
-  const now = Date.now()
-  const active = install.status === "active"
-  const name = install.team?.name || "Slack workspace"
-  return (
-    <div className="workspace-slack-card">
-      <span className="workspace-tool-logo">
-        <SlackMark size={23} />
-      </span>
-      <div>
-        {install.status === "not_installed" ? (
-          <>
-            <strong>Slack isn't connected</strong>
-            <small>Add Oryxa to a workspace you administer.</small>
-          </>
-        ) : (
-          <>
-            <strong>{name}</strong>
-            <small>
-              {active
-                ? `Connected${dayPhrase(install.installed_at, now)}${
-                    install.installed_at
-                      ? ` at ${clockTime(install.installed_at)}`
-                      : ""
-                  }.`
-                : slackEndReasonMessage(install.end_reason)}
-            </small>
-          </>
-        )}
-      </div>
-      {install.status !== "not_installed" && (
-        <span className="workspace-slack-status" data-status={install.status}>
-          {active ? "Connected" : "Not connected"}
-        </span>
-      )}
-    </div>
   )
 }
 
@@ -647,39 +578,28 @@ function SlackChannels({ organizationId }: { organizationId: string }) {
   })
 
   const section = (body: ReactNode) => (
-    <SlackSection
-      label="High-priority channels"
-      title="High-priority channels"
-      about="In a private channel you mark, a question is answered without asking each person it names, and the answer is posted in the thread. Each person is told at once, and it shows in Requests → Activity. Only private channels that no other organisation shares can be marked, and Oryxa checks that again each time. Invite the Oryxa app to a channel in Slack first."
-    >
+    <SettingsGroup label="High-priority channels">
+      <SettingsRow description="In a private channel you mark, a question is answered without asking each person it names, and the answer is posted in the thread. Each person is told at once, and it shows in Requests → Activity. Only private channels that no other organisation shares can be marked, and Oryxa checks that again each time. Invite the Oryxa app to a channel in Slack first." />
       {body}
-    </SlackSection>
+    </SettingsGroup>
   )
 
   if (channels.isPending) {
-    return section(
-      <p className="workspace-settings-hint" role="status">
-        Loading channels…
-      </p>
-    )
+    return section(<SettingsNote>Loading channels…</SettingsNote>)
   }
   if (channels.isError) {
     return section(
       isSlackUnavailable(channels.error) ? (
-        <p className="workspace-settings-hint">
+        <SettingsNote>
           <strong>Slack isn't available here.</strong>
-        </p>
+        </SettingsNote>
       ) : (
-        <p className="workspace-settings-error" role="alert">
+        <SettingsMessage tone="error">
           {slackError(channels.error, "Channels could not be loaded.")}{" "}
-          <button
-            type="button"
-            className="underline"
-            onClick={() => void channels.refetch()}
-          >
+          <SettingsButton onClick={() => void channels.refetch()}>
             Retry
-          </button>
-        </p>
+          </SettingsButton>
+        </SettingsMessage>
       )
     )
   }
@@ -702,13 +622,12 @@ function SlackChannels({ organizationId }: { organizationId: string }) {
         : `${channelName(channel)} is not high priority.`,
     })
   }
-
   if (listed.length === 0) {
     return section(
-      <p className="workspace-settings-hint">
+      <SettingsNote>
         The Oryxa app isn't in any private channel yet. Invite it to one in
         Slack, and it appears here.
-      </p>
+      </SettingsNote>
     )
   }
 
@@ -729,9 +648,9 @@ function SlackChannels({ organizationId }: { organizationId: string }) {
             : undefined
           return (
             <div role="listitem" key={channel.channel_id}>
-              <div className="workspace-settings-row">
-                <div>
-                  <strong>
+              <SettingsRow
+                title={
+                  <>
                     {channel.is_private && (
                       <Lock
                         size={12}
@@ -741,78 +660,66 @@ function SlackChannels({ organizationId }: { organizationId: string }) {
                       />
                     )}
                     {channelName(channel)}
-                  </strong>
-                  <small>
-                    {channel.high_priority && channel.markable
-                      ? `Marked${marker ? ` by ${marker}` : ""}${dayPhrase(channel.marked_at, now)}.`
-                      : channel.high_priority
-                        ? "Oryxa can no longer see this channel, or it is shared now, so the mark does nothing. Unmark it."
-                        : channel.markable
-                          ? "Not marked."
-                          : "Shared with another organisation, so it can't be marked."}
-                  </small>
-                </div>
+                  </>
+                }
+                description={
+                  channel.high_priority && channel.markable
+                    ? `Marked${marker ? ` by ${marker}` : ""}${dayPhrase(channel.marked_at, now)}.`
+                    : channel.high_priority
+                      ? "Oryxa can no longer see this channel, or it is shared now, so the mark does nothing. Unmark it."
+                      : channel.markable
+                        ? "Not marked."
+                        : "Shared with another organisation, so it can't be marked."
+                }
+              >
                 {channel.markable ? (
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-label={`High priority for ${channelName(channel)}`}
-                    aria-checked={on}
-                    className="workspace-settings-switch"
+                  <SettingsSwitch
+                    label={`High priority for ${channelName(channel)}`}
+                    checked={on}
                     disabled={busy}
-                    onClick={() =>
-                      on
-                        ? mark(channel, false)
-                        : setConfirming(channel.channel_id)
+                    onCheckedChange={(next) =>
+                      next
+                        ? setConfirming(channel.channel_id)
+                        : mark(channel, false)
                     }
-                  >
-                    <span />
-                  </button>
+                  />
                 ) : (
                   channel.high_priority && (
-                    <button
-                      type="button"
+                    <SettingsButton
                       disabled={busy}
                       onClick={() => mark(channel, false)}
                     >
                       Unmark
-                    </button>
+                    </SettingsButton>
                   )
                 )}
-              </div>
+              </SettingsRow>
               {confirming === channel.channel_id && (
-                <div className="workspace-settings-confirm">
-                  <p>
-                    Answer questions in {channelName(channel)} without asking
-                    each person they name? Answers are posted in the thread, and
-                    each person is told. You can turn this off any time.
-                  </p>
-                  <button type="button" onClick={() => setConfirming(null)}>
+                <SettingsActions
+                  start={`Answer questions in ${channelName(channel)} without asking each person they name? Answers are posted in the thread, and each person is told. You can turn this off any time.`}
+                >
+                  <SettingsButton
+                    size="default"
+                    onClick={() => setConfirming(null)}
+                  >
                     Cancel
-                  </button>
-                  <button
-                    type="button"
+                  </SettingsButton>
+                  <SettingsButton
+                    size="default"
+                    tone="primary"
                     disabled={busy}
                     onClick={() => mark(channel, true)}
                   >
                     Mark high priority
-                  </button>
-                </div>
+                  </SettingsButton>
+                </SettingsActions>
               )}
             </div>
           )
         })}
       </div>
-      {notice && (
-        <p className="workspace-settings-notice" role="status">
-          {notice}
-        </p>
-      )}
-      {problem && (
-        <p className="workspace-settings-error" role="alert">
-          {problem}
-        </p>
-      )}
+      {notice && <SettingsMessage tone="notice">{notice}</SettingsMessage>}
+      {problem && <SettingsMessage tone="error">{problem}</SettingsMessage>}
     </>
   )
 }
