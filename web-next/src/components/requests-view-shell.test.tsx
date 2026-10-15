@@ -194,7 +194,7 @@ describe("Requests in the workspace shell", () => {
     }
   )
 
-  it("is the fourth item of Agents' navigation, and opens the page", async () => {
+  it("is the last item of Agents' navigation, and opens the page", async () => {
     renderShell()
 
     const navigation = await screen.findByRole("navigation", {
@@ -206,6 +206,7 @@ describe("Requests in the workspace shell", () => {
         .map((button) => button.textContent)
     ).toEqual([
       "Agent overview",
+      "Chats",
       "Multi-agent teams",
       "Specialists",
       "Requests",

@@ -14,6 +14,8 @@ export function AgentSession({
   chatSlotRef,
   chatLabel,
   workLabel,
+  list,
+  work = "tabs",
   children,
 }: {
   /** Receives the conversation column, for the panel to move its chat into. */
@@ -22,6 +24,10 @@ export function AgentSession({
   chatLabel: string
   /** What the work column holds, for assistive technology. */
   workLabel: string
+  /** A column before the chat: the Chats page's list. */
+  list?: ReactNode
+  /** Whether the work column shows its tabs or a viewer (a file, something live). */
+  work?: "tabs" | "viewer"
   /** The work: the overview, a file viewer or a live pane. */
   children: ReactNode
 }) {
@@ -39,7 +45,12 @@ export function AgentSession({
     [chatSlotRef]
   )
   return (
-    <main className="workspace-focus-layout workspace-primary-focus-layout agent-session">
+    <main
+      className="workspace-focus-layout workspace-primary-focus-layout agent-session"
+      data-list={list ? "true" : undefined}
+      data-work={work}
+    >
+      {list}
       <section
         ref={slotRef}
         className="workspace-conversation agent-session-chat"

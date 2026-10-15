@@ -108,7 +108,7 @@ not permission to copy every incidental value into a new component.
   | --- | --- |
   | Home | My workspace, Library, Tools |
   | Team | Teamspaces, People, then up to three visible recent conversations |
-  | Agents | Agent overview, Requests, Multi-agent teams, Specialists |
+  | Agents | Agent overview, Chats, Multi-agent teams, Specialists, Requests |
 
 - The shared workspace header is compact (56px at normal desktop/mobile
   widths), with its title centered. It contains the **current context**:
@@ -220,6 +220,21 @@ not permission to copy every incidental value into a new component.
   (Organisation, People & invitations, Teams, Billing) and Connections (Tool
   access, Sign-in apps, Slack, Email), on one tile, the open page the raised
   tile.
+- **Chats** (ChatsNew; `chats-page.tsx`): the member's chats with their
+  agent as a page. It is the agent session (a focused view, the header
+  "Chats · Only you see these") with a 280px list tile before the chat:
+  Search chats (by title, in the page), Today and Earlier groups, each row
+  its title and how long ago, "Needs approval" where that is known (the open
+  chat, or details the chat already read; the list never reads every
+  transcript to mark itself), the open chat the raised tile, and New chat.
+  Picking a row moves the one primary chat to it through the same queue Home
+  uses, so drafts and unsent messages behave as anywhere else; while a run
+  works the other rows wait, and say so. The chat's own History disclosure is
+  hidden here. Narrower than 1180px the work column gives way to the list
+  until a file or live pane opens, and then the list gives way. The chat's
+  bar says who sees it ("Only you · Krude") and has a ⋯ menu with Delete
+  (a confirm: Cancel, then the destructive Delete); there is no Rename and
+  no file count on a row until Go can say them (#322).
 - **Chats and DMs as tiles** (founder's redesign, 14 Oct 2026). The open
   chat in the chat list is the raised tile and the others lift on hover; DM
   rows are rounded the same way, with unread as a filled count. The member's

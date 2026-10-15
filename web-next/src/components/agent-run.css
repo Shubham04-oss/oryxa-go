@@ -6,6 +6,20 @@
   gap: 18px;
 }
 
+/* The conversation's bar: its title, who sees it, and its ⋯ menu. */
+.workspace-agent-thread-heading {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.workspace-agent-thread-privacy {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
 /* The member's task: left-aligned, no bubble, who and when above it. The
    same goes for a first message still being sent, and one that was not. */
 .agent-turn {

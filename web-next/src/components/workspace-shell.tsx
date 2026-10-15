@@ -11,6 +11,7 @@ import {
   Inbox,
   LayoutGrid,
   LogOut,
+  MessagesSquare,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
@@ -25,6 +26,7 @@ import { FocusHeader } from "./agents-parts"
 import { PrimaryAgentFileViewer } from "./primary-agent-files"
 import { AgentSession } from "./agent-session"
 import { SessionWorkTabs } from "./agent-session-work"
+import { ChatsList } from "./chats-page"
 import type { SessionWorkTab } from "./agent-session-work"
 import { BrandChip } from "./brand-chip"
 import { HomeOverview } from "./home-overview"
@@ -88,6 +90,7 @@ type Section =
   | "teamspaces"
   | "people"
   | "agents"
+  | "chats"
   | "multi-agents"
   | "specialists"
   | "requests"
@@ -112,6 +115,7 @@ const navigation: Record<PrimaryMode, NavigationItem[]> = {
   ],
   agents: [
     { key: "agents", label: "Agent overview", icon: ChartNoAxesColumn },
+    { key: "chats", label: "Chats", icon: MessagesSquare },
     { key: "multi-agents", label: "Multi-agent teams", icon: Workflow },
     { key: "specialists", label: "Specialists", icon: Bot },
     { key: "requests", label: "Requests", icon: Inbox },
@@ -138,6 +142,7 @@ const headings: Record<Section, string> = {
   overview: "My workspace",
   teamspaces: "Teamspaces",
   agents: "Agent overview",
+  chats: "Chats",
   "multi-agents": "Multi-agent teams",
   specialists: "Specialists",
   requests: "Requests",
@@ -224,6 +229,8 @@ function WorkspaceShellContent({
   const [requestFocus, setRequestFocus] = useState<string | null>(null)
   const agentsMode = useAgentsMode()
   const [primaryWork, setPrimaryWork] = useState(false)
+  // The session opened as the Chats page: the list beside the chat.
+  const [primaryChats, setPrimaryChats] = useState(false)
   // The agent session's conversation column, which the agent panel moves its
   // mounted chat into while the session is open.
   const [primaryChatSlot, setPrimaryChatSlot] = useState<HTMLElement | null>(
@@ -455,6 +462,10 @@ function WorkspaceShellContent({
 
   /** The one sidebar: each page belongs to a mode, and picking it opens both. */
   function selectNav(mode: PrimaryMode, next: Section) {
+    if (next === "chats") {
+      openChats()
+      return
+    }
     if (next === "requests") {
       openRequestsSection()
       if (isMobile) setLeftExpanded(false)
@@ -525,7 +536,16 @@ function WorkspaceShellContent({
     setRightExpanded(false)
   }
 
+  /** The Chats page: the agent session with the member's chats listed beside it. */
+  function openChats() {
+    setPrimaryViewer("overview")
+    setPrimaryFile(null)
+    setPrimaryChats(true)
+    openPrimaryWork()
+  }
+
   function openAgentOverview() {
+    setPrimaryChats(false)
     setPrimaryViewer("overview")
     setPrimaryFile(null)
     openPrimaryWork()
@@ -577,6 +597,7 @@ function WorkspaceShellContent({
 
   function closePrimaryWork() {
     setPrimaryWork(false)
+    setPrimaryChats(false)
     setPrimaryComposing(false)
   }
 
@@ -869,8 +890,8 @@ function WorkspaceShellContent({
         {primaryWork && selectedOrganization ? (
           <div className="workspace-focus workspace-primary-focus">
             <FocusHeader
-              title="Agent overview"
-              kind="Primary agent"
+              title={primaryChats ? "Chats" : "Agent overview"}
+              kind={primaryChats ? "Only you see these" : "Primary agent"}
               onBack={closePrimaryWork}
             />
             <AgentSession
@@ -880,6 +901,34 @@ function WorkspaceShellContent({
                 "primary agent"
               }`}
               workLabel="Agent overview work panel"
+              work={primaryViewer === "overview" ? "tabs" : "viewer"}
+              list={
+                primaryChats && directMessages ? (
+                  <ChatsList
+                    organizationId={selectedOrganization.id}
+                    viewerId={directMessages.viewerId}
+                    agentName={
+                      ownAgents.data && primaryAgent(ownAgents.data)?.name
+                    }
+                    selected={primaryThreadId}
+                    waitingThread={
+                      primaryChatActivity?.state === "waiting"
+                        ? primaryChatActivity.threadId
+                        : null
+                    }
+                    busy={primaryChatActivity?.state === "running"}
+                    onOpen={(target) =>
+                      requestPrimaryChat(
+                        {
+                          organizationId: selectedOrganization.id,
+                          userId: directMessages.viewerId,
+                        },
+                        target
+                      )
+                    }
+                  />
+                ) : undefined
+              }
             >
               {primaryViewer === "live" && primaryLive ? (
                 <LivePane
