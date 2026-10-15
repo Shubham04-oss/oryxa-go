@@ -615,6 +615,29 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
   })
 
+  it("opens the jump-to palette with ⌘K and from the sidebar's search", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    )
+    Element.prototype.scrollIntoView = vi.fn()
+    render(<WorkspaceShell />)
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true })
+    expect(await screen.findByRole("dialog", { name: "Jump to" })).toBeTruthy()
+    fireEvent.keyDown(window, { key: "k", metaKey: true })
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Jump to" })).toBeNull()
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Search or jump to" }))
+    expect(await screen.findByRole("dialog", { name: "Jump to" })).toBeTruthy()
+  })
+
   it("opens the member's chats with their agent in the panel's history", async () => {
     render(<WorkspaceShell />)
 

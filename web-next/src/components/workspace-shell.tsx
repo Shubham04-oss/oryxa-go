@@ -7,6 +7,10 @@ import { PrimaryAgentFileViewer } from "./primary-agent-files"
 import { BrandChip } from "./brand-chip"
 import { HomeOverview } from "./home-overview"
 import { WorkspaceSidebar, sectionArea } from "./workspace-sidebar"
+import {
+  WorkspaceCommandPalette,
+  useCommandPalette,
+} from "./workspace-command-palette"
 import type { SidebarPage, SidebarSection } from "./workspace-sidebar"
 import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import { KnowledgeBases } from "./knowledge-bases"
@@ -148,6 +152,8 @@ function WorkspaceShellContent({
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState("")
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // ⌘K: jump anywhere (workspace-command-palette.tsx).
+  const [paletteOpen, setPaletteOpen] = useCommandPalette()
   // The page Settings opens on, when a link asked for one.
   const [settingsPage, setSettingsPage] = useState<SettingsPage>()
   // The request a link or a note named, which Requests opens first.
@@ -626,6 +632,7 @@ function WorkspaceShellContent({
           onSignOut={session ? () => void handleSignOut() : undefined}
           signingOut={signingOut}
           signOutError={signOutError}
+          onSearch={() => setPaletteOpen(true)}
         />
       )}
 
@@ -882,6 +889,25 @@ function WorkspaceShellContent({
           }}
         />
       )}
+      <WorkspaceCommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        organizationId={session ? selectedOrganization?.id : undefined}
+        viewerId={viewerId}
+        viewerName={session?.user.display_name || undefined}
+        teamspaces={teamspaces.spaces}
+        nameOf={dmPeople.nameOf}
+        onOpenTeamspace={(id) => {
+          closePrimaryWork()
+          agentsMode.close()
+          openTeamspace(id)
+        }}
+        onOpenRequest={openRequestsSection}
+        onOpenChat={(threadId) =>
+          openHomeConversation({ kind: "thread", threadId })
+        }
+        onAsk={(message) => openHomeConversation({ kind: "new", message })}
+      />
     </div>
   )
 }
