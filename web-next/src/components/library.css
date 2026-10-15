@@ -92,6 +92,36 @@
 .library-rail-dot[data-tone="4"] { background: var(--collection-4); }
 .library-rail-dot[data-tone="5"] { background: var(--collection-5); }
 .library-rail-dot[data-tone="6"] { background: var(--collection-6); }
+/* Sources: each connected app's mark on its white tile (DESIGN.md §1). */
+.library-rail-heading-sources {
+  margin-top: 12px;
+}
+.library-rail-logo {
+  display: inline-grid;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--logo-tile);
+  box-shadow: inset 0 0 0 1px var(--logo-tile-border);
+  color: var(--logo-ink);
+  font-size: 10px;
+  font-weight: 700;
+}
+.library-rail-logo svg {
+  width: 12px;
+  height: 12px;
+}
+.library-rail-logo svg[fill="#FFFFFF"],
+.library-rail-logo svg[fill="#ffffff"] {
+  filter: invert(1);
+}
+.library-rail-hint {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
 
 /* The right pane: search and Add files, then the collection or All files. */
 .library-main {

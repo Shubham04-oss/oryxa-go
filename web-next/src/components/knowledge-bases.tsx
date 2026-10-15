@@ -59,7 +59,8 @@ import {
 } from "./knowledge-format"
 import { LibraryFileTable } from "./library-file-table"
 import type { LibraryFile } from "./library-file-table"
-import { LibraryRail } from "./library-rail"
+import { LibraryRail, librarySources } from "./library-rail"
+import { LibrarySourceFiles } from "./library-source-files"
 import "./library.css"
 
 /** The collection open in the Library; null is All files. */
@@ -447,7 +448,15 @@ function LibraryPage({
   const queryClient = useQueryClient()
   const [filter, setFilter] = useState("")
   const [notice, setNotice] = useState("")
+  // The connected app whose files are open, by provider; a collection or
+  // All files clears it.
+  const [sourceProvider, setSourceProvider] = useState<string | null>(null)
   const members = useQuery(membersQueryOptions(organizationId))
+  const sourcesQuery = useQuery(sourcesQueryOptions(organizationId))
+  const sources = librarySources(sourcesQuery.data ?? [])
+  const source = selected
+    ? undefined
+    : sources.find((item) => item.provider === sourceProvider)
   const writable = corpora.filter((corpus) =>
     canAddToCollection(corpus, viewer)
   )
@@ -457,7 +466,8 @@ function LibraryPage({
   useEffect(() => {
     setFilter("")
     setNotice("")
-  }, [selected?.id])
+    if (selected) setSourceProvider(null)
+  }, [selected?.id, sourceProvider])
 
   function openAdding() {
     setNotice("")
@@ -492,15 +502,22 @@ function LibraryPage({
     <div className="library">
       <LibraryRail
         corpora={corpora}
+        sources={sources}
         selectedId={selected?.id ?? null}
-        onSelect={(corpus) =>
+        selectedSource={source?.provider ?? null}
+        onSelect={(corpus) => {
+          setSourceProvider(null)
           onSelect(corpus ? { id: corpus.id, name: corpus.name } : null)
-        }
+        }}
+        onSelectSource={(provider) => {
+          setSourceProvider(provider)
+          if (selected) onSelect(null)
+        }}
         onCreate={onCreate}
       />
       <section
         className="library-main"
-        aria-label={selected ? selected.name : "All files"}
+        aria-label={selected?.name ?? source?.name ?? "All files"}
       >
         <div className="library-bar">
           <label className="library-search">
@@ -513,7 +530,9 @@ function LibraryPage({
               placeholder={
                 selected
                   ? `Search ${selected.name}`
-                  : `Search ${librarySummary(fileCount)}`
+                  : source
+                    ? `Search ${source.name}`
+                    : `Search ${librarySummary(fileCount)}`
               }
             />
           </label>
@@ -544,6 +563,16 @@ function LibraryPage({
               onAdd({ collectionId: selected.id })
             }}
             onClose={() => onSelect(null)}
+            onOpenTools={onOpenTools}
+          />
+        ) : source ? (
+          <LibrarySourceFiles
+            key={source.provider}
+            organizationId={organizationId}
+            source={source}
+            corpora={corpora}
+            members={members.data ?? []}
+            filter={filter}
             onOpenTools={onOpenTools}
           />
         ) : (

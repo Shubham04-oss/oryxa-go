@@ -714,7 +714,13 @@ not permission to copy every incidental value into a new component.
   knowledge sources). The left rail lists All files, then each collection (a
   rag corpus) with a coloured dot (`--collection-1…6`, picked from its id;
   rag stores no colour) and its count; the open one is the raised tile, and a
-  quiet "+" at Collections opens New collection in a dialog. The right pane
+  quiet "+" at Collections opens New collection in a dialog. Under them,
+  Sources lists each connected app the member's agents read (their knowledge
+  sources, one entry per provider, its mark on the logo tile), with a quiet
+  "Paused" or "Reconnect" when none of its sources runs; there is no count,
+  since no route counts a source's files. Choosing one shows the files the
+  connected-apps collection holds from that app (`metadata.provider`), as
+  far as they are loaded, with Manage in Tools. The right pane
   has a pill search that filters the loaded titles and the one primary, Add
   files (in All files it first asks which collection, among those the member
   may add to). A file table (kind badge, name with its tags and sub-line,
