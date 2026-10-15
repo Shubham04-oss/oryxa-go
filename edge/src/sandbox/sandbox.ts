@@ -252,7 +252,7 @@ export class SandboxDO extends DurableObject<Env> {
       case "files/list":
         return this.listFiles(query["path"] ?? "", events);
       case "files/read":
-        return this.readFiles(ReadFilesRequest.parse(body).paths, events);
+        return this.readFiles(ReadFilesRequest.parse(body), events);
       case "files/write":
         return this.writeFiles(WriteFilesRequest.parse(body), events);
       case "files/remove":
@@ -397,10 +397,10 @@ export class SandboxDO extends DurableObject<Env> {
     };
   }
 
-  private async readFiles(paths: string[], events: ChildEvent[]): Promise<{ files: FileContent[] }> {
+  private async readFiles({ paths, maxBytes }: ReadFilesRequest, events: ChildEvent[]): Promise<{ files: FileContent[] }> {
     if (paths.length > MAX_PATHS) throw new EdgeError("invalid_request", `at most ${MAX_PATHS} paths`);
     const { workspace } = await this.started(events);
-    let budget = READ_BUDGET;
+    let budget = Math.min(maxBytes ?? READ_BUDGET, MAX_ARTIFACT_BYTES);
     const files: FileContent[] = [];
     for (const raw of paths) {
       const path = resolvePath(raw);

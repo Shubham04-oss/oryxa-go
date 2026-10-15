@@ -168,7 +168,7 @@ describe("Requests in the workspace shell", () => {
     async (target) => {
       renderShell({ mode: "home" })
       const teammates = await screen.findByRole("region", {
-        name: "Teammates",
+        name: "Needs you",
       })
       fireEvent.click(
         await within(teammates).findByRole("button", {
@@ -194,24 +194,26 @@ describe("Requests in the workspace shell", () => {
     }
   )
 
-  it("is the fourth item of Agents' navigation, and opens the page", async () => {
+  it("is in the sidebar's first tile, with what waits, and opens the page", async () => {
     renderShell()
 
     const navigation = await screen.findByRole("navigation", {
-      name: "Agents navigation",
+      name: "Workspace",
     })
     expect(
       within(navigation)
         .getAllByRole("button")
+        .slice(0, 3)
         .map((button) => button.textContent)
-    ).toEqual([
-      "Agent overview",
-      "Multi-agent teams",
-      "Specialists",
-      "Requests",
-    ])
+    ).toEqual(["My workspace", "Requests", "Chats with your agent"])
+    // How many wait on the member, from the inbox.
+    expect(
+      await within(navigation).findByRole("button", {
+        name: /^Requests, \d+ waiting$/,
+      })
+    ).toBeTruthy()
     fireEvent.click(
-      within(navigation).getByRole("button", { name: "Requests" })
+      within(navigation).getByRole("button", { name: /^Requests/ })
     )
 
     expect(
@@ -221,16 +223,39 @@ describe("Requests in the workspace shell", () => {
     await screen.findAllByText("Share the pipeline total.")
     expect(
       within(navigation)
-        .getByRole("button", { name: "Requests" })
+        .getByRole("button", { name: /^Requests/ })
         .getAttribute("aria-current")
     ).toBe("page")
   })
 
-  it("is where the Agent overview's Requests waiting tile leads", async () => {
+  it("gives the open request the width and says in the header how many wait", async () => {
+    const { container } = renderShell()
+    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
+    expect(
+      container.querySelector(".workspace-shell")?.getAttribute("data-right")
+    ).toBe("expanded")
+
+    const navigation = await screen.findByRole("navigation", {
+      name: "Workspace",
+    })
+    fireEvent.click(
+      within(navigation).getByRole("button", { name: /^Requests/ })
+    )
+
+    expect(
+      container.querySelector(".workspace-shell")?.getAttribute("data-right")
+    ).toBe("collapsed")
+    const header = container.querySelector(".workspace-header") as HTMLElement
+    expect(
+      await within(header).findByText(/^(\d+ waiting for you|All clear)$/)
+    ).toBeTruthy()
+  })
+
+  it("is where the Agent overview's waiting-for-you number leads", async () => {
     renderShell()
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "View requests" })
+      await screen.findByRole("button", { name: / waiting for you$/ })
     )
 
     expect(
@@ -250,9 +275,7 @@ describe("Requests in the workspace shell", () => {
     ).toBeTruthy()
     const opened = await screen.findByRole("region", { name: "Opened request" })
     await within(opened).findByText("A linked ask.")
-    expect(
-      screen.getByRole("navigation", { name: "Agents navigation" })
-    ).toBeTruthy()
+    expect(screen.getByRole("navigation", { name: "Workspace" })).toBeTruthy()
   })
 
   it("opens the request an address names, as the page opens", async () => {
@@ -278,7 +301,7 @@ describe("Requests in the workspace shell", () => {
     await screen.findByRole("region", { name: "Opened request" })
 
     const navigation = screen.getByRole("navigation", {
-      name: "Agents navigation",
+      name: "Workspace",
     })
     fireEvent.click(
       within(navigation).getByRole("button", { name: "Specialists" })
@@ -289,7 +312,7 @@ describe("Requests in the workspace shell", () => {
       ).toBeTruthy()
     )
     fireEvent.click(
-      within(navigation).getByRole("button", { name: "Requests" })
+      within(navigation).getByRole("button", { name: /^Requests/ })
     )
 
     await screen.findByRole("tab", { name: /Inbox/ })
@@ -348,11 +371,11 @@ describe("Requests in the workspace shell", () => {
         )
       }
       const navigation = screen.getByRole("navigation", {
-        name: "Agents navigation",
+        name: "Workspace",
       })
       expect(
         within(navigation)
-          .getByRole("button", { name: "Requests" })
+          .getByRole("button", { name: /^Requests/ })
           .getAttribute("aria-current")
       ).toBe("page")
       if (linked) {
