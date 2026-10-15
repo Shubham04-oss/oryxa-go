@@ -1,0 +1,142 @@
+// The connector contract (oryxa-platform#8, #9 §3). A connector is a process the connector host
+// calls over gRPC, written in any language. It never holds a provider credential: every call
+// carries an Egress, and the connector sends provider requests through the broker egress proxy
+// (connectors/broker-proxy.json). It never publishes events or writes storage either: it emits
+// changes on the Sync stream and the host validates, stores and announces them.
+//
+// Compatibility: additive changes only. A breaking change is a new package (v2).
+syntax = "proto3";
+
+package oryxa.connector.v1;
+
+service Connector {
+  // The manifest this process implements; the host checks it against the one it registered.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+
+  // Reads one stream and emits its changes in order. A Checkpoint covers everything emitted
+  // before it: the host stores it only after those changes are durable, and the next run
+  // resumes from it. Ending the stream without a final Checkpoint means the run failed.
+  // Egress handles live at most 5 minutes and a run at most 30, and the host gives up on a
+  // stream that is silent for 60 s: emit a Checkpoint at least every minute (or every few
+  // hundred items) wherever the provider allows resuming, so a cut-off run loses little.
+  rpc Sync(SyncRequest) returns (stream SyncEvent);
+
+  // Runs one tool from the manifest's tools[]. The host validated the input against the tool's
+  // input_schema and validates the output against its output_schema (at most 256 KiB); the call
+  // has a 30 s deadline.
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+}
+
+// How to reach the provider: the broker origin, and one short-lived egress handle per token kind
+// the connection holds (e.g. Slack: bot, user). Handles act for the user the host names.
+message Egress {
+  string broker_origin = 1;
+  map<string, string> handles = 2;
+}
+
+// Per-connection values the connector may need to build URLs. Never secrets.
+message ConnectionContext {
+  string connection_id = 1;
+  string config_json = 2;              // manifest `config` values, schema-checked
+  map<string, string> outputs = 3;     // manifest `outputs`, e.g. Jira cloud_id
+}
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  string manifest_json = 1;
+  string implementation_version = 2;   // free-form, for logs
+}
+
+enum SyncMode {
+  SYNC_MODE_UNSPECIFIED = 0;
+  SYNC_MODE_FULL = 1;          // everything; checkpoint is empty
+  SYNC_MODE_INCREMENTAL = 2;   // changes since checkpoint
+  SYNC_MODE_WEBHOOK = 3;       // changes described by one verified webhook delivery
+}
+
+message SyncRequest {
+  ConnectionContext connection = 1;
+  string stream = 2;           // manifest streams[].name
+  SyncMode mode = 3;
+  bytes checkpoint = 4;        // opaque to the host, as last emitted; empty on a full sync
+  Egress egress = 5;
+  bytes webhook_body = 6;      // SYNC_MODE_WEBHOOK: the delivery, already verified by the ingress
+}
+
+message SyncEvent {
+  oneof event {
+    Upsert upsert = 1;
+    Delete delete = 2;
+    SetAcl set_acl = 3;
+    Checkpoint checkpoint = 4;
+  }
+}
+
+message Item {
+  string id = 1;               // stable provider id: [A-Za-z0-9._:@/+=-], 1..256, no ".."
+  string kind = 2;             // [a-z_]: file | folder | issue | comment | message | channel | page | ...
+  string title = 3;            // at most 1 KiB
+  string url = 4;              // https link back to the provider, for citations
+  string parent_id = 5;        // same rules as id; empty at the top
+  int64 updated_at_ms = 6;     // provider's modification time, Unix milliseconds
+  string mime_type = 7;
+  bytes content = 8;           // text to index, at most 1 MiB; empty when there is none
+  map<string, string> metadata = 9;  // at most 32 small, non-secret entries
+}
+
+// Who may read an item, as the provider says. Principals are the provider's own (ids or emails);
+// the host maps them to Oryxa users and groups (#29, #30).
+message Acl {
+  repeated string users = 1;
+  repeated string groups = 2;
+  string domain = 3;           // anyone in this email domain (within the tenant)
+  bool anyone_in_tenant = 4;   // provider-wide sharing; never means the public
+}
+
+message Upsert {
+  Item item = 1;
+  Acl acl = 2;                 // required: an item without an ACL is visible to no one
+}
+
+message Delete {
+  string id = 1;
+}
+
+message SetAcl {
+  string id = 1;
+  Acl acl = 2;
+}
+
+message Checkpoint {
+  bytes cursor = 1;            // at most 64 KiB
+}
+
+message InvokeRequest {
+  ConnectionContext connection = 1;
+  string tool = 2;             // manifest tools[].name
+  string input_json = 3;       // already validated against the tool's input_schema
+  Egress egress = 4;
+  ActingUser acting = 5;       // who asked; unset for a run with no asker (e.g. a scheduled agent)
+}
+
+// The person a tool call is for. A shared token (bot, site) sees more than they do, so a connector
+// reading restricted resources with one checks them against this user, and fails closed (forbidden)
+// when it is unset.
+message ActingUser {
+  string chat_user = 1;        // platform user key from the linked chat identity (Slack: user id); never an email
+  string user_id = 2;          // Oryxa user id
+}
+
+message InvokeResponse {
+  oneof result {
+    string output_json = 1;
+    ToolError error = 2;
+  }
+}
+
+message ToolError {
+  string code = 1;             // [a-z_]: not_found | forbidden | invalid_input | rate_limited | needs_reauth | provider_error
+  string message = 2;          // safe to show the user; no tokens, no request URLs
+  bool retryable = 3;
+}

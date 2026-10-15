@@ -1,0 +1,1725 @@
+{
+  "id": "gcalendar",
+  "version": 1,
+  "display_name": "Google Calendar",
+  "description": "See your calendar, find free time and schedule events.",
+  "connection_levels": [
+    "personal"
+  ],
+  "auth": {
+    "credential_modes": [
+      "platform",
+      "tenant_app"
+    ],
+    "oauth2": {
+      "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+      "token_url": "https://oauth2.googleapis.com/token",
+      "revoke_url": "https://oauth2.googleapis.com/revoke",
+      "pkce": true,
+      "authorization_params": {
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true"
+      },
+      "token_kinds": [
+        {
+          "name": "default",
+          "scopes": [
+            "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+            "https://www.googleapis.com/auth/calendar.events.readonly",
+            "https://www.googleapis.com/auth/calendar.freebusy",
+            "https://www.googleapis.com/auth/calendar.events",
+            "https://www.googleapis.com/auth/calendar.acls.readonly"
+          ]
+        }
+      ],
+      "refresh": {
+        "ahead_seconds": 300,
+        "rotates": false
+      }
+    }
+  },
+  "base_url": "https://www.googleapis.com",
+  "egress_allowlist": [
+    "accounts.google.com",
+    "oauth2.googleapis.com",
+    "www.googleapis.com"
+  ],
+  "verify": {
+    "path": "/calendar/v3/users/me/calendarList/primary"
+  },
+  "rate_limit": {
+    "max_concurrency": 8,
+    "retry_headers": [
+      "Retry-After"
+    ]
+  },
+  "tools": [
+    {
+      "name": "gcalendar.list_calendars",
+      "description": "List the calendars the user has in their calendar list (their own, shared with them, and subscribed), with their access role. Use to find a calendar id other than `primary`.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "calendars"
+        ],
+        "properties": {
+          "calendars": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "summary",
+                "primary",
+                "access_role",
+                "time_zone"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "primary": {
+                  "type": "boolean"
+                },
+                "access_role": {
+                  "type": "string",
+                  "enum": [
+                    "freeBusyReader",
+                    "reader",
+                    "writer",
+                    "owner"
+                  ]
+                },
+                "time_zone": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
+      ]
+    },
+    {
+      "name": "gcalendar.list_events",
+      "description": "List events in a time window, soonest first, with recurring events expanded into single occurrences; optionally filtered by free text. Use for \"what's on my calendar\", agendas, and to find an event id. The window is at most 366 days; descriptions are capped at 8 KB.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "time_min",
+          "time_max"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "string",
+            "maxLength": 254,
+            "pattern": "^(primary|[A-Za-z0-9._%+#-]{1,200}@[A-Za-z0-9.-]{1,200})$",
+            "description": "`primary`, or a calendar id from list_calendars (people's calendars are their email).",
+            "default": "primary"
+          },
+          "time_min": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$",
+            "description": "RFC 3339 with an offset, e.g. 2026-10-12T15:00:00+05:30."
+          },
+          "time_max": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$",
+            "description": "RFC 3339 with an offset, e.g. 2026-10-12T15:00:00+05:30."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 20
+          },
+          "page_token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_=-]+$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "calendar_id",
+                "status",
+                "summary",
+                "description",
+                "location",
+                "start",
+                "end",
+                "all_day",
+                "time_zone",
+                "organizer",
+                "attendees",
+                "html_link",
+                "meet_link",
+                "recurring_event_id",
+                "visibility",
+                "updated"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "calendar_id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "confirmed",
+                    "tentative",
+                    "cancelled"
+                  ]
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "location": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "string"
+                },
+                "end": {
+                  "type": "string"
+                },
+                "all_day": {
+                  "type": "boolean"
+                },
+                "time_zone": {
+                  "type": "string"
+                },
+                "organizer": {
+                  "type": "string"
+                },
+                "attendees": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "email",
+                      "response_status",
+                      "optional",
+                      "organizer",
+                      "self",
+                      "resource"
+                    ],
+                    "properties": {
+                      "email": {
+                        "type": "string"
+                      },
+                      "response_status": {
+                        "type": "string",
+                        "enum": [
+                          "needsAction",
+                          "declined",
+                          "tentative",
+                          "accepted"
+                        ]
+                      },
+                      "optional": {
+                        "type": "boolean"
+                      },
+                      "organizer": {
+                        "type": "boolean"
+                      },
+                      "self": {
+                        "type": "boolean"
+                      },
+                      "resource": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "html_link": {
+                  "type": "string"
+                },
+                "meet_link": {
+                  "type": "string"
+                },
+                "recurring_event_id": {
+                  "type": "string"
+                },
+                "visibility": {
+                  "type": "string",
+                  "enum": [
+                    "default",
+                    "public",
+                    "private",
+                    "confidential"
+                  ]
+                },
+                "updated": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.events.readonly"
+      ]
+    },
+    {
+      "name": "gcalendar.get_event",
+      "description": "Read one event in full: time, attendees and their responses, location, Meet link and description. Use after list_events when you need the details of a specific event.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "event_id"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "string",
+            "maxLength": 254,
+            "pattern": "^(primary|[A-Za-z0-9._%+#-]{1,200}@[A-Za-z0-9.-]{1,200})$",
+            "description": "`primary`, or a calendar id from list_calendars (people's calendars are their email).",
+            "default": "primary"
+          },
+          "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "calendar_id",
+          "status",
+          "summary",
+          "description",
+          "location",
+          "start",
+          "end",
+          "all_day",
+          "time_zone",
+          "organizer",
+          "attendees",
+          "html_link",
+          "meet_link",
+          "recurring_event_id",
+          "visibility",
+          "updated"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "calendar_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "tentative",
+              "cancelled"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "all_day": {
+            "type": "boolean"
+          },
+          "time_zone": {
+            "type": "string"
+          },
+          "organizer": {
+            "type": "string"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "email",
+                "response_status",
+                "optional",
+                "organizer",
+                "self",
+                "resource"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "response_status": {
+                  "type": "string",
+                  "enum": [
+                    "needsAction",
+                    "declined",
+                    "tentative",
+                    "accepted"
+                  ]
+                },
+                "optional": {
+                  "type": "boolean"
+                },
+                "organizer": {
+                  "type": "boolean"
+                },
+                "self": {
+                  "type": "boolean"
+                },
+                "resource": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "html_link": {
+            "type": "string"
+          },
+          "meet_link": {
+            "type": "string"
+          },
+          "recurring_event_id": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "default",
+              "public",
+              "private",
+              "confidential"
+            ]
+          },
+          "updated": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.events.readonly"
+      ]
+    },
+    {
+      "name": "gcalendar.query_freebusy",
+      "description": "Get the busy blocks of up to 20 calendars (people's emails, or calendar ids) in a window of at most 62 days. Use to check whether someone is free at a given time; use suggest_meeting_times to find a slot for everyone.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "calendar_ids",
+          "time_min",
+          "time_max"
+        ],
+        "properties": {
+          "calendar_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^(primary|[A-Za-z0-9._%+#-]{1,200}@[A-Za-z0-9.-]{1,200})$",
+              "description": "`primary`, or a calendar id from list_calendars (people's calendars are their email)."
+            },
+            "minItems": 1,
+            "maxItems": 20,
+            "uniqueItems": true
+          },
+          "time_min": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$",
+            "description": "RFC 3339 with an offset, e.g. 2026-10-12T15:00:00+05:30."
+          },
+          "time_max": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$",
+            "description": "RFC 3339 with an offset, e.g. 2026-10-12T15:00:00+05:30."
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "calendars"
+        ],
+        "properties": {
+          "calendars": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "busy",
+                "error"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "busy": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "start",
+                      "end"
+                    ],
+                    "properties": {
+                      "start": {
+                        "type": "string"
+                      },
+                      "end": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "error": {
+                  "type": "string",
+                  "description": "Set when Google could not read this calendar (e.g. notFound); its busy list is then empty."
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.freebusy"
+      ]
+    },
+    {
+      "name": "gcalendar.suggest_meeting_times",
+      "description": "Find slots where the user and every attendee are free, within working hours in the given time zone, on the 15-minute grid. Use before schedule_meeting when the user has not fixed a time. Calendars Google cannot read are reported in `unknown` and treated as free.",
+      "effect": "read",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "attendees",
+          "duration_minutes",
+          "time_min",
+          "time_max",
+          "time_zone"
+        ],
+        "properties": {
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^(primary|[A-Za-z0-9._%+#-]{1,200}@[A-Za-z0-9.-]{1,200})$",
+              "description": "`primary`, or a calendar id from list_calendars (people's calendars are their email)."
+            },
+            "minItems": 1,
+            "maxItems": 20,
+            "uniqueItems": true
+          },
+          "duration_minutes": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 480
+          },
+          "time_min": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$",
+            "description": "RFC 3339 with an offset, e.g. 2026-10-12T15:00:00+05:30."
+          },
+          "time_max": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$",
+            "description": "RFC 3339 with an offset, e.g. 2026-10-12T15:00:00+05:30."
+          },
+          "time_zone": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^(UTC|[A-Za-z_]+(/[A-Za-z0-9_+-]+){1,2})$",
+            "description": "IANA time zone, e.g. Asia/Kolkata."
+          },
+          "working_hours_start": {
+            "type": "string",
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "default": "09:00"
+          },
+          "working_hours_end": {
+            "type": "string",
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "default": "18:00"
+          },
+          "include_weekends": {
+            "type": "boolean",
+            "default": false
+          },
+          "max_suggestions": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "slots",
+          "unknown"
+        ],
+        "properties": {
+          "slots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "start",
+                "end"
+              ],
+              "properties": {
+                "start": {
+                  "type": "string"
+                },
+                "end": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "unknown": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.freebusy"
+      ]
+    },
+    {
+      "name": "gcalendar.create_event",
+      "description": "Put an event with no guests on the user's calendar: a hold, focus time, reminder or personal block. Use schedule_meeting instead whenever anyone else should be invited.",
+      "effect": "write",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "summary",
+          "start",
+          "end"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "string",
+            "maxLength": 254,
+            "pattern": "^(primary|[A-Za-z0-9._%+#-]{1,200}@[A-Za-z0-9.-]{1,200})$",
+            "description": "`primary`, or a calendar id from list_calendars (people's calendars are their email).",
+            "default": "primary"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "location": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "start": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,9})?)?(Z|[+-][0-9]{2}:[0-9]{2}))?$",
+            "description": "RFC 3339 date-time with an offset, or YYYY-MM-DD for an all-day event (end is exclusive)."
+          },
+          "end": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,9})?)?(Z|[+-][0-9]{2}:[0-9]{2}))?$",
+            "description": "RFC 3339 date-time with an offset, or YYYY-MM-DD for an all-day event (end is exclusive)."
+          },
+          "time_zone": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^(UTC|[A-Za-z_]+(/[A-Za-z0-9_+-]+){1,2})$",
+            "description": "IANA time zone, e.g. Asia/Kolkata."
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "default",
+              "public",
+              "private"
+            ],
+            "default": "default"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "calendar_id",
+          "status",
+          "summary",
+          "description",
+          "location",
+          "start",
+          "end",
+          "all_day",
+          "time_zone",
+          "organizer",
+          "attendees",
+          "html_link",
+          "meet_link",
+          "recurring_event_id",
+          "visibility",
+          "updated"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "calendar_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "tentative",
+              "cancelled"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "all_day": {
+            "type": "boolean"
+          },
+          "time_zone": {
+            "type": "string"
+          },
+          "organizer": {
+            "type": "string"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "email",
+                "response_status",
+                "optional",
+                "organizer",
+                "self",
+                "resource"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "response_status": {
+                  "type": "string",
+                  "enum": [
+                    "needsAction",
+                    "declined",
+                    "tentative",
+                    "accepted"
+                  ]
+                },
+                "optional": {
+                  "type": "boolean"
+                },
+                "organizer": {
+                  "type": "boolean"
+                },
+                "self": {
+                  "type": "boolean"
+                },
+                "resource": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "html_link": {
+            "type": "string"
+          },
+          "meet_link": {
+            "type": "string"
+          },
+          "recurring_event_id": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "default",
+              "public",
+              "private",
+              "confidential"
+            ]
+          },
+          "updated": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.events"
+      ]
+    },
+    {
+      "name": "gcalendar.schedule_meeting",
+      "description": "Create a meeting and email invitations to the attendees, optionally with a Google Meet link. Use when the user wants to meet with others; confirm the time first (suggest_meeting_times helps).",
+      "effect": "external",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "summary",
+          "start",
+          "end",
+          "attendees"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "string",
+            "maxLength": 254,
+            "pattern": "^(primary|[A-Za-z0-9._%+#-]{1,200}@[A-Za-z0-9.-]{1,200})$",
+            "description": "`primary`, or a calendar id from list_calendars (people's calendars are their email).",
+            "default": "primary"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "location": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "start": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,9})?)?(Z|[+-][0-9]{2}:[0-9]{2}))?$",
+            "description": "RFC 3339 date-time with an offset, or YYYY-MM-DD for an all-day event (end is exclusive)."
+          },
+          "end": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,9})?)?(Z|[+-][0-9]{2}:[0-9]{2}))?$",
+            "description": "RFC 3339 date-time with an offset, or YYYY-MM-DD for an all-day event (end is exclusive)."
+          },
+          "time_zone": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^(UTC|[A-Za-z_]+(/[A-Za-z0-9_+-]+){1,2})$",
+            "description": "IANA time zone, e.g. Asia/Kolkata."
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"
+            },
+            "minItems": 1,
+            "maxItems": 100,
+            "uniqueItems": true
+          },
+          "add_meet_link": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "calendar_id",
+          "status",
+          "summary",
+          "description",
+          "location",
+          "start",
+          "end",
+          "all_day",
+          "time_zone",
+          "organizer",
+          "attendees",
+          "html_link",
+          "meet_link",
+          "recurring_event_id",
+          "visibility",
+          "updated"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "calendar_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "tentative",
+              "cancelled"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "all_day": {
+            "type": "boolean"
+          },
+          "time_zone": {
+            "type": "string"
+          },
+          "organizer": {
+            "type": "string"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "email",
+                "response_status",
+                "optional",
+                "organizer",
+                "self",
+                "resource"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "response_status": {
+                  "type": "string",
+                  "enum": [
+                    "needsAction",
+                    "declined",
+                    "tentative",
+                    "accepted"
+                  ]
+                },
+                "optional": {
+                  "type": "boolean"
+                },
+                "organizer": {
+                  "type": "boolean"
+                },
+                "self": {
+                  "type": "boolean"
+                },
+                "resource": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "html_link": {
+            "type": "string"
+          },
+          "meet_link": {
+            "type": "string"
+          },
+          "recurring_event_id": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "default",
+              "public",
+              "private",
+              "confidential"
+            ]
+          },
+          "updated": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.events"
+      ]
+    },
+    {
+      "name": "gcalendar.update_event",
+      "description": "Change an event's title, time (with an optional time zone), location or description; only the fields given change. Guests see the change and, with notify, get an email. Use to reschedule or edit an existing event.",
+      "effect": "external",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "event_id"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "string",
+            "maxLength": 254,
+            "pattern": "^(primary|[A-Za-z0-9._%+#-]{1,200}@[A-Za-z0-9.-]{1,200})$",
+            "description": "`primary`, or a calendar id from list_calendars (people's calendars are their email).",
+            "default": "primary"
+          },
+          "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "location": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "start": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,9})?)?(Z|[+-][0-9]{2}:[0-9]{2}))?$",
+            "description": "RFC 3339 date-time with an offset, or YYYY-MM-DD for an all-day event (end is exclusive)."
+          },
+          "end": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,9})?)?(Z|[+-][0-9]{2}:[0-9]{2}))?$",
+            "description": "RFC 3339 date-time with an offset, or YYYY-MM-DD for an all-day event (end is exclusive)."
+          },
+          "time_zone": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^(UTC|[A-Za-z_]+(/[A-Za-z0-9_+-]+){1,2})$",
+            "description": "IANA time zone, e.g. Asia/Kolkata."
+          },
+          "notify": {
+            "type": "boolean",
+            "default": true,
+            "description": "Email the attendees about the change."
+          }
+        },
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "summary"
+            ]
+          },
+          {
+            "required": [
+              "description"
+            ]
+          },
+          {
+            "required": [
+              "location"
+            ]
+          },
+          {
+            "required": [
+              "start"
+            ]
+          },
+          {
+            "required": [
+              "end"
+            ]
+          },
+          {
+            "required": [
+              "time_zone"
+            ]
+          }
+        ],
+        "dependentRequired": {
+          "start": [
+            "end"
+          ],
+          "end": [
+            "start"
+          ],
+          "time_zone": [
+            "start",
+            "end"
+          ]
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "calendar_id",
+          "status",
+          "summary",
+          "description",
+          "location",
+          "start",
+          "end",
+          "all_day",
+          "time_zone",
+          "organizer",
+          "attendees",
+          "html_link",
+          "meet_link",
+          "recurring_event_id",
+          "visibility",
+          "updated"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "calendar_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "tentative",
+              "cancelled"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "all_day": {
+            "type": "boolean"
+          },
+          "time_zone": {
+            "type": "string"
+          },
+          "organizer": {
+            "type": "string"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "email",
+                "response_status",
+                "optional",
+                "organizer",
+                "self",
+                "resource"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "response_status": {
+                  "type": "string",
+                  "enum": [
+                    "needsAction",
+                    "declined",
+                    "tentative",
+                    "accepted"
+                  ]
+                },
+                "optional": {
+                  "type": "boolean"
+                },
+                "organizer": {
+                  "type": "boolean"
+                },
+                "self": {
+                  "type": "boolean"
+                },
+                "resource": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "html_link": {
+            "type": "string"
+          },
+          "meet_link": {
+            "type": "string"
+          },
+          "recurring_event_id": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "default",
+              "public",
+              "private",
+              "confidential"
+            ]
+          },
+          "updated": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.events"
+      ]
+    },
+    {
+      "name": "gcalendar.add_attendees",
+      "description": "Invite more people to an existing event; existing guests are kept. Use when the user asks to add someone to a meeting.",
+      "effect": "external",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "attendees"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "string",
+            "maxLength": 254,
+            "pattern": "^(primary|[A-Za-z0-9._%+#-]{1,200}@[A-Za-z0-9.-]{1,200})$",
+            "description": "`primary`, or a calendar id from list_calendars (people's calendars are their email).",
+            "default": "primary"
+          },
+          "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 254,
+              "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"
+            },
+            "minItems": 1,
+            "maxItems": 50,
+            "uniqueItems": true
+          },
+          "notify": {
+            "type": "boolean",
+            "default": true,
+            "description": "Email the attendees about the change."
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "calendar_id",
+          "status",
+          "summary",
+          "description",
+          "location",
+          "start",
+          "end",
+          "all_day",
+          "time_zone",
+          "organizer",
+          "attendees",
+          "html_link",
+          "meet_link",
+          "recurring_event_id",
+          "visibility",
+          "updated"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "calendar_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "tentative",
+              "cancelled"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "all_day": {
+            "type": "boolean"
+          },
+          "time_zone": {
+            "type": "string"
+          },
+          "organizer": {
+            "type": "string"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "email",
+                "response_status",
+                "optional",
+                "organizer",
+                "self",
+                "resource"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "response_status": {
+                  "type": "string",
+                  "enum": [
+                    "needsAction",
+                    "declined",
+                    "tentative",
+                    "accepted"
+                  ]
+                },
+                "optional": {
+                  "type": "boolean"
+                },
+                "organizer": {
+                  "type": "boolean"
+                },
+                "self": {
+                  "type": "boolean"
+                },
+                "resource": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "html_link": {
+            "type": "string"
+          },
+          "meet_link": {
+            "type": "string"
+          },
+          "recurring_event_id": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "default",
+              "public",
+              "private",
+              "confidential"
+            ]
+          },
+          "updated": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.events"
+      ]
+    },
+    {
+      "name": "gcalendar.respond_to_event",
+      "description": "Accept, decline or tentatively accept an invitation on the user's behalf; the organizer sees the response. Use only when the user says how to respond.",
+      "effect": "external",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "response"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "string",
+            "maxLength": 254,
+            "pattern": "^(primary|[A-Za-z0-9._%+#-]{1,200}@[A-Za-z0-9.-]{1,200})$",
+            "description": "`primary`, or a calendar id from list_calendars (people's calendars are their email).",
+            "default": "primary"
+          },
+          "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "response": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "declined",
+              "tentative"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "calendar_id",
+          "status",
+          "summary",
+          "description",
+          "location",
+          "start",
+          "end",
+          "all_day",
+          "time_zone",
+          "organizer",
+          "attendees",
+          "html_link",
+          "meet_link",
+          "recurring_event_id",
+          "visibility",
+          "updated"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "calendar_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "tentative",
+              "cancelled"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "all_day": {
+            "type": "boolean"
+          },
+          "time_zone": {
+            "type": "string"
+          },
+          "organizer": {
+            "type": "string"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "email",
+                "response_status",
+                "optional",
+                "organizer",
+                "self",
+                "resource"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "response_status": {
+                  "type": "string",
+                  "enum": [
+                    "needsAction",
+                    "declined",
+                    "tentative",
+                    "accepted"
+                  ]
+                },
+                "optional": {
+                  "type": "boolean"
+                },
+                "organizer": {
+                  "type": "boolean"
+                },
+                "self": {
+                  "type": "boolean"
+                },
+                "resource": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "html_link": {
+            "type": "string"
+          },
+          "meet_link": {
+            "type": "string"
+          },
+          "recurring_event_id": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "default",
+              "public",
+              "private",
+              "confidential"
+            ]
+          },
+          "updated": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.events"
+      ]
+    },
+    {
+      "name": "gcalendar.delete_event",
+      "description": "Delete an event. If the user organizes it, it is cancelled for every guest (with notify, they get an email). Use only when the user asks to cancel or delete an event; to decline someone else's, use respond_to_event.",
+      "effect": "delete",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "event_id"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "string",
+            "maxLength": 254,
+            "pattern": "^(primary|[A-Za-z0-9._%+#-]{1,200}@[A-Za-z0-9.-]{1,200})$",
+            "description": "`primary`, or a calendar id from list_calendars (people's calendars are their email).",
+            "default": "primary"
+          },
+          "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "notify": {
+            "type": "boolean",
+            "default": true,
+            "description": "Email the attendees about the change."
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "deleted"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "deleted": {
+            "const": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar.events"
+      ]
+    }
+  ],
+  "streams": [
+    {
+      "name": "events",
+      "modes": [
+        "full",
+        "incremental",
+        "webhook"
+      ],
+      "track_deletes": true,
+      "schedule": "rate(30 minutes)"
+    },
+    {
+      "name": "calendar_acl",
+      "modes": [
+        "full"
+      ],
+      "acl": true,
+      "schedule": "rate(6 hours)"
+    }
+  ],
+  "webhooks": {
+    "ingress": "per_connection",
+    "verification": {
+      "scheme": "channel_token",
+      "header": "X-Goog-Channel-Token"
+    },
+    "route_header": "X-Goog-Channel-ID",
+    "delivery_id_header": "X-Goog-Message-Number",
+    "subscription": {
+      "max_ttl_s": 604800,
+      "renew_at": 0.6
+    },
+    "fallback_poll_s": 1800
+  },
+  "reauth_on": [
+    "invalid_grant"
+  ]
+}

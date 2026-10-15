@@ -1398,3 +1398,26 @@ describe("WorkspaceTools", () => {
     )
   })
 })
+
+describe("a connection's runs when the server has none", () => {
+  it("reads a null list as no runs", async () => {
+    const state = {
+      connections: [connection({ id: "apc_pd", broker: "pipedream" })],
+    }
+    fakeFetch(catalog(), connections(state), ({ method, path }) => {
+      if (method === "GET" && path === `${org}/apps/connections/apc_pd/actions`)
+        return json({ actions: null })
+      if (method === "GET" && path === `${org}/apps/triggers`)
+        return json({ triggers: [] })
+      if (method === "GET" && path === "/v1/apps/catalog/github/triggers")
+        return json({ triggers: [], next_cursor: null })
+      return undefined
+    })
+    render(<WorkspaceTools organizationId="org-1" />)
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Expand GitHub connection" })
+    )
+    fireEvent.click(await screen.findByRole("tab", { name: "Runs" }))
+    expect(await screen.findByText(/No runs yet/)).toBeTruthy()
+  })
+})

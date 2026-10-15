@@ -648,6 +648,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if roomService != nil {
 		httpConfig.Rooms = roomService
 	}
+	httpConfig.Runs = runDrain
 	// The check route reads with the same guard, when there is one; without
 	// it the route answers that nothing was checked.
 	if answerGuard != nil {

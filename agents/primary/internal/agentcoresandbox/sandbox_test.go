@@ -2,6 +2,7 @@ package agentcoresandbox
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"slices"
 	"strings"
@@ -198,9 +199,19 @@ func TestAggregateBoundsModelOutput(t *testing.T) {
 	result := aggregate([]types.CodeInterpreterResult{{
 		Content:           []types.ContentBlock{{Type: types.ContentBlockTypeText, Text: aws.String(strings.Repeat("x", maxModelOutputBytes+10))}},
 		StructuredContent: &types.ToolResultStructuredContent{Stdout: aws.String("not included")},
-	}})
+	}}, maxModelOutputBytes)
 	if !result.OutputTruncated || len(result.Content) != 1 || len(result.Content[0].Text) != maxModelOutputBytes || result.Stdout != "" {
 		t.Fatalf("bounded result = text:%d stdout:%q truncated:%v", len(result.Content[0].Text), result.Stdout, result.OutputTruncated)
+	}
+}
+
+func TestAggregateCarriesAFileUpToTheArtifactBudget(t *testing.T) {
+	deck := make([]byte, 3*1024*1024) // a deck with images, far past the model's budget
+	result := aggregate([]types.CodeInterpreterResult{{
+		Content: []types.ContentBlock{{Type: types.ContentBlockTypeEmbeddedResource, Resource: &types.ResourceContent{Blob: deck}}},
+	}}, maxArtifactBytes)
+	if result.OutputTruncated || len(result.Content) != 1 || base64.StdEncoding.DecodedLen(len(result.Content[0].ResourceDataBase64)) < len(deck) {
+		t.Fatalf("a 3 MiB file was cut: truncated=%v", result.OutputTruncated)
 	}
 }
 

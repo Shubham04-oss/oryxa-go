@@ -199,7 +199,8 @@ function renderShell() {
 
 const home = () =>
   within(screen.getByRole("main", { name: "My workspace canvas" }))
-const work = () => within(home().getByRole("region", { name: "Conversations" }))
+const work = () =>
+  within(home().getByRole("region", { name: "Pick up where you left off" }))
 function sendHome(text: string) {
   fireEvent.change(
     home().getByRole("textbox", { name: "Start a new conversation" }),

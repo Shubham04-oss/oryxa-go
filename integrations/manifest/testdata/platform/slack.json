@@ -1,0 +1,185 @@
+{
+  "id": "slack",
+  "version": 1,
+  "display_name": "Slack",
+  "description": "Read channels and post messages in Slack.",
+  "connection_levels": ["workspace", "personal"],
+  "auth": {
+    "credential_modes": ["platform", "tenant_app"],
+    "oauth2": {
+      "authorization_url": "https://slack.com/oauth/v2/authorize",
+      "token_url": "https://slack.com/api/oauth.v2.access",
+      "revoke_url": "https://slack.com/api/auth.revoke",
+      "pkce": false,
+      "scope_separator": ",",
+      "token_kinds": [
+        {
+          "name": "bot", "acts_as": "app",
+          "scopes": [
+            "channels:read",
+            "groups:read",
+            "channels:history",
+            "groups:history",
+            "users:read",
+            "users:read.email",
+            "chat:write",
+            "reactions:write",
+            "im:write"
+          ]
+        },
+        {
+          "name": "user",
+          "scopes": ["search:read", "chat:write"],
+          "scope_param": "user_scope",
+          "token_pointer": "/authed_user/access_token",
+          "optional": true
+        }
+      ],
+      "outputs": [
+        { "name": "team_id", "pointer": "/team/id" },
+        { "name": "enterprise_id", "pointer": "/enterprise/id", "optional": true },
+        { "name": "user_id", "pointer": "/authed_user/id", "optional": true }
+      ]
+    }
+  },
+  "base_url": "https://slack.com/api",
+  "egress_allowlist": ["slack.com"],
+  "verify": { "path": "/auth.test", "token_kind": "bot" },
+  "rate_limit": { "retry_headers": ["Retry-After"] },
+  "tools": [
+    {
+      "name": "slack.list_channels",
+      "description": "List the public and private channels the Oryxa app can see (archived ones skipped), with is_member telling whether Oryxa is in each. Use to turn a channel name into an id, or to see where Oryxa can read and post. Paged: pass next_cursor back as cursor for more. To find a message by its content, use search_messages instead.",
+      "effect": "read",
+      "input_schema": {"type": "object", "required": [], "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100}, "cursor": {"type": "string", "pattern": "^[A-Za-z0-9+/=_:-]{1,512}$", "description": "next_cursor from the previous page."}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["channels"], "properties": {"channels": {"type": "array", "maxItems": 200, "items": {"type": "object", "required": ["id", "name", "is_private", "is_ext_shared", "is_member"], "properties": {"id": {"type": "string", "pattern": "^[A-Z0-9]{2,32}$"}, "name": {"type": "string", "maxLength": 255}, "is_private": {"type": "boolean"}, "is_ext_shared": {"type": "boolean"}, "is_member": {"type": "boolean"}}, "additionalProperties": false}}, "next_cursor": {"type": "string", "pattern": "^[A-Za-z0-9+/=_:-]{1,512}$"}}, "additionalProperties": false},
+      "scopes": ["channels:read", "groups:read"],
+      "token_kind": "bot"
+    },
+    {
+      "name": "slack.channel_history",
+      "description": "Read a channel's recent top-level messages, newest first, e.g. to catch up on a channel or get context before replying. Oryxa must be a member of the channel. Messages with reply_count > 0 start a thread: read it with get_thread. When has_more is true, call again with latest set to the ts of the last (oldest) message returned. To find messages by content across channels, use search_messages.",
+      "effect": "read",
+      "input_schema": {"type": "object", "required": ["channel"], "properties": {"channel": {"type": "string", "pattern": "^[CG][A-Z0-9]{1,31}$", "description": "Channel id (C… or G…), e.g. from list_channels."}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 30}, "oldest": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$", "description": "Only messages after this ts."}, "latest": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$", "description": "Only messages before this ts."}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["messages", "has_more"], "properties": {"messages": {"type": "array", "maxItems": 100, "items": {"type": "object", "required": ["ts", "user", "text", "truncated", "thread_ts", "reply_count"], "properties": {"ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}, "user": {"type": ["string", "null"], "pattern": "^[A-Z0-9]{2,32}$"}, "text": {"type": "string", "maxLength": 4000}, "truncated": {"type": "boolean", "description": "true when text was cut at 4000 characters."}, "thread_ts": {"type": ["string", "null"], "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}, "reply_count": {"type": "integer", "minimum": 0}}, "additionalProperties": false}}, "has_more": {"type": "boolean"}}, "additionalProperties": false},
+      "scopes": ["channels:history", "groups:history"],
+      "token_kind": "bot"
+    },
+    {
+      "name": "slack.get_thread",
+      "description": "Read one thread: the parent message first, then its replies oldest first. Use when a message has replies (reply_count > 0) or the user points at a thread. When has_more is true, call again with oldest set to the ts of the last reply returned (the parent is repeated first).",
+      "effect": "read",
+      "input_schema": {"type": "object", "required": ["channel", "thread_ts"], "properties": {"channel": {"type": "string", "pattern": "^[CG][A-Z0-9]{1,31}$", "description": "Channel id (C… or G…), e.g. from list_channels."}, "thread_ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$", "description": "ts of the thread's parent message."}, "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}, "oldest": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$", "description": "Only replies after this ts."}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["messages", "has_more"], "properties": {"messages": {"type": "array", "maxItems": 200, "items": {"type": "object", "required": ["ts", "user", "text", "truncated", "thread_ts", "reply_count"], "properties": {"ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}, "user": {"type": ["string", "null"], "pattern": "^[A-Z0-9]{2,32}$"}, "text": {"type": "string", "maxLength": 4000}, "truncated": {"type": "boolean", "description": "true when text was cut at 4000 characters."}, "thread_ts": {"type": ["string", "null"], "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}, "reply_count": {"type": "integer", "minimum": 0}}, "additionalProperties": false}}, "has_more": {"type": "boolean"}}, "additionalProperties": false},
+      "scopes": ["channels:history", "groups:history"],
+      "token_kind": "bot"
+    },
+    {
+      "name": "slack.search_messages",
+      "description": "Search Slack messages the user who connected Slack can see, including their DMs and private channels, with Slack search syntax (in:#channel, from:@name, before:/after:YYYY-MM-DD, has:link). Only that user can run it. Use to find a message or decision by content; to read a known channel, use channel_history. Results carry a permalink; when has_more is true, ask for the next page.",
+      "effect": "read",
+      "input_schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S"}, "count": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}, "page": {"type": "integer", "minimum": 1, "maximum": 100, "default": 1}, "sort": {"type": "string", "enum": ["score", "timestamp"], "default": "score", "description": "score: best match first; timestamp: newest first."}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["messages", "total", "has_more"], "properties": {"messages": {"type": "array", "maxItems": 50, "items": {"type": "object", "required": ["channel", "channel_name", "ts", "user", "text", "truncated", "permalink"], "properties": {"channel": {"type": "string", "pattern": "^[A-Z0-9]{2,32}$"}, "channel_name": {"type": ["string", "null"], "maxLength": 255}, "ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}, "user": {"type": ["string", "null"], "pattern": "^[A-Z0-9]{2,32}$"}, "text": {"type": "string", "maxLength": 4000}, "truncated": {"type": "boolean", "description": "true when text was cut at 4000 characters."}, "permalink": {"type": ["string", "null"], "maxLength": 1000, "pattern": "^https://"}}, "additionalProperties": false}}, "total": {"type": "integer", "minimum": 0}, "has_more": {"type": "boolean"}}, "additionalProperties": false},
+      "scopes": ["search:read"],
+      "token_kind": "user"
+    },
+    {
+      "name": "slack.get_user",
+      "description": "Look up one Slack member by id (as found in messages and member lists): handle, real name, email, and whether they are a bot, deactivated, or an external guest. Use to say who wrote a message; to go from an email to a member, use find_user_by_email.",
+      "effect": "read",
+      "input_schema": {"type": "object", "required": ["user"], "properties": {"user": {"type": "string", "pattern": "^[UW][A-Z0-9]{1,31}$", "description": "Member id (U… or W…), e.g. from find_user_by_email."}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["id", "name", "real_name", "email", "is_bot", "deleted", "external"], "properties": {"id": {"type": "string", "pattern": "^[A-Z0-9]{2,32}$"}, "name": {"type": ["string", "null"], "maxLength": 255}, "real_name": {"type": ["string", "null"], "maxLength": 255}, "email": {"type": ["string", "null"], "maxLength": 320}, "is_bot": {"type": "boolean"}, "deleted": {"type": "boolean"}, "external": {"type": "boolean"}}, "additionalProperties": false},
+      "scopes": ["users:read", "users:read.email"],
+      "token_kind": "bot"
+    },
+    {
+      "name": "slack.find_user_by_email",
+      "description": "Find the Slack member with an exact email address, e.g. to mention or DM a colleague the user named by email. Returns not_found when nobody in the workspace has it.",
+      "effect": "read",
+      "input_schema": {"type": "object", "required": ["email"], "properties": {"email": {"type": "string", "maxLength": 254, "pattern": "^[^\\s@<>,;:\"()\\[\\]\\\\]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,63}$"}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["id", "name", "real_name", "email", "is_bot", "deleted", "external"], "properties": {"id": {"type": "string", "pattern": "^[A-Z0-9]{2,32}$"}, "name": {"type": ["string", "null"], "maxLength": 255}, "real_name": {"type": ["string", "null"], "maxLength": 255}, "email": {"type": ["string", "null"], "maxLength": 320}, "is_bot": {"type": "boolean"}, "deleted": {"type": "boolean"}, "external": {"type": "boolean"}}, "additionalProperties": false},
+      "scopes": ["users:read", "users:read.email"],
+      "token_kind": "bot"
+    },
+    {
+      "name": "slack.list_channel_members",
+      "description": "List member ids of one channel, e.g. to check who will see a message before posting it. Paged: pass next_cursor back as cursor for more. Use get_user to turn an id into a name.",
+      "effect": "read",
+      "input_schema": {"type": "object", "required": ["channel"], "properties": {"channel": {"type": "string", "pattern": "^[CG][A-Z0-9]{1,31}$", "description": "Channel id (C… or G…), e.g. from list_channels."}, "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100}, "cursor": {"type": "string", "pattern": "^[A-Za-z0-9+/=_:-]{1,512}$", "description": "next_cursor from the previous page."}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["members"], "properties": {"members": {"type": "array", "maxItems": 200, "items": {"type": "string", "pattern": "^[A-Z0-9]{2,32}$"}}, "next_cursor": {"type": "string", "pattern": "^[A-Za-z0-9+/=_:-]{1,512}$"}}, "additionalProperties": false},
+      "scopes": ["channels:read", "groups:read"],
+      "token_kind": "bot"
+    },
+    {
+      "name": "slack.post_message",
+      "description": "Post a new top-level message in a channel, as the Oryxa app. Use only when the user asked for something to be posted there. To answer inside an existing thread use reply_in_thread; to message one person privately use send_dm; to post in the user's own name use post_message_as_me. If the result is an error saying the message may already be posted, check channel_history before trying again.",
+      "effect": "external",
+      "input_schema": {"type": "object", "required": ["channel", "text"], "properties": {"channel": {"type": "string", "pattern": "^[CGD][A-Z0-9]{1,31}$", "description": "Channel id (C… or G…), or a DM's D… id."}, "text": {"type": "string", "minLength": 1, "maxLength": 40000, "pattern": "\\S", "description": "Slack mrkdwn: *bold*, _italic_, <@U123> to mention, <https://url|label> for links."}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["channel", "ts"], "properties": {"channel": {"type": "string", "pattern": "^[A-Z0-9]{2,32}$"}, "ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}}, "additionalProperties": false},
+      "scopes": ["chat:write"],
+      "token_kind": "bot"
+    },
+    {
+      "name": "slack.reply_in_thread",
+      "description": "Reply inside an existing thread, as the Oryxa app: the usual way to answer a message or a question in Slack. thread_ts is the parent message's ts (a message's own ts works when it has no thread yet). Use only when the user asked to reply. For a new conversation use post_message.",
+      "effect": "external",
+      "input_schema": {"type": "object", "required": ["channel", "thread_ts", "text"], "properties": {"channel": {"type": "string", "pattern": "^[CGD][A-Z0-9]{1,31}$", "description": "Channel id (C… or G…), or a DM's D… id."}, "thread_ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}, "text": {"type": "string", "minLength": 1, "maxLength": 40000, "pattern": "\\S", "description": "Slack mrkdwn: *bold*, _italic_, <@U123> to mention, <https://url|label> for links."}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["channel", "ts"], "properties": {"channel": {"type": "string", "pattern": "^[A-Z0-9]{2,32}$"}, "ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}}, "additionalProperties": false},
+      "scopes": ["chat:write"],
+      "token_kind": "bot"
+    },
+    {
+      "name": "slack.post_message_as_me",
+      "description": "Post in the user's own name, from their Slack account, in a channel or (with thread_ts) a thread. Use only when the user explicitly asks to post as themselves; otherwise use post_message or reply_in_thread, which post as Oryxa. Only the user who connected Slack can use it.",
+      "effect": "external",
+      "input_schema": {"type": "object", "required": ["channel", "text"], "properties": {"channel": {"type": "string", "pattern": "^[CGD][A-Z0-9]{1,31}$", "description": "Channel id (C… or G…), or a DM's D… id."}, "text": {"type": "string", "minLength": 1, "maxLength": 40000, "pattern": "\\S", "description": "Slack mrkdwn: *bold*, _italic_, <@U123> to mention, <https://url|label> for links."}, "thread_ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["channel", "ts"], "properties": {"channel": {"type": "string", "pattern": "^[A-Z0-9]{2,32}$"}, "ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}}, "additionalProperties": false},
+      "scopes": ["chat:write"],
+      "token_kind": "user"
+    },
+    {
+      "name": "slack.send_dm",
+      "description": "Send a private direct message from the Oryxa app to one member. Use only when the user asks to message that person; find their id first with find_user_by_email or get_user. For a channel use post_message.",
+      "effect": "external",
+      "input_schema": {"type": "object", "required": ["user", "text"], "properties": {"user": {"type": "string", "pattern": "^[UW][A-Z0-9]{1,31}$", "description": "Member id (U… or W…), e.g. from find_user_by_email."}, "text": {"type": "string", "minLength": 1, "maxLength": 40000, "pattern": "\\S", "description": "Slack mrkdwn: *bold*, _italic_, <@U123> to mention, <https://url|label> for links."}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["channel", "ts"], "properties": {"channel": {"type": "string", "pattern": "^[A-Z0-9]{2,32}$"}, "ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}}, "additionalProperties": false},
+      "scopes": ["im:write", "chat:write"],
+      "token_kind": "bot"
+    },
+    {
+      "name": "slack.add_reaction",
+      "description": "Add an emoji reaction to a message as the Oryxa app, e.g. :eyes: to show it is being looked at or :white_check_mark: when done. name is the emoji name without colons. Reacting twice is harmless.",
+      "effect": "write",
+      "input_schema": {"type": "object", "required": ["channel", "ts", "name"], "properties": {"channel": {"type": "string", "pattern": "^[CGD][A-Z0-9]{1,31}$", "description": "Channel id (C… or G…), or a DM's D… id."}, "ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}, "name": {"type": "string", "pattern": "^[a-z0-9_+'-]{1,100}$"}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}, "additionalProperties": false},
+      "scopes": ["reactions:write"],
+      "token_kind": "bot"
+    },
+    {
+      "name": "slack.get_permalink",
+      "description": "Get a link to one message, e.g. to cite it in an answer. search_messages results already carry one.",
+      "effect": "read",
+      "input_schema": {"type": "object", "required": ["channel", "ts"], "properties": {"channel": {"type": "string", "pattern": "^[CG][A-Z0-9]{1,31}$", "description": "Channel id (C… or G…), e.g. from list_channels."}, "ts": {"type": "string", "pattern": "^[0-9]{1,12}\\.[0-9]{1,8}$"}}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["permalink"], "properties": {"permalink": {"type": "string", "maxLength": 1000, "pattern": "^https://"}}, "additionalProperties": false},
+      "scopes": ["channels:history", "groups:history"],
+      "token_kind": "bot"
+    }
+  ],
+  "streams": [
+    { "name": "channels", "modes": ["full"], "acl": true, "schedule": "rate(1 hour)" },
+    { "name": "messages", "modes": ["incremental", "webhook"] }
+  ],
+  "webhooks": {
+    "ingress": "per_provider",
+    "verification": {
+      "scheme": "hmac",
+      "signature_header": "X-Slack-Signature",
+      "timestamp_header": "X-Slack-Request-Timestamp",
+      "basestring": "v0:{timestamp}:{body}",
+      "prefix": "v0="
+    },
+    "replay_window_s": 300,
+    "routing": ["/team_id", "/enterprise_id", "/team/id", "/enterprise/id"]
+  },
+  "reauth_on": ["invalid_auth", "token_revoked", "account_inactive", "invalid_refresh_token"]
+}

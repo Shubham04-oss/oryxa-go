@@ -103,7 +103,7 @@ afterEach(() => {
 })
 
 describe("a Slack ask, for the member it is addressed to", () => {
-  it("shows who asked, the question, where from, and the three choices in plain words", async () => {
+  it("shows who asked, the question, where from, and the four choices in plain words", async () => {
     renderCard(slackRequest())
 
     const card = await screen.findByRole("article", {
@@ -133,8 +133,15 @@ describe("a Slack ask, for the member it is addressed to", () => {
     ).toEqual([
       ["Share answer", "Share answer to Raya's request"],
       ["Allow for 1 hour", "Allow for 1 hour for Raya's request"],
+      ["Reply yourself", "Reply yourself to Raya's request"],
       ["Deny", "Deny Raya's request"],
     ])
+    // Share answer is the primary choice, and Deny looks destructive.
+    expect(
+      within(group)
+        .getByRole("button", { name: "Deny Raya's request" })
+        .getAttribute("data-choice")
+    ).toBe("d")
     expect(
       within(group).getByText(
         "Your agent answers in its own words. It won't copy passages from your documents or share links."
@@ -449,31 +456,28 @@ describe("a request an agent filed in Oryxa, which has two choices", () => {
     },
   })
 
-  it("offers Share answer and Deny, and nothing between them, then Reply yourself, quietly", async () => {
+  it("offers Share answer, Reply yourself and Deny, and no approval without tools", async () => {
     renderCard(agentRequest())
 
     expect(await screen.findByText("Waiting for you to approve.")).toBeTruthy()
-    expect(screen.queryByRole("group")).toBeNull()
+    expect(
+      screen.getByRole("group", { name: "Decide Raya's request" })
+    ).toBeTruthy()
     // What approving lets the agent read is said once, above the choices.
     expect(screen.getByText("Krude may read team knowledge.")).toBeTruthy()
     expect(
       screen
         .getAllByRole("button")
         .map((button) => [
-          button.textContent,
+          button.querySelector("strong")?.textContent ?? button.textContent,
           button.getAttribute("aria-label"),
         ])
     ).toEqual([
       ["Add a note", null],
-      ["Deny", "Deny Raya's request"],
       ["Share answer", "Share answer to Raya's request"],
       ["Reply yourself", "Reply yourself to Raya's request"],
+      ["Deny", "Deny Raya's request"],
     ])
-    expect(
-      screen
-        .getByRole("button", { name: "Share answer to Raya's request" })
-        .getAttribute("data-primary")
-    ).toBe("true")
   })
 
   it("shares the answer with the tools it asked for, and says where it was decided", async () => {

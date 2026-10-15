@@ -7,10 +7,12 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactElement } from "react"
 import { WorkspaceBillingSettings } from "./workspace-billing-settings"
+import { WorkspaceEmailSettings } from "./workspace-email-settings"
 import { WorkspaceTeamsSettings } from "./workspace-teams-settings"
 import { WorkspaceToolAccessSettings } from "./workspace-tool-access-settings"
 
@@ -69,6 +71,63 @@ describe("connected settings sections", () => {
     expect(screen.queryByRole("button", { name: "Choose" })).toBeNull()
   })
 
+  it("shows the plan as one card with renewal and seats, and Change plan opens the portal", async () => {
+    const assign = vi.fn()
+    vi.stubGlobal("location", { ...window.location, assign })
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) =>
+      json(
+        url.endsWith("/plans")
+          ? { plans: [{ key: "team", member_limit: 10 }], unpaid: {} }
+          : url.endsWith("/members")
+            ? {
+                members: [1, 2, 3].map((n) => ({
+                  organization_id: "org-1",
+                  user_id: `u${n}`,
+                  email: `u${n}@example.com`,
+                  role: "member",
+                  joined_at: "2026-09-01T00:00:00Z",
+                })),
+              }
+            : url.endsWith("/portal") && init?.method === "POST"
+              ? { portal_url: "https://billing.example/portal" }
+              : {
+                  can_manage: true,
+                  organization_id: "org-1",
+                  entitlements: {
+                    plan: "team",
+                    status: "active",
+                    member_limit: 10,
+                    grace_ends_at: null,
+                  },
+                  subscription: {
+                    plan: "team",
+                    status: "active",
+                    quantity: 1,
+                    renews_at: "2026-11-01T00:00:00Z",
+                    ends_at: null,
+                  },
+                }
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    show(
+      <WorkspaceBillingSettings organization={organization} preview={false} />
+    )
+    expect(await screen.findByText("Renews 1 November 2026")).toBeTruthy()
+    expect(await screen.findByText("3 of 10 seats")).toBeTruthy()
+    expect(
+      screen
+        .getByRole("meter", { name: "Seats used" })
+        .getAttribute("aria-valuenow")
+    ).toBe("3")
+    // A subscription changes plan in the portal; no checkout list.
+    expect(screen.queryByRole("region", { name: "Plans" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Change plan" }))
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith("https://billing.example/portal")
+    )
+  })
+
   it("creates a real team through the teams service", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) =>
       json(
@@ -99,6 +158,15 @@ describe("connected settings sections", () => {
       />
     )
     await screen.findByText("No teams yet.")
+    fireEvent.click(screen.getByRole("button", { name: "New team" }))
+    const dialog = await screen.findByRole("dialog", { name: "New team" })
+    // A dialog footer: Cancel, then the confirm on the right.
+    expect(
+      within(dialog)
+        .getAllByRole("button")
+        .map((button) => button.textContent)
+        .slice(-2)
+    ).toEqual(["Cancel", "Create"])
     fireEvent.change(screen.getByPlaceholderText("Team name"), {
       target: { value: "Design" },
     })
@@ -258,6 +326,82 @@ describe("connected settings sections", () => {
       />
     )
     expect(screen.getByText(/owners and admins can see/)).toBeTruthy()
-    expect(fetchMock).not.toHaveBeenCalled()
+    // A member reads their own tools and the catalog, never everyone's.
+    expect(
+      (fetchMock.mock.calls as unknown[][]).some(([url]) =>
+        String(url).includes("scope=organization")
+      )
+    ).toBe(false)
+  })
+
+  it("lists a member's own tools with who uses them and what they reach, and disconnects after a destructive confirm", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/targets")) {
+        return json({
+          targets: Array.from({ length: 14 }, (_, n) => ({
+            kind: "channel",
+            id: `C${n}`,
+            name: `#c${n}`,
+            target: {},
+          })),
+        })
+      }
+      if (url.endsWith("/apps/connections/c1") && init?.method === "DELETE") {
+        return new Response(null, { status: 204 })
+      }
+      if (url.includes("/apps/connections")) {
+        return json({
+          connections: [
+            { id: "c1", toolkit: "slack", member_id: "me", status: "active" },
+          ],
+        })
+      }
+      if (url.includes("/apps/catalog")) return json({ toolkits: [] })
+      return json({})
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    show(
+      <WorkspaceToolAccessSettings
+        organization={organization}
+        role="member"
+        preview={false}
+        onOpenTools={() => {}}
+      />
+    )
+    expect(await screen.findByText("Only you · 14 channels")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "More for Slack" }))
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Disconnect" }))
+    const confirm = screen.getByRole("button", { name: "Disconnect" })
+    expect(confirm.getAttribute("data-tone")).toBe("danger")
+    fireEvent.click(confirm)
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(
+        true
+      )
+    )
+  })
+
+  it("shows Gmail's real connection on Email, and nothing it can't back", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        json({
+          connections: [
+            { id: "g", toolkit: "gmail", member_id: "me", status: "active" },
+          ],
+        })
+      )
+    )
+    show(
+      <WorkspaceEmailSettings
+        organization={organization}
+        onBilling={() => {}}
+        onAgent={() => {}}
+        onOpenTools={() => {}}
+      />
+    )
+    expect(await screen.findByText("Connected")).toBeTruthy()
+    expect(screen.getByText(/coming soon/)).toBeTruthy()
+    expect(screen.queryByRole("switch")).toBeNull()
   })
 })

@@ -1,5 +1,6 @@
-// Setting up a new workspace (founder's redesign, 14 Oct 2026): after naming
-// it, four steps in the sign-in layout, each with its scene. Every step does
+// Setting up a new workspace (onboarding v3, founder's redesign of 15 Oct
+// 2026; boards OnbV3s1–s5 and Onb3Model). Naming it is step 1 (routes/index
+// NewWorkspace); these are steps 2 to 5, in OnboardingFrame. Every step does
 // real work through the existing APIs, and every one can be skipped:
 //   agent     — meet Krude; turn on background access (the agent grant)
 //   tools     — connect the apps work happens in
@@ -10,19 +11,22 @@
 import { useState } from "react"
 import type { FormEvent, ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowRight, Check } from "lucide-react"
-import { AuthNotice, AuthShell } from "./auth/auth-shell"
-import type { AuthScene } from "./auth/auth-shell"
+import { Check } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { AuthNotice } from "./auth/auth-shell"
 import { AuthField } from "./auth/auth-field"
+import { OnboardingFrame, StepIntro } from "./onboarding-frame"
+import type { OnboardingScene, WorkspaceSketch } from "./onboarding-frame"
 import { ToolkitLogo } from "./workspace-tool-logo"
 import { connectRedirect } from "./workspace-tool-helpers"
+import { personIdentity } from "./teamspace-format"
+import { IdentityAvatar } from "./workspace-avatar"
 import { ApiError } from "@/lib/api/client"
 import { authorizeAgentGrant, getAgentGrant } from "@/lib/auth/settings"
-import { sendInvitation } from "@/lib/auth/invitations"
+import { getInvitations, sendInvitation } from "@/lib/auth/invitations"
 import { connect, connectionsQueryOptions } from "@/lib/apps/client"
 import { createTeam } from "@/lib/settings/client"
 import { createTeamspace } from "@/lib/teamspaces/client"
-import "./onboarding.css"
 
 export const setupSteps = ["agent", "tools", "crew", "teamspace"] as const
 export type SetupStep = (typeof setupSteps)[number]
@@ -40,7 +44,7 @@ const stepNames: Record<SetupStep, string> = {
 
 const stepScenes: Record<
   SetupStep,
-  { scene: AuthScene; line: string; sub: string }
+  { scene: OnboardingScene; line: string; sub: string }
 > = {
   agent: {
     scene: "nest",
@@ -49,18 +53,18 @@ const stepScenes: Record<
   },
   tools: {
     scene: "deck",
-    line: "Rig the ship.",
-    sub: "Each app you connect, Krude can read.",
+    line: "Charts for every sea.",
+    sub: "Krude reads where your work already lives.",
   },
   crew: {
     scene: "ships",
-    line: "One crew. Every ask answered.",
-    sub: "Your team and its agents, in one place.",
+    line: "A crew, and their agents.",
+    sub: "Everyone keeps their own Krude.",
   },
   teamspace: {
     scene: "sea",
-    line: "Every ask is a message in a bottle.",
-    sub: "oryxa makes sure it reaches the right person.",
+    line: "Your first harbour.",
+    sub: "A teamspace is where a crew works on one thing.",
   },
 }
 
@@ -96,15 +100,67 @@ export function emailsIn(text: string): string[] {
   ]
 }
 
+/** Back on the left; Skip for now and the primary on the right (DESIGN.md §1). */
+export function StepNav({
+  back,
+  backLabel = "Back",
+  skip,
+  primary,
+}: {
+  back?: () => void
+  backLabel?: string
+  skip?: () => void
+  primary: ReactNode
+}) {
+  return (
+    <div className="onb-nav">
+      {back && (
+        <Button variant="ghost" onClick={back}>
+          {backLabel}
+        </Button>
+      )}
+      <span className="onb-grow" />
+      {skip && (
+        <Button variant="ghost" onClick={skip}>
+          Skip for now
+        </Button>
+      )}
+      {primary}
+    </div>
+  )
+}
+
+/** The primary action, with its Enter hint. */
+export function ContinueButton({
+  children = "Continue",
+  ...props
+}: {
+  children?: ReactNode
+  onClick?: () => void
+  type?: "button" | "submit"
+  form?: string
+  disabled?: boolean
+}) {
+  return (
+    <Button className="onb-next" {...props}>
+      {children}
+      <kbd aria-hidden="true">↵</kbd>
+    </Button>
+  )
+}
+
 export function Onboarding({
   organizationId,
   organizationName,
+  viewerName,
   step,
   onStep,
   onDone,
 }: {
   organizationId: string
   organizationName: string
+  /** The member's name, for the miniature's greeting. */
+  viewerName?: string
   step: SetupStep
   onStep: (step: SetupStep) => void
   /** Setup is over: open the workspace (on the new teamspace, if one was made). */
@@ -115,31 +171,89 @@ export function Onboarding({
     index < setupSteps.length - 1 ? onStep(setupSteps[index + 1]) : onDone()
   const back = index > 0 ? () => onStep(setupSteps[index - 1]) : undefined
   const art = stepScenes[step]
+  const [teamspaceName, setTeamspaceName] = useState("")
+  const [sent, setSent] = useState<string[]>([])
+
+  // What the miniature shows: the member's real setup, read where it lives.
+  const grant = useQuery({
+    queryKey: ["auth", "agent-grant", organizationId],
+    queryFn: getAgentGrant,
+    retry: false,
+  })
+  const connections = useQuery({
+    ...connectionsQueryOptions(organizationId),
+    retry: false,
+  })
+  const invitations = useQuery({
+    queryKey: ["organizations", organizationId, "invitations", "setup"],
+    queryFn: () => getInvitations(organizationId),
+    retry: false,
+  })
+  const tools = [
+    ...new Set(
+      (connections.data ?? [])
+        .filter((connection) => connection.status === "active")
+        .map((connection) => connection.toolkit)
+    ),
+  ]
+  const invited = [
+    ...new Set([
+      ...sent,
+      ...(invitations.data ?? [])
+        .filter((invitation) => invitation.status === "pending")
+        .map((invitation) => invitation.email),
+    ]),
+  ]
+  const first = viewerName?.includes("@")
+    ? undefined
+    : viewerName?.trim().split(/\s+/)[0]
+  const sketch: WorkspaceSketch = {
+    workspaceName: organizationName,
+    firstName: first,
+    agent: true,
+    agentAway: grant.data?.granted === true,
+    tools,
+    invited,
+    teamspace: teamspaceName,
+  }
+  const submitTeamspace = () =>
+    (
+      document.getElementById("setup-teamspace") as HTMLFormElement | null
+    )?.requestSubmit()
 
   return (
-    <AuthShell scene={art.scene} caption={{ line: art.line, sub: art.sub }}>
-      <ol className="setup-steps" aria-label={`Step ${index + 2} of 5`}>
-        <li className="is-done">Workspace</li>
-        {setupSteps.map((key, at) => (
-          <li
-            key={key}
-            className={at < index ? "is-done" : at === index ? "is-now" : ""}
-            aria-current={at === index ? "step" : undefined}
-          >
-            {stepNames[key]}
-          </li>
-        ))}
-      </ol>
+    <OnboardingFrame
+      step={index + 2}
+      stepName={stepNames[step]}
+      scene={art.scene}
+      caption={{ line: art.line, sub: art.sub }}
+      sketch={sketch}
+      onEnter={step === "teamspace" ? submitTeamspace : next}
+    >
       {step === "agent" && (
-        <AgentStep organizationId={organizationId} onNext={next} />
+        <AgentStep
+          organizationId={organizationId}
+          granted={grant.data?.granted === true}
+          checking={grant.isPending}
+          onNext={next}
+        />
       )}
       {step === "tools" && (
-        <ToolsStep organizationId={organizationId} onNext={next} back={back} />
+        <ToolsStep
+          organizationId={organizationId}
+          active={new Set(tools)}
+          onNext={next}
+          back={back}
+        />
       )}
       {step === "crew" && (
         <CrewStep
           organizationId={organizationId}
           organizationName={organizationName}
+          invited={invited}
+          onSent={(emails) =>
+            setSent((current) => [...new Set([...current, ...emails])])
+          }
           onNext={next}
           back={back}
         />
@@ -147,53 +261,26 @@ export function Onboarding({
       {step === "teamspace" && (
         <TeamspaceStep
           organizationId={organizationId}
+          onNameChange={setTeamspaceName}
           onDone={onDone}
           back={back}
         />
       )}
-    </AuthShell>
-  )
-}
-
-function StepNav({
-  back,
-  skip,
-  primary,
-}: {
-  back?: () => void
-  skip?: () => void
-  primary: ReactNode
-}) {
-  return (
-    <div className="setup-nav">
-      {back && (
-        <button type="button" className="setup-back" onClick={back}>
-          Back
-        </button>
-      )}
-      <span className="setup-grow" />
-      {skip && (
-        <button type="button" className="setup-skip" onClick={skip}>
-          Skip
-        </button>
-      )}
-      {primary}
-    </div>
+    </OnboardingFrame>
   )
 }
 
 function AgentStep({
   organizationId,
+  granted,
+  checking,
   onNext,
 }: {
   organizationId: string
+  granted: boolean
+  checking: boolean
   onNext: () => void
 }) {
-  const grant = useQuery({
-    queryKey: ["auth", "agent-grant", organizationId],
-    queryFn: getAgentGrant,
-    retry: false,
-  })
   const turnOn = useMutation({
     mutationFn: () => authorizeAgentGrant(setupHref(organizationId, "agent")),
     onSuccess: ({ authorization_url }) =>
@@ -201,17 +288,16 @@ function AgentStep({
         connectRedirect(authorization_url, window.location.origin)
       ),
   })
-  const granted = grant.data?.granted === true
 
   return (
     <>
-      <h1>Meet Krude, your agent.</h1>
-      <p className="auth-subtitle">
-        Krude works for you: it reads what you share, keeps watch on requests,
-        and takes notes in parleys. Only you see your chats with it.
-      </p>
-      <div className={granted ? "setup-option is-on" : "setup-option"}>
-        <span className="setup-grow">
+      <StepIntro
+        eyebrow="Meet your agent"
+        title="Krude works for you, and only you."
+        lede="It reads what you share, keeps watch on requests, and takes notes in parleys. Only you see your chats with it."
+      />
+      <div className="onb-option" data-on={granted || undefined}>
+        <span className="onb-grow">
           <strong>Works while you’re away</strong>
           <small>
             {granted
@@ -220,18 +306,18 @@ function AgentStep({
           </small>
         </span>
         {granted ? (
-          <span className="setup-on">
+          <span className="onb-on">
             <Check size={15} strokeWidth={2.4} /> On
           </span>
         ) : (
-          <button
-            type="button"
-            className="setup-small"
-            disabled={grant.isPending || turnOn.isPending}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={checking || turnOn.isPending}
             onClick={() => turnOn.mutate()}
           >
             {turnOn.isPending ? "Opening…" : "Turn on"}
-          </button>
+          </Button>
         )}
       </div>
       {turnOn.isError && (
@@ -239,15 +325,7 @@ function AgentStep({
       )}
       <StepNav
         skip={granted ? undefined : onNext}
-        primary={
-          <button
-            className="auth-submit setup-primary"
-            type="button"
-            onClick={onNext}
-          >
-            Continue <ArrowRight size={17} />
-          </button>
-        }
+        primary={<ContinueButton onClick={onNext} />}
       />
     </>
   )
@@ -255,23 +333,16 @@ function AgentStep({
 
 function ToolsStep({
   organizationId,
+  active,
   onNext,
   back,
 }: {
   organizationId: string
+  active: Set<string>
   onNext: () => void
   back?: () => void
 }) {
   const queryClient = useQueryClient()
-  const connections = useQuery({
-    ...connectionsQueryOptions(organizationId),
-    retry: false,
-  })
-  const active = new Set(
-    (connections.data ?? [])
-      .filter((connection) => connection.status === "active")
-      .map((connection) => connection.toolkit)
-  )
   const [problem, setProblem] = useState("")
   const connectApp = useMutation({
     mutationFn: async (toolkit: string) => {
@@ -297,21 +368,21 @@ function ToolsStep({
 
   return (
     <>
-      <h1>Connect where work happens.</h1>
-      <p className="auth-subtitle">
-        Krude and your team’s agents read only what these apps already let you
-        see. You can add more from Tools later.
-      </p>
+      <StepIntro
+        eyebrow="Connect your tools"
+        title="Where does your work live?"
+        lede="Krude reads only what you connect, and only for you. Two is plenty to start; add the rest from Tools any time."
+      />
       {problem && <AuthNotice>{problem}</AuthNotice>}
-      <ul className="setup-apps" aria-label="Apps to connect">
+      <ul className="onb-apps" aria-label="Apps to connect">
         {starterApps.map((app) => {
           const on = active.has(app.toolkit)
           return (
-            <li key={app.toolkit} className={on ? "is-on" : undefined}>
-              <span className="setup-app-logo">
+            <li key={app.toolkit} data-on={on || undefined}>
+              <span className="onb-app-logo">
                 <ToolkitLogo toolkit={app} />
               </span>
-              <span className="setup-grow">
+              <span className="onb-grow">
                 <strong>{app.name}</strong>
                 <small>{on ? "Connected" : app.what}</small>
               </span>
@@ -322,9 +393,9 @@ function ToolsStep({
                   aria-label={`${app.name} connected`}
                 />
               ) : (
-                <button
-                  type="button"
-                  className="setup-small"
+                <Button
+                  variant="outline"
+                  size="sm"
                   aria-label={`Connect ${app.name}`}
                   disabled={connectApp.isPending}
                   onClick={() => {
@@ -335,7 +406,7 @@ function ToolsStep({
                   {connectApp.isPending && connectApp.variables === app.toolkit
                     ? "Opening…"
                     : "Connect"}
-                </button>
+                </Button>
               )}
             </li>
           )
@@ -344,15 +415,7 @@ function ToolsStep({
       <StepNav
         back={back}
         skip={active.size === 0 ? onNext : undefined}
-        primary={
-          <button
-            className="auth-submit setup-primary"
-            type="button"
-            onClick={onNext}
-          >
-            Continue <ArrowRight size={17} />
-          </button>
-        }
+        primary={<ContinueButton onClick={onNext} />}
       />
     </>
   )
@@ -361,16 +424,19 @@ function ToolsStep({
 function CrewStep({
   organizationId,
   organizationName,
+  invited,
+  onSent,
   onNext,
   back,
 }: {
   organizationId: string
   organizationName: string
+  invited: string[]
+  onSent: (emails: string[]) => void
   onNext: () => void
   back?: () => void
 }) {
   const [emailError, setEmailError] = useState("")
-  const [sent, setSent] = useState<string[]>([])
   const [failed, setFailed] = useState<string[]>([])
   const invite = useMutation({
     mutationFn: async (emails: string[]) => {
@@ -383,10 +449,7 @@ function CrewStep({
       }))
     },
     onSuccess: (results) => {
-      setSent((current) => [
-        ...current,
-        ...results.filter((r) => r.ok).map((r) => r.email),
-      ])
+      onSent(results.filter((r) => r.ok).map((r) => r.email))
       setFailed(results.filter((r) => !r.ok).map((r) => r.email))
     },
   })
@@ -412,26 +475,17 @@ function CrewStep({
 
   return (
     <>
-      <h1>Bring your crew aboard.</h1>
-      <p className="auth-subtitle">
-        Invite people to {organizationName}. Everyone gets their own agent.
-        Invitations expire after seven days.
-      </p>
+      <StepIntro
+        eyebrow="Invite your crew"
+        title="Who do you work with most?"
+        lede={`Invite people to ${organizationName}. Each person gets their own Krude, and agents only see what their person shares. Invitations expire after seven days.`}
+      />
       {failed.length > 0 && (
         <AuthNotice>
           Couldn’t invite {failed.join(", ")}. They may already be here.
         </AuthNotice>
       )}
-      {sent.length > 0 && (
-        <ul className="setup-sent" aria-label="Invited">
-          {sent.map((email) => (
-            <li key={email}>
-              <Check size={14} strokeWidth={2.4} /> {email}
-            </li>
-          ))}
-        </ul>
-      )}
-      <form className="auth-form" onSubmit={submit} noValidate>
+      <form className="onb-invite" onSubmit={submit} noValidate>
         <AuthField
           error={emailError}
           label="Email addresses"
@@ -439,26 +493,25 @@ function CrewStep({
           placeholder="raya@company.com, priya@company.com"
           autoComplete="off"
         />
-        <button
-          className="auth-submit setup-secondary"
-          type="submit"
-          disabled={invite.isPending}
-        >
+        <Button variant="outline" type="submit" disabled={invite.isPending}>
           {invite.isPending ? "Sending…" : "Send invitations"}
-        </button>
+        </Button>
       </form>
+      {invited.length > 0 && (
+        <ul className="onb-people" aria-label="Invited">
+          {invited.map((email) => (
+            <li key={email}>
+              <IdentityAvatar identity={personIdentity(email, email)} />
+              <span className="onb-grow">{email}</span>
+              <small>Invited · Member</small>
+            </li>
+          ))}
+        </ul>
+      )}
       <StepNav
         back={back}
-        skip={sent.length === 0 ? onNext : undefined}
-        primary={
-          <button
-            className="auth-submit setup-primary"
-            type="button"
-            onClick={onNext}
-          >
-            Continue <ArrowRight size={17} />
-          </button>
-        }
+        skip={invited.length === 0 ? onNext : undefined}
+        primary={<ContinueButton onClick={onNext} />}
       />
     </>
   )
@@ -466,42 +519,47 @@ function CrewStep({
 
 function TeamspaceStep({
   organizationId,
+  onNameChange,
   onDone,
   back,
 }: {
   organizationId: string
+  onNameChange: (name: string) => void
   onDone: (teamspaceId?: string) => void
   back?: () => void
 }) {
   const [nameError, setNameError] = useState("")
   const create = useMutation({
-    mutationFn: async (name: string) => {
-      const team = await createTeam(organizationId, name)
-      return createTeamspace(organizationId, { team_id: team.id, name })
+    mutationFn: async (teamspace: string) => {
+      const team = await createTeam(organizationId, teamspace)
+      return createTeamspace(organizationId, {
+        team_id: team.id,
+        name: teamspace,
+      })
     },
     onSuccess: (teamspace) => onDone(teamspace.id),
   })
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const name = String(
+    const trimmed = String(
       new FormData(event.currentTarget).get("name") || ""
     ).trim()
-    if (!name || name.length > 100) {
-      setNameError(name ? "Use 100 characters or fewer." : "Give it a name.")
+    if (!trimmed || trimmed.length > 100) {
+      setNameError(trimmed ? "Use 100 characters or fewer." : "Give it a name.")
       return
     }
     setNameError("")
-    create.mutate(name)
+    create.mutate(trimmed)
   }
 
   return (
     <>
-      <h1>Open your first teamspace.</h1>
-      <p className="auth-subtitle">
-        A teamspace is a room, its files and its parleys, shared by people and
-        their agents.
-      </p>
+      <StepIntro
+        eyebrow="Your first teamspace"
+        title="What is the crew working on?"
+        lede="A teamspace holds one piece of work: its room, its files and its parleys, shared by people and their agents."
+      />
       {create.isError && (
         <AuthNotice>
           {create.error instanceof ApiError && create.error.status === 409
@@ -514,6 +572,12 @@ function TeamspaceStep({
         onSubmit={submit}
         noValidate
         id="setup-teamspace"
+        // The miniature shows the name as it is typed.
+        onChange={(event) =>
+          onNameChange(
+            String(new FormData(event.currentTarget).get("name") ?? "")
+          )
+        }
       >
         <AuthField
           error={nameError}
@@ -527,15 +591,13 @@ function TeamspaceStep({
         back={back}
         skip={() => onDone()}
         primary={
-          <button
-            className="auth-submit setup-primary"
+          <ContinueButton
             type="submit"
             form="setup-teamspace"
             disabled={create.isPending}
           >
-            {create.isPending ? "Opening…" : "Open teamspace"}{" "}
-            <ArrowRight size={17} />
-          </button>
+            {create.isPending ? "Opening…" : "Open my workspace"}
+          </ContinueButton>
         }
       />
     </>

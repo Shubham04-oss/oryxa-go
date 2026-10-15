@@ -126,6 +126,12 @@ Before its first run, once:
   plans.
 - In that environment, the secret `CLOUDFLARE_API_TOKEN` (the "Edit Cloudflare
   Workers" template, for this account and the zone).
+- In that environment, the secret `RELEASE_DEPLOY_KEY`: the private half of the
+  repository's write deploy key "deploy: record release (Deploy workflow)". The
+  "main: CI must pass" ruleset requires CI on main and lets only that key push
+  past it, which is how a release records itself. To rotate it, add a new
+  deploy key, replace the secret, add the key to the ruleset's bypass list, then
+  remove the old key.
 
 A release that needs a step first, like the ones below, needs it before its
 pull request merges, since merging releases it.
