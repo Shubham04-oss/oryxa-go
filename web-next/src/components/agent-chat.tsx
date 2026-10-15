@@ -16,7 +16,8 @@ import { useAgent } from "agents/react"
 import { Expand, SquarePen } from "lucide-react"
 import { AgentChatHistory } from "./agent-chat-history"
 import { AgentComposer } from "./agent-composer"
-import { AgentActivity, AgentTimeline } from "./agent-timeline"
+import { AgentTimeline } from "./agent-timeline"
+import { LookingAt } from "./agent-run"
 import { AgentConversation } from "./agent-conversation"
 import { ApiError } from "@/lib/api/client"
 import { getSession } from "@/lib/auth/client"
@@ -84,6 +85,13 @@ const RUN_SETTLE_MS = 2000
 
 function composerLabel(agentName?: string): string {
   return agentName ? `Message ${agentName}` : "Message your agent"
+}
+
+/** The task bar's prompt: a working session takes tasks, not chat. */
+function composerPlaceholder(agentName?: string): string {
+  return agentName
+    ? `Give ${agentName} a task, or ask anything`
+    : "Give your agent a task, or ask anything"
 }
 
 /** An API refusal's own words, or `fallback` for anything without them. */
@@ -481,6 +489,7 @@ export function AgentChat({
           agentName={agentName}
           state={first || notSent ? "ready" : "empty"}
           error={chat.notice}
+          variant="session"
         >
           {notSent}
           {first && (
@@ -491,7 +500,7 @@ export function AgentChat({
         </AgentConversation>
         <AgentComposer
           label={composerLabel(agentName)}
-          placeholder={composerLabel(agentName)}
+          placeholder={composerPlaceholder(agentName)}
           value={draft}
           onChange={onDraftChange}
           onSubmit={(message) =>
@@ -503,6 +512,11 @@ export function AgentChat({
           }
           disabled={first !== null}
           status={first ? "Connecting…" : undefined}
+          context={
+            getScreenContext && (
+              <LookingAt getScreenContext={getScreenContext} />
+            )
+          }
           onFocus={() => onComposingChange(true)}
           onBlur={() => onComposingChange(false)}
         />
@@ -686,6 +700,7 @@ function OpeningConversation({
         state={pending || notSent ? "ready" : "loading"}
         error={error}
         onRetry={onRetry}
+        variant="session"
       >
         {pending ? (
           <p className="workspace-agent-message" data-from="member">
@@ -700,7 +715,7 @@ function OpeningConversation({
       </AgentConversation>
       <AgentComposer
         label={composerLabel(agentName)}
-        placeholder={composerLabel(agentName)}
+        placeholder={composerPlaceholder(agentName)}
         value={draft}
         onChange={onDraftChange}
         sendDisabled
@@ -1007,9 +1022,10 @@ function ThreadChat({
     return () => onStateChange(threadId, "idle")
   }, [threadId, state])
 
-  const lastEntry = entries.at(-1)
-  const drafting =
-    lastEntry?.kind === "message" && lastEntry.state === "streaming"
+  function stop() {
+    setStopped(true)
+    void chat.stop()
+  }
   const lastMemberMessage = lastUserMessageId(chat.messages)
   const label = composerLabel(agentName)
   const status =
@@ -1034,11 +1050,15 @@ function ThreadChat({
         }
         error={runError}
         follow={lastMemberMessage}
+        variant="session"
       >
         <AgentTimeline
+          variant="session"
           entries={entries}
+          items={items}
           running={running}
           ended={ended}
+          onStop={stop}
           agentName={agentName}
           actionable={actionable}
           submitted={submitted}
@@ -1052,12 +1072,11 @@ function ThreadChat({
             {pending}
           </p>
         )}
-        {running && !drafting && <AgentActivity />}
         {notSent}
       </AgentConversation>
       <AgentComposer
         label={label}
-        placeholder={label}
+        placeholder={composerPlaceholder(agentName)}
         value={draft}
         onChange={onDraftChange}
         onSubmit={(message) => {
@@ -1067,11 +1086,11 @@ function ThreadChat({
         disabled={actionable.size > 0}
         sendDisabled={connection !== "open"}
         streaming={running}
-        onStop={() => {
-          setStopped(true)
-          void chat.stop()
-        }}
+        onStop={stop}
         status={status}
+        context={
+          getScreenContext && <LookingAt getScreenContext={getScreenContext} />
+        }
         onFocus={() => onComposingChange(true)}
         onBlur={() => onComposingChange(false)}
       />

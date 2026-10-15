@@ -434,7 +434,40 @@ not permission to copy every incidental value into a new component.
   header's own centre row (y=28 in its 56px band), vertically level with the
   back button and title, even when (like the work tabs) they are positioned
   over a region below the header rather than inside the `<header>` itself.
-- An agent conversation reads as a quiet log on the base surface: the
+- **The agent conversation is a working session, not a messenger thread**
+  (founder, 15 Oct 2026; `agent-run.tsx`, `agent-run.css`). People chats keep
+  bubbles; the primary agent's chat does not. Each thing the member asks is a
+  **task line**: left-aligned, no bubble, 14px semibold, with "You · 09:41"
+  above it (a batch from their apps keeps its "From your apps" notice there).
+  Under it, the work that answered it is one **run card**, a filled tile (the
+  base on the panel's canvas tile, the canvas in the session's column):
+  - **Header:** a status (Working or Waiting for you with a Thinking Orb;
+    Done, Interrupted or Failed with an icon) as an outline badge, how long
+    it took, and tokens used where the run said; Stop (ghost, sm) while it
+    runs. Duration comes from the run's own start and end markers, which only
+    runs streamed into the chat's transcript carry; otherwise from the items'
+    times; with neither, nothing is shown. Go's history keeps no run markers
+    or usage (#322), so older runs show no tokens.
+  - **Steps:** one ghost toggle ("3 steps · 1 failed", with app marks) that
+    opens a list, one line per call: app mark, what it did, the key argument
+    (query, file, URL or channel, from the call's own arguments), and its
+    state; a failed step shows its error. Open while the run works or waits,
+    folded once it is over, until the member chooses. "Opened" lists the web
+    addresses calls were given. Go sends no result text or sources, so a
+    step says only Done or Failed, and there is no Sources view yet (#322).
+  - **Approvals** sit inside the card as the confirmation cards below.
+  - **Outputs:** a file is a card row (its kind badge, name, "Version 2 ·
+    Made in this chat", Open as outline sm, Download as ghost icon-sm; links,
+    so a click that asks for a new tab gets one); an image also shows its
+    preview. Requests keep their request card.
+  - **The answer** is the Markdown at the end of the card; a failed run's
+    words close it.
+  The composer is a task bar ("Give Leo a task, or ask anything") with a quiet
+  "Looking at …" chip above the field: what the page's screen context names
+  (its selection, or the page), which goes with the message. Specialist and
+  team chats still use the log below until they move to run cards.
+- Elsewhere (specialists, until they move to run cards) an agent
+  conversation reads as a quiet log on the base surface: the
   member's messages in raised bubbles on the right; the agent's answers as
   full-width Markdown, labelled only when a sub-agent wrote them; each run of
   tool calls folded into one muted status row with a Thinking Orb for the
@@ -453,7 +486,10 @@ not permission to copy every incidental value into a new component.
   owner's own reply says "Waiting for Ada to reply", and an answer the owner
   wrote says "Ada replied" in place of "Answered" and shows their words as
   they wrote them (plain text, never Markdown). Confirmations are small
-  cards with Decline and Approve pills (several waiting are answered together);
+  cards whose actions follow the action-row convention: `ui/button`, both
+  `sm`, right-aligned 8px apart, Decline (outline; destructive once chosen)
+  then Approve (default) on the far right (several waiting are answered
+  together with Send answers);
   files as a thumbnail or a file chip (opening in the session's viewer, with
   Download beside it); a failed run as one muted error line,
   and an answer cut short marked "Interrupted". A specialist's answer is its
