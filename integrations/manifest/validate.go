@@ -187,9 +187,15 @@ func (v *validator) allowedURL(path, raw string) {
 	if u == nil {
 		return
 	}
-	if !slices.ContainsFunc(v.m.EgressAllowlist, func(h string) bool { return hostAllowed(h, u.Hostname()) }) {
+	if !v.m.AllowsHost(u.Hostname()) {
 		v.errf(path, "host %q is not in egress_allowlist", u.Hostname())
 	}
+}
+
+// AllowsHost reports whether host is on the egress allowlist: listed exactly,
+// or under a "*." entry (one label or more, never the bare domain).
+func (m *Manifest) AllowsHost(host string) bool {
+	return slices.ContainsFunc(m.EgressAllowlist, func(pattern string) bool { return hostAllowed(pattern, host) })
 }
 
 func hostAllowed(pattern, host string) bool {
