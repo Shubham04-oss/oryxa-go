@@ -413,6 +413,22 @@ not permission to copy every incidental value into a new component.
   canvas, opened from People or Team's recent conversations, under the header
   that names the person; and the agent panel's DMs tab, under a compact row
   with a back arrow to the list.
+  - **Messages** (founder's redesign, 15 Oct 2026; `messages-page.tsx`). In
+    the canvas, the open DM sits between the member's DM list and a card
+    about the person, the three columns answering the canvas's width (a
+    container query) rather than the window's: a narrow canvas drops the
+    card first, then the list, leaving the DM alone as before. The list, a
+    filled tile, is "Messages · N unread" over "Find a person" and the DMs
+    (side conversations stay in the DMs tab, under their teamspace), the open
+    one the raised tile; a search also lists anyone else who matches, to
+    start a conversation, and New message moves to it. The person card, a
+    filled tile in the canvas and never in the agent panel's place, says
+    their name, role and "Online" only while the page knows it, Parley (the
+    DM's own room; while the card shows, the DM keeps only a running
+    parley's strip), their agent where a shared teamspace seats one, and the
+    teamspaces you share. Local time, a profile and shared files wait for
+    the API (#322), so nothing stands in for them. The header still names
+    the person.
   - It reads as a quiet log (a centered column in the canvas): the member's
     messages in raised bubbles on the right, the other person's as plain text
     on the left beside their avatar. Each person's messages within one minute

@@ -126,7 +126,14 @@ const roster: SideRoster = {
 }
 
 function person(id: string, name: string): DmPerson {
-  return { id, name, email: `${id}@sim.oryxa`, role: "member", spaces: [] }
+  return {
+    id,
+    name,
+    email: `${id}@sim.oryxa`,
+    role: "member",
+    spaces: [],
+    agents: [],
+  }
 }
 
 /** Whom the panel can name, as useDmPeople hands it over once loaded. */
