@@ -260,6 +260,52 @@ export function LiveActivity({
   )
 }
 
+/** What `browser` has done, oldest first, from the room's log. */
+export function browserSteps(
+  events: readonly LiveEvent[],
+  browser: string
+): LiveEvent[] {
+  return events.filter(
+    (event) =>
+      event.type.startsWith("browser.") &&
+      event.data.child === browser &&
+      event.summary
+  )
+}
+
+/**
+ * One browser's steps, as LiveActivity shows the run log: the last few,
+ * with the newest marked as happening now while the browser runs.
+ */
+export function BrowserSteps({
+  events,
+  browser,
+  running,
+  limit = 4,
+}: {
+  events: readonly LiveEvent[]
+  browser: string
+  running: boolean
+  limit?: number
+}) {
+  const steps = browserSteps(events, browser).slice(-limit)
+  if (steps.length === 0) return null
+  return (
+    <ol className="live-steps" aria-label="Steps">
+      {steps.map((event, index) => {
+        const now = running && index === steps.length - 1
+        return (
+          <li key={event.seq} data-now={now ? "true" : undefined}>
+            <span className="live-steps-mark" aria-hidden="true" />
+            <span className="live-steps-what">{event.summary}</span>
+            <small>{now ? "now" : timeAgo(event.at)}</small>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
 /**
  * A room's live work in one place, for a teamspace's Live tab: its
  * sandboxes and browsers, the open one, and the run log.

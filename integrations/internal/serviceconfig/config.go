@@ -3,9 +3,12 @@
 package serviceconfig
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
@@ -22,6 +25,29 @@ type Config struct {
 	// as serviceauth.ParseCallers reads them. None means every internal call
 	// is refused.
 	ServiceCallers []serviceauth.Caller
+	// KMSKeyID wraps the data keys that seal app secrets and tokens. Without
+	// it the service cannot seal, so the routes that store secrets are not
+	// mounted.
+	KMSKeyID string
+	// PublicURL is where browsers reach this service (no trailing slash); the
+	// OAuth callback is registered with each app under it. Without it sign-ins
+	// are not mounted.
+	PublicURL string
+	// ReturnOrigins are the origins (scheme and host) a sign-in may send the
+	// browser back to, comma separated in INTEGRATIONS_RETURN_ORIGINS.
+	ReturnOrigins []string
+	// OryxaApps are Oryxa's own apps, loaded into org_apps at start. ECS
+	// injects the JSON from AWS Secrets Manager; it is never in the repo.
+	OryxaApps []OryxaApp
+}
+
+// OryxaApp is one of Oryxa's own apps (design §9.3).
+type OryxaApp struct {
+	App           string            `json:"app"`
+	ClientID      string            `json:"client_id"`
+	Secret        secrets.Secret    `json:"secret"`
+	WebhookSecret secrets.Secret    `json:"webhook_secret"`
+	Extra         map[string]string `json:"extra"`
 }
 
 // FromEnv reads the configuration through getenv, which a host layers its own
@@ -34,6 +60,21 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	var err error
 	if config.ServiceCallers, err = serviceauth.ParseCallers(getenv("INTEGRATIONS_SERVICE_CALLERS")); err != nil {
 		return Config{}, fmt.Errorf("INTEGRATIONS_SERVICE_CALLERS: %w", err)
+	}
+	config.KMSKeyID = strings.TrimSpace(getenv("INTEGRATIONS_KMS_KEY_ID"))
+	config.PublicURL = strings.TrimRight(strings.TrimSpace(getenv("INTEGRATIONS_PUBLIC_URL")), "/")
+	for _, origin := range strings.Split(getenv("INTEGRATIONS_RETURN_ORIGINS"), ",") {
+		if origin = strings.TrimRight(strings.TrimSpace(origin), "/"); origin != "" {
+			config.ReturnOrigins = append(config.ReturnOrigins, origin)
+		}
+	}
+	if raw := strings.TrimSpace(getenv("INTEGRATIONS_ORYXA_APPS")); raw != "" {
+		decoder := json.NewDecoder(bytes.NewReader([]byte(raw)))
+		decoder.DisallowUnknownFields()
+		// The decoder's error is dropped: it can quote the value, which holds secrets.
+		if err := decoder.Decode(&config.OryxaApps); err != nil {
+			return Config{}, fmt.Errorf("INTEGRATIONS_ORYXA_APPS is not a JSON list of apps")
+		}
 	}
 	return config, nil
 }
