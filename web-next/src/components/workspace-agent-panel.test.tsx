@@ -12,7 +12,7 @@ import {
   within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { StrictMode } from "react"
+import { StrictMode, useState } from "react"
 import type { ComponentProps, ReactElement } from "react"
 import {
   ORG,
@@ -23,6 +23,8 @@ import {
 } from "./agents-fake-backend"
 import type { DmPeople } from "./direct-message-people"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
+import { AgentSession } from "./agent-session"
+import type { PrimaryAgentFileTarget } from "./primary-agent-files"
 import type { Inbox } from "@/lib/dms"
 import {
   MAX_WAITING_MESSAGES,
@@ -168,6 +170,16 @@ function stubGo(seed: Seed = {}) {
           pending_confirmations: seed.pending?.[id] ?? [],
         }
         return json(body)
+      }
+      if (
+        /^\/v1\/organizations\/[^/]+\/threads\/[^/]+\/artifacts\//.test(path)
+      ) {
+        return new Response("file", {
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": 'attachment; filename="report.pdf"',
+          },
+        })
       }
       if (
         path.startsWith("/agents/thread-chat-agent/") &&
@@ -1170,5 +1182,194 @@ describe("a file the agent saves", () => {
     await screen.findByRole("textbox", { name: "Message Scout" })
     finish()
     expect(onFile).not.toHaveBeenCalled()
+  })
+})
+
+describe("the agent session", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const saved: Item[] = [
+    { type: "message", id: "ev_1", author: "member", text: "Write it up" },
+    { type: "artifact", id: "ev_f", artifact: "report.pdf", version: 2 },
+  ]
+
+  /**
+   * The session as the shell lays it out: opening a file from the chat
+   * opens the session, the chat column first and the file beside it, and
+   * the panel collapses meanwhile.
+   */
+  function Session() {
+    const [file, setFile] = useState<PrimaryAgentFileTarget | null>(null)
+    const [slot, setSlot] = useState<HTMLElement | null>(null)
+    return (
+      <>
+        {file && (
+          <AgentSession
+            chatSlotRef={setSlot}
+            chatLabel="Conversation with Leo"
+            workLabel="Work"
+          >
+            <button type="button" onClick={() => setFile(null)}>
+              Back to Agent overview
+            </button>
+            <p>Viewing {file.name}</p>
+          </AgentSession>
+        )}
+        {panel({
+          expanded: !file,
+          primaryWork: Boolean(file),
+          primaryChatSlot: file ? slot : null,
+          onOpenPrimaryFile: setFile,
+        })}
+      </>
+    )
+  }
+
+  async function withFile(items: Item[] = saved) {
+    const go = stubGo({ threads: [thread("th_1", "Write it up")] })
+    withQueries(<Session />)
+    ;(await socketOn(chatName("th_1"))).open()
+    const chat = agentChats.named(chatName("th_1"))
+    chat.update({ messages: itemsToChatMessages(items) })
+    return go
+  }
+
+  it("opens a file from the chat beside it: the chat on the left, the file on the right", async () => {
+    await withFile()
+    const box = leoBox()
+    type(box, "And a summary slide")
+    const chip = screen.getByRole("link", { name: "report.pdf" })
+    chip.focus()
+    fireEvent.click(chip)
+
+    const work = await screen.findByRole("region", { name: "Work" })
+    expect(within(work).getByText("Viewing report.pdf")).toBeTruthy()
+    const column = screen.getByRole("region", { name: "Conversation with Leo" })
+    // The same conversation, moved and not mounted again: the draft and the
+    // focus come with it.
+    expect(leoBox()).toBe(box)
+    expect(column.contains(box)).toBe(true)
+    expect(box.value).toBe("And a summary slide")
+    expect(document.activeElement).toBe(chip)
+    // The chat comes first, the file after it.
+    expect(
+      column.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      box.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+
+  it("keeps the draft when the session closes and the chat goes back to the panel", async () => {
+    await withFile()
+    const box = leoBox()
+    type(box, "Still writing")
+    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }))
+    await screen.findByRole("region", { name: "Work" })
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to Agent overview" })
+    )
+    expect(
+      screen.queryByRole("region", { name: "Conversation with Leo" })
+    ).toBe(null)
+    expect(leoBox()).toBe(box)
+    expect(box.value).toBe("Still writing")
+    expect(
+      document.getElementById("workspace-agent-view-agents")?.contains(box)
+    ).toBe(true)
+  })
+
+  it("keeps the composer's focus when the session closes from inside the chat", async () => {
+    await withFile()
+    const box = leoBox()
+    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }))
+    const column = await screen.findByRole("region", {
+      name: "Conversation with Leo",
+    })
+    box.focus()
+    expect(column.contains(document.activeElement)).toBe(true)
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to Agent overview" })
+    )
+    expect(
+      screen.queryByRole("region", { name: "Conversation with Leo" })
+    ).toBe(null)
+    expect(document.activeElement).toBe(box)
+  })
+
+  it("offers the file's download beside it, and opens nothing in a new tab", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null)
+    await withFile()
+    expect(
+      screen.getByRole("link", { name: "Download report.pdf" })
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }))
+    await screen.findByRole("region", { name: "Work" })
+    expect(opened).not.toHaveBeenCalled()
+  })
+
+  it("downloads the file from Download, without the viewer or a new tab", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null)
+    const saves: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      saves.push(this.download)
+    })
+    const go = await withFile()
+    fireEvent.click(screen.getByRole("link", { name: "Download report.pdf" }))
+
+    await waitFor(() => expect(saves).toEqual(["report.pdf"]))
+    expect(go.calls).toContain(
+      `GET /v1/organizations/${ORG}/threads/th_1/artifacts/report.pdf`
+    )
+    expect(screen.queryByRole("region", { name: "Work" })).toBe(null)
+    expect(opened).not.toHaveBeenCalled()
+  })
+
+  it("opens a new tab, not the viewer, for a click that asks for one", async () => {
+    const saves: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      saves.push(this.download)
+    })
+    const go = await withFile()
+    fireEvent.click(screen.getByRole("link", { name: "report.pdf" }), {
+      metaKey: true,
+    })
+
+    // The file's own way out (an attachment here, so it is saved), after
+    // its headers refresh the cookie: not the viewer.
+    await waitFor(() => expect(saves).toEqual(["report.pdf"]))
+    expect(go.calls).toContain(
+      `GET /v1/organizations/${ORG}/threads/th_1/artifacts/report.pdf`
+    )
+    expect(screen.queryByRole("region", { name: "Work" })).toBe(null)
+  })
+
+  it("opens an image from its thumbnail beside the chat, its Download in the caption", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null)
+    await withFile([
+      { type: "message", id: "ev_1", author: "member", text: "Chart it" },
+      { type: "artifact", id: "ev_c", artifact: "chart.png", version: 1 },
+    ])
+    const thumbnail = screen.getByRole("link", { name: "Open chart.png" })
+    const caption = thumbnail.closest("figure")?.querySelector("figcaption")
+    expect(
+      caption &&
+        within(caption).getByRole("link", {
+          name: "Download chart.png",
+        })
+    ).toBeTruthy()
+
+    fireEvent.click(thumbnail)
+    const work = await screen.findByRole("region", { name: "Work" })
+    expect(within(work).getByText("Viewing chart.png")).toBeTruthy()
+    expect(opened).not.toHaveBeenCalled()
   })
 })
