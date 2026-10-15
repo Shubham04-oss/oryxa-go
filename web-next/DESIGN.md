@@ -118,7 +118,8 @@ not permission to copy every incidental value into a new component.
   | Tile | Rows |
   | --- | --- |
   | (no heading) | My workspace; Requests, with how many wait on the member as a strong count; Chats with your agent (the agent panel's history until a Chats page exists) |
-  | Teamspaces (the heading opens the list; + leads there to add one) | Each of the member's teamspaces by its planet, opening it; "No teamspaces yet." when there are none |
+  | Live now (only while the member is in a parley) | Its own tile, edged in green: "Parley · {room}" with how long it has run (opens the parley), then mute, camera and leave (`ui/button` outline `icon-sm`, leave `destructive`). Agents' live sessions ("Krude is browsing …") are left out until there is an org-wide live list (#322). |
+  | Teamspaces (the heading opens the list; + leads there to add one) | Each of the member's teamspaces by its planet, opening it, with a green dot while a parley runs there (each room's call read every 20 s, for the first eight only, until the org-wide live list exists); "No teamspaces yet." when there are none |
   | Messages (+ opens People to pick someone) | The three latest DMs, plus any older one with unread messages (six at most), each with its unread count; People, with how many |
   | Agents (+ leads to Specialists) | The primary agent by name and voxel avatar, "Your agent" (Agent overview); Specialists, Agent teams and Workflows, each with how many (Workflows opens Agent overview, where they live) |
   | Library | Two tiles, Knowledge and Tools. The board's Files tile waits for a Files page. |

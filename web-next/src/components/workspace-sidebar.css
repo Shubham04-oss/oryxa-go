@@ -310,3 +310,44 @@ button.workspace-sidebar-heading[aria-current="page"] { color: var(--text); }
   /* On a phone the closed sidebar is one round arrow at the edge. */
   .workspace-sidebar-toggle .workspace-sidebar-org-mark { display: none; }
 }
+
+/* Live now (workspace-sidebar-live.tsx): the member's own parley as its own
+   tile, and a green dot on a teamspace with one running. */
+.workspace-sidebar-live {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 14px;
+  background: var(--canvas);
+  box-shadow: inset 0 0 0 1px var(--tone-263a2e);
+}
+.workspace-sidebar-live-row {
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 0 4px;
+  color: var(--text);
+  font-size: 12px;
+}
+.workspace-sidebar-live-time { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.workspace-sidebar-live-actions { display: flex; gap: 8px; padding: 0 4px; }
+.workspace-sidebar-live-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tone-7fcf98);
+  box-shadow: 0 0 0 3px var(--tone-8bcca721);
+}
+.workspace-sidebar-tile li > .workspace-sidebar-live-dot {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  pointer-events: none;
+}
+.workspace-sidebar-tile li:has(> .workspace-sidebar-live-dot) .workspace-sidebar-item { padding-right: 28px; }
+.workspace-shell[data-left="collapsed"] .workspace-sidebar-tile li > .workspace-sidebar-live-dot.is-badge {
+  top: 6px;
+  right: 6px;
+}
