@@ -59,6 +59,34 @@ not permission to copy every incidental value into a new component.
   content wraps past one line — with a circular icon send button inside,
   never a rectangular field with a text "Send" button. Share one set of CSS
   across composers instead of copying the pattern per screen.
+- **Buttons and action rows** (founder, 15 Oct 2026: button order, spacing
+  and consistency were poor across Settings, Teamspaces and the rest of the
+  app). One convention everywhere:
+  - Every button is `ui/button` (`Button`), with its variants (`default`,
+    `outline`, `secondary`, `ghost`, `destructive`, `link`) and sizes. Never
+    write a new button recipe in CSS; restyle through tokens and variants.
+  - One height per context: `size="default"` (32px) for page headers, forms,
+    dialogs and confirms; `sm` for trailing row actions; `icon-sm` for inline
+    row icons. The buttons in one row are always the same size.
+  - **Dialog footers and inline confirm boxes:** the message above, the
+    buttons right-aligned with 8px between them: Cancel (`outline`), then
+    the confirm on the far right. The confirm is `default`, or `destructive`
+    when it deletes, removes, revokes, disconnects or leaves.
+  - **Form footers:** status text on the left, the buttons on the right.
+    A destructive action never sits next to Save; it goes in a separate
+    danger group at the end of the page or dialog.
+  - **Settings rows:** one trailing `outline` `sm` action, right-aligned;
+    switches and selects sit in the same trailing slot.
+  - **Cards and detail headers:** the primary first, start-aligned, 8px gap.
+    A destructive action is pushed to the far end (`ml-auto`) or moved into
+    the ⋯ menu.
+  - **Page header actions:** right-aligned, at most one `default` primary.
+  - **Inline row icons:** `ghost` `icon-sm`; a destructive one tints only on
+    hover. One icon-button size per context, never three.
+  - **Spacing:** 8 between buttons, 8 from a label to its control, 12
+    between rows, 24 between sections, and page padding of 24 (32 when the
+    page is wide). Keep values on the 8/12/16/24/32 rhythm.
+  - **Phones:** an action row stacks full-width, primary on top.
 - Use Lucide for general UI icons. Use actual brand marks for integrations.
   Icons should express an action or entity, never fill empty space.
 - Every interactive state must be visible: hover, active/selected, keyboard
