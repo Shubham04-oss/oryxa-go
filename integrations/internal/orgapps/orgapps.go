@@ -363,6 +363,33 @@ func (s *Service) Choose(ctx context.Context, org, app string) (Chosen, error) {
 	return Chosen{}, fmt.Errorf("%w: %s", ErrNotSetUp, app)
 }
 
+// ClientCredentials are an app's client id and opened secret, for a token
+// request. Keep it only as long as the request.
+type ClientCredentials struct {
+	ClientID string
+	Secret   secrets.Secret
+}
+
+// Credentials opens the secret of the app id names, retired or not: a
+// connection pinned to a replaced app keeps refreshing and revoking through it.
+func (s *Service) Credentials(ctx context.Context, id string) (ClientCredentials, error) {
+	r, err := scan(s.pool.QueryRow(ctx, `SELECT `+columns+` FROM integrations.org_apps WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ClientCredentials{}, ErrNotFound
+	}
+	if err != nil {
+		return ClientCredentials{}, err
+	}
+	if r.Secret == nil {
+		return ClientCredentials{}, fmt.Errorf("%w: the app has no secret", ErrNotFound)
+	}
+	secret, err := s.sealer.Open(ctx, where(r, "secret"), *r.Secret)
+	if err != nil {
+		return ClientCredentials{}, err
+	}
+	return ClientCredentials{ClientID: r.ClientID, Secret: secret}, nil
+}
+
 func (s *Service) view(ctx context.Context, r row) (View, error) {
 	v := View{ID: r.ID, OrgID: r.OrgID, App: r.App, Kind: r.Kind, ClientID: r.ClientID, Extra: maps.Clone(r.Extra),
 		ExpiresAt: r.ExpiresAt, Status: r.Status, CreatedBy: r.CreatedBy, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}

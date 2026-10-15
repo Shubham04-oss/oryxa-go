@@ -56,3 +56,15 @@ func TestOnReadsTheKeyAndOryxasAppsAndNeverEchoesTheirSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestOnReadsWhereBrowsersReachTheServiceAndWhereTheyMayReturnTo(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{
+		"INTEGRATIONS_ENABLED":        "true",
+		"INTEGRATIONS_PUBLIC_URL":     " https://integrations.example.com/ ",
+		"INTEGRATIONS_RETURN_ORIGINS": "https://app.example.com/, ,https://staging.example.com",
+	}))
+	if err != nil || config.PublicURL != "https://integrations.example.com" ||
+		len(config.ReturnOrigins) != 2 || config.ReturnOrigins[0] != "https://app.example.com" || config.ReturnOrigins[1] != "https://staging.example.com" {
+		t.Fatalf("config = %+v, err = %v", config, err)
+	}
+}
