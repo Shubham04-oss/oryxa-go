@@ -145,7 +145,7 @@ describe("WorkspaceShell navigation", () => {
       ).toBeTruthy()
       fireEvent.click(screen.getByRole("button", { name: "Tool access" }))
       fireEvent.click(screen.getByRole("button", { name: "Open my tools →" }))
-      expect(screen.queryByRole("main", { name: "Settings" })).toBeNull()
+      expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
       fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
       fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
       expect(
@@ -169,7 +169,7 @@ describe("WorkspaceShell navigation", () => {
     }
     openSettings()
     fireEvent.click(screen.getByRole("button", { name: "Teams" }))
-    fireEvent.click(screen.getByRole("button", { name: "My workspace" }))
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }))
     openSettings()
     expect(
       screen.getByRole("heading", { name: "Teams", level: 2 })
@@ -219,23 +219,10 @@ describe("WorkspaceShell navigation", () => {
       }),
       { target: { value: "Member's unfinished Home message" } }
     )
-    view.rerender(
-      <WorkspaceShell
-        {...props}
-        session={{
-          ...session,
-          user: { ...session.user, display_name: "Member refreshing" },
-        }}
-      />
-    )
-    expect(
-      screen.getByDisplayValue("Member's unfinished Home message")
-    ).toBeTruthy()
-    // Settings is a page of the shell: it replaces Home in the canvas.
     fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
     fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
     fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
-    expect(screen.getByRole("main", { name: "Settings" })).toBeTruthy()
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
 
     view.rerender(
       <WorkspaceShell
@@ -246,12 +233,15 @@ describe("WorkspaceShell navigation", () => {
         }}
       />
     )
-    expect(screen.getByRole("main", { name: "Settings" })).toBeTruthy()
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
     expect(
       view.container
         .querySelector(".workspace-shell")
         ?.getAttribute("data-left")
     ).toBe("expanded")
+    expect(
+      screen.getByDisplayValue("Member's unfinished Home message")
+    ).toBeTruthy()
 
     view.rerender(
       <WorkspaceShell
@@ -266,7 +256,7 @@ describe("WorkspaceShell navigation", () => {
         }}
       />
     )
-    expect(screen.queryByRole("main", { name: "Settings" })).toBeNull()
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
     const shell = view.container.querySelector(".workspace-shell")
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("collapsed")
@@ -500,15 +490,11 @@ describe("WorkspaceShell navigation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
     fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
-    expect(screen.getByRole("main", { name: "Settings" })).toBeTruthy()
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
     expect(
       screen.getByRole("heading", { name: "Account", level: 2 })
     ).toBeTruthy()
-    fireEvent.click(
-      within(
-        screen.getByRole("navigation", { name: "Settings sections" })
-      ).getByRole("button", { name: "People" })
-    )
+    fireEvent.click(screen.getByRole("button", { name: "People" }))
     expect(
       screen.getByRole("heading", { name: "Make room for someone new." })
     ).toBeTruthy()
@@ -539,12 +525,8 @@ describe("WorkspaceShell navigation", () => {
         screen.getByRole("heading", { name: section, level: 2 })
       ).toBeTruthy()
     }
-    fireEvent.click(
-      within(
-        screen.getByRole("navigation", { name: "Team navigation" })
-      ).getByRole("button", { name: "People" })
-    )
-    expect(screen.queryByRole("main", { name: "Settings" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }))
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
     expect(
       screen.getByRole("heading", { name: "People", level: 1 })
     ).toBeTruthy()

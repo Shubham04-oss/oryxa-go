@@ -10,6 +10,7 @@ import {
   Puzzle,
   UserRound,
   UsersRound,
+  X,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import type { ReactNode } from "react"
@@ -28,6 +29,14 @@ import { WorkspaceEmailSettings } from "./workspace-email-settings"
 import { SlackMark, WorkspaceSlackSettings } from "./slack-settings"
 import { WorkspaceBillingSettings } from "./workspace-billing-settings"
 import { SettingsHeading, SettingsNote } from "./settings-kit"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import {
   rememberedSettingsPage,
@@ -117,12 +126,13 @@ const navGroups: readonly { label: string; items: readonly NavItem[] }[] = [
 ]
 
 /**
- * Settings, a page of the shell (DESIGN.md §3): the "Settings · org" header,
- * its own grouped navigation on a tile, and the open page beside it. It opens
- * from the sidebar's Settings entry, and on Billing or Slack when a link
- * asked for them (`?view=billing|slack`).
+ * Settings, a pop-up over the workspace (DESIGN.md §3; the founder keeps it a
+ * dialog): "Settings · org" at its head, its own grouped navigation on a
+ * tile, and the open page beside it. It opens from the user menu, and on
+ * Billing or Slack when a link asked for them (`?view=billing|slack`).
  */
 export function WorkspaceSettings({
+  onClose,
   identity,
   session,
   selectedOrganization,
@@ -134,6 +144,7 @@ export function WorkspaceSettings({
   onOpenTools,
   initialPage,
 }: {
+  onClose: () => void
   identity: AvatarIdentity
   session?: Session
   selectedOrganization?: Organization
@@ -285,21 +296,33 @@ export function WorkspaceSettings({
   }
 
   return (
-    <>
-      <header className="workspace-header settings-header">
-        <h1>
-          Settings
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <DialogContent className="settings-dialog" showCloseButton={false}>
+        <header className="settings-dialog-head">
+          <DialogTitle className="settings-dialog-title">Settings</DialogTitle>
           {organization && (
-            <>
-              <span className="settings-crumb-sep" aria-hidden="true">
-                ·
-              </span>
-              <span className="settings-crumb-org">{organization.name}</span>
-            </>
+            <DialogDescription className="settings-dialog-org">
+              {organization.name}
+            </DialogDescription>
           )}
-        </h1>
-      </header>
-      <main className="workspace-canvas settings-canvas" aria-label="Settings">
+          <DialogClose
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="settings-dialog-close"
+                aria-label="Close settings"
+              />
+            }
+          >
+            <X size={17} strokeWidth={1.7} />
+          </DialogClose>
+        </header>
         <div className="settings-layout">
           <nav className="settings-nav" aria-label="Settings sections">
             {navGroups.map((group) => (
@@ -341,7 +364,7 @@ export function WorkspaceSettings({
             </div>
           </section>
         </div>
-      </main>
-    </>
+      </DialogContent>
+    </Dialog>
   )
 }

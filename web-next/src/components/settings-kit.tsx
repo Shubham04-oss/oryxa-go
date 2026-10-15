@@ -222,13 +222,21 @@ export function SettingsValue({
   )
 }
 
-/** A row's button: quiet by default, `danger` for a destructive action. */
+/**
+ * A Settings button: the library's Button (DESIGN.md §1, "Buttons and action
+ * rows"). In a row it is the one trailing `outline` `sm` action; in an action
+ * row or a confirm it is `size="default"`, Cancel `outline` then the confirm,
+ * `primary`, or `danger` when it deletes, removes, revokes, disconnects or
+ * leaves.
+ */
 export function SettingsButton({
   tone,
+  size = "sm",
   className,
   ...props
 }: Omit<ComponentProps<typeof Button>, "variant" | "size"> & {
   tone?: "primary" | "danger"
+  size?: "sm" | "default"
 }) {
   return (
     <Button
@@ -240,11 +248,32 @@ export function SettingsButton({
             ? "default"
             : "outline"
       }
-      size="sm"
+      size={size}
       className={cn("settings-button", className)}
       data-tone={tone}
       {...props}
     />
+  )
+}
+
+/**
+ * A form footer or an inline confirm: `start` holds status text (or the
+ * message being confirmed) on the left, the buttons sit on the right, 8px
+ * apart, Cancel first and the confirm last. A destructive action never sits
+ * next to Save: it goes in the page's Danger zone group.
+ */
+export function SettingsActions({
+  children,
+  start,
+}: {
+  children?: ReactNode
+  start?: ReactNode
+}) {
+  return (
+    <div className="settings-actions">
+      {start && <div className="settings-actions-start">{start}</div>}
+      <div className="settings-actions-end">{children}</div>
+    </div>
   )
 }
 

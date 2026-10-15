@@ -217,10 +217,11 @@ not permission to copy every incidental value into a new component.
   share, Message). On the Agents pages the primary agent, the stats, teams,
   specialists and workflows are filled tiles on the canvas, with no
   outlines.
-- **Settings as a full page** (founder's redesign, 15 Oct 2026). Settings is a
-  page of the shell, not a modal: the sidebar stays, the header reads
-  "Settings · {organisation}", and the canvas holds two tiles on the base, its
-  own menu and the open page. The menu is three groups, You (Account, Your
+- **Settings, a pop-up** (founder, 15 Oct 2026: keep it a pop-up; what was
+  wrong was button order, spacing and consistency between pages). Settings is
+  the library's Dialog over the workspace: its head reads "Settings ·
+  {organisation}" with a close button, and its body holds two tiles on the
+  base, its own menu and the open page. The menu is three groups, You (Account, Your
   agent, Notifications), Workspace (Organisation, People, Teams, Billing) and
   Connections (Tool access, Sign-in apps for admins, Slack, Email), the open
   page the raised tile. A page is its title and one line under it, then
@@ -228,11 +229,15 @@ not permission to copy every incidental value into a new component.
   card rows, a title and what it means on the left and the control on the
   right, with a hairline between rows. Pages are built only from the settings
   kit (`settings-kit.tsx`: group, card, row, switch, select, chips, status,
-  value, button, note, message), which wraps the shadcn base-nova library;
-  inside Settings and its pop-ups the library's colour variables are mapped
-  to theme roles (`workspace-settings.css`). A danger zone is its own group
-  whose row title is red. Opening any other page leaves Settings; Escape no
-  longer closes it.
+  value, button, actions, note, message), which wraps the shadcn base-nova
+  library; inside Settings and its pop-ups the library's colour variables are
+  mapped to theme roles (`workspace-settings.css`). Every page has the same
+  padding (24) and 24 between groups. Buttons follow "Buttons and action
+  rows" (§1): a row's one trailing action is `outline` `sm`; a form footer or
+  confirm (`SettingsActions`) has its status on the left and Cancel then the
+  confirm on the right, `destructive` when it removes; a destructive action
+  never sits beside Save but in the page's last group, Danger zone, whose row
+  title is red.
 - **Chats and DMs as tiles** (founder's redesign, 14 Oct 2026). The open
   chat in the chat list is the raised tile and the others lift on hover; DM
   rows are rounded the same way, with unread as a filled count. The member's

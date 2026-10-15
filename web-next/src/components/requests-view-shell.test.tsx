@@ -392,7 +392,7 @@ describe("Slack's install coming back to the workspace", () => {
 
     renderShell({ mode: "home", organizationRole: "admin" })
 
-    const settings = await screen.findByRole("main", { name: "Settings" })
+    const settings = await screen.findByRole("dialog", { name: "Settings" })
     expect(
       within(settings).getByRole("heading", { level: 2, name: "Slack" })
     ).toBeTruthy()
@@ -406,7 +406,7 @@ describe("Slack's install coming back to the workspace", () => {
 
     renderShell({ mode: "home", organizationRole: "member" })
 
-    const settings = await screen.findByRole("main", { name: "Settings" })
+    const settings = await screen.findByRole("dialog", { name: "Settings" })
     expect(
       await within(settings).findByText(
         "Organisation owners and admins manage Slack."

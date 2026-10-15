@@ -36,6 +36,7 @@ function showSettings({
   render(
     <QueryClientProvider client={client}>
       <WorkspaceSettings
+        onClose={() => {}}
         identity={{ id: "user-1", name: "Avery", initials: "A", kind: "user" }}
         session={{
           user: {
