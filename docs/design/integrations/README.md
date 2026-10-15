@@ -437,6 +437,8 @@ Agents never get a flat list of hundreds of tools.
 4. **Invoke** the connector with a handle. The output is **projected to `output_schema`** and capped at 16 KB.
 5. **Audit:** a `tool_calls` row names the member and agent.
 
+**Built so far (#291).** `integrations/internal/tools` runs steps 3 to 5 behind `POST /v1/tools/call` (internal) with `{org, member, agent, role, connection, tool, input, confirmed}`. The connection must be in the org and either org-level or the member's own, else `404 not_found` (the same answer for a missing tool). A connection that is `needs_reauth` answers `409 needs_reauth`, any other state but `ok` `409 connection_unavailable` (the connect link of step 2 waits for grants, P6). A non-`read` tool without `confirmed: true` answers `409 confirmation_required`. Otherwise it mints a 2-minute handle for the tool's token kind, invokes the connector through the host, and answers `200 {"output": …}`, or `200 {"tool_error": {code, message}}` when the app said no. The output keeps only the properties and array items the `output_schema` names (a schema built on `$ref` or `oneOf` is kept whole) and is refused (`502 output_too_large`) rather than cut when over 16 KB. A `tool_calls` row (migration 004; 002 was taken by the vault) is written **before** the connector runs, so a call that can't be audited doesn't run, and its status is set after; refusals are audited too. Input and output are not stored. Not mounted yet: the service has no connector host, egress keys or proxy origin in its configuration (follow-up).
+
 ### 12.4 Proxy
 
 `POST /v1/proxy` covers what tools don't. It holds the same checks as a `write` tool, unless the method is GET.
