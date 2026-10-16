@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useRef, useState } from "react"
 import { AgentComposer } from "./agent-composer"
 import { IdentityAvatar } from "./workspace-avatar"
 import { useReportRoomActivity } from "./call-provider"
+import { ParleyNotesCard } from "./parley-notes-card"
 import {
   agentIdentity,
   fullTime,
@@ -15,6 +16,7 @@ import type {
   RoomStatus,
   TeamspaceRoom,
 } from "@/hooks/use-teamspace-room"
+import { parleyNotesOf } from "@/lib/rooms/client"
 import { useMarkTeamspaceRead } from "@/hooks/use-teamspace-read"
 import type { Teamspace } from "@/lib/teamspaces/client"
 
@@ -180,6 +182,7 @@ export function TeamspaceConversation({
             message={message}
             seats={presence.seats}
             viewerId={viewerId}
+            organizationAgent={space.organization_agent}
           />
         ))}
         {pending.map((outgoing) => (
@@ -233,10 +236,13 @@ function RoomLine({
   message,
   seats,
   viewerId,
+  organizationAgent,
 }: {
   message: RoomMessage
   seats: readonly RoomSeat[]
   viewerId?: string
+  /** The organization's agent, who posts a parley's notes and has no seat. */
+  organizationAgent?: Teamspace["organization_agent"]
 }) {
   const seat = seats.find((item) => item.handle === message.author_handle)
   const isAgent = message.author_kind === "agent"
@@ -254,6 +260,29 @@ function RoomLine({
         seat?.display_name ?? message.author_handle
       )
   const tag = isAgent ? agentTag(seat, seats, viewerId) : undefined
+  // A parley's notes are a card; notes this client can't read, and any kind
+  // it doesn't know, read as the words their body says.
+  const notes = parleyNotesOf(message)
+  if (notes) {
+    const byOrganization =
+      !seat &&
+      !!organizationAgent?.name &&
+      message.author_agent_id === organizationAgent.id
+    return (
+      <ParleyNotesCard
+        message={message}
+        notes={notes}
+        poster={
+          byOrganization
+            ? agentIdentity(organizationAgent.id, organizationAgent.name)
+            : identity
+        }
+        posterName={byOrganization ? organizationAgent.name : name}
+        seats={seats}
+        viewerId={viewerId}
+      />
+    )
+  }
 
   return (
     <article

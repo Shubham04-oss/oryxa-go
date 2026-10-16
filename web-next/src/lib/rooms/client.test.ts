@@ -5,6 +5,7 @@ import {
   checkTeamspaceRoom,
   isRoomPausedRefusal,
   mergeRoomMessages,
+  parleyNotesOf,
   roomApi,
   teamspaceRoomPath,
 } from "./client"
@@ -351,5 +352,86 @@ describe("mergeRoomMessages", () => {
       [2, "done"],
       [3, "line 3"],
     ])
+  })
+})
+
+describe("parleyNotesOf", () => {
+  const notes = (data: unknown, kind = "parley_notes"): RoomMessage => ({
+    ...message(1),
+    kind,
+    data,
+  })
+
+  it("reads a parley_notes message's data", () => {
+    expect(
+      parleyNotesOf(
+        notes({
+          call_id: "call_1",
+          duration_ms: 754000,
+          decisions: ["Ship on the 14th"],
+          actions: [
+            { text: "Send the price list", owner_user_id: "usr_2" },
+            { text: "Book the venue" },
+          ],
+        })
+      )
+    ).toEqual({
+      call_id: "call_1",
+      duration_ms: 754000,
+      decisions: ["Ship on the 14th"],
+      actions: [
+        { text: "Send the price list", owner_user_id: "usr_2" },
+        { text: "Book the venue" },
+      ],
+    })
+  })
+
+  it("has none for a plain message, a server before kinds, or data it can't read", () => {
+    expect(parleyNotesOf(message(1))).toBeUndefined()
+    expect(parleyNotesOf(notes(undefined, "message"))).toBeUndefined()
+    expect(parleyNotesOf(notes(null))).toBeUndefined()
+    expect(
+      parleyNotesOf(notes({ decisions: "x", actions: [] }))
+    ).toBeUndefined()
+  })
+
+  it("drops a length that isn't one, and reads a missing owner as nobody", () => {
+    expect(
+      parleyNotesOf(
+        notes({
+          call_id: 7,
+          duration_ms: -1,
+          decisions: ["Keep"],
+          actions: [
+            { text: "Do", owner_user_id: null },
+            { text: "Also", owner_user_id: "" },
+          ],
+        })
+      )
+    ).toEqual({
+      call_id: "",
+      decisions: ["Keep"],
+      actions: [{ text: "Do" }, { text: "Also" }],
+    })
+  })
+
+  it("has none when any decision or action can't be read, so the body shows", () => {
+    const fine = {
+      call_id: "c",
+      decisions: ["Keep"],
+      actions: [{ text: "Do" }],
+    }
+    for (const data of [
+      { ...fine, decisions: [{ text: "Ship on the 14th" }] },
+      { ...fine, decisions: ["Keep", 3] },
+      { ...fine, decisions: ["Keep", " "] },
+      { ...fine, actions: [{ text: 5 }] },
+      { ...fine, actions: [{ owner_user_id: "u" }] },
+      { ...fine, actions: [{ text: "Do", owner_user_id: 9 }] },
+      { ...fine, actions: [null] },
+      { ...fine, actions: ["Do"] },
+    ]) {
+      expect(parleyNotesOf(notes(data))).toBeUndefined()
+    }
   })
 })

@@ -415,6 +415,19 @@ not permission to copy every incidental value into a new component.
     reads the checklist again after each change. The card and each of its
     parts appear only once Go serves them (`target_date`, `task_counts`):
     against a Go without them there is no card and no read.
+  - **Parley notes in the room** (TeamspaceHome board, "th-notes"; #392):
+    a room message of kind `parley_notes` is a quiet card (`--base`, a
+    `--border-quiet` hairline, 12px corners) in the message column, with no
+    author row: "Parley notes · 35 min · posted by {agent}" beside the
+    poster's small face and the time, then each decision with a green
+    Decision tag (`ui/badge`, the pop-up's Decision colours) and each
+    action with its owner's face and an outline tag naming them ("You" for
+    the member), or "Unassigned". An owner the room can't seat (not a
+    person on the team) is Unassigned, never a guess. The poster is the
+    organization's agent, named from the teamspace. Notes that decided and
+    assigned nothing say so. A message with no kind, kind `message`, a kind
+    this client doesn't know, or notes with any item it can't read shows its
+    body as before (the body always says the notes in words).
   - **Marking the room read** (#389): reading the room never moves the
     member's read cursor; the page does, with `POST …/read {seq}`, through
     the newest message that has actually been on screen (the room's tab or
@@ -769,6 +782,8 @@ not permission to copy every incidental value into a new component.
     or they ended it for everyone), the pop-up with the sea of bottles: the
     kicker "Parley ended · 35 min · 5 people", what was kept (the recording
     and transcript, or the transcript) and Done. Just leaving shows nothing.
+    No line promises notes in the room until the call's view says the agent
+    will post them (the edge half of #392).
     The agent's notes, the save-recording switch, "Edit first" and "Post
     notes to the room" join it once there's an API for the notes.
   - **In a DM:** the same strip, or a "Parley" button when none runs, sits
