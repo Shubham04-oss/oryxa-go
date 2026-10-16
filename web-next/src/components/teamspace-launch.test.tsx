@@ -110,6 +110,15 @@ function backend(
   return { ...api, state }
 }
 
+/** Opens the first task's title field from its ⋯ menu. */
+async function openTitleEdit() {
+  fireEvent.click(
+    await screen.findByRole("button", { name: "More for Legal sign-off" })
+  )
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Edit title" }))
+  return screen.findByRole("textbox", { name: "Task title" })
+}
+
 function render(space: Teamspace) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -274,6 +283,48 @@ describe("TeamspaceLaunchCard", () => {
     )
   })
 
+  it("sends nothing when Escape cancels an edit and the field then blurs", async () => {
+    const { calls } = backend([task()])
+    render(teamspace(served))
+
+    const input = await openTitleEdit()
+    fireEvent.change(input, { target: { value: "Legal sign-off (EU)" } })
+    fireEvent.keyDown(input, { key: "Escape" })
+    fireEvent.blur(input)
+
+    expect(
+      await screen.findByRole("checkbox", { name: "Legal sign-off" })
+    ).toBeTruthy()
+    await new Promise((settle) => setTimeout(settle, 0))
+    expect(calls.filter((call) => call.method === "PATCH")).toEqual([])
+  })
+
+  it("saves a title once when Enter is followed by a blur", async () => {
+    const { calls } = backend([task()], (call) =>
+      call.method === "PATCH"
+        ? json(task({ title: "Legal sign-off (EU)" }))
+        : undefined
+    )
+    render(teamspace(served))
+
+    const input = await openTitleEdit()
+    fireEvent.change(input, { target: { value: "Legal sign-off (EU)" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    fireEvent.blur(input)
+
+    await waitFor(() =>
+      expect(calls.filter((call) => call.method === "PATCH")).toEqual([
+        {
+          method: "PATCH",
+          path: `${tasksPath}/tst_1`,
+          body: { title: "Legal sign-off (EU)" },
+        },
+      ])
+    )
+    await new Promise((settle) => setTimeout(settle, 0))
+    expect(calls.filter((call) => call.method === "PATCH")).toHaveLength(1)
+  })
+
   it("reassigns a task from the row's menu", async () => {
     const { calls } = backend([task()], (call) =>
       call.method === "PATCH"
@@ -400,7 +451,9 @@ describe("TeamspaceLaunchCard", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Change the target date" })
     )
-    fireEvent.click(await screen.findByRole("button", { name: "Clear" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Clear the target" })
+    )
     await waitFor(() =>
       expect(calls).toContainEqual({
         method: "PATCH",
@@ -408,6 +461,39 @@ describe("TeamspaceLaunchCard", () => {
         body: { target_date: null, target_label: null },
       })
     )
+  })
+
+  it("says the target went read-only, and reads the teamspace, when Go refuses it 409", async () => {
+    const { calls } = backend([], (call) =>
+      call.method === "PATCH" && call.url.pathname === spacePath
+        ? apiError(409, "teamspace_disabled", "teamspace is paused")
+        : undefined
+    )
+    const { client } = render(teamspace(served))
+    const invalidate = vi.spyOn(client, "invalidateQueries")
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Change the target date" })
+    )
+    fireEvent.change(await screen.findByLabelText("What it is"), {
+      target: { value: "Public launch" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    expect(
+      await screen.findByText(
+        "This teamspace was paused, so its target can't change now."
+      )
+    ).toBeTruthy()
+    expect(
+      screen.queryByText("Couldn't save the target. Try again.")
+    ).toBeNull()
+    expect(screen.queryByLabelText("What it is")).toBeNull()
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: teamspaceKeys.teamspace("org_sim", "tsp_launch"),
+      exact: true,
+    })
+    expect(calls.some((call) => call.method === "PATCH")).toBe(true)
   })
 
   it("offers the target only to whoever manages the team", async () => {

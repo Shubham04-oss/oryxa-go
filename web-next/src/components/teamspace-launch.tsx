@@ -1,4 +1,4 @@
-import { useId, useState } from "react"
+import { useId, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   CalendarDays,
@@ -65,14 +65,20 @@ type Person = { id: string; name: string }
 
 const pausedMessage =
   "This teamspace was paused, so its checklist is read-only now."
+const pausedTargetMessage =
+  "This teamspace was paused, so its target can't change now."
 
 /** A write's refusal in one sentence, and whether the teamspace was paused under it. */
-function writeError(error: unknown, fallback: string) {
+function writeError(
+  error: unknown,
+  fallback: string,
+  whenPaused = pausedMessage
+) {
   const paused =
     error instanceof ApiError &&
     error.status === 409 &&
     error.code === "teamspace_disabled"
-  return { paused, message: paused ? pausedMessage : fallback }
+  return { paused, message: paused ? whenPaused : fallback }
 }
 
 /**
@@ -127,21 +133,30 @@ export function TeamspaceLaunchCard({
   const people = usePeople(organizationId, space, viewerId, showChecklist)
   if (!day && !label && !canSetTarget && !showChecklist) return null
 
+  // Read the teamspace again, so the whole page sees it paused.
+  function readPaused() {
+    return queryClient.invalidateQueries({
+      queryKey: teamspaceKeys.teamspace(organizationId, space.id),
+      exact: true,
+    })
+  }
+
   async function settle(failure?: unknown, fallback?: string) {
     if (failure === undefined) {
       setError(undefined)
     } else {
       const refusal = writeError(failure, fallback ?? "")
       setError(refusal.message)
-      if (refusal.paused) {
-        // Read the teamspace again, so the whole page sees it paused.
-        await queryClient.invalidateQueries({
-          queryKey: teamspaceKeys.teamspace(organizationId, space.id),
-          exact: true,
-        })
-      }
+      if (refusal.paused) await readPaused()
     }
     await afterTeamspaceTaskChange(queryClient, organizationId, space.id)
+  }
+
+  // The target editor goes once the teamspace reads paused, so the card
+  // says why rather than the popover.
+  async function targetPaused() {
+    setError(pausedTargetMessage)
+    await readPaused()
   }
 
   return (
@@ -157,7 +172,11 @@ export function TeamspaceLaunchCard({
           </span>
         )}
         {canSetTarget && (
-          <TargetEditor organizationId={organizationId} space={space} />
+          <TargetEditor
+            organizationId={organizationId}
+            space={space}
+            onPaused={targetPaused}
+          />
         )}
       </div>
       {day && (
@@ -304,6 +323,9 @@ function TaskRow({
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(task.title)
+  // Enter and Escape take the field away, and a browser may blur it as it
+  // goes; the edit finishes once, whichever comes first.
+  const closing = useRef(false)
   const tasksKey = teamspaceKeys.tasks(organizationId, space.id)
   const update = useMutation({
     mutationFn: (input: UpdateTeamspaceTaskInput) =>
@@ -344,10 +366,12 @@ function TaskRow({
   const due = parseDay(task.due_date)
   const busy = update.isPending || remove.isPending
 
-  function saveTitle() {
-    const next = title.trim().replace(/\s+/g, " ")
+  function finishEdit(save: boolean) {
+    if (closing.current) return
+    closing.current = true
     setEditing(false)
-    if (!next || next === task.title) {
+    const next = title.trim().replace(/\s+/g, " ")
+    if (!save || !next || next === task.title) {
       setTitle(task.title)
       return
     }
@@ -370,15 +394,14 @@ function TaskRow({
           maxLength={200}
           autoFocus
           onChange={(event) => setTitle(event.target.value)}
-          onBlur={saveTitle}
+          onBlur={() => finishEdit(true)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault()
-              saveTitle()
+              finishEdit(true)
             } else if (event.key === "Escape") {
               event.preventDefault()
-              setTitle(task.title)
-              setEditing(false)
+              finishEdit(false)
             }
           }}
         />
@@ -410,6 +433,7 @@ function TaskRow({
           <DropdownMenuContent align="end">
             <DropdownMenuItem
               onClick={() => {
+                closing.current = false
                 setTitle(task.title)
                 setEditing(true)
               }}
@@ -558,14 +582,19 @@ function AddTaskForm({
 
 /**
  * For whoever manages the team: the date and what it is, in a small
- * popover. Clearing sends null for both.
+ * popover. Clearing sends null for both, from its own line under the fields
+ * (never beside Save). A 409 `teamspace_disabled` closes the popover and
+ * hands the card the reason, since the button goes once the teamspace
+ * reads paused.
  */
 function TargetEditor({
   organizationId,
   space,
+  onPaused,
 }: {
   organizationId: string
   space: Teamspace
+  onPaused: () => Promise<void>
 }) {
   const queryClient = useQueryClient()
   const id = useId()
@@ -580,6 +609,11 @@ function TargetEditor({
     onSuccess: async (updated) => {
       setOpen(false)
       await afterUpdateTeamspace(queryClient, organizationId, updated)
+    },
+    onError: async (failure) => {
+      if (!writeError(failure, "").paused) return
+      setOpen(false)
+      await onPaused()
     },
   })
   const isSet = Boolean(space.target_date || space.target_label)
@@ -638,20 +672,21 @@ function TargetEditor({
               {failure}
             </p>
           )}
+          {isSet && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="workspace-teamspace-target-clear"
+              disabled={save.isPending}
+              onClick={() =>
+                save.mutate({ target_date: null, target_label: null })
+              }
+            >
+              Clear the target
+            </Button>
+          )}
           <div className="workspace-teamspace-form-actions">
-            {isSet && (
-              <Button
-                type="button"
-                variant="ghost"
-                className="mr-auto"
-                disabled={save.isPending}
-                onClick={() =>
-                  save.mutate({ target_date: null, target_label: null })
-                }
-              >
-                Clear
-              </Button>
-            )}
             <Button
               type="button"
               variant="outline"

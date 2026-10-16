@@ -386,12 +386,15 @@ not permission to copy every incidental value into a new component.
     an optional due date, then Cancel and Add task. Whoever manages the team
     sets the target from a calendar button in the card's heading: a popover
     (`ui/popover`) with what it is ("Launch", 60 letters at most) and the
-    date, Clear (`ghost`, on the left) when one is set, then Cancel and Save.
+    date, then, when one is set, "Clear the target" (`ghost` `sm`) on its
+    own line under the fields, never beside Save, and the footer: Cancel
+    and Save.
     The checklist is the team's (members only); a manager off the team sees
     only the target. A paused teamspace's card is read-only (the
     checkboxes disabled; no menus, Add or target button), and a write Go refuses
-    409 `teamspace_disabled` says the checklist went read-only and reads the
-    teamspace again. Go publishes no event for a task change, so the card
+    409 `teamspace_disabled` says the checklist (or, from the popover, the
+    target) went read-only and reads the teamspace again, which takes the
+    controls away. Go publishes no event for a task change, so the card
     reads the checklist again after each change. The card and each of its
     parts appear only once Go serves them (`target_date`, `task_counts`):
     against a Go without them there is no card and no read.
