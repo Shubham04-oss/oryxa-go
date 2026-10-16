@@ -18,7 +18,13 @@ import {
   useReportRoomActivity,
   useRoomChatHost,
 } from "./call-provider"
-import { CallSurface, ParleyButton, ParleyStrip, tintOf } from "./call-surfaces"
+import {
+  CallSurface,
+  ParleyButton,
+  ParleyStrip,
+  endedNotesLine,
+  tintOf,
+} from "./call-surfaces"
 import type { CallView } from "@/lib/call/client"
 import { callDuration, parseVoiceFrame, whoIsIn } from "@/lib/call/client"
 import type {
@@ -597,6 +603,10 @@ describe("a parley in a teamspace", () => {
     expect(
       within(ended).getByText("The transcript, kept with EU launch.")
     ).toBeTruthy()
+    // A teamspace's parley leaves its notes in the room (#392).
+    expect(
+      within(ended).getByText("Krude will post the notes in the room")
+    ).toBeTruthy()
     // The library's dialog traps focus; it starts on Done.
     const done = within(ended).getByRole("button", { name: "Done" })
     await waitFor(() => expect(document.activeElement).toBe(done))
@@ -1095,5 +1105,27 @@ describe("the agent panel's parley chip", () => {
     current = view()
     renderChips()
     expect(screen.queryByRole("group", { name: "For you now" })).toBeNull()
+  })
+})
+
+describe("endedNotesLine", () => {
+  const ended = {
+    roomName: "EU launch",
+    endedAt: "2026-10-14T10:00:00Z",
+    people: 2,
+    recorded: false,
+  }
+
+  it("says the call's agent posts the notes, only in a teamspace", () => {
+    expect(
+      endedNotesLine({ ...ended, roomKind: "teamspace", agentName: "Krude" })
+    ).toBe("Krude will post the notes in the room")
+    expect(endedNotesLine({ ...ended, roomKind: "teamspace" })).toBe(
+      "The agent will post the notes in the room"
+    )
+    expect(
+      endedNotesLine({ ...ended, roomKind: "dm", agentName: "Krude" })
+    ).toBeUndefined()
+    expect(endedNotesLine(ended)).toBeUndefined()
   })
 })
