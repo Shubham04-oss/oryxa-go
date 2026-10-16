@@ -653,6 +653,13 @@ func scanSpace(row scanner, space *Space) error {
 		value := targetDate.Time.Format(time.DateOnly)
 		space.TargetDate = &value
 	}
+	// Who paused a teamspace is a fact only while it is paused. A release
+	// from before 003_target_and_pause resumes a teamspace without clearing
+	// them, so an active row can still carry them; they are not shown, and
+	// the next update writes them back as null.
+	if space.Status == StatusActive {
+		space.PausedByUserID, space.PausedAt = nil, nil
+	}
 	return nil
 }
 

@@ -984,17 +984,37 @@ func TestATeamspaceChecklistThroughTheAPI(t *testing.T) {
 	if removed.Code != http.StatusNoContent || len(spaces.tasks) != 0 {
 		t.Fatalf("delete = %d %s", removed.Code, removed.Body.String())
 	}
-	if status, code := ErrorCode(teamspaces.ErrPaused); status != http.StatusConflict || code != "teamspace_paused" {
+	if status, code := ErrorCode(teamspaces.ErrPaused); status != http.StatusConflict || code != "teamspace_disabled" {
 		t.Fatalf("ErrorCode(teamspaces.ErrPaused) = %d %s", status, code)
 	}
 }
 
-// Saying something in a paused room is refused with a code a client can tell
-// from any other conflict.
+// Saying something in a paused room is refused the way everything else a
+// paused teamspace refuses is, so a client handles one code for one state.
 func TestAPausedRoomRefusesAPostAsPaused(t *testing.T) {
 	status, code := ErrorCode(rooms.ErrPaused)
-	if status != http.StatusConflict || code != "teamspace_paused" {
-		t.Fatalf("ErrorCode(ErrPaused) = %d %s, want 409 teamspace_paused", status, code)
+	if status != http.StatusConflict || code != "teamspace_disabled" {
+		t.Fatalf("ErrorCode(ErrPaused) = %d %s, want 409 teamspace_disabled", status, code)
+	}
+}
+
+// A paused room is still read, and every read says it is paused, so a client
+// learns it from the read it already makes rather than from a refused post.
+func TestReadingARoomSaysWhetherItIsPaused(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		server := New(member(), &fakeThreads{}, Config{
+			AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Rooms: &fakeRooms{paused: paused},
+		}, nil)
+		want := fmt.Sprintf(`"paused":%t`, paused)
+		for _, path := range []string{
+			"/v1/organizations/org_1/teamspaces/tsp_engineering/messages",
+			"/v1/organizations/org_1/teamspaces/tsp_engineering/catchup",
+		} {
+			response := serve(server, http.MethodGet, path, "", bearer)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), want) {
+				t.Errorf("GET %s = %d %s, want 200 with %s", path, response.Code, response.Body.String(), want)
+			}
+		}
 	}
 }
 

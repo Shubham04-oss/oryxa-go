@@ -209,7 +209,8 @@ const Pass = "PASS"
 
 // Store keeps a room's messages, its brief, and who is reading it.
 type Store interface {
-	// Append adds a message and gives it the room's next sequence number.
+	// Append adds a message and gives it the room's next sequence number. It
+	// refuses with ErrPaused once the room's teamspace is paused.
 	Append(ctx context.Context, message Message) (Message, error)
 	// AppendNotes adds parley notes to roomID, a teamspace of organizationID,
 	// as its organization agent. Notes for a call already in the room are

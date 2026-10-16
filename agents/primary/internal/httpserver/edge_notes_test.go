@@ -90,7 +90,7 @@ func TestTheEdgesParleyNotesAreAbsentUnlessConfigured(t *testing.T) {
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d", recorder.Code)
 	}
-	if status, code := ErrorCode(rooms.ErrPaused); status != http.StatusConflict || code != "teamspace_paused" {
+	if status, code := ErrorCode(rooms.ErrPaused); status != http.StatusConflict || code != "teamspace_disabled" {
 		t.Fatalf("a paused room's refusal = %d %s", status, code)
 	}
 }

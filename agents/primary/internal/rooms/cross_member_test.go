@@ -153,10 +153,10 @@ func TestAnAdminOffTheTeamIsNotInItsRoom(t *testing.T) {
 		t.Fatal(err)
 	}
 	admin := Actor{OrganizationID: "org_1", UserID: "user-admin", AccessToken: "admin-token"}
-	if _, _, err := service.Read(context.Background(), admin, "tsp_room", 0, 50); !errors.Is(err, ErrForbidden) {
+	if _, _, _, err := service.Read(context.Background(), admin, "tsp_room", 0, 50); !errors.Is(err, ErrForbidden) {
 		t.Errorf("reading the room: error=%v, want ErrForbidden", err)
 	}
-	if _, _, err := service.Catchup(context.Background(), admin, "tsp_room", 0); !errors.Is(err, ErrForbidden) {
+	if _, _, _, err := service.Catchup(context.Background(), admin, "tsp_room", 0); !errors.Is(err, ErrForbidden) {
 		t.Errorf("catching up on the room: error=%v, want ErrForbidden", err)
 	}
 	if _, err := service.Post(context.Background(), admin, "tsp_room", "what is everyone saying?"); !errors.Is(err, ErrForbidden) {
