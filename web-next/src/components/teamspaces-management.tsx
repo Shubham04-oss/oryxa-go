@@ -9,7 +9,9 @@ import {
 import type { QueryClient } from "@tanstack/react-query"
 import {
   ArrowRight,
+  CalendarDays,
   Ellipsis,
+  ListChecks,
   Pause,
   Play,
   Plus,
@@ -47,6 +49,7 @@ import {
   memberName,
   personIdentity,
   statusLabel,
+  targetChip,
   timeAgo,
 } from "./teamspace-format"
 import { ApiError } from "@/lib/api/client"
@@ -633,6 +636,7 @@ function TeamspaceCard({
           ? space.description || "No description yet."
           : "Paused. Its room is closed until a team admin resumes it."}
       </p>
+      <TeamspaceCardFacts space={space} />
       {call && (
         <div className="workspace-teamspace-card-live">
           <Badge variant="secondary">
@@ -646,6 +650,37 @@ function TeamspaceCard({
         <TeamspaceFaces space={space} />
       </div>
     </Card>
+  )
+}
+
+/**
+ * A card's facts, each only when Go serves it and it says something: the
+ * target ("Launch 4 Nov") and how much of the checklist is done ("6/9").
+ */
+function TeamspaceCardFacts({ space }: { space: Teamspace }) {
+  const target = targetChip(space)
+  const counts = space.task_counts
+  const progress = counts && counts.total > 0 ? counts : undefined
+  if (!target && !progress) return null
+  return (
+    <div className="workspace-teamspace-card-facts">
+      {target && (
+        <Badge variant="outline" className="workspace-teamspace-card-fact">
+          <CalendarDays aria-hidden="true" />
+          {target}
+        </Badge>
+      )}
+      {progress && (
+        <Badge
+          variant="outline"
+          className="workspace-teamspace-card-fact"
+          aria-label={`${progress.done} of ${progress.total} tasks done`}
+        >
+          <ListChecks aria-hidden="true" />
+          {progress.done}/{progress.total}
+        </Badge>
+      )}
+    </div>
   )
 }
 

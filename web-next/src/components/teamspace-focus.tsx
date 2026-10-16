@@ -31,10 +31,12 @@ import { useHasCalls, useRoomChatHost } from "./call-provider"
 import { ParleyButton, ParleyStrip } from "./call-surfaces"
 import { TeamSynthesis } from "./team-synthesis"
 import { RoomLive } from "./live-work"
+import { TeamspaceLaunchCard } from "./teamspace-launch"
 import {
   agentIdentity,
   memberName,
   personIdentity,
+  targetLine,
   timeAgo,
 } from "./teamspace-format"
 import { useTeamspaceRoom } from "@/hooks/use-teamspace-room"
@@ -180,6 +182,7 @@ export function TeamspaceFocus({
 
   const liveRoom: LiveRoom = { kind: "teamspace", id: space.id }
   const paused = space.status !== "active"
+  const target = targetLine(space)
 
   return (
     <div
@@ -205,6 +208,7 @@ export function TeamspaceFocus({
             <h1>{space.name}</h1>
             <p>
               {paused && "Paused · "}
+              {target && `${target} · `}
               {space.team_name} team · {whoLine(space)}
             </p>
           </div>
@@ -387,9 +391,9 @@ function TeamspaceCrumbs({
 }
 
 /**
- * Beside the room: live work while something runs, the latest team files,
- * the team summary, and what the teamspace is for, with its agents and
- * people.
+ * Beside the room: live work while something runs, the target and the
+ * checklist, the latest team files, the team summary, and what the
+ * teamspace is for, with its agents and people.
  */
 function TeamspaceSide({
   organizationId,
@@ -442,6 +446,11 @@ function TeamspaceSide({
           />
         </div>
       )}
+      <TeamspaceLaunchCard
+        organizationId={organizationId}
+        space={space}
+        viewerId={viewerId}
+      />
       {files?.isSuccess && recentFiles.length > 0 && (
         <div className="workspace-work-card workspace-teamspace-side-files">
           <h3>
