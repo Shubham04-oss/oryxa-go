@@ -4,7 +4,11 @@ import { act, cleanup, renderHook } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { MARK_READ_DELAY_MS, useMarkTeamspaceRead } from "./use-teamspace-read"
+import {
+  MARK_READ_DELAY_MS,
+  MARK_READ_RETRY_MS,
+  useMarkTeamspaceRead,
+} from "./use-teamspace-read"
 import { teamspaceKeys } from "@/lib/teamspaces/queries"
 import type { Teamspace } from "@/lib/teamspaces/client"
 
@@ -116,5 +120,45 @@ describe("useMarkTeamspaceRead", () => {
     setup({ ...tracked, last_read_seq: 42, unread_count: 0 }, 42)
     await act(() => vi.advanceTimersByTimeAsync(MARK_READ_DELAY_MS * 3))
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("drops a list read in flight, so it cannot bring the count back", async () => {
+    const { queryClient } = setup(tracked, 42)
+    let answer: (spaces: Teamspace[]) => void = () => {}
+    void queryClient
+      .fetchQuery({
+        queryKey: teamspaceKeys.list("org_1"),
+        queryFn: () =>
+          new Promise<Teamspace[]>((resolve) => {
+            answer = resolve
+          }),
+        staleTime: 0,
+      })
+      .catch(() => {})
+    await act(() => vi.advanceTimersByTimeAsync(MARK_READ_DELAY_MS))
+    await act(async () => answer([tracked]))
+    expect(
+      queryClient.getQueryData<Teamspace[]>(teamspaceKeys.list("org_1"))?.[0]
+    ).toMatchObject({ last_read_seq: 42, unread_count: 0 })
+  })
+
+  it("tries a failed mark again after a wait, not at once", async () => {
+    fetchMock.mockImplementationOnce(
+      async () =>
+        new Response(JSON.stringify({ error: { code: "x", message: "x" } }), {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        })
+    )
+    setup(tracked, 42)
+    await act(() => vi.advanceTimersByTimeAsync(MARK_READ_DELAY_MS))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await act(() => vi.advanceTimersByTimeAsync(MARK_READ_RETRY_MS - 100))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await act(() => vi.advanceTimersByTimeAsync(200))
+    expect(marks().map(([, , body]) => body)).toEqual([
+      '{"seq":42}',
+      '{"seq":42}',
+    ])
   })
 })
