@@ -525,8 +525,9 @@ not permission to copy every incidental value into a new component.
   Requests thread has no Rename. Delete is a confirm (Cancel, then the
   destructive Delete). A specialist's chat bar has the same ⋯ with Rename.
   A row whose chat kept files adds "3 files · " and the latest file's kind
-  badge (`FileKindBadge`, sized to the meta line) from Go's count; with no
-  count, or 0, the row says nothing about files.
+  badge (the small `FileKindBadge`, its 8px text in a 16px box for the meta
+  line) from Go's count; with no count, or 0, the row says nothing about
+  files.
 - **Chats and DMs as tiles** (founder's redesign, 14 Oct 2026). The open
   chat in the chat list is the raised tile and the others lift on hover; DM
   rows are rounded the same way, with unread as a filled count. The member's

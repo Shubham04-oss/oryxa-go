@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { QueryClient } from "@tanstack/react-query"
 import { ApiError } from "@/lib/api/client"
-import { renameSpecialistThread } from "@/lib/specialists/client"
+import {
+  renameSpecialistThread,
+  specialistKeys,
+} from "@/lib/specialists/client"
 import {
   MAX_TITLE_LENGTH,
   canRenameThread,
@@ -184,6 +187,82 @@ describe("renameCachedThread", () => {
     expect(
       client.getQueryData<Thread[]>([...listKey, "u_1"])?.map((t) => t.title)
     ).toEqual(["One", "Two"])
+    expect(client.getQueryData<ThreadDetail>(detailKey)?.title).toBe("Two")
+  })
+})
+
+describe("renameCachedThread with a specialist's keys", () => {
+  const listKey = specialistKeys.threads("org_1", "ag_1")
+  const detailKey = specialistKeys.thread("org_1", "ag_1", "th_2")
+
+  function cache() {
+    const client = new QueryClient({
+      defaultOptions: { queries: { staleTime: Infinity, retry: false } },
+    })
+    client.setQueryData(listKey, [
+      thread("th_1", "One", "2026-10-16T09:00:00Z"),
+      thread("th_2", "Two", "2026-10-15T09:00:00Z"),
+    ])
+    const detail: ThreadDetail = {
+      ...thread("th_2", "Two", "2026-10-15T09:00:00Z"),
+      items: [],
+      pending_confirmations: [],
+    }
+    client.setQueryData(detailKey, detail)
+    return client
+  }
+
+  it("cancels a detail fetch on the wire, so it can't write the old title back", async () => {
+    const client = cache()
+    let landOld: () => void = () => undefined
+    const stale = client.fetchQuery({
+      queryKey: detailKey,
+      staleTime: 0,
+      queryFn: () =>
+        new Promise<ThreadDetail>((resolve) => {
+          landOld = () =>
+            resolve({
+              ...thread("th_2", "Two", "2026-10-15T09:00:00Z"),
+              items: [],
+              pending_confirmations: [],
+            })
+        }),
+    })
+    const renamed = thread("th_2", "Vendor plan", "2026-10-16T11:00:00Z")
+    await renameCachedThread({
+      queryClient: client,
+      listKey,
+      detailKey,
+      threadId: "th_2",
+      title: "Vendor plan",
+      rename: async () => {
+        landOld()
+        return renamed
+      },
+    })
+    await stale.catch(() => undefined)
+    expect(client.getQueryData<ThreadDetail>(detailKey)?.title).toBe(
+      "Vendor plan"
+    )
+    expect(client.getQueryState(detailKey)?.isInvalidated).toBe(true)
+  })
+
+  it("puts the old title back in both caches when Go refuses", async () => {
+    const client = cache()
+    const refusal = new ApiError("A run is answering", 409, "run_in_progress")
+    await expect(
+      renameCachedThread({
+        queryClient: client,
+        listKey,
+        detailKey,
+        threadId: "th_2",
+        title: "Vendor plan",
+        rename: () => Promise.reject(refusal),
+      })
+    ).rejects.toBe(refusal)
+    expect(client.getQueryData<Thread[]>(listKey)?.map((t) => t.title)).toEqual(
+      ["One", "Two"]
+    )
     expect(client.getQueryData<ThreadDetail>(detailKey)?.title).toBe("Two")
   })
 })

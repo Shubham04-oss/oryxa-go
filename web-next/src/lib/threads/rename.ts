@@ -27,7 +27,12 @@ export async function renameCachedThread({
   rename: (title: string) => Promise<Thread>
 }): Promise<Thread> {
   const normalized = normalizeThreadTitle(title)
-  await queryClient.cancelQueries({ queryKey: listKey })
+  // A list or detail fetch already on the wire would land after the rename
+  // and write the old title back, so both are cancelled before the snapshot.
+  await Promise.all([
+    queryClient.cancelQueries({ queryKey: listKey }),
+    queryClient.cancelQueries({ queryKey: detailKey }),
+  ])
   const lists = queryClient.getQueriesData<Thread[]>({ queryKey: listKey })
   const details = queryClient.getQueriesData<ThreadDetail>({
     queryKey: detailKey,
@@ -58,6 +63,7 @@ export async function renameCachedThread({
     throw error
   } finally {
     void queryClient.invalidateQueries({ queryKey: listKey })
+    void queryClient.invalidateQueries({ queryKey: detailKey })
   }
 }
 
