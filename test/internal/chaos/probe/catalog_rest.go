@@ -6,7 +6,7 @@ import "strings"
 // variable names the world remembers them under.
 var pathVars = map[string]string{
 	"organizationID": "org", "agentID": "agent", "workflowID": "workflow", "executionID": "execution",
-	"teamspaceID": "teamspace", "requestID": "request", "threadID": "thread", "name": "artifact",
+	"teamspaceID": "teamspace", "taskID": "task", "requestID": "request", "threadID": "thread", "name": "artifact",
 	"corpusID": "corpus", "documentID": "document", "sourceID": "source",
 	"connectionID": "connection", "triggerID": "trigger", "toolkit": "toolkit", "tool": "tool",
 }
@@ -38,6 +38,8 @@ var shallowRoutes = map[string][]string{
 		"GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", "POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries",
 		"POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents", "PATCH /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents/{agentID}",
 		"POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/read",
+		"GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks", "POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks",
+		"PATCH /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks/{taskID}",
 		"GET /v1/organizations/{organizationID}/threads", "GET /v1/organizations/{organizationID}/threads/{threadID}",
 		"PATCH /v1/organizations/{organizationID}/threads/{threadID}",
 		"PATCH /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}",
@@ -46,6 +48,7 @@ var shallowRoutes = map[string][]string{
 		"DELETE /v1/organizations/{organizationID}/agents/{agentID}", "DELETE /v1/organizations/{organizationID}/agent-teams/{agentteamID}",
 		"DELETE /v1/organizations/{organizationID}/agent-workflows/{workflowID}", "DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}",
 		"DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents/{agentID}", "DELETE /v1/organizations/{organizationID}/threads/{threadID}",
+		"DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks/{taskID}",
 	},
 	"rag": {
 		"GET /v1/capabilities",

@@ -18,6 +18,9 @@ var (
 	ErrForbidden = errors.New("teamspace is not available to this member")
 	ErrConflict  = errors.New("teamspace already exists")
 	ErrDisabled  = errors.New("teamspace is disabled")
+	// ErrPaused refuses a change to what a paused teamspace's team keeps,
+	// such as its checklist, which stays readable.
+	ErrPaused = errors.New("teamspace is paused")
 )
 
 type Status string
@@ -121,8 +124,10 @@ type Space struct {
 	LastReadSeq *int64       `json:"last_read_seq,omitempty"`
 	UnreadCount *int64       `json:"unread_count,omitempty"`
 	LastMessage *LastMessage `json:"last_message,omitempty"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
+	// TaskCounts is how much of the checklist is done.
+	TaskCounts TaskCounts `json:"task_counts"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // LastMessage is the newest thing said in a teamspace's room, as a list of

@@ -246,6 +246,7 @@ type fakeTeamspaces struct {
 	entries           []teamspaces.Entry
 	actors            []teamspaces.Actor
 	updates           []teamspaces.UpdateInput
+	tasks             []teamspaces.Task
 }
 
 // fakeOrganizationContext records, in call order, the organization id every
@@ -373,6 +374,51 @@ func (service *fakeTeamspaces) Update(_ context.Context, actor teamspaces.Actor,
 	}
 	service.space.Revision++
 	return service.space, nil
+}
+
+func (service *fakeTeamspaces) ListTasks(_ context.Context, actor teamspaces.Actor, id string) ([]teamspaces.Task, error) {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id {
+		return nil, teamspaces.ErrNotFound
+	}
+	return service.tasks, nil
+}
+
+func (service *fakeTeamspaces) CreateTask(_ context.Context, actor teamspaces.Actor, id string, input teamspaces.TaskInput) (teamspaces.Task, error) {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id {
+		return teamspaces.Task{}, teamspaces.ErrNotFound
+	}
+	task := teamspaces.Task{ID: "tst_1", TeamspaceID: id, Title: input.Title, OwnerUserID: input.OwnerUserID, CreatedByUserID: actor.UserID}
+	service.tasks = append(service.tasks, task)
+	return task, nil
+}
+
+func (service *fakeTeamspaces) UpdateTask(_ context.Context, actor teamspaces.Actor, id, taskID string, input teamspaces.TaskUpdate) (teamspaces.Task, error) {
+	service.actors = append(service.actors, actor)
+	for index := range service.tasks {
+		if service.space.ID == id && service.tasks[index].ID == taskID {
+			if input.Done != nil {
+				service.tasks[index].Done = *input.Done
+			}
+			if input.OwnerUserID.Set {
+				service.tasks[index].OwnerUserID = input.OwnerUserID.Value
+			}
+			return service.tasks[index], nil
+		}
+	}
+	return teamspaces.Task{}, teamspaces.ErrNotFound
+}
+
+func (service *fakeTeamspaces) DeleteTask(_ context.Context, actor teamspaces.Actor, id, taskID string) error {
+	service.actors = append(service.actors, actor)
+	for index := range service.tasks {
+		if service.space.ID == id && service.tasks[index].ID == taskID {
+			service.tasks = append(service.tasks[:index], service.tasks[index+1:]...)
+			return nil
+		}
+	}
+	return teamspaces.ErrNotFound
 }
 
 func (service *fakeTeamspaces) Delete(_ context.Context, actor teamspaces.Actor, id string) error {
@@ -743,7 +789,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 80 {
+	if len(patterns) != 84 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -932,6 +978,35 @@ func TestTeamspaceListCarriesUnreadCountsAndReadMovesTheCursor(t *testing.T) {
 		if missing.Code != http.StatusBadRequest || !strings.Contains(missing.Body.String(), `"invalid_request"`) {
 			t.Errorf("read %s = %d %s, want 400 invalid_request", body, missing.Code, missing.Body.String())
 		}
+	}
+}
+
+// A teamspace's checklist goes through its own routes: listed, added to,
+// ticked and removed, with the owner cleared by null.
+func TestATeamspaceChecklistThroughTheAPI(t *testing.T) {
+	spaces := &fakeTeamspaces{space: teamspaces.Space{ID: "tsp_engineering", Status: teamspaces.StatusActive, IsMember: true}}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Teamspaces: spaces,
+	}, nil)
+	created := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces/tsp_engineering/tasks",
+		`{"title":"Draft the launch post","owner_user_id":"user_2","due_date":"2026-10-30"}`, bearer)
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"id":"tst_1"`) || !strings.Contains(created.Body.String(), `"owner_user_id":"user_2"`) {
+		t.Fatalf("create = %d %s", created.Code, created.Body.String())
+	}
+	ticked := serve(server, http.MethodPatch, "/v1/organizations/org_1/teamspaces/tsp_engineering/tasks/tst_1", `{"done":true,"owner_user_id":null}`, bearer)
+	if ticked.Code != http.StatusOK || !strings.Contains(ticked.Body.String(), `"done":true`) || !strings.Contains(ticked.Body.String(), `"owner_user_id":null`) {
+		t.Fatalf("tick = %d %s", ticked.Code, ticked.Body.String())
+	}
+	listed := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces/tsp_engineering/tasks", "", bearer)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"tasks":[{"id":"tst_1"`) {
+		t.Fatalf("list = %d %s", listed.Code, listed.Body.String())
+	}
+	removed := serve(server, http.MethodDelete, "/v1/organizations/org_1/teamspaces/tsp_engineering/tasks/tst_1", "", bearer)
+	if removed.Code != http.StatusNoContent || len(spaces.tasks) != 0 {
+		t.Fatalf("delete = %d %s", removed.Code, removed.Body.String())
+	}
+	if status, code := ErrorCode(teamspaces.ErrPaused); status != http.StatusConflict || code != "teamspace_disabled" {
+		t.Fatalf("ErrorCode(teamspaces.ErrPaused) = %d %s", status, code)
 	}
 }
 
