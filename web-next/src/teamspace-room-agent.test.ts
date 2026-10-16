@@ -210,6 +210,9 @@ function fakeGo(held: RoomMessage[] = []) {
   const standings = new Map<string, Standing>()
   const unseated = new Set<string>()
   const holds = new Map<string, Promise<void>>()
+  // Go's `paused` on reads: unset, as a Go before read-only rooms sends it.
+  let paused: boolean | undefined
+  const flag = () => (paused === undefined ? {} : { paused })
   let answerPost: (call: GoCall) => Promise<Response> = async () =>
     json({ messages: [] }, 201)
   const standing = (member: string | undefined) =>
@@ -242,7 +245,11 @@ function fakeGo(held: RoomMessage[] = []) {
         return json({ ...space, is_member: standing(member) === "member" })
       }
       if (url.pathname === `${room}/catchup`) {
-        return json({ brief: { through_seq: 0 }, messages: held.slice(0, 200) })
+        return json({
+          brief: { through_seq: 0 },
+          messages: held.slice(0, 200),
+          ...flag(),
+        })
       }
       if (url.pathname === `${room}/messages` && call.method === "GET") {
         const after = Number(url.searchParams.get("after") ?? 0)
@@ -256,6 +263,7 @@ function fakeGo(held: RoomMessage[] = []) {
           seats: seats.filter((seat) =>
             seated(seat.speaks_for ?? seat.user_id)
           ),
+          ...flag(),
         })
       }
       if (url.pathname === `${room}/messages` && call.method === "POST") {
@@ -283,6 +291,10 @@ function fakeGo(held: RoomMessage[] = []) {
     refuse: (refusal: (call: GoCall) => Response | undefined) =>
       refusals.push(refusal),
     posts: () => calls.filter((call) => call.method === "POST"),
+    /** What Go's reads say of `paused` from now on (undefined: nothing). */
+    pause: (now: boolean | undefined) => {
+      paused = now
+    },
     onPost: (answer: (call: GoCall) => Promise<Response>) => {
       answerPost = answer
     },
@@ -1006,6 +1018,78 @@ describe("TeamspaceRoomAgent: refusals", () => {
     })
     expect(roomMessages(member)).toEqual([1, 2])
     expect(ticks(agent)).toHaveLength(1)
+  })
+
+  it("keeps reading a room Go says is paused, read-only: every socket is told paused, after the room for one that opens, and live once resumed", async () => {
+    const goRoom = fakeGo([said(1)])
+    const agent = makeRoom()
+    const member = await join(agent, "member")
+
+    goRoom.pause(true)
+    goRoom.held.push(said(2, "ada"))
+    await run(agent, roomTiming.heartbeatMs)
+    expect(sentOf(member, "room-status")).toEqual([
+      { type: "room-status", status: "paused" },
+    ])
+    // What was said is still read and sent, and the room keeps reading.
+    expect(roomMessages(member)).toEqual([1, 2])
+    expect(ticks(agent)).toHaveLength(1)
+
+    // A page that opens now is sent the room, then told it is paused.
+    const ada = await join(agent, "ada")
+    expect(ada.sent.map((message) => message.type)).toEqual(
+      expect.arrayContaining(["room-snapshot", "room-status"])
+    )
+    expect(roomMessages(ada)).toEqual([1, 2])
+    const types = ada.sent.map((message) => message.type)
+    expect(types.lastIndexOf("room-status")).toBeGreaterThan(
+      types.indexOf("room-snapshot")
+    )
+    expect(sentOf(ada, "room-status")).toEqual([
+      { type: "room-status", status: "paused" },
+    ])
+
+    // Still paused: nobody is told again.
+    await run(agent, roomTiming.heartbeatMs)
+    expect(sentOf(member, "room-status")).toHaveLength(1)
+
+    goRoom.pause(false)
+    await run(agent, roomTiming.heartbeatMs)
+    for (const sock of [member, ada]) {
+      expect(sentOf(sock, "room-status").at(-1)).toEqual({
+        type: "room-status",
+        status: "live",
+      })
+    }
+  })
+
+  it("tells every page a room is paused when Go refuses a post 409 teamspace_disabled", async () => {
+    const goRoom = fakeGo([said(1)])
+    const agent = makeRoom()
+    const member = await join(agent, "member")
+    const ada = await join(agent, "ada")
+
+    goRoom.onPost(async () => {
+      goRoom.pause(true)
+      return goError(409, "teamspace_disabled", "teamspace is disabled")
+    })
+    await post(agent, member, "post-1", "Hello")
+    expect(sentOf(member, "room-posted").at(-1)).toEqual({
+      type: "room-posted",
+      result: {
+        id: "post-1",
+        ok: false,
+        status: 409,
+        code: "teamspace_disabled",
+        message: "teamspace is disabled",
+      },
+    })
+    for (const sock of [member, ada]) {
+      expect(sentOf(sock, "room-status")).toEqual([
+        { type: "room-status", status: "paused" },
+      ])
+      expect(sock.closed).toBeUndefined()
+    }
   })
 
   it("says a server without rooms is unavailable, and a Go that fails is trying again", async () => {

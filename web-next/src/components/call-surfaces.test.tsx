@@ -1047,6 +1047,11 @@ describe("a parley starting in the room the member has open", () => {
     expect(toast).toBeTruthy()
     fireEvent.click(within(toast!).getByRole("button", { name: "Join" }))
     await waitFor(() => expect(requests("/call/join", "POST")).toHaveLength(1))
+    // Join dismisses the toast, and Sonner removes it on a timer: let that
+    // timer run here, not after the test environment has gone.
+    await waitFor(() =>
+      expect(document.querySelector("[data-sonner-toast]")).toBeNull()
+    )
   })
 })
 

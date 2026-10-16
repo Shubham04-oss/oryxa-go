@@ -48,7 +48,13 @@ SSE path.
    `kind`; every entry has a unique, stable `key`. A message's `role` is
    `member`, `agent` or `apps` (a notice from the member's apps); a draft's
    `state` is `streaming` until its message replaces it, `interrupted` if its
-   run ended first.
+   run ended first. For run cards, `groupTurns(entries, items)` places each
+   run's start and end in its turn: `turnDuration` (each run's end less its
+   start), `turnUsage` and `turnFailureCode` (said by `runFailureWords`).
+   Since #390 Go's history keeps the brackets too, with the ids the streamed
+   copies carry (`<run>.started`, `<run>.ended`); a start or end seen twice
+   shows once, and Go's stored end replaces a `run_failed` the object wrote
+   when its stream broke.
 4. **Stream**: `chat.sendMessage({ text })`. A refusal comes back as a
    `run_failed` item. One with `code === sessionExpiredCode` means the socket's
    cookie expired before anything ran: refresh the session, `await

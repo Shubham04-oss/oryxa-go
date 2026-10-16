@@ -371,3 +371,56 @@ func TestAProfileSaysWhatItReachesAndWhetherItDelivers(t *testing.T) {
 		}
 	}
 }
+
+// A specialist's conversation is renamed in its own engine, by the rules and
+// within the ownership boundary of the primary agent's threads.
+func TestASpecialistsConversationIsRenamedInItsOwnEngine(t *testing.T) {
+	repo := newFakeRepository()
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := session.InMemoryService()
+	service := &Service{
+		repository: repo,
+		factory:    func(Definition) (agent.Agent, error) { return namedAgent(t, "managed_agt_primary"), nil },
+		sessions:   sessions, runs: noRuns{}, prices: prices,
+	}
+	ctx := context.Background()
+	member := threads.Member{OrganizationID: "org_1", UserID: "user_1"}
+	engine, err := service.engine(repo.primary, UnattendedReads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := engine.Create(ctx, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := service.RenameThread(ctx, member, repo.primary.ID, created.ID, " Q3 review ")
+	if err != nil || renamed.Title != "Q3 review" {
+		t.Fatalf("RenameThread() = %+v, %v", renamed, err)
+	}
+	listed, err := service.ListThreads(ctx, member, repo.primary.ID)
+	if err != nil || len(listed) != 1 || listed[0].Title != "Q3 review" {
+		t.Fatalf("ListThreads() = %+v, %v", listed, err)
+	}
+	// Another member does not find the specialist, so never reaches its
+	// conversations.
+	someoneElse := threads.Member{OrganizationID: "org_1", UserID: "user_2"}
+	if _, err := service.RenameThread(ctx, someoneElse, repo.primary.ID, created.ID, "Mine"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another member's rename = %v, want ErrNotFound", err)
+	}
+	// A conversation the member does not own is not found in the engine, even
+	// when the specialist is theirs.
+	stranger := threads.Member{OrganizationID: "org_1", UserID: "user_2"}
+	strangers, err := engine.Create(ctx, stranger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RenameThread(ctx, member, repo.primary.ID, strangers.ID, "Mine"); !errors.Is(err, threads.ErrNotFound) {
+		t.Fatalf("a rename of another member's conversation = %v, want threads.ErrNotFound", err)
+	}
+	if _, err := service.RenameThread(ctx, member, repo.primary.ID, created.ID, " "); !errors.Is(err, threads.ErrInvalid) {
+		t.Fatalf("a blank title = %v, want ErrInvalid", err)
+	}
+}

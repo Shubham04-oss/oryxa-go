@@ -1568,3 +1568,117 @@ func TestARunNobodyWatchesRemembersNothing(t *testing.T) {
 		t.Fatal("a run the member started remembered nothing")
 	}
 }
+
+func TestAMemberRenamesTheirThread(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("Hello, Asha.", genai.RoleModel), nil
+	})
+	ctx := context.Background()
+	created, err := h.service.Create(ctx, asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.run(asha, created.ID, RunInput{Message: "Say hello"})
+	newer, err := h.service.Create(ctx, asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(h.runs.started)
+
+	renamed, err := h.service.Rename(ctx, asha, created.ID, "  Launch \n plan  ")
+	if err != nil {
+		t.Fatalf("Rename() error = %v", err)
+	}
+	if renamed.ID != created.ID || renamed.Title != "Launch plan" {
+		t.Fatalf("renamed = %+v, want the trimmed title", renamed)
+	}
+	// A rename is a write: it moves updated_at, as a run does.
+	if !renamed.UpdatedAt.After(newer.UpdatedAt) {
+		t.Fatalf("renamed.UpdatedAt = %v, want after %v", renamed.UpdatedAt, newer.UpdatedAt)
+	}
+	// The rename held the thread as a run does, then let it go unrecorded.
+	if len(h.runs.started) != before+1 || h.runs.started[before].SessionID != created.ID {
+		t.Fatalf("started = %+v, want the rename to hold the thread", h.runs.started)
+	}
+	if len(h.runs.cancelled) != 1 || h.runs.cancelled[0] != h.runs.started[before].ID {
+		t.Fatalf("cancelled = %v, want the rename's hold released", h.runs.cancelled)
+	}
+	if len(h.runs.finished) != 1 {
+		t.Fatalf("finished = %v, want no run recorded for the rename", h.runs.finished)
+	}
+
+	detail, err := h.service.Get(ctx, asha, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Title != "Launch plan" || strings.Join(types(detail.Items), ",") != "message,message" {
+		t.Fatalf("detail = %+v, want the new title and the history unchanged", detail)
+	}
+	listed, err := h.service.List(ctx, asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// So the renamed thread comes first, above the one made after it.
+	if len(listed) != 2 || listed[0].ID != created.ID || listed[0].Title != "Launch plan" || listed[1].ID != newer.ID {
+		t.Fatalf("listed = %+v, want the renamed thread first", listed)
+	}
+
+	// The next message neither retitles the thread nor reads the rename.
+	h.run(asha, created.ID, RunInput{Message: "And again"})
+	if detail, err = h.service.Get(ctx, asha, created.ID); err != nil || detail.Title != "Launch plan" {
+		t.Fatalf("after another run: %+v, %v", detail.Thread, err)
+	}
+}
+
+func TestARenameIsRefusedWhenItCannotBeKept(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	created, err := h.service.Create(ctx, asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, title := range map[string]string{
+		"blank":    " \n\t ",
+		"too long": strings.Repeat("a", maxTitleRunes+1),
+	} {
+		if _, err := h.service.Rename(ctx, asha, created.ID, title); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Rename() error = %v, want ErrInvalid", name, err)
+		}
+	}
+	if _, err := h.service.Rename(ctx, asha, created.ID, strings.Repeat("é", maxTitleRunes)); err != nil {
+		t.Errorf("a title of exactly %d characters: %v", maxTitleRunes, err)
+	}
+
+	other := Member{UserID: "user_ravi", OrganizationID: "org_1"}
+	if _, err := h.service.Rename(ctx, other, created.ID, "Mine now"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("another member's rename = %v, want ErrNotFound", err)
+	}
+	elsewhere := Member{UserID: asha.UserID, OrganizationID: "org_2"}
+	if _, err := h.service.Rename(ctx, elsewhere, created.ID, "Elsewhere"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a rename from another organization = %v, want ErrNotFound", err)
+	}
+
+	// The Requests thread is Oryxa's, and keeps its title.
+	if err := h.service.Note(ctx, asha, askedNote("irq_1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.service.Rename(ctx, asha, RequestsThreadID(asha.OrganizationID), "My inbox"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a rename of the Requests thread = %v, want ErrInvalid", err)
+	}
+	requests, err := h.service.Get(ctx, asha, RequestsThreadID(asha.OrganizationID))
+	if err != nil || requests.Title != RequestsTitle {
+		t.Errorf("Requests thread = %+v, %v, want its title kept", requests.Thread, err)
+	}
+
+	h.runs.startErr = runstore.ErrRunInProgress
+	if _, err := h.service.Rename(ctx, asha, created.ID, "While running"); !errors.Is(err, ErrRunInProgress) {
+		t.Errorf("a rename during a run = %v, want ErrRunInProgress", err)
+	}
+	detail, err := h.service.Get(ctx, asha, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Title != strings.Repeat("é", maxTitleRunes) {
+		t.Errorf("title = %q, want the last rename that was kept", detail.Title)
+	}
+}

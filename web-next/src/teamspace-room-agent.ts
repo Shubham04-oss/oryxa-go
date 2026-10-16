@@ -5,7 +5,7 @@ import { ApiError, requestError } from "./lib/api/client"
 import { organizationPath } from "./lib/agents/http"
 import { isUnavailableHere } from "./lib/agents/policy"
 import { isNameId, registryName } from "./lib/dms/names"
-import { roomApi } from "./lib/rooms/client"
+import { isRoomPausedRefusal, roomApi } from "./lib/rooms/client"
 import type { RoomMessage, RoomRequest, RoomSeat } from "./lib/rooms/client"
 import {
   ROOM_WINDOW,
@@ -156,6 +156,7 @@ const keys = {
   removals: "room:removals",
   fastUntil: "room:fast-until",
   condition: "room:condition",
+  paused: "room:paused",
   trouble: "room:trouble",
   tick: "room:tick",
   forget: "room:forget",
@@ -188,7 +189,11 @@ type Removal = { removedAt: string; at: number }
 /** The removals carried out lately, by member. */
 type Removals = Partial<Record<string, Removal>>
 
-/** Why nothing is read: Go refuses everyone until the teamspace changes. */
+/**
+ * Why nothing is read: Go refuses everyone until the teamspace changes. A Go
+ * before read-only rooms refuses a paused room's reads this way (400); one
+ * since reads it, saying `paused` (the store's `paused`).
+ */
 type Condition = "paused" | "unavailable"
 
 /** A finished post, kept for a socket of its author's that reopens. */
@@ -390,6 +395,18 @@ class RoomStore {
 
   set condition(condition: Condition | undefined) {
     this.put(keys.condition, condition)
+  }
+
+  /**
+   * Go's latest read said the room is paused: it is still read, and sent,
+   * but nobody can say anything in it until the teamspace is resumed.
+   */
+  get paused(): boolean {
+    return this.kv.get<boolean>(keys.paused) ?? false
+  }
+
+  set paused(paused: boolean) {
+    this.put(keys.paused, paused || undefined)
   }
 
   /** Go could not be read lately. */
@@ -675,9 +692,14 @@ function failedPost(id: string, error: unknown): RoomPostResult {
  * - **Refusals**, per member: a 401 tells that cookie's sockets
  *   `session_expired` and the cookie is not used again; a 403 or 404, or Go
  *   saying they are not on the team, closes the member's sockets as gone,
- *   and once nobody here may open the room its copy goes; a paused room
- *   (400) or a server without rooms (503) tells every socket and stops
- *   reading until a member's read succeeds again.
+ *   and once nobody here may open the room its copy goes; a server without
+ *   rooms (503), or a paused room from a Go before read-only rooms (400),
+ *   tells every socket and stops reading until a member's read succeeds
+ *   again.
+ * - **Paused.** Go reads a paused room as usual and says `paused`, and
+ *   refuses a post there 409 `teamspace_disabled`: either tells every
+ *   socket `paused`, and the room is still read and sent, read-only, until
+ *   a read says it is not paused any more (`live`).
  *
  * The Worker routes a socket here only once Go answers `GET
  * …/teamspaces/{id}` with `is_member` for the member's cookie, and the room
@@ -973,7 +995,9 @@ export class TeamspaceRoomAgent extends Agent<RoomEnv, TeamspaceRoomState> {
       this.confirmSeated(seats, asked)
       this.arrived(read.messages)
       this.setSeats(seats)
-      this.recovered()
+      // A Go before read-only rooms reads only a room that is not paused,
+      // and sends no flag.
+      this.recovered(read.paused === true)
       this.noteLanded()
       await this.sendSnapshots()
     } catch (error) {
@@ -1079,6 +1103,8 @@ export class TeamspaceRoomAgent extends Agent<RoomEnv, TeamspaceRoomState> {
     }
     if (store.trouble)
       send(connection, { type: "room-status", status: "error" })
+    else if (store.paused)
+      send(connection, { type: "room-status", status: "paused" })
     update(connection, { ready: true, held: undefined })
   }
 
@@ -1160,6 +1186,11 @@ export class TeamspaceRoomAgent extends Agent<RoomEnv, TeamspaceRoomState> {
     if (outgoing.dropped || this.epoch !== epoch) {
       await this.planTick()
       return
+    }
+    if (!result.ok && isRoomPausedRefusal(result, "post")) {
+      // Go refused it as paused (409 teamspace_disabled): every page goes
+      // read-only now, and the read below says whether that still holds.
+      this.pausedNow()
     }
     if (!result.ok && result.status !== 401 && result.status !== 429) {
       // What the room recorded reaches every page before the author hears
@@ -1252,8 +1283,9 @@ export class TeamspaceRoomAgent extends Agent<RoomEnv, TeamspaceRoomState> {
       this.expire(state.cookie)
     } else if (error.status === 403 || error.status === 404) {
       await this.turnAway(memberOf(state, connection.id), error.message)
-    } else if (error.status === 400) {
-      // Go refuses a paused room's reads to everyone.
+    } else if (isRoomPausedRefusal(error, "read")) {
+      // A Go before read-only rooms refuses a paused room's reads (400) to
+      // everyone.
       this.stop("paused", error.message)
     } else if (isUnavailableHere(error)) {
       this.stop("unavailable", error.message)
@@ -1369,15 +1401,32 @@ export class TeamspaceRoomAgent extends Agent<RoomEnv, TeamspaceRoomState> {
     }
   }
 
-  /** A read succeeded: whatever had stopped the room is over. */
-  private recovered(): void {
+  /**
+   * A read succeeded: whatever had stopped the room is over. The room is
+   * live again, or, when Go said so (`paused`), readable but paused.
+   */
+  private recovered(paused: boolean): void {
     const store = this.store
-    if (!store.condition && !store.trouble) return
+    if (!store.condition && !store.trouble && store.paused === paused) return
     store.condition = undefined
     store.trouble = false
+    store.paused = paused
+    const status = paused ? "paused" : "live"
     for (const connection of this.connections()) {
       if (stateOf(connection)?.ready) {
-        send(connection, { type: "room-status", status: "live" })
+        send(connection, { type: "room-status", status })
+      }
+    }
+  }
+
+  /** Go refused a post as paused: every page that has the room goes read-only until a read says otherwise. */
+  private pausedNow(): void {
+    const store = this.store
+    if (store.paused || store.condition) return
+    store.paused = true
+    for (const connection of this.connections()) {
+      if (stateOf(connection)?.ready) {
+        send(connection, { type: "room-status", status: "paused" })
       }
     }
   }

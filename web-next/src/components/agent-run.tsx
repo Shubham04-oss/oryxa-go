@@ -24,7 +24,10 @@ import type { ScreenContext } from "@/lib/agents/screen-context"
 import {
   artifactFileName,
   openedLinks,
+  runFailureWords,
   toolKeyArgument,
+  turnDuration,
+  turnFailureCode,
   turnTimes,
   turnUsage,
 } from "@/lib/threads/timeline"
@@ -300,14 +303,19 @@ export function RunCard({
   const active = status === "working" || status === "waiting"
   const now = useNow(active)
   const { start, end } = turnTimes(turn, { finished: !active })
+  // A finished run's own start and end say how long it worked; without
+  // them, the items' times do.
+  const worked = active ? undefined : turnDuration(turn)
   const elapsed =
-    start === undefined
-      ? undefined
-      : active
-        ? now - start
-        : end !== undefined
-          ? end - start
-          : undefined
+    worked !== undefined
+      ? worked
+      : start === undefined
+        ? undefined
+        : active
+          ? now - start
+          : end !== undefined
+            ? end - start
+            : undefined
   const usage = turnUsage(turn)
   const tools = settledCalls(
     turn.entries.filter((entry): entry is ToolEntry => entry.kind === "tool"),
@@ -335,7 +343,9 @@ export function RunCard({
       ? "Needs your input"
       : status === "done" && result?.status === "blocked"
         ? "Blocked"
-        : statusWords[status]
+        : status === "failed"
+          ? runFailureWords(turnFailureCode(turn)).label
+          : statusWords[status]
   const kept = new Set(
     outputs.flatMap((entry) =>
       entry.kind === "artifact" ? [artifactFileName(entry.name)] : []
