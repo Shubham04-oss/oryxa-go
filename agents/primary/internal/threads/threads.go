@@ -20,11 +20,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
+
+	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
@@ -390,6 +393,84 @@ func (service *Service) Origin(ctx context.Context, member Member, threadID stri
 		return "", err
 	}
 	return threadOf(stored).Origin, nil
+}
+
+// renameInvocation names the invocation a rename's event belongs to. It is no
+// run's: a rename writes the title and nothing an agent reads.
+const renameInvocation = "oryxa-rename"
+
+// Rename gives one of the member's threads a title of their own, in place of
+// the one taken from its first message. The title is trimmed, its spaces
+// collapsed as a created thread's are, and must then hold 1 to maxTitleRunes
+// characters: a longer one is refused rather than cut. The Requests thread
+// keeps RequestsTitle: it is Oryxa's, and notes are written to it without the
+// hold below, so a rename of it is refused (ErrInvalid).
+//
+// The title is the thread's state, so it is written as ADK writes state: an
+// event of a state change alone, by the member, which shows nothing in the
+// thread's history and nothing to the model. ADK refuses a write to a session
+// changed since it was read, so a run writing the thread at the same moment
+// would fail; the rename holds the thread the way a run does while it writes,
+// and answers ErrRunInProgress while a run is answering it. The hold is
+// released without a trace: no run is recorded, and no event published.
+//
+// The rename is a write to the thread like any other, so it moves the
+// thread's updated_at and with it the thread to the top of List: the member
+// has just touched it.
+func (service *Service) Rename(ctx context.Context, member Member, threadID, title string) (Thread, error) {
+	title = strings.Join(strings.Fields(title), " ")
+	switch count := utf8.RuneCountInString(title); {
+	case count == 0:
+		return Thread{}, fmt.Errorf("%w: a title needs at least one character", ErrInvalid)
+	case count > maxTitleRunes:
+		return Thread{}, fmt.Errorf("%w: a title holds at most %d characters", ErrInvalid, maxTitleRunes)
+	}
+	if threadID == RequestsThreadID(member.OrganizationID) {
+		return Thread{}, fmt.Errorf("%w: the Requests thread keeps its title", ErrInvalid)
+	}
+	// The thread must be the member's before the rename holds it, as before
+	// a run does.
+	if _, err := service.readThread(ctx, member, threadID, 1); err != nil {
+		return Thread{}, err
+	}
+	holdID, err := newRunID()
+	if err != nil {
+		return Thread{}, err
+	}
+	if err := service.runs.Start(ctx, runstore.Run{
+		ID:             holdID,
+		SessionID:      threadID,
+		UserID:         member.UserID,
+		OrganizationID: member.OrganizationID,
+		StartedBy:      agentsv1.StartedByMember,
+	}, service.lease); err != nil {
+		if errors.Is(err, runstore.ErrRunInProgress) {
+			return Thread{}, ErrRunInProgress
+		}
+		return Thread{}, fmt.Errorf("hold thread to rename it: %w", err)
+	}
+	defer func() {
+		if err := service.runs.Cancel(context.WithoutCancel(ctx), holdID); err != nil {
+			service.logger.WarnContext(ctx, "release a renamed thread", "thread_id", threadID, "error", err)
+		}
+	}()
+	// Read again now that the rename holds the thread: the write must be
+	// against the thread as it is, or ADK refuses it as stale.
+	stored, err := service.readThread(ctx, member, threadID, 1)
+	if err != nil {
+		return Thread{}, err
+	}
+	event := session.NewEvent(ctx, renameInvocation)
+	event.Author = adkUserAuthor
+	event.Actions.StateDelta = map[string]any{stateTitle: title}
+	if err := service.sessions.AppendEvent(ctx, stored, event); err != nil {
+		return Thread{}, fmt.Errorf("rename thread: %w", err)
+	}
+	renamed, err := service.readThread(ctx, member, threadID, 1)
+	if err != nil {
+		return Thread{}, err
+	}
+	return threadOf(renamed), nil
 }
 
 // Delete removes one of the member's threads, and what its runs kept.
