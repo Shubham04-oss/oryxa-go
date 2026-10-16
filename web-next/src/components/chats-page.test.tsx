@@ -9,8 +9,9 @@ import {
   within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { ChatsList, chatListGroups } from "./chats-page"
+import { ChatsList, chatFiles, chatListGroups } from "./chats-page"
 import { AgentChatMenu } from "./agent-chat-menu"
+import { ApiError } from "@/lib/api/client"
 import { threadListQueryOptions } from "@/lib/threads/client"
 import type { Thread } from "@/lib/threads/client"
 import type { PrimaryChatTarget } from "@/lib/threads/chat-choice"
@@ -24,7 +25,11 @@ const thread = (id: string, title: string, updated_at: string): Thread => ({
   updated_at,
 })
 const threads = [
-  thread("th_1", "Plan the EU launch", "2026-10-15T11:54:00Z"),
+  {
+    ...thread("th_1", "Plan the EU launch", "2026-10-15T11:54:00Z"),
+    artifact_count: 3,
+    latest_artifact: { name: "launch-plan.pdf", kind: "pdf" },
+  },
   thread("th_2", "Summarise the vendor contracts", "2026-10-15T09:00:00Z"),
   thread("th_3", "Compare the hosting quotes", "2026-10-14T15:00:00Z"),
   thread("th_4", "", "2026-10-15T08:00:00Z"),
@@ -63,6 +68,26 @@ describe("chatListGroups", () => {
       now,
     })
     expect(groups).toEqual([{ label: "Earlier", threads: [threads[2]] }])
+  })
+})
+
+describe("chatFiles", () => {
+  it("counts the files Go kept, with the latest one's name", () => {
+    expect(
+      chatFiles({
+        artifact_count: 3,
+        latest_artifact: { name: "q3.xlsx", kind: "xlsx" },
+      })
+    ).toEqual({ label: "3 files", latest: "q3.xlsx" })
+    expect(chatFiles({ artifact_count: 1, latest_artifact: null })).toEqual({
+      label: "1 file",
+      latest: undefined,
+    })
+  })
+
+  it("says nothing when Go has no count, or counts none", () => {
+    expect(chatFiles({})).toBeNull()
+    expect(chatFiles({ artifact_count: 0, latest_artifact: null })).toBeNull()
   })
 })
 
@@ -111,6 +136,18 @@ describe("ChatsList", () => {
     expect(onOpen).toHaveBeenCalledWith({ kind: "new" })
   })
 
+  it("shows a row's file count and its latest file's kind", () => {
+    renderList()
+    const row = screen.getByRole("button", { name: /Plan the EU launch/ })
+    expect(row.textContent).toContain("3 files")
+    expect(row.textContent).toContain("PDF")
+    expect(
+      screen
+        .getByRole("button", { name: /Compare the hosting quotes/ })
+        .textContent.includes("file")
+    ).toBe(false)
+  })
+
   it("marks the open chat that waits on the member", () => {
     renderList({ waitingThread: "th_1" })
     expect(screen.getByText("Needs approval")).toBeTruthy()
@@ -155,5 +192,80 @@ describe("AgentChatMenu", () => {
     ])
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }))
     expect(onDelete).toHaveBeenCalledOnce()
+  })
+})
+
+describe("AgentChatMenu rename", () => {
+  async function openRename(
+    onRename: (title: string) => Promise<void>,
+    title = "Plan"
+  ) {
+    render(
+      <AgentChatMenu
+        title={title}
+        agentName="Krude"
+        disabled={false}
+        onRename={onRename}
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Chat options" }))
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }))
+    return screen.findByRole("dialog")
+  }
+
+  it("offers only what it is handed", async () => {
+    render(<AgentChatMenu title="Plan" disabled={false} onDelete={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Chat options" }))
+    await screen.findByRole("menuitem", { name: "Delete chat" })
+    expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull()
+  })
+
+  it("renames the chat, Cancel then Save", async () => {
+    const onRename = vi.fn(() => Promise.resolve())
+    const dialog = await openRename(onRename)
+    const field = within(dialog).getByRole("textbox", { name: "Chat name" })
+    expect((field as HTMLInputElement).value).toBe("Plan")
+    expect(
+      within(dialog)
+        .getAllByRole("button")
+        .map((button) => button.textContent)
+    ).toEqual(["Cancel", "Save"])
+    fireEvent.change(field, { target: { value: "  EU launch  " } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
+    await vi.waitFor(() =>
+      expect(onRename).toHaveBeenCalledWith("  EU launch  ")
+    )
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
+  it("refuses an empty or too long name before sending", async () => {
+    const onRename = vi.fn(() => Promise.resolve())
+    const dialog = await openRename(onRename)
+    const field = within(dialog).getByRole("textbox", { name: "Chat name" })
+    fireEvent.change(field, { target: { value: "a".repeat(81) } })
+    expect(within(dialog).getByRole("alert").textContent).toBe(
+      "Keep the name to 80 characters."
+    )
+    const save = within(dialog).getByRole("button", { name: "Save" })
+    expect(save.hasAttribute("disabled")).toBe(true)
+    fireEvent.change(field, { target: { value: "   " } })
+    expect(save.hasAttribute("disabled")).toBe(true)
+    expect(onRename).not.toHaveBeenCalled()
+  })
+
+  it("says the agent is answering when Go refuses with 409", async () => {
+    const onRename = vi.fn(() =>
+      Promise.reject(new ApiError("busy", 409, "run_in_progress"))
+    )
+    const dialog = await openRename(onRename)
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Chat name" }),
+      { target: { value: "EU launch" } }
+    )
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "Krude is answering — try again in a moment"
+    )
+    expect(screen.getByRole("dialog")).toBeTruthy()
   })
 })
