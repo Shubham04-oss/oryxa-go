@@ -137,7 +137,10 @@ func TestAFailedPassIsTriedAgainAfterItsDelayAndGivenUpOnAtTheLimit(t *testing.T
 	}
 	job := claimOwn(t, store, org, time.Minute)[0]
 
-	gaveUp, err := store.Release(ctx, job, true, 3, 300*time.Millisecond, "slack was down")
+	// Long enough that the claims right after the release land inside it even
+	// on a slow CI runner (300ms was not: the early claim sometimes came late).
+	const retryDelay = 2 * time.Second
+	gaveUp, err := store.Release(ctx, job, true, 3, retryDelay, "slack was down")
 	if err != nil || gaveUp {
 		t.Fatalf("Release() = %v, %v", gaveUp, err)
 	}
@@ -152,7 +155,7 @@ func TestAFailedPassIsTriedAgainAfterItsDelayAndGivenUpOnAtTheLimit(t *testing.T
 	if early := claimOwn(t, store, org, time.Minute); len(early) != 0 {
 		t.Fatalf("an event ended the wait: claimed %+v", early)
 	}
-	time.Sleep(400 * time.Millisecond)
+	time.Sleep(retryDelay + 200*time.Millisecond)
 	retry := claimOwn(t, store, org, time.Minute)
 	if len(retry) != 1 || retry[0].Attempts != 1 || retry[0].Wanted != 2 {
 		t.Fatalf("retry = %+v, want the job with its failure still counted and both events covered", retry)
