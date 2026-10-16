@@ -7,6 +7,7 @@ import {
   agentIdentity,
   fullTime,
   messageTime,
+  pausedLine,
   personIdentity,
 } from "./teamspace-format"
 import type {
@@ -16,6 +17,7 @@ import type {
   TeamspaceRoom,
 } from "@/hooks/use-teamspace-room"
 import { parleyNotesOf } from "@/lib/rooms/client"
+import { useMarkTeamspaceRead } from "@/hooks/use-teamspace-read"
 import type { Teamspace } from "@/lib/teamspaces/client"
 
 /** How many seats the presence row shows before "+N". */
@@ -56,7 +58,37 @@ export function TeamspaceConversation({
       .map((message) => message.seq)
   )
   const lastId = messages.at(-1)?.id
+  const lastSeq = messages.at(-1)?.seq
   const outgoingCount = status.outgoing.length
+  // The newest message the member has had on screen in this room: the room
+  // is marked read through it (useMarkTeamspaceRead), not through what
+  // arrived while they had scrolled back or were on another tab.
+  const [seen, setSeen] = useState<{ room: string; seq: number }>()
+  const seenSeq = seen?.room === space.id ? seen.seq : undefined
+  useMarkTeamspaceRead(space, seenSeq)
+
+  useEffect(() => {
+    const list = listRef.current
+    if (!list || lastSeq === undefined) return
+    const spaceId = space.id
+    const saw = () =>
+      setSeen((held) =>
+        held?.room === spaceId && held.seq >= lastSeq
+          ? held
+          : { room: spaceId, seq: lastSeq }
+      )
+    const last = list.querySelector(`[data-seq="${lastSeq}"]`)
+    if (!last) return
+    if (typeof IntersectionObserver === "undefined") {
+      saw()
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) saw()
+    })
+    observer.observe(last)
+    return () => observer.disconnect()
+  }, [lastSeq, space.id])
 
   useEffect(() => {
     const list = listRef.current
@@ -81,7 +113,7 @@ export function TeamspaceConversation({
   const agents = presence.seats.filter((seat) => seat.kind === "agent")
   const seats = [...people, ...agents]
   const pending = status.outgoing.filter((outgoing) => !outgoing.landed)
-  const blocked = blockedCopy(space, status)
+  const blocked = blockedCopy(space, status, viewerId, presence.seats)
 
   return (
     <section
@@ -257,6 +289,7 @@ function RoomLine({
       className="workspace-message"
       data-author={message.author_kind}
       data-mine={mine ? "true" : undefined}
+      data-seq={message.seq}
       aria-label={`${name}${tag ? `, ${tag}` : ""}`}
     >
       <IdentityAvatar identity={identity} />
@@ -369,12 +402,27 @@ function presenceLabel(
 }
 
 /** Why the room cannot be used, when it cannot. */
-function blockedCopy(space: Teamspace, status: RoomStatus): string | undefined {
+function blockedCopy(
+  space: Teamspace,
+  status: RoomStatus,
+  viewerId: string | undefined,
+  seats: readonly RoomSeat[]
+): string | undefined {
   switch (status.connection) {
-    case "paused":
-      return space.can_manage
+    case "paused": {
+      const why = space.can_manage
         ? "This teamspace is paused. Resume it from Teamspaces to open its room again."
         : "This teamspace is paused. Its room opens again when a team admin resumes it."
+      // Who paused it and when, once Go says so.
+      const by = pausedLine(space, {
+        viewerId,
+        nameOf: (userId) =>
+          seats.find(
+            (seat) => seat.kind === "person" && seat.user_id === userId
+          )?.display_name,
+      })
+      return by ? `${why} ${by}.` : why
+    }
     case "not-member":
       return `Only members of the ${space.team_name} team can join this room.`
     case "gone":

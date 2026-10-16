@@ -96,7 +96,13 @@ export type RoomSocketStatus =
   | "live"
   /** Go could not be read. The object keeps trying. */
   | "error"
-  /** 400: the teamspace is paused. Nothing is read or said until it is resumed. */
+  /**
+   * The teamspace is paused, and nothing can be said in its room. Go reads
+   * it as usual and says `paused` (a post would be 409
+   * `teamspace_disabled`), so messages still arrive, read-only, until
+   * `live`; a Go before read-only rooms refuses its reads 400 instead, and
+   * nothing more is read until it is resumed.
+   */
   | "paused"
   /** 503 `rooms_unavailable`: this server does not run rooms. */
   | "unavailable"

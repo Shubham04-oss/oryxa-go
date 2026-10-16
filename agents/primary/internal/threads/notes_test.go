@@ -130,12 +130,13 @@ func TestANoteIsNeverShownToAModel(t *testing.T) {
 	if len(seen) == 0 {
 		t.Fatal("the model saw nothing at all")
 	}
-	// The history holds the note beside the conversation, in order.
+	// The history holds the note beside the conversation and its run's
+	// brackets, in order.
 	detail, err := h.service.Get(ctx, asha, RequestsThreadID("org_1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(types(detail.Items), ","); got != "request,message,message" {
+	if got := strings.Join(types(detail.Items), ","); got != "request,message,run_started,message,run_completed" {
 		t.Fatalf("history = %s", got)
 	}
 }

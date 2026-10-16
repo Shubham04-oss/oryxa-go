@@ -12,6 +12,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteams"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
@@ -533,6 +534,23 @@ var authzRoutes = []authzRoute{
 		pattern: "POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", method: http.MethodPost,
 		path: "/v1/organizations/org_1/teamspaces/tsp_other/entries", body: "{}", malformedBody: unknownField, identity: lastTeamspaceActor,
 	},
+	// -- teamspace checklists -------------------------------------------------
+	{
+		pattern: "GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks", method: http.MethodGet,
+		path: "/v1/organizations/org_1/teamspaces/tsp_other/tasks", identity: lastTeamspaceActor,
+	},
+	{
+		pattern: "POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks", method: http.MethodPost,
+		path: "/v1/organizations/org_1/teamspaces/tsp_other/tasks", body: `{"title":"Ship"}`, malformedBody: unknownField, identity: lastTeamspaceActor,
+	},
+	{
+		pattern: "PATCH /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks/{taskID}", method: http.MethodPatch,
+		path: "/v1/organizations/org_1/teamspaces/tsp_other/tasks/tst_other", body: `{"done":true}`, malformedBody: unknownField, identity: lastTeamspaceActor,
+	},
+	{
+		pattern: "DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks/{taskID}", method: http.MethodDelete,
+		path: "/v1/organizations/org_1/teamspaces/tsp_other/tasks/tst_other", identity: lastTeamspaceActor,
+	},
 	// -- rooms: a teamspace read as a conversation ---------------------------
 	{
 		pattern: "POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/messages", method: http.MethodPost,
@@ -545,6 +563,10 @@ var authzRoutes = []authzRoute{
 	{
 		pattern: "GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/catchup", method: http.MethodGet,
 		path: "/v1/organizations/org_1/teamspaces/tsp_other/catchup", malformedQuery: "?after=abc", identity: lastRoomActor,
+	},
+	{
+		pattern: "POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/read", method: http.MethodPost,
+		path: "/v1/organizations/org_1/teamspaces/tsp_other/read", body: `{"seq":3}`, malformedBody: unknownField, identity: lastRoomActor,
 	},
 	// -- preferences --------------------------------------------------------
 	{
@@ -578,6 +600,7 @@ var publicRoutePatterns = map[string]string{
 	"GET /healthz": "a liveness probe the host's load balancer calls before any caller can be identified; it answers 204 with no body and touches no organization or member state.",
 	"GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor-source":    "a document server fetch authenticated by a signed, expiring, resource-scoped ticket, tested in documents_test.go; it accepts no member cookie.",
 	"POST /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}/editor-callback": "a document server save authenticated by both a signed, expiring, resource-scoped ticket and an ONLYOFFICE JWT, tested in documents_test.go; it accepts no member cookie.",
+	"POST /v1/edge/teamspaces/{teamspaceID}/parley-notes":                                         "the edge's voice agent leaving a parley's notes in its teamspace room: authenticated by an edge→agents token (ES256, the edge's own key, iss edge, aud agents, single-use jti) that carries log:write and names this very teamspace room, the organization taken from the token, tested in edge_notes_test.go; it accepts no member cookie or bearer token, and answers 404 unless configured.",
 	"POST /v1/edge/dispatch": "the edge's voice agent handing work over: authenticated by an edge→agents token (ES256, the edge's own key, iss edge, aud agents, single-use jti) whose organization, room and member the body must match, tested in edge_dispatch_test.go and edgedispatch/token_test.go; it accepts no member cookie or bearer token, and answers 404 unless configured.",
 }
 
@@ -586,8 +609,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 75 {
-		t.Fatalf("authzRoutes has %d entries, want 75 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 80 {
+		t.Fatalf("authzRoutes has %d entries, want 80 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -679,8 +702,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 41 {
-		t.Fatalf("tested %d state-changing routes, want 41 - a route's method changed without updating this expectation", tested)
+	if tested != 45 {
+		t.Fatalf("tested %d state-changing routes, want 45 - a route's method changed without updating this expectation", tested)
 	}
 }
 
@@ -738,8 +761,8 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 			}
 		})
 	}
-	if tested != 42 {
-		t.Fatalf("tested %d routes for malformed input, want 42 - a route gained or lost a body/limit/version without updating this expectation", tested)
+	if tested != 45 {
+		t.Fatalf("tested %d routes for malformed input, want 45 - a route gained or lost a body/limit/version without updating this expectation", tested)
 	}
 }
 
@@ -748,6 +771,11 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 // for an id taken from the path or the body.
 type fakeRooms struct {
 	actors []rooms.Actor
+	// notes and notesFor are what the edge posted, and in which
+	// organization's room.
+	notes    []rooms.ParleyNotes
+	notesFor []string
+	paused   bool
 }
 
 func (f *fakeRooms) Post(_ context.Context, actor rooms.Actor, _, _ string) ([]rooms.Message, error) {
@@ -755,12 +783,33 @@ func (f *fakeRooms) Post(_ context.Context, actor rooms.Actor, _, _ string) ([]r
 	return []rooms.Message{{Seq: 1, Body: "hello"}}, nil
 }
 
-func (f *fakeRooms) Read(_ context.Context, actor rooms.Actor, _ string, _ int64, _ int) ([]rooms.Message, []rooms.Seat, error) {
+func (f *fakeRooms) Read(_ context.Context, actor rooms.Actor, _ string, _ int64, _ int) ([]rooms.Message, []rooms.Seat, bool, error) {
 	f.actors = append(f.actors, actor)
-	return nil, nil, nil
+	return nil, nil, f.paused, nil
 }
 
-func (f *fakeRooms) Catchup(_ context.Context, actor rooms.Actor, _ string, _ int64) (rooms.Brief, []rooms.Message, error) {
+func (f *fakeRooms) Catchup(_ context.Context, actor rooms.Actor, _ string, _ int64) (rooms.Brief, []rooms.Message, bool, error) {
 	f.actors = append(f.actors, actor)
-	return rooms.Brief{}, nil, nil
+	return rooms.Brief{}, nil, f.paused, nil
+}
+
+func (f *fakeRooms) PostParleyNotes(_ context.Context, organizationID, roomID string, notes rooms.ParleyNotes) (rooms.Message, bool, error) {
+	f.notes = append(f.notes, notes)
+	f.notesFor = append(f.notesFor, organizationID+"/"+roomID)
+	created := len(f.notes) == 1
+	return rooms.Message{RoomID: roomID, Seq: 1, Kind: rooms.KindParleyNotes}, created, nil
+}
+
+func (f *fakeRooms) MarkRead(_ context.Context, actor rooms.Actor, _ string, seq int64) (int64, error) {
+	f.actors = append(f.actors, actor)
+	return seq, nil
+}
+
+func (f *fakeRooms) Activity(_ context.Context, actor rooms.Actor, spaces []teamspaces.Space) ([]teamspaces.Space, error) {
+	f.actors = append(f.actors, actor)
+	unread := int64(len(spaces))
+	for index := range spaces {
+		spaces[index].UnreadCount = &unread
+	}
+	return spaces, nil
 }

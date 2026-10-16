@@ -10,7 +10,7 @@ import {
   withoutSupersededDeltas,
 } from "./chat-messages"
 import type { ThreadChatMessage } from "./chat-messages"
-import { buildTimeline } from "./timeline"
+import { buildTimeline, groupTurns, turnDuration } from "./timeline"
 import type { Item } from "./client"
 
 afterEach(() => vi.unstubAllGlobals())
@@ -394,6 +394,71 @@ describe("Durable Object transcript", () => {
     ).toEqual([
       ["member", "hi"],
       ["agent", "Hello"],
+    ])
+  })
+})
+
+describe("run brackets Go stores (#390)", () => {
+  const usage = { input_tokens: 9, output_tokens: 3, total_tokens: 12 }
+  const history: Item[] = [
+    { type: "message", id: "e1", author: "member", text: "Hi" },
+    {
+      type: "run_started",
+      id: "run_1.started",
+      run_id: "run_1",
+      at: "2026-10-16T09:00:00Z",
+    },
+    {
+      type: "message",
+      id: "e2",
+      author: "Krude",
+      text: "Hello",
+      at: "2026-10-16T09:00:03Z",
+    },
+    {
+      type: "run_completed",
+      id: "run_1.ended",
+      run_id: "run_1",
+      at: "2026-10-16T09:00:04Z",
+      usage,
+    },
+  ]
+
+  it("keeps them when a conversation is imported from history", () => {
+    const items = chatMessagesToItems(itemsToChatMessages(history))
+    expect(items).toEqual(history)
+    const [turn] = groupTurns(buildTimeline(items), items)
+    expect(turnDuration(turn)).toBe(4_000)
+    expect(turn.runs[0].usage).toEqual(usage)
+  })
+
+  it("does not add a streamed run's brackets again from history", () => {
+    const stored: ThreadChatMessage[] = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "Hi" }] },
+      {
+        id: "a1",
+        role: "assistant",
+        parts: history.slice(1).map(itemPart),
+      },
+    ]
+    expect(reconcileChatMessages(stored, history)).toBe(stored)
+  })
+
+  it("brings in an end the transcript lacks, after the run it ends", () => {
+    const stored: ThreadChatMessage[] = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "Hi" }] },
+      {
+        id: "a1",
+        role: "assistant",
+        parts: history.slice(1, 3).map(itemPart),
+      },
+    ]
+    const items = chatMessagesToItems(reconcileChatMessages(stored, history))
+    expect(items.map((item) => item.id)).toEqual([
+      "u1",
+      "run_1.started",
+      "e2",
+      "run_1.ended",
     ])
   })
 })

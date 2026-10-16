@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it } from "vitest"
 import { cleanup, render, screen, within } from "@testing-library/react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { actionOwner, notesLength } from "./parley-notes-card"
 import { TeamspaceConversation } from "./teamspace-room"
 import type { TeamspaceRoom } from "@/hooks/use-teamspace-room"
@@ -53,13 +54,19 @@ function renderRoom(messages: RoomMessage[]) {
     presence: { seats, here: [member], me: member },
     status: { connection: "live", outgoing: [], canPost: true },
   }
+  // The room marks itself read (#389) through the query cache.
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
   return render(
-    <TeamspaceConversation
-      space={space}
-      room={room}
-      viewerId={viewerId}
-      onComposingChange={() => {}}
-    />
+    <QueryClientProvider client={client}>
+      <TeamspaceConversation
+        space={space}
+        room={room}
+        viewerId={viewerId}
+        onComposingChange={() => {}}
+      />
+    </QueryClientProvider>
   )
 }
 

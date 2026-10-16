@@ -55,6 +55,7 @@ import { ThemeMenuItem } from "./theme-menu-item"
 import { LiveDot, LiveNow, useLiveTeamspaces } from "./workspace-sidebar-live"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { TeamspaceHoverCard } from "./teamspace-hover-card"
+import { unreadCount, unreadLabel, unreadWords } from "./teamspace-format"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { PersonAvatar } from "./direct-message"
 import { countLabel } from "./direct-message-format"
@@ -368,9 +369,10 @@ function ExpandedSidebar({
                   }
                   current={openTeamspaceId === space.id}
                   live={live.has(space.id)}
+                  {...teamspaceRowCount(space)}
                   onClick={() => onOpenTeamspace(space.id)}
                   wrap={(button) => (
-                    <TeamspaceHoverCard space={space}>
+                    <TeamspaceHoverCard space={space} viewerId={viewerId}>
                       {button}
                     </TeamspaceHoverCard>
                   )}
@@ -662,6 +664,7 @@ function CollapsedSidebar({
                     }
                     current={openTeamspaceId === space.id}
                     live={live.has(space.id)}
+                    {...teamspaceRowCount(space)}
                     collapsed
                     onClick={() => onOpenTeamspace(space.id)}
                   />
@@ -763,6 +766,18 @@ function agentIdentity(id: string, name: string): AvatarIdentity {
     initials: name.slice(0, 2).toUpperCase(),
     kind: "agent",
   }
+}
+
+/** A teamspace's unread room messages as a row's strong count, when the list carries them. */
+export function teamspaceRowCount(space: Teamspace) {
+  const unread = unreadCount(space)
+  return unread > 0
+    ? {
+        count: unreadLabel(unread),
+        countLabel: unreadWords(unread),
+        strong: true,
+      }
+    : {}
 }
 
 /**

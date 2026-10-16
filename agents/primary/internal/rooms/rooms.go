@@ -26,6 +26,7 @@ package rooms
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -68,14 +69,32 @@ type Seat struct {
 	Present bool `json:"present"`
 }
 
+// MessageKind is what a room message is.
+type MessageKind string
+
+const (
+	// KindMessage is something a person or an agent said.
+	KindMessage MessageKind = "message"
+	// KindParleyNotes is what a parley in the room left behind, posted by the
+	// organization agent when the call ended. Its Data is a [ParleyNotes].
+	KindParleyNotes MessageKind = "parley_notes"
+)
+
 // Message is one thing said in a room, by a person or by an agent.
 type Message struct {
-	ID           string   `json:"id"`
-	RoomID       string   `json:"room_id"`
-	Seq          int64    `json:"seq"`
-	AuthorHandle string   `json:"author_handle"`
-	AuthorKind   SeatKind `json:"author_kind"`
-	AuthorUserID string   `json:"author_user_id"`
+	ID     string `json:"id"`
+	RoomID string `json:"room_id"`
+	Seq    int64  `json:"seq"`
+	// Kind is KindMessage unless the message is something else a client
+	// draws differently; the store gives a message without one KindMessage.
+	Kind MessageKind `json:"kind"`
+	// Data is what a client draws a message of another kind from, absent
+	// for anything said. Body still says it in words, for whoever reads the
+	// room as text, agents included.
+	Data         json.RawMessage `json:"data,omitempty"`
+	AuthorHandle string          `json:"author_handle"`
+	AuthorKind   SeatKind        `json:"author_kind"`
+	AuthorUserID string          `json:"author_user_id"`
 	// AuthorAgentID is set when an agent said it.
 	AuthorAgentID string `json:"author_agent_id,omitempty"`
 	Body          string `json:"body"`
@@ -190,8 +209,13 @@ const Pass = "PASS"
 
 // Store keeps a room's messages, its brief, and who is reading it.
 type Store interface {
-	// Append adds a message and gives it the room's next sequence number.
+	// Append adds a message and gives it the room's next sequence number. It
+	// refuses with ErrPaused once the room's teamspace is paused.
 	Append(ctx context.Context, message Message) (Message, error)
+	// AppendNotes adds parley notes to roomID, a teamspace of organizationID,
+	// as its organization agent. Notes for a call already in the room are
+	// answered with the message they were posted as, and created false.
+	AppendNotes(ctx context.Context, organizationID, roomID string, notes ParleyNotes, body string) (message Message, created bool, err error)
 	// Messages returns the room's messages after seq, oldest first, at most
 	// limit of them.
 	Messages(ctx context.Context, roomID string, afterSeq int64, limit int) ([]Message, error)
@@ -206,6 +230,30 @@ type Store interface {
 	Watch(ctx context.Context, roomID, userID string, at time.Time) error
 	// Watching lists the people who have read the room since at.
 	Watching(ctx context.Context, roomID string, since time.Time) ([]string, error)
+	// MarkRead moves userID's read cursor in roomID forward to seq, never
+	// back and never past the room's last message, and returns where it
+	// stands.
+	MarkRead(ctx context.Context, roomID, userID string, seq int64) (int64, error)
+	// Activity is, for each of roomIDs in the organization, how much of it
+	// userID has not read and the last thing said there, read in one go
+	// however many rooms are asked about.
+	Activity(ctx context.Context, organizationID, userID string, roomIDs []string) (map[string]Activity, error)
 	// Forget removes a room's messages, brief and presence.
 	Forget(ctx context.Context, organizationID, userID string) error
+}
+
+// UnreadCap is where an unread count stops: past it a client shows "99+"
+// rather than a number, and counting further would only cost every list.
+const UnreadCap = 100
+
+// Activity is one member's standing in one room: how far they have read, how
+// many messages after that somebody else said, and the last message.
+type Activity struct {
+	LastReadSeq int64
+	// Unread counts the messages after LastReadSeq, leaving out what the
+	// member said themself, up to UnreadCap. What their own agent said
+	// counts: they were not the one saying it.
+	Unread int64
+	// Last is the room's newest message, nil for a room nobody has spoken in.
+	Last *Message
 }

@@ -3,6 +3,7 @@ import { ApiError } from "@/lib/api/client"
 import {
   catchUpOnRoom,
   checkTeamspaceRoom,
+  isRoomPausedRefusal,
   mergeRoomMessages,
   parleyNotesOf,
   roomApi,
@@ -176,6 +177,63 @@ describe("roomApi", () => {
     const refusal = new ApiError("this room is paused", 400, "invalid_request")
     const api = roomApi(recorded(() => refusal).request)
     await expect(api.read("org-1", "tsp_1")).rejects.toBe(refusal)
+  })
+
+  it("carries Go's paused flag from a read, a catch-up and readAfter, and leaves it out when Go sent none", async () => {
+    const paused = roomApi(
+      recorded((path) =>
+        path.includes("/catchup")
+          ? { brief, messages: [message(3)], paused: true }
+          : { messages: [message(3)], seats: [seat], paused: true }
+      ).request
+    )
+    expect(await paused.read("org-1", "tsp_1")).toEqual({
+      messages: [message(3)],
+      seats: [seat],
+      paused: true,
+    })
+    expect(await paused.catchUp("org-1", "tsp_1")).toEqual({
+      brief,
+      messages: [message(3)],
+      paused: true,
+    })
+    expect(await paused.readAfter("org-1", "tsp_1", 2)).toMatchObject({
+      paused: true,
+    })
+
+    const open = roomApi(
+      recorded(() => ({ messages: [], seats: [seat], paused: false })).request
+    )
+    expect(await open.read("org-1", "tsp_1")).toMatchObject({ paused: false })
+
+    // A Go before read-only rooms: nothing is made up.
+    const before = fakeRoom(3)
+    expect(await before.api.read("org-1", "tsp_1")).not.toHaveProperty("paused")
+    expect(
+      await before.api.readAfter("org-1", "tsp_1", undefined)
+    ).not.toHaveProperty("paused")
+  })
+})
+
+describe("isRoomPausedRefusal", () => {
+  it("reads 409 teamspace_disabled, and a read's 400 from a Go before read-only rooms, as paused", () => {
+    const disabled = new ApiError(
+      "teamspace is disabled",
+      409,
+      "teamspace_disabled"
+    )
+    const legacy = new ApiError("this room is paused", 400, "invalid_request")
+    expect(isRoomPausedRefusal(disabled, "post")).toBe(true)
+    expect(isRoomPausedRefusal(disabled, "read")).toBe(true)
+    expect(isRoomPausedRefusal(legacy, "read")).toBe(true)
+    // A post's 400 is a message Go will not take.
+    expect(isRoomPausedRefusal(legacy, "post")).toBe(false)
+    expect(
+      isRoomPausedRefusal(
+        new ApiError("name taken", 409, "teamspace_conflict"),
+        "post"
+      )
+    ).toBe(false)
   })
 })
 

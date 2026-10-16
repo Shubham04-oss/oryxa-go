@@ -363,6 +363,26 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
+/* The room's newest message, and a count of what the member hasn't read (#389). */
+.workspace-teamspace-unread { flex: none; }
+.workspace-teamspace-card-last {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.workspace-teamspace-card-last > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-teamspace-card-last > time { flex: none; font-size: 11.5px; }
 .workspace-teamspace-card-live { display: flex; flex-wrap: wrap; gap: 6px; }
 .workspace-teamspace-card-live > span {
   display: inline-flex;
@@ -388,7 +408,7 @@
   color: var(--text-muted);
   font-size: 11.5px;
 }
-.workspace-teamspace-card-foot > span:first-child { flex: 1; min-width: 0; }
+.workspace-teamspace-card-foot > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-teamspace-faces { display: flex; flex: none; align-items: center; }
 .workspace-teamspace-faces .workspace-avatar {
   width: 22px;

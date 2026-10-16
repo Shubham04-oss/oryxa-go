@@ -83,6 +83,8 @@ function backend({
   const api = mockApi(({ url, method, body }) => {
     const path = url.pathname
     if (path === spacePath) return json(space)
+    if (path === `${spacePath}/read` && method === "POST")
+      return json({ last_read_seq: (body as { seq: number }).seq })
     if (path === `${spacePath}/entries`) return json({ entries })
     if (path === `${orgPath}/files`) return json({ files })
     if (path.startsWith(`${orgPath}/files/`)) return json(files[0])
@@ -247,6 +249,50 @@ describe("TeamspaceFocus", () => {
     ])
   })
 
+  it("marks the room read through the newest message on screen, once the teamspace carries read cursors", async () => {
+    const api = backend({
+      space: teamspace({
+        contributions: [contribution()],
+        last_read_seq: 1,
+        unread_count: 2,
+        last_message: {
+          seq: 3,
+          author_kind: "person",
+          author_id: "user-ada",
+          author_handle: "ada",
+          author_name: "Ada",
+          preview: "Done.",
+          created_at: "2026-10-16T09:00:00Z",
+        },
+      }),
+    })
+    const [, , ada] = api.seats
+    render()
+    await openRoom(api.seats, [
+      roomMessage(1, ada, "Morning!"),
+      roomMessage(2, ada, "Rollout?"),
+      roomMessage(3, ada, "Done."),
+    ])
+    await waitFor(
+      () =>
+        expect(
+          api.calls.filter((call) => call.path === `${spacePath}/read`)
+        ).toEqual([
+          { method: "POST", path: `${spacePath}/read`, body: { seq: 3 } },
+        ]),
+      { timeout: 3000 }
+    )
+  })
+
+  it("never marks a room read for a teamspace without read cursors", async () => {
+    const api = backend()
+    const [, , ada] = api.seats
+    render()
+    await openRoom(api.seats, [roomMessage(1, ada, "Morning!")])
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    expect(api.calls.some((call) => call.path.endsWith("/read"))).toBe(false)
+  })
+
   it("posts through the pill composer, and shows sending while the room's agents answer", async () => {
     const api = backend()
     render()
@@ -357,7 +403,7 @@ describe("TeamspaceFocus", () => {
     expect(withMention("thanks", "ada")).toBe("thanks @ada ")
   })
 
-  it("never reads a paused room, and says who can open it again", async () => {
+  it("shows a paused room read-only, says who can open it again, and posts nothing", async () => {
     const api = backend({
       space: teamspace({ status: "disabled", can_manage: false }),
     })
@@ -371,12 +417,47 @@ describe("TeamspaceFocus", () => {
     expect(
       screen.getByText("Paused · Launch team · 2 people and 2 agents")
     ).toBeTruthy()
+    const field = screen.getByRole("textbox", { name: "Message Launch room" })
+    expect(field.hasAttribute("disabled")).toBe(true)
+    expect(screen.getByRole("status", { name: "" }).textContent).toBe("Paused")
+
+    // Go reads it as usual and says it is paused: what was said shows.
+    const socket = await openRoom(api.seats, [
+      roomMessage(1, api.seats[2], "Before the pause"),
+    ])
+    socket.says({ type: "room-status", status: "paused" })
+    expect(await screen.findByText("Before the pause")).toBeTruthy()
     expect(
-      screen
-        .getByRole("textbox", { name: "Message Launch room" })
-        .hasAttribute("disabled")
-    ).toBe(true)
-    expect(roomAsked(api.calls)).toBe(false)
+      screen.getByText(
+        "This teamspace is paused. Its room opens again when a team admin resumes it."
+      )
+    ).toBeTruthy()
+    expect(field.hasAttribute("disabled")).toBe(true)
+    expect(socket.said("room-post")).toEqual([])
+  })
+
+  it("says who paused a room and when, once Go says so", async () => {
+    const pausedAt = "2026-10-16T09:12:44Z"
+    const on = new Intl.DateTimeFormat(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }).format(Date.parse(pausedAt))
+    backend({
+      space: teamspace({
+        status: "disabled",
+        can_manage: true,
+        paused_by_user_id: "user-ada",
+        paused_at: pausedAt,
+      }),
+    })
+    render()
+
+    expect(
+      await screen.findByText(
+        `This teamspace is paused. Resume it from Teamspaces to open its room again. Paused by Ada on ${on}.`
+      )
+    ).toBeTruthy()
   })
 
   it("keeps someone who manages the team without being on it out of the room and its work", async () => {

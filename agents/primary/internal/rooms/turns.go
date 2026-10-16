@@ -91,8 +91,10 @@ func noTurn(seat Seat) string {
 // note says, as seat, that it has no answer for trigger: line, which the
 // guard reads like anything else an agent says in a room. It is stored under
 // a context of its own, bounded, because a request that has gone away is
-// often why a seat has no answer, and the room is still owed being told.
-func (relay *Relay) note(ctx context.Context, room Situation, trigger Message, seat Seat, line string) (Message, bool) {
+// often why a seat has no answer, and the room is still owed being told. It
+// returns why the line was not stored, which the relay only acts on when it
+// is ErrPaused: what failed is logged here.
+func (relay *Relay) note(ctx context.Context, room Situation, trigger Message, seat Seat, line string) (Message, error) {
 	settling, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleBudget)
 	defer cancel()
 	said := relay.guarded(settling, trigger.RoomID, seat, line)
@@ -106,7 +108,7 @@ func (relay *Relay) note(ctx context.Context, room Situation, trigger Message, s
 	if err != nil {
 		relay.logger().WarnContext(ctx, "rooms: relay: could not record that a seat has no answer",
 			"room_id", trigger.RoomID, "seat", seat.Handle, "in_reply_to_seq", trigger.Seq, "error", err)
-		return Message{}, false
+		return Message{}, err
 	}
-	return message, true
+	return message, nil
 }

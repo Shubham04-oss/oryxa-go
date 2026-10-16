@@ -58,8 +58,48 @@ export type Teamspace = {
   can_manage: boolean
   /** The caller is on the team: may contribute, publish and read the ledger. */
   is_member: boolean
+  /**
+   * The last room message the caller has marked read (`markTeamspaceRead`).
+   * Members only, and only from a server that keeps read cursors (#389):
+   * absent otherwise, and then nothing about unread is shown.
+   */
+  last_read_seq?: number
+  /**
+   * Room messages after `last_read_seq` that the caller did not say
+   * themself, saturating at `TEAMSPACE_UNREAD_CAP` (shown as "99+").
+   * Members only; absent from a server without read cursors.
+   */
+  unread_count?: number
+  /** The room's newest message. Members only; absent while nobody has spoken, or from a server without it. */
+  last_message?: TeamspaceLastMessage | null
+  /**
+   * Who paused it, while it is paused: null for one paused before Go kept
+   * it, and absent from a Go that predates it.
+   */
+  paused_by_user_id?: string | null
+  /** When it was paused (RFC 3339), as `paused_by_user_id`. */
+  paused_at?: string | null
   created_at: string
   updated_at: string
+}
+
+/** Where `unread_count` saturates (rooms.UnreadCap): at it, show "99+". */
+export const TEAMSPACE_UNREAD_CAP = 100
+
+/** The newest message in a teamspace's room, as the teamspace list carries it. */
+export type TeamspaceLastMessage = {
+  seq: number
+  /** "parley_notes" for a parley's notes; "message" (or absent) for what someone said. */
+  kind?: string
+  author_kind: "person" | "agent"
+  /** The user id, or the agent's id for an agent. */
+  author_id: string
+  author_handle: string
+  /** Their current seat name; the handle once they no longer have a seat. */
+  author_name?: string
+  /** One line, at most 140 characters, ending "…" when cut. */
+  preview: string
+  created_at: string
 }
 
 /** Team managers only. One teamspace per team; names unique in the organization. */
@@ -234,6 +274,26 @@ export function deleteTeamspaceContribution(
     teamspacesPath(organizationId, teamspaceId, "agents", agentId),
     { method: "DELETE" }
   )
+}
+
+/**
+ * `POST …/teamspaces/{teamspaceID}/read` (server.markTeamspaceRead, #389):
+ * moves the caller's read cursor forward to `seq`, never back and never past
+ * the room's last message, and answers where it now is. Members only; a
+ * paused room may still be marked read. Call it only for a teamspace that
+ * carries `last_read_seq` or `unread_count`: a server without read cursors
+ * has no such route.
+ */
+export async function markTeamspaceRead(
+  organizationId: string,
+  teamspaceId: string,
+  seq: number
+): Promise<number> {
+  const result = await apiRequest<{ last_read_seq: number }>(
+    teamspacesPath(organizationId, teamspaceId, "read"),
+    { method: "POST", body: { seq } }
+  )
+  return result.last_read_seq
 }
 
 /** `GET …/teamspaces/{teamspaceID}/entries[?limit=]` (server.listTeamspaceEntries): newest first; 100 by default, at most 500; members only. */

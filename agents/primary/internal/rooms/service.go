@@ -18,6 +18,11 @@ var (
 	ErrNotFound  = errors.New("room not found")
 	ErrForbidden = errors.New("room is not available to this member")
 	ErrInvalid   = errors.New("invalid room request")
+	// ErrPaused refuses saying anything in a room whose teamspace is paused.
+	// What was said there stays readable to the team. It is
+	// teamspaces.ErrDisabled, so the API names it as it names every other
+	// refusal a paused teamspace gives: 409 teamspace_disabled.
+	ErrPaused = fmt.Errorf("%w: this room is paused", teamspaces.ErrDisabled)
 )
 
 // presentWithin is how recently somebody must have read a room to count as
@@ -125,6 +130,9 @@ func (service *Service) Post(ctx context.Context, actor Actor, roomID, body stri
 	if err != nil {
 		return nil, err
 	}
+	if paused(space) {
+		return nil, ErrPaused
+	}
 	// Saying something is the plainest evidence there is that somebody is in
 	// the room, and it is recorded before the seating is read so the author is
 	// present in their own message's situation: an agent must never answer
@@ -183,14 +191,17 @@ func (service *Service) Post(ctx context.Context, actor Actor, roomID, body stri
 	return said, nil
 }
 
-// Read returns what was said after seq, oldest first, and who is in the room
-// to hear it. The seating comes back with every read because it is not static:
-// it says who is here right now, and it carries the handles people are
-// addressed by — which a reader has to know before they can name anybody.
-func (service *Service) Read(ctx context.Context, actor Actor, roomID string, afterSeq int64, limit int) ([]Message, []Seat, error) {
+// Read returns what was said after seq, oldest first, who is in the room to
+// hear it, and whether the room is paused. The seating comes back with every
+// read because it is not static: it says who is here right now, and it
+// carries the handles people are addressed by — which a reader has to know
+// before they can name anybody. paused comes back with every read for the
+// same reason: a manager can pause the teamspace between two reads, and a
+// reader should stop offering to post the moment they do.
+func (service *Service) Read(ctx context.Context, actor Actor, roomID string, afterSeq int64, limit int) ([]Message, []Seat, bool, error) {
 	space, err := service.space(ctx, actor, roomID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 200
@@ -201,32 +212,160 @@ func (service *Service) Read(ctx context.Context, actor Actor, roomID string, af
 	}
 	messages, err := service.store.Messages(ctx, space.ID, afterSeq, limit)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	watching, err := service.store.Watching(ctx, space.ID, time.Now().UTC().Add(-presentWithin))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	return messages, seatsOf(space, watching), nil
+	return messages, seatsOf(space, watching), paused(space), nil
 }
 
 // Catchup is what somebody who has been away is handed: what the room amounts
-// to, and what they have not seen.
-func (service *Service) Catchup(ctx context.Context, actor Actor, roomID string, afterSeq int64) (Brief, []Message, error) {
+// to, what they have not seen, and whether the room is paused.
+func (service *Service) Catchup(ctx context.Context, actor Actor, roomID string, afterSeq int64) (Brief, []Message, bool, error) {
 	space, err := service.space(ctx, actor, roomID)
 	if err != nil {
-		return Brief{}, nil, err
+		return Brief{}, nil, false, err
 	}
 	if err := service.store.Watch(ctx, space.ID, actor.UserID, time.Now().UTC()); err != nil {
 		service.logger.WarnContext(ctx, "record that a member is reading a room", "room_id", space.ID, "error", err)
 	}
-	return Catchup(ctx, service.store, space.ID, afterSeq)
+	brief, missed, err := Catchup(ctx, service.store, space.ID, afterSeq)
+	if err != nil {
+		return Brief{}, nil, false, err
+	}
+	return brief, missed, paused(space), nil
+}
+
+// paused is whether nothing new may be said in space's room: its teamspace is
+// anything but active.
+func paused(space teamspaces.Space) bool {
+	return space.Status != teamspaces.StatusActive
+}
+
+// MarkRead says the member has seen the room up to seq, and returns how far
+// they have now read. Reading the room (Read, Catchup) never moves this: a
+// client says what was on screen, since a fetch is not a reading. A paused
+// room can still be read, so it can still be marked read.
+func (service *Service) MarkRead(ctx context.Context, actor Actor, roomID string, seq int64) (int64, error) {
+	if seq < 0 {
+		return 0, fmt.Errorf("%w: seq must be a message sequence", ErrInvalid)
+	}
+	space, err := service.space(ctx, actor, roomID)
+	if err != nil {
+		return 0, err
+	}
+	return service.store.MarkRead(ctx, space.ID, actor.UserID, seq)
+}
+
+// previewRunes is the most of a message a teamspace list shows.
+const previewRunes = 140
+
+// Activity fills in, on each space the actor is a member of, how much of its
+// room they have not read and the last thing said there. spaces must be what
+// teamspaces.Service showed this actor, since membership is taken from them:
+// a manager who is not on a team sees its teamspace but none of its room, so
+// theirs are left as they were. One read covers every room.
+func (service *Service) Activity(ctx context.Context, actor Actor, spaces []teamspaces.Space) ([]teamspaces.Space, error) {
+	roomIDs := make([]string, 0, len(spaces))
+	for _, space := range spaces {
+		if space.IsMember {
+			roomIDs = append(roomIDs, space.ID)
+		}
+	}
+	if len(roomIDs) == 0 {
+		return spaces, nil
+	}
+	activity, err := service.store.Activity(ctx, actor.OrganizationID, actor.UserID, roomIDs)
+	if err != nil {
+		return nil, err
+	}
+	for index := range spaces {
+		found, ok := activity[spaces[index].ID]
+		if !ok || !spaces[index].IsMember {
+			continue
+		}
+		spaces[index].LastReadSeq = &found.LastReadSeq
+		spaces[index].UnreadCount = &found.Unread
+		if found.Last != nil {
+			spaces[index].LastMessage = lastMessage(spaces[index], *found.Last)
+		}
+	}
+	return spaces, nil
+}
+
+// lastMessage is message as a teamspace list shows it, its author named as
+// the teamspace names them now.
+func lastMessage(space teamspaces.Space, message Message) *teamspaces.LastMessage {
+	last := &teamspaces.LastMessage{
+		Seq: message.Seq, Kind: string(message.Kind), AuthorKind: string(message.AuthorKind), AuthorID: message.AuthorUserID,
+		AuthorHandle: message.AuthorHandle, AuthorName: message.AuthorHandle,
+		Preview: preview(message.Body), CreatedAt: message.CreatedAt,
+	}
+	if message.AuthorKind == SeatAgent {
+		last.AuthorID = message.AuthorAgentID
+	}
+	if name := authorName(space, message); name != "" {
+		last.AuthorName = name
+	}
+	return last
+}
+
+// authorName is who said message, by the name they have in space: a
+// teammate, their own agent, a contributed specialist, or the organization
+// agent. Empty for somebody who no longer has a seat there.
+func authorName(space teamspaces.Space, message Message) string {
+	if message.AuthorKind != SeatAgent {
+		for _, whisperer := range space.Whisperers {
+			if whisperer.UserID == message.AuthorUserID {
+				return whisperer.UserDisplayName
+			}
+		}
+		return ""
+	}
+	for _, whisperer := range space.Whisperers {
+		if whisperer.AgentID == message.AuthorAgentID {
+			return whisperer.AgentName
+		}
+	}
+	for _, contribution := range space.Contributions {
+		if contribution.AgentID == message.AuthorAgentID {
+			return contribution.Name
+		}
+	}
+	if space.OrganizationAgent.ID != "" && space.OrganizationAgent.ID == message.AuthorAgentID {
+		return space.OrganizationAgent.Name
+	}
+	return ""
+}
+
+// preview is the start of body on one line, cut at a word where it can be
+// and marked as cut, in at most previewRunes characters.
+func preview(body string) string {
+	line := strings.Join(strings.Fields(body), " ")
+	runes := []rune(line)
+	if len(runes) <= previewRunes {
+		return line
+	}
+	// The word break is looked for in runes, as the length is: a byte
+	// offset would cut Hindi or emoji to a fraction of the length.
+	cut := runes[:previewRunes-1]
+	for index := len(cut) - 1; index > previewRunes/2; index-- {
+		if cut[index] == ' ' {
+			cut = cut[:index]
+			break
+		}
+	}
+	return strings.TrimRight(string(cut), " ,;:-") + "…"
 }
 
 // space resolves the teamspace and refuses anybody the team does not include.
 // An organization admin who is not on the team may manage its teamspace, and
 // teamspaces.Service lets them read it to do so, but what the team says in
-// its room is the team's: they read none of it and say nothing there.
+// its room is the team's: they read none of it and say nothing there. A
+// paused teamspace's room is still resolved, for its team to read; Post is
+// what refuses it.
 func (service *Service) space(ctx context.Context, actor Actor, roomID string) (teamspaces.Space, error) {
 	space, err := service.spaces.Get(ctx, teamspaces.Actor{
 		OrganizationID: actor.OrganizationID, UserID: actor.UserID, AccessToken: actor.AccessToken,
@@ -240,8 +379,6 @@ func (service *Service) space(ctx context.Context, actor Actor, roomID string) (
 		return teamspaces.Space{}, err
 	case !space.IsMember:
 		return teamspaces.Space{}, fmt.Errorf("%w: only a member of its team is in a room", ErrForbidden)
-	case space.Status != teamspaces.StatusActive:
-		return teamspaces.Space{}, fmt.Errorf("%w: this room is paused", ErrInvalid)
 	}
 	return space, nil
 }

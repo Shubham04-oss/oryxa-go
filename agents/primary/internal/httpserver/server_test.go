@@ -245,6 +245,8 @@ type fakeTeamspaces struct {
 	organizationAgent teamspaces.OrganizationAgent
 	entries           []teamspaces.Entry
 	actors            []teamspaces.Actor
+	updates           []teamspaces.UpdateInput
+	tasks             []teamspaces.Task
 }
 
 // fakeOrganizationContext records, in call order, the organization id every
@@ -357,14 +359,66 @@ func (service *fakeTeamspaces) Create(_ context.Context, actor teamspaces.Actor,
 
 func (service *fakeTeamspaces) Update(_ context.Context, actor teamspaces.Actor, id string, input teamspaces.UpdateInput) (teamspaces.Space, error) {
 	service.actors = append(service.actors, actor)
+	service.updates = append(service.updates, input)
 	if service.space.ID != id {
 		return teamspaces.Space{}, teamspaces.ErrNotFound
 	}
 	if input.Name != nil {
 		service.space.Name = *input.Name
 	}
+	if input.TargetDate.Set {
+		service.space.TargetDate = input.TargetDate.Value
+	}
+	if input.TargetLabel.Set {
+		service.space.TargetLabel = input.TargetLabel.Value
+	}
 	service.space.Revision++
 	return service.space, nil
+}
+
+func (service *fakeTeamspaces) ListTasks(_ context.Context, actor teamspaces.Actor, id string) ([]teamspaces.Task, error) {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id {
+		return nil, teamspaces.ErrNotFound
+	}
+	return service.tasks, nil
+}
+
+func (service *fakeTeamspaces) CreateTask(_ context.Context, actor teamspaces.Actor, id string, input teamspaces.TaskInput) (teamspaces.Task, error) {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id {
+		return teamspaces.Task{}, teamspaces.ErrNotFound
+	}
+	task := teamspaces.Task{ID: "tst_1", TeamspaceID: id, Title: input.Title, OwnerUserID: input.OwnerUserID, CreatedByUserID: actor.UserID}
+	service.tasks = append(service.tasks, task)
+	return task, nil
+}
+
+func (service *fakeTeamspaces) UpdateTask(_ context.Context, actor teamspaces.Actor, id, taskID string, input teamspaces.TaskUpdate) (teamspaces.Task, error) {
+	service.actors = append(service.actors, actor)
+	for index := range service.tasks {
+		if service.space.ID == id && service.tasks[index].ID == taskID {
+			if input.Done != nil {
+				service.tasks[index].Done = *input.Done
+			}
+			if input.OwnerUserID.Set {
+				service.tasks[index].OwnerUserID = input.OwnerUserID.Value
+			}
+			return service.tasks[index], nil
+		}
+	}
+	return teamspaces.Task{}, teamspaces.ErrNotFound
+}
+
+func (service *fakeTeamspaces) DeleteTask(_ context.Context, actor teamspaces.Actor, id, taskID string) error {
+	service.actors = append(service.actors, actor)
+	for index := range service.tasks {
+		if service.space.ID == id && service.tasks[index].ID == taskID {
+			service.tasks = append(service.tasks[:index], service.tasks[index+1:]...)
+			return nil
+		}
+	}
+	return teamspaces.ErrNotFound
 }
 
 func (service *fakeTeamspaces) Delete(_ context.Context, actor teamspaces.Actor, id string) error {
@@ -735,7 +789,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 79 {
+	if len(patterns) != 85 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -862,6 +916,125 @@ func TestTeamspacesExposeOrganizationAgentWhisperersAndExplicitAgentContribution
 	for _, actor := range spaces.actors {
 		if actor.OrganizationID != "org_1" || actor.UserID != "user_1" || actor.AccessToken != "member-token" {
 			t.Fatalf("actor escaped member identity: %+v", actor)
+		}
+	}
+}
+
+// A manager sets a teamspace's target with the PATCH it already has, and
+// clears either half by sending null; a field left out is left alone.
+func TestATeamspaceTargetIsSetAndClearedThroughItsPatch(t *testing.T) {
+	spaces := &fakeTeamspaces{space: teamspaces.Space{ID: "tsp_engineering", Status: teamspaces.StatusActive}}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Teamspaces: spaces,
+	}, nil)
+
+	set := serve(server, http.MethodPatch, "/v1/organizations/org_1/teamspaces/tsp_engineering",
+		`{"target_date":"2026-11-02","target_label":"Launch"}`, bearer)
+	if set.Code != http.StatusOK || !strings.Contains(set.Body.String(), `"target_date":"2026-11-02"`) || !strings.Contains(set.Body.String(), `"target_label":"Launch"`) {
+		t.Fatalf("set = %d %s", set.Code, set.Body.String())
+	}
+	cleared := serve(server, http.MethodPatch, "/v1/organizations/org_1/teamspaces/tsp_engineering", `{"target_label":null}`, bearer)
+	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"target_label":null`) || !strings.Contains(cleared.Body.String(), `"target_date":"2026-11-02"`) {
+		t.Fatalf("clear = %d %s", cleared.Code, cleared.Body.String())
+	}
+	if last := spaces.updates[len(spaces.updates)-1]; !last.TargetLabel.Set || last.TargetLabel.Value != nil || last.TargetDate.Set {
+		t.Errorf("the clearing patch reached the service as %+v", last)
+	}
+}
+
+// A member's teamspace list carries each room's unread count, read once for
+// the whole list, and their client moves the read cursor itself.
+func TestTeamspaceListCarriesUnreadCountsAndReadMovesTheCursor(t *testing.T) {
+	spaces := &fakeTeamspaces{space: teamspaces.Space{ID: "tsp_engineering", Status: teamspaces.StatusActive, IsMember: true}}
+	roomService := &fakeRooms{}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Teamspaces: spaces, Rooms: roomService,
+	}, nil)
+
+	listed := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces", "", bearer)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"unread_count":1`) {
+		t.Fatalf("list = %d %s", listed.Code, listed.Body.String())
+	}
+	got := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces/tsp_engineering", "", bearer)
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"unread_count":1`) {
+		t.Fatalf("get = %d %s", got.Code, got.Body.String())
+	}
+	// A change answers with the whole teamspace, so it carries them too: a
+	// client that keeps what the change answered keeps its badge.
+	patched := serve(server, http.MethodPatch, "/v1/organizations/org_1/teamspaces/tsp_engineering", `{"target_label":"Launch"}`, bearer)
+	if patched.Code != http.StatusOK || !strings.Contains(patched.Body.String(), `"unread_count":1`) {
+		t.Fatalf("patch = %d %s", patched.Code, patched.Body.String())
+	}
+	if len(roomService.actors) != 3 {
+		t.Errorf("room activity read %d times for three requests", len(roomService.actors))
+	}
+	read := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces/tsp_engineering/read", `{"seq":7}`, bearer)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"last_read_seq":7`) {
+		t.Fatalf("read = %d %s", read.Code, read.Body.String())
+	}
+	// A body without seq is a client's mistake, not a read of nothing.
+	for _, body := range []string{`{}`, `{"seq":null}`} {
+		missing := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces/tsp_engineering/read", body, bearer)
+		if missing.Code != http.StatusBadRequest || !strings.Contains(missing.Body.String(), `"invalid_request"`) {
+			t.Errorf("read %s = %d %s, want 400 invalid_request", body, missing.Code, missing.Body.String())
+		}
+	}
+}
+
+// A teamspace's checklist goes through its own routes: listed, added to,
+// ticked and removed, with the owner cleared by null.
+func TestATeamspaceChecklistThroughTheAPI(t *testing.T) {
+	spaces := &fakeTeamspaces{space: teamspaces.Space{ID: "tsp_engineering", Status: teamspaces.StatusActive, IsMember: true}}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Teamspaces: spaces,
+	}, nil)
+	created := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces/tsp_engineering/tasks",
+		`{"title":"Draft the launch post","owner_user_id":"user_2","due_date":"2026-10-30"}`, bearer)
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"id":"tst_1"`) || !strings.Contains(created.Body.String(), `"owner_user_id":"user_2"`) {
+		t.Fatalf("create = %d %s", created.Code, created.Body.String())
+	}
+	ticked := serve(server, http.MethodPatch, "/v1/organizations/org_1/teamspaces/tsp_engineering/tasks/tst_1", `{"done":true,"owner_user_id":null}`, bearer)
+	if ticked.Code != http.StatusOK || !strings.Contains(ticked.Body.String(), `"done":true`) || !strings.Contains(ticked.Body.String(), `"owner_user_id":null`) {
+		t.Fatalf("tick = %d %s", ticked.Code, ticked.Body.String())
+	}
+	listed := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces/tsp_engineering/tasks", "", bearer)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"tasks":[{"id":"tst_1"`) {
+		t.Fatalf("list = %d %s", listed.Code, listed.Body.String())
+	}
+	removed := serve(server, http.MethodDelete, "/v1/organizations/org_1/teamspaces/tsp_engineering/tasks/tst_1", "", bearer)
+	if removed.Code != http.StatusNoContent || len(spaces.tasks) != 0 {
+		t.Fatalf("delete = %d %s", removed.Code, removed.Body.String())
+	}
+	if status, code := ErrorCode(teamspaces.ErrPaused); status != http.StatusConflict || code != "teamspace_disabled" {
+		t.Fatalf("ErrorCode(teamspaces.ErrPaused) = %d %s", status, code)
+	}
+}
+
+// Saying something in a paused room is refused the way everything else a
+// paused teamspace refuses is, so a client handles one code for one state.
+func TestAPausedRoomRefusesAPostAsPaused(t *testing.T) {
+	status, code := ErrorCode(rooms.ErrPaused)
+	if status != http.StatusConflict || code != "teamspace_disabled" {
+		t.Fatalf("ErrorCode(ErrPaused) = %d %s, want 409 teamspace_disabled", status, code)
+	}
+}
+
+// A paused room is still read, and every read says it is paused, so a client
+// learns it from the read it already makes rather than from a refused post.
+func TestReadingARoomSaysWhetherItIsPaused(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		server := New(member(), &fakeThreads{}, Config{
+			AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Rooms: &fakeRooms{paused: paused},
+		}, nil)
+		want := fmt.Sprintf(`"paused":%t`, paused)
+		for _, path := range []string{
+			"/v1/organizations/org_1/teamspaces/tsp_engineering/messages",
+			"/v1/organizations/org_1/teamspaces/tsp_engineering/catchup",
+		} {
+			response := serve(server, http.MethodGet, path, "", bearer)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), want) {
+				t.Errorf("GET %s = %d %s, want 200 with %s", path, response.Code, response.Body.String(), want)
+			}
 		}
 	}
 }

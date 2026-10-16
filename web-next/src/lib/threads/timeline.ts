@@ -140,7 +140,11 @@ export type ArtifactEntry = {
   version?: number
 }
 
-/** A run that failed, with Go's words for the member. Only a stream has one: history does not keep them. */
+/**
+ * A run that failed, with Go's words for the member and, where it says, why
+ * (`runFailureCode`). A stream has one, and since Go stored runs (#390) so
+ * does the thread's history.
+ */
 export type RunFailedEntry = {
   kind: "run_failed"
   key: string
@@ -148,6 +152,76 @@ export type RunFailedEntry = {
   at?: string
   error: string
   code?: string
+}
+
+/**
+ * Why Go says a run failed (`code` on its `run_failed`, #390), each said in
+ * plain words by `runFailureWords`: Oryxa restarted mid-run, it ran out of
+ * time, the member stopped it, the caller went away, another run took the
+ * conversation over, or something else went wrong.
+ */
+export type RunFailureCode =
+  "interrupted" | "timeout" | "stopped" | "cancelled" | "taken_over" | "error"
+
+const runFailures: Record<RunFailureCode, { label: string; words: string }> = {
+  interrupted: {
+    label: "Interrupted",
+    words: "Oryxa restarted while your agent was working, so this run stopped.",
+  },
+  timeout: {
+    label: "Timed out",
+    words: "This run took too long, so it was stopped.",
+  },
+  stopped: { label: "Stopped", words: "You stopped this run." },
+  cancelled: {
+    label: "Cancelled",
+    words: "This run was cancelled before it finished.",
+  },
+  taken_over: {
+    label: "Taken over",
+    words: "Another run took over this conversation, so this one stopped.",
+  },
+  error: {
+    label: "Failed",
+    words: "Your agent ran into a problem and couldn't finish.",
+  },
+}
+
+/** A failed run's code, if it is one Go gives (`RunFailureCode`). */
+export function runFailureCode(
+  code: string | undefined
+): RunFailureCode | undefined {
+  return code !== undefined && Object.hasOwn(runFailures, code)
+    ? (code as RunFailureCode)
+    : undefined
+}
+
+/**
+ * A failed run in words: a short label for its card's status, and a sentence
+ * for its notice when Go sent no words of its own. A code Go does not give
+ * (a chat Durable Object's refusal, or none) reads as plain Failed.
+ */
+export function runFailureWords(code: string | undefined): {
+  label: string
+  words: string
+} {
+  const known = runFailureCode(code)
+  return known
+    ? runFailures[known]
+    : { label: "Failed", words: "Your agent couldn't answer. Try again." }
+}
+
+/**
+ * What names a run's start or end, so the same one is shown once: its `id`
+ * (`<run>.started` or `<run>.ended`, the same on the streamed bracket and the
+ * stored one, #390), or for a bracket without one (an older stream, or a
+ * `run_failed` a chat Durable Object wrote itself) the id Go would give it.
+ * Nothing for a bracket that names no run, which is never deduped.
+ */
+function bracketKey(item: Item): string | undefined {
+  if (item.id) return item.id
+  if (!item.run_id) return undefined
+  return `${item.run_id}.${item.type === "run_started" ? "started" : "ended"}`
 }
 
 /** A request filed in this conversation, read live using the member's session. */
@@ -187,7 +261,10 @@ function roleOf(author: string): MessageRole {
  * transcript from `chatMessagesToItems`, goes in as `history`.
  *
  * `run_started` and `run_completed` render nothing, but end any draft that
- * was never finished, so two runs' deltas never share a bubble. A run that
+ * was never finished, so two runs' deltas never share a bubble. A run's start
+ * and end show once each however many copies arrive (a streamed one and the
+ * stored one, see `bracketKey`); an end Go stored replaces one a chat Durable
+ * Object wrote when the stream broke, which only guessed how the run ended. A run that
  * ends (`run_completed` or `run_failed`), or the member's next message, which
  * only follows a run's end, also leaves the tool calls that got no result
  * `interrupted`: they will never get one. A `run_failed` with
@@ -217,6 +294,12 @@ export function buildTimeline(
   const confirmations = new Map<string, ConfirmationEntry>()
   const artifacts = new Set<string>()
   const requests = new Map<string, RequestEntry>()
+  // Each run's start and end seen so far: whether Go sent it (it has an id),
+  // and the notice an end put up.
+  const brackets = new Map<
+    string,
+    { stored: boolean; notice?: RunFailedEntry }
+  >()
   let draft: MessageEntry | undefined
   let drafts = 0
 
@@ -478,25 +561,46 @@ export function buildTimeline(
         })
         break
       }
-      case "run_started":
+      case "run_started": {
+        const bracket = bracketKey(item)
+        if (bracket !== undefined) {
+          if (brackets.has(bracket)) break
+          brackets.set(bracket, { stored: item.id !== undefined })
+        }
         endDraft()
         break
+      }
       case "run_completed":
+      case "run_failed": {
+        if (item.type === "run_failed" && item.code === sessionExpiredCode) {
+          endRun()
+          break
+        }
+        const bracket = bracketKey(item)
+        const seen = bracket !== undefined ? brackets.get(bracket) : undefined
+        if (seen) {
+          // The same end again; only Go's own record replaces a guessed one.
+          if (seen.stored || item.id === undefined) break
+          if (seen.notice) entries.splice(entries.indexOf(seen.notice), 1)
+        }
+        const record: { stored: boolean; notice?: RunFailedEntry } = {
+          stored: item.id !== undefined,
+        }
+        if (bracket !== undefined) brackets.set(bracket, record)
         endRun()
-        break
-      case "run_failed":
-        endRun()
-        if (item.code === sessionExpiredCode) break
+        if (item.type === "run_completed") break
         toolGroup += 1
-        entries.push({
+        record.notice = {
           kind: "run_failed",
           key: uniqueKey(`run_failed:${item.run_id ?? index}`),
           runId: item.run_id,
           at: item.at,
           error: item.error ?? "",
           code: item.code,
-        })
+        }
+        entries.push(record.notice)
         break
+      }
     }
   })
 
@@ -504,10 +608,10 @@ export function buildTimeline(
 }
 
 /**
- * One run of the agent, as the items a stream carries mark it: when it
- * started and ended, and what it used. A thread's history from Go keeps no
- * run markers, so only runs streamed into a transcript (the chat Durable
- * Objects keep every item they relay) have one.
+ * One run of the agent, as its start and end mark it: when it started and
+ * ended, what it used, and why it failed. Runs streamed into a transcript
+ * (the chat Durable Objects keep every item they relay) have them, and since
+ * #390 so does a thread's history; runs from before that have none.
  */
 export type RunSpan = {
   runId?: string
@@ -515,6 +619,8 @@ export type RunSpan = {
   endedAt?: string
   usage?: ItemUsage
   failed?: boolean
+  /** A failed run's `code`, where it gave one. */
+  code?: string
 }
 
 /**
@@ -538,7 +644,8 @@ const isPrompt = (entry: TimelineEntry): entry is MessageEntry =>
  * from (history then live, as `buildTimeline` merged them) to place each
  * run's markers in its turn: a run belongs to the turn of the last prompt
  * before it, counted the way `buildTimeline` counts messages (a message seen
- * again by its id is the same one).
+ * again by its id is the same one). A start or end seen again is the same one
+ * too (`bracketKey`), and an end Go stored replaces a guessed one, as there.
  */
 export function groupTurns(
   entries: readonly TimelineEntry[],
@@ -568,6 +675,8 @@ export function groupTurns(
   const leading = turns[0] && !turns[0].prompt ? turns[0] : undefined
   const prompted = turns.filter((turn) => turn.prompt)
   const seen = new Set<string>()
+  const starts = new Set<string>()
+  const ends = new Map<string, { span: RunSpan; stored: boolean }>()
   let prompts = 0
   let run: RunSpan | undefined
   const turnAt = (count: number): Turn | undefined =>
@@ -581,23 +690,63 @@ export function groupTurns(
       }
       prompts += 1
     } else if (item.type === "run_started") {
+      const bracket = bracketKey(item)
+      if (bracket !== undefined) {
+        if (starts.has(bracket)) continue
+        starts.add(bracket)
+      }
       run = { runId: item.run_id, startedAt: item.at }
       turnAt(prompts)?.runs.push(run)
     } else if (item.type === "run_completed" || item.type === "run_failed") {
       if (item.type === "run_failed" && item.code === sessionExpiredCode)
         continue
+      const bracket = bracketKey(item)
+      const known = bracket !== undefined ? ends.get(bracket) : undefined
+      if (known) {
+        if (known.stored || item.id === undefined) continue
+        // Go's record of how the run ended, over the guess made for it.
+        endSpan(known.span, item)
+        known.stored = true
+        continue
+      }
       if (!run || (item.run_id && run.runId && item.run_id !== run.runId)) {
         // An end with no start in this list: the run began before it.
         run = { runId: item.run_id }
         turnAt(prompts)?.runs.push(run)
       }
-      run.endedAt = item.at
-      if (item.usage) run.usage = item.usage
-      if (item.type === "run_failed") run.failed = true
+      endSpan(run, item)
+      if (bracket !== undefined)
+        ends.set(bracket, { span: run, stored: item.id !== undefined })
       run = undefined
     }
   }
   return turns
+}
+
+/**
+ * Why a turn's run failed, as its last failure says (`code`): its notice's,
+ * or its run's end's. Nothing when no failure gave one.
+ */
+export function turnFailureCode(turn: Turn): string | undefined {
+  for (let index = turn.entries.length - 1; index >= 0; index -= 1) {
+    const entry = turn.entries[index]
+    if (entry.kind === "run_failed" && entry.code) return entry.code
+  }
+  return [...turn.runs].reverse().find((run) => run.failed && run.code)?.code
+}
+
+/** Writes a run's end onto its span, in place of any end it had. */
+function endSpan(span: RunSpan, item: Item) {
+  span.endedAt = item.at
+  if (item.usage) span.usage = item.usage
+  else delete span.usage
+  if (item.type === "run_failed") {
+    span.failed = true
+    span.code = item.code
+  } else {
+    delete span.failed
+    delete span.code
+  }
 }
 
 /** How a turn stands, for its run card. */
@@ -675,18 +824,45 @@ export function turnTimes(
   return { start, end: end !== undefined && end > start ? end : undefined }
 }
 
+/**
+ * How long a finished turn's runs worked, in ms: each run's end less its
+ * start, added up, so the time a confirmation waited for the member between
+ * two runs is left out. Nothing unless every run has both, readable and in
+ * order (a run whose start has no end ended without a record, #390); the
+ * card then falls back to `turnTimes`.
+ */
+export function turnDuration(turn: Turn): number | undefined {
+  if (turn.runs.length === 0) return undefined
+  let total = 0
+  for (const run of turn.runs) {
+    const start = timeOf(run.startedAt)
+    const end = timeOf(run.endedAt)
+    if (start === undefined || end === undefined || end < start)
+      return undefined
+    total += end - start
+  }
+  return total
+}
+
 /** What a turn's runs used, added up; nothing when no run says. */
 export function turnUsage(turn: Turn): ItemUsage | undefined {
   const used = turn.runs.flatMap((run) => (run.usage ? [run.usage] : []))
   if (used.length === 0) return undefined
-  return used.reduce(
-    (total, usage) => ({
-      input_tokens: total.input_tokens + usage.input_tokens,
-      output_tokens: total.output_tokens + usage.output_tokens,
-      total_tokens: total.total_tokens + usage.total_tokens,
+  const total = used.reduce<ItemUsage>(
+    (sum, usage) => ({
+      input_tokens: sum.input_tokens + usage.input_tokens,
+      output_tokens: sum.output_tokens + usage.output_tokens,
+      total_tokens: sum.total_tokens + usage.total_tokens,
+      ...(sum.cached_tokens !== undefined || usage.cached_tokens !== undefined
+        ? {
+            cached_tokens:
+              (sum.cached_tokens ?? 0) + (usage.cached_tokens ?? 0),
+          }
+        : {}),
     }),
     { input_tokens: 0, output_tokens: 0, total_tokens: 0 }
   )
+  return total
 }
 
 const keyArgumentNames = [
@@ -780,7 +956,9 @@ function isRunMarker(item: Item): boolean {
  * ones; a stored item carries its event's id and so does the streamed copy,
  * so an item the history holds is left out, and so are the deltas that
  * drafted a message it holds, even when that message's event put a tool call
- * before its text. Run markers and deltas carry no id and always stay.
+ * before its text. Deltas carry no id and always stay; so do run markers from
+ * a Go without #390, which streamed them without one. Since #390 a streamed
+ * run marker carries the stored one's id and is left out like any other item.
  */
 export function unseenLiveItems(
   history: readonly Item[],

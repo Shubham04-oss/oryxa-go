@@ -11,7 +11,12 @@ import { ThinkingOrb } from "thinking-orbs"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { firstName } from "./people-format"
-import { personIdentity } from "./teamspace-format"
+import {
+  lastMessageLine,
+  personIdentity,
+  unreadCount,
+  unreadWords,
+} from "./teamspace-format"
 import { originLabel } from "./request-card-format"
 import { refreshRequests, usePeopleNames } from "./requests-view-queries"
 import { clockTime } from "./direct-message-format"
@@ -38,7 +43,7 @@ import { ToolkitLogo } from "./workspace-tool-logo"
 import { HomeGlance } from "./home-glance"
 import type { DmPeople } from "./direct-message-people"
 import { toolkitIcon } from "./workspace-tools-data"
-import { IdentityAvatar } from "./workspace-avatar"
+import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import { ApiError } from "@/lib/api/client"
 import {
   AGENT_REQUESTS_POLL_MS,
@@ -64,6 +69,7 @@ import { approvalCandidates, chatHistory } from "@/lib/threads/chat-choice"
 import type { PrimaryChatActivity } from "@/lib/threads/chat-choice"
 import { getMemberSlackStatus, listActiveAgentLeases } from "@/lib/home/client"
 import { authorizedData, homeRead } from "@/lib/home/queries"
+import { teamspacesQueryOptions } from "@/lib/teamspaces/queries"
 import "./home-overview.css"
 
 const requestLimit = 100
@@ -450,6 +456,18 @@ function HomeDesk({
   const nameOf = (userId: string, fallback?: string) =>
     people.nameOf(userId) || fallback?.trim() || "A teammate"
 
+  // Teamspaces with room messages the member hasn't read, from the list's
+  // own unread counts (#389): none at all from a server without them.
+  const spaces = useQuery({ ...teamspacesQueryOptions(org), enabled })
+  const unreadSpaces = (spaces.data ?? [])
+    .filter((space) => unreadCount(space) > 0 && space.last_message)
+    .sort((left, right) =>
+      (right.last_message?.created_at ?? "").localeCompare(
+        left.last_message?.created_at ?? ""
+      )
+    )
+    .slice(0, 3)
+
   const updatesDetail = authorizedData(updates)
   const briefs = updatesDetail ? briefsOf(updatesDetail) : []
   const agentFiles = agentFilesOf(
@@ -534,6 +552,41 @@ function HomeDesk({
           </Button>
         )}
       </header>
+      {page && !firstRun && unreadSpaces.length > 0 && (
+        <ul className="home-list" aria-label="Unread in your teamspaces">
+          {unreadSpaces.map((space) => {
+            const last = space.last_message
+            if (!last) return null
+            const unread = unreadCount(space)
+            return (
+              <li key={space.id}>
+                <button
+                  type="button"
+                  className="home-item"
+                  disabled={!onOpenTeamspace}
+                  aria-label={`Open ${space.name}, ${unreadWords(unread)}`}
+                  onClick={() => onOpenTeamspace?.(space.id)}
+                >
+                  <span className="home-item-mark">
+                    <TeamspaceAvatar name={space.name} />
+                  </span>
+                  <span className="home-item-copy">
+                    <span>
+                      <strong>{space.name}</strong>{" "}
+                      {lastMessageLine(last, viewer)}
+                    </span>
+                    <small>
+                      {[unreadWords(unread), agoPhrase(last.created_at, now)]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </small>
+                  </span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
       {/* The briefs live in the wake-up thread, found in the chat list: a
           list that can't be read leaves them unknown, and says so. With no
           app connected and no wake-up thread yet there is nothing to report

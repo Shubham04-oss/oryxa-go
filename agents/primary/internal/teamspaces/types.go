@@ -5,6 +5,7 @@
 package teamspaces
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -17,6 +18,9 @@ var (
 	ErrForbidden = errors.New("teamspace is not available to this member")
 	ErrConflict  = errors.New("teamspace already exists")
 	ErrDisabled  = errors.New("teamspace is disabled")
+	// ErrPaused refuses a change to what a paused teamspace's team keeps,
+	// such as its checklist, which stays readable.
+	ErrPaused = errors.New("teamspace is paused")
 )
 
 type Status string
@@ -103,8 +107,46 @@ type Space struct {
 	Contributions       []Contribution    `json:"contributions"`
 	CanManage           bool              `json:"can_manage"`
 	IsMember            bool              `json:"is_member"`
-	CreatedAt           time.Time         `json:"created_at"`
-	UpdatedAt           time.Time         `json:"updated_at"`
+	// TargetDate is the day the team is working towards, as YYYY-MM-DD, and
+	// TargetLabel what it is ("Launch"). A manager sets either; null is none.
+	TargetDate  *string `json:"target_date"`
+	TargetLabel *string `json:"target_label"`
+	// PausedByUserID and PausedAt say who disabled the teamspace, and when.
+	// Both are null while it is active, and for one disabled before they were
+	// recorded.
+	PausedByUserID *string    `json:"paused_by_user_id"`
+	PausedAt       *time.Time `json:"paused_at"`
+	// LastReadSeq, UnreadCount and LastMessage are the caller's view of the
+	// teamspace's room. The room service fills them in for a member of the
+	// team, on every answer that is a whole teamspace, and they are left out
+	// for anybody else. UnreadCount stops at 100 (rooms.UnreadCap), which a
+	// client shows as "99+".
+	LastReadSeq *int64       `json:"last_read_seq,omitempty"`
+	UnreadCount *int64       `json:"unread_count,omitempty"`
+	LastMessage *LastMessage `json:"last_message,omitempty"`
+	// TaskCounts is how much of the checklist is done.
+	TaskCounts TaskCounts `json:"task_counts"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// LastMessage is the newest thing said in a teamspace's room, as a list of
+// teamspaces shows it.
+type LastMessage struct {
+	Seq int64 `json:"seq"`
+	// Kind is "message", or "parley_notes" for what a parley left behind.
+	Kind string `json:"kind"`
+	// AuthorKind is "person" or "agent". AuthorID is the person's user id, or
+	// the agent's id.
+	AuthorKind   string `json:"author_kind"`
+	AuthorID     string `json:"author_id"`
+	AuthorHandle string `json:"author_handle"`
+	// AuthorName is the name the author has in the teamspace now, or their
+	// handle when they no longer have a seat there.
+	AuthorName string `json:"author_name"`
+	// Preview is the start of the message, at most 140 characters.
+	Preview   string    `json:"preview"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type CreateInput struct {
@@ -117,7 +159,36 @@ type UpdateInput struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Status      *Status `json:"status,omitempty"`
+	// TargetDate and TargetLabel are left alone when left out, and cleared
+	// when sent as null.
+	TargetDate  Nullable `json:"target_date,omitzero"`
+	TargetLabel Nullable `json:"target_label,omitzero"`
 }
+
+// Nullable is a field a PATCH may leave out, set, or clear with null: three
+// things a plain pointer cannot tell apart, since it reads null and absent
+// alike.
+type Nullable struct {
+	// Set says the field was sent. Value is nil when it was sent as null.
+	Set   bool
+	Value *string
+}
+
+func (field *Nullable) UnmarshalJSON(data []byte) error {
+	field.Set = true
+	if string(data) == "null" {
+		field.Value = nil
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	field.Value = &value
+	return nil
+}
+
+func (field Nullable) MarshalJSON() ([]byte, error) { return json.Marshal(field.Value) }
 
 type OrganizationAgentUpdate struct {
 	Name         *string `json:"name,omitempty"`

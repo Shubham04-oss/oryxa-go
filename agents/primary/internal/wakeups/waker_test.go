@@ -269,8 +269,11 @@ func TestAWakeUpTellsKrudeInTheMembersUpdatesThread(t *testing.T) {
 	if chats, err := service.List(context.Background(), member); err != nil || len(chats) != 0 {
 		t.Fatalf("the member's chats = %+v, %v, want none of the updates thread", chats, err)
 	}
-	if len(detail.Items) != 2 || detail.Items[0].Author != threads.AuthorApps || !strings.Contains(detail.Items[0].Text, "GMAIL_NEW_MESSAGE") ||
-		detail.Items[1].Text != "You have a new email about the launch." {
+	// The run starts after the apps' batch that woke it, and its brackets
+	// close what it said.
+	if len(detail.Items) != 4 || detail.Items[1].Type != threads.ItemRunStarted || detail.Items[3].Type != threads.ItemRunCompleted ||
+		detail.Items[0].Author != threads.AuthorApps || !strings.Contains(detail.Items[0].Text, "GMAIL_NEW_MESSAGE") ||
+		detail.Items[2].Text != "You have a new email about the launch." {
 		t.Fatalf("items = %+v", detail.Items)
 	}
 
@@ -634,8 +637,8 @@ func TestAnUpdatesThreadMadeAsAChatIsLeftBehindForOneOfTheWakeupOrigin(t *testin
 		t.Fatalf("thread = %q, runs = %+v, threads = %+v, done = %v: want the second wake-up in the new thread alone", store.threads["org_1/user_1"], runs.started, all, store.done)
 	}
 	told, err := service.Get(ctx, member, current)
-	if err != nil || len(told.Items) != 4 {
-		t.Fatalf("the new thread = %+v, %v, want both wake-ups and Krude's answers to them", told.Items, err)
+	if err != nil || len(told.Items) != 8 {
+		t.Fatalf("the new thread = %+v, %v, want both wake-ups and Krude's answers to them, each run bracketed", told.Items, err)
 	}
 }
 

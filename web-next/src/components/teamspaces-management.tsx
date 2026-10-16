@@ -44,10 +44,15 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import {
   agentIdentity,
+  lastMessageLine,
   memberName,
+  pausedLine,
   personIdentity,
   statusLabel,
   timeAgo,
+  unreadCount,
+  unreadLabel,
+  unreadWords,
 } from "./teamspace-format"
 import { ApiError } from "@/lib/api/client"
 import { isUnavailableHere } from "@/lib/agents/policy"
@@ -484,6 +489,7 @@ export function TeamspacesManagement({
             <TeamspaceCard
               key={space.id}
               space={space}
+              viewerId={viewerId}
               call={liveCalls.get(space.id)}
               resuming={resume.isPending && resume.variables.id === space.id}
               onOpen={() => onOpen(space.id)}
@@ -538,6 +544,7 @@ export function TeamspacesManagement({
  */
 function TeamspaceCard({
   space,
+  viewerId,
   call,
   resuming,
   onOpen,
@@ -547,6 +554,7 @@ function TeamspaceCard({
   onDelete,
 }: {
   space: Teamspace
+  viewerId?: string
   call?: CallView
   resuming: boolean
   onOpen: () => void
@@ -556,6 +564,10 @@ function TeamspaceCard({
   onDelete: () => void
 }) {
   const active = space.status === "active"
+  // What the member hasn't read in the room, and its newest message, when
+  // the list carries them (#389).
+  const unread = unreadCount(space)
+  const last = space.last_message
   return (
     <Card
       role="article"
@@ -583,6 +595,12 @@ function TeamspaceCard({
             {active ? people(space.whisperers.length) : "paused"}
           </small>
         </span>
+        {unread > 0 && (
+          <Badge className="workspace-teamspace-unread">
+            <span aria-hidden="true">{unreadLabel(unread)}</span>
+            <span className="sr-only">{unreadWords(unread)}</span>
+          </Badge>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -631,8 +649,14 @@ function TeamspaceCard({
       <p className="workspace-teamspace-card-purpose">
         {active
           ? space.description || "No description yet."
-          : "Paused. Its room is closed until a team admin resumes it."}
+          : "Paused. Its room is read-only until a team admin resumes it."}
       </p>
+      {last && (
+        <p className="workspace-teamspace-card-last">
+          <span>{lastMessageLine(last, viewerId)}</span>
+          <time dateTime={last.created_at}>{timeAgo(last.created_at)}</time>
+        </p>
+      )}
       {call && (
         <div className="workspace-teamspace-card-live">
           <Badge variant="secondary">
@@ -642,7 +666,9 @@ function TeamspaceCard({
         </div>
       )}
       <div className="workspace-teamspace-card-foot">
-        <span>{active ? "" : "Paused"}</span>
+        <span>
+          {active ? "" : (pausedLine(space, { viewerId }) ?? "Paused")}
+        </span>
         <TeamspaceFaces space={space} />
       </div>
     </Card>
@@ -980,6 +1006,7 @@ function TeamspaceDetail({
   })
   const busy = changeStatus.isPending || remove.isPending
   const active = space.status === "active"
+  const pausedBy = pausedLine(space, { viewerId })
   const ownAgents = space.whisperers
   const contributions = space.contributions
   const latestEntry = entries.data?.[0]
@@ -1102,8 +1129,9 @@ function TeamspaceDetail({
       {!active && (
         <p className="workspace-teamspace-note">
           {space.can_manage
-            ? "Paused: its room is closed. Resume it to open the room again."
-            : "Paused by a team admin: its room is closed until they resume it."}
+            ? "Paused: its room is read-only. Resume it to post again."
+            : "Paused by a team admin: its room is read-only until they resume it."}
+          {pausedBy && ` ${pausedBy}.`}
         </p>
       )}
 

@@ -121,6 +121,14 @@ type Thread struct {
 	// with none in its state — every thread created before origins existed,
 	// and any other code's threads — reads as OriginChat.
 	Origin string `json:"origin"`
+	// ArtifactCount is how many files the thread's runs kept, each counted
+	// once however many versions it has, and LatestArtifact the last one
+	// kept, or nil. Both are read from the thread's state, which each run
+	// brings up to date as it ends: a thread whose last run ended before they
+	// existed has 0 and nil until its next run, and one whose last run lost
+	// its hold says what the run before it recorded.
+	ArtifactCount  int          `json:"artifact_count"`
+	LatestArtifact *ArtifactRef `json:"latest_artifact"`
 }
 
 // Detail is a thread with everything that happened in it.
@@ -377,8 +385,13 @@ func (service *Service) Get(ctx context.Context, member Member, threadID string)
 		return Detail{}, err
 	}
 	history := sessionEvents(stored)
+	thread := threadOf(stored)
+	// The whole history is here, so its files are counted from it rather
+	// than read from state, which a thread not run since may not hold.
+	tally := tallyArtifacts(history)
+	thread.ArtifactCount, thread.LatestArtifact = len(tally.names), artifactRef(tally.latest)
 	return Detail{
-		Thread:  threadOf(stored),
+		Thread:  thread,
 		Items:   displayAgent(historyItems(history), service.agent.Name(), member.AgentName),
 		Pending: nonNil(pendingConfirmations(history, service.agent.Name())),
 	}, nil
@@ -703,11 +716,14 @@ func (service *Service) readThread(ctx context.Context, member Member, threadID 
 
 func threadOf(stored session.Session) Thread {
 	thread := Thread{
-		ID:        stored.ID(),
-		Title:     stateString(stored.State(), stateTitle),
-		UpdatedAt: stored.LastUpdateTime().UTC(),
-		Origin:    cmp.Or(stateString(stored.State(), stateOrigin), OriginChat),
+		ID:             stored.ID(),
+		Title:          stateString(stored.State(), stateTitle),
+		UpdatedAt:      stored.LastUpdateTime().UTC(),
+		Origin:         cmp.Or(stateString(stored.State(), stateOrigin), OriginChat),
+		LatestArtifact: artifactRef(stateString(stored.State(), stateLatestArtifact)),
 	}
+	// A count the state does not hold reads as none.
+	thread.ArtifactCount, _ = stateInt(stored.State(), stateArtifactCount)
 	if created, err := time.Parse(time.RFC3339Nano, stateString(stored.State(), stateCreatedAt)); err == nil {
 		thread.CreatedAt = created.UTC()
 	}

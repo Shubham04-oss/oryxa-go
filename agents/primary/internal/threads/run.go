@@ -129,6 +129,9 @@ type Run struct {
 	// the run's context and nowhere else: not in stateDelta, not in the run's
 	// record, not in an event.
 	teamspaceID string
+	// artifacts is the files the thread has kept, as the run found them and
+	// with every one the run keeps, which the run records as it ends.
+	artifacts artifactTally
 	// remembering is the run's view of memory, scoped to the member's
 	// organization, that the run is handed to once it ends. It is built when
 	// the run starts driving, and nil when the service has no memory or the
@@ -251,6 +254,7 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 		maps.Copy(run.stateDelta, agents.ClearDeliveryState())
 	}
 	history := sessionEvents(stored)
+	run.artifacts = tallyArtifacts(history)
 	run.guardInput = publicationGuardInput(history, message)
 	if stateString(stored.State(), stateOrigin) == OriginSideConversation {
 		// The wrapped prompt contains other people's untrusted words. It must
@@ -395,7 +399,7 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 		// interrupted, and whoever started it may start it again.
 		run.finish(ctx, counter, err)
 		send := func(item Item) { _ = emit(item) }
-		send(Item{Type: ItemRunFailed, RunID: run.id, At: time.Now().UTC(), Error: memberFacing(err, service.runTimeout), Interrupted: true})
+		send(Item{Type: ItemRunFailed, RunID: run.id, At: time.Now().UTC(), Error: memberFacing(err, service.runTimeout), Code: failureCode(err), Interrupted: true})
 		return
 	}
 	defer service.drain.end(run)
@@ -412,28 +416,55 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 			cancel(fmt.Errorf("the member stopped listening: %w", context.Canceled))
 		}
 	}
-	send(Item{Type: ItemRunStarted, RunID: run.id, At: time.Now().UTC()})
+	// The opening bracket is stored before the agent reads the thread, so
+	// it comes before everything the run adds to it. The runner appends the
+	// run's input after it; history lists the bracket after that input, as
+	// the stream sends it (historyItems).
+	started := Item{Type: ItemRunStarted, ID: bracketID(run.id, ItemRunStarted), RunID: run.id, At: bracketAt()}
+	run.record(ctx, started)
+	send(started)
 
-	failure := run.drive(runContext, send)
-	if cause := context.Cause(runContext); runContext.Err() != nil && (failure == nil || Interrupted(cause)) {
-		// A drain's interruption is why the run ended, whatever the model
-		// call it cut short reported.
-		failure = cause
+	failure := endedBy(runContext, run.drive(runContext, send))
+	total := counter.Total()
+	ended := Item{Type: ItemRunCompleted, ID: bracketID(run.id, ItemRunCompleted), RunID: run.id, At: bracketAt(), Usage: &total}
+	if failure != nil {
+		ended.Type, ended.Error, ended.Code, ended.Interrupted = ItemRunFailed, memberFacing(failure, service.runTimeout), failureCode(failure), Interrupted(failure)
+		if total.TotalTokens == 0 {
+			ended.Usage = nil
+		}
+	}
+	// Recorded whether the run failed or not: what it kept, it kept. A run
+	// that lost its hold writes nothing more: another run may be writing the
+	// thread now. An interrupted one records in part of the drain's grace
+	// (Run.record), so finish below still has its turn.
+	if !errors.Is(failure, errLeaseLost) {
+		run.record(ctx, ended)
 	}
 	stopLease()
 
 	run.finish(ctx, counter, failure)
+	send(ended)
 	if failure != nil {
-		send(Item{Type: ItemRunFailed, RunID: run.id, At: time.Now().UTC(), Error: memberFacing(failure, service.runTimeout), Interrupted: Interrupted(failure)})
 		return
 	}
-	total := counter.Total()
-	send(Item{Type: ItemRunCompleted, RunID: run.id, At: time.Now().UTC(), Usage: &total})
 	// Remembering happens once the member has their answer: it is worth a
 	// round trip to Memory Bank, but never one the member waits through.
 	if run.remembering != nil {
 		run.remember(ctx, run.remembering)
 	}
+}
+
+// endedBy is why a run ended, given what driving it returned. A drain's
+// interruption, or a lost hold on the thread, is the reason whatever the call
+// it cut short reported: ADK passes on the context's cause for the calls it
+// makes, but an error from anywhere else, such as the session store, is a
+// plain cancellation that says neither.
+func endedBy(runContext context.Context, failure error) error {
+	cause := context.Cause(runContext)
+	if runContext.Err() != nil && (failure == nil || Interrupted(cause) || errors.Is(cause, errLeaseLost)) {
+		return cause
+	}
+	return failure
 }
 
 // publicationGuardInput uses the actual thread, not a model's report. A
@@ -562,6 +593,7 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 			}
 			continue
 		}
+		run.artifacts.add(event)
 		for _, item := range displayAgent(streamItems(event), answering.Name(), run.member.AgentName) {
 			send(item)
 		}
