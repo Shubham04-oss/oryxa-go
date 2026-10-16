@@ -337,6 +337,35 @@ describe("TeamspacesManagement list", () => {
     expect(screen.getByText("+2")).toBeTruthy()
   })
 
+  it("carries the target and the checklist's progress as fact chips, once Go serves them", async () => {
+    const year = new Date().getFullYear()
+    backend([
+      teamspace({
+        target_date: `${year}-11-04`,
+        target_label: "Launch",
+        task_counts: { done: 6, total: 9 },
+      }),
+      design,
+    ])
+    render()
+
+    const launchCard = await screen.findByRole("article", {
+      name: "Launch room",
+    })
+    const day = new Intl.DateTimeFormat(undefined, {
+      day: "numeric",
+      month: "short",
+    }).format(new Date(year, 10, 4))
+    expect(within(launchCard).getByText(`Launch ${day}`)).toBeTruthy()
+    expect(
+      within(launchCard).getByLabelText("6 of 9 tasks done").textContent
+    ).toBe("6/9")
+    // Without a target or tasks (or from a Go without them), no chips.
+    const designCard = screen.getByRole("article", { name: "Design reviews" })
+    expect(within(designCard).queryByText(/\d+\/\d+/)).toBeNull()
+    expect(within(designCard).queryByLabelText(/tasks done/)).toBeNull()
+  })
+
   it("opens the teamspace when its card is clicked, not its management", async () => {
     backend()
     const { onOpen } = render()

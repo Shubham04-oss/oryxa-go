@@ -623,3 +623,43 @@
 /* The room's conversation renders into a host that can move to a parley's
    Room pane; the hosts take no box, so the conversation lays out as before. */
 .workspace-chat-host { display: contents; }
+
+/* The Launch card (TeamspaceHome board): the target, how much is done, and
+   the checklist. */
+.workspace-teamspace-launch { display: flex; flex-direction: column; }
+.workspace-teamspace-launch-head { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.workspace-teamspace-launch-head h3 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-teamspace-launch-count { flex: none; color: var(--text-muted); font-size: 11px; }
+.workspace-teamspace-side .workspace-teamspace-launch-date { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; color: var(--text-muted); font-size: 12px; }
+.workspace-teamspace-launch-date strong { color: var(--text); font-size: 18px; font-weight: 650; }
+.workspace-teamspace-launch-bar { height: 4px; margin-top: 12px; overflow: hidden; border-radius: 999px; background: var(--canvas); }
+.workspace-teamspace-launch-bar i { display: block; height: 100%; border-radius: inherit; background: var(--tone-7fcf98); }
+.workspace-teamspace-checklist { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.workspace-teamspace-task { display: flex; align-items: center; gap: 8px; min-height: 28px; min-width: 0; font-size: 12px; }
+.workspace-teamspace-task-title { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; color: var(--text); line-height: 1.4; }
+.workspace-teamspace-task-title small { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-teamspace-task[data-done="true"] .workspace-teamspace-task-title > span { color: var(--text-muted); text-decoration: line-through; }
+.workspace-teamspace-task .workspace-avatar { flex: none; width: 20px; height: 20px; }
+.workspace-teamspace-task-input { flex: 1; min-width: 0; }
+.workspace-teamspace-side .workspace-teamspace-launch-empty { margin-top: 12px; }
+.workspace-teamspace-launch-add { align-self: flex-start; margin-top: 8px; }
+.workspace-teamspace-launch-error { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.workspace-teamspace-launch .workspace-teamspace-error,
+.workspace-teamspace-target .workspace-teamspace-error { margin: 8px 0 0; color: var(--tone-ff9d9d); font-size: 11px; }
+.workspace-teamspace-task-form { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.workspace-teamspace-task-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.workspace-teamspace-task-form-row > span { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.workspace-teamspace-task-form-row [data-slot="native-select-wrapper"] { width: 100%; }
+.workspace-teamspace-launch .workspace-teamspace-form-actions,
+.workspace-teamspace-target .workspace-teamspace-form-actions { margin-top: 4px; }
+.workspace-teamspace-target form { display: flex; flex-direction: column; gap: 8px; }
+/* Clear stands on its own line, away from Save. */
+.workspace-teamspace-target-clear { align-self: flex-start; }
+
+/* A card's facts: the target and how much of the checklist is done. */
+.workspace-teamspace-card-facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.workspace-teamspace-card-fact { color: var(--text-muted); font-weight: 550; }
+
+@media (max-width: 800px) {
+  .workspace-teamspace-task-form-row { grid-template-columns: 1fr; }
+}
