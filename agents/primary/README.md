@@ -1467,6 +1467,16 @@ context by concluding something, not by anybody remembering to publish.
 consecutive passes end the relay, and the whole thing is bounded in
 wall-clock time. An agent with nothing to add says so and is not recorded.
 
+**A paused room is read-only.** While its teamspace is `disabled`, the team
+still reads its room: `GET .../messages` and `GET .../catchup` answer as
+usual, and both carry `"paused": true` (`false` otherwise), so a client turns
+its composer off from the read it already makes. Saying anything there,
+`POST .../messages`, is `409 teamspace_disabled`, the code everything else a
+disabled teamspace refuses uses. The store checks the teamspace again as it
+stores each message, so a pause that lands while an agent is taking its turn
+stops that answer and every turn it would have woken; what was stored before
+the pause stays.
+
 **Every message a room stores is announced**, a person's or an agent's
 answer, as `agents.teamspace.room.message.posted.v1`, recorded in the agents
 outbox in the transaction that stores the message: the event commits with the
@@ -1602,13 +1612,31 @@ every team's posts; migration `003_synthesis_audiences.sql` moved them to
 | `GET /v1/organizations/{org}/teamspaces` | Lists spaces whose human teams are currently visible to the member |
 | `POST /v1/organizations/{org}/teamspaces` | Creates one shared work space for a team the caller manages and binds the organization agent |
 | `GET /v1/organizations/{org}/teamspaces/{space}` | Reads the organization agent, live whisperer roster, and safe contributed-specialist handles |
-| `PATCH /v1/organizations/{org}/teamspaces/{space}` | Changes shared metadata or lifecycle status as a team manager |
+| `PATCH /v1/organizations/{org}/teamspaces/{space}` | Changes shared metadata, its target, or lifecycle status as a team manager (below) |
 | `DELETE /v1/organizations/{org}/teamspaces/{space}` | Removes the space without deleting members' private agents |
 | `POST /v1/organizations/{org}/teamspaces/{space}/agents` | Contributes one of the caller's active specialists with a role and delegation mode |
 | `PATCH /v1/organizations/{org}/teamspaces/{space}/agents/{agent}` | Lets only the specialist owner change its role or standing delegation authority |
 | `DELETE /v1/organizations/{org}/teamspaces/{space}/agents/{agent}` | Lets the owner withdraw it or a team manager remove it |
 | `GET /v1/organizations/{org}/teamspaces/{space}/entries` | Reads recent attributed shared publications, newest first |
 | `POST /v1/organizations/{org}/teamspaces/{space}/entries` | Publishes immutable work as the caller's whisperer or contributed active specialist |
+
+**A teamspace's target, and who paused it.** A teamspace carries
+`target_date`, the day its team is working towards, written `YYYY-MM-DD`, and
+`target_label`, what it is (`"Launch"`, at most 60 characters). Both are
+`null` until a manager sets them with the `PATCH` above, as
+`{"target_date": "2026-11-02", "target_label": "Launch"}`. Either field left
+out is left alone, and sent as `null` or `""` is cleared; a date that is not a
+calendar date, or a longer label, is `400 invalid_request`. A manager pauses a
+teamspace with `{"status": "disabled"}` and resumes it with
+`{"status": "active"}`. Pausing records `paused_by_user_id` and `paused_at`
+(RFC 3339), and both are `null` while the teamspace is active, including one
+paused before they were recorded (migration `003_target_and_pause.sql`).
+Asking for the status a teamspace already has changes neither. All four
+fields are on every teamspace the API returns:
+`{"id": "tsp_...", "status": "disabled", "target_date": "2026-11-02", "target_label": "Launch", "paused_by_user_id": "user_...", "paused_at": "2026-10-16T09:30:00Z", ...}`.
+While paused, a teamspace refuses new contributions, entries and seat requests
+with `409 teamspace_disabled`, and its room is read-only (see
+[A teamspace is a room](#a-teamspace-is-a-room)).
 
 A thread is `{"id", "title", "created_at", "updated_at"}`; its title is the
 first line of its first message.
