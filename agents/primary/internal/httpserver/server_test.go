@@ -884,6 +884,26 @@ func TestAPausedRoomRefusesAPostAsPaused(t *testing.T) {
 	}
 }
 
+// A paused room is still read, and every read says it is paused, so a client
+// learns it from the read it already makes rather than from a refused post.
+func TestReadingARoomSaysWhetherItIsPaused(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		server := New(member(), &fakeThreads{}, Config{
+			AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Rooms: &fakeRooms{paused: paused},
+		}, nil)
+		want := fmt.Sprintf(`"paused":%t`, paused)
+		for _, path := range []string{
+			"/v1/organizations/org_1/teamspaces/tsp_engineering/messages",
+			"/v1/organizations/org_1/teamspaces/tsp_engineering/catchup",
+		} {
+			response := serve(server, http.MethodGet, path, "", bearer)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), want) {
+				t.Errorf("GET %s = %d %s, want 200 with %s", path, response.Code, response.Body.String(), want)
+			}
+		}
+	}
+}
+
 func TestAgentWorkflowsCanBeScheduledStartedAndObservedThroughTheAPI(t *testing.T) {
 	workflows := &fakeAgentWorkflows{}
 	server := New(member(), &fakeThreads{}, Config{

@@ -198,8 +198,8 @@ type Preferences interface {
 // agents talking in one place. rooms.Service implements it.
 type Rooms interface {
 	Post(ctx context.Context, actor rooms.Actor, roomID, body string) ([]rooms.Message, error)
-	Read(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64, limit int) ([]rooms.Message, []rooms.Seat, error)
-	Catchup(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64) (rooms.Brief, []rooms.Message, error)
+	Read(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64, limit int) ([]rooms.Message, []rooms.Seat, bool, error)
+	Catchup(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64) (rooms.Brief, []rooms.Message, bool, error)
 }
 
 // Config is how the server runs.
@@ -1898,9 +1898,10 @@ func (server *Server) postRoomMessage(writer http.ResponseWriter, request *http.
 	writeJSON(writer, http.StatusCreated, map[string]any{"messages": said})
 }
 
-// readRoom returns what was said after ?after, oldest first, and records that
-// the member is reading it — which is how the room knows they are here, and
-// therefore that their agent must not answer over them.
+// readRoom returns what was said after ?after, oldest first, and whether the
+// room is paused, and records that the member is reading it — which is how the
+// room knows they are here, and therefore that their agent must not answer
+// over them.
 func (server *Server) readRoom(writer http.ResponseWriter, request *http.Request) {
 	member, ok := server.member(writer, request)
 	if !ok {
@@ -1918,16 +1919,16 @@ func (server *Server) readRoom(writer http.ResponseWriter, request *http.Request
 	if !ok {
 		return
 	}
-	said, seats, err := server.rooms.Read(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), after, limit)
+	said, seats, paused, err := server.rooms.Read(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), after, limit)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"messages": said, "seats": seats})
+	writeJSON(writer, http.StatusOK, map[string]any{"messages": said, "seats": seats, "paused": paused})
 }
 
 // catchUpOnRoom is for somebody who has been away: what the room amounts to,
-// and what they have not seen.
+// what they have not seen, and whether the room is paused.
 func (server *Server) catchUpOnRoom(writer http.ResponseWriter, request *http.Request) {
 	member, ok := server.member(writer, request)
 	if !ok {
@@ -1941,12 +1942,12 @@ func (server *Server) catchUpOnRoom(writer http.ResponseWriter, request *http.Re
 	if !ok {
 		return
 	}
-	brief, said, err := server.rooms.Catchup(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), after)
+	brief, said, paused, err := server.rooms.Catchup(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), after)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"brief": brief, "messages": said})
+	writeJSON(writer, http.StatusOK, map[string]any{"brief": brief, "messages": said, "paused": paused})
 }
 
 // sequence reads a message sequence from the query, which is how a reader
