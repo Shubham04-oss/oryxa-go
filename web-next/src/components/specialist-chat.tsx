@@ -5,12 +5,14 @@
 // sends every socket the same conversation. It reuses the primary agent's
 // chat pieces: the timeline, the conversation log and the pill composer.
 import { useEffect, useMemo, useRef, useState } from "react"
+import type { ReactNode } from "react"
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { useAgent } from "agents/react"
 import { SquarePen } from "lucide-react"
 import { failureText, lastUserMessageId } from "./agent-chat"
 import { AgentChatHistory } from "./agent-chat-history"
+import { AgentChatMenu } from "./agent-chat-menu"
 import { AgentComposer } from "./agent-composer"
 import { AgentConversation } from "./agent-conversation"
 import { AgentTimeline } from "./agent-timeline"
@@ -28,6 +30,7 @@ import type { SpecialistChatState } from "@/lib/specialists/chat-messages"
 import {
   selectSpecialistChat,
   deleteSpecialistThread,
+  renameSpecialistThread,
   specialistThreadsQueryOptions,
   getSpecialistChatMessages,
   specialistKeys,
@@ -49,6 +52,7 @@ import {
 } from "@/lib/threads/chat-choice"
 import type { ChatScope } from "@/lib/threads/chat-choice"
 import type { ConfirmationAnswer, ThreadDetail } from "@/lib/threads/client"
+import { renameCachedThread } from "@/lib/threads/rename"
 import { socketProtocol } from "@/lib/socket-protocol"
 import { buildTimeline, pendingConfirmationIds } from "@/lib/threads/timeline"
 import type { ScreenContext } from "@/lib/agents/screen-context"
@@ -132,9 +136,9 @@ type Presence = {
 }
 
 /**
- * The row above the conversation: its name, and a quiet button that starts
- * a new one. In the focused view it is the presence row, with the chat's
- * state in a pill.
+ * The row above the conversation: its name, its ⋯ menu when it has one, and
+ * a quiet button that starts a new one. In the focused view it is the
+ * presence row, with the chat's state in a pill.
  */
 function ChatBar({
   layout,
@@ -142,12 +146,14 @@ function ChatBar({
   presence,
   canStartOver,
   onStartOver,
+  menu,
 }: {
   layout: SpecialistChatLayout
   title: string
   presence: Presence
   canStartOver: boolean
   onStartOver?: () => void
+  menu?: ReactNode
 }) {
   const startOver = (
     <button
@@ -170,6 +176,7 @@ function ChatBar({
     return (
       <div className="workspace-agent-thread-bar">
         {name}
+        {menu}
         {startOver}
       </div>
     )
@@ -183,6 +190,7 @@ function ChatBar({
         {presence.label}
       </span>
       {name}
+      {menu}
       {startOver}
     </div>
   )
@@ -814,6 +822,39 @@ function SpecialistChatSession({
         presence={presenceOf(specialist, refusal, connection, running)}
         canStartOver={open && !running && !clearing}
         onStartOver={() => void startOver()}
+        menu={
+          threadId && (
+            <AgentChatMenu
+              title={title}
+              editableTitle={detail.data?.title ?? ""}
+              agentName={specialist.name}
+              disabled={running || clearing || !detail.data}
+              onRename={(next) =>
+                renameCachedThread({
+                  queryClient,
+                  listKey: specialistKeys.threads(
+                    organizationId,
+                    specialist.id
+                  ),
+                  detailKey: specialistKeys.thread(
+                    organizationId,
+                    specialist.id,
+                    threadId
+                  ),
+                  threadId,
+                  title: next,
+                  rename: (normalized) =>
+                    renameSpecialistThread(
+                      organizationId,
+                      specialist.id,
+                      threadId,
+                      normalized
+                    ),
+                }).then(() => undefined)
+              }
+            />
+          )
+        }
       />
       <AgentChatHistory
         threads={threads.data ?? []}

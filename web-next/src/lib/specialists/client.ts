@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query"
 import { apiRequest } from "@/lib/api/client"
 import {
+  normalizeThreadTitle,
   retryUnlessRefused,
   runRequestBody,
   streamRunRequest,
@@ -47,6 +48,23 @@ export function getSpecialistThread(
   return apiRequest<ThreadDetail>(
     `${agentPath(organizationId, agentId)}/threads/${encodeURIComponent(threadId)}`,
     { signal }
+  )
+}
+
+/**
+ * PATCH /v1/organizations/{org}/agents/{agent}/threads/{thread} {title},
+ * answering the renamed `Thread` (#386); refused as `renameThread` is.
+ * agents/primary/internal/httpserver/server.go renameAgentThread
+ */
+export function renameSpecialistThread(
+  organizationId: string,
+  agentId: string,
+  threadId: string,
+  title: string
+): Promise<Thread> {
+  return apiRequest<Thread>(
+    `${agentPath(organizationId, agentId)}/threads/${encodeURIComponent(threadId)}`,
+    { method: "PATCH", body: { title: normalizeThreadTitle(title) } }
   )
 }
 

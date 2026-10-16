@@ -83,6 +83,18 @@
   font-size: 11px;
   font-weight: 400;
 }
+.chats-list-files {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* The kind badge, sized to the 11px meta line. */
+.chats-list-files .workspace-file-kind {
+  min-width: 20px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 7px;
+}
 .chats-list-waiting {
   color: var(--text);
   font-weight: 560;
