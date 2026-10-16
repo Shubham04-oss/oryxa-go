@@ -97,12 +97,22 @@ export function canRemoveContribution(
 }
 
 /**
- * Whether to open the space's room: a team member, while the space is
- * active. A paused space's room answers 400, and only a person with a seat
- * (a team member with an active primary agent) may speak in it.
+ * Whether to say anything in the space's room: a team member, while the
+ * space is active. Only a person with a seat (a team member with an active
+ * primary agent) may speak in it, and Go refuses a post in a paused space's
+ * room 409 `teamspace_disabled` (a Go before read-only rooms, 400).
  */
 export function canUseRoom(space: Teamspace): boolean {
   return space.is_member && space.status === "active"
+}
+
+/**
+ * Whether to open the space's room: a team member, paused or not. Go reads
+ * a paused space's room, read-only, and says `paused`; a Go before
+ * read-only rooms refuses its reads 400, which the room shows as paused.
+ */
+export function canReadRoom(space: Teamspace): boolean {
+  return space.is_member
 }
 
 // Resolving a path against a stand-in origin shows where a browser would

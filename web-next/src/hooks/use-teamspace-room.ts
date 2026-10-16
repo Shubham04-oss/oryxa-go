@@ -20,7 +20,11 @@ import { useAgent } from "agents/react"
 import { ApiError } from "@/lib/api/client"
 import { isUnavailableHere } from "@/lib/agents/policy"
 import { getSession } from "@/lib/auth/client"
-import { checkTeamspaceRoom, mergeRoomMessages } from "@/lib/rooms/client"
+import {
+  checkTeamspaceRoom,
+  isRoomPausedRefusal,
+  mergeRoomMessages,
+} from "@/lib/rooms/client"
 import type { RoomMessage, RoomSeat } from "@/lib/rooms/client"
 import {
   ROOM_HISTORY_LIMIT,
@@ -37,7 +41,7 @@ import type {
   TeamspaceRoomState,
 } from "@/lib/rooms/room-agent"
 import type { Teamspace } from "@/lib/teamspaces/client"
-import { canUseRoom } from "@/lib/teamspaces/policy"
+import { canReadRoom } from "@/lib/teamspaces/policy"
 import { teamspaceKeys } from "@/lib/teamspaces/queries"
 import { reopenSocket } from "@/lib/threads/agent-socket"
 import { socketProtocol } from "@/lib/socket-protocol"
@@ -51,7 +55,11 @@ export type RoomConnection =
   | "closed"
   /** They manage the teamspace without being on its team, so it has no seat for them. */
   | "not-member"
-  /** The teamspace is paused; its room answers 400 until it is resumed. */
+  /**
+   * The teamspace is paused: the room is read-only. What it holds still
+   * shows (and, from a Go with read-only rooms, still arrives); nothing can
+   * be said until it is resumed.
+   */
   | "paused"
   /** The socket is opening, or has not been sent the room yet. */
   | "connecting"
@@ -191,8 +199,11 @@ function tabVisible(): boolean {
  * calling component is mounted. Keep it mounted for as long as the room is
  * on screen: while this tab is visible the room reads Go as `viewerId`,
  * which is what keeps them present, and 90 seconds after the last such read
- * their own agent may answer for them. It opens only when the member may use
- * the room (`canUseRoom`): on the team, in an active teamspace.
+ * their own agent may answer for them. It opens only when the member may read
+ * the room (`canReadRoom`): on the team. A paused teamspace's room opens
+ * read-only; Go says it is paused on each read, refuses a post 409
+ * `teamspace_disabled`, or, before read-only rooms, refuses its reads 400.
+ * Any of the three shows the room as paused.
  */
 export function useTeamspaceRoom(
   organizationId: string | undefined,
@@ -200,7 +211,7 @@ export function useTeamspaceRoom(
   viewerId: string | undefined
 ): TeamspaceRoom {
   const queryClient = useQueryClient()
-  const open = Boolean(organizationId && teamspace && canUseRoom(teamspace))
+  const open = Boolean(organizationId && teamspace && canReadRoom(teamspace))
   const room =
     open && organizationId && teamspace
       ? teamspaceRoomAgentName(organizationId, teamspace.id)
@@ -239,6 +250,10 @@ export function useTeamspaceRoom(
   // The room the page asks for now, for the socket's callbacks.
   const latestRoom = useRef(room)
   latestRoom.current = room
+  // Whether the page's copy of the teamspace says it is paused: the room
+  // saying otherwise means that copy is stale.
+  const pausedHere = useRef(false)
+  pausedHere.current = teamspace?.status === "disabled"
 
   const settled = Boolean(live.current.refusal?.settled)
   const agent = useAgent<TeamspaceRoomState>({
@@ -333,6 +348,8 @@ export function useTeamspaceRoom(
               open: held.seen,
               refusal: held.refusal?.settled ? held.refusal : undefined,
             }))
+            // Resumed: the page's copy of the teamspace follows.
+            if (pausedHere.current) void refreshTeamspace(queryClient, forRoom)
             return
           case "error":
             change(forRoom, (held) =>
@@ -345,13 +362,8 @@ export function useTeamspaceRoom(
             )
             return
           case "paused":
-            change(forRoom, (held) => ({
-              ...held,
-              refusal: { connection: "paused" },
-            }))
-            // The teamspace itself changed: the page's copy is re-read, so
-            // its header and gates follow.
-            void refreshTeamspace(queryClient, forRoom)
+            // Read-only: what the room holds stays on screen.
+            paused(forRoom)
             return
           case "unavailable":
             settle(forRoom, { connection: "unavailable", settled: true })
@@ -378,6 +390,20 @@ export function useTeamspaceRoom(
     change(forRoom, (held) => ({ ...held, refusal, open: false }))
     if (live.current.room !== forRoom) return
     for (const id of [...waiting.current.keys()]) finish(id, lost(id))
+  }
+
+  /**
+   * The room is paused: it shows read-only, keeping what it holds. When the
+   * page's copy of the teamspace did not know, it is re-read, so its header
+   * and gates follow.
+   */
+  function paused(forRoom: string): void {
+    change(forRoom, (held) =>
+      held.refusal?.settled
+        ? held
+        : { ...held, refusal: { connection: "paused" } }
+    )
+    if (!pausedHere.current) void refreshTeamspace(queryClient, forRoom)
   }
 
   function turnedAway(forRoom: string): void {
@@ -529,7 +555,9 @@ export function useTeamspaceRoom(
       }
       const landed = hasLanded(live.current.messages, item, viewerId)
       setSendError(sendErrorMessage(result, landed))
-      if (result.status === 400) void refreshTeamspace(queryClient, forRoom)
+      if (isRoomPausedRefusal(result, "post")) paused(forRoom)
+      else if (result.status === 400)
+        void refreshTeamspace(queryClient, forRoom)
       return landed
     } finally {
       setPending((held) => held.filter((outgoing) => outgoing.key !== item.key))
@@ -637,6 +665,9 @@ function sendErrorMessage(
     isUnavailableHere(new ApiError(result.message, result.status, result.code))
   ) {
     return "Rooms aren't available on this server."
+  }
+  if (isRoomPausedRefusal(result, "post")) {
+    return "This room is paused, so your message wasn't sent."
   }
   switch (result.status) {
     case 400:

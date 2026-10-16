@@ -14,14 +14,14 @@ not permission to copy every incidental value into a new component.
 
 ## 1. Visual foundation
 
-| Role | Token | Dark | Light | Use |
-| --- | --- | --- | --- | --- |
-| Base surface | `--base` | `#111111` | `#f4f4f4` | Page surround, naked sidebars, chat background, auth inset |
-| Main surface | `--canvas` | `#1e1e1e` | `#ffffff` | Central canvas, settings content, auth page |
-| Cards and side panels | `--base` | `#111111` | `#f4f4f4` | Compact cards and agent/navigation panels |
-| Quiet border | `--border-quiet` | `#353535` | `#e6e6e6` | Interior controls/cards only |
-| Primary text | `--text` | `#f2f2f2` | `#111111` | Titles and essential labels |
-| Muted text | `--text-muted` | `#999999` | `#737373` | Secondary information |
+| Role                  | Token            | Dark      | Light     | Use                                                        |
+| --------------------- | ---------------- | --------- | --------- | ---------------------------------------------------------- |
+| Base surface          | `--base`         | `#111111` | `#f4f4f4` | Page surround, naked sidebars, chat background, auth inset |
+| Main surface          | `--canvas`       | `#1e1e1e` | `#ffffff` | Central canvas, settings content, auth page                |
+| Cards and side panels | `--base`         | `#111111` | `#f4f4f4` | Compact cards and agent/navigation panels                  |
+| Quiet border          | `--border-quiet` | `#353535` | `#e6e6e6` | Interior controls/cards only                               |
+| Primary text          | `--text`         | `#f2f2f2` | `#111111` | Titles and essential labels                                |
+| Muted text            | `--text-muted`   | `#999999` | `#737373` | Secondary information                                      |
 
 - Two themes, one set of roles. Dark is the workspace as it has always been;
   light takes oryxa-platform's light roles. The profile menu's Theme item moves
@@ -49,7 +49,7 @@ not permission to copy every incidental value into a new component.
 - Use a restrained spacing rhythm based on 8, 12, 16, 24, and 32px. Rounded
   cards and pill controls are welcome; avoid ornamental gradients, broad
   shadows, glass effects, or divider lines between shell regions. Borders may
-  group content *inside* a surface. Shadows are for overlays, not page depth,
+  group content _inside_ a surface. Shadows are for overlays, not page depth,
   with one exception: the selected item in a tiled group is a **raised tile**
   (`--raised` fill, a 1px `--border-quiet` hairline and a 1–3px
   `--shade-66` shadow), never a sunken fill. The same raised tile marks the
@@ -157,28 +157,28 @@ not permission to copy every incidental value into a new component.
   - What needs the member is not a card here: it is the panel's chip and
     count, and Requests. Each card says in one quiet line what lands there
     when it is empty, and offers Try again when its read failed. When the member
-  has more than one agent, the Agents tab's top row is a quick switch between
-  them: the one in use is the oval pill with its name, like the pills
-  elsewhere, and the rest stay avatar-only. With a single agent the row is not
-  shown, and it never shows empty or example slots. The panel is
-  location-aware: on a teamspace page the agent's view also offers that
-  teamspace's teammates and their agents, below the member's own (§3, "Side
-  conversations"); elsewhere it does not. Collapsed, the panel's rail shows
-  one icon per view (the agent, At a glance with the needs count, DMs), and
-  each opens the panel on that view. A tab without a
-  live service shows a one-line empty state, never example people, rooms or
-  messages.
+    has more than one agent, the Agents tab's top row is a quick switch between
+    them: the one in use is the oval pill with its name, like the pills
+    elsewhere, and the rest stay avatar-only. With a single agent the row is not
+    shown, and it never shows empty or example slots. The panel is
+    location-aware: on a teamspace page the agent's view also offers that
+    teamspace's teammates and their agents, below the member's own (§3, "Side
+    conversations"); elsewhere it does not. Collapsed, the panel's rail shows
+    one icon per view (the agent, At a glance with the needs count, DMs), and
+    each opens the panel on that view. A tab without a
+    live service shows a one-line empty state, never example people, rooms or
+    messages.
 - The sidebar's tiles, in order (each heading in quiet capitals, with its
-  + where it has one):
+  - where it has one):
 
-  | Tile | Rows |
-  | --- | --- |
-  | (no heading) | My workspace; Requests, with how many wait on the member as a strong count; Chats with your agent (the Chats page) |
-  | Live now (only while the member is in a parley) | Its own tile, edged in green: "Parley · {room}" with how long it has run (opens the parley), then mute, camera and leave (`ui/button` outline `icon-sm`, leave `destructive`). Agents' live sessions ("Krude is browsing …") are left out until there is an org-wide live list (#322). |
-  | Teamspaces (the heading opens the list; + leads there to add one) | Each of the member's teamspaces by its planet, opening it, with a green dot while a parley runs there (each room's call read every 20 s, for the first eight only, until the org-wide live list exists); "No teamspaces yet." when there are none |
-  | Messages (+ opens People to pick someone) | The three latest DMs, plus any older one with unread messages (six at most), each with its unread count; People, with how many |
-  | Agents (+ leads to Specialists) | The primary agent by name and voxel avatar, "Your agent" (Agent overview); Specialists, Agent teams and Workflows, each with how many (Workflows opens Agent overview, where they live) |
-  | Library | Two tiles, Knowledge and Tools. The board's Files tile waits for a Files page. |
+  | Tile                                                              | Rows                                                                                                                                                                                                                                                                                   |
+  | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | (no heading)                                                      | My workspace; Requests, with how many wait on the member as a strong count; Chats with your agent (the Chats page)                                                                                                                                                                     |
+  | Live now (only while the member is in a parley)                   | Its own tile, edged in green: "Parley · {room}" with how long it has run (opens the parley), then mute, camera and leave (`ui/button` outline `icon-sm`, leave `destructive`). Agents' live sessions ("Krude is browsing …") are left out until there is an org-wide live list (#322). |
+  | Teamspaces (the heading opens the list; + leads there to add one) | Each of the member's teamspaces by its planet, opening it, with a green dot while a parley runs there (each room's call read every 20 s, for the first eight only, until the org-wide live list exists); "No teamspaces yet." when there are none                                      |
+  | Messages (+ opens People to pick someone)                         | The three latest DMs, plus any older one with unread messages (six at most), each with its unread count; People, with how many                                                                                                                                                         |
+  | Agents (+ leads to Specialists)                                   | The primary agent by name and voxel avatar, "Your agent" (Agent overview); Specialists, Agent teams and Workflows, each with how many (Workflows opens Agent overview, where they live)                                                                                                |
+  | Library                                                           | Two tiles, Knowledge and Tools. The board's Files tile waits for a Files page.                                                                                                                                                                                                         |
 
   Collapsed, the rail (board Rail) is: the workspace's initial, which
   expands the sidebar (a round arrow on a phone); Search once it is
@@ -251,10 +251,10 @@ not permission to copy every incidental value into a new component.
     Orb while it works) over a name and a quiet line. New chat, All
     conversations and Library sit in its header. Fewer cards leave the row
     short; none says what lands there in one line.
-  Inside a tile, rows stay plain (a 26px mark, a 13px line clamped to two
-  lines, an 11px quiet line) with a hover tint. Every action is `ui/button`:
-  row actions `outline` `sm`, header actions `ghost` `sm`, inline links
-  `link` `sm`, suggestion chips `outline` `sm` (§1, Buttons and action rows).
+    Inside a tile, rows stay plain (a 26px mark, a 13px line clamped to two
+    lines, an 11px quiet line) with a hover tint. Every action is `ui/button`:
+    row actions `outline` `sm`, header actions `ghost` `sm`, inline links
+    `link` `sm`, suggestion chips `outline` `sm` (§1, Buttons and action rows).
   - **While you were away** (At a glance: **From your apps**): at most three
     briefs on the page (four at a glance), newest first. A brief
     is the first sentence of what Krude told the member in their wake-up
@@ -366,7 +366,17 @@ not permission to copy every incidental value into a new component.
     are kept on purpose, below the board's cards, as Overview's content
     with nowhere else to go (owner to confirm). The
     room stays mounted behind the other tabs, so its draft, scroll and
-    socket carry over. **Files** is the team's files, full width. **Plan**
+    socket carry over. A paused teamspace's room is read-only, never broken
+    and never live: what was said stays on screen (and keeps arriving from
+    a Go that reads paused rooms), the presence pill says Paused, the
+    composer is off with "This room is paused", and the line under the
+    messages gives the paused copy and, once Go records them, "Paused by
+    <name> on <date>" (the name from the room's seats, "you" for the
+    viewer, or just "Paused on <date>" when nobody here knows it). The room
+    takes any of Go's three signals as paused: `"paused": true` on a read,
+    409 `teamspace_disabled` on a post (the draft is kept: "This room is
+    paused, so your message wasn't sent."), and the 400 an older Go gives
+    a paused room's reads. **Files** is the team's files, full width. **Plan**
     and **Parleys** have no API yet, so each is one honest line on the
     empty scene ("A shared plan is coming", "Past parleys will be listed
     here"). No launch date in the hero until the teamspace carries one.
@@ -395,10 +405,14 @@ not permission to copy every incidental value into a new component.
     for whoever manages it, Pause or Resume and Delete. Pause and Delete
     open the details on their usual confirm; Resume needs none. A paused
     card is dimmed, still opens from anywhere on it, and says its room is
-    closed until a team admin resumes it. The parley chip reads each open teamspace's call once a minute
+    read-only until a team admin resumes it; its footer says "Paused by
+    <name> on <date>" once Go records who and when (the name from the
+    teamspace's seats, "you" for the viewer, else "Paused on <date>"), and
+    just "Paused" before. The details' paused note ends the same way. The
+    parley chip reads each open teamspace's call once a minute
     (the member must be on the team), under the room's own call key.
-    Unread counts, who's editing, custom facts, the last activity line and
-    who paused it stay off the card until the list carries them.
+    Unread counts, who's editing, custom facts and the last activity line
+    stay off the card until the list carries them.
   - For a member who can open one, the last card opens a new teamspace,
     drawn as the ship's lines on deep sea, with a New teamspace button.
     Both it and the header's button open the create form as a pop-up
@@ -858,18 +872,18 @@ not permission to copy every incidental value into a new component.
     preview. Requests keep their request card.
   - **The answer** is the Markdown at the end of the card; a failed run's
     words close it.
-  The composer is a task bar ("Give Leo a task, or ask anything") with a quiet
-  "Looking at …" chip above the field: what the page's screen context names
-  (its selection, or the page), which goes with the message.
-  **Specialist and team chats are working sessions too.** A specialist's
-  card takes what its work result says: "Needs your input" or "Blocked" in
-  place of Done, the files it saved as output rows by name (Go serves no
-  specialist files yet, so they say they can't be opened here), and the
-  hand-offs it suggests as rows ("Suggests Planner: …"; suggestions only,
-  nothing ran); the line under its answer keeps only the tools it used. A
-  multi-agent team's posts are tasks, and the agents' answers after one are
-  its run card, each named for who wrote it; while the team works the card
-  says so and the composer says it can take a minute and a half.
+    The composer is a task bar ("Give Leo a task, or ask anything") with a quiet
+    "Looking at …" chip above the field: what the page's screen context names
+    (its selection, or the page), which goes with the message.
+    **Specialist and team chats are working sessions too.** A specialist's
+    card takes what its work result says: "Needs your input" or "Blocked" in
+    place of Done, the files it saved as output rows by name (Go serves no
+    specialist files yet, so they say they can't be opened here), and the
+    hand-offs it suggests as rows ("Suggests Planner: …"; suggestions only,
+    nothing ran); the line under its answer keeps only the tools it used. A
+    multi-agent team's posts are tasks, and the agents' answers after one are
+    its run card, each named for who wrote it; while the team works the card
+    says so and the composer says it can take a minute and a half.
 - No screen uses the older log layout any more (`AgentTimeline`'s `log`
   variant, kept for now), which read an agent conversation as a quiet log
   on the base surface: the

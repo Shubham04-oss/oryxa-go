@@ -83,9 +83,6 @@ describe("useTeamspaceRoom", () => {
 
     expect(setup(undefined).result.current.status.connection).toBe("closed")
     expect(
-      setup(teamspace({ status: "disabled" })).result.current.status
-    ).toMatchObject({ connection: "paused", canPost: false })
-    expect(
       setup(teamspace({ is_member: false, can_manage: true })).result.current
         .status.connection
     ).toBe("not-member")
@@ -422,7 +419,7 @@ describe("useTeamspaceRoom", () => {
     expect(socket.reconnects).toBe(0)
   })
 
-  it("answers a paused room as paused and re-reads the teamspace", async () => {
+  it("answers a paused room as paused and re-reads the teamspace, as a Go before read-only rooms refuses its reads (400)", async () => {
     mockApi(() => json(teamspace({ status: "disabled" })))
     const { result, queryClient } = setup(teamspace())
     const detail = teamspaceKeys.teamspace(org, "tsp_launch")
@@ -447,6 +444,81 @@ describe("useTeamspaceRoom", () => {
     // Resumed: the room says it is live again.
     socket.says({ type: "room-status", status: "live" })
     expect(result.current.status.connection).toBe("live")
+  })
+
+  it("opens a paused teamspace's room read-only: what it holds shows, and nothing can be said", async () => {
+    const { result, queryClient } = setup(teamspace({ status: "disabled" }))
+    const detail = teamspaceKeys.teamspace(org, "tsp_launch")
+    queryClient.setQueryData(detail, teamspace({ status: "disabled" }))
+    const socket = roomSockets.latest
+    expect(socket.options).toMatchObject({ name: roomName, enabled: true })
+    expect(result.current.status).toMatchObject({
+      connection: "paused",
+      canPost: false,
+    })
+
+    // Go's read said `paused`: the room sends itself, then says so.
+    openRoom([roomMessage(1, adaSeat, "Before the pause")])
+    socket.says({ type: "room-status", status: "paused" })
+    expect(result.current.status).toMatchObject({
+      connection: "paused",
+      canPost: false,
+    })
+    expect(result.current.messages.map((item) => item.body)).toEqual([
+      "Before the pause",
+    ])
+    socket.says({
+      type: "room-messages",
+      messages: [roomMessage(2, junoSeat, "Notes from the call")],
+    })
+    expect(result.current.messages).toHaveLength(2)
+    expect(await result.current.send("Hello?")).toBe(false)
+    expect(socket.said("room-post")).toEqual([])
+    // The page already knew it was paused: nothing to re-read.
+    expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(false)
+
+    // Resumed elsewhere: the room is live, and the page's copy is re-read.
+    mockApi(() => json(teamspace()))
+    socket.says({ type: "room-status", status: "live" })
+    await waitFor(() =>
+      expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true)
+    )
+  })
+
+  it("takes a post refused 409 teamspace_disabled as a paused room, keeping the draft and the room", async () => {
+    mockApi(() => json(teamspace({ status: "disabled" })))
+    const { result, queryClient } = setup(teamspace())
+    const detail = teamspaceKeys.teamspace(org, "tsp_launch")
+    queryClient.setQueryData(detail, teamspace())
+    const socket = openRoom([roomMessage(1, adaSeat, "Before the pause")])
+
+    let kept: Promise<boolean> | undefined
+    act(() => {
+      kept = result.current.send("Hello")
+    })
+    const posted = socket.said("room-post").at(-1)!
+    socket.says({
+      type: "room-posted",
+      result: {
+        id: posted.id,
+        ok: false,
+        status: 409,
+        code: "teamspace_disabled",
+        message: "teamspace is disabled",
+      },
+    })
+    expect(await kept).toBe(false)
+    await waitFor(() =>
+      expect(result.current.status).toMatchObject({
+        connection: "paused",
+        canPost: false,
+        sendError: "This room is paused, so your message wasn't sent.",
+      })
+    )
+    expect(result.current.messages).toHaveLength(1)
+    await waitFor(() =>
+      expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true)
+    )
   })
 
   it("stops at a room the member may no longer open, by the room's word or its close", async () => {
