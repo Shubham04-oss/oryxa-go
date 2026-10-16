@@ -56,6 +56,72 @@ export type RoomMessage = {
   addressed_to?: string[]
   in_reply_to_seq?: number
   created_at: string
+  /**
+   * What the message is: something said ("message", and every message from
+   * a server before kinds), or the notes a parley left ("parley_notes",
+   * posted by the organization agent when a call in the teamspace ends,
+   * #392). `body` always says it in words, so a kind this client does not
+   * know reads as its body.
+   */
+  kind?: RoomMessageKind
+  /** What a client draws a non-plain kind from; absent for anything said. */
+  data?: unknown
+}
+
+export type RoomMessageKind = "message" | "parley_notes" | (string & {})
+
+/** One thing somebody took away from a parley. */
+export type ParleyAction = {
+  text: string
+  /** Who took it, as the call knew them; absent for nobody in particular. Not checked against the team. */
+  owner_user_id?: string
+}
+
+/** A "parley_notes" message's `data`: the call, how long it ran, what was decided and who owes what. */
+export type ParleyNotes = {
+  call_id: string
+  /** How long the call ran; absent when it isn't a length. */
+  duration_ms?: number
+  decisions: string[]
+  actions: ParleyAction[]
+}
+
+/**
+ * The parley notes a message carries, or undefined when it carries none (any
+ * other kind, or data this client can't read): such a message shows its
+ * body. An item that isn't words is left out rather than guessed at.
+ */
+export function parleyNotesOf(message: RoomMessage): ParleyNotes | undefined {
+  if (message.kind !== "parley_notes") return undefined
+  const data = message.data
+  if (!data || typeof data !== "object") return undefined
+  const { call_id, duration_ms, decisions, actions } = data as Record<
+    string,
+    unknown
+  >
+  if (!Array.isArray(decisions) || !Array.isArray(actions)) return undefined
+  return {
+    call_id: typeof call_id === "string" ? call_id : "",
+    ...(typeof duration_ms === "number" &&
+    Number.isFinite(duration_ms) &&
+    duration_ms >= 0
+      ? { duration_ms }
+      : {}),
+    decisions: decisions.filter(
+      (decision): decision is string =>
+        typeof decision === "string" && decision.trim() !== ""
+    ),
+    actions: actions.flatMap((action): ParleyAction[] => {
+      if (!action || typeof action !== "object") return []
+      const { text, owner_user_id } = action as Record<string, unknown>
+      if (typeof text !== "string" || text.trim() === "") return []
+      return [
+        typeof owner_user_id === "string" && owner_user_id !== ""
+          ? { text, owner_user_id }
+          : { text },
+      ]
+    }),
+  }
 }
 
 /**

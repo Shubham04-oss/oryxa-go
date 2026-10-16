@@ -4,6 +4,7 @@ import {
   catchUpOnRoom,
   checkTeamspaceRoom,
   mergeRoomMessages,
+  parleyNotesOf,
   roomApi,
   teamspaceRoomPath,
 } from "./client"
@@ -293,5 +294,67 @@ describe("mergeRoomMessages", () => {
       [2, "done"],
       [3, "line 3"],
     ])
+  })
+})
+
+describe("parleyNotesOf", () => {
+  const notes = (data: unknown, kind = "parley_notes"): RoomMessage => ({
+    ...message(1),
+    kind,
+    data,
+  })
+
+  it("reads a parley_notes message's data", () => {
+    expect(
+      parleyNotesOf(
+        notes({
+          call_id: "call_1",
+          duration_ms: 754000,
+          decisions: ["Ship on the 14th"],
+          actions: [
+            { text: "Send the price list", owner_user_id: "usr_2" },
+            { text: "Book the venue" },
+          ],
+        })
+      )
+    ).toEqual({
+      call_id: "call_1",
+      duration_ms: 754000,
+      decisions: ["Ship on the 14th"],
+      actions: [
+        { text: "Send the price list", owner_user_id: "usr_2" },
+        { text: "Book the venue" },
+      ],
+    })
+  })
+
+  it("has none for a plain message, a server before kinds, or data it can't read", () => {
+    expect(parleyNotesOf(message(1))).toBeUndefined()
+    expect(parleyNotesOf(notes(undefined, "message"))).toBeUndefined()
+    expect(parleyNotesOf(notes(null))).toBeUndefined()
+    expect(
+      parleyNotesOf(notes({ decisions: "x", actions: [] }))
+    ).toBeUndefined()
+  })
+
+  it("leaves out items that aren't words, and a length that isn't one", () => {
+    expect(
+      parleyNotesOf(
+        notes({
+          call_id: 7,
+          duration_ms: -1,
+          decisions: ["Keep", 3, " "],
+          actions: [
+            { text: "Do", owner_user_id: 9 },
+            { owner_user_id: "u" },
+            null,
+          ],
+        })
+      )
+    ).toEqual({
+      call_id: "",
+      decisions: ["Keep"],
+      actions: [{ text: "Do" }],
+    })
   })
 })

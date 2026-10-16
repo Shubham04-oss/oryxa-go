@@ -125,6 +125,32 @@
 .workspace-room-sending { color: var(--text-muted); font-size: 10px; }
 .workspace-room-notice { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; text-align: center; }
 
+/* A parley's notes (TeamspaceHome "th-notes"): a quiet card in the room,
+   its decisions tagged as the Parley ended pop-up tags them. */
+.workspace-parley-notes-gutter { flex: none; width: 30px; }
+.workspace-parley-notes-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-quiet);
+  border-radius: 12px;
+  background: var(--base);
+}
+.workspace-parley-notes-head { display: flex; align-items: center; gap: 8px; min-width: 0; padding-bottom: 4px; }
+.workspace-message .workspace-parley-notes-head .workspace-avatar { width: 18px; height: 18px; }
+.workspace-parley-notes-title { flex: 1; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 11.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-parley-notes-head time { flex: none; color: var(--tone-858585); font-size: 10px; }
+.workspace-parley-notes-lines { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.workspace-parley-notes-lines li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 4px 0; color: var(--tone-dedede); font-size: 12.5px; line-height: 1.45; }
+.workspace-parley-notes-face { display: inline-flex; flex: none; }
+.workspace-message .workspace-parley-notes-lines .workspace-avatar { width: 20px; height: 20px; }
+.workspace-parley-notes-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.workspace-parley-notes-decision { background: var(--tone-263a2e); color: var(--tone-b9e6c6); }
+.workspace-parley-notes-owner { border-color: var(--tone-3a3a3a); color: var(--tone-a5a5a5); }
+.workspace-parley-notes-owner[data-unassigned="true"] { color: var(--text-muted); }
+.workspace-message-body .workspace-parley-notes-empty { margin: 0; padding: 4px 0; color: var(--text-muted); font-size: 12.5px; }
+
 /* Agents answer in Markdown. */
 .workspace-room-markdown { margin-top: 3px; color: var(--tone-dedede); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .workspace-room-markdown > :first-child { margin-top: 0; }
