@@ -171,19 +171,20 @@ not permission to copy every incidental value into a new component.
 - The sidebar's tiles, in order (each heading in quiet capitals, with its
   - where it has one):
 
-  | Tile                                                              | Rows                                                                                                                                                                                                                                                                                   |
-  | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | (no heading)                                                      | My workspace; Requests, with how many wait on the member as a strong count; Chats with your agent (the Chats page)                                                                                                                                                                     |
-  | Live now (only while the member is in a parley)                   | Its own tile, edged in green: "Parley · {room}" with how long it has run (opens the parley), then mute, camera and leave (`ui/button` outline `icon-sm`, leave `destructive`). Agents' live sessions ("Krude is browsing …") are left out until there is an org-wide live list (#322). |
-  | Teamspaces (the heading opens the list; + leads there to add one) | Each of the member's teamspaces by its planet, opening it, with a green dot while a parley runs there (each room's call read every 20 s, for the first eight only, until the org-wide live list exists); "No teamspaces yet." when there are none                                      |
-  | Messages (+ opens People to pick someone)                         | The three latest DMs, plus any older one with unread messages (six at most), each with its unread count; People, with how many                                                                                                                                                         |
-  | Agents (+ leads to Specialists)                                   | The primary agent by name and voxel avatar, "Your agent" (Agent overview); Specialists, Agent teams and Workflows, each with how many (Workflows opens Agent overview, where they live)                                                                                                |
-  | Library                                                           | Two tiles, Knowledge and Tools. The board's Files tile waits for a Files page.                                                                                                                                                                                                         |
+  | Tile                                                              | Rows                                                                                                                                                                                                                                                                                                                                                                                                               |
+  | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | (no heading)                                                      | My workspace; Requests, with how many wait on the member as a strong count; Chats with your agent (the Chats page)                                                                                                                                                                                                                                                                                                 |
+  | Live now (only while the member is in a parley)                   | Its own tile, edged in green: "Parley · {room}" with how long it has run (opens the parley), then mute, camera and leave (`ui/button` outline `icon-sm`, leave `destructive`). Agents' live sessions ("Krude is browsing …") are left out until there is an org-wide live list (#322).                                                                                                                             |
+  | Teamspaces (the heading opens the list; + leads there to add one) | Each of the member's teamspaces by its planet, opening it, with its unread room messages as a strong count ("99+" at the server's cap of 100) once the list carries `unread_count` (#389), and a green dot while a parley runs there (beside the count when both show) (each room's call read every 20 s, for the first eight only, until the org-wide live list exists); "No teamspaces yet." when there are none |
+  | Messages (+ opens People to pick someone)                         | The three latest DMs, plus any older one with unread messages (six at most), each with its unread count; People, with how many                                                                                                                                                                                                                                                                                     |
+  | Agents (+ leads to Specialists)                                   | The primary agent by name and voxel avatar, "Your agent" (Agent overview); Specialists, Agent teams and Workflows, each with how many (Workflows opens Agent overview, where they live)                                                                                                                                                                                                                            |
+  | Library                                                           | Two tiles, Knowledge and Tools. The board's Files tile waits for a Files page.                                                                                                                                                                                                                                                                                                                                     |
 
   Collapsed, the rail (board Rail) is: the workspace's initial, which
   expands the sidebar (a round arrow on a phone); Search once it is
   answered; then tiles of icons: My workspace, Requests (its count a badge)
-  and Chats; each teamspace's planet; the DMs with unread messages, each an
+  and Chats; each teamspace's planet (its unread count a badge, the parley
+  dot under it); the DMs with unread messages, each an
   avatar with its count; the agent's avatar and the Library; and at the
   foot Settings over the member's avatar (the profile menu). Every icon's
   name is its tooltip and accessible name. A tile with nothing in it is left
@@ -287,6 +288,12 @@ not permission to copy every incidental value into a new component.
     aggregate pending flag, so state that coverage visibly and never show an
     unqualified all-clear while any read is unchecked. **Nothing needs you
     right now.** appears only when every read is complete and quiet.
+  - **While you were away** also lists, above the briefs, up to three of
+    the member's teamspaces with unread room messages, newest first: the
+    planet, the name and the room's last message ("EU launch Krude:
+    suggested an edit…"), and "2 unread · 5 min ago"; a row opens the
+    teamspace. Only from the list's own `unread_count` and `last_message`
+    (#389); without them, or with everything read, there are no rows.
   - Hidden until the API exists (#322): the Needs-you parley row and
     "Krude suggested an edit" rows, per-app counts and previews, "N editing"
     presence, and document thumbnails.
@@ -380,6 +387,17 @@ not permission to copy every incidental value into a new component.
     and **Parleys** have no API yet, so each is one honest line on the
     empty scene ("A shared plan is coming", "Past parleys will be listed
     here"). No launch date in the hero until the teamspace carries one.
+  - **Marking the room read** (#389): reading the room never moves the
+    member's read cursor; the page does, with `POST …/read {seq}`, through
+    the newest message that has actually been on screen (the room's tab or
+    the parley's Room pane showing, the message scrolled into view), once
+    the tab is visible and a second after the last change, forward only
+    (`use-teamspace-read.ts`). The cached teamspace's unread count drops to
+    0 at once, and a list or teamspace read already in flight is cancelled
+    so it cannot bring the old count back. A mark that fails is sent again
+    after 5 s, doubling to a minute while it keeps failing. Nothing is sent
+    for a teamspace without read cursors (a server before #389). While the list carries unread counts the shell
+    reads it again every minute, so other rooms' counts follow.
   - **The member's agent beside a teamspace** (TeamspaceHome, Teamspace3 and
     TeamspaceGlance boards, 15 Oct 2026): opening a teamspace on a desktop
     opens the agent panel (§2) beside it, so the sidebar folds to its
@@ -411,8 +429,15 @@ not permission to copy every incidental value into a new component.
     just "Paused" before. The details' paused note ends the same way. The
     parley chip reads each open teamspace's call once a minute
     (the member must be on the team), under the room's own call key.
-    Unread counts, who's editing, custom facts and the last activity line
-    stay off the card until the list carries them.
+    Once the list carries them (#389, members only), a card shows its
+    unread room messages as a count (`ui/badge`, "99+" at the cap; a
+    screen reader hears "2 unread" from hidden text in the badge) before
+    its More menu, and the room's last message as one quiet line under the
+    purpose: "Krude: suggested an edit…" (the author's seat name, else
+    their handle; "You" for the member's own; "Parley notes" for a
+    parley's notes) with how long ago. Without the fields neither shows.
+    Who's editing and custom facts stay off the card until the list
+    carries them.
   - For a member who can open one, the last card opens a new teamspace,
     drawn as the ship's lines on deep sea, with a New teamspace button.
     Both it and the header's button open the create form as a pop-up
@@ -627,7 +652,10 @@ not permission to copy every incidental value into a new component.
   - **Hover card** (`teamspace-hover-card.tsx`, the library's hover card):
     a teamspace from the sidebar, as a small pop-up with a 72px band of the
     harbour: its name and description, "5 people · 3 agents" (its members;
-    its own agent and the specialists brought to it) with faces, and
+    its own agent and the specialists brought to it) with faces, the
+    unread count and the room's last message on one line with how long ago
+    (as on the Teamspaces cards, "You" for the member's own and the count
+    spoken as "2 unread", only when the list carries them), and
     "Parley live" from the room's own call view, read when the card opens.
   - **Plain:** warnings and destructive confirms (`PopupConfirm`, the
     library's alert dialog) never get a scene: an icon, what will happen,

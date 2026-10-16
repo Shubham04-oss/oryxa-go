@@ -155,3 +155,56 @@ export async function afterPublishTeamspaceEntry(
     queryKey: teamspaceKeys.entries(organizationId, teamspaceId),
   })
 }
+
+/** The teamspace carries read cursors (#389): unread can be shown and marked. */
+export function tracksUnread(space: Teamspace): boolean {
+  return (
+    space.is_member &&
+    (typeof space.last_read_seq === "number" ||
+      typeof space.unread_count === "number")
+  )
+}
+
+/**
+ * The member has read the room through `seq`: moves the cached teamspace's
+ * cursor forward (never back), in the list and its detail, before or after
+ * `markTeamspaceRead` answers. Its unread count drops to 0 once the cursor
+ * reaches the newest message the cache knows of; a cache that knows of a
+ * later one keeps its count until the next read. A teamspace without read
+ * cursors is left alone.
+ */
+export function markReadInCache(
+  queryClient: QueryClient,
+  organizationId: string,
+  teamspaceId: string,
+  seq: number
+): void {
+  const advance = (space: Teamspace): Teamspace => {
+    if (space.id !== teamspaceId || !tracksUnread(space)) return space
+    const through = Math.max(space.last_read_seq ?? 0, seq)
+    const caughtUp = (space.last_message?.seq ?? 0) <= through
+    if (through === space.last_read_seq && (!caughtUp || !space.unread_count))
+      return space
+    return {
+      ...space,
+      last_read_seq: through,
+      ...(caughtUp && typeof space.unread_count === "number"
+        ? { unread_count: 0 }
+        : {}),
+    }
+  }
+  queryClient.setQueryData<Teamspace[]>(
+    teamspaceKeys.list(organizationId),
+    (current) => {
+      if (!current) return current
+      const next = current.map(advance)
+      return next.some((space, index) => space !== current[index])
+        ? next
+        : current
+    }
+  )
+  queryClient.setQueryData<Teamspace>(
+    teamspaceKeys.teamspace(organizationId, teamspaceId),
+    (current) => current && advance(current)
+  )
+}
