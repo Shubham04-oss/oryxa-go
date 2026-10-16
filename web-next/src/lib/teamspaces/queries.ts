@@ -3,7 +3,12 @@
 // removing the teamspace's key removes all of it.
 import { queryOptions } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
-import { getTeamspace, listTeamspaceEntries, listTeamspaces } from "./client"
+import {
+  getTeamspace,
+  listTeamspaceEntries,
+  listTeamspaceTasks,
+  listTeamspaces,
+} from "./client"
 import type { Teamspace } from "./client"
 
 /** The ledger page the old app read. */
@@ -36,7 +41,12 @@ function room(organizationId: string, teamspaceId: string) {
   return [...teamspace(organizationId, teamspaceId), "room"] as const
 }
 
-export const teamspaceKeys = { all, list, teamspace, entries, room }
+/** The teamspace's checklist. */
+function tasks(organizationId: string, teamspaceId: string) {
+  return [...teamspace(organizationId, teamspaceId), "tasks"] as const
+}
+
+export const teamspaceKeys = { all, list, teamspace, entries, room, tasks }
 
 /** `listTeamspaces`, under `teamspaceKeys.list`. */
 export function teamspacesQueryOptions(organizationId: string) {
@@ -68,6 +78,18 @@ export function teamspaceEntriesQueryOptions(
     queryKey: teamspaceKeys.entries(organizationId, teamspaceId, limit),
     queryFn: ({ signal }) =>
       listTeamspaceEntries(organizationId, teamspaceId, { limit, signal }),
+  })
+}
+
+/** `listTeamspaceTasks`. Members only: gate on `is_member`. */
+export function teamspaceTasksQueryOptions(
+  organizationId: string,
+  teamspaceId: string
+) {
+  return queryOptions({
+    queryKey: teamspaceKeys.tasks(organizationId, teamspaceId),
+    queryFn: ({ signal }) =>
+      listTeamspaceTasks(organizationId, teamspaceId, { signal }),
   })
 }
 
@@ -154,4 +176,28 @@ export async function afterPublishTeamspaceEntry(
   await queryClient.invalidateQueries({
     queryKey: teamspaceKeys.entries(organizationId, teamspaceId),
   })
+}
+
+/**
+ * After `createTeamspaceTask`, `updateTeamspaceTask` or
+ * `deleteTeamspaceTask`: re-reads the checklist, and the teamspace and the
+ * list for their `task_counts`. Go publishes no event for a task change yet.
+ */
+export async function afterTeamspaceTaskChange(
+  queryClient: QueryClient,
+  organizationId: string,
+  teamspaceId: string
+): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: teamspaceKeys.tasks(organizationId, teamspaceId),
+    }),
+    queryClient.invalidateQueries({
+      queryKey: teamspaceKeys.teamspace(organizationId, teamspaceId),
+      exact: true,
+    }),
+    queryClient.invalidateQueries({
+      queryKey: teamspaceKeys.list(organizationId),
+    }),
+  ])
 }

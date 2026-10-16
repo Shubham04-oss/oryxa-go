@@ -52,6 +52,15 @@ export type Teamspace = {
   organization_agent: OrganizationAgent
   whisperers: Whisperer[]
   status: TeamspaceStatus
+  /**
+   * The day the team is working towards, `YYYY-MM-DD`, and what it is
+   * ("Launch", at most 60 characters). Null when unset; absent from a Go
+   * that predates them.
+   */
+  target_date?: string | null
+  target_label?: string | null
+  /** How much of the checklist is done; absent from a Go without tasks. */
+  task_counts?: TeamspaceTaskCounts
   revision: number
   contributions: TeamspaceContribution[]
   /** The caller manages the team: may rename, pause or delete the space. */
@@ -60,6 +69,44 @@ export type Teamspace = {
   is_member: boolean
   created_at: string
   updated_at: string
+}
+
+export type TeamspaceTaskCounts = { done: number; total: number }
+
+/** One item of a teamspace's checklist. Team members read and change them. */
+export type TeamspaceTask = {
+  id: string
+  teamspace_id: string
+  organization_id: string
+  title: string
+  owner_user_id: string | null
+  done: boolean
+  position: number
+  /** `YYYY-MM-DD`. */
+  due_date: string | null
+  created_by_user_id: string
+  created_at: string
+  updated_at: string
+  done_at: string | null
+}
+
+/** Team members. Left out, `position` puts the task last. */
+export type CreateTeamspaceTaskInput = {
+  /** 1–200 characters. */
+  title: string
+  /** A current member of the teamspace's team. */
+  owner_user_id?: string
+  due_date?: string
+  position?: number
+}
+
+/** Team members. Any subset; null clears the owner or the due date. */
+export type UpdateTeamspaceTaskInput = {
+  title?: string
+  done?: boolean
+  position?: number
+  owner_user_id?: string | null
+  due_date?: string | null
 }
 
 /** Team managers only. One teamspace per team; names unique in the organization. */
@@ -76,6 +123,10 @@ export type UpdateTeamspaceInput = {
   name?: string
   description?: string
   status?: TeamspaceStatus
+  /** `YYYY-MM-DD`; null clears it. */
+  target_date?: string | null
+  /** At most 60 characters; null clears it. */
+  target_label?: string | null
 }
 
 /** A team member's own active specialist, not already contributed. */
@@ -179,7 +230,13 @@ export function updateTeamspace(
 ): Promise<Teamspace> {
   return apiRequest<Teamspace>(teamspacesPath(organizationId, teamspaceId), {
     method: "PATCH",
-    body: pick(input, ["name", "description", "status"]),
+    body: pick(input, [
+      "name",
+      "description",
+      "status",
+      "target_date",
+      "target_label",
+    ]),
   })
 }
 
@@ -278,5 +335,67 @@ export function publishTeamspaceEntry(
           : {}),
       },
     }
+  )
+}
+
+/** `GET …/teamspaces/{teamspaceID}/tasks` (server.listTeamspaceTasks): by position, then age; members only. */
+export async function listTeamspaceTasks(
+  organizationId: string,
+  teamspaceId: string,
+  { signal }: ReadOptions = {}
+): Promise<TeamspaceTask[]> {
+  const result = await apiRequest<{ tasks: TeamspaceTask[] }>(
+    teamspacesPath(organizationId, teamspaceId, "tasks"),
+    { signal }
+  )
+  return result.tasks
+}
+
+/** `POST …/teamspaces/{teamspaceID}/tasks` (server.createTeamspaceTask): 201; 409 teamspace_disabled while paused. */
+export function createTeamspaceTask(
+  organizationId: string,
+  teamspaceId: string,
+  input: CreateTeamspaceTaskInput
+): Promise<TeamspaceTask> {
+  return apiRequest<TeamspaceTask>(
+    teamspacesPath(organizationId, teamspaceId, "tasks"),
+    {
+      method: "POST",
+      body: pick(input, ["title", "owner_user_id", "due_date", "position"]),
+    }
+  )
+}
+
+/** `PATCH …/teamspaces/{teamspaceID}/tasks/{taskID}` (server.updateTeamspaceTask); 409 teamspace_disabled while paused. */
+export function updateTeamspaceTask(
+  organizationId: string,
+  teamspaceId: string,
+  taskId: string,
+  input: UpdateTeamspaceTaskInput
+): Promise<TeamspaceTask> {
+  return apiRequest<TeamspaceTask>(
+    teamspacesPath(organizationId, teamspaceId, "tasks", taskId),
+    {
+      method: "PATCH",
+      body: pick(input, [
+        "title",
+        "done",
+        "position",
+        "owner_user_id",
+        "due_date",
+      ]),
+    }
+  )
+}
+
+/** `DELETE …/teamspaces/{teamspaceID}/tasks/{taskID}` (server.deleteTeamspaceTask): 204; whoever created it, or a manager on the team. */
+export async function deleteTeamspaceTask(
+  organizationId: string,
+  teamspaceId: string,
+  taskId: string
+): Promise<void> {
+  await apiRequest(
+    teamspacesPath(organizationId, teamspaceId, "tasks", taskId),
+    { method: "DELETE" }
   )
 }

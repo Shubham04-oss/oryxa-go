@@ -2,14 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   addTeamspaceContribution,
   createTeamspace,
+  createTeamspaceTask,
   deleteTeamspace,
   deleteTeamspaceContribution,
+  deleteTeamspaceTask,
   getTeamspace,
   listTeamspaceEntries,
+  listTeamspaceTasks,
   listTeamspaces,
   publishTeamspaceEntry,
   updateTeamspace,
   updateTeamspaceContribution,
+  updateTeamspaceTask,
 } from "./client"
 import type { Teamspace, TeamspaceArtifact } from "./client"
 
@@ -212,5 +216,71 @@ describe("teamspaces API", () => {
       status: 404,
       code: "not_found",
     })
+  })
+
+  it("sets and clears a teamspace's target, sending null to clear", async () => {
+    const fetchMock = stubFetch(() => json(space))
+
+    await updateTeamspace("org-1", "tsp_1", {
+      target_date: "2026-11-04",
+      target_label: "Launch",
+    })
+    await updateTeamspace("org-1", "tsp_1", {
+      target_date: null,
+      target_label: null,
+    })
+
+    expect(sent(fetchMock)).toEqual([
+      [
+        "PATCH",
+        `${base}/tsp_1`,
+        JSON.stringify({ target_date: "2026-11-04", target_label: "Launch" }),
+      ],
+      [
+        "PATCH",
+        `${base}/tsp_1`,
+        JSON.stringify({ target_date: null, target_label: null }),
+      ],
+    ])
+  })
+
+  it("lists, adds, changes and deletes checklist tasks", async () => {
+    const task = { id: "tst_1", title: "Legal sign-off", done: false }
+    const fetchMock = stubFetch((url, init) => {
+      if (init.method === "DELETE") return new Response(null, { status: 204 })
+      if (init.method === "GET") return json({ tasks: [task] })
+      return json(task, init.method === "POST" ? 201 : 200)
+    })
+
+    expect(await listTeamspaceTasks("org-1", "tsp_1")).toEqual([task])
+    await createTeamspaceTask("org-1", "tsp_1", {
+      title: "Legal sign-off",
+      owner_user_id: "user-2",
+      due_date: "2026-10-30",
+    })
+    await updateTeamspaceTask("org-1", "tsp_1", "tst_1", {
+      done: true,
+      owner_user_id: null,
+    })
+    await deleteTeamspaceTask("org-1", "tsp_1", "tst_1")
+
+    expect(sent(fetchMock)).toEqual([
+      ["GET", `${base}/tsp_1/tasks`, undefined],
+      [
+        "POST",
+        `${base}/tsp_1/tasks`,
+        JSON.stringify({
+          title: "Legal sign-off",
+          owner_user_id: "user-2",
+          due_date: "2026-10-30",
+        }),
+      ],
+      [
+        "PATCH",
+        `${base}/tsp_1/tasks/tst_1`,
+        JSON.stringify({ done: true, owner_user_id: null }),
+      ],
+      ["DELETE", `${base}/tsp_1/tasks/tst_1`, undefined],
+    ])
   })
 })
