@@ -7,12 +7,13 @@ logic. The Go contract is `agents/primary/internal/httpserver/server.go` and
 
 | Module | What it offers |
 | --- | --- |
-| `client.ts` | Go's types (`Thread`, `ThreadDetail`, `Item`, `RunInput`, `ConfirmationAnswer`, `ThreadErrorCode`); `listThreads`, `createThread`, `getThread`, `deleteThread`; the Durable Object's HTTP side (`deleteThreadChat`, `getThreadChatMessages`); `startRun` (direct SSE); `artifactContentUrl`, `fetchArtifactLink`; `threadKeys` and `thread*QueryOptions` |
+| `client.ts` | Go's types (`Thread`, `ThreadDetail`, `Item`, `RunInput`, `ConfirmationAnswer`, `ThreadErrorCode`); `listThreads`, `createThread`, `getThread`, `deleteThread`, `renameThread` (with `normalizeThreadTitle`, `threadTitleProblem`, `canRenameThread`, `withRenamedThread`); a `Thread`'s optional `artifact_count` / `latest_artifact`; the Durable Object's HTTP side (`deleteThreadChat`, `getThreadChatMessages`); `startRun` (direct SSE); `artifactContentUrl`, `fetchArtifactLink`; `threadKeys` and `thread*QueryOptions` |
 | `event-stream.ts` | `createEventStreamReader` (incremental SSE parser for a POST's body) and `readItemStream`, the one read loop for the browser and the Durable Object |
 | `timeline.ts` | `buildTimeline`, `unseenLiveItems`, `pendingConfirmationIds`, and small naming helpers |
 | `chat-messages.ts` | The Durable Object's transcript: `ThreadChatMessage`, `threadAgentName`, `itemsToChatMessages`, `chatMessagesToItems`, `reconcileChatMessages`, `withoutSupersededDeltas`, `sessionExpiredCode` |
+| `rename.ts` | `renameCachedThread` (optimistic rename across list and detail entries, rolled back on refusal) and `renameFailureText` |
 | `agent-socket.ts` | `reopenSocket`, to carry a refreshed session to the Durable Object |
-| `../specialists` | `listSpecialistThreads`, `getSpecialistThread`, `startSpecialistRun` (direct SSE, `X-Oryxa-Thread`), keys and query options; `parseSpecialistResult` for a specialist's JSON answer; the specialist chat's Durable Object: `specialistAgentName`, `SpecialistChatState`, `getSpecialistChatMessages`, `clearSpecialistChat`, `readableSpecialistItems`, `isProgressMarker` (`chat-messages.ts`, `client.ts`) |
+| `../specialists` | `listSpecialistThreads`, `getSpecialistThread`, `renameSpecialistThread`, `startSpecialistRun` (direct SSE, `X-Oryxa-Thread`), keys and query options; `parseSpecialistResult` for a specialist's JSON answer; the specialist chat's Durable Object: `specialistAgentName`, `SpecialistChatState`, `getSpecialistChatMessages`, `clearSpecialistChat`, `readableSpecialistItems`, `isProgressMarker` (`chat-messages.ts`, `client.ts`) |
 
 Everything here uses relative URLs and the browser's cookies through
 `apiFetch`: run the queries in the browser, not during SSR.
@@ -72,6 +73,9 @@ SSE path.
 7. **Delete**: `deleteThreadChat`, so the object's transcript goes too, then
    invalidate `threadKeys.all(org)`. After any run, invalidate
    `threadKeys.detail` and `threadKeys.list` (title, order).
+8. **Rename**: `renameCachedThread` with `renameThread` (or
+   `renameSpecialistThread` and `specialistKeys`). Go answers 409
+   `run_in_progress` while a run answers, and moves `updated_at`.
 
 With direct SSE, collect `onItem` items in `live` and render
 `buildTimeline(detail.items, live)`: what the refetched history already holds

@@ -11,6 +11,7 @@ import {
 } from "@/lib/threads/client"
 import type { Thread, ThreadDetail } from "@/lib/threads/client"
 import { timeAgo } from "./agents-format"
+import { FileKindBadge, fileKindLabel } from "./file-kind"
 import "./chats-page.css"
 
 /** Whether `at` falls on the member's today. */
@@ -20,6 +21,24 @@ function isToday(at: string, now = new Date()): boolean {
     Number.isFinite(date.getTime()) &&
     date.toDateString() === now.toDateString()
   )
+}
+
+/**
+ * What a row says about the files its chat kept, from Go's count (#388):
+ * "3 files" and the latest one's name, or nothing while there are none or
+ * Go does not count them. A 0 can mean "not counted yet" for an old thread,
+ * so nothing is shown rather than a guess.
+ */
+export function chatFiles(
+  thread: Pick<Thread, "artifact_count" | "latest_artifact">
+): { label: string; latest?: string } | null {
+  const count = thread.artifact_count
+  if (typeof count !== "number" || !Number.isFinite(count) || count <= 0)
+    return null
+  return {
+    label: count === 1 ? "1 file" : `${count} files`,
+    latest: thread.latest_artifact?.name || undefined,
+  }
 }
 
 /**
@@ -168,6 +187,7 @@ export function ChatsList({
                 {group.threads.map((thread) => {
                   const title = thread.title.trim() || "Untitled chat"
                   const current = selected === thread.id
+                  const files = chatFiles(thread)
                   return (
                     <li key={thread.id}>
                       <Button
@@ -185,6 +205,23 @@ export function ChatsList({
                           <time dateTime={thread.updated_at}>
                             {timeAgo(thread.updated_at)}
                           </time>
+                          {files && (
+                            <span className="chats-list-files">
+                              {files.label}
+                              {files.latest && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <FileKindBadge
+                                    name={files.latest}
+                                    size="small"
+                                  />
+                                  <span className="sr-only">
+                                    , latest {fileKindLabel(files.latest)}
+                                  </span>
+                                </>
+                              )}
+                            </span>
+                          )}
                           {waiting.has(thread.id) && (
                             <span className="chats-list-waiting">
                               Needs approval

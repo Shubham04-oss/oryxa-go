@@ -83,6 +83,19 @@
   font-size: 11px;
   font-weight: 400;
 }
+.chats-list-files {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* The small kind badge (8px text, as everywhere) in a box sized to the 11px
+   meta line. The attribute selector outranks agents-mode.css's small size,
+   whatever order the stylesheets load in. */
+.chats-list-files .workspace-file-kind[data-size="small"] {
+  min-width: 20px;
+  height: 16px;
+  border-radius: 4px;
+}
 .chats-list-waiting {
   color: var(--text);
   font-weight: 560;

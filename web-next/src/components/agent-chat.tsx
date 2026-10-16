@@ -50,9 +50,11 @@ import {
 } from "@/lib/threads/chat-messages"
 import type { ThreadChatMessage } from "@/lib/threads/chat-messages"
 import {
+  canRenameThread,
   createThread,
   deleteThreadChat,
   getThreadChatMessages,
+  renameThread,
   threadApprovalQueryOptions,
   threadDetailQueryOptions,
   threadKeys,
@@ -63,6 +65,7 @@ import type {
   Thread,
   ThreadDetail,
 } from "@/lib/threads/client"
+import { renameCachedThread } from "@/lib/threads/rename"
 import { buildTimeline, pendingConfirmationIds } from "@/lib/threads/timeline"
 import type { ArtifactEntry } from "@/lib/threads/timeline"
 import { socketProtocol } from "@/lib/socket-protocol"
@@ -434,10 +437,11 @@ export function AgentChat({
     onDraftChange,
     onComposingChange,
   }
-  const title =
+  const listedTitle =
     (threadId &&
       threads.data?.find((thread) => thread.id === threadId)?.title) ||
-    "New conversation"
+    ""
+  const title = listedTitle || "New conversation"
 
   function startNew() {
     dispatch({ type: "move", thread: null })
@@ -456,6 +460,18 @@ export function AgentChat({
     if (threadId === id) startNew()
     void queryClient.invalidateQueries({
       queryKey: threadKeys.list(organizationId),
+    })
+  }
+
+  // Go's copy replaces the optimistic one in every list and detail entry.
+  async function renameConversation(id: string, next: string) {
+    await renameCachedThread({
+      queryClient,
+      listKey: threadKeys.list(organizationId),
+      detailKey: threadKeys.detail(organizationId, id),
+      threadId: id,
+      title: next,
+      rename: (normalized) => renameThread(organizationId, id, normalized),
     })
   }
 
@@ -580,7 +596,14 @@ export function AgentChat({
         {threadId && listed && (
           <AgentChatMenu
             title={title}
+            editableTitle={listedTitle}
+            agentName={agentName}
             disabled={first !== null || state === "running"}
+            onRename={
+              canRenameThread(threadId)
+                ? (next) => renameConversation(threadId, next)
+                : undefined
+            }
             onDelete={() => deleteConversation(threadId)}
           />
         )}

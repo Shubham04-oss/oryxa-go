@@ -1087,3 +1087,116 @@ describe("specialist history and the default conversation", () => {
     )
   })
 })
+
+describe("Renaming a specialist's conversation", () => {
+  const threadPath = `/v1/organizations/${ORG}/agents/${scout.id}/threads/th_1`
+
+  /**
+   * The focused view on a conversation, with Go's rename route answered by
+   * `answer` (the fake backend has no thread PATCH): it may write the title
+   * Go keeps into `held`, which later reads return.
+   */
+  async function openedWithRename(
+    answer: (title: string, held: ThreadDetail) => Promise<Response>
+  ) {
+    const held = conversation()
+    const backend = fakeAgentsBackend({
+      agents: [primary, scout],
+      chats: { [scout.id]: transcript(asked, answered) },
+      conversations: { [scout.id]: [held] },
+    })
+    const patches: string[] = []
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://localhost")
+        if (url.pathname === threadPath && init?.method === "PATCH") {
+          const { title } = JSON.parse(String(init.body)) as { title: string }
+          patches.push(title)
+          return answer(title, held)
+        }
+        return backend.fetch(String(input), init)
+      })
+    )
+    withQueries(
+      <AgentsFocus
+        target={{ kind: "specialist", agentId: scout.id }}
+        organizationId={ORG}
+        onBack={vi.fn()}
+        onOpen={vi.fn()}
+      />
+    )
+    await chatLoaded()
+    const socket = chatSocket()
+    socket.open()
+    socket.state({ threadId: "th_1" })
+    await waitFor(() => expect(conversationTitle()).toBe("Review the pipeline"))
+    return patches
+  }
+
+  async function rename(title: string) {
+    const options = screen.getByRole("button", { name: "Chat options" })
+    await waitFor(() => expect(options.hasAttribute("disabled")).toBe(false))
+    fireEvent.click(options)
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }))
+    const dialog = await screen.findByRole("dialog")
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Chat name" }),
+      {
+        target: { value: title },
+      }
+    )
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
+    return dialog
+  }
+
+  it("changes the bar's title from the ⋯ menu, through the specialist's route", async () => {
+    const patches = await openedWithRename(async (title, held) => {
+      held.title = title
+      held.updated_at = new Date().toISOString()
+      const { items: _items, pending_confirmations: _pending, ...row } = held
+      return new Response(JSON.stringify(row), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    })
+    await rename("  Vendor   plan ")
+    await waitFor(() => expect(conversationTitle()).toBe("Vendor plan"))
+    expect(patches).toEqual(["Vendor plan"])
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(conversationTitle()).toBe("Vendor plan")
+  })
+
+  it("shows the new title at once, and puts the old one back when Go refuses", async () => {
+    let refuse = () => {}
+    await openedWithRename(
+      () =>
+        new Promise<Response>((resolve) => {
+          refuse = () =>
+            resolve(
+              new Response(
+                JSON.stringify({
+                  error: {
+                    code: "run_in_progress",
+                    message: "a run is answering",
+                  },
+                }),
+                {
+                  status: 409,
+                  headers: { "Content-Type": "application/json" },
+                }
+              )
+            )
+        })
+    )
+    const dialog = await rename("Vendor plan")
+    await waitFor(() => expect(conversationTitle()).toBe("Vendor plan"))
+    refuse()
+    expect(
+      await within(dialog).findByText(
+        "Scout is answering — try again in a moment"
+      )
+    ).toBeTruthy()
+    expect(conversationTitle()).toBe("Review the pipeline")
+  })
+})

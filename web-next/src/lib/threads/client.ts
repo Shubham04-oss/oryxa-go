@@ -30,6 +30,21 @@ export type Thread = {
   updated_at: string
   /** Why the thread exists: "chat", "side_conversation" or "wakeup". Missing reads as "chat", as in Go. */
   origin?: string
+  /**
+   * How many distinct files the thread's runs kept (#388). Missing before Go
+   * served it; 0 also means "not counted yet" for a thread whose last run
+   * predates the count, until its next run. Opening the thread is exact.
+   */
+  artifact_count?: number
+  /** The last file kept, in history order (#388); null or missing when there is none. */
+  latest_artifact?: ThreadArtifactSummary | null
+}
+
+/** A thread's latest file as the list carries it (Go: `threads.ArtifactSummary`). */
+export type ThreadArtifactSummary = {
+  name: string
+  /** The name's extension, lowercased, without the dot; "" when there is none. */
+  kind: string
 }
 
 /** A thread and everything that happened in it (Go: `threads.Detail`). */
@@ -202,6 +217,51 @@ export type ThreadErrorCode =
   | "unavailable"
   | "internal"
 
+/** The longest title Go keeps, in Unicode code points after trimming (threads.go `maxTitleRunes`). */
+export const MAX_TITLE_LENGTH = 80
+
+/**
+ * A title as Go stores it on a rename: trimmed, its whitespace collapsed to
+ * single spaces (threads.go `Rename`).
+ */
+export function normalizeThreadTitle(title: string): string {
+  return title.trim().split(/\s+/).filter(Boolean).join(" ")
+}
+
+/**
+ * Why Go would refuse `title` as a rename, in its terms, or undefined when it
+ * would take it: 1 to `MAX_TITLE_LENGTH` characters once normalized. A longer
+ * title is refused, not cut.
+ */
+export function threadTitleProblem(title: string): string | undefined {
+  const normalized = normalizeThreadTitle(title)
+  if (!normalized) return "Give the chat a name."
+  if ([...normalized].length > MAX_TITLE_LENGTH)
+    return `Keep the name to ${MAX_TITLE_LENGTH} characters.`
+  return undefined
+}
+
+/** The Requests thread (`requests-<org>`) keeps its title; Go refuses to rename it. */
+export function canRenameThread(threadId: string): boolean {
+  return !threadId.startsWith("requests-")
+}
+
+/**
+ * A listed thread renamed: replaced by Go's copy (or the optimistic one),
+ * then the list re-sorted newest first, since a rename moves `updated_at`.
+ */
+export function withRenamedThread(
+  threads: readonly Thread[] | undefined,
+  renamed: Pick<Thread, "id"> & Partial<Thread>
+): Thread[] | undefined {
+  if (!threads) return undefined
+  return threads
+    .map((thread) =>
+      thread.id === renamed.id ? { ...thread, ...renamed } : thread
+    )
+    .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+}
+
 /** The longest message Go accepts, in Unicode code points after trimming (threads.go `maxMessageRunes`). */
 export const MAX_MESSAGE_LENGTH = 32_000
 
@@ -257,6 +317,22 @@ export async function deleteThread(
   threadId: string
 ): Promise<void> {
   await apiRequest(threadPath(organizationId, threadId), { method: "DELETE" })
+}
+
+/**
+ * PATCH /v1/organizations/{org}/threads/{thread} {title}, answering the
+ * renamed `Thread` (#386). 400 for a title Go refuses or the Requests thread,
+ * 409 `run_in_progress` while a run answers. agents/primary/internal/httpserver/server.go renameThread
+ */
+export function renameThread(
+  organizationId: string,
+  threadId: string,
+  title: string
+): Promise<Thread> {
+  return apiRequest<Thread>(threadPath(organizationId, threadId), {
+    method: "PATCH",
+    body: { title: normalizeThreadTitle(title) },
+  })
 }
 
 /** Where the thread's chat Durable Object answers HTTP, on the app's own origin (`/agents/{class}/{name}`). */
