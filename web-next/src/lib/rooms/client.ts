@@ -89,8 +89,15 @@ export type ParleyNotes = {
 /**
  * The parley notes a message carries, or undefined when it carries none (any
  * other kind, or data this client can't read): such a message shows its
- * body. An item that isn't words is left out rather than guessed at.
+ * body. One decision or action it can't read makes all of it unreadable, so
+ * the card never shows a part of the notes as the whole (the body has them
+ * all in words).
  */
+/** A non-blank string. */
+function isWords(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== ""
+}
+
 export function parleyNotesOf(message: RoomMessage): ParleyNotes | undefined {
   if (message.kind !== "parley_notes") return undefined
   const data = message.data
@@ -100,6 +107,17 @@ export function parleyNotesOf(message: RoomMessage): ParleyNotes | undefined {
     unknown
   >
   if (!Array.isArray(decisions) || !Array.isArray(actions)) return undefined
+  if (!decisions.every(isWords)) return undefined
+  const read: ParleyAction[] = []
+  for (const action of actions) {
+    if (!action || typeof action !== "object") return undefined
+    const { text, owner_user_id } = action as Record<string, unknown>
+    if (!isWords(text)) return undefined
+    if (owner_user_id == null || owner_user_id === "") read.push({ text })
+    else if (typeof owner_user_id === "string")
+      read.push({ text, owner_user_id })
+    else return undefined
+  }
   return {
     call_id: typeof call_id === "string" ? call_id : "",
     ...(typeof duration_ms === "number" &&
@@ -107,20 +125,8 @@ export function parleyNotesOf(message: RoomMessage): ParleyNotes | undefined {
     duration_ms >= 0
       ? { duration_ms }
       : {}),
-    decisions: decisions.filter(
-      (decision): decision is string =>
-        typeof decision === "string" && decision.trim() !== ""
-    ),
-    actions: actions.flatMap((action): ParleyAction[] => {
-      if (!action || typeof action !== "object") return []
-      const { text, owner_user_id } = action as Record<string, unknown>
-      if (typeof text !== "string" || text.trim() === "") return []
-      return [
-        typeof owner_user_id === "string" && owner_user_id !== ""
-          ? { text, owner_user_id }
-          : { text },
-      ]
-    }),
+    decisions,
+    actions: read,
   }
 }
 

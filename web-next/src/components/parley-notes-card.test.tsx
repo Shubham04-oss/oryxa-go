@@ -115,6 +115,23 @@ describe("parley notes in the room", () => {
       null
     )
     expect(screen.queryByText(/posted by/)).toBeNull()
+    // Each shows its body: the notes in words.
+    expect(screen.getAllByText(/Decided:/)).toHaveLength(2)
+    expect(screen.getAllByText(/Ship on the 14th/)).toHaveLength(2)
+  })
+
+  it("reads notes with an item it can't read as their body, not as fewer notes", () => {
+    renderRoom([
+      notesMessage(1, {
+        ...notes,
+        decisions: [{ text: "Ship on the 14th" }],
+      }),
+      notesMessage(2, { ...notes, actions: [{ text: 5 }] }),
+    ])
+    expect(screen.queryByText("Nothing was decided or assigned.")).toBeNull()
+    expect(screen.queryByText(/posted by/)).toBeNull()
+    expect(screen.getAllByText(/Decided:/)).toHaveLength(2)
+    expect(screen.getAllByText(/Send the price list/)).toHaveLength(2)
   })
 
   it("says so when a parley decided nothing and left nobody anything", () => {

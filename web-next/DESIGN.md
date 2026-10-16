@@ -381,7 +381,7 @@ not permission to copy every incidental value into a new component.
     person on the team) is Unassigned, never a guess. The poster is the
     organization's agent, named from the teamspace. Notes that decided and
     assigned nothing say so. A message with no kind, kind `message`, a kind
-    this client doesn't know, or notes whose data can't be read shows its
+    this client doesn't know, or notes with any item it can't read shows its
     body as before (the body always says the notes in words).
   - **The member's agent beside a teamspace** (TeamspaceHome, Teamspace3 and
     TeamspaceGlance boards, 15 Oct 2026): opening a teamspace on a desktop

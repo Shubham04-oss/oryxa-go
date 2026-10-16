@@ -337,24 +337,43 @@ describe("parleyNotesOf", () => {
     ).toBeUndefined()
   })
 
-  it("leaves out items that aren't words, and a length that isn't one", () => {
+  it("drops a length that isn't one, and reads a missing owner as nobody", () => {
     expect(
       parleyNotesOf(
         notes({
           call_id: 7,
           duration_ms: -1,
-          decisions: ["Keep", 3, " "],
+          decisions: ["Keep"],
           actions: [
-            { text: "Do", owner_user_id: 9 },
-            { owner_user_id: "u" },
-            null,
+            { text: "Do", owner_user_id: null },
+            { text: "Also", owner_user_id: "" },
           ],
         })
       )
     ).toEqual({
       call_id: "",
       decisions: ["Keep"],
-      actions: [{ text: "Do" }],
+      actions: [{ text: "Do" }, { text: "Also" }],
     })
+  })
+
+  it("has none when any decision or action can't be read, so the body shows", () => {
+    const fine = {
+      call_id: "c",
+      decisions: ["Keep"],
+      actions: [{ text: "Do" }],
+    }
+    for (const data of [
+      { ...fine, decisions: [{ text: "Ship on the 14th" }] },
+      { ...fine, decisions: ["Keep", 3] },
+      { ...fine, decisions: ["Keep", " "] },
+      { ...fine, actions: [{ text: 5 }] },
+      { ...fine, actions: [{ owner_user_id: "u" }] },
+      { ...fine, actions: [{ text: "Do", owner_user_id: 9 }] },
+      { ...fine, actions: [null] },
+      { ...fine, actions: ["Do"] },
+    ]) {
+      expect(parleyNotesOf(notes(data))).toBeUndefined()
+    }
   })
 })
