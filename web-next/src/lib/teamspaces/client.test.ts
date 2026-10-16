@@ -246,7 +246,7 @@ describe("teamspaces API", () => {
 
   it("lists, adds, changes and deletes checklist tasks", async () => {
     const task = { id: "tst_1", title: "Legal sign-off", done: false }
-    const fetchMock = stubFetch((url, init) => {
+    const fetchMock = stubFetch((_, init) => {
       if (init.method === "DELETE") return new Response(null, { status: 204 })
       if (init.method === "GET") return json({ tasks: [task] })
       return json(task, init.method === "POST" ? 201 : 200)
