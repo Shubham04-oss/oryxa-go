@@ -501,10 +501,33 @@ func TestStoreKeepsAChecklist(t *testing.T) {
 	if kept, err := store.GetTask(ctx, organizationID, space.ID, first.ID); err != nil || kept.OwnerUserID != nil {
 		t.Fatalf("a departed member's task = %+v, %v; want it kept with no owner", kept, err)
 	}
+	// Leaving the organization, not just the team, does the same.
+	leaver := "user_ada"
+	if _, err := store.UpdateTask(ctx, organizationID, space.ID, second.ID, TaskUpdate{OwnerUserID: Nullable{Set: true, Value: &leaver}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Forget(ctx, organizationID, leaver); err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := store.GetTask(ctx, organizationID, space.ID, second.ID); err != nil || kept.OwnerUserID != nil {
+		t.Fatalf("a departed person's task = %+v, %v; want it kept with no owner", kept, err)
+	}
 	if err := store.DeleteTask(ctx, organizationID, space.ID, second.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DeleteTask(ctx, organizationID, space.ID, second.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("delete twice: %v, want ErrNotFound", err)
+	}
+
+	// Filled to maxTasks, the checklist takes no more.
+	if _, err := database.Pool.Exec(ctx, `INSERT INTO agents_primary.teamspace_tasks
+		(id, teamspace_id, organization_id, title, position, created_by_user_id)
+		SELECT $1 || n, $2, $3, 'Filler', n, 'user_owner' FROM generate_series(1, $4::integer) n`,
+		fmt.Sprintf("tst_fill_%d_", suffix), space.ID, organizationID, maxTasks-1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTask(ctx, Task{ID: fmt.Sprintf("tst_d_%d", suffix), TeamspaceID: space.ID, OrganizationID: organizationID,
+		Title: "One too many", Position: -1, CreatedByUserID: "user_owner"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a task past %d: %v, want ErrInvalid", maxTasks, err)
 	}
 }

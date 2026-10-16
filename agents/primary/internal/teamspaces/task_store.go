@@ -51,7 +51,8 @@ func (store *Store) GetTask(ctx context.Context, organizationID, teamspaceID, ta
 
 // CreateTask stores task. A Position below 0 puts it after every task the
 // list holds; two added at once may share a position, and then the one added
-// first comes first.
+// first comes first. A checklist already holding maxTasks takes no more; two
+// added at once to one a task short of full may both go in.
 func (store *Store) CreateTask(ctx context.Context, task Task) (Task, error) {
 	dueDate, err := dateOf(task.DueDate)
 	if err != nil {
@@ -66,16 +67,32 @@ func (store *Store) CreateTask(ctx context.Context, task Task) (Task, error) {
 				SELECT COALESCE(MAX(position), -1) + 1 FROM agents_primary.teamspace_tasks WHERE teamspace_id=space.id
 			) END, $7, $8, $9, $9
 		FROM agents_primary.teamspaces space WHERE space.organization_id=$3 AND space.id=$2
+			AND (SELECT count(*) FROM agents_primary.teamspace_tasks WHERE teamspace_id=space.id) < $10
 		RETURNING `+taskColumns,
 		task.ID, task.TeamspaceID, task.OrganizationID, task.Title, task.OwnerUserID, task.Position,
-		dueDate, task.CreatedByUserID, now), &task)
+		dueDate, task.CreatedByUserID, now, maxTasks), &task)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Task{}, ErrNotFound
+		return Task{}, store.missingOrFull(ctx, task.OrganizationID, task.TeamspaceID)
 	}
 	if err != nil {
 		return Task{}, fmt.Errorf("create teamspace task: %w", err)
 	}
 	return task, nil
+}
+
+// missingOrFull is why a task could not be added to teamspaceID: it is not
+// there, or its checklist is full.
+func (store *Store) missingOrFull(ctx context.Context, organizationID, teamspaceID string) error {
+	var exists bool
+	if err := store.database.Pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM agents_primary.teamspaces WHERE organization_id=$1 AND id=$2
+	)`, organizationID, teamspaceID).Scan(&exists); err != nil {
+		return fmt.Errorf("create teamspace task: %w", err)
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	return fmt.Errorf("%w: a teamspace's checklist holds at most %d tasks", ErrInvalid, maxTasks)
 }
 
 func (store *Store) UpdateTask(ctx context.Context, organizationID, teamspaceID, taskID string, input TaskUpdate) (Task, error) {
