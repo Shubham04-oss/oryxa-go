@@ -34,7 +34,12 @@ export type Thread = {
 
 /** A thread and everything that happened in it (Go: `threads.Detail`). */
 export type ThreadDetail = Thread & {
-  /** Oldest first. The same items a run streams, without deltas or `run_*` items. */
+  /**
+   * Oldest first. The same items a run streams, without deltas. Since #390
+   * each run's `run_started` and its end (`run_completed` or `run_failed`)
+   * are kept too; runs from before that have none, and a start with no end
+   * is a run that ended without a record, never one still running.
+   */
   items: Item[]
   /**
    * Call ids of the confirmations waiting for the member, in the order they
@@ -95,12 +100,14 @@ export type ItemUsage = {
  * | `confirmation`  | id, at, author, call_id, tool_call_id, tool, arguments, hint, status |
  * | `artifact`      | id, at, author, artifact, version                                   |
  * | `request`       | id, at, author, request_id, status; a note can carry text            |
- * | `run_started`   | run_id, at                                                          |
- * | `run_completed` | run_id, at, usage                                                   |
- * | `run_failed`    | run_id, at, error; code only from the thread's Durable Object       |
+ * | `run_started`   | id (`<run>.started`), run_id, at                                    |
+ * | `run_completed` | id (`<run>.ended`), run_id, at, usage                               |
+ * | `run_failed`    | id (`<run>.ended`), run_id, at, error, code, usage when it spent any |
  *
- * The chat Durable Objects add two fields Go never sets: `code` on a
- * `run_failed` they write, and `result` on a specialist's message.
+ * A run's brackets carry an `id` only from a Go with #390, the same on the
+ * streamed copy and the stored one. The chat Durable Objects write their own
+ * `run_failed` (with no `id`, and their own `code`) and add `result` on a
+ * specialist's message, which Go never sets.
  *
  * A thread's history carries the stored event's `id` on every item, so what
  * a client streamed can be matched against what it reads later. One stored
@@ -109,7 +116,10 @@ export type ItemUsage = {
  */
 export type Item = {
   type: ItemType
-  /** The stored event the item came from. Deltas and `run_*` items have none. */
+  /**
+   * The stored event the item came from. Deltas have none; a run's start and
+   * end have `<run>.started` and `<run>.ended` since #390, and none before.
+   */
   id?: string
   /** When it happened, RFC 3339 in UTC. */
   at?: string
@@ -128,11 +138,13 @@ export type Item = {
    */
   error?: string
   /**
-   * Set only by the thread's Durable Object, on a run_failed it writes itself:
-   * `"session_expired"` (see `sessionExpiredCode`) when Go answered 401, or
-   * Go's own refusal code (`run_in_progress`, `confirmation_pending`,
-   * `not_found`, ...) when Go would not start the run. Go never sets it on
-   * the items it streams.
+   * On a run_failed, why. Go sets it since #390, streamed and stored, as one
+   * of `RunFailureCode` (`interrupted`, `timeout`, `stopped`, `cancelled`,
+   * `taken_over`, `error`). The thread's Durable Object sets it on a
+   * run_failed it writes itself: `"session_expired"` (see
+   * `sessionExpiredCode`) when Go answered 401, or Go's own refusal code
+   * (`run_in_progress`, `confirmation_pending`, `not_found`, ...) when Go
+   * would not start the run. The two sets never share a value.
    */
   code?: string
   /**

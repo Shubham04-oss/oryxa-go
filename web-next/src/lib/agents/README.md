@@ -72,7 +72,7 @@ Across all three:
   `isUnavailableHere`) and `../teamspaces/policy.ts` (`publicationAuthors`,
   `canPublishSharedWork`, `canContribute`, `contributionCandidates`,
   `canChangeContribution`, `canRemoveContribution`, `canUseRoom`,
-  `safeArtifactHref`). They mirror the server's checks; the server stays the
+  `canReadRoom`, `safeArtifactHref`). They mirror the server's checks; the server stays the
   authority.
 
 ## Creating a specialist
@@ -112,9 +112,13 @@ agent may answer for them. A page does not read the room itself: the room
 is a Durable Object (`TeamspaceRoomAgent`, REALTIME.md) that reads Go as
 each member with the room open in a visible tab, and never as a member
 whose tabs are all hidden. `useTeamspaceRoom` holds its socket; open it
-only when `canUseRoom(space)` holds.
+only when `canReadRoom(space)` holds (a member, paused or not), and offer
+to post only when `canUseRoom(space)` does.
 
-- A paused room answers 400.
+- A paused room is read-only: reads and catch-ups answer as usual with
+  `"paused": true`, and a post is 409 `teamspace_disabled`. A Go before
+  read-only rooms refused a paused room's reads 400, which the room still
+  reads as paused.
 - Someone neither on the team nor managing it gets 404.
 - A manager who is not on the team can read but gets 403 on a post; the
   Worker keeps them out of the room's socket.

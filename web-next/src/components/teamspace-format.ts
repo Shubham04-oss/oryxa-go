@@ -37,6 +37,35 @@ export function statusLabel(space: Pick<Teamspace, "status">): string {
   return space.status === "active" ? "Active" : "Paused"
 }
 
+/**
+ * Who paused a paused teamspace and when, as Go recorded it: "Paused by Ada
+ * on 16 Oct 2026" ("by you" for the viewer), "Paused on 16 Oct 2026" when
+ * nobody here knows the name, or nothing when Go recorded no date. A name
+ * comes from the teamspace's seats, else from `nameOf`.
+ */
+export function pausedLine(
+  space: Teamspace,
+  {
+    viewerId,
+    nameOf,
+  }: {
+    viewerId?: string
+    nameOf?: (userId: string) => string | undefined
+  } = {}
+): string | undefined {
+  if (space.status === "active" || !space.paused_at) return undefined
+  const at = Date.parse(space.paused_at)
+  if (Number.isNaN(at)) return undefined
+  const date = dateFormat.format(at)
+  const by = space.paused_by_user_id
+  const name = !by
+    ? undefined
+    : by === viewerId
+      ? "you"
+      : (memberName(space, by) ?? nameOf?.(by))
+  return name ? `Paused by ${name} on ${date}` : `Paused on ${date}`
+}
+
 const minute = 60_000
 const hour = 60 * minute
 const day = 24 * hour

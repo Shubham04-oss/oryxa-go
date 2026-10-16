@@ -67,6 +67,13 @@ export type Teamspace = {
   can_manage: boolean
   /** The caller is on the team: may contribute, publish and read the ledger. */
   is_member: boolean
+  /**
+   * Who paused it, while it is paused: null for one paused before Go kept
+   * it, and absent from a Go that predates it.
+   */
+  paused_by_user_id?: string | null
+  /** When it was paused (RFC 3339), as `paused_by_user_id`. */
+  paused_at?: string | null
   created_at: string
   updated_at: string
 }

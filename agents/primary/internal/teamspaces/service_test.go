@@ -2,7 +2,9 @@ package teamspaces
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,12 +98,15 @@ func (repo *fakeRepository) Get(_ context.Context, _ string, id string) (Space, 
 	return Space{}, ErrNotFound
 }
 
-func (repo *fakeRepository) Update(_ context.Context, _ string, id string, input UpdateInput) (Space, error) {
+func (repo *fakeRepository) Update(_ context.Context, _ string, id, userID string, input UpdateInput) (Space, error) {
 	for index := range repo.spaces {
 		if repo.spaces[index].ID != id {
 			continue
 		}
 		repo.spaces[index] = applyUpdate(repo.spaces[index], input)
+		if input.Status != nil {
+			repo.spaces[index] = changeStatus(repo.spaces[index], *input.Status, userID, time.Unix(3, 0).UTC())
+		}
 		repo.spaces[index].Revision++
 		return repo.spaces[index], nil
 	}
@@ -472,3 +477,79 @@ func TestDisabledSharedWorkRemainsMemberReadableButNotAgentVisible(t *testing.T)
 }
 
 func ptr[T any](value T) *T { return &value }
+
+func TestAManagerSetsAndClearsATeamspaceTarget(t *testing.T) {
+	repo := &fakeRepository{spaces: []Space{{ID: "tsp_1", OrganizationID: "org_1", TeamID: "team_1", Name: "Engineering", Status: StatusActive}}}
+	service, _ := New(repo, fakeDirectory{directory: teamDirectory(true, true)})
+	updated, err := service.Update(context.Background(), actor(), "tsp_1", UpdateInput{
+		TargetDate:  Nullable{Set: true, Value: ptr(" 2026-11-02 ")},
+		TargetLabel: Nullable{Set: true, Value: ptr("  Public   launch ")},
+	})
+	if err != nil || updated.TargetDate == nil || *updated.TargetDate != "2026-11-02" || updated.TargetLabel == nil || *updated.TargetLabel != "Public launch" {
+		t.Fatalf("updated = %+v, %v", updated, err)
+	}
+	// An empty label clears it as null does, and a date left out stays.
+	updated, err = service.Update(context.Background(), actor(), "tsp_1", UpdateInput{TargetLabel: Nullable{Set: true, Value: ptr(" ")}})
+	if err != nil || updated.TargetLabel != nil || updated.TargetDate == nil {
+		t.Fatalf("cleared label = %+v, %v", updated, err)
+	}
+	updated, err = service.Update(context.Background(), actor(), "tsp_1", UpdateInput{TargetDate: Nullable{Set: true}})
+	if err != nil || updated.TargetDate != nil {
+		t.Fatalf("cleared date = %+v, %v", updated, err)
+	}
+
+	for name, input := range map[string]UpdateInput{
+		"a date that is not one":  {TargetDate: Nullable{Set: true, Value: ptr("2026-02-30")}},
+		"a date with a time":      {TargetDate: Nullable{Set: true, Value: ptr("2026-11-02T10:00:00Z")}},
+		"a label past 60 letters": {TargetLabel: Nullable{Set: true, Value: ptr(strings.Repeat("é", 61))}},
+	} {
+		if _, err := service.Update(context.Background(), actor(), "tsp_1", input); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: error = %v, want ErrInvalid", name, err)
+		}
+	}
+
+	memberOnly, _ := New(repo, fakeDirectory{directory: teamDirectory(false, true)})
+	if _, err := memberOnly.Update(context.Background(), actor(), "tsp_1", UpdateInput{TargetLabel: Nullable{Set: true, Value: ptr("Mine")}}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("member update error = %v, want ErrForbidden", err)
+	}
+}
+
+func TestPausingATeamspaceRecordsWhoAndWhenUntilItResumes(t *testing.T) {
+	repo := &fakeRepository{spaces: []Space{{ID: "tsp_1", OrganizationID: "org_1", TeamID: "team_1", Name: "Engineering", Status: StatusActive}}}
+	service, _ := New(repo, fakeDirectory{directory: teamDirectory(true, true)})
+	paused, err := service.Update(context.Background(), actor(), "tsp_1", UpdateInput{Status: ptr(StatusDisabled)})
+	if err != nil || paused.Status != StatusDisabled || paused.PausedByUserID == nil || *paused.PausedByUserID != "user_1" || paused.PausedAt == nil {
+		t.Fatalf("paused = %+v, %v", paused, err)
+	}
+	pausedAt := *paused.PausedAt
+	// Pausing a paused teamspace again keeps the first pause's facts.
+	again := changeStatus(paused, StatusDisabled, "user_2", pausedAt.Add(time.Hour))
+	if *again.PausedByUserID != "user_1" || !again.PausedAt.Equal(pausedAt) {
+		t.Fatalf("paused again = %+v", again)
+	}
+	resumed, err := service.Update(context.Background(), actor(), "tsp_1", UpdateInput{Status: ptr(StatusActive)})
+	if err != nil || resumed.Status != StatusActive || resumed.PausedByUserID != nil || resumed.PausedAt != nil {
+		t.Fatalf("resumed = %+v, %v", resumed, err)
+	}
+}
+
+func TestATargetPatchTellsNullFromLeftOut(t *testing.T) {
+	var input UpdateInput
+	if err := json.Unmarshal([]byte(`{"target_date":null,"target_label":"Launch"}`), &input); err != nil {
+		t.Fatal(err)
+	}
+	if !input.TargetDate.Set || input.TargetDate.Value != nil || !input.TargetLabel.Set || *input.TargetLabel.Value != "Launch" {
+		t.Fatalf("decoded = %+v", input)
+	}
+	input = UpdateInput{}
+	if err := json.Unmarshal([]byte(`{"name":"Engineering"}`), &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.TargetDate.Set || input.TargetLabel.Set {
+		t.Fatalf("a patch that left the target out decoded as %+v", input)
+	}
+	encoded, err := json.Marshal(UpdateInput{TargetLabel: Nullable{Set: true}})
+	if err != nil || string(encoded) != `{"target_label":null}` {
+		t.Fatalf("encoded = %s, %v", encoded, err)
+	}
+}

@@ -357,7 +357,7 @@ describe("TeamspaceFocus", () => {
     expect(withMention("thanks", "ada")).toBe("thanks @ada ")
   })
 
-  it("never reads a paused room, and says who can open it again", async () => {
+  it("shows a paused room read-only, says who can open it again, and posts nothing", async () => {
     const api = backend({
       space: teamspace({ status: "disabled", can_manage: false }),
     })
@@ -371,12 +371,47 @@ describe("TeamspaceFocus", () => {
     expect(
       screen.getByText("Paused · Launch team · 2 people and 2 agents")
     ).toBeTruthy()
+    const field = screen.getByRole("textbox", { name: "Message Launch room" })
+    expect(field.hasAttribute("disabled")).toBe(true)
+    expect(screen.getByRole("status", { name: "" }).textContent).toBe("Paused")
+
+    // Go reads it as usual and says it is paused: what was said shows.
+    const socket = await openRoom(api.seats, [
+      roomMessage(1, api.seats[2], "Before the pause"),
+    ])
+    socket.says({ type: "room-status", status: "paused" })
+    expect(await screen.findByText("Before the pause")).toBeTruthy()
     expect(
-      screen
-        .getByRole("textbox", { name: "Message Launch room" })
-        .hasAttribute("disabled")
-    ).toBe(true)
-    expect(roomAsked(api.calls)).toBe(false)
+      screen.getByText(
+        "This teamspace is paused. Its room opens again when a team admin resumes it."
+      )
+    ).toBeTruthy()
+    expect(field.hasAttribute("disabled")).toBe(true)
+    expect(socket.said("room-post")).toEqual([])
+  })
+
+  it("says who paused a room and when, once Go says so", async () => {
+    const pausedAt = "2026-10-16T09:12:44Z"
+    const on = new Intl.DateTimeFormat(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }).format(Date.parse(pausedAt))
+    backend({
+      space: teamspace({
+        status: "disabled",
+        can_manage: true,
+        paused_by_user_id: "user-ada",
+        paused_at: pausedAt,
+      }),
+    })
+    render()
+
+    expect(
+      await screen.findByText(
+        `This teamspace is paused. Resume it from Teamspaces to open its room again. Paused by Ada on ${on}.`
+      )
+    ).toBeTruthy()
   })
 
   it("keeps someone who manages the team without being on it out of the room and its work", async () => {

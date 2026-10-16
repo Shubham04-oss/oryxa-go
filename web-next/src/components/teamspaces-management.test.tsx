@@ -200,12 +200,12 @@ describe("TeamspacesManagement list", () => {
       within(launchCard).getByRole("img", { name: "Member, Ada" })
     ).toBeTruthy()
 
-    // A paused card says so, and doesn't promise a read-only room.
+    // A paused card says so, and that its room is read-only.
     const designCard = screen.getByRole("article", { name: "Design reviews" })
     expect(within(designCard).getByText("Design team · paused")).toBeTruthy()
     expect(
       within(designCard).getByText(
-        "Paused. Its room is closed until a team admin resumes it."
+        "Paused. Its room is read-only until a team admin resumes it."
       )
     ).toBeTruthy()
     expect(
@@ -221,6 +221,56 @@ describe("TeamspacesManagement list", () => {
     for (const example of ["Northwind", "Krude:", "Paused by", "editing"]) {
       expect(screen.queryByText(new RegExp(example))).toBeNull()
     }
+  })
+
+  it("says on a paused card who paused it and when, once Go says so", async () => {
+    const pausedAt = "2026-10-16T09:12:44Z"
+    const on = new Intl.DateTimeFormat(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }).format(Date.parse(pausedAt))
+    backend([
+      { ...design, paused_by_user_id: "user-sam", paused_at: pausedAt },
+      {
+        ...design,
+        id: "tsp_mine",
+        name: "Mine",
+        paused_by_user_id: viewerId,
+        paused_at: pausedAt,
+      },
+      {
+        ...design,
+        id: "tsp_unknown",
+        name: "Unknown",
+        paused_by_user_id: "user-gone",
+        paused_at: pausedAt,
+      },
+      // Paused before Go kept who and when.
+      {
+        ...design,
+        id: "tsp_old",
+        name: "Old",
+        paused_by_user_id: null,
+        paused_at: null,
+      },
+    ])
+    render()
+
+    const card = (name: string) => screen.findByRole("article", { name })
+    expect(
+      within(await card("Design reviews")).getByText(`Paused by Sam on ${on}`)
+    ).toBeTruthy()
+    expect(
+      within(await card("Mine")).getByText(`Paused by you on ${on}`)
+    ).toBeTruthy()
+    expect(
+      within(await card("Unknown")).getByText(`Paused on ${on}`)
+    ).toBeTruthy()
+    expect(within(await card("Old")).getByText("Paused")).toBeTruthy()
+    expect(
+      within(await card("Old")).queryByText(/Paused by|Paused on/)
+    ).toBeNull()
   })
 
   it("shows four faces, then how many more", async () => {
@@ -785,7 +835,7 @@ describe("TeamspaceDetail", () => {
     expect(screen.queryByRole("button", { name: "Open teamspace" })).toBeNull()
     expect(
       screen.getByText(
-        "Paused: its room is closed. Resume it to open the room again."
+        "Paused: its room is read-only. Resume it to post again."
       )
     ).toBeTruthy()
 
@@ -892,7 +942,7 @@ describe("TeamspaceDetail", () => {
     ).toBeNull()
     expect(
       screen.getByText(
-        "Paused by a team admin: its room is closed until they resume it."
+        "Paused by a team admin: its room is read-only until they resume it."
       )
     ).toBeTruthy()
   })

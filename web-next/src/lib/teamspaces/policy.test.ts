@@ -4,6 +4,7 @@ import {
   canContribute,
   canPublishSharedWork,
   canRemoveContribution,
+  canReadRoom,
   canUseRoom,
   contributionCandidates,
   publicationAuthors,
@@ -172,6 +173,16 @@ describe("canUseRoom", () => {
     expect(canUseRoom(space())).toBe(true)
     expect(canUseRoom(space({ status: "disabled" }))).toBe(false)
     expect(canUseRoom(space({ is_member: false, can_manage: true }))).toBe(
+      false
+    )
+  })
+})
+
+describe("canReadRoom", () => {
+  it("opens the room to members, paused or not, and to nobody off the team", () => {
+    expect(canReadRoom(space())).toBe(true)
+    expect(canReadRoom(space({ status: "disabled" }))).toBe(true)
+    expect(canReadRoom(space({ is_member: false, can_manage: true }))).toBe(
       false
     )
   })

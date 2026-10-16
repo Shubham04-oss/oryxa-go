@@ -245,6 +245,7 @@ type fakeTeamspaces struct {
 	organizationAgent teamspaces.OrganizationAgent
 	entries           []teamspaces.Entry
 	actors            []teamspaces.Actor
+	updates           []teamspaces.UpdateInput
 }
 
 // fakeOrganizationContext records, in call order, the organization id every
@@ -357,11 +358,18 @@ func (service *fakeTeamspaces) Create(_ context.Context, actor teamspaces.Actor,
 
 func (service *fakeTeamspaces) Update(_ context.Context, actor teamspaces.Actor, id string, input teamspaces.UpdateInput) (teamspaces.Space, error) {
 	service.actors = append(service.actors, actor)
+	service.updates = append(service.updates, input)
 	if service.space.ID != id {
 		return teamspaces.Space{}, teamspaces.ErrNotFound
 	}
 	if input.Name != nil {
 		service.space.Name = *input.Name
+	}
+	if input.TargetDate.Set {
+		service.space.TargetDate = input.TargetDate.Value
+	}
+	if input.TargetLabel.Set {
+		service.space.TargetLabel = input.TargetLabel.Value
 	}
 	service.space.Revision++
 	return service.space, nil
@@ -862,6 +870,57 @@ func TestTeamspacesExposeOrganizationAgentWhisperersAndExplicitAgentContribution
 	for _, actor := range spaces.actors {
 		if actor.OrganizationID != "org_1" || actor.UserID != "user_1" || actor.AccessToken != "member-token" {
 			t.Fatalf("actor escaped member identity: %+v", actor)
+		}
+	}
+}
+
+// A manager sets a teamspace's target with the PATCH it already has, and
+// clears either half by sending null; a field left out is left alone.
+func TestATeamspaceTargetIsSetAndClearedThroughItsPatch(t *testing.T) {
+	spaces := &fakeTeamspaces{space: teamspaces.Space{ID: "tsp_engineering", Status: teamspaces.StatusActive}}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Teamspaces: spaces,
+	}, nil)
+
+	set := serve(server, http.MethodPatch, "/v1/organizations/org_1/teamspaces/tsp_engineering",
+		`{"target_date":"2026-11-02","target_label":"Launch"}`, bearer)
+	if set.Code != http.StatusOK || !strings.Contains(set.Body.String(), `"target_date":"2026-11-02"`) || !strings.Contains(set.Body.String(), `"target_label":"Launch"`) {
+		t.Fatalf("set = %d %s", set.Code, set.Body.String())
+	}
+	cleared := serve(server, http.MethodPatch, "/v1/organizations/org_1/teamspaces/tsp_engineering", `{"target_label":null}`, bearer)
+	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"target_label":null`) || !strings.Contains(cleared.Body.String(), `"target_date":"2026-11-02"`) {
+		t.Fatalf("clear = %d %s", cleared.Code, cleared.Body.String())
+	}
+	if last := spaces.updates[len(spaces.updates)-1]; !last.TargetLabel.Set || last.TargetLabel.Value != nil || last.TargetDate.Set {
+		t.Errorf("the clearing patch reached the service as %+v", last)
+	}
+}
+
+// Saying something in a paused room is refused the way everything else a
+// paused teamspace refuses is, so a client handles one code for one state.
+func TestAPausedRoomRefusesAPostAsPaused(t *testing.T) {
+	status, code := ErrorCode(rooms.ErrPaused)
+	if status != http.StatusConflict || code != "teamspace_disabled" {
+		t.Fatalf("ErrorCode(ErrPaused) = %d %s, want 409 teamspace_disabled", status, code)
+	}
+}
+
+// A paused room is still read, and every read says it is paused, so a client
+// learns it from the read it already makes rather than from a refused post.
+func TestReadingARoomSaysWhetherItIsPaused(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		server := New(member(), &fakeThreads{}, Config{
+			AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Rooms: &fakeRooms{paused: paused},
+		}, nil)
+		want := fmt.Sprintf(`"paused":%t`, paused)
+		for _, path := range []string{
+			"/v1/organizations/org_1/teamspaces/tsp_engineering/messages",
+			"/v1/organizations/org_1/teamspaces/tsp_engineering/catchup",
+		} {
+			response := serve(server, http.MethodGet, path, "", bearer)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), want) {
+				t.Errorf("GET %s = %d %s, want 200 with %s", path, response.Code, response.Body.String(), want)
+			}
 		}
 	}
 }
