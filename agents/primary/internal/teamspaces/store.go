@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
@@ -219,29 +220,31 @@ func (store *Store) Name(ctx context.Context, organizationID, id string) (string
 	return name, nil
 }
 
-func (store *Store) Update(ctx context.Context, organizationID, id string, input UpdateInput) (Space, error) {
+func (store *Store) Update(ctx context.Context, organizationID, id, userID string, input UpdateInput) (Space, error) {
 	var result Space
 	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 		current, err := getForUpdate(ctx, tx, organizationID, id)
 		if err != nil {
 			return err
 		}
-		if input.Name != nil {
-			current.Name = *input.Name
-		}
-		if input.Description != nil {
-			current.Description = *input.Description
-		}
+		now := time.Now().UTC()
+		current = applyUpdate(current, input)
 		if input.Status != nil {
-			current.Status = *input.Status
+			current = changeStatus(current, *input.Status, userID, now)
+		}
+		targetDate, err := dateOf(current.TargetDate)
+		if err != nil {
+			return err
 		}
 		current.Revision++
-		current.UpdatedAt = time.Now().UTC()
+		current.UpdatedAt = now
 		if err := scanSpace(tx.QueryRow(ctx, `UPDATE agents_primary.teamspaces SET
-			name=$3, description=$4, status=$5, revision=$6, updated_at=$7
+			name=$3, description=$4, status=$5, revision=$6, updated_at=$7,
+			target_date=$8, target_label=$9, paused_by_user_id=$10, paused_at=$11
 			WHERE organization_id=$1 AND id=$2 RETURNING `+spaceColumns,
 			organizationID, id, current.Name, current.Description, current.Status,
-			current.Revision, current.UpdatedAt), &result); err != nil {
+			current.Revision, current.UpdatedAt, targetDate, current.TargetLabel,
+			current.PausedByUserID, current.PausedAt), &result); err != nil {
 			return err
 		}
 		result.OrganizationAgent, err = organizationAgentFrom(ctx, tx, result.OrganizationID)
@@ -584,7 +587,8 @@ func (store *Store) ForgetTeam(ctx context.Context, organizationID, teamID strin
 }
 
 const spaceColumns = `id, organization_id, team_id, name, description, created_by_user_id,
-	organization_agent_id, status, revision, created_at, updated_at`
+	organization_agent_id, status, revision, created_at, updated_at,
+	target_date, target_label, paused_by_user_id, paused_at`
 
 const entryColumns = `id, teamspace_id, organization_id, author_user_id, author_agent_id,
 	author_agent_name, kind, title, summary, tools_used, artifacts, created_at`
@@ -622,8 +626,37 @@ func organizationAgentFrom(ctx context.Context, queryer interface {
 }
 
 func scanSpace(row scanner, space *Space) error {
-	return row.Scan(&space.ID, &space.OrganizationID, &space.TeamID, &space.Name, &space.Description,
-		&space.CreatedByUserID, &space.OrganizationAgentID, &space.Status, &space.Revision, &space.CreatedAt, &space.UpdatedAt)
+	var targetDate pgtype.Date
+	if err := row.Scan(&space.ID, &space.OrganizationID, &space.TeamID, &space.Name, &space.Description,
+		&space.CreatedByUserID, &space.OrganizationAgentID, &space.Status, &space.Revision, &space.CreatedAt, &space.UpdatedAt,
+		&targetDate, &space.TargetLabel, &space.PausedByUserID, &space.PausedAt); err != nil {
+		return err
+	}
+	space.TargetDate = nil
+	if targetDate.Valid {
+		value := targetDate.Time.Format(time.DateOnly)
+		space.TargetDate = &value
+	}
+	// Who paused a teamspace is a fact only while it is paused. A release
+	// from before 003_target_and_pause resumes a teamspace without clearing
+	// them, so an active row can still carry them; they are not shown, and
+	// the next update writes them back as null.
+	if space.Status == StatusActive {
+		space.PausedByUserID, space.PausedAt = nil, nil
+	}
+	return nil
+}
+
+// dateOf is a target date as the column takes it: null for none.
+func dateOf(value *string) (pgtype.Date, error) {
+	if value == nil {
+		return pgtype.Date{}, nil
+	}
+	parsed, err := time.Parse(time.DateOnly, *value)
+	if err != nil {
+		return pgtype.Date{}, fmt.Errorf("%w: target_date must be a date written YYYY-MM-DD", ErrInvalid)
+	}
+	return pgtype.Date{Time: parsed, Valid: true}, nil
 }
 
 func scanEntry(row scanner, entry *Entry) error {
