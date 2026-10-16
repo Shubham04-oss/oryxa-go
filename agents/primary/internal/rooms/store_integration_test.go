@@ -696,6 +696,43 @@ func TestReadCursorsAndActivity(t *testing.T) {
 		t.Fatalf("Bo's activity = %+v, %v; want Ada's message and her agent's unread", activity[busy], err)
 	}
 
+	// Somebody who had read the room before cursors existed starts as having
+	// read all of it, and a cursor already there is left where it is.
+	if err := fixture.store.Watch(ctx, busy, "user-cy", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.MarkRead(ctx, busy, "user-bo", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.Watch(ctx, busy, "user-bo", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	backfill, err := migrations.ReadFile("migrations/003_read_cursors.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.database.Pool.Exec(ctx, string(backfill)); err != nil {
+		t.Fatal(err)
+	}
+	for user, want := range map[string]int64{"user-cy": 3, "user-bo": 1} {
+		activity, err = fixture.store.Activity(ctx, fixture.organizationID, user, []string{busy})
+		if err != nil || activity[busy].LastReadSeq != want {
+			t.Fatalf("%s after the backfill = %+v, %v; want read to %d", user, activity[busy], err, want)
+		}
+	}
+
+	// However much is unread, the count stops at UnreadCap.
+	if _, err := fixture.database.Pool.Exec(ctx, `
+		INSERT INTO agents_primary.room_messages (id, room_id, organization_id, seq, author_handle, author_kind, author_user_id, body)
+		SELECT 'rmm_backlog_' || $1 || '_' || n, $1, $2, 3 + n, 'bo', 'person', 'user-bo', 'backlog'
+		FROM generate_series(1, $3::int) n`, busy, fixture.organizationID, UnreadCap+5); err != nil {
+		t.Fatal(err)
+	}
+	activity, err = fixture.store.Activity(ctx, fixture.organizationID, "user-ada", []string{busy})
+	if err != nil || activity[busy].Unread != UnreadCap {
+		t.Fatalf("a long backlog = %+v, %v; want %d unread", activity[busy], err, UnreadCap)
+	}
+
 	if err := fixture.store.Forget(ctx, fixture.organizationID, "user-ada"); err != nil {
 		t.Fatal(err)
 	}

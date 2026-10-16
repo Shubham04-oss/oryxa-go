@@ -333,11 +333,16 @@ func preview(body string) string {
 	if len(runes) <= previewRunes {
 		return line
 	}
-	cut := string(runes[:previewRunes-1])
-	if space := strings.LastIndexByte(cut, ' '); space > previewRunes/2 {
-		cut = cut[:space]
+	// The word break is looked for in runes, as the length is: a byte
+	// offset would cut Hindi or emoji to a fraction of the length.
+	cut := runes[:previewRunes-1]
+	for index := len(cut) - 1; index > previewRunes/2; index-- {
+		if cut[index] == ' ' {
+			cut = cut[:index]
+			break
+		}
 	}
-	return strings.TrimRight(cut, " ,;:-") + "…"
+	return strings.TrimRight(string(cut), " ,;:-") + "…"
 }
 
 // space resolves the teamspace and refuses anybody the team does not include.
