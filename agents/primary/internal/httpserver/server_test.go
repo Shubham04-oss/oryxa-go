@@ -938,12 +938,25 @@ func TestTeamspaceListCarriesUnreadCountsAndReadMovesTheCursor(t *testing.T) {
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"unread_count":1`) {
 		t.Fatalf("get = %d %s", got.Code, got.Body.String())
 	}
-	if len(roomService.actors) != 2 {
-		t.Errorf("room activity read %d times for two requests", len(roomService.actors))
+	// A change answers with the whole teamspace, so it carries them too: a
+	// client that keeps what the change answered keeps its badge.
+	patched := serve(server, http.MethodPatch, "/v1/organizations/org_1/teamspaces/tsp_engineering", `{"target_label":"Launch"}`, bearer)
+	if patched.Code != http.StatusOK || !strings.Contains(patched.Body.String(), `"unread_count":1`) {
+		t.Fatalf("patch = %d %s", patched.Code, patched.Body.String())
+	}
+	if len(roomService.actors) != 3 {
+		t.Errorf("room activity read %d times for three requests", len(roomService.actors))
 	}
 	read := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces/tsp_engineering/read", `{"seq":7}`, bearer)
 	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"last_read_seq":7`) {
 		t.Fatalf("read = %d %s", read.Code, read.Body.String())
+	}
+	// A body without seq is a client's mistake, not a read of nothing.
+	for _, body := range []string{`{}`, `{"seq":null}`} {
+		missing := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces/tsp_engineering/read", body, bearer)
+		if missing.Code != http.StatusBadRequest || !strings.Contains(missing.Body.String(), `"invalid_request"`) {
+			t.Errorf("read %s = %d %s, want 400 invalid_request", body, missing.Code, missing.Body.String())
+		}
 	}
 }
 

@@ -118,7 +118,9 @@ type Space struct {
 	PausedAt       *time.Time `json:"paused_at"`
 	// LastReadSeq, UnreadCount and LastMessage are the caller's view of the
 	// teamspace's room. The room service fills them in for a member of the
-	// team, and they are left out for anybody else.
+	// team, on every answer that is a whole teamspace, and they are left out
+	// for anybody else. UnreadCount stops at 100 (rooms.UnreadCap), which a
+	// client shows as "99+".
 	LastReadSeq *int64       `json:"last_read_seq,omitempty"`
 	UnreadCount *int64       `json:"unread_count,omitempty"`
 	LastMessage *LastMessage `json:"last_message,omitempty"`

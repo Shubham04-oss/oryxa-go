@@ -403,7 +403,9 @@ func (store *PostgresStore) MarkRead(ctx context.Context, roomID, userID string,
 
 // Activity implements [Store] in one statement, however many rooms it is
 // asked about: each room's unread count and newest message are read beside
-// one another, rather than a query per room.
+// one another, rather than a query per room. The count stops at UnreadCap,
+// so a large room nobody marks read costs the busiest list no more than a
+// small one.
 func (store *PostgresStore) Activity(ctx context.Context, organizationID, userID string, roomIDs []string) (map[string]Activity, error) {
 	activity := make(map[string]Activity, len(roomIDs))
 	if len(roomIDs) == 0 {
@@ -411,10 +413,11 @@ func (store *PostgresStore) Activity(ctx context.Context, organizationID, userID
 	}
 	rows, err := store.database.Pool.Query(ctx, `
 		SELECT room.id, COALESCE(reader.last_read_seq, 0),
-			(SELECT count(*) FROM agents_primary.room_messages unread
+			(SELECT count(*) FROM (SELECT 1 FROM agents_primary.room_messages unread
 				WHERE unread.room_id = room.id AND unread.organization_id = $1
 				  AND unread.seq > COALESCE(reader.last_read_seq, 0)
-				  AND NOT (unread.author_kind = 'person' AND unread.author_user_id = $2)),
+				  AND NOT (unread.author_kind = 'person' AND unread.author_user_id = $2)
+				LIMIT $4) capped),
 			newest.id, newest.room_id, newest.seq, newest.author_handle, newest.author_kind, newest.author_user_id,
 			newest.author_agent_id, newest.body, newest.addressed_to, newest.in_reply_to_seq, newest.created_at
 		FROM unnest($3::text[]) AS room(id)
@@ -422,7 +425,7 @@ func (store *PostgresStore) Activity(ctx context.Context, organizationID, userID
 		LEFT JOIN LATERAL (
 			SELECT `+messageColumns+` FROM agents_primary.room_messages
 			WHERE room_id = room.id AND organization_id = $1 ORDER BY seq DESC LIMIT 1
-		) newest ON true`, organizationID, userID, roomIDs)
+		) newest ON true`, organizationID, userID, roomIDs, UnreadCap)
 	if err != nil {
 		return nil, fmt.Errorf("read room activity: %w", err)
 	}
