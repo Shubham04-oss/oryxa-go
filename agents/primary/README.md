@@ -663,7 +663,7 @@ with none; `name` is what the artifact route above downloads. The listing
 reads both from the thread's state, which each run brings up to date as it
 ends, so they are only as fresh as the thread's last run: a thread not run
 since they were added lists `0` and `null` until its next run, and a run that
-was interrupted or lost its thread to another leaves them to the next run.
+lost its thread to another leaves them to the next run.
 `GET /threads/{thread}` counts them from the whole history, so the detail is
 always exact.
 

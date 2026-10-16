@@ -247,8 +247,8 @@ func TestARunThatLostItsHoldRecordsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	for event := range got.Session.Events().All() {
-		if event.InvocationID == recordInvocation {
-			t.Fatalf("a run that lost its hold recorded %+v", event.Actions.StateDelta)
+		if bracket, ok := bracketOf(event); ok && bracket.Type != ItemRunStarted {
+			t.Fatalf("a run that lost its hold recorded %+v", bracket)
 		}
 	}
 	if _, err := got.Session.State().Get(stateArtifactCount); !errors.Is(err, session.ErrStateKeyNotExist) {

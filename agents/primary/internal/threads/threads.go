@@ -125,8 +125,8 @@ type Thread struct {
 	// once however many versions it has, and LatestArtifact the last one
 	// kept, or nil. Both are read from the thread's state, which each run
 	// brings up to date as it ends: a thread whose last run ended before they
-	// existed has 0 and nil until its next run, and one whose last run was
-	// interrupted or lost its hold says what the run before it recorded.
+	// existed has 0 and nil until its next run, and one whose last run lost
+	// its hold says what the run before it recorded.
 	ArtifactCount  int          `json:"artifact_count"`
 	LatestArtifact *ArtifactRef `json:"latest_artifact"`
 }
