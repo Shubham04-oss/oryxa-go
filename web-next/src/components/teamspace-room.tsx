@@ -6,6 +6,7 @@ import {
   agentIdentity,
   fullTime,
   messageTime,
+  pausedLine,
   personIdentity,
 } from "./teamspace-format"
 import type {
@@ -79,7 +80,7 @@ export function TeamspaceConversation({
   const agents = presence.seats.filter((seat) => seat.kind === "agent")
   const seats = [...people, ...agents]
   const pending = status.outgoing.filter((outgoing) => !outgoing.landed)
-  const blocked = blockedCopy(space, status)
+  const blocked = blockedCopy(space, status, viewerId, presence.seats)
 
   return (
     <section
@@ -340,12 +341,27 @@ function presenceLabel(
 }
 
 /** Why the room cannot be used, when it cannot. */
-function blockedCopy(space: Teamspace, status: RoomStatus): string | undefined {
+function blockedCopy(
+  space: Teamspace,
+  status: RoomStatus,
+  viewerId: string | undefined,
+  seats: readonly RoomSeat[]
+): string | undefined {
   switch (status.connection) {
-    case "paused":
-      return space.can_manage
+    case "paused": {
+      const why = space.can_manage
         ? "This teamspace is paused. Resume it from Teamspaces to open its room again."
         : "This teamspace is paused. Its room opens again when a team admin resumes it."
+      // Who paused it and when, once Go says so.
+      const by = pausedLine(space, {
+        viewerId,
+        nameOf: (userId) =>
+          seats.find(
+            (seat) => seat.kind === "person" && seat.user_id === userId
+          )?.display_name,
+      })
+      return by ? `${why} ${by}.` : why
+    }
     case "not-member":
       return `Only members of the ${space.team_name} team can join this room.`
     case "gone":

@@ -223,6 +223,56 @@ describe("TeamspacesManagement list", () => {
     }
   })
 
+  it("says on a paused card who paused it and when, once Go says so", async () => {
+    const pausedAt = "2026-10-16T09:12:44Z"
+    const on = new Intl.DateTimeFormat(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }).format(Date.parse(pausedAt))
+    backend([
+      { ...design, paused_by_user_id: "user-sam", paused_at: pausedAt },
+      {
+        ...design,
+        id: "tsp_mine",
+        name: "Mine",
+        paused_by_user_id: viewerId,
+        paused_at: pausedAt,
+      },
+      {
+        ...design,
+        id: "tsp_unknown",
+        name: "Unknown",
+        paused_by_user_id: "user-gone",
+        paused_at: pausedAt,
+      },
+      // Paused before Go kept who and when.
+      {
+        ...design,
+        id: "tsp_old",
+        name: "Old",
+        paused_by_user_id: null,
+        paused_at: null,
+      },
+    ])
+    render()
+
+    const card = (name: string) => screen.findByRole("article", { name })
+    expect(
+      within(await card("Design reviews")).getByText(`Paused by Sam on ${on}`)
+    ).toBeTruthy()
+    expect(
+      within(await card("Mine")).getByText(`Paused by you on ${on}`)
+    ).toBeTruthy()
+    expect(
+      within(await card("Unknown")).getByText(`Paused on ${on}`)
+    ).toBeTruthy()
+    expect(within(await card("Old")).getByText("Paused")).toBeTruthy()
+    expect(
+      within(await card("Old")).queryByText(/Paused by|Paused on/)
+    ).toBeNull()
+  })
+
   it("shows four faces, then how many more", async () => {
     backend([
       teamspace({

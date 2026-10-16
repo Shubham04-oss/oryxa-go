@@ -366,7 +366,17 @@ not permission to copy every incidental value into a new component.
     are kept on purpose, below the board's cards, as Overview's content
     with nowhere else to go (owner to confirm). The
     room stays mounted behind the other tabs, so its draft, scroll and
-    socket carry over. **Files** is the team's files, full width. **Plan**
+    socket carry over. A paused teamspace's room is read-only, never broken
+    and never live: what was said stays on screen (and keeps arriving from
+    a Go that reads paused rooms), the presence pill says Paused, the
+    composer is off with "This room is paused", and the line under the
+    messages gives the paused copy and, once Go records them, "Paused by
+    <name> on <date>" (the name from the room's seats, "you" for the
+    viewer, or just "Paused on <date>" when nobody here knows it). The room
+    takes any of Go's three signals as paused: `"paused": true` on a read,
+    409 `teamspace_disabled` on a post (the draft is kept: "This room is
+    paused, so your message wasn't sent."), and the 400 an older Go gives
+    a paused room's reads. **Files** is the team's files, full width. **Plan**
     and **Parleys** have no API yet, so each is one honest line on the
     empty scene ("A shared plan is coming", "Past parleys will be listed
     here"). No launch date in the hero until the teamspace carries one.
@@ -395,10 +405,14 @@ not permission to copy every incidental value into a new component.
     for whoever manages it, Pause or Resume and Delete. Pause and Delete
     open the details on their usual confirm; Resume needs none. A paused
     card is dimmed, still opens from anywhere on it, and says its room is
-    closed until a team admin resumes it. The parley chip reads each open teamspace's call once a minute
+    closed until a team admin resumes it; its footer says "Paused by
+    <name> on <date>" once Go records who and when (the name from the
+    teamspace's seats, "you" for the viewer, else "Paused on <date>"), and
+    just "Paused" before. The details' paused note ends the same way. The
+    parley chip reads each open teamspace's call once a minute
     (the member must be on the team), under the room's own call key.
-    Unread counts, who's editing, custom facts, the last activity line and
-    who paused it stay off the card until the list carries them.
+    Unread counts, who's editing, custom facts and the last activity line
+    stay off the card until the list carries them.
   - For a member who can open one, the last card opens a new teamspace,
     drawn as the ship's lines on deep sea, with a New teamspace button.
     Both it and the header's button open the create form as a pop-up
