@@ -271,6 +271,10 @@ var authzRoutes = []authzRoute{
 		path: "/v1/organizations/org_1/threads/thread_1", identity: lastThreadsMember,
 	},
 	{
+		pattern: "PATCH /v1/organizations/{organizationID}/threads/{threadID}", method: http.MethodPatch,
+		path: "/v1/organizations/org_1/threads/thread_1", body: `{"title":"Launch plan"}`, malformedBody: unknownField, identity: lastThreadsMember,
+	},
+	{
 		pattern: "DELETE /v1/organizations/{organizationID}/threads/{threadID}", method: http.MethodDelete,
 		path: "/v1/organizations/org_1/threads/thread_1", identity: lastThreadsMember,
 	},
@@ -318,6 +322,10 @@ var authzRoutes = []authzRoute{
 	{
 		pattern: "GET /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}", method: http.MethodGet,
 		path: "/v1/organizations/org_1/agents/agt_other/threads/thread_other", identity: lastManagedMember,
+	},
+	{
+		pattern: "PATCH /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}", method: http.MethodPatch,
+		path: "/v1/organizations/org_1/agents/agt_other/threads/thread_other", body: `{"title":"Launch plan"}`, malformedBody: unknownField, identity: lastManagedMember,
 	},
 	{
 		pattern: "DELETE /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}", method: http.MethodDelete,
@@ -583,8 +591,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 74 {
-		t.Fatalf("authzRoutes has %d entries, want 74 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 76 {
+		t.Fatalf("authzRoutes has %d entries, want 76 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -676,8 +684,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 40 {
-		t.Fatalf("tested %d state-changing routes, want 40 - a route's method changed without updating this expectation", tested)
+	if tested != 42 {
+		t.Fatalf("tested %d state-changing routes, want 42 - a route's method changed without updating this expectation", tested)
 	}
 }
 
@@ -735,8 +743,8 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 			}
 		})
 	}
-	if tested != 41 {
-		t.Fatalf("tested %d routes for malformed input, want 41 - a route gained or lost a body/limit/version without updating this expectation", tested)
+	if tested != 43 {
+		t.Fatalf("tested %d routes for malformed input, want 43 - a route gained or lost a body/limit/version without updating this expectation", tested)
 	}
 }
 

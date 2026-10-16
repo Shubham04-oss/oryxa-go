@@ -76,9 +76,24 @@ export type RoomBrief = {
   updated_at: string
 }
 
-export type RoomRead = { messages: RoomMessage[]; seats: RoomSeat[] }
+export type RoomRead = {
+  messages: RoomMessage[]
+  seats: RoomSeat[]
+  /**
+   * Go says the room's teamspace is paused: the room is read-only, and a
+   * post would be refused 409 `teamspace_disabled`. Absent from a Go that
+   * predates read-only rooms, which refuses a paused room's reads 400
+   * instead (`isRoomPausedRefusal`).
+   */
+  paused?: boolean
+}
 
-export type RoomCatchUp = { brief: RoomBrief; messages: RoomMessage[] }
+export type RoomCatchUp = {
+  brief: RoomBrief
+  messages: RoomMessage[]
+  /** As on `RoomRead`. */
+  paused?: boolean
+}
 
 /** What a read added, and the last seq it got to: the next read starts after it. */
 export type RoomReadAfter = RoomRead & { readThrough: number }
@@ -123,7 +138,11 @@ export function roomApi(request: RoomRequest) {
       }),
       { signal }
     )
-    return { messages: answer.messages ?? [], seats: answer.seats ?? [] }
+    return {
+      messages: answer.messages ?? [],
+      seats: answer.seats ?? [],
+      ...pausedOf(answer),
+    }
   }
 
   /** `POST …/teamspaces/{teamspaceID}/messages` (server.postRoomMessage): the member's message, then every agent reply. It answers only once the room's agents have, which can take a minute and more; each message is readable as the room records it. */
@@ -149,11 +168,16 @@ export function roomApi(request: RoomRequest) {
     const caught = await request<{
       brief: RoomBrief
       messages?: RoomMessage[]
+      paused?: unknown
     }>(
       withSearch(roomPath(organizationId, teamspaceId, "catchup"), { after }),
       { signal }
     )
-    return { brief: caught.brief, messages: caught.messages ?? [] }
+    return {
+      brief: caught.brief,
+      messages: caught.messages ?? [],
+      ...pausedOf(caught),
+    }
   }
 
   /**
@@ -182,6 +206,7 @@ export function roomApi(request: RoomRequest) {
     }
     let messages: RoomMessage[] = []
     let seats: RoomSeat[] = []
+    let paused: boolean | undefined
     for (let page = 0; page < MAX_PAGES_PER_READ; page += 1) {
       const answer = await read(organizationId, teamspaceId, {
         after,
@@ -190,10 +215,16 @@ export function roomApi(request: RoomRequest) {
       })
       messages = mergeRoomMessages(messages, answer.messages)
       seats = answer.seats
+      paused = answer.paused
       after = answer.messages.at(-1)?.seq ?? after
       if (answer.messages.length < ROOM_READ_LIMIT) break
     }
-    return { messages, seats, readThrough: after }
+    return {
+      messages,
+      seats,
+      readThrough: after,
+      ...(paused === undefined ? {} : { paused }),
+    }
   }
 
   return { read, say, catchUp, readAfter }
@@ -234,6 +265,25 @@ export async function checkTeamspaceRoom(
   teamspaceId: string
 ): Promise<void> {
   await apiRequest(teamspaceRoomPath(organizationId, teamspaceId))
+}
+
+/** Go's `paused`, when it sent one: a Go before read-only rooms never does. */
+function pausedOf(answer: { paused?: unknown }): { paused?: boolean } {
+  return typeof answer.paused === "boolean" ? { paused: answer.paused } : {}
+}
+
+/**
+ * Whether Go refused a room call because its teamspace is paused: 409
+ * `teamspace_disabled` on a post, or, from a Go before read-only rooms, 400
+ * on a read (`invalid_request` "this room is paused"). A 400 on a post is
+ * not this: it is also how Go refuses a message it will not take.
+ */
+export function isRoomPausedRefusal(
+  error: { status: number; code?: string },
+  call: "read" | "post"
+): boolean {
+  if (error.status === 409 && error.code === "teamspace_disabled") return true
+  return call === "read" && error.status === 400
 }
 
 /** Folds arrived messages into held ones: one per `seq`, the newer copy winning, in order. */
