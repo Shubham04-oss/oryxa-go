@@ -377,3 +377,107 @@ func TestStoreNamesATeamspaceInItsOrganizationOnly(t *testing.T) {
 		}
 	}
 }
+
+// A teamspace's target and its pause facts are stored as the service set
+// them, read back as it gave them, and cleared by null.
+func TestStoreKeepsTheTargetAndWhoPaused(t *testing.T) {
+	database, store, _ := testStores(t)
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	organizationID := fmt.Sprintf("org_teamspace_target_%d", suffix)
+	defer func() {
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.teamspaces WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.organization_agents WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.agents_outbox WHERE detail->>'organization_id'=$1`, organizationID)
+	}()
+	organizationAgent, err := store.EnsureOrganizationAgent(ctx, organizationID, "Target Org", "user_owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, err := store.Create(ctx, Space{
+		ID: fmt.Sprintf("tsp_target_%d", suffix), OrganizationID: organizationID, TeamID: "team_target",
+		Name: "Launch", CreatedByUserID: "user_owner", OrganizationAgentID: organizationAgent.ID,
+	})
+	if err != nil || space.TargetDate != nil || space.TargetLabel != nil || space.PausedAt != nil {
+		t.Fatalf("created = %+v, %v", space, err)
+	}
+
+	date, label := "2026-11-02", "Public launch"
+	disabled := StatusDisabled
+	updated, err := store.Update(ctx, organizationID, space.ID, "user_pauser", UpdateInput{
+		Status: &disabled, TargetDate: Nullable{Set: true, Value: &date}, TargetLabel: Nullable{Set: true, Value: &label},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, err := store.Get(ctx, organizationID, space.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range []Space{updated, read} {
+		if got.TargetDate == nil || *got.TargetDate != date || got.TargetLabel == nil || *got.TargetLabel != label ||
+			got.Status != StatusDisabled || got.PausedByUserID == nil || *got.PausedByUserID != "user_pauser" || got.PausedAt == nil {
+			t.Fatalf("paused with a target = %+v", got)
+		}
+	}
+
+	active := StatusActive
+	resumed, err := store.Update(ctx, organizationID, space.ID, "user_owner", UpdateInput{Status: &active, TargetDate: Nullable{Set: true}})
+	if err != nil || resumed.PausedByUserID != nil || resumed.PausedAt != nil || resumed.TargetDate != nil ||
+		resumed.TargetLabel == nil || *resumed.TargetLabel != label {
+		t.Fatalf("resumed = %+v, %v", resumed, err)
+	}
+	listed, err := store.List(ctx, organizationID)
+	if err != nil || len(listed) != 1 || listed[0].TargetLabel == nil || listed[0].PausedAt != nil {
+		t.Fatalf("listed = %+v, %v", listed, err)
+	}
+}
+
+// A release from before the pause columns resumes a teamspace by its status
+// alone. The stale pause facts it leaves are not shown, and the next update
+// clears them.
+func TestStoreShowsNoPauseOnATeamspaceAnOldReleaseResumed(t *testing.T) {
+	database, store, _ := testStores(t)
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	organizationID := fmt.Sprintf("org_teamspace_resumed_%d", suffix)
+	defer func() {
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.teamspaces WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.organization_agents WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.agents_outbox WHERE detail->>'organization_id'=$1`, organizationID)
+	}()
+	organizationAgent, err := store.EnsureOrganizationAgent(ctx, organizationID, "Resumed Org", "user_owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, err := store.Create(ctx, Space{
+		ID: fmt.Sprintf("tsp_resumed_%d", suffix), OrganizationID: organizationID, TeamID: "team_resumed",
+		Name: "Resumed", CreatedByUserID: "user_owner", OrganizationAgentID: organizationAgent.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := StatusDisabled
+	if _, err := store.Update(ctx, organizationID, space.ID, "user_pauser", UpdateInput{Status: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	// What the old release's UPDATE writes: the status, and nothing it does not know.
+	if _, err := database.Pool.Exec(ctx, `UPDATE agents_primary.teamspaces SET status='active', revision=revision+1
+		WHERE organization_id=$1 AND id=$2`, organizationID, space.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	read, err := store.Get(ctx, organizationID, space.ID)
+	if err != nil || read.Status != StatusActive || read.PausedByUserID != nil || read.PausedAt != nil {
+		t.Fatalf("an active teamspace an old release resumed = %+v, %v; want no pause shown", read, err)
+	}
+	name := "Renamed"
+	if _, err := store.Update(ctx, organizationID, space.ID, "user_owner", UpdateInput{Name: &name}); err != nil {
+		t.Fatal(err)
+	}
+	var stale int
+	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.teamspaces
+		WHERE id=$1 AND (paused_by_user_id IS NOT NULL OR paused_at IS NOT NULL)`, space.ID).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("pause facts left on the row after the next update: %d, %v", stale, err)
+	}
+}

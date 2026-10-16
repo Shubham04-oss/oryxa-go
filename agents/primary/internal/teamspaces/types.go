@@ -5,6 +5,7 @@
 package teamspaces
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -103,8 +104,17 @@ type Space struct {
 	Contributions       []Contribution    `json:"contributions"`
 	CanManage           bool              `json:"can_manage"`
 	IsMember            bool              `json:"is_member"`
-	CreatedAt           time.Time         `json:"created_at"`
-	UpdatedAt           time.Time         `json:"updated_at"`
+	// TargetDate is the day the team is working towards, as YYYY-MM-DD, and
+	// TargetLabel what it is ("Launch"). A manager sets either; null is none.
+	TargetDate  *string `json:"target_date"`
+	TargetLabel *string `json:"target_label"`
+	// PausedByUserID and PausedAt say who disabled the teamspace, and when.
+	// Both are null while it is active, and for one disabled before they were
+	// recorded.
+	PausedByUserID *string    `json:"paused_by_user_id"`
+	PausedAt       *time.Time `json:"paused_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type CreateInput struct {
@@ -117,7 +127,36 @@ type UpdateInput struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Status      *Status `json:"status,omitempty"`
+	// TargetDate and TargetLabel are left alone when left out, and cleared
+	// when sent as null.
+	TargetDate  Nullable `json:"target_date,omitzero"`
+	TargetLabel Nullable `json:"target_label,omitzero"`
 }
+
+// Nullable is a field a PATCH may leave out, set, or clear with null: three
+// things a plain pointer cannot tell apart, since it reads null and absent
+// alike.
+type Nullable struct {
+	// Set says the field was sent. Value is nil when it was sent as null.
+	Set   bool
+	Value *string
+}
+
+func (field *Nullable) UnmarshalJSON(data []byte) error {
+	field.Set = true
+	if string(data) == "null" {
+		field.Value = nil
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	field.Value = &value
+	return nil
+}
+
+func (field Nullable) MarshalJSON() ([]byte, error) { return json.Marshal(field.Value) }
 
 type OrganizationAgentUpdate struct {
 	Name         *string `json:"name,omitempty"`

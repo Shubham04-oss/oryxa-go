@@ -373,7 +373,17 @@ not permission to copy every incidental value into a new component.
     are kept on purpose, below the board's cards, as Overview's content
     with nowhere else to go (owner to confirm). The
     room stays mounted behind the other tabs, so its draft, scroll and
-    socket carry over. **Files** is the team's files, full width. **Plan**
+    socket carry over. A paused teamspace's room is read-only, never broken
+    and never live: what was said stays on screen (and keeps arriving from
+    a Go that reads paused rooms), the presence pill says Paused, the
+    composer is off with "This room is paused", and the line under the
+    messages gives the paused copy and, once Go records them, "Paused by
+    <name> on <date>" (the name from the room's seats, "you" for the
+    viewer, or just "Paused on <date>" when nobody here knows it). The room
+    takes any of Go's three signals as paused: `"paused": true` on a read,
+    409 `teamspace_disabled` on a post (the draft is kept: "This room is
+    paused, so your message wasn't sent."), and the 400 an older Go gives
+    a paused room's reads. **Files** is the team's files, full width. **Plan**
     and **Parleys** have no API yet, so each is one honest line on the
     empty scene ("A shared plan is coming", "Past parleys will be listed
     here"). No launch date in the hero until the teamspace carries one.
@@ -413,7 +423,11 @@ not permission to copy every incidental value into a new component.
     for whoever manages it, Pause or Resume and Delete. Pause and Delete
     open the details on their usual confirm; Resume needs none. A paused
     card is dimmed, still opens from anywhere on it, and says its room is
-    closed until a team admin resumes it. The parley chip reads each open teamspace's call once a minute
+    read-only until a team admin resumes it; its footer says "Paused by
+    <name> on <date>" once Go records who and when (the name from the
+    teamspace's seats, "you" for the viewer, else "Paused on <date>"), and
+    just "Paused" before. The details' paused note ends the same way. The
+    parley chip reads each open teamspace's call once a minute
     (the member must be on the team), under the room's own call key.
     Once the list carries them (#389, members only), a card shows its
     unread room messages as a count (`ui/badge`, "99+" at the cap; a
@@ -422,8 +436,8 @@ not permission to copy every incidental value into a new component.
     purpose: "Krude: suggested an edit…" (the author's seat name, else
     their handle; "You" for the member's own; "Parley notes" for a
     parley's notes) with how long ago. Without the fields neither shows.
-    Who's editing, custom facts and who paused it stay off the card until
-    the list carries them.
+    Who's editing and custom facts stay off the card until the list
+    carries them.
   - For a member who can open one, the last card opens a new teamspace,
     drawn as the ship's lines on deep sea, with a New teamspace button.
     Both it and the header's button open the create form as a pop-up
@@ -868,10 +882,16 @@ not permission to copy every incidental value into a new component.
   - **Header:** a status (Working or Waiting for you with a Thinking Orb;
     Done, Interrupted or Failed with an icon) as an outline badge, how long
     it took, and tokens used where the run said; Stop (ghost, sm) while it
-    runs. Duration comes from the run's own start and end markers, which only
-    runs streamed into the chat's transcript carry; otherwise from the items'
-    times; with neither, nothing is shown. Go's history keeps no run markers
-    or usage (#322), so older runs show no tokens.
+    runs. A failed run's badge says why, from its `code`: Interrupted (Oryxa
+    restarted), Timed out, Stopped (by the member), Cancelled, Taken over
+    (another run took the conversation), or Failed; its notice keeps Go's
+    words, or a plain sentence for the code when Go sent none. A finished
+    run's duration is each run's end less its start, added up (a wait for an
+    approval between two runs is left out), from the run's own start and end
+    markers: streamed ones, and since #390 the ones Go's history keeps, shown
+    once however many copies arrive. Without both, it comes from the items'
+    times; with neither, nothing is shown. Runs from before #390 keep no
+    markers or usage in history, so they show no tokens.
   - **Steps:** one ghost toggle ("3 steps · 1 failed", with app marks) that
     opens a list, one line per call: app mark, what it did, the key argument
     (query, file, URL or channel, from the call's own arguments), and its

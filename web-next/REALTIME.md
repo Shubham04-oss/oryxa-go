@@ -181,12 +181,17 @@ answers. What travels on the socket is in `src/lib/rooms/room-agent.ts`.
   on a post is a member without a seat, not gone. Go answers 404 to
   everyone once a teamspace is deleted, so the other members here are asked
   for the teamspace itself (which marks nobody present); once none of them
-  may open it, the object clears what it holds. A paused room (400) tells
-  every socket `paused`, and a server without rooms (503
-  `rooms_unavailable`) `unavailable`; either stops the reads until a
-  member's read succeeds again, which happens when somebody comes back to
-  the room. Any other failure tells the sockets `error` once, and the reads
-  go on.
+  may open it, the object clears what it holds. A paused room is
+  read-only: Go reads it as usual and says `"paused": true` on each read
+  and catch-up, and refuses a post 409 `teamspace_disabled`; either tells
+  every socket `paused` (a socket that opens gets the room first), the
+  reads go on, and the first read that says `paused: false` tells them
+  `live`. A Go from before read-only rooms refuses a paused room's reads
+  400 instead, which tells every socket `paused` too, and a server without
+  rooms (503 `rooms_unavailable`) `unavailable`; either of those stops the
+  reads until a member's read succeeds again, which happens when somebody
+  comes back to the room. Any other failure tells the sockets `error`
+  once, and the reads go on.
 - **Letting go.** The object is a cache of Go's room: ten minutes after the
   last socket closes, it clears what it holds, and the next socket reads
   the room afresh. A teamspace's deletion clears it at once, through the

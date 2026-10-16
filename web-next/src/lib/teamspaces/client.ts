@@ -72,6 +72,13 @@ export type Teamspace = {
   unread_count?: number
   /** The room's newest message. Members only; absent while nobody has spoken, or from a server without it. */
   last_message?: TeamspaceLastMessage | null
+  /**
+   * Who paused it, while it is paused: null for one paused before Go kept
+   * it, and absent from a Go that predates it.
+   */
+  paused_by_user_id?: string | null
+  /** When it was paused (RFC 3339), as `paused_by_user_id`. */
+  paused_at?: string | null
   created_at: string
   updated_at: string
 }

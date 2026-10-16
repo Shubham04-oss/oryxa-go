@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
@@ -22,6 +23,7 @@ const (
 	maxDescriptionRunes  = 2000
 	maxInstructionsRunes = 20_000
 	maxRoleRunes         = 500
+	maxTargetLabelRunes  = 60
 	maxEntryTitleRunes   = 200
 	maxEntrySummaryRunes = 20_000
 	maxEntryTools        = 100
@@ -35,7 +37,9 @@ type Repository interface {
 	Create(context.Context, Space) (Space, error)
 	List(context.Context, string) ([]Space, error)
 	Get(context.Context, string, string) (Space, error)
-	Update(context.Context, string, string, UpdateInput) (Space, error)
+	// Update changes a teamspace as userID asked, recording them as who
+	// paused it when the change disables it.
+	Update(ctx context.Context, organizationID, id, userID string, input UpdateInput) (Space, error)
 	Delete(context.Context, string, string) error
 	AddContribution(context.Context, Actor, string, ContributionInput) (Space, error)
 	UpdateContribution(context.Context, Actor, string, string, ContributionUpdate) (Space, error)
@@ -272,7 +276,10 @@ func (service *Service) Update(ctx context.Context, actor Actor, id string, inpu
 	if input.Status != nil && *input.Status != StatusActive && *input.Status != StatusDisabled {
 		return Space{}, fmt.Errorf("%w: status must be active or disabled", ErrInvalid)
 	}
-	updated, err := service.repository.Update(ctx, actor.OrganizationID, current.ID, input)
+	if err := validateTarget(input); err != nil {
+		return Space{}, err
+	}
+	updated, err := service.repository.Update(ctx, actor.OrganizationID, current.ID, actor.UserID, input)
 	if err != nil {
 		return Space{}, err
 	}
@@ -550,7 +557,21 @@ func cleanUpdate(input UpdateInput) UpdateInput {
 		value := strings.TrimSpace(*input.Description)
 		input.Description = &value
 	}
+	// An empty date or label clears it, as null does.
+	if input.TargetDate.Value != nil {
+		input.TargetDate.Value = nonEmpty(strings.TrimSpace(*input.TargetDate.Value))
+	}
+	if input.TargetLabel.Value != nil {
+		input.TargetLabel.Value = nonEmpty(cleanLine(*input.TargetLabel.Value))
+	}
 	return input
+}
+
+func nonEmpty(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func cleanOrganizationAgentUpdate(input OrganizationAgentUpdate) OrganizationAgentUpdate {
@@ -628,6 +649,20 @@ func validateSpaceFields(name, description string) error {
 		return fmt.Errorf("%w: name holds at most %d characters", ErrInvalid, maxNameRunes)
 	case utf8.RuneCountInString(description) > maxDescriptionRunes:
 		return fmt.Errorf("%w: description holds at most %d characters", ErrInvalid, maxDescriptionRunes)
+	}
+	return nil
+}
+
+// validateTarget checks a cleaned update's target: a calendar date written
+// YYYY-MM-DD, and a short label.
+func validateTarget(input UpdateInput) error {
+	if date := input.TargetDate.Value; date != nil {
+		if _, err := time.Parse(time.DateOnly, *date); err != nil {
+			return fmt.Errorf("%w: target_date must be a date written YYYY-MM-DD", ErrInvalid)
+		}
+	}
+	if label := input.TargetLabel.Value; label != nil && utf8.RuneCountInString(*label) > maxTargetLabelRunes {
+		return fmt.Errorf("%w: target_label holds at most %d characters", ErrInvalid, maxTargetLabelRunes)
 	}
 	return nil
 }
@@ -724,9 +759,12 @@ func publicationAuthor(space Space, userID, agentID string) (string, bool) {
 }
 
 func emptyUpdate(input UpdateInput) bool {
-	return input.Name == nil && input.Description == nil && input.Status == nil
+	return input.Name == nil && input.Description == nil && input.Status == nil &&
+		!input.TargetDate.Set && !input.TargetLabel.Set
 }
 
+// applyUpdate is space with input's fields changed, all but its status,
+// which changeStatus moves.
 func applyUpdate(space Space, input UpdateInput) Space {
 	if input.Name != nil {
 		space.Name = *input.Name
@@ -734,8 +772,28 @@ func applyUpdate(space Space, input UpdateInput) Space {
 	if input.Description != nil {
 		space.Description = *input.Description
 	}
-	if input.Status != nil {
-		space.Status = *input.Status
+	if input.TargetDate.Set {
+		space.TargetDate = input.TargetDate.Value
+	}
+	if input.TargetLabel.Set {
+		space.TargetLabel = input.TargetLabel.Value
+	}
+	return space
+}
+
+// changeStatus moves space to status as userID asked, at at. Disabling an
+// active teamspace records who paused it and when; making it active again
+// clears both. Asking for the status it already has changes nothing, so a
+// second pause keeps the first one's facts.
+func changeStatus(space Space, status Status, userID string, at time.Time) Space {
+	if space.Status == status {
+		return space
+	}
+	space.Status = status
+	if status == StatusDisabled {
+		space.PausedByUserID, space.PausedAt = &userID, &at
+	} else {
+		space.PausedByUserID, space.PausedAt = nil, nil
 	}
 	return space
 }

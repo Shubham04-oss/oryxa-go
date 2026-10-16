@@ -46,6 +46,7 @@ import {
   agentIdentity,
   lastMessageLine,
   memberName,
+  pausedLine,
   personIdentity,
   statusLabel,
   timeAgo,
@@ -488,8 +489,8 @@ export function TeamspacesManagement({
             <TeamspaceCard
               key={space.id}
               space={space}
-              call={liveCalls.get(space.id)}
               viewerId={viewerId}
+              call={liveCalls.get(space.id)}
               resuming={resume.isPending && resume.variables.id === space.id}
               onOpen={() => onOpen(space.id)}
               onManage={() => manage(space)}
@@ -543,8 +544,8 @@ export function TeamspacesManagement({
  */
 function TeamspaceCard({
   space,
-  call,
   viewerId,
+  call,
   resuming,
   onOpen,
   onManage,
@@ -553,8 +554,8 @@ function TeamspaceCard({
   onDelete,
 }: {
   space: Teamspace
-  call?: CallView
   viewerId?: string
+  call?: CallView
   resuming: boolean
   onOpen: () => void
   onManage: () => void
@@ -648,7 +649,7 @@ function TeamspaceCard({
       <p className="workspace-teamspace-card-purpose">
         {active
           ? space.description || "No description yet."
-          : "Paused. Its room is closed until a team admin resumes it."}
+          : "Paused. Its room is read-only until a team admin resumes it."}
       </p>
       {last && (
         <p className="workspace-teamspace-card-last">
@@ -665,7 +666,9 @@ function TeamspaceCard({
         </div>
       )}
       <div className="workspace-teamspace-card-foot">
-        <span>{active ? "" : "Paused"}</span>
+        <span>
+          {active ? "" : (pausedLine(space, { viewerId }) ?? "Paused")}
+        </span>
         <TeamspaceFaces space={space} />
       </div>
     </Card>
@@ -1003,6 +1006,7 @@ function TeamspaceDetail({
   })
   const busy = changeStatus.isPending || remove.isPending
   const active = space.status === "active"
+  const pausedBy = pausedLine(space, { viewerId })
   const ownAgents = space.whisperers
   const contributions = space.contributions
   const latestEntry = entries.data?.[0]
@@ -1125,8 +1129,9 @@ function TeamspaceDetail({
       {!active && (
         <p className="workspace-teamspace-note">
           {space.can_manage
-            ? "Paused: its room is closed. Resume it to open the room again."
-            : "Paused by a team admin: its room is closed until they resume it."}
+            ? "Paused: its room is read-only. Resume it to post again."
+            : "Paused by a team admin: its room is read-only until they resume it."}
+          {pausedBy && ` ${pausedBy}.`}
         </p>
       )}
 

@@ -190,7 +190,8 @@ const Pass = "PASS"
 
 // Store keeps a room's messages, its brief, and who is reading it.
 type Store interface {
-	// Append adds a message and gives it the room's next sequence number.
+	// Append adds a message and gives it the room's next sequence number. It
+	// refuses with ErrPaused once the room's teamspace is paused.
 	Append(ctx context.Context, message Message) (Message, error)
 	// Messages returns the room's messages after seq, oldest first, at most
 	// limit of them.

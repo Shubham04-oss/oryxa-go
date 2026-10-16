@@ -225,7 +225,8 @@ func (relay *Relay) Post(ctx context.Context, room Situation, message Message, v
 		transcript = append(transcript, trigger)
 
 		var added []addition
-		added, consecutivePasses = relay.round(ctx, situation, trigger, transcript, asked, unreached, consecutivePasses)
+		var paused bool
+		added, consecutivePasses, paused = relay.round(ctx, situation, trigger, transcript, asked, unreached, consecutivePasses)
 		for _, said := range added {
 			results = append(results, said.Message)
 			history = append(history, said.Message)
@@ -233,7 +234,10 @@ func (relay *Relay) Post(ctx context.Context, room Situation, message Message, v
 				queue = append(queue, relayItem{message: said.Message, priorLen: len(history) - 1})
 			}
 		}
-		if consecutivePasses >= maxConsecutivePasses {
+		// A room paused while its turns ran took nothing more from the moment
+		// it was paused, and the relay starts no turn whose answer it would
+		// refuse.
+		if paused || consecutivePasses >= maxConsecutivePasses {
 			return results, nil
 		}
 	}
@@ -254,9 +258,10 @@ type addition struct {
 // passes, and for one that could not answer a line saying so. unreached are
 // seats the message named that had no turn left, which say that too. It
 // returns what it stored, and how many turns in a row have passed by now,
-// counting on from passes. Whether that ends the relay is for the caller to
+// counting on from passes, and whether the room refused something because it
+// had been paused by then. Whether that ends the relay is for the caller to
 // say once the whole round is in: a seat that ran has its answer heard.
-func (relay *Relay) round(ctx context.Context, room Situation, trigger Message, transcript []Message, asked, unreached []Seat, passes int) ([]addition, int) {
+func (relay *Relay) round(ctx context.Context, room Situation, trigger Message, transcript []Message, asked, unreached []Seat, passes int) ([]addition, int, bool) {
 	running := make([]chan turn, len(asked))
 	for index, seat := range asked {
 		running[index] = make(chan turn, 1)
@@ -264,6 +269,7 @@ func (relay *Relay) round(ctx context.Context, room Situation, trigger Message, 
 	}
 
 	var added []addition
+	paused := false
 	for index, seat := range asked {
 		taken := <-running[index]
 		if taken.err == nil && strings.TrimSpace(taken.reply) == "" {
@@ -273,9 +279,11 @@ func (relay *Relay) round(ctx context.Context, room Situation, trigger Message, 
 		case taken.err != nil:
 			relay.logger().WarnContext(ctx, "rooms: relay: a seat could not answer; saying so in the room",
 				"room_id", trigger.RoomID, "seat", seat.Handle, "in_reply_to_seq", trigger.Seq, "slow", taken.slow, "error", taken.err)
-			if line, ok := relay.note(ctx, room, trigger, seat, unanswered(seat, taken)); ok {
+			line, err := relay.note(ctx, room, trigger, seat, unanswered(seat, taken))
+			if err == nil {
 				added = append(added, addition{Message: line})
 			}
+			paused = paused || errors.Is(err, ErrPaused)
 		case taken.reply == Pass:
 			passes++
 		default:
@@ -284,6 +292,7 @@ func (relay *Relay) round(ctx context.Context, room Situation, trigger Message, 
 			if err != nil {
 				relay.logger().WarnContext(ctx, "rooms: relay: could not record a seat's answer; skipping it",
 					"room_id", trigger.RoomID, "seat", seat.Handle, "in_reply_to_seq", trigger.Seq, "error", err)
+				paused = paused || errors.Is(err, ErrPaused)
 				continue
 			}
 			added = append(added, addition{Message: said, answer: true})
@@ -292,11 +301,13 @@ func (relay *Relay) round(ctx context.Context, room Situation, trigger Message, 
 	for _, seat := range unreached {
 		relay.logger().WarnContext(ctx, "rooms: relay: a seat was named past the turns one message may cause; saying so in the room",
 			"room_id", trigger.RoomID, "seat", seat.Handle, "in_reply_to_seq", trigger.Seq)
-		if line, ok := relay.note(ctx, room, trigger, seat, noTurn(seat)); ok {
+		line, err := relay.note(ctx, room, trigger, seat, noTurn(seat))
+		if err == nil {
 			added = append(added, addition{Message: line})
 		}
+		paused = paused || errors.Is(err, ErrPaused)
 	}
-	return added, passes
+	return added, passes, paused
 }
 
 // say stores what seat says in reply to trigger, addressing exactly the

@@ -17,9 +17,9 @@ import (
 )
 
 // The kinds of item a thread's history and a run's stream are made of. A
-// thread's history holds messages, tool calls, tool results and
-// confirmations; a run's stream carries the same items as they happen, plus
-// deltas and the run's own start and end.
+// thread's history holds messages, tool calls, tool results, confirmations
+// and each run's start and end; a run's stream carries the same items as they
+// happen, plus deltas.
 const (
 	// ItemMessage is text from the member or from Krude.
 	ItemMessage = "message"
@@ -79,15 +79,20 @@ const (
 type Item struct {
 	Type string `json:"type"`
 	// ID is the stored event the item came from, so a client can match what
-	// it streamed against the history it reads later. Deltas and the run's
-	// own items have none.
+	// it streamed against the history it reads later. Deltas have none; a
+	// run's brackets have their run's id with ".started" or ".ended", streamed
+	// and stored alike (brackets.go).
 	ID string    `json:"id,omitempty"`
 	At time.Time `json:"at,omitzero"`
 	// Author is AuthorMember or the agent's name.
 	Author string `json:"author,omitempty"`
 	Text   string `json:"text,omitempty"`
-	// Error says why a message, tool result or run went wrong.
+	// Error says why a message, tool result or run went wrong. On a failed
+	// run, Code says it as one of the Failure codes, under the name a chat
+	// Durable Object gives the codes it writes on a run_failed of its own
+	// (session_expired, or Go's refusal), which none of them shares.
 	Error string `json:"error,omitempty"`
+	Code  string `json:"code,omitempty"`
 	// CallID ties a tool result to its call. On a confirmation it is the ID
 	// the member's answer names, and ToolCallID the call it holds back, so a
 	// client can show that call as waiting rather than running.
@@ -135,16 +140,46 @@ func streamItems(event *session.Event) []Item {
 
 // historyItems is a thread's history: every stored event's items, each
 // confirmation with the answer the member gave it, if any.
+//
+// A run's start is stored before the runner appends what started it: the
+// member's message, an apps batch or the member's answers. A run's stream
+// sends that first and the start after it, so history lists the start where
+// the stream has it, after what started the run and before anything the run
+// added, which a client groups into the turn of the prompt before it. Its At
+// still says when it was stored.
 func historyItems(events []*session.Event) []Item {
 	answers := confirmationAnswers(events)
 	items := make([]Item, 0, len(events))
+	var started *Item
 	for _, event := range events {
 		if event == nil || event.Partial {
 			continue
 		}
+		if bracket, ok := bracketOf(event); ok && bracket.Type == ItemRunStarted {
+			if started != nil {
+				items = append(items, *started)
+			}
+			started = &bracket
+			continue
+		}
+		if started != nil && !startsRun(event) {
+			items = append(items, *started)
+			started = nil
+		}
 		items = append(items, eventItems(event, answers)...)
 	}
+	if started != nil {
+		items = append(items, *started)
+	}
 	return items
+}
+
+// startsRun reports whether an event is what the member, or their apps, sent
+// a run: content of ADK's user author, which only the runner appends from a
+// run's input. A bracket, a note or a rename is the user author's too, but
+// carries no content.
+func startsRun(event *session.Event) bool {
+	return event.Author == adkUserAuthor && event.Content != nil
 }
 
 // displayAgent replaces only the answering agent's immutable ADK name with
@@ -165,6 +200,9 @@ func displayAgent(items []Item, machineName, displayName string) []Item {
 // came in. Confirmations take their status from answers; a confirmation
 // answers does not hold is pending.
 func eventItems(event *session.Event, answers map[string]bool) []Item {
+	if bracket, ok := bracketOf(event); ok {
+		return []Item{bracket}
+	}
 	// A note is an event of metadata alone. It is read before anything else,
 	// and a message a model or a member wrote never carries one.
 	if note, ok := noteOf(event); ok && event.Content == nil {
