@@ -1616,3 +1616,29 @@ describe("primary chat history actions", () => {
     expect(rememberedChoice(scope, LEO)).toBeNull()
   })
 })
+
+describe("the open conversation's ⋯ menu", () => {
+  async function menuItems(id: string, title: string) {
+    rememberChoice(scope, LEO, id)
+    stubApi({ threads: [thread(id, title)], rememberLatest: false })
+    renderChat()
+    await waitFor(() =>
+      expect(hooks.agentOptions.map((item) => item.name)).toContain(
+        `org_1~${id}`
+      )
+    )
+    fireEvent.click(await screen.findByRole("button", { name: "Chat options" }))
+    await screen.findByRole("menuitem", { name: "Delete chat" })
+    return screen.getAllByRole("menuitem").map((item) => item.textContent)
+  }
+
+  it("offers Rename on a conversation", async () => {
+    expect(await menuItems("th_2", "Plan the launch")).toContain("Rename")
+  })
+
+  it("has no Rename on the Requests thread, whose title Go keeps", async () => {
+    expect(await menuItems("requests-org_1", "Requests")).not.toContain(
+      "Rename"
+    )
+  })
+})
