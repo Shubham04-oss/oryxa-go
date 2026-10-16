@@ -129,6 +129,9 @@ type Run struct {
 	// the run's context and nowhere else: not in stateDelta, not in the run's
 	// record, not in an event.
 	teamspaceID string
+	// artifacts is the files the thread has kept, as the run found them and
+	// with every one the run keeps, which the run records as it ends.
+	artifacts artifactTally
 	// remembering is the run's view of memory, scoped to the member's
 	// organization, that the run is handed to once it ends. It is built when
 	// the run starts driving, and nil when the service has no memory or the
@@ -251,6 +254,7 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 		maps.Copy(run.stateDelta, agents.ClearDeliveryState())
 	}
 	history := sessionEvents(stored)
+	run.artifacts = tallyArtifacts(history)
 	run.guardInput = publicationGuardInput(history, message)
 	if stateString(stored.State(), stateOrigin) == OriginSideConversation {
 		// The wrapped prompt contains other people's untrusted words. It must
@@ -414,11 +418,14 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	}
 	send(Item{Type: ItemRunStarted, RunID: run.id, At: time.Now().UTC()})
 
-	failure := run.drive(runContext, send)
-	if cause := context.Cause(runContext); runContext.Err() != nil && (failure == nil || Interrupted(cause)) {
-		// A drain's interruption is why the run ended, whatever the model
-		// call it cut short reported.
-		failure = cause
+	failure := endedBy(runContext, run.drive(runContext, send))
+	// Recorded while the run still holds the thread, so nothing else writes
+	// it in between, and whether the run failed or not: what it kept, it kept.
+	// A run that lost its hold writes nothing more: another run may be
+	// writing the thread now. Nor does an interrupted one: the drain's grace
+	// is for finish below, and the thread's next run counts its whole history.
+	if !errors.Is(failure, errLeaseLost) && !Interrupted(failure) {
+		run.record(ctx)
 	}
 	stopLease()
 
@@ -434,6 +441,19 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	if run.remembering != nil {
 		run.remember(ctx, run.remembering)
 	}
+}
+
+// endedBy is why a run ended, given what driving it returned. A drain's
+// interruption, or a lost hold on the thread, is the reason whatever the call
+// it cut short reported: ADK passes on the context's cause for the calls it
+// makes, but an error from anywhere else, such as the session store, is a
+// plain cancellation that says neither.
+func endedBy(runContext context.Context, failure error) error {
+	cause := context.Cause(runContext)
+	if runContext.Err() != nil && (failure == nil || Interrupted(cause) || errors.Is(cause, errLeaseLost)) {
+		return cause
+	}
+	return failure
 }
 
 // publicationGuardInput uses the actual thread, not a model's report. A
@@ -562,6 +582,7 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 			}
 			continue
 		}
+		run.artifacts.add(event)
 		for _, item := range displayAgent(streamItems(event), answering.Name(), run.member.AgentName) {
 			send(item)
 		}

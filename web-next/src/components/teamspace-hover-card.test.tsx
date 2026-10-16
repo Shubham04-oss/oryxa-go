@@ -1,8 +1,16 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { toast } from "sonner"
 import { Toaster } from "@/components/ui/sonner"
 import { TeamspaceCard, TeamspaceHoverCard } from "./teamspace-hover-card"
 import { notifyCopied, notifyParleyStarted } from "./workspace-toasts"
@@ -139,5 +147,13 @@ describe("the workspace's toasts", () => {
     expect(await screen.findByText("Raya Patel started a parley")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Join" }))
     expect(onJoin).toHaveBeenCalled()
+    // Sonner removes dismissed toasts on a timer: let it run here, not after
+    // the test environment has gone.
+    act(() => {
+      toast.dismiss()
+    })
+    await waitFor(() =>
+      expect(document.querySelector("[data-sonner-toast]")).toBeNull()
+    )
   })
 })
