@@ -37,6 +37,7 @@ var shallowRoutes = map[string][]string{
 		"PATCH /v1/organizations/{organizationID}/teamspaces/{teamspaceID}",
 		"GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", "POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries",
 		"POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents", "PATCH /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents/{agentID}",
+		"POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/read",
 		"GET /v1/organizations/{organizationID}/threads", "GET /v1/organizations/{organizationID}/threads/{threadID}",
 		"PATCH /v1/organizations/{organizationID}/threads/{threadID}",
 		"PATCH /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}",

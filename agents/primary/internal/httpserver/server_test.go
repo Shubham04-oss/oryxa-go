@@ -743,7 +743,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 79 {
+	if len(patterns) != 80 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -893,6 +893,45 @@ func TestATeamspaceTargetIsSetAndClearedThroughItsPatch(t *testing.T) {
 	}
 	if last := spaces.updates[len(spaces.updates)-1]; !last.TargetLabel.Set || last.TargetLabel.Value != nil || last.TargetDate.Set {
 		t.Errorf("the clearing patch reached the service as %+v", last)
+	}
+}
+
+// A member's teamspace list carries each room's unread count, read once for
+// the whole list, and their client moves the read cursor itself.
+func TestTeamspaceListCarriesUnreadCountsAndReadMovesTheCursor(t *testing.T) {
+	spaces := &fakeTeamspaces{space: teamspaces.Space{ID: "tsp_engineering", Status: teamspaces.StatusActive, IsMember: true}}
+	roomService := &fakeRooms{}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Teamspaces: spaces, Rooms: roomService,
+	}, nil)
+
+	listed := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces", "", bearer)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"unread_count":1`) {
+		t.Fatalf("list = %d %s", listed.Code, listed.Body.String())
+	}
+	got := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces/tsp_engineering", "", bearer)
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"unread_count":1`) {
+		t.Fatalf("get = %d %s", got.Code, got.Body.String())
+	}
+	// A change answers with the whole teamspace, so it carries them too: a
+	// client that keeps what the change answered keeps its badge.
+	patched := serve(server, http.MethodPatch, "/v1/organizations/org_1/teamspaces/tsp_engineering", `{"target_label":"Launch"}`, bearer)
+	if patched.Code != http.StatusOK || !strings.Contains(patched.Body.String(), `"unread_count":1`) {
+		t.Fatalf("patch = %d %s", patched.Code, patched.Body.String())
+	}
+	if len(roomService.actors) != 3 {
+		t.Errorf("room activity read %d times for three requests", len(roomService.actors))
+	}
+	read := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces/tsp_engineering/read", `{"seq":7}`, bearer)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"last_read_seq":7`) {
+		t.Fatalf("read = %d %s", read.Code, read.Body.String())
+	}
+	// A body without seq is a client's mistake, not a read of nothing.
+	for _, body := range []string{`{}`, `{"seq":null}`} {
+		missing := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces/tsp_engineering/read", body, bearer)
+		if missing.Code != http.StatusBadRequest || !strings.Contains(missing.Body.String(), `"invalid_request"`) {
+			t.Errorf("read %s = %d %s, want 400 invalid_request", body, missing.Code, missing.Body.String())
+		}
 	}
 }
 
