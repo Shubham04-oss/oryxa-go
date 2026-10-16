@@ -105,6 +105,7 @@ func TestATaskIsRefusedWhatItCannotHold(t *testing.T) {
 		"an owner off the team": {Title: "Ship", OwnerUserID: ptr("user_elsewhere")},
 		"a due date that isn't": {Title: "Ship", DueDate: ptr("next week")},
 		"a negative position":   {Title: "Ship", Position: ptr(-1)},
+		"a position past 1e6":   {Title: "Ship", Position: ptr(3_000_000_000)},
 	} {
 		if _, err := service.CreateTask(context.Background(), actor(), "tsp_1", input); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: error = %v, want ErrInvalid", name, err)
@@ -114,8 +115,14 @@ func TestATaskIsRefusedWhatItCannotHold(t *testing.T) {
 	if _, err := service.UpdateTask(context.Background(), actor(), "tsp_1", created.ID, TaskUpdate{}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("an empty update: %v, want ErrInvalid", err)
 	}
-	if _, err := service.UpdateTask(context.Background(), actor(), "tsp_1", created.ID, TaskUpdate{Title: ptr(" ")}); !errors.Is(err, ErrInvalid) {
-		t.Errorf("an emptied title: %v, want ErrInvalid", err)
+	for name, input := range map[string]TaskUpdate{
+		"an emptied title":      {Title: ptr(" ")},
+		"a position past 1e6":   {Position: ptr(maxTaskPosition + 1)},
+		"an owner off the team": {OwnerUserID: Nullable{Set: true, Value: ptr("user_elsewhere")}},
+	} {
+		if _, err := service.UpdateTask(context.Background(), actor(), "tsp_1", created.ID, input); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: error = %v, want ErrInvalid", name, err)
+		}
 	}
 }
 

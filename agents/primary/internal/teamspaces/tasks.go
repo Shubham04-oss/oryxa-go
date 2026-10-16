@@ -10,7 +10,15 @@ import (
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 )
 
-const maxTaskTitleRunes = 200
+const (
+	maxTaskTitleRunes = 200
+	// maxTaskPosition keeps a position, and the one after the last, inside
+	// the column's integer.
+	maxTaskPosition = 1_000_000
+	// maxTasks is the most a teamspace's checklist holds, since it is read
+	// whole.
+	maxTasks = 500
+)
 
 // Task is one item on a teamspace's checklist. Any member of the team may
 // add one, change it or tick it; only whoever added it, or a manager of the
@@ -234,8 +242,8 @@ func validateTaskTitle(title string) error {
 // validateTaskPlacement checks where a task sits: its place in the list and
 // the day it is due.
 func validateTaskPlacement(dueDate *string, position *int) error {
-	if position != nil && *position < 0 {
-		return fmt.Errorf("%w: position must be zero or more", ErrInvalid)
+	if position != nil && (*position < 0 || *position > maxTaskPosition) {
+		return fmt.Errorf("%w: position must be between 0 and %d", ErrInvalid, maxTaskPosition)
 	}
 	if dueDate != nil {
 		if _, err := time.Parse(time.DateOnly, *dueDate); err != nil {
