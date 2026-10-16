@@ -370,6 +370,19 @@ not permission to copy every incidental value into a new component.
     and **Parleys** have no API yet, so each is one honest line on the
     empty scene ("A shared plan is coming", "Past parleys will be listed
     here"). No launch date in the hero until the teamspace carries one.
+  - **Parley notes in the room** (TeamspaceHome board, "th-notes"; #392):
+    a room message of kind `parley_notes` is a quiet card (`--base`, a
+    `--border-quiet` hairline, 12px corners) in the message column, with no
+    author row: "Parley notes · 35 min · posted by {agent}" beside the
+    poster's small face and the time, then each decision with a green
+    Decision tag (`ui/badge`, the pop-up's Decision colours) and each
+    action with its owner's face and an outline tag naming them ("You" for
+    the member), or "Unassigned". An owner the room can't seat (not a
+    person on the team) is Unassigned, never a guess. The poster is the
+    organization's agent, named from the teamspace. Notes that decided and
+    assigned nothing say so. A message with no kind, kind `message`, a kind
+    this client doesn't know, or notes whose data can't be read shows its
+    body as before (the body always says the notes in words).
   - **The member's agent beside a teamspace** (TeamspaceHome, Teamspace3 and
     TeamspaceGlance boards, 15 Oct 2026): opening a teamspace on a desktop
     opens the agent panel (§2) beside it, so the sidebar folds to its
@@ -695,7 +708,10 @@ not permission to copy every incidental value into a new component.
   - **Parley ended:** when the call the member is in ends (someone ended it,
     or they ended it for everyone), the pop-up with the sea of bottles: the
     kicker "Parley ended · 35 min · 5 people", what was kept (the recording
-    and transcript, or the transcript) and Done. Just leaving shows nothing.
+    and transcript, or the transcript) and Done. In a teamspace the foot's
+    quiet note says "{agent} will post the notes in the room" (the call's
+    agent as its view last named it, or "The agent"); other rooms keep no
+    notes and show none. Just leaving shows nothing.
     The agent's notes, the save-recording switch, "Edit first" and "Post
     notes to the room" join it once there's an API for the notes.
   - **In a DM:** the same strip, or a "Parley" button when none runs, sits
