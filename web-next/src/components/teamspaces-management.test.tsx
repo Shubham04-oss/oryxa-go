@@ -200,12 +200,12 @@ describe("TeamspacesManagement list", () => {
       within(launchCard).getByRole("img", { name: "Member, Ada" })
     ).toBeTruthy()
 
-    // A paused card says so, and doesn't promise a read-only room.
+    // A paused card says so, and that its room is read-only.
     const designCard = screen.getByRole("article", { name: "Design reviews" })
     expect(within(designCard).getByText("Design team · paused")).toBeTruthy()
     expect(
       within(designCard).getByText(
-        "Paused. Its room is closed until a team admin resumes it."
+        "Paused. Its room is read-only until a team admin resumes it."
       )
     ).toBeTruthy()
     expect(
@@ -806,7 +806,7 @@ describe("TeamspaceDetail", () => {
     expect(screen.queryByRole("button", { name: "Open teamspace" })).toBeNull()
     expect(
       screen.getByText(
-        "Paused: its room is closed. Resume it to open the room again."
+        "Paused: its room is read-only. Resume it to post again."
       )
     ).toBeTruthy()
 
@@ -913,7 +913,7 @@ describe("TeamspaceDetail", () => {
     ).toBeNull()
     expect(
       screen.getByText(
-        "Paused by a team admin: its room is closed until they resume it."
+        "Paused by a team admin: its room is read-only until they resume it."
       )
     ).toBeTruthy()
   })
