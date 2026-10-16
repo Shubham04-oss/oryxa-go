@@ -57,7 +57,7 @@ func (store *PostgresStore) Migrate(ctx context.Context) error {
 }
 
 const messageColumns = `id, room_id, seq, author_handle, author_kind, author_user_id,
-	author_agent_id, body, addressed_to, in_reply_to_seq, created_at`
+	author_agent_id, body, addressed_to, in_reply_to_seq, created_at, kind, data`
 
 // Append implements [Store]. It allocates the room's next sequence number
 // and inserts message under it, atomically, then returns the stored row.
@@ -90,6 +90,37 @@ const messageColumns = `id, room_id, seq, author_handle, author_kind, author_use
 // is refused with ErrPaused, or waits for the message to commit and stops the
 // next one.
 func (store *PostgresStore) Append(ctx context.Context, message Message) (Message, error) {
+	var stored Message
+	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		var status teamspaces.Status
+		err := tx.QueryRow(ctx, `SELECT status FROM agents_primary.teamspaces WHERE id = $1 FOR SHARE`,
+			message.RoomID).Scan(&status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrRoomNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("read the room's teamspace: %w", err)
+		}
+		if status != teamspaces.StatusActive {
+			return ErrPaused
+		}
+		stored, err = store.append(ctx, tx, message)
+		return err
+	})
+	if errors.Is(err, ErrRoomNotFound) || errors.Is(err, ErrPaused) {
+		return Message{}, err
+	}
+	if err != nil {
+		return Message{}, fmt.Errorf("append room message: %w", err)
+	}
+	return stored, nil
+}
+
+// append stores message in tx, as Append describes. Each of allocated runs
+// once the message has its number and before it is inserted, while the
+// room's counter row is locked; an error from one stops the append, and the
+// caller's rollback gives the number back.
+func (store *PostgresStore) append(ctx context.Context, tx pgx.Tx, message Message, allocated ...func(organizationID string) error) (Message, error) {
 	// The store gives a message both of the things that make it one: its
 	// place in the room, and its name. A caller that invented ids would have
 	// to be trusted to keep them unique across every room at once, and the
@@ -105,10 +136,68 @@ func (store *PostgresStore) Append(ctx context.Context, message Message) (Messag
 	if message.AddressedTo == nil {
 		message.AddressedTo = []string{}
 	}
-	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+	if message.Kind == "" {
+		message.Kind = KindMessage
+	}
+	var organizationID string
+	err := tx.QueryRow(ctx, `
+		INSERT INTO agents_primary.room_message_seqs (room_id, organization_id, next_seq)
+		SELECT $1, teamspace.organization_id, 2
+		FROM agents_primary.teamspaces teamspace WHERE teamspace.id = $1
+		ON CONFLICT (room_id) DO UPDATE SET next_seq = room_message_seqs.next_seq + 1
+		RETURNING next_seq - 1, organization_id`,
+		message.RoomID).Scan(&message.Seq, &organizationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Message{}, ErrRoomNotFound
+	}
+	if err != nil {
+		return Message{}, fmt.Errorf("allocate room message sequence: %w", err)
+	}
+	for _, check := range allocated {
+		if err := check(organizationID); err != nil {
+			return Message{}, err
+		}
+	}
+	if err := scanMessage(tx.QueryRow(ctx, `
+		INSERT INTO agents_primary.room_messages (`+messageColumns+`, organization_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		RETURNING `+messageColumns,
+		message.ID, message.RoomID, message.Seq, message.AuthorHandle, message.AuthorKind,
+		message.AuthorUserID, message.AuthorAgentID, message.Body, message.AddressedTo,
+		message.InReplyToSeq, message.CreatedAt, message.Kind, nullJSON(message.Data), organizationID), &message); err != nil {
+		return Message{}, err
+	}
+	return message, store.recordPosted(ctx, tx, organizationID, message)
+}
+
+// errNotesPosted rolls back an AppendNotes whose call already has notes in
+// the room, and with it the sequence number it took.
+var errNotesPosted = errors.New("this call's notes are already in the room")
+
+// AppendNotes implements [Store]. The teamspace is read in the organization
+// it is said to be in, with its organization agent, which is who the notes
+// are by: an agent that speaks for nobody, so the message has no author
+// user. A paused teamspace's room takes no notes, as it takes no messages.
+//
+// Whether the call already has notes is asked after the room's sequence
+// number is allocated, while the counter row is locked: two deliveries of
+// the same notes queue there, and the second sees the first's committed
+// message, gives its number back and answers with that message instead.
+func (store *PostgresStore) AppendNotes(ctx context.Context, organizationID, roomID string, notes ParleyNotes, body string) (Message, bool, error) {
+	data, err := json.Marshal(notes)
+	if err != nil {
+		return Message{}, false, fmt.Errorf("encode parley notes: %w", err)
+	}
+	var stored, existing Message
+	err = pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 		var status teamspaces.Status
-		err := tx.QueryRow(ctx, `SELECT status FROM agents_primary.teamspaces WHERE id = $1 FOR SHARE`,
-			message.RoomID).Scan(&status)
+		var agentID, agentName string
+		err := tx.QueryRow(ctx, `SELECT teamspace.status, agent.id, agent.name
+			FROM agents_primary.teamspaces teamspace
+			JOIN agents_primary.organization_agents agent ON agent.id = teamspace.organization_agent_id
+			WHERE teamspace.organization_id = $1 AND teamspace.id = $2
+			FOR SHARE OF teamspace`, organizationID, roomID).
+			Scan(&status, &agentID, &agentName)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrRoomNotFound
 		}
@@ -118,38 +207,40 @@ func (store *PostgresStore) Append(ctx context.Context, message Message) (Messag
 		if status != teamspaces.StatusActive {
 			return ErrPaused
 		}
-		var organizationID string
-		err = tx.QueryRow(ctx, `
-			INSERT INTO agents_primary.room_message_seqs (room_id, organization_id, next_seq)
-			SELECT $1, teamspace.organization_id, 2
-			FROM agents_primary.teamspaces teamspace WHERE teamspace.id = $1
-			ON CONFLICT (room_id) DO UPDATE SET next_seq = room_message_seqs.next_seq + 1
-			RETURNING next_seq - 1, organization_id`,
-			message.RoomID).Scan(&message.Seq, &organizationID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrRoomNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("allocate room message sequence: %w", err)
-		}
-		if err := scanMessage(tx.QueryRow(ctx, `
-			INSERT INTO agents_primary.room_messages (`+messageColumns+`, organization_id)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-			RETURNING `+messageColumns,
-			message.ID, message.RoomID, message.Seq, message.AuthorHandle, message.AuthorKind,
-			message.AuthorUserID, message.AuthorAgentID, message.Body, message.AddressedTo,
-			message.InReplyToSeq, message.CreatedAt, organizationID), &message); err != nil {
-			return err
-		}
-		return store.recordPosted(ctx, tx, organizationID, message)
+		stored, err = store.append(ctx, tx, Message{
+			RoomID: roomID, Kind: KindParleyNotes, Data: data,
+			AuthorHandle: handle(agentName, map[string]bool{}), AuthorKind: SeatAgent, AuthorAgentID: agentID,
+			Body: body,
+		}, func(string) error {
+			err := scanMessage(tx.QueryRow(ctx, `SELECT `+messageColumns+` FROM agents_primary.room_messages
+				WHERE room_id = $1 AND kind = 'parley_notes' AND data->>'call_id' = $2`, roomID, notes.CallID), &existing)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			return errNotesPosted
+		})
+		return err
 	})
-	if errors.Is(err, ErrRoomNotFound) || errors.Is(err, ErrPaused) {
-		return Message{}, err
+	switch {
+	case errors.Is(err, errNotesPosted):
+		return existing, false, nil
+	case errors.Is(err, ErrRoomNotFound), errors.Is(err, ErrPaused):
+		return Message{}, false, err
+	case err != nil:
+		return Message{}, false, fmt.Errorf("append parley notes: %w", err)
 	}
-	if err != nil {
-		return Message{}, fmt.Errorf("append room message: %w", err)
+	return stored, true, nil
+}
+
+// nullJSON is data as a nullable jsonb column takes it: null for none.
+func nullJSON(data json.RawMessage) any {
+	if len(data) == 0 {
+		return nil
 	}
-	return message, nil
+	return []byte(data)
 }
 
 // recordPosted records in tx that message, as stored, was posted in its
@@ -224,10 +315,15 @@ func (store *PostgresStore) listMessages(ctx context.Context, query string, args
 type scanner interface{ Scan(...any) error }
 
 func scanMessage(row scanner, message *Message) error {
+	var data []byte
 	if err := row.Scan(&message.ID, &message.RoomID, &message.Seq, &message.AuthorHandle, &message.AuthorKind,
 		&message.AuthorUserID, &message.AuthorAgentID, &message.Body, &message.AddressedTo,
-		&message.InReplyToSeq, &message.CreatedAt); err != nil {
+		&message.InReplyToSeq, &message.CreatedAt, &message.Kind, &data); err != nil {
 		return err
+	}
+	message.Data = nil
+	if len(data) > 0 {
+		message.Data = json.RawMessage(data)
 	}
 	if message.AddressedTo == nil {
 		message.AddressedTo = []string{}
@@ -438,7 +534,8 @@ func (store *PostgresStore) Activity(ctx context.Context, organizationID, userID
 				  AND NOT (unread.author_kind = 'person' AND unread.author_user_id = $2)
 				LIMIT $4) capped),
 			newest.id, newest.room_id, newest.seq, newest.author_handle, newest.author_kind, newest.author_user_id,
-			newest.author_agent_id, newest.body, newest.addressed_to, newest.in_reply_to_seq, newest.created_at
+			newest.author_agent_id, newest.body, newest.addressed_to, newest.in_reply_to_seq, newest.created_at,
+			newest.kind
 		FROM unnest($3::text[]) AS room(id)
 		LEFT JOIN agents_primary.room_read_cursors reader ON reader.room_id = room.id AND reader.user_id = $2
 		LEFT JOIN LATERAL (
@@ -454,15 +551,15 @@ func (store *PostgresStore) Activity(ctx context.Context, organizationID, userID
 			roomID  string
 			current Activity
 			last    struct {
-				id, roomID, handle, kind, userID, agentID, body *string
-				seq, inReplyTo                                  *int64
-				addressed                                       []string
-				createdAt                                       *time.Time
+				id, roomID, handle, kind, userID, agentID, body, messageKind *string
+				seq, inReplyTo                                               *int64
+				addressed                                                    []string
+				createdAt                                                    *time.Time
 			}
 		)
 		if err := rows.Scan(&roomID, &current.LastReadSeq, &current.Unread,
 			&last.id, &last.roomID, &last.seq, &last.handle, &last.kind, &last.userID,
-			&last.agentID, &last.body, &last.addressed, &last.inReplyTo, &last.createdAt); err != nil {
+			&last.agentID, &last.body, &last.addressed, &last.inReplyTo, &last.createdAt, &last.messageKind); err != nil {
 			return nil, fmt.Errorf("scan room activity: %w", err)
 		}
 		if last.id != nil {
@@ -470,7 +567,7 @@ func (store *PostgresStore) Activity(ctx context.Context, organizationID, userID
 				ID: *last.id, RoomID: *last.roomID, Seq: *last.seq, AuthorHandle: *last.handle,
 				AuthorKind: SeatKind(*last.kind), AuthorUserID: *last.userID, AuthorAgentID: *last.agentID,
 				Body: *last.body, AddressedTo: nonNilStrings(last.addressed), InReplyToSeq: *last.inReplyTo,
-				CreatedAt: *last.createdAt,
+				CreatedAt: *last.createdAt, Kind: MessageKind(*last.messageKind),
 			}
 		}
 		activity[roomID] = current
@@ -528,16 +625,18 @@ func clampLimit(limit int) int {
 }
 
 // Forget implements [Store]: it removes a member's own messages, presence,
-// read cursors and agent-thread pointers from organizationID's rooms, or, when userID is
-// empty, everything every room of that organization holds. A message's
-// owning member is always AuthorUserID, whether a person or their own agent
-// said it (Message.AuthorUserID is never empty), so scoping by it catches
-// both. The brief is a room's own synthesis rather than any one member's, so
-// a per-member Forget leaves it standing — the same convention
-// teamspaces.Forget follows for a team-owned space when one contributor
-// leaves it. A member's agent threads are found through member_agents'
-// ownership, the same join organizationagents.Forget uses to reach a
-// member's own follow-ups.
+// read cursors and agent-thread pointers from organizationID's rooms, or,
+// when userID is empty, everything every room of that organization holds. A
+// message's owning member is its AuthorUserID, whether a person or their own
+// agent said it, so scoping by it catches both. Parley notes are the
+// organization agent's and have no author user, so only the organization's
+// own Forget removes them; a member's Forget leaves the notes but takes
+// their id off every action they owned. The brief is a room's own synthesis rather than
+// any one member's, so a per-member Forget leaves it standing — the same
+// convention teamspaces.Forget follows for a team-owned space when one
+// contributor leaves it. A member's agent threads are found through
+// member_agents' ownership, the same join organizationagents.Forget uses to
+// reach a member's own follow-ups.
 func (store *PostgresStore) Forget(ctx context.Context, organizationID, userID string) error {
 	if strings.TrimSpace(userID) == "" {
 		return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
@@ -563,6 +662,15 @@ func (store *PostgresStore) Forget(ctx context.Context, organizationID, userID s
 	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_messages
 			WHERE organization_id=$1 AND author_user_id=$2`, organizationID, userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE agents_primary.room_messages
+			SET data = jsonb_set(data, '{actions}', (
+				SELECT COALESCE(jsonb_agg(CASE WHEN action->>'owner_user_id' = $2 THEN action - 'owner_user_id' ELSE action END), '[]'::jsonb)
+				FROM jsonb_array_elements(data->'actions') AS action
+			))
+			WHERE organization_id=$1 AND kind='parley_notes'
+				AND data->'actions' @> jsonb_build_array(jsonb_build_object('owner_user_id', $2::text))`, organizationID, userID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_presence

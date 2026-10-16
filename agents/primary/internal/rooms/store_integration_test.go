@@ -743,6 +743,72 @@ func TestReadCursorsAndActivity(t *testing.T) {
 	}
 }
 
+// A parley's notes are one message per call, by the organization agent, kept
+// with their data and read back with their kind; a message said is still
+// kind message with no data, and a paused room takes no notes.
+func TestParleyNotesArePostedOncePerCall(t *testing.T) {
+	fixture := testStore(t)
+	ctx := context.Background()
+	room := fixture.newRoom(t)
+	said, err := fixture.store.Append(ctx, Message{RoomID: room, AuthorHandle: "ada", AuthorKind: SeatPerson, AuthorUserID: "user-ada", Body: "let's call"})
+	if err != nil || said.Kind != KindMessage || said.Data != nil {
+		t.Fatalf("said = %+v, %v", said, err)
+	}
+	notes := ParleyNotes{CallID: "call_1", DurationMs: 60_000, Decisions: []string{"Ship"}, Actions: []ParleyAction{{Text: "Post it", OwnerUserID: "user-ada"}}}
+	posted, created, err := fixture.store.AppendNotes(ctx, fixture.organizationID, room, notes, notesBody(notes))
+	if err != nil || !created || posted.Seq != 2 || posted.Kind != KindParleyNotes || posted.AuthorKind != SeatAgent ||
+		posted.AuthorUserID != "" || !strings.HasPrefix(posted.AuthorAgentID, "oag_") || posted.AuthorHandle != "rooms-test-agent" {
+		t.Fatalf("posted = %+v, %v, %v", posted, created, err)
+	}
+	again, created, err := fixture.store.AppendNotes(ctx, fixture.organizationID, room, notes, notesBody(notes))
+	if err != nil || created || again.ID != posted.ID {
+		t.Fatalf("again = %+v, %v, %v", again, created, err)
+	}
+	// The repeat gave its number back: the next message is 3.
+	next, err := fixture.store.Append(ctx, Message{RoomID: room, AuthorHandle: "ada", AuthorKind: SeatPerson, AuthorUserID: "user-ada", Body: "thanks"})
+	if err != nil || next.Seq != 3 {
+		t.Fatalf("next = %+v, %v", next, err)
+	}
+
+	messages, err := fixture.store.Messages(ctx, room, 0, 10)
+	if err != nil || len(messages) != 3 || messages[1].Kind != KindParleyNotes {
+		t.Fatalf("messages = %+v, %v", messages, err)
+	}
+	var data ParleyNotes
+	if err := json.Unmarshal(messages[1].Data, &data); err != nil || data.CallID != "call_1" || data.Actions[0].OwnerUserID != "user-ada" {
+		t.Fatalf("data = %s, %v", messages[1].Data, err)
+	}
+	activity, err := fixture.store.Activity(ctx, fixture.organizationID, "user-ada", []string{room})
+	if err != nil || activity[room].Unread != 1 || activity[room].Last.Kind != KindMessage {
+		t.Fatalf("activity = %+v, %v", activity[room], err)
+	}
+
+	if _, _, err := fixture.store.AppendNotes(ctx, "org_elsewhere", room, ParleyNotes{CallID: "call_2"}, "notes"); !errors.Is(err, ErrRoomNotFound) {
+		t.Fatalf("notes for another organization's room: %v, want ErrRoomNotFound", err)
+	}
+	disabled := teamspaces.StatusDisabled
+	if _, err := fixture.teamspaces.Update(ctx, fixture.organizationID, room, "user-ada", teamspaces.UpdateInput{Status: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.store.AppendNotes(ctx, fixture.organizationID, room, ParleyNotes{CallID: "call_2"}, "notes"); !errors.Is(err, ErrPaused) {
+		t.Fatalf("notes for a paused room: %v, want ErrPaused", err)
+	}
+	// A member leaving takes their own messages, never the organization agent's
+	// notes, but takes their id off the actions they owned.
+	if err := fixture.store.Forget(ctx, fixture.organizationID, "user-ada"); err != nil {
+		t.Fatal(err)
+	}
+	left, err := fixture.store.Messages(ctx, room, 0, 10)
+	if err != nil || len(left) != 1 || left[0].Kind != KindParleyNotes {
+		t.Fatalf("after Ada's Forget = %+v, %v", left, err)
+	}
+	var scrubbed ParleyNotes
+	if err := json.Unmarshal(left[0].Data, &scrubbed); err != nil || len(scrubbed.Actions) != 1 ||
+		scrubbed.Actions[0].Text != "Post it" || scrubbed.Actions[0].OwnerUserID != "" || strings.Contains(string(left[0].Data), "user-ada") {
+		t.Fatalf("notes after Ada's Forget = %s, %v", left[0].Data, err)
+	}
+}
+
 // A paused room takes nothing, whoever asks: the store refuses the message as
 // ErrPaused, stores and announces none of it, and takes messages again once
 // the teamspace is resumed.

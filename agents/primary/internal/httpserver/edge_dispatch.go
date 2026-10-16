@@ -30,7 +30,8 @@ type EdgeDispatcher interface {
 	Dispatch(ctx context.Context, request edgedispatch.Request) (edgedispatch.Accepted, error)
 }
 
-// EdgeDispatch enables the edge's dispatch route. Both are required.
+// EdgeDispatch enables the edge's dispatch route. Both are required. Its
+// Tokens also admit the edge's parley notes, which need Config.Rooms too.
 type EdgeDispatch struct {
 	Tokens     EdgeTokens
 	Dispatcher EdgeDispatcher
@@ -38,6 +39,7 @@ type EdgeDispatch struct {
 
 func (server *Server) routeEdge() {
 	server.handle(edgeDispatchPath, server.edgeDispatch)
+	server.handle(edgeParleyNotesPath, server.edgeParleyNotes)
 }
 
 // edgeDispatch takes one request the voice agent hands over, for the member

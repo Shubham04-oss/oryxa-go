@@ -49,6 +49,9 @@ var shallowRoutes = map[string][]string{
 		"DELETE /v1/organizations/{organizationID}/agent-workflows/{workflowID}", "DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}",
 		"DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents/{agentID}", "DELETE /v1/organizations/{organizationID}/threads/{threadID}",
 		"DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks/{taskID}",
+		// The edge's route: an edge→agents token, not a member's, so a shallow
+		// call is refused 401, or 404 where the edge is not configured.
+		"POST /v1/edge/teamspaces/{teamspaceID}/parley-notes",
 	},
 	"rag": {
 		"GET /v1/capabilities",

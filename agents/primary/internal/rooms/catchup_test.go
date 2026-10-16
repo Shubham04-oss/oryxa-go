@@ -72,6 +72,10 @@ func (store *catchupFakeStore) Watching(_ context.Context, _ string, _ time.Time
 	return nil, nil
 }
 
+func (store *catchupFakeStore) AppendNotes(context.Context, string, string, ParleyNotes, string) (Message, bool, error) {
+	return Message{}, false, nil
+}
+
 func (store *catchupFakeStore) MarkRead(context.Context, string, string, int64) (int64, error) {
 	return 0, nil
 }

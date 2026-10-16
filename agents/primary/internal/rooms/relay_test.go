@@ -89,6 +89,10 @@ func (s *relayFakeStore) Watching(_ context.Context, _ string, _ time.Time) ([]s
 
 func (s *relayFakeStore) Forget(_ context.Context, _, _ string) error { return nil }
 
+func (s *relayFakeStore) AppendNotes(context.Context, string, string, ParleyNotes, string) (Message, bool, error) {
+	return Message{}, false, nil
+}
+
 func (s *relayFakeStore) MarkRead(context.Context, string, string, int64) (int64, error) {
 	return 0, nil
 }

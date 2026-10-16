@@ -299,7 +299,7 @@ func (service *Service) Activity(ctx context.Context, actor Actor, spaces []team
 // the teamspace names them now.
 func lastMessage(space teamspaces.Space, message Message) *teamspaces.LastMessage {
 	last := &teamspaces.LastMessage{
-		Seq: message.Seq, AuthorKind: string(message.AuthorKind), AuthorID: message.AuthorUserID,
+		Seq: message.Seq, Kind: string(message.Kind), AuthorKind: string(message.AuthorKind), AuthorID: message.AuthorUserID,
 		AuthorHandle: message.AuthorHandle, AuthorName: message.AuthorHandle,
 		Preview: preview(message.Body), CreatedAt: message.CreatedAt,
 	}

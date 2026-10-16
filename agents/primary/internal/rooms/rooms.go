@@ -26,6 +26,7 @@ package rooms
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -68,14 +69,32 @@ type Seat struct {
 	Present bool `json:"present"`
 }
 
+// MessageKind is what a room message is.
+type MessageKind string
+
+const (
+	// KindMessage is something a person or an agent said.
+	KindMessage MessageKind = "message"
+	// KindParleyNotes is what a parley in the room left behind, posted by the
+	// organization agent when the call ended. Its Data is a [ParleyNotes].
+	KindParleyNotes MessageKind = "parley_notes"
+)
+
 // Message is one thing said in a room, by a person or by an agent.
 type Message struct {
-	ID           string   `json:"id"`
-	RoomID       string   `json:"room_id"`
-	Seq          int64    `json:"seq"`
-	AuthorHandle string   `json:"author_handle"`
-	AuthorKind   SeatKind `json:"author_kind"`
-	AuthorUserID string   `json:"author_user_id"`
+	ID     string `json:"id"`
+	RoomID string `json:"room_id"`
+	Seq    int64  `json:"seq"`
+	// Kind is KindMessage unless the message is something else a client
+	// draws differently; the store gives a message without one KindMessage.
+	Kind MessageKind `json:"kind"`
+	// Data is what a client draws a message of another kind from, absent
+	// for anything said. Body still says it in words, for whoever reads the
+	// room as text, agents included.
+	Data         json.RawMessage `json:"data,omitempty"`
+	AuthorHandle string          `json:"author_handle"`
+	AuthorKind   SeatKind        `json:"author_kind"`
+	AuthorUserID string          `json:"author_user_id"`
 	// AuthorAgentID is set when an agent said it.
 	AuthorAgentID string `json:"author_agent_id,omitempty"`
 	Body          string `json:"body"`
@@ -193,6 +212,10 @@ type Store interface {
 	// Append adds a message and gives it the room's next sequence number. It
 	// refuses with ErrPaused once the room's teamspace is paused.
 	Append(ctx context.Context, message Message) (Message, error)
+	// AppendNotes adds parley notes to roomID, a teamspace of organizationID,
+	// as its organization agent. Notes for a call already in the room are
+	// answered with the message they were posted as, and created false.
+	AppendNotes(ctx context.Context, organizationID, roomID string, notes ParleyNotes, body string) (message Message, created bool, err error)
 	// Messages returns the room's messages after seq, oldest first, at most
 	// limit of them.
 	Messages(ctx context.Context, roomID string, afterSeq int64, limit int) ([]Message, error)

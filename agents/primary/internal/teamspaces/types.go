@@ -134,6 +134,8 @@ type Space struct {
 // teamspaces shows it.
 type LastMessage struct {
 	Seq int64 `json:"seq"`
+	// Kind is "message", or "parley_notes" for what a parley left behind.
+	Kind string `json:"kind"`
 	// AuthorKind is "person" or "agent". AuthorID is the person's user id, or
 	// the agent's id.
 	AuthorKind   string `json:"author_kind"`

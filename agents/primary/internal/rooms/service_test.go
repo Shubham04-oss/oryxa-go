@@ -2,6 +2,7 @@ package rooms
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -102,6 +103,24 @@ func (store *serviceFakeStore) Watching(_ context.Context, _ string, since time.
 }
 
 func (store *serviceFakeStore) Forget(_ context.Context, _, _ string) error { return nil }
+
+func (store *serviceFakeStore) AppendNotes(_ context.Context, _, roomID string, notes ParleyNotes, body string) (Message, bool, error) {
+	store.mu.Lock()
+	for _, message := range store.messages {
+		var posted ParleyNotes
+		if message.Kind == KindParleyNotes && json.Unmarshal(message.Data, &posted) == nil && posted.CallID == notes.CallID {
+			store.mu.Unlock()
+			return message, false, nil
+		}
+	}
+	store.mu.Unlock()
+	data, _ := json.Marshal(notes)
+	message, err := store.Append(context.Background(), Message{
+		RoomID: roomID, Kind: KindParleyNotes, Data: data, AuthorHandle: "oryxa-agent", AuthorKind: SeatAgent,
+		AuthorAgentID: "oag_1", Body: body,
+	})
+	return message, err == nil, err
+}
 
 func (store *serviceFakeStore) MarkRead(_ context.Context, _, userID string, seq int64) (int64, error) {
 	store.mu.Lock()
