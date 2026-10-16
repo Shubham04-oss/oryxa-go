@@ -1,9 +1,16 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { Teamspace } from "@/lib/teamspaces/client"
-import { teamspacesQueryOptions } from "@/lib/teamspaces/queries"
+import { teamspacesQueryOptions, tracksUnread } from "@/lib/teamspaces/queries"
 
 const noSpaces: Teamspace[] = []
+
+/**
+ * How often the list is read again while it carries unread counts (#389),
+ * so the sidebar's counts follow rooms the member doesn't have open. A list
+ * without them is read as before, on its own staleness.
+ */
+export const TEAMSPACES_UNREAD_POLL_MS = 60_000
 
 /**
  * Team mode's teamspace state for the shell: the member's teamspaces in the
@@ -14,6 +21,8 @@ export function useTeamspaces(organizationId: string | undefined) {
   const list = useQuery({
     ...teamspacesQueryOptions(organizationId ?? ""),
     enabled: Boolean(organizationId),
+    refetchInterval: (query) =>
+      query.state.data?.some(tracksUnread) ? TEAMSPACES_UNREAD_POLL_MS : false,
   })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)

@@ -179,6 +179,25 @@
   background: var(--tone-7fcf98);
   content: "";
 }
+/* The room's newest message, after what the member hasn't read (#389). */
+.popup-card-last {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.popup-card-last-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.popup-card-last time { flex: none; }
+.popup-card-unread { flex: none; }
 
 /* Toasts (ui/sonner): raised, and a thin strip of scene on the left for
    the ones that carry a person (someone started a parley). */

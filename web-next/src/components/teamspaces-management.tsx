@@ -44,10 +44,14 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import {
   agentIdentity,
+  lastMessageLine,
   memberName,
   personIdentity,
   statusLabel,
   timeAgo,
+  unreadCount,
+  unreadLabel,
+  unreadWords,
 } from "./teamspace-format"
 import { ApiError } from "@/lib/api/client"
 import { isUnavailableHere } from "@/lib/agents/policy"
@@ -485,6 +489,7 @@ export function TeamspacesManagement({
               key={space.id}
               space={space}
               call={liveCalls.get(space.id)}
+              viewerId={viewerId}
               resuming={resume.isPending && resume.variables.id === space.id}
               onOpen={() => onOpen(space.id)}
               onManage={() => manage(space)}
@@ -539,6 +544,7 @@ export function TeamspacesManagement({
 function TeamspaceCard({
   space,
   call,
+  viewerId,
   resuming,
   onOpen,
   onManage,
@@ -548,6 +554,7 @@ function TeamspaceCard({
 }: {
   space: Teamspace
   call?: CallView
+  viewerId?: string
   resuming: boolean
   onOpen: () => void
   onManage: () => void
@@ -556,6 +563,10 @@ function TeamspaceCard({
   onDelete: () => void
 }) {
   const active = space.status === "active"
+  // What the member hasn't read in the room, and its newest message, when
+  // the list carries them (#389).
+  const unread = unreadCount(space)
+  const last = space.last_message
   return (
     <Card
       role="article"
@@ -583,6 +594,14 @@ function TeamspaceCard({
             {active ? people(space.whisperers.length) : "paused"}
           </small>
         </span>
+        {unread > 0 && (
+          <Badge
+            className="workspace-teamspace-unread"
+            aria-label={unreadWords(unread)}
+          >
+            {unreadLabel(unread)}
+          </Badge>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -633,6 +652,12 @@ function TeamspaceCard({
           ? space.description || "No description yet."
           : "Paused. Its room is closed until a team admin resumes it."}
       </p>
+      {last && (
+        <p className="workspace-teamspace-card-last">
+          <span>{lastMessageLine(last, viewerId)}</span>
+          <time dateTime={last.created_at}>{timeAgo(last.created_at)}</time>
+        </p>
+      )}
       {call && (
         <div className="workspace-teamspace-card-live">
           <Badge variant="secondary">
