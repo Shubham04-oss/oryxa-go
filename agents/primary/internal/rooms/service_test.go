@@ -451,6 +451,17 @@ func TestAPreviewIsOneLineAndAtMost140Characters(t *testing.T) {
 	}
 }
 
+// Text whose characters take several bytes is cut at the same length as
+// English, not at a fraction of it.
+func TestAPreviewOfHindiOrEmojiIsCutByCharacters(t *testing.T) {
+	for _, long := range []string{strings.Repeat("मूल्य निर्धारण ", 20), strings.Repeat("🚀🚀🚀 ✅ ", 40)} {
+		got := preview(long)
+		if runes := []rune(got); len(runes) <= 70 || len(runes) > 140 || !strings.HasSuffix(got, "…") {
+			t.Errorf("preview of %q… = %q (%d characters), want 71 to 140", string([]rune(long)[:6]), got, len(runes))
+		}
+	}
+}
+
 // The ledger shows a conclusion by its first sentence, and a price is not
 // the end of a sentence.
 func TestAConclusionIsTitledBySentenceNotByFullStop(t *testing.T) {

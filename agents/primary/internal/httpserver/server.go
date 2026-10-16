@@ -1042,9 +1042,12 @@ func (server *Server) listTeamspaces(writer http.ResponseWriter, request *http.R
 }
 
 // withRoomActivity adds each room's unread count and last message for the
-// member, in one read for the whole list. Without rooms, or when that read
-// fails, the teamspaces are answered without them: a list that will not load
-// because a count could not be read helps nobody.
+// member, in one read for the whole list. Every response that is a whole
+// teamspace goes through it, the changes as well as the reads, so a client
+// that keeps the teamspace a change answers with does not lose its badge.
+// Without rooms, or when that read fails, the teamspaces are answered without
+// them: a list that will not load because a count could not be read helps
+// nobody.
 func (server *Server) withRoomActivity(request *http.Request, member threads.Member, spaces []teamspaces.Space) []teamspaces.Space {
 	if server.rooms == nil || len(spaces) == 0 {
 		return spaces
@@ -1226,7 +1229,7 @@ func (server *Server) createTeamspace(writer http.ResponseWriter, request *http.
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusCreated, created)
+	writeJSON(writer, http.StatusCreated, server.withRoomActivity(request, member, []teamspaces.Space{created})[0])
 }
 
 func (server *Server) getTeamspace(writer http.ResponseWriter, request *http.Request) {
@@ -1264,7 +1267,7 @@ func (server *Server) updateTeamspace(writer http.ResponseWriter, request *http.
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, space)
+	writeJSON(writer, http.StatusOK, server.withRoomActivity(request, member, []teamspaces.Space{space})[0])
 }
 
 func (server *Server) deleteTeamspace(writer http.ResponseWriter, request *http.Request) {
@@ -1314,7 +1317,7 @@ func (server *Server) addTeamspaceContribution(writer http.ResponseWriter, reque
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusCreated, space)
+	writeJSON(writer, http.StatusCreated, server.withRoomActivity(request, member, []teamspaces.Space{space})[0])
 }
 
 func (server *Server) updateTeamspaceContribution(writer http.ResponseWriter, request *http.Request) {
@@ -1335,7 +1338,7 @@ func (server *Server) updateTeamspaceContribution(writer http.ResponseWriter, re
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, space)
+	writeJSON(writer, http.StatusOK, server.withRoomActivity(request, member, []teamspaces.Space{space})[0])
 }
 
 func (server *Server) deleteTeamspaceContribution(writer http.ResponseWriter, request *http.Request) {
@@ -1352,7 +1355,7 @@ func (server *Server) deleteTeamspaceContribution(writer http.ResponseWriter, re
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, space)
+	writeJSON(writer, http.StatusOK, server.withRoomActivity(request, member, []teamspaces.Space{space})[0])
 }
 
 func (server *Server) listTeamspaceEntries(writer http.ResponseWriter, request *http.Request) {
@@ -2069,13 +2072,19 @@ func (server *Server) markRoomRead(writer http.ResponseWriter, request *http.Req
 		writeError(writer, http.StatusServiceUnavailable, "rooms_unavailable", "teamspace conversations are not configured")
 		return
 	}
+	// A pointer, so a body that leaves seq out is refused rather than read as
+	// 0, which would answer 200 and move nothing.
 	var body struct {
-		Seq int64 `json:"seq"`
+		Seq *int64 `json:"seq"`
 	}
 	if !server.decode(writer, request, &body) {
 		return
 	}
-	read, err := server.rooms.MarkRead(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), body.Seq)
+	if body.Seq == nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "seq is required")
+		return
+	}
+	read, err := server.rooms.MarkRead(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), *body.Seq)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return

@@ -75,7 +75,7 @@ func TestMembersKeepATeamspaceChecklistInOrder(t *testing.T) {
 	first, err := service.CreateTask(context.Background(), actor(), "tsp_1", TaskInput{
 		Title: "  Draft the   launch post ", OwnerUserID: ptr("user_2"), DueDate: ptr("2026-10-30"),
 	})
-	if err != nil || first.Title != "Draft the launch post" || *first.OwnerUserID != "user_2" || first.CreatedBy != "user_1" || first.Position != 0 {
+	if err != nil || first.Title != "Draft the launch post" || *first.OwnerUserID != "user_2" || first.CreatedByUserID != "user_1" || first.Position != 0 {
 		t.Fatalf("first = %+v, %v", first, err)
 	}
 	second, err := service.CreateTask(context.Background(), teammate(), "tsp_1", TaskInput{Title: "Book the venue"})
@@ -105,6 +105,7 @@ func TestATaskIsRefusedWhatItCannotHold(t *testing.T) {
 		"an owner off the team": {Title: "Ship", OwnerUserID: ptr("user_elsewhere")},
 		"a due date that isn't": {Title: "Ship", DueDate: ptr("next week")},
 		"a negative position":   {Title: "Ship", Position: ptr(-1)},
+		"a position past 1e6":   {Title: "Ship", Position: ptr(3_000_000_000)},
 	} {
 		if _, err := service.CreateTask(context.Background(), actor(), "tsp_1", input); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: error = %v, want ErrInvalid", name, err)
@@ -114,8 +115,14 @@ func TestATaskIsRefusedWhatItCannotHold(t *testing.T) {
 	if _, err := service.UpdateTask(context.Background(), actor(), "tsp_1", created.ID, TaskUpdate{}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("an empty update: %v, want ErrInvalid", err)
 	}
-	if _, err := service.UpdateTask(context.Background(), actor(), "tsp_1", created.ID, TaskUpdate{Title: ptr(" ")}); !errors.Is(err, ErrInvalid) {
-		t.Errorf("an emptied title: %v, want ErrInvalid", err)
+	for name, input := range map[string]TaskUpdate{
+		"an emptied title":      {Title: ptr(" ")},
+		"a position past 1e6":   {Position: ptr(maxTaskPosition + 1)},
+		"an owner off the team": {OwnerUserID: Nullable{Set: true, Value: ptr("user_elsewhere")}},
+	} {
+		if _, err := service.UpdateTask(context.Background(), actor(), "tsp_1", created.ID, input); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: error = %v, want ErrInvalid", name, err)
+		}
 	}
 }
 
@@ -144,7 +151,7 @@ func TestOnlyItsCreatorOrAManagerRemovesATask(t *testing.T) {
 
 func TestAPausedChecklistIsReadOnlyAndOnlyMembersUseIt(t *testing.T) {
 	repo := taskSpace(StatusDisabled)
-	repo.tasks = []Task{{ID: "tst_1", TeamspaceID: "tsp_1", Title: "Ship", CreatedBy: "user_1"}}
+	repo.tasks = []Task{{ID: "tst_1", TeamspaceID: "tsp_1", Title: "Ship", CreatedByUserID: "user_1"}}
 	service, _ := New(repo, fakeDirectory{directory: teamDirectory(true, true)})
 	if tasks, err := service.ListTasks(context.Background(), actor(), "tsp_1"); err != nil || len(tasks) != 1 {
 		t.Fatalf("paused list = %+v, %v", tasks, err)

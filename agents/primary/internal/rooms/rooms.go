@@ -241,13 +241,17 @@ type Store interface {
 	Forget(ctx context.Context, organizationID, userID string) error
 }
 
+// UnreadCap is where an unread count stops: past it a client shows "99+"
+// rather than a number, and counting further would only cost every list.
+const UnreadCap = 100
+
 // Activity is one member's standing in one room: how far they have read, how
 // many messages after that somebody else said, and the last message.
 type Activity struct {
 	LastReadSeq int64
 	// Unread counts the messages after LastReadSeq, leaving out what the
-	// member said themself. What their own agent said counts: they were not
-	// the one saying it.
+	// member said themself, up to UnreadCap. What their own agent said
+	// counts: they were not the one saying it.
 	Unread int64
 	// Last is the room's newest message, nil for a room nobody has spoken in.
 	Last *Message

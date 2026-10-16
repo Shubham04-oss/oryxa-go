@@ -68,7 +68,7 @@ func (store *Store) CreateTask(ctx context.Context, task Task) (Task, error) {
 		FROM agents_primary.teamspaces space WHERE space.organization_id=$3 AND space.id=$2
 		RETURNING `+taskColumns,
 		task.ID, task.TeamspaceID, task.OrganizationID, task.Title, task.OwnerUserID, task.Position,
-		dueDate, task.CreatedBy, now), &task)
+		dueDate, task.CreatedByUserID, now), &task)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrNotFound
 	}
@@ -135,7 +135,7 @@ func forgetTaskOwner(ctx context.Context, tx pgx.Tx, organizationID, teamspaceID
 func scanTask(row scanner, task *Task) error {
 	var dueDate pgtype.Date
 	if err := row.Scan(&task.ID, &task.TeamspaceID, &task.OrganizationID, &task.Title, &task.OwnerUserID,
-		&task.Done, &task.Position, &dueDate, &task.CreatedBy, &task.CreatedAt, &task.UpdatedAt, &task.DoneAt); err != nil {
+		&task.Done, &task.Position, &dueDate, &task.CreatedByUserID, &task.CreatedAt, &task.UpdatedAt, &task.DoneAt); err != nil {
 		return err
 	}
 	task.DueDate = nil

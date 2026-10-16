@@ -19,3 +19,15 @@ CREATE TABLE IF NOT EXISTS agents_primary.room_read_cursors (
 
 CREATE INDEX IF NOT EXISTS room_read_cursors_forget_idx
     ON agents_primary.room_read_cursors (organization_id, user_id);
+
+-- Without a cursor a member has read nothing, so on the day this ships every
+-- room would show its whole history unread, rooms read yesterday included.
+-- Whoever has read a room (room_presence) starts as having read all of it.
+-- Somebody who joins a team later starts with no cursor, and so with its
+-- history unread: that is the catch-up they came for, and the count stops at
+-- 100 (rooms.UnreadCap). Safe to repeat: a cursor already there is kept.
+INSERT INTO agents_primary.room_read_cursors (room_id, organization_id, user_id, last_read_seq)
+SELECT presence.room_id, presence.organization_id, presence.user_id, counter.next_seq - 1
+FROM agents_primary.room_presence presence
+JOIN agents_primary.room_message_seqs counter ON counter.room_id = presence.room_id
+ON CONFLICT (room_id, user_id) DO NOTHING;

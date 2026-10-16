@@ -10,7 +10,15 @@ import (
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 )
 
-const maxTaskTitleRunes = 200
+const (
+	maxTaskTitleRunes = 200
+	// maxTaskPosition keeps a position, and the one after the last, inside
+	// the column's integer.
+	maxTaskPosition = 1_000_000
+	// maxTasks is the most a teamspace's checklist holds, since it is read
+	// whole.
+	maxTasks = 500
+)
 
 // Task is one item on a teamspace's checklist. Any member of the team may
 // add one, change it or tick it; only whoever added it, or a manager of the
@@ -25,10 +33,10 @@ type Task struct {
 	Done        bool    `json:"done"`
 	Position    int     `json:"position"`
 	// DueDate is the day it is due, as YYYY-MM-DD, or null.
-	DueDate   *string   `json:"due_date"`
-	CreatedBy string    `json:"created_by"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	DueDate         *string   `json:"due_date"`
+	CreatedByUserID string    `json:"created_by_user_id"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 	// DoneAt is when it was ticked, null while it is not done.
 	DoneAt *time.Time `json:"done_at"`
 }
@@ -102,7 +110,7 @@ func (service *Service) CreateTask(ctx context.Context, actor Actor, id string, 
 	}
 	return service.repository.CreateTask(ctx, Task{
 		ID: taskID, TeamspaceID: space.ID, OrganizationID: actor.OrganizationID, Title: input.Title,
-		OwnerUserID: input.OwnerUserID, Position: position, DueDate: input.DueDate, CreatedBy: actor.UserID,
+		OwnerUserID: input.OwnerUserID, Position: position, DueDate: input.DueDate, CreatedByUserID: actor.UserID,
 	})
 }
 
@@ -144,7 +152,7 @@ func (service *Service) DeleteTask(ctx context.Context, actor Actor, id, taskID 
 	if err != nil {
 		return err
 	}
-	if task.CreatedBy != actor.UserID && !space.CanManage {
+	if task.CreatedByUserID != actor.UserID && !space.CanManage {
 		return fmt.Errorf("%w: only whoever added a task, or a manager of the team, can remove it", ErrForbidden)
 	}
 	return service.repository.DeleteTask(ctx, actor.OrganizationID, space.ID, task.ID)
@@ -234,8 +242,8 @@ func validateTaskTitle(title string) error {
 // validateTaskPlacement checks where a task sits: its place in the list and
 // the day it is due.
 func validateTaskPlacement(dueDate *string, position *int) error {
-	if position != nil && *position < 0 {
-		return fmt.Errorf("%w: position must be zero or more", ErrInvalid)
+	if position != nil && (*position < 0 || *position > maxTaskPosition) {
+		return fmt.Errorf("%w: position must be between 0 and %d", ErrInvalid, maxTaskPosition)
 	}
 	if dueDate != nil {
 		if _, err := time.Parse(time.DateOnly, *dueDate); err != nil {
