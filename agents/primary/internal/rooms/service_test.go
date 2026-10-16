@@ -296,12 +296,12 @@ func TestReadingARoomSaysWhoIsInIt(t *testing.T) {
 	if _, err := service.Post(context.Background(), actor, "tsp_room", "morning all"); err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	said, seats, err := service.Read(context.Background(), actor, "tsp_room", 0, 50)
+	said, seats, paused, err := service.Read(context.Background(), actor, "tsp_room", 0, 50)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if len(said) != 1 {
-		t.Fatalf("read %d messages, want the one that was said", len(said))
+	if len(said) != 1 || paused {
+		t.Fatalf("read %d messages, paused %t; want the one that was said, in a room that is not paused", len(said), paused)
 	}
 	ada, found := personSeat(seats, "user-ada")
 	if !found || !ada.Present {
@@ -319,7 +319,7 @@ func TestReadingARoomSaysWhoIsInIt(t *testing.T) {
 }
 
 // A paused teamspace's room stays the team's to read, its brief included,
-// and nobody can say anything new in it.
+// every read says it is paused, and nobody can say anything new in it.
 func TestAPausedRoomIsReadOnly(t *testing.T) {
 	store := newServiceFakeStore()
 	service := aService(t, store, &serviceFakeDecider{}, nil)
@@ -334,12 +334,12 @@ func TestAPausedRoomIsReadOnly(t *testing.T) {
 	if _, err := service.Post(context.Background(), actor, "tsp_room", "after the pause"); !errors.Is(err, ErrPaused) {
 		t.Fatalf("post in a paused room: %v, want ErrPaused", err)
 	}
-	said, _, err := service.Read(context.Background(), actor, "tsp_room", 0, 50)
-	if err != nil || len(said) != 1 || said[0].Body != "before the pause" {
-		t.Fatalf("read a paused room = %+v, %v; want what was said before it", said, err)
+	said, _, readPaused, err := service.Read(context.Background(), actor, "tsp_room", 0, 50)
+	if err != nil || len(said) != 1 || said[0].Body != "before the pause" || !readPaused {
+		t.Fatalf("read a paused room = %+v, paused %t, %v; want what was said before it, paused", said, readPaused, err)
 	}
-	if _, missed, err := service.Catchup(context.Background(), actor, "tsp_room", 0); err != nil || len(missed) != 1 {
-		t.Fatalf("catch up on a paused room = %+v, %v", missed, err)
+	if _, missed, caughtUpPaused, err := service.Catchup(context.Background(), actor, "tsp_room", 0); err != nil || len(missed) != 1 || !caughtUpPaused {
+		t.Fatalf("catch up on a paused room = %+v, paused %t, %v", missed, caughtUpPaused, err)
 	}
 }
 
@@ -359,7 +359,7 @@ func TestUnreadCountsWhatOthersSaidSinceTheReadCursor(t *testing.T) {
 			t.Fatalf("post: %v", err)
 		}
 	}
-	if _, _, err := service.Read(context.Background(), ada, "tsp_room", 0, 50); err != nil {
+	if _, _, _, err := service.Read(context.Background(), ada, "tsp_room", 0, 50); err != nil {
 		t.Fatalf("read: %v", err)
 	}
 

@@ -531,3 +531,52 @@ func TestStoreKeepsAChecklist(t *testing.T) {
 		t.Fatalf("a task past %d: %v, want ErrInvalid", maxTasks, err)
 	}
 }
+
+// A release from before the pause columns resumes a teamspace by its status
+// alone. The stale pause facts it leaves are not shown, and the next update
+// clears them.
+func TestStoreShowsNoPauseOnATeamspaceAnOldReleaseResumed(t *testing.T) {
+	database, store, _ := testStores(t)
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	organizationID := fmt.Sprintf("org_teamspace_resumed_%d", suffix)
+	defer func() {
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.teamspaces WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.organization_agents WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.agents_outbox WHERE detail->>'organization_id'=$1`, organizationID)
+	}()
+	organizationAgent, err := store.EnsureOrganizationAgent(ctx, organizationID, "Resumed Org", "user_owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, err := store.Create(ctx, Space{
+		ID: fmt.Sprintf("tsp_resumed_%d", suffix), OrganizationID: organizationID, TeamID: "team_resumed",
+		Name: "Resumed", CreatedByUserID: "user_owner", OrganizationAgentID: organizationAgent.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := StatusDisabled
+	if _, err := store.Update(ctx, organizationID, space.ID, "user_pauser", UpdateInput{Status: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	// What the old release's UPDATE writes: the status, and nothing it does not know.
+	if _, err := database.Pool.Exec(ctx, `UPDATE agents_primary.teamspaces SET status='active', revision=revision+1
+		WHERE organization_id=$1 AND id=$2`, organizationID, space.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	read, err := store.Get(ctx, organizationID, space.ID)
+	if err != nil || read.Status != StatusActive || read.PausedByUserID != nil || read.PausedAt != nil {
+		t.Fatalf("an active teamspace an old release resumed = %+v, %v; want no pause shown", read, err)
+	}
+	name := "Renamed"
+	if _, err := store.Update(ctx, organizationID, space.ID, "user_owner", UpdateInput{Name: &name}); err != nil {
+		t.Fatal(err)
+	}
+	var stale int
+	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.teamspaces
+		WHERE id=$1 AND (paused_by_user_id IS NOT NULL OR paused_at IS NOT NULL)`, space.ID).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("pause facts left on the row after the next update: %d, %v", stale, err)
+	}
+}

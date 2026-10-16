@@ -762,6 +762,7 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 // for an id taken from the path or the body.
 type fakeRooms struct {
 	actors []rooms.Actor
+	paused bool
 }
 
 func (f *fakeRooms) Post(_ context.Context, actor rooms.Actor, _, _ string) ([]rooms.Message, error) {
@@ -769,14 +770,14 @@ func (f *fakeRooms) Post(_ context.Context, actor rooms.Actor, _, _ string) ([]r
 	return []rooms.Message{{Seq: 1, Body: "hello"}}, nil
 }
 
-func (f *fakeRooms) Read(_ context.Context, actor rooms.Actor, _ string, _ int64, _ int) ([]rooms.Message, []rooms.Seat, error) {
+func (f *fakeRooms) Read(_ context.Context, actor rooms.Actor, _ string, _ int64, _ int) ([]rooms.Message, []rooms.Seat, bool, error) {
 	f.actors = append(f.actors, actor)
-	return nil, nil, nil
+	return nil, nil, f.paused, nil
 }
 
-func (f *fakeRooms) Catchup(_ context.Context, actor rooms.Actor, _ string, _ int64) (rooms.Brief, []rooms.Message, error) {
+func (f *fakeRooms) Catchup(_ context.Context, actor rooms.Actor, _ string, _ int64) (rooms.Brief, []rooms.Message, bool, error) {
 	f.actors = append(f.actors, actor)
-	return rooms.Brief{}, nil, nil
+	return rooms.Brief{}, nil, f.paused, nil
 }
 
 func (f *fakeRooms) MarkRead(_ context.Context, actor rooms.Actor, _ string, seq int64) (int64, error) {

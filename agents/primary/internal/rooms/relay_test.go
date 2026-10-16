@@ -107,6 +107,30 @@ func (s *relayFailingAppendStore) Append(context.Context, Message) (Message, err
 	return Message{}, s.err
 }
 
+// relayPausingStore is a room a manager pauses partway through: once paused
+// is set, every Append is refused as the store refuses one into a paused
+// teamspace.
+type relayPausingStore struct {
+	relayFakeStore
+	paused bool
+}
+
+func (s *relayPausingStore) pause() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.paused = true
+}
+
+func (s *relayPausingStore) Append(ctx context.Context, message Message) (Message, error) {
+	s.mu.Lock()
+	paused := s.paused
+	s.mu.Unlock()
+	if paused {
+		return Message{}, ErrPaused
+	}
+	return s.relayFakeStore.Append(ctx, message)
+}
+
 // relaySpeakCall records one Speak invocation for a test to inspect.
 type relaySpeakCall struct {
 	seat       Seat
@@ -190,6 +214,49 @@ func TestRelayPost_AddressedAgentAnswers(t *testing.T) {
 	}
 	if got := speaker.callCount(); got != 1 {
 		t.Errorf("Speak called %d times, want 1", got)
+	}
+}
+
+// A room paused while an agent is taking its turn stores nothing from then
+// on: not the answer, and not the turn that answer would have woken.
+func TestRelayPost_ARoomPausedDuringATurnTakesNothingMore(t *testing.T) {
+	bob := relayPersonSeat("bob", "user-bob", true)
+	ada := relayAgentSeat("ada", "user-ada", "agent-ada")
+	cara := relayAgentSeat("cara", "user-cara", "agent-cara")
+	store := &relayPausingStore{}
+	speaker := &relayFakeSpeaker{reply: func(seat Seat, _ Situation, _ []Message) (string, error) {
+		if seat.Handle == "ada" {
+			store.pause()
+			return "@cara over to you.", nil
+		}
+		return "Here.", nil
+	}}
+	relay := &Relay{Store: store, Speaker: speaker}
+	room := Situation{Seats: []Seat{bob, ada, cara}}
+
+	results, err := relay.Post(context.Background(), room, relayMessage("room-1", bob, "@ada what's left?"), Verdict{})
+	if err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if len(results) != 1 || results[0].AuthorHandle != "bob" {
+		t.Fatalf("got %+v, want only what bob said before the pause", results)
+	}
+	if got := len(store.messages); got != 1 {
+		t.Errorf("the store holds %d messages, want 1", got)
+	}
+	if got := speaker.callCount(); got != 1 {
+		t.Errorf("Speak called %d times, want 1: cara was named only by an answer the paused room refused", got)
+	}
+}
+
+// A room paused before the message itself is stored refuses it as paused.
+func TestRelayPost_APausedRoomRefusesThePost(t *testing.T) {
+	bob := relayPersonSeat("bob", "user-bob", true)
+	store := &relayPausingStore{paused: true}
+	relay := &Relay{Store: store, Speaker: &relayFakeSpeaker{}}
+
+	if _, err := relay.Post(context.Background(), Situation{Seats: []Seat{bob}}, relayMessage("room-1", bob, "hello"), Verdict{}); !errors.Is(err, ErrPaused) {
+		t.Fatalf("Post into a paused room: %v, want ErrPaused", err)
 	}
 }
 
