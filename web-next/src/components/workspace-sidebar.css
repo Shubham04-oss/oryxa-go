@@ -351,3 +351,12 @@ button.workspace-sidebar-heading[aria-current="page"] { color: var(--text); }
   top: 6px;
   right: 6px;
 }
+/* A teamspace with unread messages and a live parley: the count keeps the
+   corner and the dot sits beside it (expanded) or under it (the rail). */
+.workspace-sidebar-tile li:has(.workspace-sidebar-count) > .workspace-sidebar-live-dot { right: 36px; }
+.workspace-sidebar-tile li:has(.workspace-sidebar-count):has(> .workspace-sidebar-live-dot) .workspace-sidebar-item { padding-right: 52px; }
+.workspace-shell[data-left="collapsed"] .workspace-sidebar-tile li:has(.workspace-sidebar-count.is-badge) > .workspace-sidebar-live-dot.is-badge {
+  top: auto;
+  right: 6px;
+  bottom: 6px;
+}

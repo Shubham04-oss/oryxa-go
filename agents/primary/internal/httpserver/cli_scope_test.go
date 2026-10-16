@@ -34,6 +34,9 @@ func TestCLISetupTokenCannotReadThreadsOrMakeOwnerDecisions(t *testing.T) {
 		{http.MethodDelete, "/v1/organizations/org_1/agent-requests/irq_1/secret", http.StatusForbidden},
 		{http.MethodDelete, "/v1/organizations/org_1/agent-leases/ils_1", http.StatusForbidden},
 		{http.MethodGet, "/v1/organizations/org_1/teamspaces/space_1/messages", http.StatusForbidden},
+		{http.MethodPost, "/v1/organizations/org_1/teamspaces/space_1/read", http.StatusForbidden},
+		{http.MethodGet, "/v1/organizations/org_1/teamspaces/space_1/tasks", http.StatusForbidden},
+		{http.MethodPost, "/v1/organizations/org_1/teamspaces/space_1/tasks", http.StatusForbidden},
 		{http.MethodGet, "/v1/organizations/org_1/organization-agent", http.StatusOK},
 	} {
 		request := httptest.NewRequest(route.method, route.path, strings.NewReader(`{}`))

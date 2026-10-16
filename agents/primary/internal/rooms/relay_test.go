@@ -89,6 +89,18 @@ func (s *relayFakeStore) Watching(_ context.Context, _ string, _ time.Time) ([]s
 
 func (s *relayFakeStore) Forget(_ context.Context, _, _ string) error { return nil }
 
+func (s *relayFakeStore) AppendNotes(context.Context, string, string, ParleyNotes, string) (Message, bool, error) {
+	return Message{}, false, nil
+}
+
+func (s *relayFakeStore) MarkRead(context.Context, string, string, int64) (int64, error) {
+	return 0, nil
+}
+
+func (s *relayFakeStore) Activity(context.Context, string, string, []string) (map[string]Activity, error) {
+	return map[string]Activity{}, nil
+}
+
 // relayFailingAppendStore fails every Append, to prove Post reports it.
 type relayFailingAppendStore struct {
 	relayFakeStore

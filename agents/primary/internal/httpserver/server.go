@@ -178,6 +178,10 @@ type Teamspaces interface {
 	DeleteContribution(context.Context, teamspaces.Actor, string, string) (teamspaces.Space, error)
 	PublishEntry(context.Context, teamspaces.Actor, string, teamspaces.PublishEntryInput) (teamspaces.Entry, error)
 	ListEntries(context.Context, teamspaces.Actor, string, int) ([]teamspaces.Entry, error)
+	ListTasks(context.Context, teamspaces.Actor, string) ([]teamspaces.Task, error)
+	CreateTask(context.Context, teamspaces.Actor, string, teamspaces.TaskInput) (teamspaces.Task, error)
+	UpdateTask(context.Context, teamspaces.Actor, string, string, teamspaces.TaskUpdate) (teamspaces.Task, error)
+	DeleteTask(context.Context, teamspaces.Actor, string, string) error
 }
 
 // OrganizationAgentContext reads the organization agent's output by audience;
@@ -202,6 +206,11 @@ type Rooms interface {
 	Post(ctx context.Context, actor rooms.Actor, roomID, body string) ([]rooms.Message, error)
 	Read(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64, limit int) ([]rooms.Message, []rooms.Seat, bool, error)
 	Catchup(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64) (rooms.Brief, []rooms.Message, bool, error)
+	MarkRead(ctx context.Context, actor rooms.Actor, roomID string, seq int64) (int64, error)
+	Activity(ctx context.Context, actor rooms.Actor, spaces []teamspaces.Space) ([]teamspaces.Space, error)
+	// PostParleyNotes answers to the edge, not to a member: the caller has
+	// bound the organization and the room to the edge's token.
+	PostParleyNotes(ctx context.Context, organizationID, roomID string, notes rooms.ParleyNotes) (rooms.Message, bool, error)
 }
 
 // Config is how the server runs.
@@ -411,9 +420,14 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.listTeamspaceEntries)
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/synthesis", server.getTeamspaceSynthesis)
 	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.publishTeamspaceEntry)
+	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks", server.listTeamspaceTasks)
+	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks", server.createTeamspaceTask)
+	server.handle("PATCH /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks/{taskID}", server.updateTeamspaceTask)
+	server.handle("DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/tasks/{taskID}", server.deleteTeamspaceTask)
 	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/messages", server.postRoomMessage)
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/messages", server.readRoom)
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/catchup", server.catchUpOnRoom)
+	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/read", server.markRoomRead)
 	server.handle("GET /v1/organizations/{organizationID}/preferences", server.getPreferences)
 	server.handle("PUT /v1/organizations/{organizationID}/preferences", server.setPreferences)
 	server.handle("POST /v1/organizations/{organizationID}/answer-guard/check", server.checkAnswer)
@@ -1052,7 +1066,26 @@ func (server *Server) listTeamspaces(writer http.ResponseWriter, request *http.R
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"teamspaces": spaces})
+	writeJSON(writer, http.StatusOK, map[string]any{"teamspaces": server.withRoomActivity(request, member, spaces)})
+}
+
+// withRoomActivity adds each room's unread count and last message for the
+// member, in one read for the whole list. Every response that is a whole
+// teamspace goes through it, the changes as well as the reads, so a client
+// that keeps the teamspace a change answers with does not lose its badge.
+// Without rooms, or when that read fails, the teamspaces are answered without
+// them: a list that will not load because a count could not be read helps
+// nobody.
+func (server *Server) withRoomActivity(request *http.Request, member threads.Member, spaces []teamspaces.Space) []teamspaces.Space {
+	if server.rooms == nil || len(spaces) == 0 {
+		return spaces
+	}
+	decorated, err := server.rooms.Activity(request.Context(), roomActorOf(member), spaces)
+	if err != nil {
+		server.logger.WarnContext(request.Context(), "read teamspace rooms' unread counts", "organization_id", member.OrganizationID, "error", err)
+		return spaces
+	}
+	return decorated
 }
 
 func (server *Server) getOrganizationAgent(writer http.ResponseWriter, request *http.Request) {
@@ -1224,7 +1257,7 @@ func (server *Server) createTeamspace(writer http.ResponseWriter, request *http.
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusCreated, created)
+	writeJSON(writer, http.StatusCreated, server.withRoomActivity(request, member, []teamspaces.Space{created})[0])
 }
 
 func (server *Server) getTeamspace(writer http.ResponseWriter, request *http.Request) {
@@ -1241,7 +1274,7 @@ func (server *Server) getTeamspace(writer http.ResponseWriter, request *http.Req
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, space)
+	writeJSON(writer, http.StatusOK, server.withRoomActivity(request, member, []teamspaces.Space{space})[0])
 }
 
 func (server *Server) updateTeamspace(writer http.ResponseWriter, request *http.Request) {
@@ -1262,7 +1295,7 @@ func (server *Server) updateTeamspace(writer http.ResponseWriter, request *http.
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, space)
+	writeJSON(writer, http.StatusOK, server.withRoomActivity(request, member, []teamspaces.Space{space})[0])
 }
 
 func (server *Server) deleteTeamspace(writer http.ResponseWriter, request *http.Request) {
@@ -1312,7 +1345,7 @@ func (server *Server) addTeamspaceContribution(writer http.ResponseWriter, reque
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusCreated, space)
+	writeJSON(writer, http.StatusCreated, server.withRoomActivity(request, member, []teamspaces.Space{space})[0])
 }
 
 func (server *Server) updateTeamspaceContribution(writer http.ResponseWriter, request *http.Request) {
@@ -1333,7 +1366,7 @@ func (server *Server) updateTeamspaceContribution(writer http.ResponseWriter, re
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, space)
+	writeJSON(writer, http.StatusOK, server.withRoomActivity(request, member, []teamspaces.Space{space})[0])
 }
 
 func (server *Server) deleteTeamspaceContribution(writer http.ResponseWriter, request *http.Request) {
@@ -1350,7 +1383,7 @@ func (server *Server) deleteTeamspaceContribution(writer http.ResponseWriter, re
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, space)
+	writeJSON(writer, http.StatusOK, server.withRoomActivity(request, member, []teamspaces.Space{space})[0])
 }
 
 func (server *Server) listTeamspaceEntries(writer http.ResponseWriter, request *http.Request) {
@@ -1372,6 +1405,85 @@ func (server *Server) listTeamspaceEntries(writer http.ResponseWriter, request *
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"entries": entries})
+}
+
+// listTeamspaceTasks is a teamspace's checklist, in order, for a member of
+// its team.
+func (server *Server) listTeamspaceTasks(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	tasks, err := server.teamspaces.ListTasks(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (server *Server) createTeamspaceTask(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	var input teamspaces.TaskInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	task, err := server.teamspaces.CreateTask(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, task)
+}
+
+func (server *Server) updateTeamspaceTask(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	var input teamspaces.TaskUpdate
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	task, err := server.teamspaces.UpdateTask(request.Context(), teamspaceActorOf(member),
+		request.PathValue("teamspaceID"), request.PathValue("taskID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, task)
+}
+
+func (server *Server) deleteTeamspaceTask(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	if err := server.teamspaces.DeleteTask(request.Context(), teamspaceActorOf(member),
+		request.PathValue("teamspaceID"), request.PathValue("taskID")); err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
 }
 
 func (server *Server) publishTeamspaceEntry(writer http.ResponseWriter, request *http.Request) {
@@ -1999,6 +2111,37 @@ func (server *Server) catchUpOnRoom(writer http.ResponseWriter, request *http.Re
 	writeJSON(writer, http.StatusOK, map[string]any{"brief": brief, "messages": said, "paused": paused})
 }
 
+// markRoomRead moves the member's read cursor in a room forward to the seq
+// their client showed them. Reading the room never moves it by itself.
+func (server *Server) markRoomRead(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.rooms == nil {
+		writeError(writer, http.StatusServiceUnavailable, "rooms_unavailable", "teamspace conversations are not configured")
+		return
+	}
+	// A pointer, so a body that leaves seq out is refused rather than read as
+	// 0, which would answer 200 and move nothing.
+	var body struct {
+		Seq *int64 `json:"seq"`
+	}
+	if !server.decode(writer, request, &body) {
+		return
+	}
+	if body.Seq == nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "seq is required")
+		return
+	}
+	read, err := server.rooms.MarkRead(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), *body.Seq)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"last_read_seq": read})
+}
+
 // sequence reads a message sequence from the query, which is how a reader
 // says where they got to. Absent means from the beginning; anything that is
 // not a whole number at or above zero is the caller's mistake rather than
@@ -2062,6 +2205,10 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, teamspaces.ErrDisabled):
 		return http.StatusConflict, "teamspace_disabled"
+	case errors.Is(err, teamspaces.ErrPaused):
+		// One code for one state: a paused teamspace refuses everything as
+		// teamspace_disabled, its tasks included.
+		return http.StatusConflict, "teamspace_disabled"
 	case errors.Is(err, teamspaces.ErrConflict):
 		return http.StatusConflict, "teamspace_conflict"
 	case errors.Is(err, teamspaces.ErrNotFound):
@@ -2072,7 +2219,7 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusBadRequest, "invalid_request"
 	case errors.Is(err, rooms.ErrForbidden):
 		return http.StatusForbidden, "forbidden"
-	case errors.Is(err, rooms.ErrNotFound):
+	case errors.Is(err, rooms.ErrNotFound), errors.Is(err, rooms.ErrRoomNotFound):
 		return http.StatusNotFound, "not_found"
 	case errors.Is(err, agentworkflows.ErrInvalid):
 		return http.StatusBadRequest, "invalid_request"

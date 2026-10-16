@@ -10,6 +10,7 @@ import {
   listTeamspaceEntries,
   listTeamspaceTasks,
   listTeamspaces,
+  markTeamspaceRead,
   publishTeamspaceEntry,
   updateTeamspace,
   updateTeamspaceContribution,
@@ -66,6 +67,14 @@ const base = "/v1/organizations/org-1/teamspaces"
 afterEach(() => vi.unstubAllGlobals())
 
 describe("teamspaces API", () => {
+  it("marks the room read and answers where the cursor now is", async () => {
+    const fetchMock = stubFetch(() => json({ last_read_seq: 40 }))
+    expect(await markTeamspaceRead("org-1", "tsp_1", 42)).toBe(40)
+    expect(sent(fetchMock)).toEqual([
+      ["POST", `${base}/tsp_1/read`, '{"seq":42}'],
+    ])
+  })
+
   it("lists, reads, creates, updates and deletes teamspaces", async () => {
     const fetchMock = stubFetch((url, init) => {
       if (init.method === "DELETE") return new Response(null, { status: 204 })

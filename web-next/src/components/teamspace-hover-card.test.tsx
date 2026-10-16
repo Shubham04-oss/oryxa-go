@@ -86,6 +86,72 @@ describe("the teamspace hover card", () => {
     expect(screen.queryByText(/Parley live/)).toBeNull()
   })
 
+  it("shows what the member hasn't read and the room's last message", async () => {
+    render(
+      withQueries(
+        <TeamspaceCard
+          space={{
+            ...space,
+            last_read_seq: 40,
+            unread_count: 100,
+            last_message: {
+              seq: 142,
+              author_kind: "agent",
+              author_id: "agt_1",
+              author_handle: "krude",
+              author_name: "Krude",
+              preview: "suggested an edit…",
+              created_at: new Date().toISOString(),
+            },
+          }}
+        />
+      )
+    )
+    const badge = document.querySelector(".popup-card-unread")
+    expect(badge?.querySelector("[aria-hidden='true']")?.textContent).toBe(
+      "99+"
+    )
+    expect(screen.getByText("99+ unread")).toBeTruthy()
+    expect(screen.getByText("Krude: suggested an edit…")).toBeTruthy()
+    expect(screen.getByText("just now")).toBeTruthy()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+
+  it("says You for the member's own last message, as the cards do", async () => {
+    render(
+      withQueries(
+        <TeamspaceCard
+          viewerId="user-ada"
+          space={{
+            ...space,
+            last_read_seq: 42,
+            unread_count: 0,
+            last_message: {
+              seq: 42,
+              kind: "message",
+              author_kind: "person",
+              author_id: "user-ada",
+              author_handle: "ada",
+              author_name: "Ada",
+              preview: "the pricing sheet is done",
+              created_at: new Date().toISOString(),
+            },
+          }}
+        />
+      )
+    )
+    expect(screen.getByText("You: the pricing sheet is done")).toBeTruthy()
+    expect(screen.queryByText(/unread/)).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+
+  it("shows neither without the list's unread fields", async () => {
+    render(withQueries(<TeamspaceCard space={space} />))
+    expect(screen.queryByText(/unread/)).toBeNull()
+    expect(document.querySelector(".popup-card-last")).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+
   it("says a parley is live from the room's own call", async () => {
     call = {
       callId: "call_1",

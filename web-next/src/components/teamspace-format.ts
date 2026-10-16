@@ -2,7 +2,8 @@
 // the focused teamspace: who someone is (as an avatar identity) and when
 // something happened (in words).
 import type { AvatarIdentity } from "./workspace-avatar"
-import type { Teamspace } from "@/lib/teamspaces/client"
+import { TEAMSPACE_UNREAD_CAP } from "@/lib/teamspaces/client"
+import type { Teamspace, TeamspaceLastMessage } from "@/lib/teamspaces/client"
 
 export function initialsOf(name: string): string {
   const letters = name
@@ -221,4 +222,42 @@ export function targetChip(
   const date = parseDay(space.target_date)
   if (!date) return undefined
   return `${targetName(space)} ${dayLabel(date, { short: true, now })}`
+}
+
+/** How many room messages wait on the member; 0 when the server doesn't say. */
+export function unreadCount(space: Pick<Teamspace, "unread_count">): number {
+  const count = space.unread_count
+  return typeof count === "number" && count > 0 ? count : 0
+}
+
+/** An unread count as a badge shows it: "99+" once it reaches the server's cap. */
+export function unreadLabel(count: number): string {
+  return count >= TEAMSPACE_UNREAD_CAP
+    ? `${TEAMSPACE_UNREAD_CAP - 1}+`
+    : String(count)
+}
+
+/** An unread count in words, for a screen reader: "3 unread", "99+ unread". */
+export function unreadWords(count: number): string {
+  return `${unreadLabel(count)} unread`
+}
+
+/**
+ * The room's newest message on one line: "Bo: the pricing sheet is done",
+ * "You: …" for the member's own, and "Parley notes" for a parley's notes.
+ */
+export function lastMessageLine(
+  message: TeamspaceLastMessage,
+  viewerId?: string
+): string {
+  if (message.kind === "parley_notes") return "Parley notes"
+  const author =
+    message.author_kind === "person" &&
+    viewerId &&
+    message.author_id === viewerId
+      ? "You"
+      : message.author_name?.trim() || message.author_handle
+  const preview = message.preview.trim()
+  if (!author) return preview
+  return preview ? `${author}: ${preview}` : author
 }

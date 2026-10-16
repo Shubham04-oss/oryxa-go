@@ -15,6 +15,7 @@ import type {
   RoomStatus,
   TeamspaceRoom,
 } from "@/hooks/use-teamspace-room"
+import { useMarkTeamspaceRead } from "@/hooks/use-teamspace-read"
 import type { Teamspace } from "@/lib/teamspaces/client"
 
 /** How many seats the presence row shows before "+N". */
@@ -55,7 +56,37 @@ export function TeamspaceConversation({
       .map((message) => message.seq)
   )
   const lastId = messages.at(-1)?.id
+  const lastSeq = messages.at(-1)?.seq
   const outgoingCount = status.outgoing.length
+  // The newest message the member has had on screen in this room: the room
+  // is marked read through it (useMarkTeamspaceRead), not through what
+  // arrived while they had scrolled back or were on another tab.
+  const [seen, setSeen] = useState<{ room: string; seq: number }>()
+  const seenSeq = seen?.room === space.id ? seen.seq : undefined
+  useMarkTeamspaceRead(space, seenSeq)
+
+  useEffect(() => {
+    const list = listRef.current
+    if (!list || lastSeq === undefined) return
+    const spaceId = space.id
+    const saw = () =>
+      setSeen((held) =>
+        held?.room === spaceId && held.seq >= lastSeq
+          ? held
+          : { room: spaceId, seq: lastSeq }
+      )
+    const last = list.querySelector(`[data-seq="${lastSeq}"]`)
+    if (!last) return
+    if (typeof IntersectionObserver === "undefined") {
+      saw()
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) saw()
+    })
+    observer.observe(last)
+    return () => observer.disconnect()
+  }, [lastSeq, space.id])
 
   useEffect(() => {
     const list = listRef.current
@@ -229,6 +260,7 @@ function RoomLine({
       className="workspace-message"
       data-author={message.author_kind}
       data-mine={mine ? "true" : undefined}
+      data-seq={message.seq}
       aria-label={`${name}${tag ? `, ${tag}` : ""}`}
     >
       <IdentityAvatar identity={identity} />

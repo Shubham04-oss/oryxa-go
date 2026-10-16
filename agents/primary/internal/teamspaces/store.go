@@ -164,7 +164,7 @@ func (store *Store) Create(ctx context.Context, space Space) (Space, error) {
 }
 
 func (store *Store) List(ctx context.Context, organizationID string) ([]Space, error) {
-	rows, err := store.database.Pool.Query(ctx, `SELECT `+spaceColumns+` FROM agents_primary.teamspaces
+	rows, err := store.database.Pool.Query(ctx, spaceWithTaskCounts+`
 		WHERE organization_id=$1 ORDER BY lower(name), id`, organizationID)
 	if err != nil {
 		return nil, fmt.Errorf("list teamspaces: %w", err)
@@ -173,7 +173,7 @@ func (store *Store) List(ctx context.Context, organizationID string) ([]Space, e
 	spaces := []Space{}
 	for rows.Next() {
 		var space Space
-		if err := scanSpace(rows, &space); err != nil {
+		if err := scanSpaceWithTaskCounts(rows, &space); err != nil {
 			return nil, fmt.Errorf("scan teamspace: %w", err)
 		}
 		spaces = append(spaces, space)
@@ -191,7 +191,7 @@ func (store *Store) List(ctx context.Context, organizationID string) ([]Space, e
 
 func (store *Store) Get(ctx context.Context, organizationID, id string) (Space, error) {
 	var space Space
-	err := scanSpace(store.database.Pool.QueryRow(ctx, `SELECT `+spaceColumns+` FROM agents_primary.teamspaces
+	err := scanSpaceWithTaskCounts(store.database.Pool.QueryRow(ctx, spaceWithTaskCounts+`
 		WHERE organization_id=$1 AND id=$2`, organizationID, id), &space)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Space{}, ErrNotFound
@@ -448,8 +448,9 @@ func (store *Store) changeContribution(ctx context.Context, organizationID, id s
 	return result, nil
 }
 
-// Forget removes an exiting member's contributions but leaves the team-owned
-// space intact. Organization deletion removes the spaces themselves.
+// Forget removes an exiting member's contributions, and leaves the tasks they
+// owned with no owner, but leaves the team-owned space intact. Organization
+// deletion removes the spaces themselves.
 func (store *Store) Forget(ctx context.Context, organizationID, userID string) error {
 	if strings.TrimSpace(userID) == "" {
 		return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
@@ -461,6 +462,9 @@ func (store *Store) Forget(ctx context.Context, organizationID, userID string) e
 		})
 	}
 	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		if err := forgetTaskOwner(ctx, tx, organizationID, "", userID); err != nil {
+			return err
+		}
 		return forgetMemberContributions(ctx, tx, organizationID, "", userID)
 	})
 }
@@ -470,7 +474,7 @@ func (store *Store) Forget(ctx context.Context, organizationID, userID string) e
 // teamspace is withdrawn. And when the team has a teamspace, their leaving it
 // is recorded as agents.teamspace.member.removed.v1, whether or not they had
 // contributed any, so realtime has the web app purge their side conversations
-// there. Both happen in one transaction, through the outbox. removedAt is
+// there. The tasks they owned there are left with no owner. Both happen in one transaction, through the outbox. removedAt is
 // when the membership ended. A Teams event delivered again records the event
 // again, with the same removedAt, which its consumers take as a repeat.
 func (store *Store) ForgetTeamMember(ctx context.Context, organizationID, teamID, userID string, removedAt time.Time) error {
@@ -495,6 +499,9 @@ func (store *Store) ForgetTeamMember(ctx context.Context, organizationID, teamID
 		}
 		if teamspaceID == "" {
 			return nil
+		}
+		if err := forgetTaskOwner(ctx, tx, organizationID, teamspaceID, userID); err != nil {
+			return err
 		}
 		return recordTeamspaceMemberRemoved(ctx, tx, agentsv1.TeamspaceMemberRemoved{
 			OrganizationID: organizationID, TeamspaceID: teamspaceID, TeamID: teamID, UserID: userID,
@@ -590,6 +597,15 @@ const spaceColumns = `id, organization_id, team_id, name, description, created_b
 	organization_agent_id, status, revision, created_at, updated_at,
 	target_date, target_label, paused_by_user_id, paused_at`
 
+// spaceWithTaskCounts reads teamspaces with their checklist's counts beside
+// each, in the same statement however many it reads.
+const spaceWithTaskCounts = `SELECT ` + spaceColumns + `, counts.done, counts.total
+	FROM agents_primary.teamspaces
+	LEFT JOIN LATERAL (
+		SELECT count(*) FILTER (WHERE task.done) AS done, count(*) AS total
+		FROM agents_primary.teamspace_tasks task WHERE task.teamspace_id = teamspaces.id
+	) counts ON true`
+
 const entryColumns = `id, teamspace_id, organization_id, author_user_id, author_agent_id,
 	author_agent_name, kind, title, summary, tools_used, artifacts, created_at`
 
@@ -647,14 +663,36 @@ func scanSpace(row scanner, space *Space) error {
 	return nil
 }
 
-// dateOf is a target date as the column takes it: null for none.
+func scanSpaceWithTaskCounts(row scanner, space *Space) error {
+	var counts TaskCounts
+	scanned := spaceScanner{row: row, extra: []any{&counts.Done, &counts.Total}}
+	if err := scanSpace(scanned, space); err != nil {
+		return err
+	}
+	space.TaskCounts = counts
+	return nil
+}
+
+// spaceScanner scans a teamspace's own columns and then extra, for a query
+// that reads something beside them.
+type spaceScanner struct {
+	row   scanner
+	extra []any
+}
+
+func (scanned spaceScanner) Scan(destinations ...any) error {
+	return scanned.row.Scan(append(destinations, scanned.extra...)...)
+}
+
+// dateOf is a date, a target's or a task's, as its column takes it: null for
+// none.
 func dateOf(value *string) (pgtype.Date, error) {
 	if value == nil {
 		return pgtype.Date{}, nil
 	}
 	parsed, err := time.Parse(time.DateOnly, *value)
 	if err != nil {
-		return pgtype.Date{}, fmt.Errorf("%w: target_date must be a date written YYYY-MM-DD", ErrInvalid)
+		return pgtype.Date{}, fmt.Errorf("%w: a date is written YYYY-MM-DD", ErrInvalid)
 	}
 	return pgtype.Date{Time: parsed, Valid: true}, nil
 }

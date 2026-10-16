@@ -46,12 +46,16 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { IdentityAvatar, TeamspaceAvatar } from "./workspace-avatar"
 import {
   agentIdentity,
+  lastMessageLine,
   memberName,
   pausedLine,
   personIdentity,
   statusLabel,
   targetChip,
   timeAgo,
+  unreadCount,
+  unreadLabel,
+  unreadWords,
 } from "./teamspace-format"
 import { ApiError } from "@/lib/api/client"
 import { isUnavailableHere } from "@/lib/agents/policy"
@@ -563,6 +567,10 @@ function TeamspaceCard({
   onDelete: () => void
 }) {
   const active = space.status === "active"
+  // What the member hasn't read in the room, and its newest message, when
+  // the list carries them (#389).
+  const unread = unreadCount(space)
+  const last = space.last_message
   return (
     <Card
       role="article"
@@ -590,6 +598,12 @@ function TeamspaceCard({
             {active ? people(space.whisperers.length) : "paused"}
           </small>
         </span>
+        {unread > 0 && (
+          <Badge className="workspace-teamspace-unread">
+            <span aria-hidden="true">{unreadLabel(unread)}</span>
+            <span className="sr-only">{unreadWords(unread)}</span>
+          </Badge>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -641,6 +655,12 @@ function TeamspaceCard({
           : "Paused. Its room is read-only until a team admin resumes it."}
       </p>
       <TeamspaceCardFacts space={space} />
+      {last && (
+        <p className="workspace-teamspace-card-last">
+          <span>{lastMessageLine(last, viewerId)}</span>
+          <time dateTime={last.created_at}>{timeAgo(last.created_at)}</time>
+        </p>
+      )}
       {call && (
         <div className="workspace-teamspace-card-live">
           <Badge variant="secondary">

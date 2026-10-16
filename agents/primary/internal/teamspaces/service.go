@@ -46,6 +46,12 @@ type Repository interface {
 	DeleteContribution(context.Context, string, string, string) (Space, error)
 	PublishEntry(context.Context, Entry) (Entry, error)
 	ListEntries(context.Context, string, string, int) ([]Entry, error)
+	ListTasks(ctx context.Context, organizationID, teamspaceID string) ([]Task, error)
+	GetTask(ctx context.Context, organizationID, teamspaceID, taskID string) (Task, error)
+	// CreateTask stores task, last on the list when its Position is below 0.
+	CreateTask(ctx context.Context, task Task) (Task, error)
+	UpdateTask(ctx context.Context, organizationID, teamspaceID, taskID string, input TaskUpdate) (Task, error)
+	DeleteTask(ctx context.Context, organizationID, teamspaceID, taskID string) error
 }
 
 type Directory interface {
@@ -283,7 +289,7 @@ func (service *Service) Update(ctx context.Context, actor Actor, id string, inpu
 	if err != nil {
 		return Space{}, err
 	}
-	return decorate(updated, accessFrom(current)), nil
+	return decorate(withTaskCounts(updated, current), accessFrom(current)), nil
 }
 
 func (service *Service) Delete(ctx context.Context, actor Actor, id string) error {
@@ -318,7 +324,7 @@ func (service *Service) AddContribution(ctx context.Context, actor Actor, id str
 	}
 	access := accessFrom(current)
 	access.isMember = true
-	return decorate(updated, access), nil
+	return decorate(withTaskCounts(updated, current), access), nil
 }
 
 func (service *Service) UpdateContribution(ctx context.Context, actor Actor, id, agentID string, input ContributionUpdate) (Space, error) {
@@ -351,7 +357,7 @@ func (service *Service) UpdateContribution(ctx context.Context, actor Actor, id,
 	if err != nil {
 		return Space{}, err
 	}
-	return decorate(updated, accessFrom(current)), nil
+	return decorate(withTaskCounts(updated, current), accessFrom(current)), nil
 }
 
 func (service *Service) DeleteContribution(ctx context.Context, actor Actor, id, agentID string) (Space, error) {
@@ -370,7 +376,7 @@ func (service *Service) DeleteContribution(ctx context.Context, actor Actor, id,
 	if err != nil {
 		return Space{}, err
 	}
-	return decorate(updated, accessFrom(current)), nil
+	return decorate(withTaskCounts(updated, current), accessFrom(current)), nil
 }
 
 func (service *Service) PublishEntry(ctx context.Context, actor Actor, id string, input PublishEntryInput) (Entry, error) {
@@ -531,6 +537,14 @@ func decorate(space Space, access teamAccess) Space {
 		space.Contributions = []Contribution{}
 	}
 	return space
+}
+
+// withTaskCounts is updated with current's task counts. A change to a
+// teamspace itself, or to who contributes to it, leaves its checklist as it
+// was, and the store answers such a change without reading it again.
+func withTaskCounts(updated, current Space) Space {
+	updated.TaskCounts = current.TaskCounts
+	return updated
 }
 
 func accessFrom(space Space) teamAccess {

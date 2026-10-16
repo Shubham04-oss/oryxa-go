@@ -83,6 +83,8 @@ function backend({
   const api = mockApi(({ url, method, body }) => {
     const path = url.pathname
     if (path === spacePath) return json(space)
+    if (path === `${spacePath}/read` && method === "POST")
+      return json({ last_read_seq: (body as { seq: number }).seq })
     if (path === `${spacePath}/entries`) return json({ entries })
     if (path === `${orgPath}/files`) return json({ files })
     if (path.startsWith(`${orgPath}/files/`)) return json(files[0])
@@ -245,6 +247,50 @@ describe("TeamspaceFocus", () => {
       "Mention Juno (@juno)",
       "Mention Pricing (@pricing)",
     ])
+  })
+
+  it("marks the room read through the newest message on screen, once the teamspace carries read cursors", async () => {
+    const api = backend({
+      space: teamspace({
+        contributions: [contribution()],
+        last_read_seq: 1,
+        unread_count: 2,
+        last_message: {
+          seq: 3,
+          author_kind: "person",
+          author_id: "user-ada",
+          author_handle: "ada",
+          author_name: "Ada",
+          preview: "Done.",
+          created_at: "2026-10-16T09:00:00Z",
+        },
+      }),
+    })
+    const [, , ada] = api.seats
+    render()
+    await openRoom(api.seats, [
+      roomMessage(1, ada, "Morning!"),
+      roomMessage(2, ada, "Rollout?"),
+      roomMessage(3, ada, "Done."),
+    ])
+    await waitFor(
+      () =>
+        expect(
+          api.calls.filter((call) => call.path === `${spacePath}/read`)
+        ).toEqual([
+          { method: "POST", path: `${spacePath}/read`, body: { seq: 3 } },
+        ]),
+      { timeout: 3000 }
+    )
+  })
+
+  it("never marks a room read for a teamspace without read cursors", async () => {
+    const api = backend()
+    const [, , ada] = api.seats
+    render()
+    await openRoom(api.seats, [roomMessage(1, ada, "Morning!")])
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    expect(api.calls.some((call) => call.path.endsWith("/read"))).toBe(false)
   })
 
   it("posts through the pill composer, and shows sending while the room's agents answer", async () => {
