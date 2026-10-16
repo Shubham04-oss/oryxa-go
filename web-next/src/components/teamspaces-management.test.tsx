@@ -223,6 +223,52 @@ describe("TeamspacesManagement list", () => {
     }
   })
 
+  it("shows unread room messages and the room's last message once the list carries them", async () => {
+    backend([
+      teamspace({
+        last_read_seq: 40,
+        unread_count: 2,
+        last_message: {
+          seq: 42,
+          kind: "message",
+          author_kind: "person",
+          author_id: "user-ada",
+          author_handle: "ada",
+          author_name: "Ada",
+          preview: "the pricing sheet is done",
+          created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        },
+      }),
+      teamspace({
+        id: "tsp_notes",
+        name: "Notes room",
+        last_read_seq: 7,
+        unread_count: 0,
+        last_message: {
+          seq: 7,
+          kind: "parley_notes",
+          author_kind: "agent",
+          author_id: "agt_leo",
+          author_handle: "leo",
+          author_name: "Leo",
+          preview: "Decided: ship Friday",
+          created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        },
+      }),
+    ])
+    render()
+    const card = await screen.findByRole("article", { name: "Launch room" })
+    expect(within(card).getByLabelText("2 unread").textContent).toBe("2")
+    expect(
+      within(card).getByText("Ada: the pricing sheet is done")
+    ).toBeTruthy()
+    expect(within(card).getByText("5 min ago")).toBeTruthy()
+
+    const notes = screen.getByRole("article", { name: "Notes room" })
+    expect(within(notes).queryByLabelText(/unread/)).toBeNull()
+    expect(within(notes).getByText("Parley notes")).toBeTruthy()
+  })
+
   it("shows four faces, then how many more", async () => {
     backend([
       teamspace({

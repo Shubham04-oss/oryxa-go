@@ -1763,3 +1763,45 @@ it("drops prior viewer work and drafts immediately and freshly authorizes all pr
   ).toBeGreaterThanOrEqual(9)
   expect(keys.every((key) => key.includes(ORG))).toBe(true)
 })
+
+it("lists teamspaces with unread room messages under While you were away, only when the list carries them", async () => {
+  const at = new Date(Date.now() - 5 * 60_000).toISOString()
+  stubApi({
+    [`${path}/teamspaces`]: {
+      teamspaces: [
+        {
+          id: "tsp_eu",
+          name: "EU launch",
+          is_member: true,
+          status: "active",
+          last_read_seq: 40,
+          unread_count: 2,
+          last_message: {
+            seq: 42,
+            author_kind: "agent",
+            author_id: "agt_krude",
+            author_handle: "krude",
+            author_name: "Krude",
+            preview: "suggested an edit…",
+            created_at: at,
+          },
+        },
+        { id: "tsp_old", name: "Old room", is_member: true, status: "active" },
+      ],
+    },
+  })
+  const onOpenTeamspace = vi.fn()
+  renderHome({ onOpenTeamspace })
+  const away = screen.getByRole("region", { name: "While you were away" })
+  const list = await within(away).findByRole("list", {
+    name: "Unread in your teamspaces",
+  })
+  const rows = within(list).getAllByRole("button")
+  expect(rows.map((row) => row.textContent)).toEqual([
+    "EU launch Krude: suggested an edit…2 unread · 5 min ago",
+  ])
+  fireEvent.click(
+    within(list).getByRole("button", { name: "Open EU launch, 2 unread" })
+  )
+  expect(onOpenTeamspace).toHaveBeenCalledWith("tsp_eu")
+})

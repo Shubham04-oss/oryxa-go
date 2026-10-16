@@ -8,10 +8,12 @@ import {
   afterPublishTeamspaceEntry,
   afterTeamspaceContributionChange,
   afterUpdateTeamspace,
+  markReadInCache,
   teamspaceEntriesQueryOptions,
   teamspaceKeys,
   teamspaceQueryOptions,
   teamspacesQueryOptions,
+  tracksUnread,
 } from "./queries"
 import type { Teamspace } from "./client"
 
@@ -121,5 +123,66 @@ describe("teamspace mutation helpers", () => {
     const queryClient = seeded()
     await afterPublishTeamspaceEntry(queryClient, org, "tsp_1")
     expect(invalidated(queryClient)).toEqual(["entries"])
+  })
+})
+
+describe("markReadInCache", () => {
+  const tracked = {
+    id: "tsp_1",
+    is_member: true,
+    last_read_seq: 40,
+    unread_count: 2,
+    last_message: { seq: 42 },
+  } as unknown as Teamspace
+  const other = { ...tracked, id: "tsp_2" }
+  const untracked = {
+    id: "tsp_1",
+    is_member: true,
+  } as unknown as Teamspace
+
+  function cached(spaces: Teamspace[]) {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(teamspaceKeys.list("org-1"), spaces)
+    queryClient.setQueryData(
+      teamspaceKeys.teamspace("org-1", "tsp_1"),
+      spaces[0]
+    )
+    return queryClient
+  }
+
+  it("clears the count once the cursor reaches the newest message, in the list and the detail", () => {
+    const queryClient = cached([tracked, other])
+    markReadInCache(queryClient, "org-1", "tsp_1", 42)
+    const list = queryClient.getQueryData<Teamspace[]>(
+      teamspaceKeys.list("org-1")
+    )
+    expect(list?.[0]).toMatchObject({ last_read_seq: 42, unread_count: 0 })
+    expect(list?.[1]).toBe(other)
+    expect(
+      queryClient.getQueryData(teamspaceKeys.teamspace("org-1", "tsp_1"))
+    ).toMatchObject({ last_read_seq: 42, unread_count: 0 })
+  })
+
+  it("never moves the cursor back, and keeps the count while a later message is known", () => {
+    const queryClient = cached([tracked])
+    markReadInCache(queryClient, "org-1", "tsp_1", 41)
+    expect(
+      queryClient.getQueryData<Teamspace[]>(teamspaceKeys.list("org-1"))?.[0]
+    ).toMatchObject({ last_read_seq: 41, unread_count: 2 })
+    markReadInCache(queryClient, "org-1", "tsp_1", 30)
+    expect(
+      queryClient.getQueryData<Teamspace[]>(teamspaceKeys.list("org-1"))?.[0]
+    ).toMatchObject({ last_read_seq: 41 })
+  })
+
+  it("leaves a teamspace without read cursors as it is", () => {
+    const queryClient = cached([untracked])
+    markReadInCache(queryClient, "org-1", "tsp_1", 42)
+    expect(
+      queryClient.getQueryData<Teamspace[]>(teamspaceKeys.list("org-1"))?.[0]
+    ).toBe(untracked)
+    expect(tracksUnread(untracked)).toBe(false)
+    expect(tracksUnread(tracked)).toBe(true)
+    expect(tracksUnread({ ...tracked, is_member: false })).toBe(false)
   })
 })

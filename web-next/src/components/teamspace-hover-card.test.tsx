@@ -86,6 +86,40 @@ describe("the teamspace hover card", () => {
     expect(screen.queryByText(/Parley live/)).toBeNull()
   })
 
+  it("shows what the member hasn't read and the room's last message", async () => {
+    render(
+      withQueries(
+        <TeamspaceCard
+          space={{
+            ...space,
+            last_read_seq: 40,
+            unread_count: 100,
+            last_message: {
+              seq: 142,
+              author_kind: "agent",
+              author_id: "agt_1",
+              author_handle: "krude",
+              author_name: "Krude",
+              preview: "suggested an edit…",
+              created_at: new Date().toISOString(),
+            },
+          }}
+        />
+      )
+    )
+    expect(screen.getByLabelText("99+ unread").textContent).toBe("99+")
+    expect(screen.getByText("Krude: suggested an edit…")).toBeTruthy()
+    expect(screen.getByText("just now")).toBeTruthy()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+
+  it("shows neither without the list's unread fields", async () => {
+    render(withQueries(<TeamspaceCard space={space} />))
+    expect(screen.queryByText(/unread/)).toBeNull()
+    expect(document.querySelector(".popup-card-last")).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+
   it("says a parley is live from the room's own call", async () => {
     call = {
       callId: "call_1",

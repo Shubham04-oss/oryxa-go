@@ -369,7 +369,7 @@ function ExpandedSidebar({
                   }
                   current={openTeamspaceId === space.id}
                   live={live.has(space.id)}
-                  {...unreadProps(space)}
+                  {...teamspaceRowCount(space)}
                   onClick={() => onOpenTeamspace(space.id)}
                   wrap={(button) => (
                     <TeamspaceHoverCard space={space}>
@@ -664,7 +664,7 @@ function CollapsedSidebar({
                     }
                     current={openTeamspaceId === space.id}
                     live={live.has(space.id)}
-                    {...unreadProps(space)}
+                    {...teamspaceRowCount(space)}
                     collapsed
                     onClick={() => onOpenTeamspace(space.id)}
                   />
@@ -769,7 +769,7 @@ function agentIdentity(id: string, name: string): AvatarIdentity {
 }
 
 /** A teamspace's unread room messages as a row's strong count, when the list carries them. */
-function unreadProps(space: Teamspace) {
+export function teamspaceRowCount(space: Teamspace) {
   const unread = unreadCount(space)
   return unread > 0
     ? {
