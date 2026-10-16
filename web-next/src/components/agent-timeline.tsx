@@ -36,6 +36,7 @@ import {
   groupTurns,
   humanizeToolName,
   isImageArtifact,
+  runFailureWords,
   turnStatus,
   turnTimes,
 } from "@/lib/threads/timeline"
@@ -981,7 +982,7 @@ export function AgentTimeline({
       case "run_failed":
         return (
           <p className="workspace-agent-error" key={entry.key}>
-            {entry.error || "Your agent couldn't answer. Try again."}
+            {entry.error || runFailureWords(entry.code).words}
           </p>
         )
     }
