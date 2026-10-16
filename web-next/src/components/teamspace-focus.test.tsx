@@ -578,6 +578,38 @@ describe("TeamspaceFocus", () => {
     ).toBeTruthy()
   })
 
+  it("says the target in the hero and keeps the Launch card beside the room", async () => {
+    const date = new Date()
+    date.setDate(date.getDate() + 21)
+    const pad = (value: number) => String(value).padStart(2, "0")
+    backend({
+      space: teamspace({
+        target_date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+        target_label: "Launch",
+      }),
+    })
+    render()
+
+    expect(
+      await screen.findByText(
+        /^Launch on .+ · in 21 days · Launch team · 2 people and 2 agents$/
+      )
+    ).toBeTruthy()
+    const side = screen.getByRole("complementary", {
+      name: "About Launch room",
+    })
+    expect(within(side).getByRole("region", { name: "Launch" })).toBeTruthy()
+  })
+
+  it("leaves the target and the Launch card out for a Go without them", async () => {
+    backend()
+    render()
+    expect(await screen.findByText(/^Launch team · 2 people and/)).toBeTruthy()
+    expect(
+      screen.queryByRole("region", { name: /^(Launch|Target|Checklist)$/ })
+    ).toBeNull()
+  })
+
   it("shows the Live card only while something runs in the room", async () => {
     backend({
       children: [
