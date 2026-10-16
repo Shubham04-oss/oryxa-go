@@ -742,3 +742,46 @@ func TestReadCursorsAndActivity(t *testing.T) {
 		t.Fatalf("Ada's cursors after Forget = %d, %v", cursors, err)
 	}
 }
+
+// A paused room takes nothing, whoever asks: the store refuses the message as
+// ErrPaused, stores and announces none of it, and takes messages again once
+// the teamspace is resumed.
+func TestAppendRefusesARoomWhileItIsPaused(t *testing.T) {
+	fixture := testStore(t)
+	roomID := fixture.newRoom(t)
+	ctx := context.Background()
+	say := func(body string) error {
+		_, err := fixture.store.Append(ctx, Message{
+			RoomID: roomID, AuthorHandle: "ada", AuthorKind: SeatPerson, AuthorUserID: "user_ada", Body: body,
+		})
+		return err
+	}
+	setStatus := func(status teamspaces.Status) {
+		t.Helper()
+		if _, err := fixture.teamspaces.Update(ctx, fixture.organizationID, roomID, "user_manager", teamspaces.UpdateInput{Status: &status}); err != nil {
+			t.Fatalf("set the teamspace %s: %v", status, err)
+		}
+	}
+
+	if err := say("before the pause"); err != nil {
+		t.Fatalf("Append() before the pause = %v", err)
+	}
+	setStatus(teamspaces.StatusDisabled)
+	if err := say("during the pause"); !errors.Is(err, ErrPaused) {
+		t.Fatalf("Append() into a paused room = %v, want ErrPaused", err)
+	}
+	if announced := fixture.postedEvents(t, roomID); len(announced) != 1 {
+		t.Errorf("%d messages were announced, want only the one said before the pause", len(announced))
+	}
+	setStatus(teamspaces.StatusActive)
+	if err := say("after the pause"); err != nil {
+		t.Fatalf("Append() after resuming = %v", err)
+	}
+	stored, err := fixture.store.Messages(ctx, roomID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 2 || stored[0].Body != "before the pause" || stored[1].Body != "after the pause" || stored[1].Seq != 2 {
+		t.Fatalf("stored = %+v, want the two messages either side of the pause, numbered without a gap", stored)
+	}
+}

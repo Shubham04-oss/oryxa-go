@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
@@ -82,6 +83,12 @@ const messageColumns = `id, room_id, seq, author_handle, author_kind, author_use
 // Every message stored is announced, in the same transaction, as
 // agents.teamspace.room.message.posted.v1 in the agents outbox: the event
 // commits with the message, and never without it.
+//
+// A paused room takes nothing, and Append is where that holds, not only where
+// Service.Post looks before a turn that can take minutes: the teamspace row
+// is read FOR SHARE first, so a pause either commits before and the message
+// is refused with ErrPaused, or waits for the message to commit and stops the
+// next one.
 func (store *PostgresStore) Append(ctx context.Context, message Message) (Message, error) {
 	// The store gives a message both of the things that make it one: its
 	// place in the room, and its name. A caller that invented ids would have
@@ -99,8 +106,20 @@ func (store *PostgresStore) Append(ctx context.Context, message Message) (Messag
 		message.AddressedTo = []string{}
 	}
 	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		var status teamspaces.Status
+		err := tx.QueryRow(ctx, `SELECT status FROM agents_primary.teamspaces WHERE id = $1 FOR SHARE`,
+			message.RoomID).Scan(&status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrRoomNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("read the room's teamspace: %w", err)
+		}
+		if status != teamspaces.StatusActive {
+			return ErrPaused
+		}
 		var organizationID string
-		err := tx.QueryRow(ctx, `
+		err = tx.QueryRow(ctx, `
 			INSERT INTO agents_primary.room_message_seqs (room_id, organization_id, next_seq)
 			SELECT $1, teamspace.organization_id, 2
 			FROM agents_primary.teamspaces teamspace WHERE teamspace.id = $1
@@ -124,8 +143,8 @@ func (store *PostgresStore) Append(ctx context.Context, message Message) (Messag
 		}
 		return store.recordPosted(ctx, tx, organizationID, message)
 	})
-	if errors.Is(err, ErrRoomNotFound) {
-		return Message{}, ErrRoomNotFound
+	if errors.Is(err, ErrRoomNotFound) || errors.Is(err, ErrPaused) {
+		return Message{}, err
 	}
 	if err != nil {
 		return Message{}, fmt.Errorf("append room message: %w", err)
