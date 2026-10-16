@@ -103,7 +103,9 @@ function randomId(): string {
  * Go's items as chat messages: for a conversation from before the Durable
  * Object held it, and for what `reconcileChatMessages` finds missing. A
  * member's message keeps its stored event's id; the agent's items in between
- * become one assistant message each.
+ * become one assistant message each, runs' starts and ends among them: since
+ * #390 Go stores them, with the ids the streamed copies carry, so the run
+ * cards can read a past run's duration and usage.
  */
 export function itemsToChatMessages(
   items: readonly Item[]
@@ -120,7 +122,6 @@ export function itemsToChatMessages(
       assistant = undefined
       continue
     }
-    if (item.type === "run_started" || item.type === "run_completed") continue
     if (!assistant) {
       assistant = { id: randomId(), role: "assistant", parts: [] }
       messages.push(assistant)
