@@ -346,7 +346,9 @@ not permission to copy every incidental value into a new component.
     which marks Teamspaces. The page's header is the crumbs "Teamspaces /
     <name>"; the first goes back to the list. On the canvas, under a faint
     band of the harbour scene: the hero (planet, the name as a 30px title,
-    "<Team> team · N people and M agents", "Paused · " first when paused),
+    "<Team> team · N people and M agents", "Paused · " first when paused,
+    then "Launch on 4 November · in 21 days · " when the teamspace has a
+    target date),
     and on its right the faces of the people with a seat, the Parley pill
     and, only for whoever manages the team, an Invite pill. Invite opens a
     pop-up sheet listing the workspace's people not yet on the team, each
@@ -357,19 +359,42 @@ not permission to copy every incidental value into a new component.
     little apart (the ledger has no place on the board; owner to confirm).
   - **Room:** the room is the main tile, with a side column beside it: a
     Live card only while a sandbox or browser is running in the room
-    (RoomLive), a **Files N** card with the newest four team files (a kind
+    (RoomLive), the **Launch** card (below), a **Files N** card with the newest four team files (a kind
     tag from the extension, the name, "added …"; its heading opens the
     Files tab, and it shows only once there are files to list), the team
     summary, then the purpose, the contributed agents and the people. The
-    board has a Plan card and a Last parley card too, left out until
-    their APIs exist. Purpose, agents and People aren't on the board; they
+    board's Last parley card is left out until its API exists. Purpose, agents and People aren't on the board; they
     are kept on purpose, below the board's cards, as Overview's content
     with nowhere else to go (owner to confirm). The
     room stays mounted behind the other tabs, so its draft, scroll and
     socket carry over. **Files** is the team's files, full width. **Plan**
     and **Parleys** have no API yet, so each is one honest line on the
     empty scene ("A shared plan is coming", "Past parleys will be listed
-    here"). No launch date in the hero until the teamspace carries one.
+    here").
+  - **The Launch card** (`teamspace-launch.tsx`): what the team is working
+    towards and its checklist. The heading is the target's label (Go's
+    `target_label`, "Target" with only a date, "Checklist" with neither),
+    then "N of M done"; the date in words with how far away ("4 November",
+    "in 21 days"), a thin progress bar, and the tasks: the library's
+    checkbox, the title (struck through once done), "Due 30 Oct · Kenji"
+    and the owner's face, and a ⋯ menu (`ghost` `icon-sm`) with Edit title
+    (the title becomes a field in place: Enter saves, Escape cancels),
+    Assign to (the team's members, or No one) and, for whoever created the
+    task or manages the team, Delete task (`destructive`, no confirm: a
+    checklist line is cheap to add back). "Add a task" (`ghost` `sm`) opens
+    a small form in the card: the task, an optional owner from the team and
+    an optional due date, then Cancel and Add task. Whoever manages the team
+    sets the target from a calendar button in the card's heading: a popover
+    (`ui/popover`) with what it is ("Launch", 60 letters at most) and the
+    date, Clear (`ghost`, on the left) when one is set, then Cancel and Save.
+    The checklist is the team's (members only); a manager off the team sees
+    only the target. A paused teamspace's card is read-only (the
+    checkboxes disabled; no menus, Add or target button), and a write Go refuses
+    409 `teamspace_disabled` says the checklist went read-only and reads the
+    teamspace again. Go publishes no event for a task change, so the card
+    reads the checklist again after each change. The card and each of its
+    parts appear only once Go serves them (`target_date`, `task_counts`):
+    against a Go without them there is no card and no read.
   - **The member's agent beside a teamspace** (TeamspaceHome, Teamspace3 and
     TeamspaceGlance boards, 15 Oct 2026): opening a teamspace on a desktop
     opens the agent panel (§2) beside it, so the sidebar folds to its
@@ -397,8 +422,11 @@ not permission to copy every incidental value into a new component.
     card is dimmed, still opens from anywhere on it, and says its room is
     closed until a team admin resumes it. The parley chip reads each open teamspace's call once a minute
     (the member must be on the team), under the room's own call key.
-    Unread counts, who's editing, custom facts, the last activity line and
-    who paused it stay off the card until the list carries them.
+    Under the purpose, outline fact chips: the target ("Launch 4 Nov")
+    and how much of the checklist is done ("6/9"), each only when Go
+    serves it and it holds something. Unread counts, who's editing, other
+    custom facts, the last activity line and who paused it stay off the
+    card until the list carries them.
   - For a member who can open one, the last card opens a new teamspace,
     drawn as the ship's lines on deep sea, with a New teamspace button.
     Both it and the header's button open the create form as a pop-up
