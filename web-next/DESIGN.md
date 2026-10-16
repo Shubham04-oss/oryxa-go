@@ -708,10 +708,9 @@ not permission to copy every incidental value into a new component.
   - **Parley ended:** when the call the member is in ends (someone ended it,
     or they ended it for everyone), the pop-up with the sea of bottles: the
     kicker "Parley ended · 35 min · 5 people", what was kept (the recording
-    and transcript, or the transcript) and Done. In a teamspace the foot's
-    quiet note says "{agent} will post the notes in the room" (the call's
-    agent as its view last named it, or "The agent"); other rooms keep no
-    notes and show none. Just leaving shows nothing.
+    and transcript, or the transcript) and Done. Just leaving shows nothing.
+    No line promises notes in the room until the call's view says the agent
+    will post them (the edge half of #392).
     The agent's notes, the save-recording switch, "Edit first" and "Post
     notes to the room" join it once there's an API for the notes.
   - **In a DM:** the same strip, or a "Parley" button when none runs, sits

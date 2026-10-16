@@ -155,10 +155,6 @@ type CallActions = {
 /** A parley that just ended, as the member saw it. */
 export type EndedCall = {
   roomName: string
-  /** The kind of room the call was in: a teamspace's gets its notes posted in it. */
-  roomKind?: LiveRoom["kind"]
-  /** The call's agent, as its view last named it, if it did. */
-  agentName?: string
   startedAt?: string
   endedAt: string
   /** How many people were in it at the end. */
@@ -663,8 +659,6 @@ export function CallProvider({
     const seen = lastView.current
     setEnded({
       roomName: current.roomName,
-      roomKind: current.room.kind,
-      agentName: seen?.agent.name.trim() || undefined,
       startedAt: seen?.startedAt,
       endedAt: new Date().toISOString(),
       people: Math.max(seen?.participants.length ?? 0, current.tiles.length),

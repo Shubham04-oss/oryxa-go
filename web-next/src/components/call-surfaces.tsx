@@ -616,19 +616,9 @@ function minutesBetween(
 }
 
 /**
- * Where a parley's notes will be: a teamspace's room has the call's agent
- * post them there when the call ends (#392). Other rooms keep no notes.
- */
-export function endedNotesLine(ended: EndedCall): string | undefined {
-  if (ended.roomKind !== "teamspace") return undefined
-  return `${ended.agentName ?? "The agent"} will post the notes in the room`
-}
-
-/**
  * A parley just ended (founder's redesign, "Parley ended" on the pop-ups
  * board): the Popup with the sea of bottles, how long it ran and who was in
- * it, and what was kept; in a teamspace, a note that the notes will be
- * posted in its room. The agent's notes, the save-recording switch, "Edit
+ * it, and what was kept. The agent's notes, the save-recording switch, "Edit
  * first" and "Post notes to the room" join it with an API for the notes.
  */
 function CallEnded({
@@ -664,7 +654,7 @@ function CallEnded({
           ? `The recording and transcript, kept with ${ended.roomName}. Only people in it can open them.`
           : `The transcript, kept with ${ended.roomName}.`}
       </PopupHead>
-      <PopupFoot note={endedNotesLine(ended)}>
+      <PopupFoot>
         <Button ref={done} onClick={onDone}>
           Done
         </Button>
