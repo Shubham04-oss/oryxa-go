@@ -595,11 +595,9 @@ function TeamspaceCard({
           </small>
         </span>
         {unread > 0 && (
-          <Badge
-            className="workspace-teamspace-unread"
-            aria-label={unreadWords(unread)}
-          >
-            {unreadLabel(unread)}
+          <Badge className="workspace-teamspace-unread">
+            <span aria-hidden="true">{unreadLabel(unread)}</span>
+            <span className="sr-only">{unreadWords(unread)}</span>
           </Badge>
         )}
         <DropdownMenu>

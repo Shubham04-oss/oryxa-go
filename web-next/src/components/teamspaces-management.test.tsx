@@ -258,14 +258,16 @@ describe("TeamspacesManagement list", () => {
     ])
     render()
     const card = await screen.findByRole("article", { name: "Launch room" })
-    expect(within(card).getByLabelText("2 unread").textContent).toBe("2")
+    const badge = card.querySelector(".workspace-teamspace-unread")
+    expect(badge?.querySelector("[aria-hidden='true']")?.textContent).toBe("2")
+    expect(within(card).getByText("2 unread")).toBeTruthy()
     expect(
       within(card).getByText("Ada: the pricing sheet is done")
     ).toBeTruthy()
     expect(within(card).getByText("5 min ago")).toBeTruthy()
 
     const notes = screen.getByRole("article", { name: "Notes room" })
-    expect(within(notes).queryByLabelText(/unread/)).toBeNull()
+    expect(within(notes).queryByText(/unread/)).toBeNull()
     expect(within(notes).getByText("Parley notes")).toBeTruthy()
   })
 

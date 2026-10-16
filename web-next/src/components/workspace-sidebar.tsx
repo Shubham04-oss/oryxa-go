@@ -372,7 +372,7 @@ function ExpandedSidebar({
                   {...teamspaceRowCount(space)}
                   onClick={() => onOpenTeamspace(space.id)}
                   wrap={(button) => (
-                    <TeamspaceHoverCard space={space}>
+                    <TeamspaceHoverCard space={space} viewerId={viewerId}>
                       {button}
                     </TeamspaceHoverCard>
                   )}

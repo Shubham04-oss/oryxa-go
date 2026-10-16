@@ -107,9 +107,41 @@ describe("the teamspace hover card", () => {
         />
       )
     )
-    expect(screen.getByLabelText("99+ unread").textContent).toBe("99+")
+    const badge = document.querySelector(".popup-card-unread")
+    expect(badge?.querySelector("[aria-hidden='true']")?.textContent).toBe(
+      "99+"
+    )
+    expect(screen.getByText("99+ unread")).toBeTruthy()
     expect(screen.getByText("Krude: suggested an edit…")).toBeTruthy()
     expect(screen.getByText("just now")).toBeTruthy()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+
+  it("says You for the member's own last message, as the cards do", async () => {
+    render(
+      withQueries(
+        <TeamspaceCard
+          viewerId="user-ada"
+          space={{
+            ...space,
+            last_read_seq: 42,
+            unread_count: 0,
+            last_message: {
+              seq: 42,
+              kind: "message",
+              author_kind: "person",
+              author_id: "user-ada",
+              author_handle: "ada",
+              author_name: "Ada",
+              preview: "the pricing sheet is done",
+              created_at: new Date().toISOString(),
+            },
+          }}
+        />
+      )
+    )
+    expect(screen.getByText("You: the pricing sheet is done")).toBeTruthy()
+    expect(screen.queryByText(/unread/)).toBeNull()
     await new Promise((resolve) => setTimeout(resolve, 10))
   })
 

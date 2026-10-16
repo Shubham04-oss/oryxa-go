@@ -28,9 +28,12 @@ const FACES = 4
 
 export function TeamspaceHoverCard({
   space,
+  viewerId,
   children,
 }: {
   space: Teamspace
+  /** The member looking, so their own last message reads "You". */
+  viewerId?: string
   /** The item that opens the card on hover or focus: the sidebar's own. */
   children: ReactElement
 }) {
@@ -38,14 +41,21 @@ export function TeamspaceHoverCard({
     <HoverCard>
       <HoverCardTrigger render={children} />
       <HoverCardContent side="right" align="start" className="popup-card">
-        <TeamspaceCard space={space} />
+        <TeamspaceCard space={space} viewerId={viewerId} />
       </HoverCardContent>
     </HoverCard>
   )
 }
 
 /** The card itself: mounted only while it shows, so it reads only then. */
-export function TeamspaceCard({ space }: { space: Teamspace }) {
+export function TeamspaceCard({
+  space,
+  viewerId,
+}: {
+  space: Teamspace
+  /** The member looking, so their own last message reads "You". */
+  viewerId?: string
+}) {
   const room = { kind: "teamspace", id: space.id } as const
   // Whether a parley runs: the room's own call view, read when the card
   // opens. A room the edge refuses or doesn't know shows none.
@@ -93,17 +103,15 @@ export function TeamspaceCard({ space }: { space: Teamspace }) {
         {(last || unread > 0) && (
           <div className="popup-card-last">
             {unread > 0 && (
-              <Badge
-                className="popup-card-unread"
-                aria-label={unreadWords(unread)}
-              >
-                {unreadLabel(unread)}
+              <Badge className="popup-card-unread">
+                <span aria-hidden="true">{unreadLabel(unread)}</span>
+                <span className="sr-only">{unreadWords(unread)}</span>
               </Badge>
             )}
             {last && (
               <>
                 <span className="popup-card-last-line">
-                  {lastMessageLine(last)}
+                  {lastMessageLine(last, viewerId)}
                 </span>
                 <time dateTime={last.created_at}>
                   {timeAgo(last.created_at)}
