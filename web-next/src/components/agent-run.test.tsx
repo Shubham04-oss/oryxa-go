@@ -198,6 +198,56 @@ describe("the agent session", () => {
     expect(within(card).getByText("The model is unavailable.")).toBeTruthy()
   })
 
+  it("reads a past run's time and tokens from the brackets history keeps", () => {
+    session([
+      task,
+      {
+        type: "run_started",
+        id: "r1.started",
+        run_id: "r1",
+        at: "2026-10-15T09:41:02Z",
+      },
+      {
+        type: "message",
+        id: "ev_2",
+        author: "Leo",
+        text: "Checked.",
+        at: "2026-10-15T09:41:40Z",
+      },
+      {
+        type: "run_completed",
+        id: "r1.ended",
+        run_id: "r1",
+        at: "2026-10-15T09:41:14Z",
+        usage: { input_tokens: 900, output_tokens: 340, total_tokens: 1240 },
+      },
+    ])
+    const card = screen.getByRole("article", { name: "Run: Done" })
+    expect(within(card).getByText("12s · 1.2k tokens")).toBeTruthy()
+  })
+
+  it("names a failed run by why it failed", () => {
+    session([
+      task,
+      {
+        type: "run_started",
+        id: "r1.started",
+        run_id: "r1",
+        at: "2026-10-15T09:41:02Z",
+      },
+      {
+        type: "run_failed",
+        id: "r1.ended",
+        run_id: "r1",
+        at: "2026-10-15T09:41:09Z",
+        code: "stopped",
+      },
+    ])
+    const card = screen.getByRole("article", { name: "Run: Stopped" })
+    expect(within(card).getByText("You stopped this run.")).toBeTruthy()
+    expect(within(card).getByText("7s")).toBeTruthy()
+  })
+
   it("lists a file the run made as an output with Open and Download", () => {
     session([
       task,
