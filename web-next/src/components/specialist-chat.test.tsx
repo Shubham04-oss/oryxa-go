@@ -1115,7 +1115,7 @@ describe("Renaming a specialist's conversation", () => {
           patches.push(title)
           return answer(title, held)
         }
-        return backend.fetch(input, init)
+        return backend.fetch(String(input), init)
       })
     )
     withQueries(
