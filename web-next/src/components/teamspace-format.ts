@@ -105,12 +105,12 @@ export function latest(
 export function parseDay(value: string | null | undefined): Date | undefined {
   const match = value ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(value) : null
   if (!match) return undefined
-  const [year, month, day] = match.slice(1).map(Number)
-  const date = new Date(year, month - 1, day)
-  return date.getFullYear() === year &&
-    date.getMonth() === month - 1 &&
-    date.getDate() === day
-    ? date
+  const [year, month, date] = match.slice(1).map(Number)
+  const parsed = new Date(year, month - 1, date)
+  return parsed.getFullYear() === year &&
+    parsed.getMonth() === month - 1 &&
+    parsed.getDate() === date
+    ? parsed
     : undefined
 }
 
@@ -135,10 +135,10 @@ const shortDayYearFormat = new Intl.DateTimeFormat(undefined, {
 
 /** A day in words: "4 November" this year, "4 November 2027" another ("4 Nov" short). */
 export function dayLabel(
-  day: Date,
+  date: Date,
   { short = false, now = Date.now() }: { short?: boolean; now?: number } = {}
 ): string {
-  const thisYear = day.getFullYear() === new Date(now).getFullYear()
+  const thisYear = date.getFullYear() === new Date(now).getFullYear()
   const format = short
     ? thisYear
       ? shortDayMonthFormat
@@ -146,7 +146,7 @@ export function dayLabel(
     : thisYear
       ? longDayFormat
       : longDayYearFormat
-  return format.format(day)
+  return format.format(date)
 }
 
 /** Whole days from today to `target` by the member's calendar (negative once past). */
@@ -179,9 +179,9 @@ export function targetLine(
   space: Pick<Teamspace, "target_date" | "target_label">,
   now = Date.now()
 ): string | undefined {
-  const day = parseDay(space.target_date)
-  if (!day) return undefined
-  return `${targetName(space)} on ${dayLabel(day, { now })} · ${daysAway(daysUntil(day, now))}`
+  const date = parseDay(space.target_date)
+  if (!date) return undefined
+  return `${targetName(space)} on ${dayLabel(date, { now })} · ${daysAway(daysUntil(date, now))}`
 }
 
 /** "Launch 4 Nov", the target as a card's fact chip, or nothing without a date. */
@@ -189,7 +189,7 @@ export function targetChip(
   space: Pick<Teamspace, "target_date" | "target_label">,
   now = Date.now()
 ): string | undefined {
-  const day = parseDay(space.target_date)
-  if (!day) return undefined
-  return `${targetName(space)} ${dayLabel(day, { short: true, now })}`
+  const date = parseDay(space.target_date)
+  if (!date) return undefined
+  return `${targetName(space)} ${dayLabel(date, { short: true, now })}`
 }
