@@ -607,7 +607,8 @@ func clampLimit(limit int) int {
 // message's owning member is its AuthorUserID, whether a person or their own
 // agent said it, so scoping by it catches both. Parley notes are the
 // organization agent's and have no author user, so only the organization's
-// own Forget removes them. The brief is a room's own synthesis rather than
+// own Forget removes them; a member's Forget leaves the notes but takes
+// their id off every action they owned. The brief is a room's own synthesis rather than
 // any one member's, so a per-member Forget leaves it standing — the same
 // convention teamspaces.Forget follows for a team-owned space when one
 // contributor leaves it. A member's agent threads are found through
@@ -638,6 +639,15 @@ func (store *PostgresStore) Forget(ctx context.Context, organizationID, userID s
 	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_messages
 			WHERE organization_id=$1 AND author_user_id=$2`, organizationID, userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE agents_primary.room_messages
+			SET data = jsonb_set(data, '{actions}', (
+				SELECT COALESCE(jsonb_agg(CASE WHEN action->>'owner_user_id' = $2 THEN action - 'owner_user_id' ELSE action END), '[]'::jsonb)
+				FROM jsonb_array_elements(data->'actions') AS action
+			))
+			WHERE organization_id=$1 AND kind='parley_notes'
+				AND data->'actions' @> jsonb_build_array(jsonb_build_object('owner_user_id', $2::text))`, organizationID, userID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_presence

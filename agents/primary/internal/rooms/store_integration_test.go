@@ -756,11 +756,18 @@ func TestParleyNotesArePostedOncePerCall(t *testing.T) {
 	if _, _, err := fixture.store.AppendNotes(ctx, fixture.organizationID, room, ParleyNotes{CallID: "call_2"}, "notes"); !errors.Is(err, ErrPaused) {
 		t.Fatalf("notes for a paused room: %v, want ErrPaused", err)
 	}
-	// A member leaving takes their own messages, never the organization agent's notes.
+	// A member leaving takes their own messages, never the organization agent's
+	// notes, but takes their id off the actions they owned.
 	if err := fixture.store.Forget(ctx, fixture.organizationID, "user-ada"); err != nil {
 		t.Fatal(err)
 	}
-	if left, err := fixture.store.Messages(ctx, room, 0, 10); err != nil || len(left) != 1 || left[0].Kind != KindParleyNotes {
+	left, err := fixture.store.Messages(ctx, room, 0, 10)
+	if err != nil || len(left) != 1 || left[0].Kind != KindParleyNotes {
 		t.Fatalf("after Ada's Forget = %+v, %v", left, err)
+	}
+	var scrubbed ParleyNotes
+	if err := json.Unmarshal(left[0].Data, &scrubbed); err != nil || len(scrubbed.Actions) != 1 ||
+		scrubbed.Actions[0].Text != "Post it" || scrubbed.Actions[0].OwnerUserID != "" || strings.Contains(string(left[0].Data), "user-ada") {
+		t.Fatalf("notes after Ada's Forget = %s, %v", left[0].Data, err)
 	}
 }
