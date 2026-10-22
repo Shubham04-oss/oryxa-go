@@ -6,16 +6,15 @@ import (
 	"testing"
 )
 
-func TestEventPatternMatchesTheEventsThatEndConnections(t *testing.T) {
+func TestEventPatternMatchesTheEventsAppsConsumes(t *testing.T) {
 	pattern, err := EventPattern()
 	if err != nil {
 		t.Fatalf("EventPattern() error = %v", err)
 	}
-	// One source, so no $or: EventBridge refuses an $or of one branch.
-	assertJSONEqual(t, pattern, `{
-		"source": ["oryxa.auth"],
-		"detail-type": ["auth.member.removed.v1", "auth.organization.deleted.v1"]
-	}`)
+	assertJSONEqual(t, pattern, `{"$or": [
+		{"source": ["oryxa.auth"], "detail-type": ["auth.member.removed.v1", "auth.organization.deleted.v1"]},
+		{"source": ["oryxa.integrations"], "detail-type": ["integrations.connection.created.v1", "integrations.connection.removed.v1", "integrations.connection.updated.v1"]}
+	]}`)
 }
 
 func TestQueuePolicyAllowsOnlyTheRule(t *testing.T) {

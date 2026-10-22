@@ -885,3 +885,13 @@ func TestPolicyFailureCauseIsNotReturnedToClient(t *testing.T) {
 		t.Fatalf("policy error response: %d %s", response.Code, response.Body)
 	}
 }
+
+func TestANativeConnectAnswersTheRedirectAlone(t *testing.T) {
+	fake := &fakeService{broker: "native", redirect: "https://github.com/login/oauth/authorize?state=s"}
+	recorder := call(newServer(t, fake), http.MethodPost, "/v1/organizations/org_1/apps/connections",
+		`{"toolkit":"github"}`, "Authorization", "Bearer token")
+	body := decodeBody(t, recorder)
+	if _, has := body["connection"]; recorder.Code != http.StatusCreated || has || body["redirect_url"] != fake.redirect {
+		t.Fatalf("status = %d body = %s, want 201 with only redirect_url", recorder.Code, recorder.Body)
+	}
+}

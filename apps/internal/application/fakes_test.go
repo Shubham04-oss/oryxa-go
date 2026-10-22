@@ -221,6 +221,25 @@ func (store *fakeStore) ExpireConnection(_ context.Context, id, reason string, n
 	return true, nil
 }
 
+func (store *fakeStore) ApplyNativeConnection(_ context.Context, connection domain.Connection, at time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for id, existing := range store.connections {
+		if existing.NativeConnectionID != connection.NativeConnectionID {
+			continue
+		}
+		if existing.Status == domain.ConnectionRemoved || (connection.Status != domain.ConnectionRemoved && !existing.UpdatedAt.Before(at)) {
+			return nil
+		}
+		existing.Status, existing.StatusReason, existing.UpdatedAt = connection.Status, connection.StatusReason, at
+		store.connections[id] = existing
+		return nil
+	}
+	connection.CreatedAt, connection.UpdatedAt = at, at
+	store.connections[connection.ID] = connection
+	return nil
+}
+
 func (store *fakeStore) RemoveConnection(_ context.Context, id, reason string, now time.Time, events func(domain.Connection, []domain.Trigger) ([]domain.Event, error)) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()

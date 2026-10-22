@@ -20,6 +20,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/hooks"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/integration"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/integrations"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/nativeclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/signin"
@@ -107,6 +108,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	if err != nil {
 		return host.Service{}, err
 	}
+	native := mountNative(platform, config, logger)
 	var services *serviceauth.Verifier
 	if len(config.ServiceCallers) > 0 {
 		if services, err = serviceauth.NewVerifier(serviceauth.VerifierConfig{
@@ -123,6 +125,13 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Sink:      publisher,
 		Verifier:  platform.EventAuth.Verifier(),
 		Logger:    logger,
+	}
+	nativeToolkits := config.NativeToolkits
+	if native != nil {
+		dependencies.Native = native
+	} else {
+		// Named toolkits without a service to send them to would be refused.
+		nativeToolkits = nil
 	}
 	dependencies.Policy = platform.WorkspaceSettings()
 	if oryxa != nil {
@@ -154,6 +163,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		PipedreamMinPoll:     config.PipedreamMinPoll,
 		SigninRedirectURI:    config.SigninRedirectURI,
 		DefaultOAuthClients:  defaults,
+		NativeToolkits:       nativeToolkits,
 	})
 	if err != nil {
 		return host.Service{}, err
@@ -184,6 +194,31 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Timeouts: host.Timeouts{Read: 15 * time.Second, Write: 120 * time.Second},
 		Workers:  workers,
 	}, nil
+}
+
+// mountNative builds the client for the integrations service, or nil with the
+// reason logged: it needs both its URL and the key apps signs its calls with.
+// Without it no connect goes native and no native tool runs, and events about
+// native connections are still recorded.
+func mountNative(platform host.Platform, config serviceconfig.Config, logger *slog.Logger) *nativeclient.Client {
+	switch {
+	case config.IntegrationsURL == "":
+		logger.Info("the integrations service is not configured (APPS_INTEGRATIONS_URL is not set): no app connects or runs tools through it")
+		return nil
+	case config.ServiceKeyID == "":
+		logger.Warn("APPS_SERVICE_KEY_ID is not set: apps cannot sign calls to the integrations service, so no app connects or runs tools through it")
+		return nil
+	}
+	client, err := nativeclient.New(nativeclient.Config{
+		BaseURL: config.IntegrationsURL,
+		Signer:  serviceauth.Signer{Client: kms.NewFromConfig(platform.AWS), KeyID: config.ServiceKeyID, Service: Name},
+	})
+	if err != nil {
+		logger.Warn("the integrations service is not usable: no app connects or runs tools through it", "error", err)
+		return nil
+	}
+	logger.Info("the integrations service is configured", "toolkits", strings.Join(config.NativeToolkits, ","))
+	return client
 }
 
 // oryxaParts are Oryxa's own sign-in as Mount builds it, and the Slack

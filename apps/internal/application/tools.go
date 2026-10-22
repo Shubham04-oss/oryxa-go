@@ -164,7 +164,9 @@ func (s *Service) RunTool(ctx context.Context, credentials authclient.Credential
 	if err != nil {
 		return ToolRun{}, err
 	}
-	if input.OnlyReads && !route.readOnly {
+	// A native tool's effect is the integrations service's to say: it refuses
+	// a change that is not confirmed, so an unconfirmed caller is stopped there.
+	if input.OnlyReads && !route.readOnly && !route.native {
 		return ToolRun{}, fmt.Errorf("%s changes things, so it runs only once the member confirms: %w", route.slug, domain.ErrNotReadOnly)
 	}
 	// A specialist runs only what its owner granted it, whatever it was told.
@@ -172,7 +174,7 @@ func (s *Service) RunTool(ctx context.Context, credentials authclient.Credential
 		return ToolRun{}, err
 	}
 	key := ""
-	if !route.readOnly {
+	if !route.readOnly && !route.native {
 		if key, err = domain.CheckIdempotencyKey(input.IdempotencyKey); err != nil {
 			return ToolRun{}, err
 		}
@@ -180,6 +182,9 @@ func (s *Service) RunTool(ctx context.Context, credentials authclient.Credential
 	connection, err := s.connectionFor(ctx, organizationID, caller.UserID, route.toolkit, input.ConnectionID)
 	if err != nil {
 		return ToolRun{}, err
+	}
+	if route.native {
+		return s.runNativeTool(ctx, caller, connection, route.slug, arguments, input.OnlyReads)
 	}
 	if route.pipedream != nil {
 		return s.runPipedreamTool(ctx, caller, connection, *route.pipedream, key, object)

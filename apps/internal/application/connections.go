@@ -17,6 +17,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/nativeclient"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 )
 
@@ -60,9 +61,9 @@ var userSuppliedSchemes = []string{"API_KEY", "BEARER_TOKEN", "BASIC"}
 // has an auth config for the app, asks Composio for a link, and records the
 // pending connection. The member finishes in their browser, at RedirectURL.
 func (s *Service) Connect(ctx context.Context, credentials authclient.Credentials, organizationID string, input ConnectInput) (domain.Connection, string, error) {
-	// ponytail: a native connect records no apps connection yet, so it
-	// answers an empty one with the redirect; the integrations service owns
-	// the connection until it reports them (#372).
+	// A native connect records nothing here: the connection's row arrives
+	// with the integrations service's connection.created event once the
+	// member finishes, so the answer is the redirect alone.
 	if toolkit, err := domain.CheckToolkit(input.Toolkit); err == nil && s.nativeServes(toolkit) {
 		redirect, err := s.connectNative(ctx, credentials, organizationID, input)
 		return domain.Connection{}, redirect, err
@@ -468,6 +469,20 @@ func (s *Service) remove(ctx context.Context, connection domain.Connection, reas
 	}
 	if connection.Pipedream() {
 		return s.removePipedream(ctx, connection, reason)
+	}
+	if connection.Native() {
+		// The credential is the integrations service's: it is revoked there
+		// before the row is retired, as with every other broker, so a member
+		// who disconnects (or leaves) leaves nothing live. One the service no
+		// longer knows is already gone.
+		if s.native == nil {
+			return fmt.Errorf("remove the connection: the integrations service is not configured: %w", domain.ErrUnavailable)
+		}
+		if err := s.native.Remove(ctx, connection.OrganizationID, connection.NativeConnectionID); err != nil && !errors.Is(err, nativeclient.ErrNotFound) {
+			s.logger.ErrorContext(ctx, "remove a native connection", "connection_id", connection.ID, "error", err)
+			return fmt.Errorf("remove the connection: the integrations service did not answer: %w", domain.ErrUnavailable)
+		}
+		return s.recordRemoved(ctx, connection, reason)
 	}
 	if !connection.Composio() {
 		// Deleting at Composio would leave the account alive wherever it

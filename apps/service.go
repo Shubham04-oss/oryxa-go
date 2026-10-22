@@ -66,6 +66,9 @@ type Dependencies struct {
 	// a consumer that cannot check signatures would run any message a queue
 	// handed it, so New refuses to build without one.
 	Verifier *eventauth.Verifier
+	// Native is the integrations service, or nil when this deployment has
+	// none: then no toolkit connects through it and no tool runs there.
+	Native application.Native
 	// Signin, Hooks and Integrations are Oryxa's own sign-in, the webhook
 	// ingress its apps deliver to, and the integrations this build ships,
 	// all built on Store. They come together or not at all. Without them
@@ -109,6 +112,9 @@ type Config struct {
 	// PipedreamMinPoll is the shortest interval a polling Pipedream trigger
 	// is deployed with; zero is fifteen minutes.
 	PipedreamMinPoll time.Duration
+	// NativeToolkits are the toolkits new connects go to the integrations
+	// service for. Needs Dependencies.Native.
+	NativeToolkits []string
 	// SigninRedirectURI is the one OAuth callback registered with every app.
 	SigninRedirectURI string
 	// DefaultOAuthClients are Oryxa's own OAuth apps, which Oryxa's sign-in
@@ -159,6 +165,9 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		Sealer:    dependencies.Sealer,
 		Logger:    logger,
 	}
+	if dependencies.Native != nil {
+		applicationDependencies.Native = dependencies.Native
+	}
 	if dependencies.Pipedream != nil {
 		// Only when there is one: a nil client in the interface would read as
 		// a Pipedream that panics.
@@ -172,6 +181,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		ToolkitBrokers:   config.ToolkitBrokers,
 		PipedreamDeny:    config.PipedreamDenyActions,
 		PipedreamMinPoll: config.PipedreamMinPoll,
+		NativeToolkits:   config.NativeToolkits,
 	})
 	if err != nil {
 		return nil, err

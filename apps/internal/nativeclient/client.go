@@ -23,6 +23,10 @@ const (
 	Audience = "integrations"
 	// ConnectPurpose is the purpose of the token that starts a sign-in.
 	ConnectPurpose = "connect"
+	// ToolsPurpose is the purpose of the token that runs a tool.
+	ToolsPurpose = "tools"
+	// ConnectionsPurpose is the purpose of the token that removes a connection.
+	ConnectionsPurpose = "connections"
 
 	requestTimeout   = 30 * time.Second
 	maxResponseBytes = 1 << 20
@@ -40,6 +44,15 @@ var (
 	ErrNotFound = errors.New("nativeclient: no such app")
 	// ErrInvalid is a request the integrations service refused as malformed.
 	ErrInvalid = errors.New("nativeclient: invalid request")
+	// ErrConfirmation is a tool that changes something, called unconfirmed.
+	// Nothing ran.
+	ErrConfirmation = errors.New("nativeclient: the tool needs the member's confirmation")
+	// ErrNeedsReauth is a connection the member has to sign in to again.
+	ErrNeedsReauth = errors.New("nativeclient: the connection needs a new sign-in")
+	// ErrUnavailable is a connection that cannot be used right now.
+	ErrUnavailable = errors.New("nativeclient: the connection is not usable")
+	// ErrOutputTooLarge is a tool whose output was over the service's limit.
+	ErrOutputTooLarge = errors.New("nativeclient: the tool's output is too large")
 )
 
 // Signer proves which service is calling. serviceauth.Signer satisfies it.
@@ -127,21 +140,75 @@ func (client *Client) Connect(ctx context.Context, request ConnectRequest) (stri
 	return answer.URL, nil
 }
 
+// CallRequest is what POST /v1/tools/call takes.
+type CallRequest struct {
+	Org        string          `json:"org"`
+	Member     string          `json:"member"`
+	Agent      string          `json:"agent"`
+	Role       string          `json:"role"`
+	Connection string          `json:"connection"`
+	Tool       string          `json:"tool"`
+	Input      json.RawMessage `json:"input"`
+	Confirmed  bool            `json:"confirmed"`
+}
+
+// ToolError is a failure the app or connector reported when the tool ran.
+type ToolError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// CallResult is a tool's answer: Output, or the ToolError the app gave. A
+// tool that could not run at all is an error from CallTool instead.
+type CallResult struct {
+	Output    json.RawMessage `json:"output"`
+	ToolError *ToolError      `json:"tool_error"`
+}
+
+// CallTool runs a tool of a connection for a member and agent apps has
+// already authenticated.
+func (client *Client) CallTool(ctx context.Context, request CallRequest) (CallResult, error) {
+	var result CallResult
+	err := client.post(ctx, "/v1/tools/call", ToolsPurpose, request, &result)
+	return result, err
+}
+
+// Remove revokes a connection of the org at the integrations service. A
+// connection it does not know (already removed, or never there) is
+// ErrNotFound.
+func (client *Client) Remove(ctx context.Context, org, connection string) error {
+	var answer struct {
+		ProviderRevoked bool `json:"provider_revoked"`
+	}
+	path := "/v1/connections/" + url.PathEscape(connection) + "?" + url.Values{"org": {org}}.Encode()
+	return client.do(ctx, http.MethodDelete, path, ConnectionsPurpose, nil, &answer)
+}
+
 func (client *Client) post(ctx context.Context, path, purpose string, body, into any) error {
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("nativeclient: encode request: %w", err)
+	return client.do(ctx, http.MethodPost, path, purpose, body, into)
+}
+
+func (client *Client) do(ctx context.Context, method, path, purpose string, body, into any) error {
+	var encoded io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("nativeclient: encode request: %w", err)
+		}
+		encoded = bytes.NewReader(data)
 	}
 	token, err := client.signer.Token(ctx, Audience, purpose)
 	if err != nil {
 		return fmt.Errorf("nativeclient: sign service token: %w", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+path, bytes.NewReader(encoded))
+	request, err := http.NewRequestWithContext(ctx, method, client.baseURL+path, encoded)
 	if err != nil {
 		return fmt.Errorf("nativeclient: build request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response, err := client.http.Do(request)
 	if err != nil {
 		return fmt.Errorf("nativeclient: %s: %w", path, err)
@@ -179,6 +246,14 @@ func statusError(path string, status int, data []byte) error {
 		return ErrNotFound
 	case "invalid_request":
 		return ErrInvalid
+	case "confirmation_required":
+		return ErrConfirmation
+	case "needs_reauth":
+		return ErrNeedsReauth
+	case "connection_unavailable":
+		return ErrUnavailable
+	case "output_too_large":
+		return ErrOutputTooLarge
 	}
 	return fmt.Errorf("nativeclient: %s answered %d (%s)", path, status, body.Error.Code)
 }

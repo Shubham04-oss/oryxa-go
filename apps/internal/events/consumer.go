@@ -14,6 +14,7 @@ import (
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	integrationsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/integrations/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
@@ -34,6 +35,12 @@ func Subscriptions() map[string][]string {
 			authv1.OrganizationDeletedDetailType,
 			authv1.MemberRemovedDetailType,
 		},
+		// The integrations service's connections become apps' own rows.
+		integrationsv1.Source: {
+			integrationsv1.ConnectionCreatedDetailType,
+			integrationsv1.ConnectionUpdatedDetailType,
+			integrationsv1.ConnectionRemovedDetailType,
+		},
 	}
 }
 
@@ -42,6 +49,8 @@ func Subscriptions() map[string][]string {
 type application interface {
 	OrganizationDeleted(context.Context, authv1.OrganizationDeleted) error
 	MemberRemoved(context.Context, authv1.MemberRemoved) error
+	NativeConnectionChanged(context.Context, integrationsv1.Connection) error
+	NativeConnectionRemoved(context.Context, integrationsv1.Connection) error
 	// AlreadyHandled checks without recording anything; MarkHandled records,
 	// and must only be called once the handler it followed has succeeded.
 	AlreadyHandled(ctx context.Context, eventID string) (bool, error)
@@ -55,7 +64,8 @@ type subscription struct {
 	handle handler
 }
 
-// Consumer removes the connections of members and organizations that are gone.
+// Consumer removes the connections of members and organizations that are gone,
+// and records the integrations service's connections.
 type Consumer struct {
 	handlers map[string]subscription
 	app      application
@@ -85,6 +95,10 @@ func NewConsumer(app application, verifier *eventauth.Verifier, logger *slog.Log
 		handlers: map[string]subscription{
 			authv1.OrganizationDeletedDetailType: {source: authv1.Source, handle: decode(app.OrganizationDeleted)},
 			authv1.MemberRemovedDetailType:       {source: authv1.Source, handle: decode(app.MemberRemoved)},
+
+			integrationsv1.ConnectionCreatedDetailType: {source: integrationsv1.Source, handle: decode(app.NativeConnectionChanged)},
+			integrationsv1.ConnectionUpdatedDetailType: {source: integrationsv1.Source, handle: decode(app.NativeConnectionChanged)},
+			integrationsv1.ConnectionRemovedDetailType: {source: integrationsv1.Source, handle: decode(app.NativeConnectionRemoved)},
 		},
 		app:      app,
 		logger:   logger,

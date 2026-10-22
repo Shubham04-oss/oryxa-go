@@ -74,6 +74,10 @@ type Config struct {
 	// IntegrationsURL is where that service is: APPS_INTEGRATIONS_URL, https
 	// or loopback http, since a service token travels on it.
 	IntegrationsURL string
+	// ServiceKeyID is the KMS key apps signs its calls to other services
+	// with: APPS_SERVICE_KEY_ID. The integrations service needs it, and is
+	// not used without it.
+	ServiceKeyID string
 	// PipedreamDenyActions are Pipedream action keys agents are never
 	// offered nor allowed to run, such as gmail-delete-email:
 	// APPS_PIPEDREAM_DENY_ACTIONS, a comma list.
@@ -369,6 +373,7 @@ func readNative(getenv func(string) string, config *Config) error {
 		}
 	}
 	config.IntegrationsURL = endpoint(getenv, "APPS_INTEGRATIONS_URL")
+	config.ServiceKeyID = strings.TrimSpace(getenv("APPS_SERVICE_KEY_ID"))
 	switch {
 	case len(config.NativeToolkits) > 0 && config.IntegrationsURL == "":
 		return errors.New("APPS_INTEGRATIONS_URL is required once APPS_NATIVE_TOOLKITS names a toolkit")
