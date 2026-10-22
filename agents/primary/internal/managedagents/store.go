@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -57,7 +58,11 @@ func (store *Store) EnsurePrimary(ctx context.Context, scope Scope) (Definition,
 			if err != nil {
 				return err
 			}
-			name, err := generatedName()
+			taken, err := takenNames(ctx, tx, scope.OrganizationID)
+			if err != nil {
+				return err
+			}
+			name, err := generatedName(taken)
 			if err != nil {
 				return err
 			}
@@ -446,16 +451,62 @@ func newID(prefix string) (string, error) {
 	return prefix + base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
-var friendlyNames = []string{"Ada", "Arlo", "Aster", "Atlas", "Avery", "Cleo", "Cora", "Elio", "Iris", "Juno", "Kai", "Leo", "Maya", "Milo", "Nia", "Nova", "Orion", "Remy", "Sage", "Theo", "Vera", "Zara"}
+var friendlyNames = []string{
+	"Ada", "Alma", "Arlo", "Aster", "Atlas", "Avery", "Bea", "Cleo", "Cora", "Dara",
+	"Eden", "Elio", "Ezra", "Faye", "Finn", "Gia", "Hana", "Ines", "Iris", "Ivo",
+	"Jade", "Juno", "Kai", "Kira", "Lena", "Leo", "Luca", "Mara", "Maya", "Milo",
+	"Mira", "Nia", "Noor", "Nova", "Odin", "Orion", "Pia", "Quinn", "Remy", "Rhea",
+	"Rio", "Sage", "Sami", "Tara", "Theo", "Uma", "Vera", "Wren", "Yara", "Zara",
+}
 
-func generatedName() (string, error) {
-	bytes := make([]byte, 4)
-	if _, err := rand.Read(bytes); err != nil {
+// generatedName is a name for a new primary agent that no agent in its
+// organization has yet: one of friendlyNames as it is, or, once every one is
+// taken, the first numbered one free ("Nia 2"). Names are unique in an
+// organization whatever their case (member_agents_org_name_idx), so taken
+// holds lowercased names. Which free name is chosen is random, so two members
+// starting together are unlikely to want the same one; when they do, the
+// index refuses the second and EnsurePrimary asks again.
+func generatedName(taken map[string]bool) (string, error) {
+	order := make([]byte, len(friendlyNames))
+	if _, err := rand.Read(order); err != nil {
 		return "", fmt.Errorf("create agent name: %w", err)
 	}
-	base := friendlyNames[int(bytes[0])%len(friendlyNames)]
-	suffix := strings.ToUpper(base64.RawURLEncoding.EncodeToString(bytes[1:]))
-	return base + "-" + suffix, nil
+	names := slices.Clone(friendlyNames)
+	// Fisher-Yates, from the random bytes; the slight bias of a byte modulo a
+	// small length does not matter for picking a name.
+	for i := len(names) - 1; i > 0; i-- {
+		j := int(order[i]) % (i + 1)
+		names[i], names[j] = names[j], names[i]
+	}
+	for number := 1; ; number++ {
+		for _, base := range names {
+			candidate := base
+			if number > 1 {
+				candidate = fmt.Sprintf("%s %d", base, number)
+			}
+			if !taken[strings.ToLower(candidate)] {
+				return candidate, nil
+			}
+		}
+	}
+}
+
+// takenNames is every agent name already used in the organization,
+// lowercased, as the unique index compares them.
+func takenNames(ctx context.Context, tx pgx.Tx, organizationID string) (map[string]bool, error) {
+	rows, err := tx.Query(ctx, `SELECT lower(name) FROM agents_primary.member_agents WHERE organization_id = $1`, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("read agent names: %w", err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("read agent names: %w", err)
+	}
+	taken := make(map[string]bool, len(names))
+	for _, name := range names {
+		taken[name] = true
+	}
+	return taken, nil
 }
 
 func isNameConflict(err error) bool {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -151,5 +152,47 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 	if _, err := store.Get(ctx, scope, primary.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("forgotten primary error=%v", err)
+	}
+}
+
+// TestPrimaryNamesArePlainAndDistinct gives two members of one organization
+// their primary agents: each is a friendly name as it is, and never the same
+// as the other's.
+func TestPrimaryNamesArePlainAndDistinct(t *testing.T) {
+	databaseURL := os.Getenv("AGENTS_PRIMARY_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("AGENTS_PRIMARY_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	database, err := postgreskit.Open(ctx, postgreskit.Config{URL: databaseURL, ApplicationName: "oryxa-managed-agents-test", Schema: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	store := NewStore(database)
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	organization := fmt.Sprintf("org_managed_names_%d", time.Now().UnixNano())
+	defer func() {
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.agents_outbox WHERE detail->>'organization_id'=$1`, organization)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.member_agents WHERE organization_id=$1`, organization)
+	}()
+	first, err := store.EnsurePrimary(ctx, Scope{OrganizationID: organization, UserID: "user_names_a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.EnsurePrimary(ctx, Scope{OrganizationID: organization, UserID: "user_names_b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{first.Name, second.Name} {
+		if !slices.Contains(friendlyNames, name) {
+			t.Fatalf("name = %q, want a friendly name as it is", name)
+		}
+	}
+	if first.Name == second.Name {
+		t.Fatalf("both members' primary agents are %q", first.Name)
 	}
 }
