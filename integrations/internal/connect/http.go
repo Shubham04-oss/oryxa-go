@@ -17,14 +17,18 @@ const CallbackPath = "/v1/integrations/oauth/callback"
 const maxBody = 16 << 10
 
 // Routes registers POST /v1/connect (internal: apps calls it for a member it
-// has already authenticated) and GET /v1/integrations/oauth/callback (public:
-// the browser, which proves itself by the state).
+// has already authenticated), GET /v1/connections and GET and DELETE
+// /v1/connections/{id} (internal), and GET /v1/integrations/oauth/callback
+// (public: the browser, which proves itself by the state).
 func Routes(server *httpserver.Server, service *Service, logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	h := handlers{service: service, logger: logger}
 	server.Internal("POST /v1/connect", h.connect)
+	server.Internal("GET /v1/connections", h.list)
+	server.Internal("GET /v1/connections/{id}", h.get)
+	server.Internal("DELETE /v1/connections/{id}", h.remove)
 	server.Public("GET "+CallbackPath, h.callback)
 }
 
@@ -111,4 +115,57 @@ func (h handlers) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	target.RawQuery = merged.Encode()
 	http.Redirect(w, r, target.String(), http.StatusSeeOther)
+}
+
+func (h handlers) list(w http.ResponseWriter, r *http.Request) {
+	org, member := r.URL.Query().Get("org"), r.URL.Query().Get("member")
+	if org == "" {
+		httpserver.WriteError(w, http.StatusBadRequest, "invalid_request", "org is required")
+		return
+	}
+	list, err := h.service.List(r.Context(), org, member)
+	if err != nil {
+		h.fail(w, r, "list connections", err)
+		return
+	}
+	writeJSON(w, map[string]any{"connections": list})
+}
+
+func (h handlers) get(w http.ResponseWriter, r *http.Request) {
+	c, err := h.service.Get(r.Context(), r.URL.Query().Get("org"), r.PathValue("id"))
+	if err != nil {
+		h.fail(w, r, "read a connection", err)
+		return
+	}
+	writeJSON(w, c)
+}
+
+// remove revokes the connection, but only after finding it in the org asked
+// for, so an id from another org is as missing as one that never existed.
+func (h handlers) remove(w http.ResponseWriter, r *http.Request) {
+	c, err := h.service.Get(r.Context(), r.URL.Query().Get("org"), r.PathValue("id"))
+	if err != nil {
+		h.fail(w, r, "find a connection to remove", err)
+		return
+	}
+	providerRevoked, err := h.service.Revoke(r.Context(), c.ID)
+	if err != nil {
+		h.fail(w, r, "remove a connection", err)
+		return
+	}
+	writeJSON(w, map[string]bool{"provider_revoked": providerRevoked})
+}
+
+func (h handlers) fail(w http.ResponseWriter, r *http.Request, doing string, err error) {
+	if errors.Is(err, ErrNotFound) {
+		httpserver.WriteError(w, http.StatusNotFound, "not_found", "no such connection")
+		return
+	}
+	h.logger.ErrorContext(r.Context(), doing, "error", err)
+	httpserver.WriteError(w, http.StatusInternalServerError, "internal", "the request could not be completed")
+}
+
+func writeJSON(w http.ResponseWriter, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(body)
 }

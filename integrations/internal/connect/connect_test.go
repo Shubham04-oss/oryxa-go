@@ -209,6 +209,7 @@ func newRig(t *testing.T) *rig {
 			`DELETE FROM integrations.credentials WHERE connection_id IN (SELECT id FROM integrations.connections WHERE org_id = $1)`,
 			`DELETE FROM integrations.connections WHERE org_id = $1`,
 			`DELETE FROM integrations.oauth_states WHERE org_id = $1`,
+			`DELETE FROM integrations.outbox WHERE detail->>'organization_id' = $1`,
 			`DELETE FROM integrations.org_apps WHERE org_id = $1`,
 		} {
 			database.Pool.Exec(context.Background(), sql, r.org)

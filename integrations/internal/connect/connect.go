@@ -5,8 +5,9 @@
 //
 // Ported from apps/internal/signin (oauth.go, refresh.go, revoke.go, health.go).
 // Not yet here: several token kinds per sign-in (Slack's bot and user), the
-// refresh job (a connection refreshes when it is used) and the events; see the
-// follow-up issues.
+// refresh job (a connection refreshes when it is used); see the follow-up
+// issues. Its connection events go to the outbox in the transaction that
+// changes the connection (events.go).
 package connect
 
 import (
@@ -27,6 +28,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	eventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/integrations/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/orgapps"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/vault"
@@ -364,10 +367,10 @@ func (s *Service) keep(ctx context.Context, org, member, app, appID, level strin
 	if scopes == nil {
 		scopes = scopesOf(m.Auth.OAuth2)
 	}
-	var id string
-	err = tx.QueryRow(ctx, `SELECT id FROM integrations.connections
+	var id, previous string
+	err = tx.QueryRow(ctx, `SELECT id, status FROM integrations.connections
 		WHERE org_id = $1 AND member_id IS NOT DISTINCT FROM $2 AND app = $3 AND level = $4 AND status <> 'revoked'
-		FOR UPDATE`, org, memberArg, app, level).Scan(&id)
+		FOR UPDATE`, org, memberArg, app, level).Scan(&id, &previous)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		if id, err = newID("cn_"); err != nil {
@@ -395,6 +398,16 @@ func (s *Service) keep(ctx context.Context, org, member, app, appID, level strin
 			return "", err
 		}
 	} else if _, err := tx.Exec(ctx, `DELETE FROM integrations.credentials WHERE connection_id = $1 AND kind = $2`, id, refreshKind); err != nil {
+		return "", err
+	}
+	// A renewal of a healthy connection changes nothing a consumer sees.
+	switch {
+	case previous == "":
+		err = s.emit(ctx, tx, id, eventsv1.ConnectionCreatedDetailType)
+	case previous != "ok":
+		err = s.emit(ctx, tx, id, eventsv1.ConnectionUpdatedDetailType)
+	}
+	if err != nil {
 		return "", err
 	}
 	return id, tx.Commit(ctx)

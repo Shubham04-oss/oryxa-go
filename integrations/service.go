@@ -19,11 +19,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 
 	"github.com/Shubham04-oss/oryxa-go/integrations/egress"
 	connectorhost "github.com/Shubham04-oss/oryxa-go/integrations/host"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/connect"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/orgapps"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/serviceconfig"
@@ -31,6 +33,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/vault"
 	"github.com/Shubham04-oss/oryxa-go/integrations/manifest"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
@@ -100,9 +103,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Timeouts: host.Timeouts{Read: 15 * time.Second, Write: 30 * time.Second},
 		Close:    func() { _ = connectors.Close() },
 	}
-	connections, err := mountOrgApps(ctx, server, platform, config, connectors.Manifest)
+	connections, workers, err := mountOrgApps(ctx, server, platform, config, connectors.Manifest)
 	if err == nil {
-		service.Workers, err = mountTools(server, platform, config, connectors, connections)
+		var toolWorkers []host.Worker
+		toolWorkers, err = mountTools(server, platform, config, connectors, connections)
+		service.Workers = append(workers, toolWorkers...)
 	}
 	if err != nil {
 		service.Close()
@@ -182,37 +187,51 @@ func mountTools(server *httpserver.Server, platform host.Platform, config servic
 }
 
 // mountOrgApps serves the org apps API and loads Oryxa's own apps, then the
-// sign-ins, whose service it returns (nil when they are off). Without a KMS
-// key nothing can be sealed, so it serves nothing and says so; apps that were
-// configured but cannot be loaded stop the start.
-func mountOrgApps(ctx context.Context, server *httpserver.Server, platform host.Platform, config serviceconfig.Config, manifestOf func(string) (*manifest.Manifest, bool)) (*connect.Service, error) {
+// sign-ins, whose service it returns (nil when they are off). Sign-ins bring
+// the connections API and the outbox dispatcher that publishes their events,
+// which it answers as workers for the host to run. Without a KMS key nothing
+// can be sealed, so it serves nothing and says so; apps that were configured
+// but cannot be loaded stop the start.
+func mountOrgApps(ctx context.Context, server *httpserver.Server, platform host.Platform, config serviceconfig.Config, manifestOf func(string) (*manifest.Manifest, bool)) (*connect.Service, []host.Worker, error) {
 	if config.KMSKeyID == "" {
 		platform.Logger.Warn("INTEGRATIONS_KMS_KEY_ID is not set: the org apps API is off")
-		return nil, nil
+		return nil, nil, nil
 	}
 	sealer, err := vault.New(secrets.KMSDataKeys{Client: kms.NewFromConfig(platform.AWS), KeyID: config.KMSKeyID}, config.KMSKeyID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	apps := orgapps.New(platform.Database.Pool, sealer)
 	for _, app := range config.OryxaApps {
 		if _, _, err := apps.Load(ctx, app.App, orgapps.Input{
 			ClientID: app.ClientID, Secret: app.Secret, WebhookSecret: app.WebhookSecret, Extra: app.Extra,
 		}); err != nil {
-			return nil, fmt.Errorf("load Oryxa's %s app: %w", app.App, err)
+			return nil, nil, fmt.Errorf("load Oryxa's %s app: %w", app.App, err)
 		}
 	}
 	orgapps.Routes(server, apps, platform.Logger)
 	if config.PublicURL == "" {
 		platform.Logger.Warn("INTEGRATIONS_PUBLIC_URL is not set: connecting apps is off")
-		return nil, nil
+		return nil, nil, nil
 	}
 	connections := connect.New(platform.Database.Pool, sealer, apps, connect.Config{
 		RedirectURI: config.PublicURL + connect.CallbackPath, ReturnOrigins: config.ReturnOrigins,
 		Manifest: manifestOf, Logger: platform.Logger,
 	})
 	connect.Routes(server, connections, platform.Logger)
-	return connections, nil
+	signer, err := platform.EventAuth.Signer(Name)
+	if err != nil {
+		return nil, nil, err
+	}
+	publisher, err := events.NewPublisher(eventbridge.NewFromConfig(platform.AWS), platform.EventBusName, signer)
+	if err != nil {
+		return nil, nil, err
+	}
+	table, err := outbox.NewTable(platform.Database.Pool, events.OutboxTable)
+	if err != nil {
+		return nil, nil, err
+	}
+	return connections, []host.Worker{outbox.NewDispatcher(table, publisher, platform.Logger).Run}, nil
 }
 
 // namedIn reports whether services, ORYXA_SERVICES's value, names this
