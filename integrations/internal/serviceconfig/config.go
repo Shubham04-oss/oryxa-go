@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Shubham04-oss/oryxa-go/integrations/egress"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
@@ -39,6 +40,18 @@ type Config struct {
 	// OryxaApps are Oryxa's own apps, loaded into org_apps at start. ECS
 	// injects the JSON from AWS Secrets Manager; it is never in the repo.
 	OryxaApps []OryxaApp
+	// ConnectorsDir holds the connector binaries the host starts, one per
+	// file, named by the connector's manifest id (INTEGRATIONS_CONNECTORS_DIR).
+	// Empty means no connector runs.
+	ConnectorsDir string
+	// EgressKeys sign the handles connectors call apps with, as JSON
+	// {"current": "<kid>", "keys": {"<kid>": "<at least 32 bytes>"}} in
+	// INTEGRATIONS_EGRESS_KEYS. Without them tool calls are not mounted.
+	EgressKeys egress.Keys
+	// BrokerAddress is where the egress proxy listens for connectors; they run
+	// in the same task, so it is loopback (INTEGRATIONS_BROKER_ADDRESS,
+	// default 127.0.0.1:8091).
+	BrokerAddress string
 }
 
 // OryxaApp is one of Oryxa's own apps (design §9.3).
@@ -75,6 +88,27 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		if err := decoder.Decode(&config.OryxaApps); err != nil {
 			return Config{}, fmt.Errorf("INTEGRATIONS_ORYXA_APPS is not a JSON list of apps")
 		}
+	}
+	config.ConnectorsDir = strings.TrimSpace(getenv("INTEGRATIONS_CONNECTORS_DIR"))
+	if raw := strings.TrimSpace(getenv("INTEGRATIONS_EGRESS_KEYS")); raw != "" {
+		var keys struct {
+			Current string                    `json:"current"`
+			Keys    map[string]secrets.Secret `json:"keys"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader([]byte(raw)))
+		decoder.DisallowUnknownFields()
+		// As above, the decoder's error could quote a key.
+		if err := decoder.Decode(&keys); err != nil {
+			return Config{}, fmt.Errorf(`INTEGRATIONS_EGRESS_KEYS is not {"current": ..., "keys": {...}}`)
+		}
+		config.EgressKeys = egress.Keys{Current: keys.Current, Keys: keys.Keys}
+		if err := config.EgressKeys.Validate(); err != nil {
+			return Config{}, fmt.Errorf("INTEGRATIONS_EGRESS_KEYS: %w", err)
+		}
+	}
+	config.BrokerAddress = strings.TrimSpace(getenv("INTEGRATIONS_BROKER_ADDRESS"))
+	if config.BrokerAddress == "" {
+		config.BrokerAddress = "127.0.0.1:8091"
 	}
 	return config, nil
 }

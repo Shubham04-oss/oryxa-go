@@ -2,9 +2,11 @@ package tools
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/integrations/egress"
 	"github.com/Shubham04-oss/oryxa-go/integrations/host"
+	"github.com/Shubham04-oss/oryxa-go/integrations/manifest"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
 )
@@ -45,6 +48,7 @@ var keys = egress.Keys{Current: "k1", Keys: map[string]secrets.Secret{"k1": secr
 type rig struct {
 	*Service
 	pool *pgxpool.Pool
+	host *host.Host
 	org  string
 	// handles the fake broker saw, and how many writes reached the app.
 	mu      sync.Mutex
@@ -91,6 +95,7 @@ func newRig(t *testing.T) *rig {
 	if err := h.Start(ctx, host.Spec{ID: "fakeapp", Path: fakeappBin}); err != nil {
 		t.Fatal(err)
 	}
+	r.host = h
 	r.Service = New(database.Pool, h, Config{Keys: keys, BrokerOrigin: broker.URL})
 	t.Cleanup(func() {
 		database.Pool.Exec(context.Background(), `DELETE FROM integrations.tool_calls WHERE org_id = $1`, r.org)
@@ -231,5 +236,53 @@ func TestConnectionNeedingReauthIsRefusedAndAudited(t *testing.T) {
 	conn = r.connection(t, "revoked")
 	if _, err := r.Call(context.Background(), r.req(conn, "fakeapp.echo", `{"text":"hi"}`)); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("revoked: err = %v, want ErrUnavailable", err)
+	}
+}
+
+// proxyConns is the proxy's view of the rig's one connection: fakeapp's
+// manifest from the running connector, and a fixed token.
+type proxyConns struct{ h *host.Host }
+
+func (c proxyConns) Manifest(context.Context, string) (*manifest.Manifest, error) {
+	m, _ := c.h.Manifest("fakeapp")
+	return m, nil
+}
+func (proxyConns) Token(context.Context, string, string) (secrets.Secret, error) {
+	return "app-token", nil
+}
+func (proxyConns) Refresh(context.Context, string, string, secrets.Secret) (secrets.Secret, error) {
+	return "", errors.New("no refresh in this test")
+}
+
+// The path the service mounts: the tool call, the connector, the real egress
+// proxy as its broker, and the app, which sees the connection's token and
+// never the handle.
+func TestConfirmedWriteReachesTheAppThroughTheEgressProxy(t *testing.T) {
+	r := newRig(t)
+	conn := r.connection(t, "ok")
+	var gotHost, gotAuth string
+	app := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		gotHost, gotAuth = req.Host, req.Header.Get("Authorization")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"n9"}`))
+	}))
+	t.Cleanup(app.Close)
+	transport := app.Client().Transport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, app.Listener.Addr().String())
+	}
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // the test app's own certificate
+	broker := httptest.NewServer(&egress.Proxy{Keys: keys, Connections: proxyConns{r.host}, Client: &http.Client{Transport: transport}})
+	t.Cleanup(broker.Close)
+	r.Service = New(r.pool, r.host, Config{Keys: keys, BrokerOrigin: broker.URL})
+
+	req := r.req(conn, "fakeapp.add_note", `{"text":"x"}`)
+	req.Confirmed = true
+	res, err := r.Call(context.Background(), req)
+	if err != nil || string(res.Output) != `{"id":"n9"}` {
+		t.Fatalf("call = %+v, %v", res, err)
+	}
+	if gotHost != "api.fakeapp.example.com" || gotAuth != "Bearer app-token" {
+		t.Fatalf("app saw host %q, Authorization %q", gotHost, gotAuth)
 	}
 }
