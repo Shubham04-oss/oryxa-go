@@ -670,7 +670,10 @@ always exact.
 ### Persistent agent API
 
 The registry creates one primary definition lazily for each member in each
-organization. Its friendly generated name is display identity only; the
+organization. Its name is a friendly one nobody in the organization has yet
+(`Nia`), numbered only once every one is taken (`Nia 2`); primaries an
+earlier build named with a random suffix (`Nia-WETP`) are renamed that way
+as the service migrates. The name is display identity only; the
 stable `agt_...` id remains the agent's machine identity, so the member can
 rename it without losing conversations. Existing threads refresh that name on
 their next run, and streamed/history items show it instead of the machine

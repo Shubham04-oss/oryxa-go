@@ -196,3 +196,91 @@ func TestPrimaryNamesArePlainAndDistinct(t *testing.T) {
 		t.Fatalf("both members' primary agents are %q", first.Name)
 	}
 }
+
+// TestRenameSuffixedPrimaries renames primary agents an earlier build named
+// "Nia-WETP": to their plain name, or numbered where an agent in the
+// organization has it, with the copies of the name and an event; and it
+// leaves every other name, and the agents it renamed, alone when run again.
+func TestRenameSuffixedPrimaries(t *testing.T) {
+	databaseURL := os.Getenv("AGENTS_PRIMARY_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("AGENTS_PRIMARY_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	database, err := postgreskit.Open(ctx, postgreskit.Config{URL: databaseURL, ApplicationName: "oryxa-managed-agents-test", Schema: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	store := NewStore(database)
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	organization := fmt.Sprintf("org_managed_rename_%d", time.Now().UnixNano())
+	defer func() {
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.agents_outbox WHERE detail->'data'->>'organization_id'=$1 OR detail->>'organization_id'=$1`, organization)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.member_agents WHERE organization_id=$1`, organization)
+	}()
+	insert := func(id, owner, kind, name string) {
+		t.Helper()
+		if _, err := database.Pool.Exec(ctx, `INSERT INTO agents_primary.member_agents (id, organization_id, owner_user_id, kind, name)
+			VALUES ($1,$2,$3,$4,$5)`, id, organization, owner, kind, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Someone already named a specialist Nia, so the two suffixed Nias are
+	// numbered; the Cleo is free and goes plain; a primary its member
+	// renamed, and a specialist that only looks suffixed, stay.
+	insert(organization+"_spec", "user_a", "specialist", "Nia")
+	insert(organization+"_a", "user_a", "primary", "Nia-WETP")
+	insert(organization+"_b", "user_b", "primary", "Nia--W_P")
+	insert(organization+"_c", "user_c", "primary", "Cleo-AB12")
+	insert(organization+"_d", "user_d", "primary", "Morgan")
+	insert(organization+"_e", "user_d", "specialist", "Kai-TEAM")
+
+	if _, err := store.RenameSuffixedPrimaries(ctx); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	revisions := map[string]int64{}
+	rows, err := database.Pool.Query(ctx, `SELECT id, name, revision FROM agents_primary.member_agents WHERE organization_id=$1`, organization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id, name string
+		var revision int64
+		if err := rows.Scan(&id, &name, &revision); err != nil {
+			t.Fatal(err)
+		}
+		names[id], revisions[id] = name, revision
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	nias := []string{names[organization+"_a"], names[organization+"_b"]}
+	slices.Sort(nias)
+	if !reflect.DeepEqual(nias, []string{"Nia 2", "Nia 3"}) {
+		t.Fatalf("the suffixed Nias are %v, want Nia 2 and Nia 3", nias)
+	}
+	if names[organization+"_c"] != "Cleo" || revisions[organization+"_c"] != 2 {
+		t.Fatalf("the suffixed Cleo is %q at revision %d, want Cleo at 2", names[organization+"_c"], revisions[organization+"_c"])
+	}
+	for id, want := range map[string]string{"_spec": "Nia", "_d": "Morgan", "_e": "Kai-TEAM"} {
+		if names[organization+id] != want || revisions[organization+id] != 1 {
+			t.Fatalf("%s is %q at revision %d, want %q untouched", id, names[organization+id], revisions[organization+id], want)
+		}
+	}
+	var updates int
+	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.agents_outbox
+		WHERE detail_type=$1 AND detail::text LIKE '%'||$2||'%'`, "agents.agent.updated.v1", organization).Scan(&updates); err != nil {
+		t.Fatal(err)
+	}
+	if updates != 3 {
+		t.Fatalf("updated events = %d, want one for each of the 3 renamed agents", updates)
+	}
+	if again, err := store.RenameSuffixedPrimaries(ctx); err != nil || again != 0 {
+		t.Fatalf("run again: renamed %d, error %v; want nothing left to rename", again, err)
+	}
+}

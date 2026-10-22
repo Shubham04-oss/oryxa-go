@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -489,6 +490,111 @@ func generatedName(taken map[string]bool) (string, error) {
 			}
 		}
 	}
+}
+
+// suffixedName is a name an earlier build gave a primary agent: one of the
+// friendly names it had, a hyphen, and three random bytes in uppercased
+// base64url ("Nia-WETP", "Nia--W_P"). No member writes a name like that, so
+// one is still the generated name nobody chose.
+var suffixedName = regexp.MustCompile(`^(Ada|Arlo|Aster|Atlas|Avery|Cleo|Cora|Elio|Iris|Juno|Kai|Leo|Maya|Milo|Nia|Nova|Orion|Remy|Sage|Theo|Vera|Zara)-[A-Z0-9_-]{4}$`)
+
+// RenameSuffixedPrimaries gives every primary agent still named the way an
+// earlier build named them ("Nia-WETP") the plain name ("Nia"), or, where an
+// agent in its organization has that already, the first one numbered free
+// ("Nia 2"). Each is renamed as its member renaming it would be: the copies of
+// its name with it, and agents.agent.updated.v1. It is safe to run again and
+// from replicas at once: a renamed agent no longer matches, and an agent
+// renamed by someone else in between is left as they named it. It returns how
+// many it renamed.
+func (store *Store) RenameSuffixedPrimaries(ctx context.Context) (int, error) {
+	rows, err := store.database.Pool.Query(ctx, `
+		SELECT id, organization_id, name FROM agents_primary.member_agents
+		WHERE kind = 'primary' AND name ~ $1`, suffixedName.String())
+	if err != nil {
+		return 0, fmt.Errorf("find suffixed primary agents: %w", err)
+	}
+	type suffixed struct{ id, organizationID, name string }
+	found, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (suffixed, error) {
+		var agent suffixed
+		err := row.Scan(&agent.id, &agent.organizationID, &agent.name)
+		return agent, err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("find suffixed primary agents: %w", err)
+	}
+	renamed := 0
+	for _, agent := range found {
+		done, err := store.renameSuffixed(ctx, agent.id, agent.organizationID, agent.name)
+		if err != nil {
+			return renamed, err
+		}
+		if done {
+			renamed++
+		}
+	}
+	return renamed, nil
+}
+
+// renameSuffixed renames one suffixed primary agent, trying again when
+// another agent takes the name it chose first.
+func (store *Store) renameSuffixed(ctx context.Context, id, organizationID, oldName string) (bool, error) {
+	base, _, _ := strings.Cut(oldName, "-")
+	for attempt := 0; attempt < 5; attempt++ {
+		renamed := false
+		err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+			var current Definition
+			if err := scanDefinition(tx.QueryRow(ctx, `SELECT `+definitionColumns+`
+				FROM agents_primary.member_agents WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
+				id, organizationID), &current); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil
+				}
+				return err
+			}
+			if current.Name != oldName {
+				return nil
+			}
+			taken, err := takenNames(ctx, tx, organizationID)
+			if err != nil {
+				return err
+			}
+			name := numberedName(base, taken)
+			current.Revision++
+			current.UpdatedAt = time.Now().UTC()
+			var result Definition
+			if err := scanDefinition(tx.QueryRow(ctx, `
+				UPDATE agents_primary.member_agents SET name=$3, revision=$4, updated_at=$5
+				WHERE id=$1 AND organization_id=$2
+				RETURNING `+definitionColumns,
+				id, organizationID, name, current.Revision, current.UpdatedAt), &result); err != nil {
+				return err
+			}
+			if err := renameCopies(ctx, tx, result, oldName); err != nil {
+				return err
+			}
+			renamed = true
+			return recordLifecycle(ctx, tx, agentsv1.AgentUpdatedDetailType, result)
+		})
+		if isNameConflict(err) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("rename primary agent %s: %w", id, err)
+		}
+		return renamed, nil
+	}
+	return false, fmt.Errorf("%w: could not find a free name for primary agent %s", ErrConflict, id)
+}
+
+// numberedName is base when no agent in the organization has it, and
+// otherwise the first of "base 2", "base 3" and on that none has. taken holds
+// lowercased names.
+func numberedName(base string, taken map[string]bool) string {
+	candidate := base
+	for number := 2; taken[strings.ToLower(candidate)]; number++ {
+		candidate = fmt.Sprintf("%s %d", base, number)
+	}
+	return candidate
 }
 
 // takenNames is every agent name already used in the organization,

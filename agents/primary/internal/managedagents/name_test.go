@@ -64,3 +64,29 @@ func TestGeneratedNameIsNumberedWhenEveryNameIsTaken(t *testing.T) {
 		t.Fatalf("name = %q, want a friendly name numbered 3", name)
 	}
 }
+
+// Only the names an earlier build generated count as suffixed; a name a member
+// wrote, or one this build gives, does not.
+func TestSuffixedName(t *testing.T) {
+	for _, name := range []string{"Nia-WETP", "Nia--W_P", "Zara-A1B2", "Ada-____"} {
+		if !suffixedName.MatchString(name) {
+			t.Errorf("%q should read as generated with a suffix", name)
+		}
+	}
+	for _, name := range []string{"Nia", "Nia 2", "nia-wetp", "Nia-WETPX", "Nia-WET", "Wren-WETP", "Sales-TEAM", "My Nia-WETP"} {
+		if suffixedName.MatchString(name) {
+			t.Errorf("%q should not read as generated with a suffix", name)
+		}
+	}
+}
+
+// A renamed agent takes its plain name when it is free, and the first number
+// free after it when it is not.
+func TestNumberedName(t *testing.T) {
+	if name := numberedName("Nia", map[string]bool{}); name != "Nia" {
+		t.Fatalf("name = %q, want Nia", name)
+	}
+	if name := numberedName("Nia", map[string]bool{"nia": true, "nia 2": true}); name != "Nia 3" {
+		t.Fatalf("name = %q, want Nia 3", name)
+	}
+}

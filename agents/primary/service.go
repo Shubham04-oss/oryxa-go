@@ -146,6 +146,16 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	if err := shares.Migrate(ctx); err != nil {
 		return fmt.Errorf("migrate one-time secrets: %w", err)
 	}
+	// Primary agents an earlier build named "Nia-WETP" are renamed "Nia". It
+	// runs last, once every table that keeps a copy of an agent's name exists,
+	// and finds nothing to do once each has been renamed.
+	renamed, err := managedagents.NewStore(platform.Database).RenameSuffixedPrimaries(ctx)
+	if err != nil {
+		return fmt.Errorf("rename suffixed primary agents: %w", err)
+	}
+	if renamed > 0 && platform.Logger != nil {
+		platform.Logger.InfoContext(ctx, "primary agents renamed from their generated suffixed names", "renamed", renamed)
+	}
 	scoped, err := platform.Database.WithSchema(ctx, schema, "oryxa-migrate-agents", 2)
 	if err != nil {
 		return err
