@@ -16,6 +16,11 @@ Oryxa gets its own **integrations service**: one Go service that connects member
   - the org's own OAuth app or API key, "bring your own" (BYO);
   - Oryxa's own app.
 - **Connectors never hold tokens:** they run as separate processes that reach apps only through the service's egress proxy.
+- **Two paths per app, one credential (D12–D14):**
+  - **sync** (pull plus webhooks, for knowledge and RAG) is always ours, built on the vendor's best-maintained SDK in whatever language that is (Go, TypeScript or Python), declared in the manifest;
+  - **tools** come from the vendor's own MCP server where it accepts the connection's credential, and from our own SDK tools everywhere else;
+  - both use the same connection and the same stored token: one sign-in per app.
+- **BYO first (D11):** each app ships on the org's own app before Oryxa's.
 
 ## 2. Context
 
@@ -31,7 +36,7 @@ Oryxa gets its own **integrations service**: one Go service that connects member
 **Goals**
 1. Members connect Google, Microsoft, GitHub, Slack and Notion through **their org's app** or **Oryxa's app**.
 2. **Knowledge stays current** from those apps, deletes and permission changes included, without re-embedding unchanged data.
-3. **Agents act** in those apps through MCP tools, within their grants (I3), with writes confirmed.
+3. **Agents act** in those apps through MCP tools, within their grants (I3), with writes confirmed. Each app's catalog is **mature from its first release:** the 20–30 tools that cover what people actually do in that app, not two or three (§12.6).
 4. **Agents wake** on app events (webhooks or polls) through the existing batching path.
 5. **The service runs itself:**
    - token refresh, subscription renewal, rate limits and retries;
@@ -42,7 +47,7 @@ Oryxa gets its own **integrations service**: one Go service that connects member
 **Non-goals (for now)**
 - Native connectors for the long tail: Composio keeps it.
 - A public developer platform or a marketplace.
-- Running vendors' MCP servers as the only route (an option later, §12.5).
+- Running vendors' MCP servers as the only route: they serve tools, never syncs or webhooks (§12.5).
 - Writing into members' data warehouses (we are not an ELT tool).
 
 ## 4. Decisions
@@ -59,6 +64,14 @@ Oryxa gets its own **integrations service**: one Go service that connects member
 | D8 | Webhook ingress **in the service** first; the Cloudflare Worker from oryxa-platform only if volume needs it | Default |
 | D9 | Build order: core, then **GitHub**, Microsoft, Google, then Slack and Notion | Default |
 | D10 | oryxa-platform is a **reference:** we lift its contract, manifest, verifiers and Go connectors, not its Rust services | Default |
+| D11 | **BYO first.** Each app is built, tested and switched on for orgs' own apps first; Oryxa's app for it follows. (Also what unlocks Slack's MCP server and Google's full scopes today, §12.5.) | Owner, 2026-10-15 |
+| D12 | **Sync uses the vendor's best-maintained SDK, in any language.** The manifest's `runtime` names the language and SDK (§8.5); connectors in Go, Node or Python speak the same gRPC contract. With no usable SDK, an OpenAPI description drives a generic engine. **Go first (2026-10-22):** connectors are built in Go; the Node and Python runtimes are added only when an app actually needs its vendor's SDK in that language. | Owner, 2026-10-15; Go first 2026-10-22 |
+| D13 | **Tools come from the vendor's MCP server where it accepts the connection's credential,** through our gateway, which keeps grants, effects, confirmation and audit; our own SDK tools fill the gaps. | Owner, 2026-10-15 |
+| D14 | **One connection, one credential, all paths.** Consent asks for the union of the scopes the app's streams and tools need; sync, our tools and the vendor's MCP server all use the token in our vault. A member never connects the same app twice. | Owner, 2026-10-15 |
+| D15 | **A catalog minimum replaces the 15-tool cap.** Agents find tools through `search_tools`, so catalog size costs them nothing; what matters is coverage (§12.6). | Owner, 2026-10-15 |
+| D16 | **AgentCore Gateway in front, tokens behind.** Agents reach tools through Amazon Bedrock AgentCore Gateway; its one target is our MCP endpoint. Vendor tokens never leave our vault. It fronts every native connection, the org's own app (BYO) and Oryxa's alike (confirmed 2026-10-22). In development, and until the gateway is provisioned, agents call our MCP endpoint directly; the endpoint enforces grants, confirmation and audit either way, so the gateway adds no checks we rely on. How the gateway authenticates to us is open (§20). | Owner, 2026-10-15; confirmed 2026-10-22 |
+| D17 | **apps learns of native connections from events.** The integrations service's `connection.created`, `connection.updated` and `connection.removed` events (outbox) create, update and retire the apps row; apps can re-read `GET /v1/connections` to repair drift. (#379) | Owner, 2026-10-22 |
+| D18 | **A dev key outside production.** The vault keeps AWS KMS in production (D7). In development and on the AWS-free dev stack it can seal with a local key from a file instead; the service refuses that key when the environment is production. | Owner, 2026-10-22 |
 
 ## 5. Architecture
 
@@ -72,7 +85,7 @@ Oryxa gets its own **integrations service**: one Go service that connects member
                  │                                                                                           │
                  │  vault (KMS envelopes) ◀── broker: refresh · handles · egress proxy ──▶ app APIs          │
                  │                                  ▲ handle                                                 │
-                 │  connector host ──gRPC/Unix socket──▶ connector processes (one Go binary per app)         │
+                 │  connector host ──gRPC/Unix socket──▶ connector processes (one per app: Go, Node or Python)│
                  │        ▲                                                                                  │
                  │  workers ◀── job queue (Postgres, SKIP LOCKED) ◀── scheduler                              │
                  │  records store + change feed · rate limiter · outbox ──▶ EventBridge bus                  │
@@ -83,7 +96,7 @@ Oryxa gets its own **integrations service**: one Go service that connects member
 - the HTTP API (including webhook ingress and the MCP gateway);
 - the scheduler loop;
 - N workers;
-- the connector host, which spawns one child process per connector binary, supervises it and restarts it on a crash.
+- the connector host, which spawns one child process per connector (a Go binary, or a Node or Python entrypoint, §8.5), supervises it and restarts it on a crash.
 
 **Built so far (#283).** The skeleton: `integrations.Definition`, registered after `realtime`, reads `INTEGRATIONS_ENABLED=true` (off otherwise: no mount, no migration, no workers, no configuration). On, it migrates `integrations/migrations/` (schema `integrations`) and serves `GET /healthz`; internal routes are registered with `Server.Internal`, which refuses any call without a verified serviceauth token, and the callers come from `INTEGRATIONS_SERVICE_CALLERS`. A process whose `ORYXA_SERVICES` names `integrations` while it is off refuses to start.
 
@@ -187,7 +200,10 @@ An existing connection keeps the broker it was made with. Agents see no differen
   - `Describe() → manifest`
   - `Sync(SyncRequest) → stream SyncEvent`. Events are `Upsert`, `Delete`, `SetAcl` and `Checkpoint`. Each `SyncRequest` carries the stream, partition, mode (full, incremental or slice), checkpoint and an egress handle.
   - `Invoke(InvokeRequest) → InvokeResponse`. The request carries the tool, input, egress handle and acting user; the response carries the output or a typed `ToolError`.
-- Connectors use **`gosdk`** (lifted from oryxa-platform): `gosdk.Main(server, id)` serves on the socket the host passes in.
+- The contract is gRPC, so it doesn't depend on Go. Each language has a thin **kit** that serves it on the socket the host passes in:
+  - **`gosdk`** (lifted from oryxa-platform): `gosdk.Main(server, id)`;
+  - **`integrations/kits/node`** and **`integrations/kits/python`**, the same surface (§8.5).
+- **Every kit provides the one broker HTTP client.** It sends each request to the request's `Egress.BrokerOrigin` with `x-oryxa-egress-host` and the handle, follows no redirects and caps bodies. Every SDK is built on it (a custom `http.Client`, `fetch` or transport); no connector builds its own, sets a vendor token or dials a vendor directly.
 
 ### 8.2 Manifest (`connectors/<app>/manifest.json`)
 
@@ -224,6 +240,29 @@ Based on oryxa-platform's format, validated by `integrations/manifest`:
 }
 ```
 
+Three more blocks (D12–D14), shown for GitHub:
+
+```jsonc
+{
+  "runtime": { "kind": "go", "sdk": "github.com/google/go-github", "sdk_licence": "BSD-3-Clause",
+               "entrypoint": "./github" },        // node: "dist/main.js", python: "github_connector.main"
+  "scopes": { "streams": { "issues": ["repo"] },  // per stream and per tool; consent asks for the union
+              "tools":   { "github.create_issue": ["repo"] } },
+  "tool_sources": [
+    { "kind": "vendor_mcp", "url": "https://api.githubcopilot.com/mcp/", "token_kind": "user",
+      "headers": { "X-MCP-Toolsets": "context,repos,issues,pull_requests,users,labels" },
+      "modes": ["byo", "oryxa", "user_key"],     // credential modes whose token this server accepts
+      "tools": { "issue_write": { "as": "github.update_issue", "effect": "write" },
+                 "search_code": { "as": "github.search_code",  "effect": "read" } } },
+    { "kind": "own" }                            // the tools in "tools", run by this connector
+  ]
+}
+```
+
+- `runtime.kind` is `go`, `node`, `python` or `openapi` (§8.5).
+- A `vendor_mcp` source lists **every** vendor tool it exposes, with our name and **our** effect. A vendor tool not listed is hidden, so a tool the vendor adds stays off until someone classifies it. The vendor's own hints (`readOnlyHint`) are never trusted.
+- A source applies to a connection only when the connection's `mode` is in its `modes`; otherwise the same tool names fall back to `own` tools, or are absent.
+
 Additions over oryxa-platform's format:
 - `credential_modes` uses our names;
 - streams gain `document`, `lookback`, `partition` and `deletes` (`feed` \| `field` \| `webhook` \| `reconcile`);
@@ -233,14 +272,24 @@ Additions over oryxa-platform's format:
 ### 8.3 Layout
 
 ```
-integrations/connectors/github/
+integrations/connectors/github/          # runtime "go"
   manifest.json
   main.go            # gosdk.Main
   sync.go  tools.go  model.go
   github-app.json    # GitHub App manifest template (BYO one-click)
   testdata/          # recorded responses (cassettes)
   *_test.go
+
+integrations/connectors/notion/          # runtime "node"
+  manifest.json
+  package.json  package-lock.json  tsconfig.json
+  src/main.ts        # kits/node serve()
+  src/sync.ts  src/tools.ts
+  testdata/
+  test/*.test.ts
 ```
+
+Node connectors pin their dependencies with a lockfile and Python ones with `uv.lock`; both are built into the image like the Go binaries.
 
 ### 8.4 The gate (CI, no live accounts)
 
@@ -248,7 +297,7 @@ integrations/connectors/github/
 1. The manifest validates against the schema, and every tool, stream and webhook is consistent.
 2. **Effects are honest:** any tool whose calls aren't all GET is `write`, `external` or `delete`.
 3. **Description lint:** each description starts with a verb, says when to use the tool, is 40–400 characters, and is unique.
-4. **Tool budget:** at most 15 tools per app; the rest goes through the proxy.
+4. **Catalog minimum (D15, §12.6):** the app's tools, from every source, reach the minimum in its `catalog.md`, and every API area there is either covered or listed as left out with a reason. Every `vendor_mcp` tool is classified.
 5. **Replay conformance,** run against the host with cassettes:
    - full sync to the end of pagination;
    - incremental with the emitted checkpoint returns nothing new;
@@ -257,7 +306,25 @@ integrations/connectors/github/
    - an empty page;
    - a delete produces a tombstone;
    - each tool's happy path and one error.
-6. `go vet`, `go test -race`, and no network in tests.
+6. The runtime's own checks, with no network in tests: `go vet` and `go test -race`; `tsc --noEmit`, the linter and `npm test`; `ruff`, `mypy` and `pytest`.
+
+`cmd/check` builds the connector by its `runtime`, then runs steps 1–5 the same way for every language: the gate talks to the connector only through the contract.
+
+### 8.5 Runtimes and SDKs
+
+**Choose the SDK, then the language.** For each app, the SDK the vendor maintains best (complete, current, typed, MIT, Apache-2.0 or BSD) decides the runtime:
+
+| App | SDK | Runtime | Why |
+|---|---|---|---|
+| GitHub | `go-github` (or Octokit) | `go` | Mature, complete, already used in oryxa-platform |
+| Slack | `@slack/web-api` and Bolt | `node` | Slack's own SDKs; `slack-go` is community-maintained |
+| Notion | `@notionhq/client` | `node` | Notion's only official SDK |
+| Google Drive, Gmail | Google API client libraries | `go` (`google.golang.org/api`), or `node` (`googleapis`) if it covers more | Both official; Gmail's Go connector exists in oryxa-platform |
+| An app with no usable SDK | its OpenAPI 3.x description | `openapi` | A generic engine, below |
+
+- **Kits:** `gosdk`, `kits/node` and `kits/python` each give a connector `serve()`, the broker HTTP client (§8.1), checkpoint and event helpers, and a structured logger that redacts. They are small and tested against the same host suite.
+- **`openapi`:** no connector code. The manifest names a pinned spec file (committed, with its source URL) and, per tool, the `operationId`, effect and a trimmed input schema; per stream, the list operation, its pagination and its document mapping. One engine, in Go, runs every `openapi` app through the broker. (AgentCore Gateway can also turn an OpenAPI file into tools, but it doesn't support `oneOf`/`anyOf`/`allOf`, and its tokens would live outside our vault.)
+- **Image:** the integrations image gains Node and Python runtimes. The host starts a connector as `node <entrypoint>` or `python -m <module>`, with the same bare environment as a Go binary (only the socket path).
 
 ## 9. Auth and vault
 
@@ -270,6 +337,8 @@ At connect time:
 
 `user_key` (a personal API key or token) is offered where the manifest allows it.
 
+**BYO first (D11).** Each app is built and switched on for BYO before Oryxa's app. The order above doesn't change; an org with no app of its own sees "Your admin needs to set up <app>" until Oryxa's app for it ships.
+
 ### 9.2 The org's own app (BYO)
 
 | App | Setup | What we store |
@@ -281,6 +350,11 @@ At connect time:
 | Notion | An internal integration; the admin pastes its token (key-based) | Token |
 
 An "Internal" Google app or single-tenant Microsoft app **needs no Google verification or Microsoft publisher verification**, so BYO gets full Gmail and Drive scopes from day one.
+
+**The org's app also serves the vendor's MCP server (D14).** Setup asks once for everything: the scopes of every stream and tool, and, where a vendor's MCP server is used, what it needs:
+- **Slack:** an org's own app is an *internal* app, which Slack lets use its MCP server; the generated manifest adds the MCP tools' user scopes (`search:read.*`, `canvases:*`, `lists:*`, …).
+- **Google:** the guided steps also enable `gmailmcp.googleapis.com` and `drivemcp.googleapis.com` in the same project, once Google's MCP servers are past Developer Preview (§12.5).
+- **GitHub:** nothing extra; the app's user token works with GitHub's MCP server.
 
 ### 9.3 Oryxa's own apps
 
@@ -431,6 +505,11 @@ Each stream declares how deletes are detected:
 
 Agents never get a flat list of hundreds of tools.
 
+**AgentCore Gateway in front (D16).** Agents reach tools through Amazon Bedrock AgentCore Gateway, whose **one target is this endpoint** (an MCP-server target). The gateway handles agents' inbound auth and its own catalog; we keep grants, effects, confirmation, audit and every vendor token.
+- **How the gateway calls us** is open (§20). Its outbound options for an MCP-server target are: none, its IAM role (SigV4, which needs an AWS-native front such as API Gateway), OAuth client credentials, OAuth authorization code (per user), OAuth token exchange (on behalf of the user) and an API key. It can't pass the caller's token through unchanged. **Token exchange is preferred:** the exchanged token names the member and the agent, so we resolve the connection without a second consent.
+- **Limits** (defaults, adjustable): 100 targets per gateway, 1,000 tools per target, a 15-minute timeout per call.
+- **Its listing modes:** DEFAULT syncs and indexes our tools for its semantic search; DYNAMIC lists at call time but can't be combined with semantic search. Our endpoint keeps its three meta-tools either way, so the gateway's catalog stays small.
+
 ### 12.3 Every call
 
 1. **Grant (I3):** the agent's grant must allow the app; a `write`, `external` or `delete` tool needs a write grant for it. Refused → `forbidden`, with the reason.
@@ -445,11 +524,33 @@ Agents never get a flat list of hundreds of tools.
 
 `POST /v1/proxy` covers what tools don't. It holds the same checks as a `write` tool, unless the method is GET.
 
-### 12.5 Vendors' own MCP servers (later)
+### 12.5 Vendors' own MCP servers (D13)
 
-- For GitHub, Linear, Atlassian and Google, the gateway may also **front the vendor's remote MCP server** with the member's token.
-- It pins a tool allowlist and classifies each tool's effect.
-- This is an option, not a replacement: vendors' servers have no triggers or syncs, and several need their own sign-in.
+A `call_tool` for a `vendor_mcp` tool runs the same steps 1–3 and 5 as any tool; step 4 becomes: open (or reuse) an MCP session to the vendor's server, put the connection's token in `Authorization: Bearer` **inside the service**, call the vendor's tool by its own name, and project the result. The connector process is not involved, and the token never reaches the gateway, the agent or a connector.
+
+What each vendor allows (checked 2026-10-15 against their docs):
+
+| Vendor | Server | Who may use it | Same credential as our sync? | Status for us |
+|---|---|---|---|---|
+| GitHub | `api.githubcopilot.com/mcp/` (also open source, MIT: `github/github-mcp-server`) | Any host with its own GitHub App or OAuth app; PATs too. Toolsets chosen per request (`X-MCP-Toolsets`), `/readonly` variants | **Yes** (GitHub App user token, OAuth token or PAT) | **Use now**, every mode |
+| Slack | `mcp.slack.com/mcp` | **Only Marketplace-published and internal apps;** unlisted apps are prohibited. Confidential OAuth with the app's own client id and secret; no dynamic client registration | **Yes** (the app's user token, with the tools' scopes) | **Use now for BYO** (an org's own app is internal); Oryxa's app once it is in the Marketplace |
+| Google (Gmail, Drive, Docs, Sheets, Slides, Calendar, Chat, People) | `gmailmcp.googleapis.com/mcp/v1`, `drivemcp.googleapis.com/mcp/v1`, … | **Developer Preview.** Standard Google OAuth with your own client; the `*mcp` APIs enabled in that project | **Yes** (same token, with the scopes) | **Later:** own tools first; switch tool by tool after GA. Gmail's server drafts but doesn't send |
+| Notion | `mcp.notion.com/mcp` | Any client, through its own OAuth with dynamic client registration and PKCE | **No:** a separate sign-in from our REST connection | **Don't use:** it would break D14. Own tools on the REST token |
+
+Rules:
+- **Our effects, not theirs:** every exposed vendor tool is listed in the manifest with our effect; anything else the server offers is hidden.
+- **Scopes:** the vendor tools' scopes are part of the consent union (D14), so a vendor tool never needs a reconnect.
+- **Pinning:** a vendor server can change its tools at any time. A nightly job lists each vendor server's tools and reports any change (new, removed, or a schema change) to macbookpro; a changed schema hides the tool until it is re-checked.
+- **Failure:** if the vendor's server is down, an `own` tool of the same name is used where one exists; otherwise the call fails as `app_unavailable`.
+
+### 12.6 Mature catalogs (D15)
+
+Each app's first release carries a catalog that covers what people actually do in it, not a token few tools.
+
+- **Minimum:** 20–30 core tools for each of the big five (GitHub, Slack, Notion, Drive, Gmail), from every source together. Smaller apps set their own minimum in `catalog.md`.
+- **`connectors/<app>/catalog.md`:** a table of the vendor's API areas (for Gmail: messages, threads, drafts, labels, attachments, filters, settings…), the tools covering each (with their source), and what's left out and why (admin-only, dangerous, rarely used). The reviewer checks it against the vendor's API reference.
+- **Every tool is a real one:** a description that says when to use it, an honest effect, an input schema an agent can fill without guessing, and a happy-path and an error cassette.
+- **Writes are not left out to keep a catalog safe:** they are gated by grants and confirmation (§12.3). Only tools no member would want an agent to run (delete an org, transfer a repo, change billing) are left out.
 
 ## 13. Rate limiting
 
@@ -523,14 +624,15 @@ Each phase is a set of small issues in the queue (`loop`, `phase:P<n>`). One PR 
 |---|---|---|
 | **P0 Core** | Service skeleton, config, migrations; vault (KMS envelopes); org apps and connections; connect and callback; refresh; egress handles and proxy; connector host and `gosdk`; manifest validator; `cmd/check` gate; move signin and the framework from `apps`; the `native` broker in `apps`; ECS service and tunnel route (macbookpro) | A fake app connects, refreshes, and serves one tool through the host and proxy on staging |
 | **P1 Engine** | Job queue, scheduler, checkpoints, backfill slices, records store and feed, delete modes, rate limiter, webhook ingress and verifiers, subscriptions, the normalized trigger event, outbox events, health and alarms | A replay-tested fake stream backfills, resumes after a killed worker, honours 429s, tombstones a delete, and knowledge pages the feed |
-| **P2 GitHub** | GitHub App (BYO manifest flow plus Oryxa app), repos, issues and PRs syncs, webhooks, ≤15 tools | Owner's live smoke test with a real org |
+| **P1R Runtimes and tool sources** | Manifest `runtime`, `scopes` and `tool_sources`; the broker HTTP client in `gosdk`; `kits/node` and `kits/python`; the host starting Node and Python connectors; `cmd/check` by runtime with the catalog check; `vendor_mcp` calls in the gateway (§12.5) with the nightly drift job; the `openapi` engine; the image with Node and Python | fakeapp in Go and in Node pass the gate; a cassette-backed vendor MCP server serves a tool through `call_tool` |
+| **P2 GitHub** | GitHub App (BYO manifest flow first, Oryxa app after), repos, issues and PRs syncs, webhooks; tools from GitHub's MCP server plus our own to reach the catalog minimum | Owner's live smoke test with a real org |
 | **P3 Microsoft** | Graph app (BYO single-tenant plus Oryxa multi-tenant); mail, OneDrive/SharePoint, calendar and Teams via delta; Graph subscriptions | Same |
-| **P4 Google** | Drive (BYO full, Oryxa `drive.file`), Calendar, Gmail (BYO); push channels; lift the Gmail and Calendar Go connectors from oryxa-platform | Same |
-| **P5 Slack and Notion** | Slack member-data app (BYO manifest plus Oryxa), Notion (internal token plus public integration) | Same |
-| **P6 Agents** | MCP gateway, connect-link results, the `tool_calls` audit, the org-app admin screen (with frontend) | An agent finds, calls and is refused tools as grants say |
+| **P4 Google** | Drive (BYO full, Oryxa `drive.file`), Calendar, Gmail (BYO); push channels; lift the Gmail and Calendar Go connectors from oryxa-platform; own tools to the catalog minimum (Google's MCP servers once GA) | Same |
+| **P5 Slack and Notion** | Slack member-data app in Node (BYO manifest first, Oryxa after), tools from Slack's MCP server for BYO plus our own; Notion in Node (internal token, then public integration), own tools | Same |
+| **P6 Agents** | MCP gateway, connect-link results, the `tool_calls` audit, the org-app admin screen (with frontend); our endpoint as AgentCore Gateway's target | An agent finds, calls and is refused tools as grants say, through AgentCore Gateway |
 | **Ongoing** | More streams and tools for these apps; a new app only when usage says so | |
 
-**Ordering:** P2–P5 can run in parallel after P1. P6 can start after P0.
+**Ordering:** P2–P5 can run in parallel after P1 and P1R. P6 can start after P0. Within the big five, the loop builds GitHub, then Notion, Slack, Drive and Gmail (the loop's prompt sets the dependencies).
 
 ## 19. Risks
 
@@ -542,15 +644,21 @@ Each phase is a set of small issues in the queue (`loop`, `phase:P<n>`). One PR 
 | Rate-limit bans on Oryxa's shared apps | Shared buckets per org app, adaptive concurrency, priority for interactive calls |
 | Change-token expiry or missed webhooks | Fallback polling, full resync plus reconcile |
 | Licence contamination | Facts about APIs from anywhere; **code** only from MIT or Apache sources or our own repos; never Nango, Airbyte (ELv2), Pipedream or n8n |
+| A vendor changes or withdraws its MCP server, or its terms | Our effects and allowlist per tool; the nightly drift job; `own` tools as the fallback; sync never depends on it |
+| Three runtimes to keep healthy | Thin kits with one shared host suite; one gate for every language; Node or Python only where its SDK is clearly better |
 
 ## 20. Open questions
 
 1. Microsoft: does Oryxa's own app ask for admin-consent scopes (Teams channel messages), or are those BYO-only?
 2. Google verification for Oryxa's app: when (if ever) to apply? Until then Oryxa's Google app is `drive.file` only.
 3. Should Slack's member-data app and the consent bot become one app later? Separate today.
+4. **How AgentCore Gateway authenticates to us (D16).** Token exchange needs Oryxa's identity provider to support RFC 8693; otherwise per-user authorization code against our own authorization server, or client credentials plus a signed member and agent claim. Which identity provider issues agents' tokens today?
+5. **Google's MCP servers:** join the Workspace Developer Preview now, or build own tools and switch after GA? Own tools first is the default (Gmail send is missing either way).
+6. **Slack Marketplace for Oryxa's app:** when to apply? It unlocks Slack's MCP server and normal history limits for Oryxa's app; BYO doesn't need it.
 
 ## Appendix: sources
 
 - Research reports (2026-10-15): Nango (architecture, licence), sync engines (Airbyte, Singer, Fivetran), landscape (Composio, Pipedream, Activepieces, n8n, Merge, Paragon, Arcade, Klavis, vendors' MCP servers).
+- Vendors' MCP servers and AgentCore Gateway, checked 2026-10-15: [GitHub remote server](https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md), [Slack MCP server](https://docs.slack.dev/ai/slack-mcp-server/), [Google Workspace MCP servers](https://developers.google.com/workspace/guides/configure-mcp-servers), [Notion MCP client guide](https://developers.notion.com/guides/mcp/build-mcp-client), [AgentCore outbound auth](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-outbound-auth.html), [AgentCore MCP targets](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-target-MCPservers.html), [AgentCore quotas](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/bedrock-agentcore-limits.html).
 - oryxa-platform: `proto/oryxa/connector/v1`, `connectors/gosdk`, `connectors/manifests`, `crates/oryxa-broker`, `crates/oryxa-webhooks`, `crates/oryxa-sync`.
 - This repo: `apps/internal/signin`, `apps/internal/integration`, `docs/design/integrations-plan.md`, `docs/design/integration-providers-2026-10.md`, `docs/design/live-layer/06-agent-isolation.md` (grants I3, identity I2).
