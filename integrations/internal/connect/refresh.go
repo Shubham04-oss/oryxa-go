@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	eventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/integrations/v1"
+
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/orgapps"
 	"github.com/Shubham04-oss/oryxa-go/integrations/manifest"
 	"github.com/Shubham04-oss/oryxa-go/internal/secrets"
@@ -175,12 +177,21 @@ func (s *Service) Refresh(ctx context.Context, connection, kind string, stale se
 		last_ok_at = $2, updated_at = $2 WHERE id = $1`, c.id, now); err != nil {
 		return "", err
 	}
+	// A recovery from degraded is a status change; a routine refresh is not.
+	if c.status != "ok" {
+		if err := s.emit(ctx, tx, c.id, eventsv1.ConnectionUpdatedDetailType); err != nil {
+			return "", err
+		}
+	}
 	return issued.access, tx.Commit(ctx)
 }
 
 func (s *Service) needsReauth(ctx context.Context, tx pgx.Tx, c loaded, cause error) error {
 	s.config.Logger.WarnContext(ctx, "a connection needs to be signed in again", "connection_id", c.id, "app", c.app, "error", cause)
 	if _, err := tx.Exec(ctx, `UPDATE integrations.connections SET status = 'needs_reauth', updated_at = $2 WHERE id = $1`, c.id, s.now()); err != nil {
+		return err
+	}
+	if err := s.emit(ctx, tx, c.id, eventsv1.ConnectionUpdatedDetailType); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -203,6 +214,11 @@ func (s *Service) refreshFailed(ctx context.Context, tx pgx.Tx, c loaded, cause 
 	if _, err := tx.Exec(ctx, `UPDATE integrations.connections SET failures = $2, status = $3, cooldown_until = $4, updated_at = $5
 		WHERE id = $1`, c.id, failures, status, now.Add(cooldown), now); err != nil {
 		return err
+	}
+	if status != c.status {
+		if err := s.emit(ctx, tx, c.id, eventsv1.ConnectionUpdatedDetailType); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err

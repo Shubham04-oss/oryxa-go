@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/url"
 
+	eventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/integrations/v1"
+
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/orgapps"
 	"github.com/Shubham04-oss/oryxa-go/integrations/manifest"
 )
@@ -46,6 +48,9 @@ func (s *Service) Revoke(ctx context.Context, connection string) (providerRevoke
 		return false, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE integrations.connections SET status = 'revoked', updated_at = $2 WHERE id = $1`, c.id, s.now()); err != nil {
+		return false, err
+	}
+	if err := s.emit(ctx, tx, c.id, eventsv1.ConnectionRemovedDetailType); err != nil {
 		return false, err
 	}
 	return providerRevoked, tx.Commit(ctx)
