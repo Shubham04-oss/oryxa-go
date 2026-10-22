@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	mrand "math/rand/v2"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -354,7 +355,8 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n]
+	// Cutting mid-rune leaves invalid UTF-8, which Postgres refuses for text.
+	return strings.ToValidUTF8(s[:n], "")
 }
 
 func newID() (string, error) {
